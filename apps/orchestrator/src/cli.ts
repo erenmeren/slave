@@ -8,6 +8,7 @@ import {
   answerQuestion,
   approveDecision,
   archiveWorkspace,
+  cancelTask,
   assignCompany,
   claimResume,
   cloneSimulation,
@@ -30,6 +31,7 @@ import {
   haltSimulation,
   injectExternalEvent,
   listDecisions,
+  listGoalVersions,
   listPendingQuestions,
   listUsers,
   loadSimulation,
@@ -82,6 +84,9 @@ import {
 import { sectors } from '@slave-of-ai/simulation'
 import { DEFAULT_MODEL_TIMEOUT_MS, buildRegistry, decideWithModel, type AdapterRegistry, type ProviderKind } from '@slave-of-ai/providers'
 import { runDaemon } from './daemon.js'
+import { PLANNING_RETRY_CAP } from './planning.js'
+import { replanVerdict } from './replan.js'
+import { renderReplanPreview } from './runContext.js'
 import { deliverAnswers } from './deliver.js'
 import { claudeCommandFrom } from './claude-command.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
@@ -113,6 +118,14 @@ const USAGE = `usage: orchestrator <command> [options]
                                        never reset -- a task already at its attempt ceiling is
                                        refused unless --allow-another-attempt raises the ceiling
                                        by exactly one.
+  cancel-task --task <id> --reason "<text>"
+                                       take a task off the board for good: it becomes cancelled and
+                                       the reason is kept on it. Only from backlog, ready or blocked
+                                       -- work already in the pipeline is refused, and so is a task
+                                       holding a live run. Anything that DEPENDS on it stays blocked
+                                       until a human removes the dependency: the work was never
+                                       done. No --by flag: the verb records no operator name, only
+                                       that a human did it.
   messages [--workspace <id>]          every question a slave is still waiting on an answer to,
                                        with the message id the answer verb needs
   answer --message <id> --text "<t>" [--by <name>]
@@ -133,7 +146,22 @@ const USAGE = `usage: orchestrator <command> [options]
                                        active run in it -- the operator's stop-everything button
   set-goal --workspace <id> --goal "<text>"
                                        set the operator's standing instruction for what this
-                                       workspace's slaves are working toward
+                                       workspace's slaves are working toward. Every accepted set is
+                                       a new VERSION of the requirement; prints the version it wrote
+                                       and that text's sha256. Refused (non-zero) when the new text
+                                       is byte-identical to the current version -- nothing is
+                                       recorded, because nothing changed.
+  goal-history --workspace <id>        every version of this project's goal, newest first, as JSON:
+                                       the text, its sha256, who set it, when, and the line-level
+                                       diff against the version it replaced (null for v1).
+  replan-status --workspace <id> [--prompt]
+                                       why the next tick will, or will not, start a delta re-plan:
+                                       the goal version, the highest version stamped on an
+                                       unfinished task, whether this version was already re-planned,
+                                       whether a planning run is live, the failed attempts against
+                                       the cap, and willReplan. --prompt also prints the re-plan
+                                       prompt such a run would be given -- rendered and thrown away,
+                                       never recorded, and it starts nothing.
   create-workspace --name <n> --repo <abs path> [--base main] --verify "<cmd>" [--verify "<cmd>" ...]
                    [--setup "<cmd>" ...] [--budget <usd> | --no-budget] [--provider claude_code|cursor]
                                        attach an existing local clone as a workspace. The path
@@ -770,6 +798,24 @@ export async function main(argv: readonly string[]): Promise<number> {
       return 0
     }
 
+    case 'cancel-task': {
+      // No `--by`, unlike `unblock-task`'s neighbours above: `cancelTask` has no operator-name
+      // field to put one in. Its third argument is the ENVELOPE actor (`'human'` here -- a person
+      // ran this command; the Supervisor's own approval path passes `'system'`), and its fourth is
+      // a `Principal`, which the CLI has never had (`approve-decision`'s own comment: "the CLI and
+      // the orchestrator act with no user"). A `--by` that reached neither would be a flag that
+      // silently did nothing, so the reason is the only place a name can go, and an operator who
+      // wants one writes it there.
+      const taskIdFlag = requireFlag(flags, 'task')
+      const reason = requireFlag(flags, 'reason')
+      const result = await cancelTask(taskIdFlag, reason, 'human')
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(
+        `task ${taskIdFlag} is cancelled: ${reason}\nAnything that depends on it stays blocked until you remove the dependency.\n`,
+      )
+      return 0
+    }
+
     case 'messages': {
       const workspaceId = await resolveWorkspace(flags)
       const result = await listPendingQuestions(workspaceId)
@@ -869,8 +915,58 @@ export async function main(argv: readonly string[]): Promise<number> {
       const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
       const goal = requireFlag(flags, 'goal')
       const result = await setGoal(workspaceId, goal)
+      // `goal_unchanged` exits NON-zero with the refusal's own words, like every other refusal this
+      // file reports (M40 t4 ruling). Only the WEB softens it into "no change": a browser form has
+      // a person in front of it who just pressed a button, and a command in a script has a caller
+      // that has to be able to tell "the version moved" from "it did not".
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`goal set on ${workspaceId}\n`)
+      // JSON, like `show-context` and `supervisor-decisions`: the version is the number the re-plan
+      // trigger counts and a caller has to be able to read it back without parsing a sentence.
+      process.stdout.write(`${JSON.stringify({ version: result.value.version, sha256: result.value.sha256 })}\n`)
+      return 0
+    }
+
+    case 'goal-history': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const result = await listGoalVersions(workspaceId)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(`${JSON.stringify(result.value, null, 2)}\n`)
+      return 0
+    }
+
+    case 'replan-status': {
+      // A READ, and ruling R4 is why it stays one: the tick is the only thing that starts a
+      // planning run, so this prints the verdict the tick would reach and dispatches nothing --
+      // including with `--prompt`, which renders the prompt and throws it away.
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const workspace = await prisma.workspace.findUniqueOrThrow({
+        where: { id: workspaceId },
+        select: { goalVersion: true },
+      })
+      // The same helper `dispatchPlanning` asks, at the same cap -- one idea of when a re-plan
+      // fires, not a second one that can drift from the tick's.
+      const verdict = await replanVerdict(workspaceId, workspace.goalVersion, PLANNING_RETRY_CAP)
+      process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`)
+
+      if ('prompt' in flags) {
+        if (verdict.intent === null) {
+          // Nothing to preview: the prompt this would render is for a run that will not happen, and
+          // inventing a previous version to diff against would put a requirement nobody set in
+          // front of an operator.
+          process.stdout.write(
+            `${'-'.repeat(40)}\nno re-plan is pending for goal v${String(verdict.goalVersion)}, so there is no prompt to preview\n`,
+          )
+          return 0
+        }
+        // A rule between the verdict and the prompt, `show-context --prompt`'s own separator: the
+        // prompt is free text and can contain anything, including JSON.
+        const prompt = await renderReplanPreview({
+          workspaceId,
+          previousVersion: verdict.intent.previousVersion,
+          version: verdict.intent.version,
+        })
+        process.stdout.write(`${'-'.repeat(40)}\n${prompt}\n`)
+      }
       return 0
     }
 

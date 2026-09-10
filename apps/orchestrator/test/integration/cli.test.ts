@@ -285,12 +285,169 @@ describe('the orchestrator CLI', () => {
     expect(`${result.stdout}${result.stderr}`).toMatch(/--workspace is required/)
   }, 30_000)
 
-  it('sets a workspace goal', async (): Promise<void> => {
+  it('sets a workspace goal and prints the version it wrote with that text\'s sha256', async (): Promise<void> => {
     const result = await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'x'])
 
     expect(result.code).toBe(0)
     const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
     expect(ws.goal).toBe('x')
+    // M40 t4: the version is the number the re-plan trigger counts, so it is printed as JSON a
+    // caller can read back rather than buried in a sentence.
+    const printed = JSON.parse(result.stdout) as { version: number; sha256: string }
+    expect(printed.version).toBe(1)
+    expect(printed.sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(ws.goalVersion).toBe(1)
+  })
+
+  it('exits non-zero with the refusal when set-goal is given the text the goal already reads', async (): Promise<void> => {
+    // M40 t4 ruling: only the WEB softens `goal_unchanged` into "no change". Here it is a refusal
+    // like every other, so a script can tell "the version moved" from "it did not".
+    const first = await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'ship the checkout redesign'])
+    expect(first.code).toBe(0)
+
+    const second = await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'ship the checkout redesign'])
+
+    expect(second.code).not.toBe(0)
+    expect(`${second.stdout}${second.stderr}`).toMatch(/already reads exactly this at version 1/)
+    const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+    expect(ws.goalVersion).toBe(1)
+    expect(await prisma.goalVersion.count({ where: { workspaceId: fixture.workspaceId } })).toBe(1)
+  })
+
+  it('prints every goal version newest first, with the diff against the version it replaced', async (): Promise<void> => {
+    await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'ship checkout'])
+    await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'ship checkout\nand the refunds flow'])
+
+    const result = await runCli(['goal-history', '--workspace', fixture.workspaceId])
+
+    expect(result.code).toBe(0)
+    const history = JSON.parse(result.stdout) as {
+      version: number
+      text: string
+      sha256: string
+      setByUserId: string | null
+      createdAt: string
+      diff: { added: string[]; removed: string[] } | null
+    }[]
+    expect(history.map((one) => one.version)).toEqual([2, 1])
+    expect(history[0]?.text).toBe('ship checkout\nand the refunds flow')
+    expect(history[0]?.diff).toEqual({ added: ['and the refunds flow'], removed: [] })
+    // v1 is the requirement's beginning: there is nothing it replaced.
+    expect(history[1]?.diff).toBeNull()
+    expect(history[1]?.sha256).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('exits non-zero for goal-history with no --workspace given', async (): Promise<void> => {
+    const result = await runCli(['goal-history'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/--workspace is required/)
+  })
+
+  it('cancels a task off the board with its reason', async (): Promise<void> => {
+    const result = await runCli([
+      'cancel-task',
+      '--task',
+      fixture.taskId,
+      '--reason',
+      'the re-plan for goal v2 no longer needs it',
+    ])
+
+    expect(result.code).toBe(0)
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('cancelled')
+    expect(task.lastRejectionReason).toBe('the re-plan for goal v2 no longer needs it')
+    const events = await prisma.executionEvent.findMany({ where: { taskId: fixture.taskId, type: 'task_cancelled' } })
+    expect(events).toHaveLength(1)
+    expect(events[0]?.actor).toBe('human')
+  })
+
+  it('refuses cancel-task on a task the pipeline is already carrying', async (): Promise<void> => {
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'reviewing' } })
+
+    const result = await runCli(['cancel-task', '--task', fixture.taskId, '--reason', 'no longer needed'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/only a task in backlog, ready or blocked can be cancelled/)
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('reviewing')
+  })
+
+  it('exits non-zero for cancel-task with no --reason given', async (): Promise<void> => {
+    const result = await runCli(['cancel-task', '--task', fixture.taskId])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/--reason is required/)
+  })
+
+  it('prints the re-plan verdict the next tick would reach', async (): Promise<void> => {
+    // The fixture's one task is hand-made (`goalVersion` null, which counts as 0), so the first
+    // goal version already moves the board's requirement past what produced it.
+    await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'ship checkout'])
+
+    const result = await runCli(['replan-status', '--workspace', fixture.workspaceId])
+
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout)).toEqual({
+      goalVersion: 1,
+      boardVersion: 0,
+      boardTaskCount: 1,
+      goalMoved: true,
+      alreadyReplanned: false,
+      livePlanningRun: false,
+      failedAttempts: 0,
+      retryCap: 2,
+      willReplan: true,
+      intent: { previousVersion: 0, version: 1 },
+    })
+  })
+
+  it('says a current board will not re-plan', async (): Promise<void> => {
+    await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'ship checkout'])
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { goalVersion: 1 } })
+
+    const result = await runCli(['replan-status', '--workspace', fixture.workspaceId])
+
+    expect(result.code).toBe(0)
+    const verdict = JSON.parse(result.stdout) as { goalMoved: boolean; willReplan: boolean; boardVersion: number }
+    expect(verdict.boardVersion).toBe(1)
+    expect(verdict.goalMoved).toBe(false)
+    expect(verdict.willReplan).toBe(false)
+  })
+
+  it('renders the re-plan prompt with --prompt and records no RunContext row for it', async (): Promise<void> => {
+    await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'ship checkout'])
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { goalVersion: 1 } })
+    await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'ship checkout and refunds'])
+
+    const before = await prisma.runContext.count()
+    const result = await runCli(['replan-status', '--workspace', fixture.workspaceId, '--prompt'])
+
+    expect(result.code).toBe(0)
+    const [verdictText, prompt] = result.stdout.split(`${'-'.repeat(40)}\n`)
+    expect((JSON.parse(verdictText ?? '') as { willReplan: boolean }).willReplan).toBe(true)
+    // What the re-plan run would be told: the new requirement, the wording it replaced, the board
+    // it may act on, and the re-plan instructions the trailer carries.
+    expect(prompt).toContain('GOAL: ship checkout and refunds')
+    expect(prompt).toContain('THE GOAL CHANGED')
+    expect(prompt).toContain('Previous goal (v1):')
+    expect(prompt).toContain(fixture.taskId)
+    expect(prompt).toContain('replan')
+    // R4: a preview starts nothing and records nothing -- the row exists for runs that were given
+    // a prompt, and no run was.
+    expect(await prisma.runContext.count()).toBe(before)
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(0)
+  })
+
+  it('says there is no prompt to preview when no re-plan is pending', async (): Promise<void> => {
+    await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'ship checkout'])
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { goalVersion: 1 } })
+
+    const result = await runCli(['replan-status', '--workspace', fixture.workspaceId, '--prompt'])
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toMatch(/no re-plan is pending for goal v1/)
+    expect(await prisma.runContext.count()).toBe(0)
   })
 
   it('exits non-zero for set-goal with no --goal given', async (): Promise<void> => {

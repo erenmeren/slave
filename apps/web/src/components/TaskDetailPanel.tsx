@@ -6,7 +6,7 @@ import { errorMessage, sendControl } from '../lib/postControl'
 import { sectionLine } from '../lib/runContextSummary'
 import { priorityChip } from '../lib/taskColumns'
 import type { TaskBoardItem } from '../server/tasks'
-import { TASK_STATUS_TEXT } from './TaskCard'
+import { TASK_STATUS_TEXT, goalStampText, isStale } from './TaskCard'
 import { Button } from './ui/Button'
 import { GhostButton, PrimaryButton } from './ui/FormControls'
 import { SectionLabel } from './ui/SectionLabel'
@@ -29,10 +29,13 @@ interface OpenRunContext {
 export function TaskDetailPanel({
   task,
   workspaceId,
+  workspaceGoalVersion,
   onClose,
 }: {
   readonly task: TaskBoardItem
   readonly workspaceId: string
+  /** The goal version the PROJECT is on (M40 §6) -- the other half of the stale badge. */
+  readonly workspaceGoalVersion: number
   readonly onClose: () => void
 }): React.JSX.Element {
   const router = useRouter()
@@ -143,6 +146,13 @@ export function TaskDetailPanel({
             <span data-testid="task-panel-ref" className="text-text-3">TASK-{task.id.slice(0, 8)}</span>
             <span className="text-text-faint">·</span>
             <span data-testid="task-panel-priority" className={TONE_TEXT[priorityChip(task.priority).tone]}>{priorityChip(task.priority).label}</span>
+            <span className="text-text-faint">·</span>
+            {/* Which requirement produced this task (M40 §1) -- "unstamped" for one a human made,
+              * which was derived from no goal version at all. */}
+            <span data-testid="task-panel-goal-version" className="text-text-3">{goalStampText(task.goalVersion)}</span>
+            {isStale(task.goalVersion, workspaceGoalVersion) && (
+              <span data-testid="task-panel-stale" className="uppercase tracking-wide text-tone-waiting">stale</span>
+            )}
           </p>
           <h2 className="text-sm font-medium text-text-1">{task.title}</h2>
           <span data-testid="detail-status" className={`text-xs ${TASK_STATUS_TEXT[task.status]}`}>
@@ -173,9 +183,18 @@ export function TaskDetailPanel({
         <dt className="text-text-3">branch</dt>
         <dd className="font-mono text-text-2">{task.branch ?? '—'}</dd>
         {task.lastRejectionReason !== null && (
+          // One column, two meanings, named apart (M40 §6): `cancelTask` writes the CANCELLATION
+          // reason into `lastRejectionReason`, and labelling that "rejection" would tell an
+          // operator a reviewer turned the work down when nobody reviewed it at all. Muted for a
+          // cancelled task, like its card: nothing here needs anybody.
           <>
-            <dt className="text-text-3">rejection</dt>
-            <dd className="text-tone-waiting">{task.lastRejectionReason}</dd>
+            <dt className="text-text-3">{task.status === 'cancelled' ? 'cancelled' : 'rejection'}</dt>
+            <dd
+              data-testid={task.status === 'cancelled' ? 'detail-cancel-reason' : 'detail-rejection-reason'}
+              className={task.status === 'cancelled' ? 'text-text-3' : 'text-tone-waiting'}
+            >
+              {task.lastRejectionReason}
+            </dd>
           </>
         )}
       </dl>

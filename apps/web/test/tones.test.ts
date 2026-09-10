@@ -26,12 +26,15 @@ const EXPECTED: Record<CardState, { tone: string; label: string; pulse: boolean 
   pause_requested: { tone: 'waiting', label: 'PAUSING', pulse: true },
   resuming: { tone: 'working', label: 'RESUMING', pulse: true },
   blocked: { tone: 'blocked', label: 'BLOCKED', pulse: false },
+  // M40 §6: the eleventh state. A cancelled task is not a broken one, so it rides the muted `idle`
+  // grey rather than `blocked`'s red -- with its own label, so the pill still says what happened.
+  cancelled: { tone: 'idle', label: 'CANCELLED', pulse: false },
   idle: { tone: 'idle', label: 'IDLE', pulse: false },
   completed: { tone: 'done', label: 'DONE', pulse: false },
 }
 
 describe('CARD_STATE_TONE', () => {
-  it('carries the mockup table verbatim for all ten states', () => {
+  it('carries the mockup table verbatim for all eleven states', () => {
     expect(CARD_STATE_TONE).toEqual(EXPECTED)
   })
 
@@ -133,7 +136,7 @@ describe('cardStateForTask', () => {
     ['blocked', 'blocked'],
     ['done', 'completed'],
     ['failed', 'blocked'],
-    ['cancelled', 'blocked'],
+    ['cancelled', 'cancelled'],
   ]
 
   it.each(cases)('maps %s to %s', (status, expected) => {
@@ -144,13 +147,16 @@ describe('cardStateForTask', () => {
     expect(new Set(cases.map(([s]) => s))).toEqual(new Set(TASK_STATUSES))
   })
 
-  it("is the column's state for every status except the three that are not their column", () => {
+  it("is the column's state for every status except the four that are not their column", () => {
     for (const status of TASK_STATUSES) {
       const columnState = COLUMN_STATE[COLUMN_FOR_STATUS[status]]
       if (status === 'failed' || status === 'cancelled') {
-        // Both sit on the Done column, and neither is done. The card says what happened.
+        // Both sit on the Done column, and neither is done. The card says what happened -- and
+        // since M40 they say DIFFERENT things: a failure needs an operator, a cancellation needs
+        // nobody.
         expect(COLUMN_FOR_STATUS[status]).toBe('Done')
-        expect(cardStateForTask(status)).toBe('blocked')
+        expect(cardStateForTask(status)).toBe(status === 'failed' ? 'blocked' : 'cancelled')
+        expect(CARD_STATE_TONE[cardStateForTask(status)].tone).toBe(status === 'failed' ? 'blocked' : 'idle')
       } else if (status === 'waiting') {
         // M36 t2: the work is in flight (the In Progress column) but nothing is being worked on
         // while the slave waits for another slave's answer, so the card says WAITING, not WORKING.

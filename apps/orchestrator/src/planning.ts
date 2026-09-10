@@ -18,8 +18,10 @@ import { createRunUnlessArchived } from './runs.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { verifyConcludedRun } from './verify.js'
 
-/** How many planning runs may fail against the current goal before dispatch stops trying (spec Decision 8). */
-const PLANNING_RETRY_CAP = 2
+/** How many planning runs may fail against the current goal before dispatch stops trying (spec Decision 8).
+ *  Exported since M40 t4 so the CLI's `replan-status` reports the cap the tick actually enforces
+ *  rather than a second copy of the number. */
+export const PLANNING_RETRY_CAP = 2
 
 /**
  * Conclude a succeeded planning run: parse the task graph and turn it into the board.

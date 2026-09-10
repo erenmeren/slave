@@ -435,6 +435,54 @@ async function replanSection(input: {
   }
 }
 
+/** The `planning_goal` section: the requirement itself, and WHICH version of it (M40 §1). Shared by
+ *  the builder below and by {@link renderReplanPreview}, so an operator previewing a re-plan reads
+ *  the same first section the run would be given. */
+function planningGoalSection(goal: string, version: number): Section {
+  return {
+    kind: 'planning_goal',
+    text: goal === '' ? '' : `GOAL: ${goal}`,
+    source: { kind: 'planning_goal', sha256: sha256(goal), version },
+  }
+}
+
+/**
+ * The re-plan prompt a run for this version WOULD be given, rendered and thrown away (M40 §6,
+ * `replan-status --prompt`).
+ *
+ * Deliberately not `buildRunContext` with a flag: that function's contract is that it RECORDS what
+ * it renders, before a spawn, and a preview has no run to record against. Writing a `RunContext`
+ * row for a run that does not exist would put a prompt nobody was ever given into the one table
+ * that answers "what was this run told".
+ *
+ * What it therefore leaves out is the persona: which manager takes a planning run is decided at
+ * dispatch, by who is free, so a preview that picked one would be showing an operator a profile
+ * section a different worker's run will not carry. Everything the RE-PLAN is about -- the goal, its
+ * version, the previous wording, the board, and the re-plan trailer `renderRunContext` chooses
+ * because a `replan` section is present -- is exactly what the run gets.
+ */
+export async function renderReplanPreview(input: {
+  readonly workspaceId: string
+  readonly previousVersion: number
+  readonly version: number
+}): Promise<string> {
+  const workspace = await prisma.workspace.findUniqueOrThrow({
+    where: { id: input.workspaceId },
+    select: { goal: true, goalVersion: true },
+  })
+  const goal = workspace.goal ?? ''
+  const sections: Section[] = [
+    planningGoalSection(goal, workspace.goalVersion),
+    await replanSection({
+      workspaceId: input.workspaceId,
+      goal,
+      previousVersion: input.previousVersion,
+      version: input.version,
+    }),
+  ]
+  return renderRunContext('planning', sections).prompt
+}
+
 /**
  * The one place a run's prompt is assembled (M37 §1, "one builder"), and the one place it is
  * recorded.
@@ -584,11 +632,7 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
 
   if (workspace !== null) {
     const goal = workspace.goal ?? ''
-    sections.push({
-      kind: 'planning_goal',
-      text: goal === '' ? '' : `GOAL: ${goal}`,
-      source: { kind: 'planning_goal', sha256: sha256(goal), version: workspace.goalVersion },
-    })
+    sections.push(planningGoalSection(goal, workspace.goalVersion))
     // M40 §3. After the goal, never instead of it: the prompt reads "here is the requirement,
     // here is what changed about it, here is what to return", and `renderRunContext` picks the
     // re-plan trailer because this section is present (spec erratum E2).

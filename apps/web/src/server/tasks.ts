@@ -60,6 +60,13 @@ export interface TaskBoardItem {
   readonly branch: string | null
   readonly lastRejectionReason: string | null
   /**
+   * Which goal version this task was derived from (M40 §1), or `null` for a task a human made by
+   * hand -- no plan produced it, so there is no requirement for it to be behind. Rendered as
+   * `goal vN` (or "unstamped") on the card and the detail panel, and compared against
+   * `workspace.goalVersion` for the **stale** badge.
+   */
+  readonly goalVersion: number | null
+  /**
    * M35 t2: null until the task's work actually reached the base branch -- `merge.ts`'s
    * real-merge path stamps it, its `!autoMerge` path (done, no merge, branch left for a human)
    * leaves it null. ISO string, same convention as every other timestamp on this DTO.
@@ -77,7 +84,15 @@ export interface TaskBoardItem {
 }
 
 export interface TasksSnapshot {
-  readonly workspace: { readonly id: string; readonly name: string; readonly haltedReason: string | null }
+  readonly workspace: {
+    readonly id: string
+    readonly name: string
+    readonly haltedReason: string | null
+    /** The version of the goal this project is on (M40 §1) -- the other half of a card's **stale**
+     *  badge, which is `task.goalVersion !== null && task.goalVersion < this`. 0 for a project with
+     *  no recorded version, which nothing can be behind. */
+    readonly goalVersion: number
+  }
   readonly tasks: readonly TaskBoardItem[]
   /**
    * The same counts/guardrails the project header and the Tasks tab's badge show (M14 Task 8/10
@@ -137,7 +152,7 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
   }
 
   return {
-    workspace: { id: workspace.id, name: workspace.name, haltedReason: workspace.haltedReason },
+    workspace: { id: workspace.id, name: workspace.name, haltedReason: workspace.haltedReason, goalVersion: workspace.goalVersion },
     shellFacts,
     tasks: tasks.map((task) => {
       const liveRun = task.runs.find((run) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status))
@@ -152,6 +167,7 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         assigneeName: liveRun?.slave.name ?? null,
         branch: task.branch,
         lastRejectionReason: task.lastRejectionReason,
+        goalVersion: task.goalVersion,
         integratedAt: task.integratedAt?.toISOString() ?? null,
         // M23 B4 (controller ruling): a terminal task with a worktree still standing on at least
         // one of its runs. Computed here, not in the panel -- the panel never imports `TERMINAL`

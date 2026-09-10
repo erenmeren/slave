@@ -251,6 +251,40 @@ describe('buildTasksSnapshot', () => {
     expect(snapshot?.tasks.find((t) => t.id === doneTask.id)?.assigneeName).toBeNull()
   })
 
+  it('carries the goal version each task was derived from, beside the version the project is on', async (): Promise<void> => {
+    // M40 §6: both numbers come from one reading, because the **stale** badge is a comparison
+    // between them and two readings could disagree about which goal the board is behind.
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { goal: 'ship checkout', goalVersion: 2 } })
+    const planned = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Wire up the form',
+        description: 'x',
+        status: 'ready',
+        requiredRole: 'frontend',
+        maxAttempts: 3,
+        goalVersion: 1,
+      },
+    })
+    const handMade = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Chase the vendor',
+        description: 'x',
+        status: 'backlog',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+      },
+    })
+
+    const snapshot = await buildTasksSnapshot(fixture.workspaceId)
+
+    expect(snapshot?.workspace.goalVersion).toBe(2)
+    expect(snapshot?.tasks.find((task) => task.id === planned.id)?.goalVersion).toBe(1)
+    // A hand-made task was derived from no requirement at all, so it is never behind one.
+    expect(snapshot?.tasks.find((task) => task.id === handMade.id)?.goalVersion).toBeNull()
+  })
+
   it('returns null for an unknown workspace', async (): Promise<void> => {
     expect(await buildTasksSnapshot('00000000-0000-4000-8000-000000000000')).toBeNull()
   })

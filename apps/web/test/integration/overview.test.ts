@@ -53,6 +53,18 @@ describe('buildOverviewSnapshot', () => {
     expect(await buildOverviewSnapshot('nope')).toBeNull()
   })
 
+  it('carries the goal version the project is on (M40 §6)', async (): Promise<void> => {
+    // 0 is the honest reading of a project whose goal was never set: no version was recorded, and
+    // nothing on the board can be behind it.
+    expect((await buildOverviewSnapshot(fixture.workspaceId))?.workspace.goalVersion).toBe(0)
+
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { goal: 'ship checkout', goalVersion: 3 } })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.workspace.goal).toBe('ship checkout')
+    expect(snapshot?.workspace.goalVersion).toBe(3)
+  })
+
   it('derives the slave status from its active run with the domain function', async (): Promise<void> => {
     const run = await prisma.slaveRun.create({
       data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'pause_requested' },

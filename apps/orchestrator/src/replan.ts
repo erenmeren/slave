@@ -27,6 +27,41 @@ export interface ReplanIntent {
 }
 
 /**
+ * The whole trigger verdict for one workspace (M40 §1), fact by fact.
+ *
+ * `replanIntent` below is this narrowed to the one question `dispatchPlanning` asks; the CLI's
+ * `replan-status` prints the rest, because "no re-plan is coming" is four different situations and
+ * an operator staring at a board that has not caught up needs to know WHICH one.
+ */
+export interface ReplanVerdict {
+  /** `Workspace.goalVersion` -- the newest requirement. */
+  readonly goalVersion: number
+  /** `max(Task.goalVersion)` over the NON-terminal tasks, a null (hand-made) stamp counting as 0. */
+  readonly boardVersion: number
+  /** How many tasks the board holds at all. 0 is the FIRST-plan path, where none of the rest of
+   *  this applies -- `dispatchPlanning` never asks for a re-plan verdict on an empty board. */
+  readonly boardTaskCount: number
+  /** Whether the goal has moved past the board that goal produced. */
+  readonly goalMoved: boolean
+  /** Whether a re-plan for THIS version already ran or is running (the `workspace.replan_started`
+   *  dedup). A failed one does not count -- it produced nothing. */
+  readonly alreadyReplanned: boolean
+  /** Whether a planning run of any kind is live right now. `dispatchPlanning`'s own check 3, which
+   *  `replanIntent` deliberately does not make: it is a fact about the moment, not about the
+   *  version, and it delays a re-plan rather than cancelling it. */
+  readonly livePlanningRun: boolean
+  /** Planning runs that FAILED since this version's `workspace.goal_set`. */
+  readonly failedAttempts: number
+  readonly retryCap: number
+  /** Whether the next tick would start a re-plan run for this version -- every fact above,
+   *  answered together. */
+  readonly willReplan: boolean
+  /** What `dispatchPlanning` would dispatch, or `null`. Non-null even while a planning run is live:
+   *  that is a wait, not a refusal, and `dispatchPlanning` makes the check itself. */
+  readonly intent: ReplanIntent | null
+}
+
+/**
  * Whether the workspace's goal has moved past the board that goal produced, and a re-plan for that
  * move may start now (M40 §1).
  *
@@ -51,19 +86,34 @@ export interface ReplanIntent {
  * Both event reads filter in JS rather than in the query: these are workspace-lifetime events (one
  * per goal edit, one per re-plan), so there are a handful of them, and a `payload.path` filter on a
  * JSON NUMBER is a subtlety this does not need to depend on.
+ *
+ * M40 t4: the three questions are answered by {@link replanVerdict} and read off it here, so the
+ * tick and `replan-status` cannot drift into two ideas of when a re-plan fires.
  */
 export async function replanIntent(
   workspaceId: string,
   goalVersion: number,
   retryCap: number,
 ): Promise<ReplanIntent | null> {
+  return (await replanVerdict(workspaceId, goalVersion, retryCap)).intent
+}
+
+/** {@link ReplanVerdict}, computed. Every fact is read even once an earlier one has already
+ *  decided the outcome -- this is a diagnosis, and a caller asking why nothing is happening is owed
+ *  all of it, not the first reason the tick would have stopped at. */
+export async function replanVerdict(
+  workspaceId: string,
+  goalVersion: number,
+  retryCap: number,
+): Promise<ReplanVerdict> {
   // 1. Has the goal actually moved past the board?
   const board = await prisma.task.findMany({
     where: { workspaceId, status: { notIn: [...TERMINAL] } },
     select: { goalVersion: true },
   })
   const boardVersion = board.reduce((highest, task) => Math.max(highest, task.goalVersion ?? 0), 0)
-  if (goalVersion <= boardVersion) return null
+  const boardTaskCount = await prisma.task.count({ where: { workspaceId } })
+  const goalMoved = goalVersion > boardVersion
 
   // 2. One re-plan per version (M40 §1).
   const startedRunIds = (
@@ -76,12 +126,11 @@ export async function replanIntent(
     .filter((payload) => payload.version === goalVersion)
     .map((payload) => payload.runId)
     .filter((runId): runId is string => typeof runId === 'string')
-  if (startedRunIds.length > 0) {
-    const alive = await prisma.slaveRun.count({
+  const alreadyReplanned =
+    startedRunIds.length > 0 &&
+    (await prisma.slaveRun.count({
       where: { id: { in: startedRunIds }, status: { in: [...NON_TERMINAL_RUN_STATUSES, 'succeeded'] } },
-    })
-    if (alive > 0) return null
-  }
+    })) > 0
 
   // 3. The cap, counted since this version was set. A version with no `workspace.goal_set` event
   // (a stamp written by something other than `setGoal`) counts from the epoch, so every planning
@@ -95,7 +144,7 @@ export async function replanIntent(
     })
   ).find((event) => (event.payload as { version?: unknown }).version === goalVersion)
   const since = goalSet?.ts ?? new Date(0)
-  const failedSinceVersion = await prisma.slaveRun.count({
+  const failedAttempts = await prisma.slaveRun.count({
     where: {
       kind: 'planning',
       status: 'failed',
@@ -103,9 +152,38 @@ export async function replanIntent(
       slave: { team: { workspaceId } },
     },
   })
-  if (failedSinceVersion >= retryCap) return null
 
-  return { previousVersion: goalVersion - 1, version: goalVersion }
+  // `dispatchPlanning`'s own check 3, which is NOT part of the intent: a live planning run makes
+  // the tick wait, and the version keeps its claim on a re-plan until one actually starts.
+  const livePlanningRun =
+    (await prisma.slaveRun.count({
+      where: {
+        kind: 'planning',
+        status: { in: [...NON_TERMINAL_RUN_STATUSES] },
+        slave: { team: { workspaceId } },
+      },
+    })) > 0
+
+  const intent =
+    goalMoved && !alreadyReplanned && failedAttempts < retryCap
+      ? { previousVersion: goalVersion - 1, version: goalVersion }
+      : null
+
+  return {
+    goalVersion,
+    boardVersion,
+    boardTaskCount,
+    goalMoved,
+    alreadyReplanned,
+    livePlanningRun,
+    failedAttempts,
+    retryCap,
+    // An empty board is the first plan, not a re-plan: `dispatchPlanning` never reaches this at
+    // all there, and saying "a re-plan will run" about a workspace that has never been planned
+    // would be a different promise than the one the tick keeps.
+    willReplan: intent !== null && !livePlanningRun && boardTaskCount > 0,
+    intent,
+  }
 }
 
 /** The `replan` section of a run's recorded manifest, or `null` when it has none -- which is what

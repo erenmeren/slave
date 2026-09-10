@@ -3,11 +3,10 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProjectSettings } from '../src/server/projectSettings.js'
 import type { ShellFacts } from '../src/server/shell.js'
-import { GoalPanel } from '../src/components/project/GoalPanel.js'
 import { ProjectSettingsClient } from '../src/components/project/ProjectSettingsClient.js'
 import { RuntimePanel } from '../src/components/project/RuntimePanel.js'
 import { publishShellFacts } from '../src/hooks/useShellFacts.js'
-import { postControl, sendControl } from '../src/lib/postControl.js'
+import { sendControl } from '../src/lib/postControl.js'
 
 const refresh = vi.fn()
 const push = vi.fn()
@@ -25,55 +24,9 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-describe('GoalPanel', () => {
-  it('renders the form when goal is null', () => {
-    render(<GoalPanel workspaceId="w1" goal={null} />)
-    expect(screen.getByRole('textbox', { name: 'workspace goal' })).toBeTruthy()
-    expect(screen.getByTestId('goal-submit')).toBeTruthy()
-    expect(screen.queryByTestId('workspace-goal')).toBeNull()
-  })
-
-  it('posts /api/w/w1/goal with the typed text', async () => {
-    render(<GoalPanel workspaceId="w1" goal={null} />)
-    fireEvent.change(screen.getByTestId('goal-input'), { target: { value: 'ship the redesign' } })
-
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('goal-submit'))
-    })
-
-    expect(postControl).toHaveBeenCalledWith('/api/w/w1/goal', { goal: 'ship the redesign' })
-  })
-
-  it('renders the goal read-only when set', () => {
-    render(<GoalPanel workspaceId="w1" goal="ship the redesign" />)
-    expect(screen.getByTestId('workspace-goal').textContent).toBe('ship the redesign')
-    expect(screen.queryByTestId('goal-input')).toBeNull()
-  })
-
-  it('a 409 lands in the alert span', async () => {
-    vi.mocked(postControl).mockResolvedValueOnce({ ok: false, error: 'a goal must be a non-empty text' })
-    render(<GoalPanel workspaceId="w1" goal={null} />)
-    fireEvent.change(screen.getByTestId('goal-input'), { target: { value: '  ' } })
-
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('goal-submit'))
-    })
-
-    expect(screen.getByRole('alert').textContent).toContain('a goal must be a non-empty text')
-    // Success clears nothing locally; a failed submit stays in form mode too.
-    expect(screen.getByTestId('goal-input')).toBeTruthy()
-  })
-
-  it('an edit button switches a set goal back to the form, seeded with the current goal', () => {
-    render(<GoalPanel workspaceId="w1" goal="ship checkout" />)
-    expect(screen.queryByTestId('goal-input')).toBeNull()
-
-    fireEvent.click(screen.getByTestId('goal-edit'))
-
-    expect((screen.getByTestId('goal-input') as HTMLInputElement).value).toBe('ship checkout')
-    expect(screen.queryByTestId('workspace-goal')).toBeNull()
-  })
-})
+// `GoalPanel`'s own cases live in `goal-panel.test.tsx` (M40 t4): the panel dials `fetch`
+// directly now -- both outcomes of a save carry something it has to render -- so it no longer
+// shares this file's `postControl` mock with the other Settings panels.
 
 describe('RuntimePanel', () => {
   const limits = { maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 5 }
@@ -193,6 +146,7 @@ function settings(over: Partial<ProjectSettings['workspace']> = {}): ProjectSett
       id: 'w1',
       name: 'Checkout Platform',
       goal: null,
+      goalVersion: 0,
       provider: 'claude_code',
       budgetUsd: 2,
       costBlindBudgeted: false,
@@ -241,11 +195,26 @@ describe('ProjectSettingsClient', () => {
   })
 
   it('sets the goal then refreshes the route instead of waiting for a stream', async () => {
-    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
-    fireEvent.change(screen.getByTestId('goal-input'), { target: { value: 'Ship it' } })
-    fireEvent.click(screen.getByTestId('goal-submit'))
-    await waitFor(() => expect(postControl).toHaveBeenCalledWith('/api/w/w1/goal', { goal: 'Ship it' }))
-    await waitFor(() => expect(refresh).toHaveBeenCalled())
+    // The panel dials `fetch` itself since M40 t4 (both outcomes of a save carry a number it has to
+    // render), so this stubs the response the tab's own wiring is being checked against; what the
+    // panel does with the body is `goal-panel.test.tsx`'s subject.
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, version: 1, sha256: 'a'.repeat(64) }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
+      fireEvent.change(screen.getByTestId('goal-input'), { target: { value: 'Ship it' } })
+      fireEvent.click(screen.getByTestId('goal-submit'))
+      await waitFor(() =>
+        expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/goal', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ goal: 'Ship it' }),
+        }),
+      )
+      await waitFor(() => expect(refresh).toHaveBeenCalled())
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('carries the emergency stop in the danger zone', () => {

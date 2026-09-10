@@ -32,6 +32,7 @@ const task = (over: Partial<TaskBoardItem>): TaskBoardItem => ({
   assigneeName: 'Alex',
   branch: 'feature/add-the-thing',
   lastRejectionReason: null,
+  goalVersion: null,
   runs: [],
   collectable: false,
   artifacts: [],
@@ -40,7 +41,7 @@ const task = (over: Partial<TaskBoardItem>): TaskBoardItem => ({
 })
 
 const snapshot = (tasks: readonly TaskBoardItem[]): TasksSnapshot => ({
-  workspace: { id: 'w1', name: 'W', haltedReason: null },
+  workspace: { id: 'w1', name: 'W', haltedReason: null, goalVersion: 0 },
   shellFacts: {
     workspace: { id: 'w1', name: 'W' },
     counts: { slavesWorking: 0, tasksActive: 0 },
@@ -78,7 +79,7 @@ describe('TaskColumn', () => {
     render(
       <div>
         {BOARD_COLUMNS.map((column) => (
-          <TaskColumn key={column} column={column} tasks={[]} onSelect={() => {}} />
+          <TaskColumn workspaceGoalVersion={0} key={column} column={column} tasks={[]} onSelect={() => {}} />
         ))}
       </div>,
     )
@@ -89,28 +90,129 @@ describe('TaskColumn', () => {
 
 describe('TaskCard', () => {
   it('shows the title and the attempt/maxAttempts step counter', () => {
-    render(<TaskCard task={task({ attempt: 2 })} onSelect={() => {}} />)
+    render(<TaskCard workspaceGoalVersion={0} task={task({ attempt: 2 })} onSelect={() => {}} />)
     expect(screen.getByText('Add the thing')).toBeTruthy()
     expect(screen.getByTestId('task-step').textContent).toBe('2/3')
   })
 
   it('no longer shows the priority chip — it moved to the panel (M24 §5.4)', () => {
-    render(<TaskCard task={task({ priority: 9 })} onSelect={() => {}} />)
+    render(<TaskCard workspaceGoalVersion={0} task={task({ priority: 9 })} onSelect={() => {}} />)
     expect(screen.queryByTestId('task-priority')).toBeNull()
   })
 
   it('calls onSelect with the task id when clicked', () => {
     const onSelect = vi.fn()
-    render(<TaskCard task={task({ id: 't9' })} onSelect={onSelect} />)
+    render(<TaskCard workspaceGoalVersion={0} task={task({ id: 't9' })} onSelect={onSelect} />)
     fireEvent.click(screen.getByText('Add the thing'))
     expect(onSelect).toHaveBeenCalledWith('t9')
+  })
+
+  /** M40 §6: which requirement produced this task, and whether that requirement has moved on. */
+  describe('the goal stamp and the stale badge', () => {
+    it('names the goal version the task was derived from', () => {
+      render(<TaskCard workspaceGoalVersion={2} task={task({ goalVersion: 2 })} onSelect={() => {}} />)
+      expect(screen.getByTestId('task-goal-version').textContent).toBe('goal v2')
+      expect(screen.queryByTestId('task-stale')).toBeNull()
+    })
+
+    it('says "unstamped" for a hand-made task, and never calls it stale', () => {
+      // No plan derived it from a goal, so there is no version for it to be behind.
+      render(<TaskCard workspaceGoalVersion={5} task={task({ goalVersion: null })} onSelect={() => {}} />)
+      expect(screen.getByTestId('task-goal-version').textContent).toBe('unstamped')
+      expect(screen.queryByTestId('task-stale')).toBeNull()
+    })
+
+    it('badges a task whose goal version is behind the project\'s', () => {
+      render(<TaskCard workspaceGoalVersion={3} task={task({ goalVersion: 1 })} onSelect={() => {}} />)
+      expect(screen.getByTestId('task-goal-version').textContent).toBe('goal v1')
+      expect(screen.getByTestId('task-stale').textContent).toBe('stale')
+    })
+  })
+
+  /** M40 §6: a cancelled task is not a broken one. */
+  describe('a cancelled task', () => {
+    it('reads CANCELLED in the muted tone rather than blocked\'s red, with its reason on the card', () => {
+      render(
+        <TaskCard
+          workspaceGoalVersion={2}
+          task={task({ status: 'cancelled', lastRejectionReason: 'the re-plan for goal v2 no longer needs it' })}
+          onSelect={() => {}}
+        />,
+      )
+
+      const pill = screen.getByTestId('status-pill')
+      expect(pill.textContent).toContain('CANCELLED')
+      expect(pill.getAttribute('data-tone')).toBe('idle')
+      expect(screen.getByTestId('task-cancel-reason').textContent).toBe('the re-plan for goal v2 no longer needs it')
+    })
+
+    it('is greyed, unlike a failed card', () => {
+      const { container: cancelled } = render(<TaskCard workspaceGoalVersion={0} task={task({ status: 'cancelled' })} onSelect={() => {}} />)
+      expect(cancelled.querySelector('[data-testid="task-card"]')?.className).toContain('opacity-60')
+
+      const { container: failed } = render(<TaskCard workspaceGoalVersion={0} task={task({ status: 'failed' })} onSelect={() => {}} />)
+      expect(failed.querySelector('[data-testid="task-card"]')?.className).not.toContain('opacity-60')
+      expect(within(failed).getByTestId('status-pill').getAttribute('data-tone')).toBe('blocked')
+    })
+  })
+})
+
+describe('TaskDetailPanel — the goal stamp, the stale badge and a cancellation (M40 §6)', () => {
+  it('names the goal version in the header and badges a stale task', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={4} workspaceId="w1" task={task({ goalVersion: 2 })} onClose={() => {}} />)
+
+    expect(screen.getByTestId('task-panel-goal-version').textContent).toBe('goal v2')
+    expect(screen.getByTestId('task-panel-stale').textContent).toBe('stale')
+  })
+
+  it('leaves a current task unbadged, and an unstamped one too', () => {
+    const { unmount } = render(
+      <TaskDetailPanel workspaceGoalVersion={2} workspaceId="w1" task={task({ goalVersion: 2 })} onClose={() => {}} />,
+    )
+    expect(screen.queryByTestId('task-panel-stale')).toBeNull()
+    unmount()
+
+    render(<TaskDetailPanel workspaceGoalVersion={2} workspaceId="w1" task={task({ goalVersion: null })} onClose={() => {}} />)
+    expect(screen.getByTestId('task-panel-goal-version').textContent).toBe('unstamped')
+    expect(screen.queryByTestId('task-panel-stale')).toBeNull()
+  })
+
+  it('labels a cancelled task\'s reason as a cancellation, not as a rejection', () => {
+    // `cancelTask` writes the reason into the same column a review rejection uses; calling it a
+    // rejection would say a reviewer turned the work down when nobody reviewed it at all.
+    render(
+      <TaskDetailPanel
+        workspaceGoalVersion={2}
+        workspaceId="w1"
+        task={task({ status: 'cancelled', lastRejectionReason: 'the re-plan for goal v2 no longer needs it' })}
+        onClose={() => {}}
+      />,
+    )
+
+    expect(screen.getByTestId('detail-cancel-reason').textContent).toBe('the re-plan for goal v2 no longer needs it')
+    expect(screen.queryByTestId('detail-rejection-reason')).toBeNull()
+    expect(screen.getByText('cancelled', { selector: 'dt' })).toBeTruthy()
+  })
+
+  it('still calls a rejected task\'s reason a rejection', () => {
+    render(
+      <TaskDetailPanel
+        workspaceGoalVersion={0}
+        workspaceId="w1"
+        task={task({ status: 'rework', lastRejectionReason: 'edge case unhandled' })}
+        onClose={() => {}}
+      />,
+    )
+
+    expect(screen.getByTestId('detail-rejection-reason').textContent).toBe('edge case unhandled')
+    expect(screen.queryByTestId('detail-cancel-reason')).toBeNull()
   })
 })
 
 describe('TaskDetailPanel', () => {
   it('shows TASK-<id> and the priority chip in the header (M24 §5.4 — moved off the card)', () => {
     render(
-      <TaskDetailPanel
+      <TaskDetailPanel workspaceGoalVersion={0}
         workspaceId="w1"
         task={task({ id: '3f9a21c8-0000-4000-8000-000000000000', priority: 3 })}
         onClose={() => {}}
@@ -122,7 +224,7 @@ describe('TaskDetailPanel', () => {
 
   it('shows description, branch, rejection reason and run rows', () => {
     render(
-      <TaskDetailPanel
+      <TaskDetailPanel workspaceGoalVersion={0}
         workspaceId="w1"
         task={task({
           description: 'Do the thing well',
@@ -153,7 +255,7 @@ describe('TaskDetailPanel', () => {
 
   it("shows 'paused at step N' for a paused run with a checkpoint", () => {
     render(
-      <TaskDetailPanel
+      <TaskDetailPanel workspaceGoalVersion={0}
         workspaceId="w1"
         task={task({
           runs: [
@@ -182,7 +284,7 @@ describe('TaskDetailPanel', () => {
   // resume. The panel names what it is waiting on instead.
   it("shows 'waiting for <recipient>' instead of 'paused at step N' for a waiting run", () => {
     render(
-      <TaskDetailPanel
+      <TaskDetailPanel workspaceGoalVersion={0}
         workspaceId="w1"
         task={task({
           runs: [
@@ -211,7 +313,7 @@ describe('TaskDetailPanel', () => {
     // `packages/domain/src/events/schema.ts`), so `summary` is always `null` today and the panel
     // always falls back to the truncated id -- not a gap in this test, a fact of the data.
     render(
-      <TaskDetailPanel
+      <TaskDetailPanel workspaceGoalVersion={0}
         workspaceId="w1"
         task={task({
           runs: [
@@ -244,7 +346,7 @@ describe('TaskDetailPanel', () => {
 
   it('calls onClose when the close control is used', () => {
     const onClose = vi.fn()
-    render(<TaskDetailPanel workspaceId="w1" task={task({})} onClose={onClose} />)
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({})} onClose={onClose} />)
     fireEvent.click(screen.getByRole('button', { name: /close/i }))
     expect(onClose).toHaveBeenCalled()
   })
@@ -252,7 +354,7 @@ describe('TaskDetailPanel', () => {
   // Motion pass (spec §8 / M4 deferral). `TasksClient` mounts this panel fresh on card select, so
   // the slide-in class replays on every open by construction.
   it('carries the motion-safe panel slide-in animation class on its root', () => {
-    const { container } = render(<TaskDetailPanel workspaceId="w1" task={task({})} onClose={() => {}} />)
+    const { container } = render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({})} onClose={() => {}} />)
     expect(container.querySelector('aside')?.className).toContain('motion-safe:animate-[panel-in_160ms_ease-out]')
   })
 })
@@ -304,7 +406,7 @@ describe('TaskDetailPanel — what a run saw (M37 §6)', () => {
 
   it('fetches the run context on demand and lists what each section came from', async () => {
     const fetchMock = stubContext({ prompt: 'You are careful.', manifest })
-    render(<TaskDetailPanel workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('run-context-open'))
@@ -322,7 +424,7 @@ describe('TaskDetailPanel — what a run saw (M37 §6)', () => {
 
   it('highlights the skills the run could NOT be given', async () => {
     stubContext({ prompt: 'You are careful.', manifest })
-    render(<TaskDetailPanel workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('run-context-open'))
@@ -335,7 +437,7 @@ describe('TaskDetailPanel — what a run saw (M37 §6)', () => {
 
   it('keeps the prompt collapsed behind a disclosure, as text', async () => {
     stubContext({ prompt: 'You are careful.\n<b>not markup</b>', manifest })
-    render(<TaskDetailPanel workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('run-context-open'))
@@ -352,7 +454,7 @@ describe('TaskDetailPanel — what a run saw (M37 §6)', () => {
 
   it("says so when the run recorded no context, rather than showing an empty section list", async () => {
     stubContext({ error: 'this run recorded no context: it never started' }, 404)
-    render(<TaskDetailPanel workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('run-context-open'))
@@ -365,13 +467,13 @@ describe('TaskDetailPanel — what a run saw (M37 §6)', () => {
 
 describe('TaskDetailPanel integration marker (M35 t2)', () => {
   it("shows 'awaiting integration' on a done task whose integratedAt is null", () => {
-    render(<TaskDetailPanel workspaceId="w1" task={task({ status: 'done', integratedAt: null })} onClose={() => {}} />)
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ status: 'done', integratedAt: null })} onClose={() => {}} />)
     expect(screen.getByTestId('awaiting-integration')).toBeTruthy()
   })
 
   it('shows no marker for a done task once integratedAt is set', () => {
     render(
-      <TaskDetailPanel
+      <TaskDetailPanel workspaceGoalVersion={0}
         workspaceId="w1"
         task={task({ status: 'done', integratedAt: new Date(0).toISOString() })}
         onClose={() => {}}
@@ -381,7 +483,7 @@ describe('TaskDetailPanel integration marker (M35 t2)', () => {
   })
 
   it('shows no marker for a task that is not done at all', () => {
-    render(<TaskDetailPanel workspaceId="w1" task={task({ status: 'running', integratedAt: null })} onClose={() => {}} />)
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ status: 'running', integratedAt: null })} onClose={() => {}} />)
     expect(screen.queryByTestId('awaiting-integration')).toBeNull()
   })
 })
@@ -401,7 +503,7 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
 
   it('renders the collect control for a terminal task with a worktree still on disk', () => {
     render(
-      <TaskDetailPanel
+      <TaskDetailPanel workspaceGoalVersion={0}
         workspaceId="w1"
         task={task({ status: 'done', collectable: true, runs: [runWithWorktree('/r/.slaveofai/worktrees/T-1')] })}
         onClose={() => {}}
@@ -412,7 +514,7 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
 
   it('does not render the collect control for a still-running task', () => {
     render(
-      <TaskDetailPanel
+      <TaskDetailPanel workspaceGoalVersion={0}
         workspaceId="w1"
         task={task({ status: 'running', collectable: false, runs: [runWithWorktree('/r/.slaveofai/worktrees/T-1')] })}
         onClose={() => {}}
@@ -423,7 +525,7 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
 
   it('does not render the collect control for a terminal task whose runs have no worktree left', () => {
     render(
-      <TaskDetailPanel
+      <TaskDetailPanel workspaceGoalVersion={0}
         workspaceId="w1"
         task={task({ status: 'done', collectable: false, runs: [runWithWorktree(null)] })}
         onClose={() => {}}
@@ -437,7 +539,7 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(
-      <TaskDetailPanel
+      <TaskDetailPanel workspaceGoalVersion={0}
         workspaceId="w1"
         task={task({ id: 't1', status: 'done', collectable: true, runs: [runWithWorktree('/r/.slaveofai/worktrees/T-1')] })}
         onClose={() => {}}
@@ -465,7 +567,7 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(
-      <TaskDetailPanel
+      <TaskDetailPanel workspaceGoalVersion={0}
         workspaceId="w1"
         task={task({ id: 't1', status: 'done', collectable: true, runs: [runWithWorktree('/r/.slaveofai/worktrees/T-1')] })}
         onClose={() => {}}
@@ -486,13 +588,13 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
 
 describe('TaskDetailPanel artifacts (M23 C1-C3)', () => {
   it("shows 'no artifacts yet' when the task has none", () => {
-    render(<TaskDetailPanel workspaceId="w1" task={task({ artifacts: [] })} onClose={() => {}} />)
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ artifacts: [] })} onClose={() => {}} />)
     expect(screen.getByText('no artifacts yet')).toBeTruthy()
   })
 
   it('renders one row per artifact, with its label and time-of-day', () => {
     render(
-      <TaskDetailPanel
+      <TaskDetailPanel workspaceGoalVersion={0}
         workspaceId="w1"
         task={task({
           artifacts: [
@@ -519,7 +621,7 @@ describe('TaskDetailPanel artifacts (M23 C1-C3)', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(
-      <TaskDetailPanel
+      <TaskDetailPanel workspaceGoalVersion={0}
         workspaceId="w1"
         task={task({
           id: 't1',
@@ -547,7 +649,7 @@ describe('TaskDetailPanel artifacts (M23 C1-C3)', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     render(
-      <TaskDetailPanel
+      <TaskDetailPanel workspaceGoalVersion={0}
         workspaceId="w1"
         task={task({
           id: 't1',
@@ -610,6 +712,7 @@ describe('the six-column board', () => {
   it('renders the compact card: title, status pill, assignee chip, step counter — no ref or priority chip', () => {
     render(
       <TaskCard
+        workspaceGoalVersion={0}
         task={task({ id: '3f9a21c8-0000-4000-8000-000000000000', title: 'Implement Checkout API', priority: 3, assigneeName: 'Alex Turner', status: 'running' })}
         onSelect={() => {}}
       />,
@@ -622,7 +725,7 @@ describe('the six-column board', () => {
   })
 
   it('says unassigned rather than showing an empty avatar', () => {
-    render(<TaskCard task={task({ assigneeName: null })} onSelect={() => {}} />)
+    render(<TaskCard workspaceGoalVersion={0} task={task({ assigneeName: null })} onSelect={() => {}} />)
     expect(screen.getByTestId('task-assignee').textContent).toBe('unassigned')
     expect(screen.queryByTestId('avatar-tile')).toBeNull()
   })
@@ -630,7 +733,7 @@ describe('the six-column board', () => {
   // M14 fix wave, review I2: the card used to pass a fake idle slave through `cardStateFor`, so a
   // `running` task under the teal IN PROGRESS head wore a grey IDLE pill. It reads its column now.
   it('gives a running task the working pill its own column head wears, not IDLE', () => {
-    render(<TaskCard task={task({ status: 'running' })} onSelect={() => {}} />)
+    render(<TaskCard workspaceGoalVersion={0} task={task({ status: 'running' })} onSelect={() => {}} />)
     expect(screen.getByTestId('status-pill').textContent).toBe('WORKING')
     expect(screen.getByTestId('status-pill').getAttribute('data-tone')).toBe('working')
   })

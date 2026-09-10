@@ -7,10 +7,14 @@ import { TONE_DOT } from './ui/StatusPill'
 export function TaskColumn({
   column,
   tasks,
+  workspaceGoalVersion,
   onSelect,
 }: {
   readonly column: BoardColumn
   readonly tasks: readonly TaskBoardItem[]
+  /** Passed straight through to every card (M40 §6): the goal version the PROJECT is on, which is
+   *  what a card's own stamp is compared against for the stale badge. */
+  readonly workspaceGoalVersion: number
   readonly onSelect: (id: string) => void
 }): React.JSX.Element {
   // One tone table (Decision 2): the column's state, then that state's tone. Never a colour
@@ -29,7 +33,7 @@ export function TaskColumn({
       </header>
       <div className="flex flex-col gap-2">
         {tasks.map((task) => (
-          <TaskCard key={task.id} task={task} onSelect={onSelect} />
+          <TaskCard key={task.id} task={task} workspaceGoalVersion={workspaceGoalVersion} onSelect={onSelect} />
         ))}
       </div>
     </div>

@@ -111,7 +111,8 @@ describe('route-level principal gating (M23 F6)', () => {
     const response = await postGoal(fixture.workspace.id)
 
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ ok: true })
+    // M40 t4: the goal route's envelope carries the version it wrote and that text's hash.
+    expect(await response.json()).toMatchObject({ ok: true, version: 1 })
     const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })
     expect(workspace.goalSetByUserId).toBe(user.id)
     const events = await prisma.executionEvent.findMany({

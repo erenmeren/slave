@@ -61,7 +61,7 @@ const snapshot = (slaves: readonly SlaveCardData[]): OverviewSnapshot => ({
     // M38 t5: the Supervisor's share of `spentUsd`. Nothing here, so the strip claims nothing --
     // the two cases that do are below.
     supervisorSpend: { measuredUsd: 0, unmeasuredCalls: 0 },
-    goal: null, provider: 'claude_code', costBlindBudgeted: false,
+    goal: null, goalVersion: 0, provider: 'claude_code', costBlindBudgeted: false,
     // M14 Task 8: the three guardrail columns the project header/tab strip read (M24 §2.2). They
     // live on the overview snapshot so the page can PROVIDE `ShellFacts` from the stream it
     // already has, rather than the header opening a second `EventSource` of its own.

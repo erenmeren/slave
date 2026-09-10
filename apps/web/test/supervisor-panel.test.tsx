@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SUPERVISOR_PANEL_MIN_REFRESH_MS, SupervisorPanel } from '../src/components/SupervisorPanel.js'
+import { SUPERVISOR_PANEL_MIN_REFRESH_MS, SupervisorPanel, actionText } from '../src/components/SupervisorPanel.js'
 import type { SupervisorView } from '../src/server/supervisor.js'
 
 const GET_URL = '/api/w/w1/supervisor'
@@ -96,7 +96,25 @@ const view = (over?: Partial<SupervisorView>): SupervisorView => ({
   // M39 t4: the mailbox block -- every question still waiting on somebody, whether or not the
   // Supervisor has drafted anything for it.
   questions: [question()],
+  // M40 t4: the board's titles by id, so a `cancel_task` proposal names the task a human is being
+  // asked to give up rather than its uuid.
+  taskTitles: { 't-1': 'Wire up the refunds form' },
   ...over,
+})
+
+describe('actionText', () => {
+  it('names the task a cancel_task proposal is about, with the reason it was proposed for', () => {
+    expect(
+      actionText({ kind: 'cancel_task', taskId: 't-1', reason: 'the re-plan for goal v2 no longer needs it' }, { 't-1': 'Wire up the refunds form' }),
+    ).toBe('cancel task Wire up the refunds form: the re-plan for goal v2 no longer needs it')
+  })
+
+  it('falls back to the id for a task the world no longer holds', () => {
+    // Findable, rather than a name this function would have to invent.
+    expect(actionText({ kind: 'cancel_task', taskId: 't-9', reason: 'no longer needed' }, {})).toBe(
+      'cancel task t-9: no longer needed',
+    )
+  })
 })
 
 describe('SupervisorPanel', () => {
@@ -166,6 +184,31 @@ describe('SupervisorPanel', () => {
     expect(screen.getByTestId('supervisor-proposal-action').textContent).toContain('backend, reviewer')
     expect(screen.getByTestId('supervisor-proposal-rationale').textContent).toBe(
       'Alex is idle and their title already reads as reviewer.',
+    )
+  })
+
+  it('names the task in a cancel_task proposal, so a human is not asked to approve a uuid (M40 §6)', async () => {
+    await mount({
+      pending: [
+        decision({
+          id: 'd-cancel',
+          situationKind: 'stale_task',
+          subjectId: 't-1',
+          situation: {
+            kind: 'stale_task',
+            subjectId: 't-1',
+            summary: 'the re-plan for goal v2 no longer needs "Wire up the refunds form"',
+            facts: { goalVersion: 1, currentVersion: 2, reason: 'replan_cancel' },
+          },
+          action: { kind: 'cancel_task', taskId: 't-1', reason: 'the re-plan for goal v2 no longer needs it' },
+          rationale: 'the re-plan for goal v2 no longer needs this task',
+        }),
+      ],
+    })
+
+    expect(screen.getByTestId('supervisor-proposal-kind').textContent).toBe('stale_task')
+    expect(screen.getByTestId('supervisor-proposal-action').textContent).toBe(
+      'cancel task Wire up the refunds form: the re-plan for goal v2 no longer needs it',
     )
   })
 

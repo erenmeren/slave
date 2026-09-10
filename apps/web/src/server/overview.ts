@@ -200,6 +200,15 @@ export interface OverviewSnapshot {
      */
     readonly unmeasuredRuns: number
     readonly goal: string | null
+    /**
+     * Which VERSION of that goal the project is on (M40 §1). 0 means no version was ever recorded
+     * -- a project with no goal, or one whose `goal` column was hand-seeded before M40.
+     *
+     * Shipped beside the goal because it is half of what makes a task card's **stale** badge: a
+     * task is stale when its own `goalVersion` is behind this one, and that comparison needs both
+     * numbers from the same reading.
+     */
+    readonly goalVersion: number
     /** The workspace's configured default runtime, or `null` for "nothing configured" (M13 §6.3). */
     readonly provider: ProviderKind | null
     /**
@@ -538,6 +547,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       },
       unmeasuredRuns: spend.unknownRuns,
       goal: workspace.goal,
+      goalVersion: workspace.goalVersion,
       provider,
       // The warning the Runtime card shows, derived SERVER-side (spec §6.3): `capabilitiesOf` is
       // safe here and unsafe in a client component -- `@slave-of-ai/providers`'s barrel imports

@@ -31,6 +31,7 @@ import { POST as messagePOST } from '../../src/app/api/w/[workspaceId]/runs/[run
 import { POST as answerPOST } from '../../src/app/api/w/[workspaceId]/messages/[messageId]/answer/route.js'
 import { POST as emergencyStopPOST } from '../../src/app/api/w/[workspaceId]/emergency-stop/route.js'
 import { POST as goalPOST } from '../../src/app/api/w/[workspaceId]/goal/route.js'
+import { GET as goalHistoryGET } from '../../src/app/api/w/[workspaceId]/goal/history/route.js'
 import { PATCH as profilePATCH } from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/profile/route.js'
 import { PATCH as runtimeRolesPATCH } from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/runtime-roles/route.js'
 import { GET as runContextGET } from '../../src/app/api/w/[workspaceId]/runs/[runId]/context/route.js'
@@ -583,10 +584,16 @@ describe('the control routes', () => {
         { params: Promise.resolve({ workspaceId }) },
       )
 
-    it('(a) sets the column and records one workspace.goal_set event, returning 200', async (): Promise<void> => {
+    it('(a) sets the column and records one workspace.goal_set event, returning 200 with the version', async (): Promise<void> => {
       const response = await post(fixture.workspace.id, { goal: 'ship the checkout redesign' })
       expect(response.status).toBe(200)
-      expect(await response.json()).toEqual({ ok: true })
+      // M40 t4: the version the set wrote rides back on the envelope, so the panel can name it
+      // without a second read.
+      expect(await response.json()).toEqual({
+        ok: true,
+        version: 1,
+        sha256: expect.stringMatching(/^[0-9a-f]{64}$/) as unknown as string,
+      })
 
       const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })
       expect(workspace.goal).toBe('ship the checkout redesign')
@@ -617,6 +624,67 @@ describe('the control routes', () => {
     it('(d) 404s an unknown workspace', async (): Promise<void> => {
       const response = await post('00000000-0000-4000-8000-000000000000', { goal: 'ship it' })
       expect(response.status).toBe(404)
+    })
+
+    it('(e) 409s the same text again as goal_unchanged, naming the kind so the panel can soften it', async (): Promise<void> => {
+      await post(fixture.workspace.id, { goal: 'ship the checkout redesign' })
+
+      const response = await post(fixture.workspace.id, { goal: 'ship the checkout redesign' })
+
+      expect(response.status).toBe(409)
+      const body = (await response.json()) as { error: string; kind: string }
+      expect(body.kind).toBe('goal_unchanged')
+      expect(body.error).toMatch(/already reads exactly this at version 1/)
+      expect(await prisma.goalVersion.count({ where: { workspaceId: fixture.workspace.id } })).toBe(1)
+    })
+  })
+
+  /** M40 §6: the goal's history, newest first, each row carrying the diff against the version it
+   *  replaced -- the read behind `GoalPanel`'s collapsible history list. */
+  describe('goal history', () => {
+    const get = (workspaceId: string): Promise<Response> =>
+      goalHistoryGET(new Request('http://x'), { params: Promise.resolve({ workspaceId }) })
+    // The write beside it, so a history has something to be a history OF. Its own copy: `post`
+    // above is scoped to the `goal` describe.
+    const setGoalVia = (workspaceId: string, goal: string): Promise<Response> =>
+      goalPOST(
+        new Request('http://x', { method: 'POST', body: JSON.stringify({ goal }), headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId }) },
+      )
+
+    it('(a) 200s with every version newest first and each one\'s diff', async (): Promise<void> => {
+      await setGoalVia(fixture.workspace.id, 'ship checkout')
+      await setGoalVia(fixture.workspace.id, 'ship checkout\nand the refunds flow')
+
+      const response = await get(fixture.workspace.id)
+
+      expect(response.status).toBe(200)
+      const history = (await response.json()) as {
+        version: number
+        text: string
+        sha256: string
+        setByUserId: string | null
+        createdAt: string
+        diff: { added: string[]; removed: string[] } | null
+      }[]
+      expect(history.map((one) => one.version)).toEqual([2, 1])
+      expect(history[0]?.diff).toEqual({ added: ['and the refunds flow'], removed: [] })
+      expect(history[1]?.diff).toBeNull()
+      expect(history[1]?.text).toBe('ship checkout')
+    })
+
+    it('(b) 200s with an empty list for a project whose goal was never set', async (): Promise<void> => {
+      const response = await get(fixture.workspace.id)
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual([])
+    })
+
+    it('(c) 404s an unknown workspace -- "no history" and "no such project" are different facts', async (): Promise<void> => {
+      const response = await get('00000000-0000-4000-8000-000000000000')
+
+      expect(response.status).toBe(404)
+      expect((await response.json()).error).toBe('no such workspace')
     })
   })
 

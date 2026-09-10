@@ -420,42 +420,94 @@ function WorkspacePlanCreatedCard(props: ActivityCardProps): ReactElement {
 
 // `workers` deliberately has NO `.min(1)` on the wire (schema.ts) — a pure re-sync that added
 // nobody still emits with an empty array (M10 spec §5 step 4), hence the "no new workers" line.
-// M40 t1: the three requirement-versioning events. Minimal cards -- Task 4 gives them the goal
-// version, the diff and the stale badge the milestone's web work is actually about.
+// ---- M40 §6: the three requirement-versioning events -----------------------------------------
+// A goal that moved past the board it produced starts a delta re-plan; the delta's additions LAND
+// and its cancellations are only PROPOSED (ruling R1); a task that is actually taken off the board
+// says why, and which requirement it was doing the work of.
+
+/** `dispatchPlanning` started a re-plan run for a goal version (M40 §5). `starting`, the tone every
+ *  other "a run is beginning" card carries -- nothing has been decided yet. */
 function WorkspaceReplanStartedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as { version: number }
   return (
     <ActivityCard {...props}>
-      <Transition tone="idle" label={`re-plan started for goal v${String(payload.version)}`} />
+      <Transition tone="starting" label={`re-planning for goal v${String(payload.version)}`} />
     </ActivityCard>
   )
 }
 
+/**
+ * What a re-plan actually did (M40 §5).
+ *
+ * Four counts, worded so the asymmetry ruling R1 is built on cannot be misread: tasks were **added**
+ * (they are on the board now), cancellations were **proposed** (nothing was cancelled -- a human
+ * approves each one), and the two ways a requested cancellation came to nothing are named apart --
+ * **dropped** by the status rule (the task was running, reviewing, done…) and **failed** to become a
+ * proposal at all (a cooldown, a switched-off Supervisor, a write that threw).
+ *
+ * `failedProposals` is read optionally: it joined the payload in Task 3's fix round, and a row
+ * written before it carries no such field. Absent is not zero -- rendering "0 failed" for a row that
+ * never recorded the number would be an assertion the log does not support -- so that line is simply
+ * not there.
+ */
 function WorkspaceReplannedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
     version: number
     added: readonly string[]
     proposedCancellations: readonly string[]
     droppedCancellations: readonly { taskId: string; status: string }[]
+    failedProposals?: readonly string[]
   }
   return (
     <ActivityCard {...props}>
       <Transition tone="idle" label={`re-planned for goal v${String(payload.version)}`}>
         <span data-testid="replanned-counts">
-          {payload.added.length} added, {payload.proposedCancellations.length} cancellations proposed,{' '}
-          {payload.droppedCancellations.length} dropped
+          <span data-testid="replanned-added">
+            {payload.added.length} task{payload.added.length === 1 ? '' : 's'} added
+          </span>
+          {', '}
+          <span data-testid="replanned-proposed">
+            {payload.proposedCancellations.length} cancellation{payload.proposedCancellations.length === 1 ? '' : 's'} proposed
+          </span>
+          {payload.droppedCancellations.length > 0 && (
+            <>
+              {', '}
+              <span data-testid="replanned-dropped">{payload.droppedCancellations.length} dropped</span>
+            </>
+          )}
+          {payload.failedProposals !== undefined && payload.failedProposals.length > 0 && (
+            <>
+              {', '}
+              <span data-testid="replanned-failed">{payload.failedProposals.length} failed</span>
+            </>
+          )}
         </span>
       </Transition>
     </ActivityCard>
   )
 }
 
+/**
+ * A task taken off the board (M40 §4) -- by a human, or by a human approving the Supervisor's
+ * `cancel_task` proposal.
+ *
+ * `idle`, not `danger`: a cancellation is not a failure. It carries the reason `cancelTask` kept on
+ * the task, and the goal version that task was derived from -- so the log says WHOSE work was
+ * dropped without a reader having to join a task row that now says `cancelled` and nothing about
+ * why it existed. "unstamped" for a hand-made task, which no goal version produced.
+ */
 function TaskCancelledCard(props: ActivityCardProps): ReactElement {
-  const payload = props.event.payload as { reason: string }
+  const payload = props.event.payload as { reason: string; goalVersion?: number | null }
+  const goalVersion = payload.goalVersion ?? null
   return (
     <ActivityCard {...props}>
-      <Transition tone="warn" label="cancelled">
-        <span data-testid="task-cancelled-reason">{payload.reason}</span>
+      <Transition tone="idle" label="cancelled">
+        {/* Another party's text -- a re-plan's own sentence, or an operator's -- as JSX children,
+          * so it is characters on the page and never elements (spec §1). */}
+        <span data-testid="task-cancelled-reason">{payload.reason}</span>{' '}
+        <span data-testid="task-cancelled-goal-version" className="text-text-3">
+          {goalVersion === null ? 'unstamped' : `goal v${String(goalVersion)}`}
+        </span>
       </Transition>
     </ActivityCard>
   )

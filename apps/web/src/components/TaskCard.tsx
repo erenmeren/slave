@@ -24,6 +24,30 @@ export const TASK_STATUS_FLASH_COLOR: Record<TaskStatus, string> = taskStatusTab
 export const TASK_STATUS_TEXT: Record<TaskStatus, string> = taskStatusTable(TONE_TEXT)
 
 /**
+ * Which requirement produced this task (M40 §1), as a card says it.
+ *
+ * "unstamped" rather than a blank or a `v0`: a hand-made task was derived from no goal version at
+ * all, which is a real and different fact from "we do not know", and a `v0` would name a
+ * `GoalVersion` row that does not exist.
+ */
+export function goalStampText(goalVersion: number | null): string {
+  return goalVersion === null ? 'unstamped' : `goal v${String(goalVersion)}`
+}
+
+/**
+ * Whether a task is behind the goal the project is on (M40 §6) -- the **stale** badge's one rule,
+ * shared by the card and the detail panel so the two cannot disagree about one task.
+ *
+ * A null stamp is never stale: no plan derived that task from a goal, so there is no version for it
+ * to be behind. This is the same predicate `summarise`'s `next.stale` count uses in the domain,
+ * restated here over the DTO rather than imported -- the domain's version reads a
+ * `SupervisorWorld`, which is a model's input, not a board card's.
+ */
+export function isStale(goalVersion: number | null, workspaceGoalVersion: number): boolean {
+  return goalVersion !== null && goalVersion < workspaceGoalVersion
+}
+
+/**
  * The handoff's compact card (design README §3a.3): title, status pill, assignee chip, step
  * counter (`attempt/maxAttempts`) — the id and priority live in the detail panel now (M24 §5.4).
  * Its state — and so its dot/pill tone — comes from
@@ -35,13 +59,18 @@ export const TASK_STATUS_TEXT: Record<TaskStatus, string> = taskStatusTable(TONE
  */
 export function TaskCard({
   task,
+  workspaceGoalVersion,
   onSelect,
 }: {
   readonly task: TaskBoardItem
+  /** The version of the goal the PROJECT is on (M40 §6) -- what this card's own stamp is compared
+   *  against for the stale badge. */
+  readonly workspaceGoalVersion: number
   readonly onSelect: (id: string) => void
 }): React.JSX.Element {
   const state = cardStateForTask(task.status)
   const { tone, label, pulse } = CARD_STATE_TONE[state]
+  const stale = isStale(task.goalVersion, workspaceGoalVersion)
 
   return (
     <button
@@ -49,16 +78,40 @@ export function TaskCard({
       data-testid="task-card"
       data-status={task.status}
       onClick={() => onSelect(task.id)}
+      // Greyed, not reddened (M40 §6): a cancelled card is still readable and still selectable --
+      // an operator has to be able to open it and read why -- but it recedes, because the work it
+      // stands for is not coming back.
       className={`flex w-full flex-col gap-1 rounded-tile border bg-[#0f1116] p-[10px] text-left transition-colors hover:border-white/[0.22] ${
         task.status === 'blocked' ? 'border-tone-blocked/30' : 'border-line'
-      }`}
+      } ${task.status === 'cancelled' ? 'opacity-60' : ''}`}
     >
-      <span className="flex items-baseline justify-end">
-        <StatusPill tone={tone} label={label} pulse={pulse} />
+      <span className="flex items-baseline justify-between gap-2">
+        <span data-testid="task-goal-version" className="truncate font-mono text-[9.5px] text-text-3">
+          {goalStampText(task.goalVersion)}
+        </span>
+        <span className="flex shrink-0 items-baseline gap-[6px]">
+          {stale && (
+            // The one thing on this card an operator may have to act on: the requirement moved and
+            // this task is still the old one's work.
+            <span data-testid="task-stale" className="font-mono text-[9px] uppercase tracking-wide text-tone-waiting">
+              stale
+            </span>
+          )}
+          <StatusPill tone={tone} label={label} pulse={pulse} />
+        </span>
       </span>
       <span data-testid="task-title" className="text-[11.5px] leading-[1.35] text-[#dbe1ea]">
         {task.title}
       </span>
+      {task.status === 'cancelled' && task.lastRejectionReason !== null && (
+        // WHY it is off the board, on the card itself: `cancelTask` keeps the reason on the task,
+        // and a cancelled card with no reason is the one an operator has to open to understand.
+        // Another party's text -- a re-plan's own sentence, or an operator's -- as JSX children,
+        // so it is characters and never elements (spec §1).
+        <span data-testid="task-cancel-reason" className="text-[10px] leading-[1.35] text-text-3">
+          {task.lastRejectionReason}
+        </span>
+      )}
       <span className="mt-[8px] flex items-center gap-[6px]">
         {task.assigneeName === null ? (
           <span data-testid="task-assignee" className="text-[10px] text-[#7c8697]">

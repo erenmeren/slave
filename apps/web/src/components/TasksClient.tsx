@@ -55,12 +55,13 @@ export function TasksClient({
               key={column}
               column={column}
               tasks={view.tasks.filter((task) => COLUMN_FOR_STATUS[task.status] === column)}
+              workspaceGoalVersion={view.workspace.goalVersion}
               onSelect={setSelectedId}
             />
           ))}
         </main>
       </div>
-      {selectedTask !== null && <TaskDetailPanel task={selectedTask} workspaceId={workspaceId} onClose={() => setSelectedId(null)} />}
+      {selectedTask !== null && <TaskDetailPanel task={selectedTask} workspaceId={workspaceId} workspaceGoalVersion={view.workspace.goalVersion} onClose={() => setSelectedId(null)} />}
     </>
   )
 }

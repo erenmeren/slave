@@ -88,6 +88,9 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     added: ['TASK-3'],
     proposedCancellations: ['TASK-1'],
     droppedCancellations: [{ taskId: 'TASK-2', status: 'running' }],
+    // M40 t3 fix round 1: cancellable ids that never became a proposal (a throw, a cooldown, a
+    // disabled Supervisor). `cancel = proposed ∪ failed ∪ dropped`.
+    failedProposals: ['TASK-4'],
   },
   'task.cancelled': { reason: 'the re-plan for goal v2 no longer needs it', goalVersion: 1 },
   'workspace.company_assigned': {
@@ -572,6 +575,63 @@ describe('targeted card bodies', () => {
     render(<Card event={fixtureFor('task.started')} {...CARD_PROPS} />)
     expect(screen.getByTestId('slave-link').getAttribute('href')).toBe('/w/w1?slave=a1')
     expect(screen.getByTestId('task-link').getAttribute('href')).toBe('/w/w1/tasks?task=t1')
+  })
+})
+
+/** M40 §6: the three requirement-versioning events, as an operator reads them in the timeline. */
+describe('the requirement-versioning cards', () => {
+  it('workspace.replan_started names the goal version being re-planned for', () => {
+    const Card = ACTIVITY_CARDS['workspace.replan_started']
+    render(<Card event={fixtureFor('workspace.replan_started')} {...CARD_PROPS} />)
+
+    expect(screen.getByTestId('transition-label').textContent).toBe('re-planning for goal v2')
+  })
+
+  it('workspace.replanned counts what landed and what was only asked for', () => {
+    const Card = ACTIVITY_CARDS['workspace.replanned']
+    render(<Card event={fixtureFor('workspace.replanned')} {...CARD_PROPS} />)
+
+    expect(screen.getByTestId('transition-label').textContent).toBe('re-planned for goal v2')
+    // Additions APPLY, cancellations are PROPOSED (ruling R1) -- the counts are worded so the two
+    // are never read as the same thing, and the two ways a cancellation can come to nothing (the
+    // status rule dropped it; the proposal itself failed) are named apart.
+    expect(screen.getByTestId('replanned-added').textContent).toBe('1 task added')
+    expect(screen.getByTestId('replanned-proposed').textContent).toBe('1 cancellation proposed')
+    expect(screen.getByTestId('replanned-dropped').textContent).toBe('1 dropped')
+    expect(screen.getByTestId('replanned-failed').textContent).toBe('1 failed')
+  })
+
+  it('workspace.replanned says so when a re-plan proposed and dropped nothing', () => {
+    const Card = ACTIVITY_CARDS['workspace.replanned']
+    render(
+      <Card
+        event={baseEvent('workspace.replanned', { version: 3, runId: 'r1', added: [], proposedCancellations: [], droppedCancellations: [] })}
+        {...CARD_PROPS}
+      />,
+    )
+
+    expect(screen.getByTestId('replanned-added').textContent).toBe('0 tasks added')
+    expect(screen.getByTestId('replanned-proposed').textContent).toBe('0 cancellations proposed')
+    // A pre-fix-round row carries no `failedProposals` at all: absent is not the same as a count,
+    // and the card must not render `NaN` or invent a zero it did not read.
+    expect(screen.queryByTestId('replanned-failed')).toBeNull()
+    expect(screen.queryByTestId('replanned-dropped')).toBeNull()
+  })
+
+  it('task.cancelled gives the reason and the goal version the task was derived from', () => {
+    const Card = ACTIVITY_CARDS['task.cancelled']
+    render(<Card event={fixtureFor('task.cancelled')} {...CARD_PROPS} />)
+
+    expect(screen.getByTestId('transition-label').textContent).toBe('cancelled')
+    expect(screen.getByTestId('task-cancelled-reason').textContent).toBe('the re-plan for goal v2 no longer needs it')
+    expect(screen.getByTestId('task-cancelled-goal-version').textContent).toBe('goal v1')
+  })
+
+  it('task.cancelled says "unstamped" for a hand-made task, which no goal version produced', () => {
+    const Card = ACTIVITY_CARDS['task.cancelled']
+    render(<Card event={baseEvent('task.cancelled', { reason: 'an operator changed their mind', goalVersion: null })} {...CARD_PROPS} />)
+
+    expect(screen.getByTestId('task-cancelled-goal-version').textContent).toBe('unstamped')
   })
 })
 

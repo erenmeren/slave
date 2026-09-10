@@ -35,8 +35,13 @@ type Question = SupervisorView['questions'][number]
  * The kind alone (`set_runtime_roles`) says what would happen but never to WHOM, and "approve" is
  * a decision a person can only make with the subject in front of them. Exhaustive over `Action`,
  * so a kind added to the catalogue fails this file's build rather than rendering as a blank.
+ *
+ * `taskTitles` (M40 §6) is the board's titles by id, from the same world the decision was read
+ * with. Used by `cancel_task`, whose subject is a task a human is being asked to give up: a raw
+ * uuid is not something anyone can say yes or no to. A task the world no longer holds falls back to
+ * its id, which is findable, rather than to a name this function would have to invent.
  */
-export function actionText(action: Action): string {
+export function actionText(action: Action, taskTitles: Readonly<Record<string, string>> = {}): string {
   switch (action.kind) {
     case 'unblock_task':
       return `unblock task ${action.taskId}`
@@ -50,9 +55,8 @@ export function actionText(action: Action): string {
       return `re-address question ${action.messageId} to ${action.toSlaveId}`
     case 'mark_task_failed':
       return `mark task ${action.taskId} failed: ${action.reason}`
-    // M40 t1, minimal: Task 4 names the task and the two goal versions instead of the raw id.
     case 'cancel_task':
-      return `cancel task ${action.taskId}: ${action.reason}`
+      return `cancel task ${taskTitles[action.taskId] ?? action.taskId}: ${action.reason}`
     case 'escalate_to_human':
       return `escalate to a human: ${action.summary}`
     case 'no_action':
@@ -156,6 +160,7 @@ function DraftEditor({
 function ProposalRow({
   decision,
   questions,
+  taskTitles,
   busy,
   onApprove,
   onReject,
@@ -165,6 +170,9 @@ function ProposalRow({
    *  rather than pre-matched by the panel so the one `answer_question` narrowing lives here, beside
    *  the draft it also governs. */
   readonly questions: readonly Question[]
+  /** The board's titles by id (M40 §6), for an action whose subject is a task -- see
+   *  {@link actionText}. */
+  readonly taskTitles: Readonly<Record<string, string>>
   readonly busy: boolean
   /** `body` is the human's replacement text, and `undefined` means "send what the Supervisor
    *  drafted" -- the route tells those two apart, and an untouched box must not be sent as an
@@ -198,7 +206,7 @@ function ProposalRow({
         </span>
       </div>
       <span data-testid="supervisor-proposal-action" className="text-xs text-tone-waiting">
-        {actionText(decision.action)}
+        {actionText(decision.action, taskTitles)}
       </span>
       <span data-testid="supervisor-proposal-rationale" className="text-[11px] text-text-2">
         {decision.rationale}
@@ -395,7 +403,7 @@ export function SupervisorPanel({
   // claim, and one this component cannot make yet.
   if (view === null) return null
 
-  const { report, pending, recent, questions, settings } = view
+  const { report, pending, recent, questions, settings, taskTitles } = view
   const profileText = profileDraft ?? settings.profile ?? ''
   const decisions = `/api/w/${workspaceId}/supervisor/decisions`
 
@@ -451,6 +459,7 @@ export function SupervisorPanel({
                   key={decision.id}
                   decision={decision}
                   questions={questions}
+                  taskTitles={taskTitles}
                   busy={busy}
                   onApprove={(body) =>
                     void send(`${decisions}/${decision.id}/approve`, {

@@ -18,6 +18,7 @@ export type CardState =
   | 'pause_requested'
   | 'resuming'
   | 'blocked'
+  | 'cancelled'
   | 'idle'
   | 'completed'
 
@@ -41,6 +42,12 @@ export const CARD_STATE_TONE: Record<CardState, ToneSpec> = {
   pause_requested: { tone: 'waiting', label: 'PAUSING', pulse: true },
   resuming: { tone: 'working', label: 'RESUMING', pulse: true },
   blocked: { tone: 'blocked', label: 'BLOCKED', pulse: false },
+  // M40 §6: a cancelled task is not a broken one. It rides the muted `idle` grey rather than
+  // `blocked`'s red, because red is the colour of something that needs an operator and a task
+  // somebody took off the board needs nothing at all. Its own CARD STATE rather than a second
+  // `idle` spelling, so the pill still says what happened; no new `StatusTone`, because the tone
+  // set is the handoff's palette and this is a new state in it, not a new colour.
+  cancelled: { tone: 'idle', label: 'CANCELLED', pulse: false },
   idle: { tone: 'idle', label: 'IDLE', pulse: false },
   completed: { tone: 'done', label: 'DONE', pulse: false },
 }
@@ -113,8 +120,9 @@ export function cardStateFor(slave: SlaveStatus, task: TaskStatus | null): CardS
     case 'merging':
       return 'review'
     case 'failed':
-    case 'cancelled':
       return 'blocked'
+    case 'cancelled':
+      return 'cancelled'
     case 'done':
       // Only when nobody is still working on it: a `done` task whose slave is mid-run means the
       // slave has moved on and the snapshot has not caught up, and the SLAVE is what this card
@@ -150,10 +158,11 @@ export function cardStateFor(slave: SlaveStatus, task: TaskStatus | null): CardS
  * `backlog` that fell through to `cardStateForSlave('idle')` and painted a grey **IDLE** pill on a
  * card sitting under the teal **IN PROGRESS** column head. One card, two answers.
  *
- * `failed` and `cancelled` are the two exceptions, and they are deliberate: `COLUMN_FOR_STATUS`
- * puts both on the `Done` column (a column is a phase, and both of those end one), but a failed
- * task is not a completed one -- they keep the `blocked` state `cardStateFor` already gave them,
- * so the card says what happened while the board still files it where it belongs.
+ * `failed` and `cancelled` are two of the exceptions, and they are deliberate: `COLUMN_FOR_STATUS`
+ * puts both on the `Done` column (a column is a phase, and both of those end one), but neither is a
+ * completed task -- `failed` keeps the `blocked` state `cardStateFor` gives it, and `cancelled`
+ * takes the muted state of its own (M40 §6), so the card says what happened while the board still
+ * files it where it belongs.
  *
  * `cardStateFor(slave, task)` is untouched and stays the SLAVE-first derivation: `SlaveCard` is
  * about a slave that happens to hold a task, and this function is about a task that may have no
@@ -162,8 +171,12 @@ export function cardStateFor(slave: SlaveStatus, task: TaskStatus | null): CardS
 export function cardStateForTask(status: TaskStatus): CardState {
   switch (status) {
     case 'failed':
-    case 'cancelled':
       return 'blocked'
+    // M40 §6, the fourth exception: `cancelled` sits on the Done column (a column is a phase, and
+    // this ends one) and used to share `failed`'s BLOCKED red. A task a human or a re-plan took off
+    // the board is not a failure and needs nobody, so it gets the muted `cancelled` state instead.
+    case 'cancelled':
+      return 'cancelled'
     // M36 t2, the third exception to "a task reads as its column": `waiting` sits on the In
     // Progress column because the work is in flight, but the card must not say WORKING -- nothing
     // is being worked on while the slave waits for an answer. `waiting` is the handoff's own amber,

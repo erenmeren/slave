@@ -24,6 +24,17 @@ export interface SupervisorView {
    *  computed from, so the two cannot disagree about what is outstanding. */
   readonly questions: readonly SupervisorQuestionView[]
   readonly settings: { readonly enabled: boolean; readonly profile: string | null }
+  /**
+   * The titles of the tasks on this project's board, by id (M40 §6) -- what a `cancel_task`
+   * proposal's sentence names instead of a raw uuid. "cancel task 3f8a…: the re-plan for goal v2 no
+   * longer needs it" is a decision nobody can make; the title is the whole of what a human is being
+   * asked about.
+   *
+   * Off the SAME world the report and the proposals came from, so a title here can never belong to
+   * a task that was not on the board when the decision was read. An id missing from this map is a
+   * task the world no longer holds, and the panel falls back to the id rather than inventing a name.
+   */
+  readonly taskTitles: Readonly<Record<string, string>>
 }
 
 /** One pending question, flattened for a browser (M39 §6). The world's own `SupervisorQuestion`
@@ -77,6 +88,7 @@ export async function buildSupervisorView(workspaceId: string, now: Date = new D
     recent,
     questions: loaded.world.questions.map((one) => toQuestionView(one, loaded.world.slaves)),
     settings: loaded.settings,
+    taskTitles: Object.fromEntries(loaded.world.tasks.map((one) => [one.id, one.title])),
   }
 }
 

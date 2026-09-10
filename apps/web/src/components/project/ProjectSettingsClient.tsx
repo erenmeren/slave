@@ -54,7 +54,14 @@ export function ProjectSettingsClient({
   return (
     <div className="flex flex-col gap-4 p-4">
       {workspace.haltedReason !== null && <HaltBanner reason={workspace.haltedReason} />}
-      <GoalPanel workspaceId={workspace.id} goal={workspace.goal} />
+      <GoalPanel
+        workspaceId={workspace.id}
+        goal={workspace.goal}
+        goalVersion={workspace.goalVersion}
+        // The re-plan trigger's own question (`dispatchPlanning` check 2): every task the project
+        // has, terminal ones included, which is exactly what `projectFootprint` counts.
+        boardTaskCount={footprint.tasks}
+      />
       <RuntimePanel
         key={`${workspace.provider ?? ''}|${workspace.budgetUsd ?? ''}`}
         workspaceId={workspace.id}

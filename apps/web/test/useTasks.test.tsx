@@ -5,7 +5,7 @@ import { useTasks } from '../src/hooks/useTasks.js'
 import type { TasksSnapshot } from '../src/server/tasks.js'
 
 const SNAPSHOT: TasksSnapshot = {
-  workspace: { id: 'w1', name: 'W', haltedReason: null },
+  workspace: { id: 'w1', name: 'W', haltedReason: null, goalVersion: 0 },
   shellFacts: {
     workspace: { id: 'w1', name: 'W' },
     counts: { slavesWorking: 0, tasksActive: 0 },
@@ -24,6 +24,7 @@ const SNAPSHOT: TasksSnapshot = {
       assigneeName: 'Alex',
       branch: 'feature/add-the-thing',
       lastRejectionReason: null,
+      goalVersion: null,
       collectable: false,
       artifacts: [],
       integratedAt: null,

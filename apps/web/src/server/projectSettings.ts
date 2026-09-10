@@ -7,6 +7,10 @@ export interface ProjectSettings {
     readonly id: string
     readonly name: string
     readonly goal: string | null
+    /** Which VERSION of that goal (M40 §1). 0 for a project with no goal, or one whose column was
+     *  hand-seeded before M40 -- `GoalPanel` then shows no version chip rather than naming a
+     *  `GoalVersion` row that does not exist. */
+    readonly goalVersion: number
     readonly provider: ProviderKind | null
     readonly budgetUsd: number | null
     /** `overview.ts`'s rule, verbatim: a budgeted workspace whose provider reports no cost. */
@@ -47,6 +51,7 @@ export async function buildProjectSettings(workspaceId: string): Promise<Project
       id: workspace.id,
       name: workspace.name,
       goal: workspace.goal,
+      goalVersion: workspace.goalVersion,
       provider,
       budgetUsd: workspace.budgetUsd,
       costBlindBudgeted: provider !== null && workspace.budgetUsd !== null && !capabilitiesOf(provider).reportsCost,

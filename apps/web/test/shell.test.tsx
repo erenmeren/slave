@@ -156,7 +156,7 @@ describe('the halt banner shows on every page', () => {
     // `useTasks` (via `useWorkspaceStream`) opens a real `EventSource` and fetches on open — the
     // file-level `FakeEventSource` + `fetch` stubs cover both; this only pins the body.
     const snapshot: TasksSnapshot = {
-      workspace: { id: 'w1', name: 'W', haltedReason: HALT_REASON },
+      workspace: { id: 'w1', name: 'W', haltedReason: HALT_REASON, goalVersion: 0 },
       shellFacts: {
         workspace: { id: 'w1', name: 'W' },
         counts: { slavesWorking: 0, tasksActive: 0 },
