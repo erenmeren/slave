@@ -20,6 +20,11 @@ export type SectionKind =
    *  what tells the two apart (spec erratum E2/E4), for `renderRunContext`'s trailer choice and
    *  for `concludePlanning`'s routing. */
   | 'replan'
+  /** M47 R3: the taxonomy keys this workspace can ask for, rendered from the `Capability` table by
+   *  the orchestrator. A SECTION and not part of `PLANNING_GRAPH_INSTRUCTIONS` (plan erratum E3):
+   *  that constant is pure, static, pinned byte-for-byte by a test, and is what the fake CLI
+   *  selects its planning arm on — and a per-workspace key list is none of those things. */
+  | 'capabilities'
 
 /**
  * One piece of a run's prompt, as the orchestrator hands it to {@link renderRunContext}: the
@@ -85,6 +90,10 @@ export type SectionSource =
       readonly sha256: string
       readonly boardTaskIds: readonly string[]
     }
+  /** Which keys the planner was shown, and whether the list was capped. The KEYS, not the text:
+   *  a reader asking "could this plan have named `security.application`?" wants the vocabulary the
+   *  run was actually given. */
+  | { readonly kind: 'capabilities'; readonly keys: readonly string[]; readonly capped: boolean }
 
 /** The manifest stored (as `Json`) on `RunContext.sections` -- an ordered record of what produced
  *  the prompt, without the prompt text itself. */
@@ -150,6 +159,14 @@ const replanSourceSchema = z.object({
   boardTaskIds: z.array(z.string()),
 })
 
+// M47 E3: both fields REQUIRED, by the same rule `replan` follows -- this source kind is new in
+// M47, so there is no history of rows written without them to be tolerant of.
+const capabilitiesSourceSchema = z.object({
+  kind: z.literal('capabilities'),
+  keys: z.array(z.string()),
+  capped: z.boolean(),
+})
+
 const sectionSourceSchema = z.discriminatedUnion('kind', [
   profileSourceSchema,
   rosterSourceSchema,
@@ -162,6 +179,7 @@ const sectionSourceSchema = z.discriminatedUnion('kind', [
   reviewDiffSourceSchema,
   planningGoalSourceSchema,
   replanSourceSchema,
+  capabilitiesSourceSchema,
 ])
 
 /**

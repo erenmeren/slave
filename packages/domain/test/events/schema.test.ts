@@ -842,3 +842,65 @@ describe('parseExecutionEvent', () => {
     ).toBe(true)
   })
 })
+
+describe('parseExecutionEvent -- dropped capabilities (M47 R3, E14)', () => {
+  it('accepts a workspace.plan_created carrying the capability keys the taxonomy did not have', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.plan_created',
+      runId: 'run-1',
+      payload: {
+        goal: 'ship it',
+        goalVersion: 1,
+        tasks: [{ id: 't1', title: 'Harden the endpoint', role: 'security' }],
+        droppedCapabilities: ['nope.nothing'],
+      },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'workspace.plan_created') {
+      expect(result.value.payload.droppedCapabilities).toEqual(['nope.nothing'])
+    }
+  })
+
+  it('accepts a workspace.plan_created with no dropped capabilities at all -- every pre-M47 row has none', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.plan_created',
+      runId: 'run-1',
+      payload: { goal: 'ship it', tasks: [{ id: 't1', title: 'Harden the endpoint', role: 'security' }] },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'workspace.plan_created') {
+      expect(result.value.payload.droppedCapabilities).toBeUndefined()
+    }
+  })
+
+  it('accepts a workspace.replanned carrying them, and one without them', () => {
+    const withField = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.replanned',
+      payload: {
+        version: 2,
+        runId: 'run-9',
+        added: ['t9'],
+        proposedCancellations: [],
+        droppedCancellations: [],
+        droppedCapabilities: ['nope.nothing'],
+      },
+    })
+    expect(withField.ok).toBe(true)
+    if (withField.ok && withField.value.type === 'workspace.replanned') {
+      expect(withField.value.payload.droppedCapabilities).toEqual(['nope.nothing'])
+    }
+
+    const withoutField = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.replanned',
+      payload: { version: 2, runId: 'run-9', added: [], proposedCancellations: [], droppedCancellations: [] },
+    })
+    expect(withoutField.ok).toBe(true)
+    if (withoutField.ok && withoutField.value.type === 'workspace.replanned') {
+      expect(withoutField.value.payload.droppedCapabilities).toBeUndefined()
+    }
+  })
+})

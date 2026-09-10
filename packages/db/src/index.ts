@@ -1,3 +1,4 @@
+export * from './capabilities.js'
 export * from './checkout-platform.js'
 export * from './enums.js'
 export * from './mappers.js'

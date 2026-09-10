@@ -542,7 +542,10 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
             title: planTask.title,
             description: planTask.description,
             status: 'ready',
-            requiredRole: planTask.role,
+            // M47 t1 (plan erratum E2), the same line as `concludePlanning`'s: an optional role
+            // stores null when the planner named none, and Task 2 derives it from the task's
+            // capabilities instead.
+            requiredRole: planTask.role ?? null,
             createdBy: 'slave',
             createdByUserId: workspace.goalSetByUserId,
             maxAttempts: workspace.maxAttempts,

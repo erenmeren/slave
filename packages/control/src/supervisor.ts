@@ -826,7 +826,13 @@ export async function listDecisions(
   return rows.map((row) => ({
     id: row.id,
     workspaceId: row.workspaceId,
-    situationKind: row.situationKind,
+    // M47 t1: the Postgres enum gained `capability_unstaffed` with this milestone's migration,
+    // and `SITUATION_KINDS` gains it in Task 3 -- so for one task the column is one member WIDER
+    // than the domain union. Narrowed here rather than widened there, because a `SituationKind`
+    // with no `SITUATION_LABEL`, no candidate arm and no `observe` predicate would be a kind the
+    // panel could render and nothing could produce. No row can carry the new value yet: nothing
+    // writes it until Task 3.
+    situationKind: row.situationKind as SituationKind,
     subjectId: row.subjectId,
     situation: parsedOrThrow(situationSchema.safeParse(row.situation), `SupervisorDecision ${row.id}.situation`),
     candidates: storedCandidates(row.candidates, `SupervisorDecision ${row.id}.candidates`),

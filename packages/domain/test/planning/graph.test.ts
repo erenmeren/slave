@@ -134,3 +134,30 @@ describe('parsePlanGraph', () => {
     }
   })
 })
+
+describe('parsePlanGraph -- capabilities (M47 R3)', () => {
+  it('parses a task with capabilities and no role', () => {
+    const out = parsePlanGraph('{"tasks":[{"key":"a","title":"t","description":"d","capabilities":["security.application"]}]}')
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.value.tasks[0]?.role).toBeUndefined()
+    expect(out.value.tasks[0]?.capabilities).toEqual(['security.application'])
+  })
+
+  // The whole compatibility claim, in one assertion: `plan-graph.ndjson` and every graph a model
+  // wrote before this milestone still parse, and read back as "no capabilities".
+  it('parses a task with a role and no capabilities, exactly as before', () => {
+    const out = parsePlanGraph('{"tasks":[{"key":"a","title":"t","description":"d","role":"backend","dependsOn":[]}]}')
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.value.tasks[0]?.role).toBe('backend')
+    expect(out.value.tasks[0]?.capabilities).toEqual([])
+  })
+
+  it('rejects a task that names neither', () => {
+    const out = parsePlanGraph('{"tasks":[{"key":"a","title":"t","description":"d"}]}')
+    expect(out.ok).toBe(false)
+    if (out.ok) return
+    expect(out.error).toContain('neither a role nor a capability')
+  })
+})

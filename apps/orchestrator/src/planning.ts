@@ -108,7 +108,12 @@ export async function concludePlanning(runId: RunId): Promise<void> {
           title: planTask.title,
           description: planTask.description,
           status: 'ready',
-          requiredRole: planTask.role,
+          // M47 t1 (plan erratum E2): `PlanTask.role` is optional now, and `?? null` is what
+          // "the planner named no role" stores. Task 2 replaces this with the DERIVED role -- the
+          // role the task's capabilities project to -- and writes `requiredCapabilities` beside
+          // it; until then a capability-only graph stores a null role, exactly as a hand-made
+          // task with no role does.
+          requiredRole: planTask.role ?? null,
           createdBy: 'slave',
           createdByUserId: workspace.goalSetByUserId,
           maxAttempts: workspace.maxAttempts,
@@ -128,7 +133,10 @@ export async function concludePlanning(runId: RunId): Promise<void> {
         },
       })
       idByKey.set(planTask.key, task.id)
-      rows.push({ id: task.id, title: task.title, role: planTask.role })
+      // Read off the CREATED row, so the event says what was STORED. `?? ''` fails the payload
+      // schema's `min(1)`, which is the right way to find out that a task reached the board with
+      // no role at all -- E1 and E2 together are what promise it cannot, once Task 2 derives one.
+      rows.push({ id: task.id, title: task.title, role: task.requiredRole ?? '' })
     }
     for (const planTask of parsed.value.tasks) {
       const taskId = idByKey.get(planTask.key) as string

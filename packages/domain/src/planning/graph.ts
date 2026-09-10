@@ -6,7 +6,23 @@ export interface PlanTask {
   readonly key: string
   readonly title: string
   readonly description: string
-  readonly role: string
+  /**
+   * The runtime role the planner asked for, when it asked for one at all.
+   *
+   * OPTIONAL as of M47 (plan erratum E2). It used to be required, and while it was, a task's
+   * `requiredRole` could only ever be this literal — there was no reachable state in which the
+   * capability projection (R2) decided the role, and the milestone's central claim could not be
+   * measured. A task must still carry a role OR at least one capability; that is checked in
+   * {@link validateStructure}, not here, so a graph naming neither is REJECTED rather than falling
+   * back to an earlier candidate object in the same message.
+   */
+  readonly role?: string | undefined
+  /** M47 R3: the capabilities this work needs, in the taxonomy's dotted vocabulary. Optional in
+   *  the JSON (`.default([])`), so every fixture and every plan written before this milestone
+   *  still parses — an old `plan-graph.ndjson` reads back as a task with no capabilities and the
+   *  planner's own role, which is exactly what it meant. Validated against the TABLE later, by
+   *  `concludePlanning`: this module is pure and has no taxonomy to check against. */
+  readonly capabilities: readonly string[]
   readonly dependsOn: readonly string[]
 }
 
@@ -18,8 +34,9 @@ const planTaskSchema = z.object({
   key: z.string().min(1),
   title: z.string().min(1),
   description: z.string().min(1),
-  role: z.string().min(1),
+  role: z.string().min(1).optional(),
   dependsOn: z.array(z.string()).default([]),
+  capabilities: z.array(z.string().min(1)).max(10).default([]),
 })
 
 export const planGraphSchema = z.object({ tasks: z.array(planTaskSchema).min(1).max(20) })
@@ -44,6 +61,16 @@ export function parsePlanGraph(text: string): Result<PlanGraph, string> {
 }
 
 function validateStructure(graph: PlanGraph): Result<PlanGraph, string> {
+  for (const task of graph.tasks) {
+    // E2: a task nobody can staff is not a plan. `requiredRole` is what the scheduler matches and
+    // `requiredCapabilities` is what it is derived from; with neither, `concludePlanning` would
+    // write a null role and BOTH loaders would drop the row — a task on the board that no pass
+    // can ever see.
+    if (task.role === undefined && task.capabilities.length === 0) {
+      return err(`task "${task.key}" names neither a role nor a capability`)
+    }
+  }
+
   const keys = new Set<string>()
   for (const task of graph.tasks) {
     if (keys.has(task.key)) return err(`duplicate task key: "${task.key}"`)

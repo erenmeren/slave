@@ -232,6 +232,11 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       tasks: z
         .array(z.object({ id: z.string().min(1), title: z.string().min(1), role: z.string().min(1) }))
         .min(1),
+      /** M47 R3: capability keys the planner asked for that the taxonomy does not have. Dropped
+       *  from the task (nothing matches on a key nobody defined) and recorded here, because a
+       *  silently ignored vocabulary is how an operator concludes the feature does not work.
+       *  Optional: every event written before M47 has none. */
+      droppedCapabilities: z.array(z.string().min(1)).optional(),
     }),
   }),
   // M40 §2: a re-plan run started, because the goal moved on a board that already had tasks. The
@@ -265,6 +270,11 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       proposedCancellations: z.array(z.string().min(1)),
       droppedCancellations: z.array(z.object({ taskId: z.string().min(1), status: z.string().min(1) })),
       failedProposals: z.array(z.string().min(1)).optional(),
+      /** M47 R3: capability keys the planner asked for that the taxonomy does not have. Dropped
+       *  from the task (nothing matches on a key nobody defined) and recorded here, because a
+       *  silently ignored vocabulary is how an operator concludes the feature does not work.
+       *  Optional: every event written before M47 has none. */
+      droppedCapabilities: z.array(z.string().min(1)).optional(),
     }),
   }),
   // M40 §4: `cancelTask` took a task off the board -- an operator's own call, or an approved

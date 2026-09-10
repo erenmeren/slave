@@ -71,6 +71,15 @@ export function parsePlanDelta(text: string, existingTaskIds: readonly string[])
 function validateDelta(delta: PlanDelta, existingTaskIds: readonly string[]): Result<PlanDelta, string> {
   const existing = new Set(existingTaskIds)
 
+  for (const task of delta.add) {
+    // E2, the same rule `validateStructure` applies to a first plan: a task naming neither a role
+    // nor a capability derives no `requiredRole`, and a task with no required role is dropped by
+    // both world loaders — unschedulable and unstaffable at once.
+    if (task.role === undefined && task.capabilities.length === 0) {
+      return err(`added task "${task.key}" names neither a role nor a capability`)
+    }
+  }
+
   const keys = new Set<string>()
   for (const task of delta.add) {
     if (keys.has(task.key)) return err(`duplicate task key: "${task.key}"`)

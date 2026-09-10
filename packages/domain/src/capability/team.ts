@@ -1,0 +1,209 @@
+import { capabilityLabel, projectRoles, type CapabilityKey, type CapabilityRecord } from './taxonomy.js'
+
+export interface TeamRosterMember {
+  readonly slaveId: string
+  readonly name: string
+  readonly capabilities: readonly CapabilityKey[]
+  readonly runtimeRoles: readonly string[]
+  readonly busy: boolean
+}
+
+export interface TeamCompanyWorker {
+  readonly companySlaveId: string
+  readonly name: string
+  readonly capabilities: readonly CapabilityKey[]
+}
+
+export interface TeamCatalogEntry {
+  readonly templateId: string
+  readonly name: string
+  readonly capabilities: readonly CapabilityKey[]
+  readonly division: string | null
+}
+
+export interface TeamInput {
+  /** The capabilities the BOARD needs -- the union over its ready and blocked tasks. */
+  readonly required: readonly CapabilityKey[]
+  readonly roster: readonly TeamRosterMember[]
+  /** The company's roster rows that are NOT already materialised into this project. */
+  readonly company: readonly TeamCompanyWorker[]
+  readonly catalog: readonly TeamCatalogEntry[]
+  readonly taxonomy: readonly CapabilityRecord[]
+  /** Templates a current worker's own profile recommends pairing with (R5). A tie-break and a
+   *  sentence, never a dispatch. */
+  readonly recommendedTemplateIds?: readonly string[]
+}
+
+/** Where a proposed worker would come from, in the preference order R4 fixes: an existing capable
+ *  worker, an existing company worker, a new project worker, a temporary specialist. `temporary`
+ *  is never emitted in M47 -- M50 owns that lifecycle -- and is in the union so the surfaces that
+ *  render a source do not have to change again when it arrives. */
+export type TeamSource = 'existing_worker' | 'company_worker' | 'project_worker' | 'temporary'
+
+export interface TeamProposal {
+  readonly capability: CapabilityKey
+  readonly source: TeamSource
+  readonly pick: { readonly kind: 'slave' | 'company_slave' | 'template'; readonly id: string; readonly name: string }
+  /** Every missing capability this one pick would cover -- what makes "one worker instead of two"
+   *  visible to a person rather than implicit in the count. */
+  readonly covers: readonly CapabilityKey[]
+  /** M50's flag, always false here (R4: "here it is a flag on the proposal"). */
+  readonly temporary: boolean
+  readonly rationale: string
+}
+
+export interface TeamPlan {
+  readonly covered: readonly { readonly capability: CapabilityKey; readonly by: string }[]
+  readonly proposals: readonly TeamProposal[]
+  readonly unfillable: readonly CapabilityKey[]
+}
+
+/**
+ * The smallest team that covers what the board needs (M47 R4). Pure and deterministic: the same
+ * input always produces the same plan, whatever order the caller's queries returned rows in --
+ * every list is sorted before it is walked and every tie has a named break.
+ *
+ * A capability is COVERED when somebody in the roster already holds the role it projects to
+ * (plan erratum E8): that is the dispatch condition, and it is the only one that matters, because
+ * `decide()` matches roles. Everything else is a gap, and the gaps are filled in R4's order:
+ *
+ *  1. an existing worker who PROVIDES the capability but was never given its role -- one
+ *     `set_runtime_roles` away from dispatchable, and the cheapest fix there is;
+ *  2. a company roster worker not yet on this project;
+ *  3. a catalog template, chosen by SET COVER: the entry covering the most still-missing
+ *     capabilities wins, so one worker who can do two things beats two who can do one each.
+ *
+ * Anything left is `unfillable` and is reported rather than quietly dropped -- "nobody anywhere
+ * can do this" is the one answer a person most needs to see.
+ */
+export function formTeam(input: TeamInput): TeamPlan {
+  const required = [...new Set(input.required)].toSorted()
+  const roster = [...input.roster].toSorted((a, b) => a.slaveId.localeCompare(b.slaveId))
+  const recommended = new Set(input.recommendedTemplateIds ?? [])
+
+  const covered: { capability: CapabilityKey; by: string }[] = []
+  const missing: CapabilityKey[] = []
+  for (const capability of required) {
+    const role = projectRoles([capability], input.taxonomy)[0]
+    const holder = role === undefined ? undefined : roster.find((member) => member.runtimeRoles.includes(role))
+    if (holder === undefined) missing.push(capability)
+    else covered.push({ capability, by: holder.slaveId })
+  }
+
+  const proposals: TeamProposal[] = []
+  const outstanding = new Set(missing)
+
+  // 1. The existing capable worker: idle first (a busy worker's roles must not change under its
+  // own run), then slave id.
+  for (const capability of missing) {
+    const provider = roster
+      .filter((member) => member.capabilities.includes(capability))
+      .toSorted((a, b) => (a.busy === b.busy ? a.slaveId.localeCompare(b.slaveId) : a.busy ? 1 : -1))[0]
+    if (provider === undefined) continue
+    const role = projectRoles([capability], input.taxonomy)[0] ?? ''
+    proposals.push({
+      capability,
+      source: 'existing_worker',
+      pick: { kind: 'slave', id: provider.slaveId, name: provider.name },
+      covers: [capability],
+      temporary: false,
+      rationale:
+        `${provider.name} already provides ${capabilityLabel(capability, input.taxonomy)} and does not hold the ` +
+        `"${role}" runtime role, so giving it to them makes them dispatchable for this work with nobody new.`,
+    })
+    outstanding.delete(capability)
+  }
+
+  // 2 and 3. Set cover over the company roster first, then the catalog. Both loops are the same
+  // shape, so a change to the minimality rule is one change and not two.
+  coverWith(
+    outstanding,
+    [...input.company].toSorted((a, b) => a.companySlaveId.localeCompare(b.companySlaveId)).map((worker) => ({
+      id: worker.companySlaveId,
+      name: worker.name,
+      capabilities: worker.capabilities,
+      recommended: false,
+    })),
+    (pick, covers) =>
+      proposals.push({
+        capability: covers[0] as CapabilityKey,
+        source: 'company_worker',
+        pick: { kind: 'company_slave', id: pick.id, name: pick.name },
+        covers,
+        temporary: false,
+        rationale:
+          `${pick.name} is already on the company roster and provides ${labelList(covers, input.taxonomy)}, so this ` +
+          'project can be staffed from people who already work here rather than by hiring.',
+      }),
+  )
+
+  coverWith(
+    outstanding,
+    [...input.catalog].toSorted((a, b) => a.templateId.localeCompare(b.templateId)).map((entry) => ({
+      id: entry.templateId,
+      name: entry.name,
+      capabilities: entry.capabilities,
+      recommended: recommended.has(entry.templateId),
+    })),
+    (pick, covers) =>
+      proposals.push({
+        capability: covers[0] as CapabilityKey,
+        source: 'project_worker',
+        pick: { kind: 'template', id: pick.id, name: pick.name },
+        covers,
+        temporary: false,
+        rationale:
+          `${pick.name} provides ${labelList(covers, input.taxonomy)}, which nobody on this project or on the ` +
+          `company roster does${pick.recommended ? ", and a worker's profile recommends pairing with it" : ''}.`,
+      }),
+  )
+
+  return {
+    covered,
+    proposals: proposals.toSorted((a, b) => a.capability.localeCompare(b.capability)),
+    unfillable: [...outstanding].toSorted(),
+  }
+}
+
+/** One round of greedy set cover, repeated until nothing else can be covered. The winner is the
+ *  candidate covering the most outstanding capabilities; ties break on RECOMMENDED first (R5's
+ *  advisory tie-break), then on the fewest total capabilities (the most specific worker for the
+ *  job), then on name, then on id -- four breaks, so the winner never depends on input order. */
+function coverWith(
+  outstanding: Set<CapabilityKey>,
+  candidates: readonly { readonly id: string; readonly name: string; readonly capabilities: readonly CapabilityKey[]; readonly recommended: boolean }[],
+  emit: (pick: { readonly id: string; readonly name: string; readonly recommended: boolean }, covers: readonly CapabilityKey[]) => void,
+): void {
+  let progress = true
+  while (outstanding.size > 0 && progress) {
+    progress = false
+    let best: { id: string; name: string; recommended: boolean; covers: CapabilityKey[] } | null = null
+    for (const candidate of candidates) {
+      const covers = [...outstanding].filter((capability) => candidate.capabilities.includes(capability)).toSorted()
+      if (covers.length === 0) continue
+      if (best === null || beats({ ...candidate, covers }, best, candidates)) {
+        best = { id: candidate.id, name: candidate.name, recommended: candidate.recommended, covers }
+      }
+    }
+    if (best === null) return
+    emit(best, best.covers)
+    for (const capability of best.covers) outstanding.delete(capability)
+    progress = true
+  }
+}
+
+function beats(
+  challenger: { id: string; name: string; recommended: boolean; covers: readonly CapabilityKey[]; capabilities: readonly CapabilityKey[] },
+  holder: { id: string; name: string; recommended: boolean; covers: readonly CapabilityKey[] },
+  candidates: readonly { readonly id: string; readonly capabilities: readonly CapabilityKey[] }[],
+): boolean {
+  if (challenger.covers.length !== holder.covers.length) return challenger.covers.length > holder.covers.length
+  if (challenger.recommended !== holder.recommended) return challenger.recommended
+  const holderSize = candidates.find((candidate) => candidate.id === holder.id)?.capabilities.length ?? 0
+  if (challenger.capabilities.length !== holderSize) return challenger.capabilities.length < holderSize
+  if (challenger.name !== holder.name) return challenger.name.localeCompare(holder.name) < 0
+  return challenger.id.localeCompare(holder.id) < 0
+}
+
+const labelList = (keys: readonly CapabilityKey[], taxonomy: readonly CapabilityRecord[]): string =>
+  keys.map((key) => capabilityLabel(key, taxonomy)).join(' and ')

@@ -89,6 +89,15 @@ export function sectionLine(source: SectionSource): SectionLine {
             : `the workspace goal v${String(source.version)} (sha ${short(source.sha256)})`,
         missing: [],
       }
+    // M47 t1: the vocabulary a planning run was shown. The COUNT and whether it was capped, not
+    // the keys themselves -- the manifest carries every one of them, and a summary line naming
+    // forty-eight of them is not a line a person reads.
+    case 'capabilities':
+      return {
+        kind: source.kind,
+        detail: `${plural(source.keys.length, 'capability key')} it could ask for${source.capped ? ' (capped)' : ''}`,
+        missing: [],
+      }
     // M40 t1, minimal: a re-plan run's own section. Task 4 gives it the diff a human reads.
     case 'replan':
       return {

@@ -1,3 +1,4 @@
+import { CAPABILITY_SEED } from './capabilities.js'
 import { CHECKOUT_PLATFORM_COMPANY_NAME, CHECKOUT_PLATFORM_ROSTER, CHECKOUT_PLATFORM_TEAMS, checkoutPlatformTemplateName } from './checkout-platform.js'
 import { prisma } from './client.js'
 import { TASK_STATUSES } from './enums.js'
@@ -40,8 +41,22 @@ const ROSTER: readonly { name: string; template: string }[] = [
  */
 export async function seed(): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "CatalogImport", "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "CatalogImport", "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "CollaborationHint", "Capability", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
+
+  // M47 R1: the taxonomy is DATA, and a seeded database has it. Written straight through Prisma
+  // rather than through `syncCapabilityTaxonomy` -- `packages/db` cannot import `packages/control`,
+  // which imports IT -- and the two write the same rows from the same list.
+  await prisma.capability.createMany({
+    data: CAPABILITY_SEED.map((record) => ({
+      key: record.key,
+      label: record.label,
+      domain: record.domain,
+      role: record.role,
+      synonyms: [...record.synonyms],
+      createdBy: 'seed',
+    })),
+  })
 
   const workspace = await prisma.workspace.create({
     data: {

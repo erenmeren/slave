@@ -12,7 +12,11 @@ export const SECTION_ORDER: Readonly<Record<Manifest['kind'], readonly SectionKi
   // `replan` is present only when the goal CHANGED on a non-empty board (M40 §3). It comes last,
   // after the new goal it is about, so the prompt reads "here is the goal, here is what changed
   // about it, here is what to return" -- and `renderRunContext`'s trailer choice keys on it.
-  planning: ['profile', 'planning_goal', 'replan'],
+  // `capabilities` is LAST (M47, plan erratum E3): the trailer that asks for the JSON object comes
+  // straight after it, so the vocabulary a planner may use sits directly above the request to use
+  // it. A section whose text is empty is dropped from prompt and manifest alike, so a workspace
+  // with no taxonomy rows renders exactly what it rendered before this milestone.
+  planning: ['profile', 'planning_goal', 'replan', 'capabilities'],
 }
 
 /**

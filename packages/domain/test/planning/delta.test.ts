@@ -26,7 +26,9 @@ describe('parsePlanDelta', () => {
     expect(result).toEqual({
       ok: true,
       value: {
-        add: [{ key: 'docs', title: 'Document the endpoint', description: 'Write the API doc.', role: 'backend', dependsOn: [] }],
+        // `capabilities: []` is M47 R3's default: a delta written before this milestone parses
+        // unchanged and reads back as "this task asked for no capabilities".
+        add: [{ key: 'docs', title: 'Document the endpoint', description: 'Write the API doc.', role: 'backend', dependsOn: [], capabilities: [] }],
         cancel: ['task-1'],
         keep: ['task-2'],
       },
@@ -238,9 +240,29 @@ describe('applyCancelPolicy', () => {
 
   it('never reads the additions or the keeps', () => {
     const result = applyCancelPolicy(
-      { add: [{ key: 'docs', title: 't', description: 'd', role: 'backend', dependsOn: [] }], cancel: [], keep: ['task-1'] },
+      { add: [{ key: 'docs', title: 't', description: 'd', role: 'backend', dependsOn: [], capabilities: [] }], cancel: [], keep: ['task-1'] },
       [board()],
     )
     expect(result).toEqual({ cancellable: [], dropped: [] })
+  })
+})
+
+describe('parsePlanDelta -- capabilities (M47 R3, E2)', () => {
+  it('rejects an added task that names neither a role nor a capability', () => {
+    const out = parsePlanDelta('{"add":[{"key":"a","title":"t","description":"d"}],"cancel":[],"keep":[]}', [])
+    expect(out.ok).toBe(false)
+    if (out.ok) return
+    expect(out.error).toBe('added task "a" names neither a role nor a capability')
+  })
+
+  it('accepts an added task that names a capability instead of a role', () => {
+    const out = parsePlanDelta(
+      '{"add":[{"key":"a","title":"t","description":"d","capabilities":["security.application"]}],"cancel":[],"keep":[]}',
+      [],
+    )
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.value.add[0]?.role).toBeUndefined()
+    expect(out.value.add[0]?.capabilities).toEqual(['security.application'])
   })
 })

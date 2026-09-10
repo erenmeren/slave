@@ -206,6 +206,20 @@ model Slave {
   /// not a refusal, so every `slave.create()` call that predates this task keeps compiling and
   /// keeps inserting a real empty array through the migration's DB-level default.
   runtimeRoles   String[]      @default([])
+  /// M47 R2: what this worker PROVIDES -- its template's normalised capabilities plus whatever an
+  /// operator added (`set-capabilities`). `runtimeRoles` above is what it may be DISPATCHED as and
+  /// is seeded with the roles these project to; the two are kept apart because a capability is a
+  /// fact about the specialist and a runtime role is a decision about the schedule.
+  capabilities   String[]      @default([])
+  /// Why this worker is on this project, in one sentence a person can read (R6). Written by
+  /// `hireFromTemplate`/`materialiseCompanySlave` from the Supervisor's own rationale; NULL for
+  /// every worker seeded or materialised before M47, where the Organization view says "seeded" or
+  /// "assigned from <company>" instead.
+  selectionRationale String?
+  /// The catalog row this worker was hired from (R4). `onDelete: SetNull`: a worker with run
+  /// history must survive the deletion of the template it came from, exactly as `companySlaveId`
+  /// survives its roster row.
+  hiredFromTemplateId String?
   /// The roster link (M10): null for legacy hand-made slaves created before the organization
   /// model, or for a worker whose roster row has since been deleted. `onDelete: SetNull` (not
   /// Cascade) on the relation below is a binding ruling, not an oversight -- a worker with run
@@ -227,6 +241,7 @@ model Slave {
 
   team         Team          @relation(fields: [teamId], references: [id], onDelete: Cascade)
   companySlave CompanySlave? @relation(fields: [companySlaveId], references: [id], onDelete: SetNull)
+  hiredFromTemplate SlaveTemplate? @relation("HiredWorkers", fields: [hiredFromTemplateId], references: [id], onDelete: SetNull)
 
   permissions SlavePermission[]
   skills      SlaveSkill[]
@@ -294,8 +309,68 @@ model SlaveTemplate {
   /// License` -> `MIT`). Attribution, not a copy: no licence text is vendored anywhere.
   sourceLicense  String?
   importedAt     DateTime?
+  /// M47 R1: `profileSpec.capabilities` resolved to taxonomy keys at import, so a catalog search
+  /// and `formTeam` read a controlled vocabulary instead of re-normalising free text per query.
+  capabilityKeys         String[] @default([])
+  /// The capability sentences that matched no key, verbatim -- what the taxonomy is missing, kept
+  /// where an operator can see it. Never matched against anything.
+  unresolvedCapabilities String[] @default([])
   createdAt     DateTime       @default(now())
   companySlaves CompanySlave[]
+
+  collaborationHints CollaborationHint[] @relation("CollaborationHintOwner")
+  advisedBy          CollaborationHint[] @relation("CollaborationHintTarget")
+  hiredWorkers       Slave[]             @relation("HiredWorkers")
+}
+
+/// M47 R1: the capability taxonomy, as DATA. Nothing matches on a key that is not a row here --
+/// the importer, the CLI and the planner all validate against this table, and an unknown key is
+/// dropped and reported rather than stored. Seeded from `packages/db/src/capabilities.ts` by
+/// `db:seed` and reconciled by `syncCapabilityTaxonomy()`; an operator adds their own with
+/// `capabilities add`, and `createdBy` is what tells the two apart.
+model Capability {
+  /// `<domain>.<name>`, lower case and dash-separated -- the primary key, because the key IS the
+  /// identity: `Task.requiredCapabilities` and `Slave.capabilities` are `String[]` columns of them
+  /// (the `runtimeRoles` precedent), not foreign keys, so a taxonomy row can be relabelled without
+  /// rewriting every task that asked for it.
+  key        String   @id
+  label      String
+  /// The prefix of `key`, stored so a facet list is a `groupBy` rather than a scan of split keys.
+  domain     String
+  /// The runtime role this capability PROJECTS to (R2) -- the one string `decide()` matches.
+  /// NOT NULL by design (plan erratum E1): a capability that projected to nothing would derive no
+  /// `requiredRole`, and a task with no required role is dropped by both world loaders.
+  role       String
+  synonyms   String[] @default([])
+  createdBy  String   @default("seed")
+  createdAt  DateTime @default(now())
+
+  @@index([domain])
+}
+
+/// M47 R5: one persona sentence, normalised into an ADVISORY relationship. Never execution
+/// authority: nothing here is read by `decide()`, by the review pass or by messaging. `text` is
+/// the sentence exactly as M46 stored it, which is what lets a reader trace an edge back to the
+/// persona that wrote it.
+model CollaborationHint {
+  id               String   @id @default(uuid())
+  templateId       String
+  text             String
+  /// The template the sentence names, when it names one. NULL is ordinary: most real handoff
+  /// sentences name a generic role rather than a persona.
+  targetTemplateId String?
+  /// A taxonomy key the sentence is about, when it is about one. A plain column, not a relation:
+  /// a hint must survive the removal of a capability row it happens to mention.
+  capability       String?
+  source           String   @default("import")
+
+  template       SlaveTemplate  @relation("CollaborationHintOwner", fields: [templateId], references: [id], onDelete: Cascade)
+  targetTemplate SlaveTemplate? @relation("CollaborationHintTarget", fields: [targetTemplateId], references: [id], onDelete: SetNull)
+
+  /// One row per sentence per template -- a re-import replaces this template's hints and can never
+  /// double them.
+  @@unique([templateId, text])
+  @@index([targetTemplateId])
 }
 
 /// A persistent roster (M10 §4) -- the durable identity ("Atlas") statistics accrue to, distinct
@@ -461,6 +536,10 @@ model Task {
   status              TaskStatus @default(backlog)
   priority            Int        @default(0)
   requiredRole        String?
+  /// M47 R2/R3: the capabilities this work needs, in the taxonomy's vocabulary -- the PLANNING and
+  /// STAFFING key. `requiredRole` above stays the DISPATCH key and is derived from this list when
+  /// the planner did not name one, so the scheduler keeps exactly one matching rule.
+  requiredCapabilities String[] @default([])
   assigneeId          String?
   activeRunId         String?    @unique
   attempt             Int        @default(0)
@@ -736,6 +815,10 @@ enum SupervisorSituationKind {
   waiting_stale
   unanswerable_question
   ready_unstaffed
+  /// M47 R4: a startable task needs a capability nobody can be dispatched for. Supersedes
+  /// `ready_unstaffed` for the task that raised it (plan erratum E8); `ready_unstaffed` remains
+  /// the role-only fallback for a task that declared no capabilities.
+  capability_unstaffed
   done_not_integrated_stale
   workspace_halted
 }

@@ -31,7 +31,7 @@ describe('SECTION_ORDER', () => {
     expect(SECTION_ORDER).toEqual({
       implementation: ['profile', 'roster', 'skills', 'inbox', 'ask_protocol', 'task', 'rejection'],
       review: ['profile', 'skills', 'task', 'review_diff'],
-      planning: ['profile', 'planning_goal', 'replan'],
+      planning: ['profile', 'planning_goal', 'replan', 'capabilities'],
     })
   })
 })
@@ -265,5 +265,17 @@ describe('neutraliseMarkers', () => {
 
   it('leaves text with no markers unchanged', () => {
     expect(neutraliseMarkers('nothing to see here')).toBe('nothing to see here')
+  })
+})
+
+describe('renderRunContext -- the capabilities section (M47 E3)', () => {
+  it('puts the capabilities section after the goal and the trailer after IT', () => {
+    const { prompt, manifest } = renderRunContext('planning', [
+      section('capabilities', 'CAPABILITIES\n\n- backend.api-design: API design', { kind: 'capabilities', keys: ['backend.api-design'], capped: false }),
+      section('planning_goal', 'GOAL: ship it', { kind: 'planning_goal', sha256: GOAL_SHA, version: 1 }),
+    ])
+    expect(prompt.indexOf('GOAL: ship it')).toBeLessThan(prompt.indexOf('CAPABILITIES'))
+    expect(prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
+    expect(manifest.sections.map((s) => s.kind)).toEqual(['planning_goal', 'capabilities'])
   })
 })
