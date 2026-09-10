@@ -553,6 +553,26 @@ try {
   // sets on the seed workspace is reset to unset again right after, before the user is deleted:
   // `gate-m16-chrome.mjs` depends on that workspace's goal form being empty.
   {
+    // M40: the goal is a VERSIONED requirement now, so "reset it afterwards" means the version
+    // history too. `setGoal` refuses `goal_unchanged` when the text hashes to the CURRENT
+    // version's, and it decides that from the `GoalVersion` rows -- not from the `goal` column.
+    // Clearing only the cache would leave version N behind carrying this exact probe text, and the
+    // NEXT run of this gate would POST the same words, get a 409, and fail on the assert below.
+    // So capture the version this workspace stands at first, and put it back exactly.
+    const before = await prismaClient.workspace.findUniqueOrThrow({
+      where: { id: W },
+      select: { goal: true, goalSetByUserId: true, goalVersion: true },
+    })
+    // The history's own high-water mark as well as the cache, and the LARGER of the two is the
+    // delete boundary: on a workspace whose two ever disagreed, keying only off the cache would
+    // delete a version this probe did not write. Nothing at or below this line is ours to remove.
+    const highestBefore = await prismaClient.goalVersion.findFirst({
+      where: { workspaceId: W },
+      orderBy: { version: 'desc' },
+      select: { version: true },
+    })
+    const keepThrough = Math.max(before.goalVersion, highestBefore?.version ?? 0)
+
     const write = await fetch(url(`/api/w/${W}/goal`), {
       method: 'POST',
       headers: { cookie: freshCookie, 'content-type': 'application/json' },
@@ -562,7 +582,14 @@ try {
     assert(write.status === 200, `authed write: expected 200, got ${write.status}`)
     assert((await write.json()).ok === true, 'authed write: unexpected body')
 
-    await prismaClient.workspace.update({ where: { id: W }, data: { goal: null, goalSetByUserId: null } })
+    // Back to exactly the pre-probe state: every version this probe minted goes, and the cache
+    // columns return to what they held -- `goal: null` for the seeded workspace, which is what
+    // `gate-m16-chrome.mjs` depends on (its goal form must be empty).
+    await prismaClient.goalVersion.deleteMany({ where: { workspaceId: W, version: { gt: keepThrough } } })
+    await prismaClient.workspace.update({
+      where: { id: W },
+      data: { goal: before.goal, goalSetByUserId: before.goalSetByUserId, goalVersion: before.goalVersion },
+    })
 
     const deletion = await deleteUserFn(gateUsername)
     assert(deletion.ok, `stage 12: could not delete ${gateUsername}: ${deletion.ok ? '' : JSON.stringify(deletion.error)}`)

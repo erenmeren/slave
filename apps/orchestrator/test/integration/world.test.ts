@@ -201,10 +201,10 @@ describe('loadWorld', () => {
     const before = await loadWorld(workspaceId(fixture.workspaceId))
     expect(before.world.tasks.find((t) => t.id === taskId(fixture.readyTaskId))?.dependenciesDone).toBe(true)
 
-    await prisma.task.update({
-      where: { id: fixture.doneDepTaskId },
-      data: { status: 'cancelled', integratedAt: null },
-    })
+    // ONLY the status moves: `integratedAt` stays stamped. If this cleared it too, the test would
+    // still pass against a gate that had lost its `status = 'done'` clause -- and it is exactly
+    // that clause a cancelled dependency has to fail.
+    await prisma.task.update({ where: { id: fixture.doneDepTaskId }, data: { status: 'cancelled' } })
 
     const after = await loadWorld(workspaceId(fixture.workspaceId))
     expect(after.world.tasks.find((t) => t.id === taskId(fixture.readyTaskId))?.dependenciesDone).toBe(false)
