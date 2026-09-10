@@ -129,7 +129,6 @@ export const REPLAN_INSTRUCTIONS = [
   'You are the engineering manager and this is a "replan": the GOAL above changed while your team already had a board.',
   'Read the repository for context, but do NOT modify, create, or commit any file.',
   '',
-  '',
   'Your final message must contain exactly one JSON object and nothing else on its line:',
   '{"add":[{"key":"short-unique-key","title":"...","description":"...","role":"backend","dependsOn":["other-key-or-existing-task-id"]}],"cancel":["<task id to cancel>"],"keep":["<task id to keep>"]}',
   'All three arrays may be empty. At most 20 additions. Keys are plan-local, must not repeat, and must not be an id already on the board.',

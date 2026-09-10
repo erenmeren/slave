@@ -57,7 +57,9 @@
 //      turns core `cancelled` with `task.cancelled { goalVersion: 1 }`; `api`, which depends on it,
 //      still reports `dependenciesDone: false` through the ORCHESTRATOR'S OWN `loadWorld` -- the
 //      snapshot the scheduler decides from -- its `TaskDependency` row survives, and two further
-//      ticks start nothing (ruling R3: cancelled work was never done). Then the human's own
+//      ticks start nothing: not an implementation run (ruling R3: cancelled work was never done)
+//      and not a PLANNING run either, because the goal has not moved since v2 and a board that has
+//      caught up with its requirement is never re-planned again (erratum E8). Then the human's own
 //      `cancel-task` takes `api` off the board too.
 //   4. The same words are not a new version. `set-goal` with the v2 text byte for byte exits
 //      NON-ZERO naming version 2, and leaves the history at two rows with no third `goal_set`.
@@ -817,9 +819,33 @@ try {
 
   // And nothing moves it. Two hand-run ticks, which carry no model decider at all, so the board
   // this reads afterwards is what the SCHEDULER left alone.
+  const planningRunsBeforeTicks = await prisma.slaveRun.count({ where: { kind: 'planning', slave: { team: { workspaceId } } } })
   for (const pass of [1, 2]) {
     const tickOutput = runCli(['tick', '--workspace', workspaceId])
     console.log(`stage 3 tick ${String(pass)} printed:\n${tickOutput}`)
+  }
+
+  // Erratum E8's regression guard, taken at the point the board is at its most terminal: the goal
+  // has not moved since v2, so no tick may start a planning run of any kind. The trigger used to
+  // take its board version over the NON-terminal tasks only, so a board whose tasks had all
+  // finished had nothing to take a max over, the version fell to 0, and every finished project
+  // re-planned itself on its next tick -- a real manager run told a requirement had changed when
+  // nothing had.
+  const planningRunsAfterTicks = await prisma.slaveRun.count({ where: { kind: 'planning', slave: { team: { workspaceId } } } })
+  console.log(`stage 3 planning runs: ${String(planningRunsBeforeTicks)} before the ticks, ${String(planningRunsAfterTicks)} after`)
+  if (planningRunsAfterTicks !== planningRunsBeforeTicks) {
+    await fail(
+      `stage 3's two ticks started ${String(planningRunsAfterTicks - planningRunsBeforeTicks)} planning run(s) on a board whose ` +
+        'goal has not moved since v2 (erratum E8)',
+    )
+  }
+  const replanStartedAfterTicks = await eventsOfType('workspace_replan_started')
+  console.log(`stage 3 workspace.replan_started (${String(replanStartedAfterTicks.length)}): ${replanStartedAfterTicks.map(describeEvent).join('\n  ')}`)
+  if (replanStartedAfterTicks.length !== 1 || replanStartedAfterTicks[0].payload.version !== 2) {
+    await fail(
+      `stage 3 left ${String(replanStartedAfterTicks.length)} workspace.replan_started event(s) ` +
+        `(${JSON.stringify(replanStartedAfterTicks.map((event) => event.payload))}), expected only the one for version 2`,
+    )
   }
   const apiAfterTicks = await prisma.task.findUniqueOrThrow({ where: { id: apiTask.id } })
   const apiRuns = await prisma.slaveRun.count({ where: { taskId: apiTask.id } })

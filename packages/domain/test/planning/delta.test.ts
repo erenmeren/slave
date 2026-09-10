@@ -172,6 +172,13 @@ describe('REPLAN_INSTRUCTIONS', () => {
     expect(REPLAN_INSTRUCTIONS).toContain('"keep"')
   })
 
+  it('separates its two halves with ONE blank line', () => {
+    // Final review, Minor 7: two consecutive empty strings joined with '\n' render as a triple
+    // newline, a gap nothing in the prompt means -- every other section boundary this codebase
+    // writes is one blank line.
+    expect(REPLAN_INSTRUCTIONS).not.toContain('\n\n\n')
+  })
+
   it('tells the model never to cancel work that is running or done', () => {
     expect(REPLAN_INSTRUCTIONS).toContain('never cancel work that is running or done')
   })

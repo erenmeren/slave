@@ -1,6 +1,5 @@
 import {
   NON_TERMINAL_RUN_STATUSES,
-  TERMINAL,
   applyCancelPolicy,
   candidates,
   parsePlanDelta,
@@ -36,7 +35,8 @@ export interface ReplanIntent {
 export interface ReplanVerdict {
   /** `Workspace.goalVersion` -- the newest requirement. */
   readonly goalVersion: number
-  /** `max(Task.goalVersion)` over the NON-terminal tasks, a null (hand-made) stamp counting as 0. */
+  /** `max(Task.goalVersion)` over EVERY task of the workspace, terminal or not, a null (hand-made)
+   *  stamp counting as 0 (spec erratum E8). */
   readonly boardVersion: number
   /** How many tasks the board holds at all. 0 is the FIRST-plan path, where none of the rest of
    *  this applies -- `dispatchPlanning` never asks for a re-plan verdict on an empty board. */
@@ -91,10 +91,15 @@ export interface ReplanVerdict {
  * Only ever asked of a NON-EMPTY board -- an empty one is the first-plan path, unchanged. Three
  * things can say no, and they are different questions:
  *
- * 1. **The board is already current.** `max(Task.goalVersion)` over the non-terminal tasks, with a
- *    null (hand-made) or absent stamp counting as 0. Terminal tasks are excluded because they are
- *    what a re-plan may not touch anyway: a finished task cannot be cancelled and does not need
- *    re-deriving, so leaving it in the max would suppress a re-plan the live board still needs.
+ * 1. **The board is already current.** `max(Task.goalVersion)` over EVERY task of the workspace,
+ *    terminal or not, with a null (hand-made) or absent stamp counting as 0 (spec erratum E8).
+ *    Terminal tasks were once excluded, on the reasoning that a re-plan may not touch them anyway
+ *    -- but that made the max fall to 0 on a board whose every task had finished, so a project
+ *    that was simply DONE re-planned spontaneously on its next tick and told the manager the goal
+ *    had changed when nothing had. What the exclusion was written for is covered by the per-version
+ *    dedup below: a terminal task carries version N only after version N had its re-plan, so a
+ *    genuine v(N)->v(N+1) edit still fires, over whatever of the board is still live (which may be
+ *    nothing -- an empty live board is a legitimate thing to show a manager).
  * 2. **A re-plan for this version already happened, or is happening.** `workspace.replan_started`
  *    names the run it started; a run that is non-terminal or `succeeded` is a re-plan this version
  *    got. A FAILED one is not -- it produced nothing -- so it falls through to the cap below,
@@ -106,20 +111,49 @@ export interface ReplanVerdict {
  *    here would make a re-plan louder than the first plan whose failure leaves a workspace with no
  *    board at all.
  *
- * Both event reads filter in JS rather than in the query: these are workspace-lifetime events (one
- * per goal edit, one per re-plan), so there are a handful of them, and a `payload.path` filter on a
- * JSON NUMBER is a subtlety this does not need to depend on.
+ * Both event reads filter in JS rather than in the query, over the newest {@link RECENT_EVENTS}
+ * rows: these are workspace-lifetime events (one per goal edit, one per re-plan), the ones that can
+ * name the CURRENT version are by construction the last ones written, and a `payload.path` filter
+ * on a JSON NUMBER is a subtlety this does not need to depend on.
  *
  * M40 t4: the three questions are answered by {@link replanVerdict} and read off it here, so the
  * tick and `replan-status` cannot drift into two ideas of when a re-plan fires.
+ *
+ * **This runs on every tick of every workspace**, so it stops at the first question rather than
+ * paying for the diagnosis (final review, Important 2): a board that is already current -- which is
+ * every board almost all of the time -- costs ONE query and returns, where `replanVerdict` would
+ * have gone on to read the workspace, the runs and two spans of the event log to explain a `null`
+ * nobody asked to have explained. The CLI's `replan-status`, which does want all of it, calls
+ * {@link replanVerdict} directly.
  */
 export async function replanIntent(
   workspaceId: string,
   goalVersion: number,
   retryCap: number,
 ): Promise<ReplanIntent | null> {
+  const boardVersion = boardVersionOf(await goalVersionsOnBoard(workspaceId))
+  if (goalVersion <= boardVersion) return null
   return (await replanVerdict(workspaceId, goalVersion, retryCap)).intent
 }
+
+/** Every task's stamp, terminal tasks included (spec erratum E8) -- the one read both the
+ *  short-circuit above and {@link replanVerdict} compute the board's version from. */
+async function goalVersionsOnBoard(workspaceId: string): Promise<{ readonly goalVersion: number | null }[]> {
+  return prisma.task.findMany({ where: { workspaceId }, select: { goalVersion: true } })
+}
+
+/** `max(Task.goalVersion)`, a null (hand-made) stamp counting as 0. An EMPTY board is 0 too, which
+ *  is only ever reached through `replanVerdict` -- `dispatchPlanning` takes the first-plan path
+ *  there and never asks. */
+function boardVersionOf(tasks: readonly { readonly goalVersion: number | null }[]): number {
+  return tasks.reduce((highest, task) => Math.max(highest, task.goalVersion ?? 0), 0)
+}
+
+/** How far back the two workspace-lifetime event scans read. Both are looking for the row that
+ *  names the CURRENT goal version, and both event types are written in version order, so the row
+ *  they want is among the newest few or is not there at all -- while an unbounded scan grows with
+ *  the workspace's whole life and was being paid on every tick (final review, Important 2). */
+const RECENT_EVENTS = 20
 
 /** {@link ReplanVerdict}, computed. Every fact is read even once an earlier one has already
  *  decided the outcome -- this is a diagnosis, and a caller asking why nothing is happening is owed
@@ -131,26 +165,28 @@ export async function replanVerdict(
 ): Promise<ReplanVerdict> {
   // What `tick` decides before `dispatchPlanning` is ever reached (tick.ts: archived first, then
   // the halt). Read here rather than passed in, so the verdict is the same fact whoever asks --
-  // `replanIntent` pays one primary-key read it does not use, which is what one idea of the trigger
-  // costs.
+  // `replanIntent` pays one primary-key read it does not use on the runs that get this far, which
+  // is what one idea of the trigger costs (and it only gets this far when the goal really has moved,
+  // which is rare).
   const workspace = await prisma.workspace.findUniqueOrThrow({
     where: { id: workspaceId },
     select: { haltedReason: true, archivedAt: true },
   })
 
-  // 1. Has the goal actually moved past the board?
-  const board = await prisma.task.findMany({
-    where: { workspaceId, status: { notIn: [...TERMINAL] } },
-    select: { goalVersion: true },
-  })
-  const boardVersion = board.reduce((highest, task) => Math.max(highest, task.goalVersion ?? 0), 0)
-  const boardTaskCount = await prisma.task.count({ where: { workspaceId } })
+  // 1. Has the goal actually moved past the board? EVERY task, terminal ones included (erratum
+  // E8): a board whose tasks have all finished still carries the version they were derived from,
+  // and dropping them made a finished project re-plan itself on its next tick.
+  const board = await goalVersionsOnBoard(workspaceId)
+  const boardVersion = boardVersionOf(board)
+  const boardTaskCount = board.length
   const goalMoved = goalVersion > boardVersion
 
   // 2. One re-plan per version (M40 §1).
   const startedRunIds = (
     await prisma.executionEvent.findMany({
       where: { workspaceId, type: 'workspace_replan_started' },
+      orderBy: { seq: 'desc' },
+      take: RECENT_EVENTS,
       select: { payload: true },
     })
   )
@@ -172,6 +208,7 @@ export async function replanVerdict(
     await prisma.executionEvent.findMany({
       where: { workspaceId, type: 'workspace_goal_set' },
       orderBy: { seq: 'desc' },
+      take: RECENT_EVENTS,
       select: { ts: true, payload: true },
     })
   ).find((event) => (event.payload as { version?: unknown }).version === goalVersion)
@@ -259,7 +296,8 @@ export async function replanSectionOf(runId: RunId): Promise<ReplanSection | nul
  * costs real planned work, so every one of them goes through `recordDecision` as a `stale_task`
  * proposal a human approves, and `cancelTask` is never called from here.
  *
- * **Nothing here may throw past this function** (fix round 1). A re-plan is deduped on
+ * **Nothing here may throw past this function** (fix round 1, widened by the final review to the
+ * three reads that used to sit outside the containment). A re-plan is deduped on
  * `workspace.replan_started`, which is written at DISPATCH: a throw that escaped would reach only
  * the pump's `console.error`, leave the run `succeeded`, and leave the version permanently counted
  * as re-planned -- additions on the board, no proposals, no `workspace.replanned`, and nothing for
@@ -272,35 +310,68 @@ export async function replanSectionOf(runId: RunId): Promise<ReplanSection | nul
  *   contained: a proposal that refuses or throws is counted in `failedProposals`, and
  *   `workspace.replanned` is written whatever happened, because the board changed and the log has
  *   to say so.
+ *
+ * The RUN ROW is read first and alone, because it is the one read with nowhere to route: every
+ * failure above reports itself by flipping that row and appending `run.failed` against its slave
+ * and its workspace, none of which is known until it has been read. A failure there is logged with
+ * `console.error` and returns -- the same information the pump's own handler would have printed for
+ * a throw, minus the throw.
  */
 export async function concludeReplan(runId: RunId): Promise<void> {
-  const replan = await replanSectionOf(runId)
-  if (replan === null) {
-    // Unreachable through `concludePlanning`, which routes here only when it found this section.
-    // Thrown rather than routed around: concluding a first plan as a delta would silently create
-    // nothing and cancel nothing.
-    throw new Error(`run ${runId} has no replan section in its recorded context: it is not a re-plan run`)
+  let run: ConcludingRun
+  try {
+    run = await prisma.slaveRun.findUniqueOrThrow({
+      where: { id: runId },
+      include: { slave: { include: { team: true } } },
+    })
+  } catch (error) {
+    console.error(
+      `[replan] run ${runId} could not be read at conclusion ` +
+        `(${error instanceof Error ? error.message : String(error)}): its delta was not applied, and there is no run ` +
+        'row to record the failure against',
+    )
+    return
   }
-
-  const run = await prisma.slaveRun.findUniqueOrThrow({
-    where: { id: runId },
-    include: { slave: { include: { team: true } } },
-  })
   // A planning run has no task (M8b): the workspace is only reachable through `slave -> team`.
   const workspaceId = run.slave.team.workspaceId
 
-  // Concluded once already. `concludePlanning`'s own "the board already has tasks" warn-and-drop
-  // for a first plan, in the shape a re-plan can be asked about: this run's `workspace.replanned`
-  // IS the record that its delta was applied, so a second conclusion (a redelivered pump result, an
-  // operator re-running it) would create the additions twice.
-  const concluded = await prisma.executionEvent.findFirst({
-    where: { runId, type: 'workspace_replanned' },
-    select: { seq: true },
-  })
-  if (concluded !== null) {
-    console.warn(
-      `[replan] ignoring a second conclusion of run ${runId}: its delta is already on the board ` +
-        `(workspace.replanned at seq ${String(concluded.seq)})`,
+  // The manifest read and the double-conclusion read, inside the containment (final review,
+  // Important 1). Both are ordinary database reads and both can fail the way any read can; a throw
+  // escaping either would leave the run `succeeded`, the version permanently deduped, and nothing on
+  // the board -- exactly the outcome the split below exists to prevent -- so they are failures of
+  // this planning ATTEMPT, and the cap governs the retry.
+  let replan: ReplanSection
+  try {
+    const section = await replanSectionOf(runId)
+    if (section === null) {
+      // Unreachable through `concludePlanning`, which routes here only when it found this section.
+      // Thrown rather than returned: concluding a first plan as a delta would silently create
+      // nothing and cancel nothing, and the catch below turns it into a failed run rather than an
+      // exception nobody handles.
+      throw new Error(`run ${runId} has no replan section in its recorded context: it is not a re-plan run`)
+    }
+
+    // Concluded once already. `concludePlanning`'s own "the board already has tasks" warn-and-drop
+    // for a first plan, in the shape a re-plan can be asked about: this run's `workspace.replanned`
+    // IS the record that its delta was applied, so a second conclusion (a redelivered pump result,
+    // an operator re-running it) would create the additions twice.
+    const concluded = await prisma.executionEvent.findFirst({
+      where: { runId, type: 'workspace_replanned' },
+      select: { seq: true },
+    })
+    if (concluded !== null) {
+      console.warn(
+        `[replan] ignoring a second conclusion of run ${runId}: its delta is already on the board ` +
+          `(workspace.replanned at seq ${String(concluded.seq)})`,
+      )
+      return
+    }
+    replan = section
+  } catch (error) {
+    await failRun(
+      run,
+      workspaceId,
+      `a re-plan could not be concluded: ${error instanceof Error ? error.message : String(error)}`,
     )
     return
   }
@@ -309,18 +380,7 @@ export async function concludeReplan(runId: RunId): Promise<void> {
   if (!applied.ok) {
     // The parse-failure path, and now every other pre-commit failure with it: a failed planning
     // attempt, not an infrastructure problem, so it feeds `replanIntent`'s retry cap.
-    await prisma.slaveRun.updateMany({
-      where: { id: runId, status: 'succeeded' },
-      data: { status: 'failed' },
-    })
-    await appendEvent({
-      type: 'run.failed',
-      workspaceId,
-      slaveId: run.slaveId,
-      runId: run.id,
-      actor: 'system',
-      payload: { reason: applied.reason },
-    })
+    await failRun(run, workspaceId, applied.reason)
     return
   }
 
@@ -364,6 +424,34 @@ export async function concludeReplan(runId: RunId): Promise<void> {
       // together account for every id the model asked to cancel.
       failedProposals: proposals.failed,
     },
+  })
+}
+
+/** The run row {@link concludeReplan} concludes, narrowed to what a conclusion actually uses: the
+ *  run to flip, the slave to attribute a failure to, and the workspace both belong to. */
+interface ConcludingRun {
+  readonly id: string
+  readonly slaveId: string
+  readonly slave: { readonly team: { readonly workspaceId: string } }
+}
+
+/**
+ * The one answer to every pre-commit failure of a re-plan: this planning ATTEMPT failed, so the
+ * retry cap governs what happens next (M40 §1).
+ *
+ * `updateMany` rather than `update`, and scoped to `succeeded`, for the reason the parse-failure
+ * path always had: the run has already been concluded as a success by the pump, and only that state
+ * may be walked back from here.
+ */
+async function failRun(run: ConcludingRun, workspaceId: string, reason: string): Promise<void> {
+  await prisma.slaveRun.updateMany({ where: { id: run.id, status: 'succeeded' }, data: { status: 'failed' } })
+  await appendEvent({
+    type: 'run.failed',
+    workspaceId,
+    slaveId: run.slaveId,
+    runId: run.id,
+    actor: 'system',
+    payload: { reason },
   })
 }
 

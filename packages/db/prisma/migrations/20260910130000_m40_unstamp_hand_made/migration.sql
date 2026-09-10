@@ -1,0 +1,14 @@
+-- M40 final review, Minor 1 (spec §2 corrected): un-stamp the tasks a HUMAN made.
+--
+-- `20260910120000_m40_requirement_versioning`'s backfill stamped every task of a goal-bearing
+-- workspace `goalVersion = 1`, on the reasoning that version 1 is the only version that could have
+-- produced it. That is true of a task a PLAN produced and false of a task a person typed in:
+-- spec §1 says a hand-made task is derived from no goal at all, carries a null stamp, and can
+-- therefore never be stale against a requirement it was never written for. A `1` there tells the
+-- re-plan trigger that the board has caught up with version 1 and offers the Supervisor a
+-- `goalVersion` in a `stale_task` proposal that nobody ever chose.
+--
+-- Scoped to `= 1` so this only ever undoes the backfill: a hand-made task cannot have been stamped
+-- by anything else (`concludePlanning` and `concludeReplan` both write `createdBy = 'slave'`), and
+-- a later version there would be evidence of something this migration must not silently discard.
+UPDATE "Task" SET "goalVersion" = NULL WHERE "createdBy" = 'human' AND "goalVersion" = 1;

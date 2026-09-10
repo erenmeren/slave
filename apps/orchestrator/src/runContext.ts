@@ -322,6 +322,11 @@ export async function injectSkills(input: {
  *  M36's own preamble sections established as the boundary between one section and the next. */
 const block = (heading: string, body: readonly string[]): string => [heading, '', ...body, '', '---'].join('\n')
 
+/** One line, whatever the source did: every run of whitespace (a newline included) becomes a single
+ *  space. For a field that is rendered INSIDE a line whose shape means something -- see the re-plan
+ *  board below, where a newline would let a title forge a row. */
+const singleLine = (text: string): string => text.replace(/\s+/g, ' ').trim()
+
 /**
  * What the slave is told about its skills.
  *
@@ -400,7 +405,13 @@ async function replanSection(input: {
     select: { id: true, title: true, status: true, goalVersion: true },
   })
 
-  const text = block('THE GOAL CHANGED', [
+  // The heading is the honest one for each case (final review, Minor 2). With no previous version
+  // there is nothing this goal changed FROM: the board was made by hand, or seeded, before the
+  // requirement existed (spec §5 clarified), and telling a manager "the goal changed" over a board
+  // nobody derived from a goal is a claim the row cannot support.
+  const heading = input.previousVersion <= 0 ? 'THE GOAL WAS SET, and this board predates it' : 'THE GOAL CHANGED'
+
+  const text = block(heading, [
     ...(previousText === ''
       ? ['Previous goal: (no previous version recorded)']
       : [`Previous goal (v${String(input.previousVersion)}):`, neutraliseMarkers(previousText)]),
@@ -413,7 +424,11 @@ async function replanSection(input: {
       ? ['(nothing unfinished is on the board)']
       : board.map(
           (task) =>
-            `- ${task.id} [${task.status}] ${neutraliseMarkers(task.title)} ` +
+            // The title is flattened to ONE line (final review, Minor 4): a board line is a record
+            // whose shape the manager reads ids and statuses off, and a title carrying a newline
+            // could otherwise write a further `- <id> [ready] ...` line for a task that does not
+            // exist -- forging the board out of a field a model wrote on the last plan.
+            `- ${task.id} [${task.status}] ${singleLine(neutraliseMarkers(task.title))} ` +
             `(${task.goalVersion === null ? 'unstamped' : `goal v${String(task.goalVersion)}`})`,
         )),
   ])

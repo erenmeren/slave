@@ -555,18 +555,18 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m35-pipeline-honesty`, `gate:m36-messaging`, `gate:m37-run-context`, `gate:m38-supervisor`,
 `gate:m39-supervisor-mailbox` and `gate:m40-requirement-versioning` on every push — `m36` stops the
 orchestrator and starts it again mid-scenario, to prove a waiting slave's question survives a
-restart, `m37` reads a real run's
-prompt and worktree back to prove a slave was given the persona and the skills it was assigned,
-`m38` drives a real daemon until the Supervisor proposes the staffing a reviewer-less project needs,
-waits for a human to approve it, unblocks a review-capped task by itself, and escalates a project
-whose budget is gone without spending a cent to decide that, and `m39` drives one until the
-Supervisor answers a question from a quote in the asking task and wakes the slave that was waiting,
-drafts an answer it cannot prove and sends only the words a human typed over it, refuses to answer a
-question about an API key at all, re-addresses a stale one to a colleague who can, and deletes a
-month-old decision while leaving a month-old proposal alone, and `m40` drives one until a changed
-goal produces a delta re-plan whose addition is on the board and whose cancellation is still only a
-proposal, then approves it and shows the task that depended on the cancelled work still cannot
-start. That is 16 gates. Tests and gates share one Postgres — run one at a time.
+restart, `m37` reads a real run's prompt and worktree back to prove a slave was given the persona
+and the skills it was assigned, `m38` drives a real daemon until the Supervisor proposes the
+staffing a reviewer-less project needs, waits for a human to approve it, unblocks a review-capped
+task by itself, and escalates a project whose budget is gone without spending a cent to decide that,
+and `m39` drives one until the Supervisor answers a question from a quote in the asking task and
+wakes the slave that was waiting, drafts an answer it cannot prove and sends only the words a human
+typed over it, refuses to answer a question about an API key at all, re-addresses a stale one to a
+colleague who can, and deletes a month-old decision while leaving a month-old proposal alone, and
+`m40` drives one until a changed goal produces a delta re-plan whose addition is on the board and
+whose cancellation is still only a proposal, then approves it and shows the task that depended on
+the cancelled work still cannot start. That is 16 gates. Tests and gates share one Postgres — run
+one at a time.
 
 ## Learn more
 

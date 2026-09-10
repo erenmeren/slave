@@ -773,6 +773,69 @@ describe('a re-plan', () => {
     expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(0)
   })
 
+  it('starts nothing on a board whose tasks have ALL finished, while the goal stands still', async (): Promise<void> => {
+    // Spec erratum E8, the bug this test exists for: the board version used to be the max over the
+    // NON-terminal tasks, so a project whose every task was done had no task to take a max over,
+    // the version fell to 0, and `goalVersion 1 > 0` re-planned a requirement nobody had touched --
+    // a real manager run, on a real repository, told the goal had changed when it had not.
+    const fixture = await boardAt(1)
+    await prisma.task.updateMany({ where: { workspaceId: fixture.workspaceId }, data: { status: 'done' } })
+
+    expect(await dispatchPlanning(depsForReplan(fixture.workspaceId))).toBeNull()
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(0)
+    expect(
+      await prisma.executionEvent.count({
+        where: { workspaceId: fixture.workspaceId, type: 'workspace_replan_started' },
+      }),
+    ).toBe(0)
+  })
+
+  it('still re-plans a FINISHED board when the goal genuinely moves, over an empty live board', async (): Promise<void> => {
+    // The other half of erratum E8: counting terminal tasks in the max must not cost a real goal
+    // edit its re-plan. The live board it is shown is empty, which is a legitimate thing to show a
+    // manager -- everything the old requirement asked for is done, and the new one may need more.
+    const fixture = await boardAt(1)
+    await prisma.task.updateMany({ where: { workspaceId: fixture.workspaceId }, data: { status: 'done' } })
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+
+    const runId = await dispatchPlanning(depsForReplan(fixture.workspaceId))
+
+    expect(runId).not.toBeNull()
+    const context = await prisma.runContext.findUniqueOrThrow({ where: { runId: runId as string } })
+    expect(context.prompt).toContain('THE GOAL CHANGED')
+    expect(context.prompt).toContain('New goal (v2)')
+    expect(context.prompt).toContain('(nothing unfinished is on the board)')
+    // The finished task is not on the board the manager may name -- it is only in the arithmetic
+    // that decided this run should happen at all.
+    expect(context.prompt).not.toContain('Expose the API')
+  }, 60_000)
+
+  it('reads no event log at all on a dispatch pass whose board is already current', async (): Promise<void> => {
+    // Final review, Important 2: this runs on every tick of every workspace, and the ordinary
+    // answer is "nothing to do". `replanIntent` therefore computes the board version first and
+    // returns, instead of paying for the whole diagnosis -- two of whose reads used to be
+    // unbounded scans of the workspace's entire event log.
+    const fixture = await boardAt(1)
+
+    const original = prisma.executionEvent.findMany
+    let scans = 0
+    Object.defineProperty(prisma.executionEvent, 'findMany', {
+      configurable: true,
+      writable: true,
+      value: (...args: Parameters<typeof original>): unknown => {
+        scans += 1
+        return (original as (...call: Parameters<typeof original>) => unknown).apply(prisma.executionEvent, args)
+      },
+    })
+    try {
+      expect(await dispatchPlanning(depsForReplan(fixture.workspaceId))).toBeNull()
+    } finally {
+      Object.defineProperty(prisma.executionEvent, 'findMany', { configurable: true, writable: true, value: original })
+    }
+
+    expect(scans).toBe(0)
+  })
+
   it('starts nothing for an unstamped board under a goal that was never versioned', async (): Promise<void> => {
     // `goalVersion` 0 is a hand-seeded goal (M40 §1): nothing to compare, so nothing to re-plan.
     const fixture = await seed(V1)
@@ -1048,6 +1111,54 @@ describe('a re-plan', () => {
     expect(
       await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' } }),
     ).toBe(1)
+  })
+
+  it('fails the run when the double-conclusion read itself throws, rather than throwing past the pump', async (): Promise<void> => {
+    // Final review, Important 1. The three reads before `applyDelta` -- the manifest, the run row
+    // and this one -- sat outside the containment under a docblock promising nothing throws past
+    // this function. A throw from here would leave the run `succeeded`, the version permanently
+    // deduped on `workspace.replan_started`, and nothing on the board: the one outcome the split
+    // at the commit exists to prevent. It is a failed ATTEMPT instead, so the retry cap governs.
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const runId = await seedConcludedReplan(
+      fixture,
+      `{"add":[{"key":"docs","title":"Document the new endpoint","description":"write it","role":"backend","dependsOn":[]}],"cancel":[],"keep":["${existing.id}"]}`,
+      [existing.id],
+    )
+
+    // Only the double-conclusion read: every other `findFirst` on the event log -- including the
+    // ones `appendEvent` and the failure path below make -- still runs for real.
+    const original = prisma.executionEvent.findFirst
+    Object.defineProperty(prisma.executionEvent, 'findFirst', {
+      configurable: true,
+      writable: true,
+      value: (...args: Parameters<typeof original>): unknown => {
+        if ((args[0] as { where?: { type?: string } } | undefined)?.where?.type === 'workspace_replanned') {
+          throw new Error('the event log could not be read')
+        }
+        return (original as (...call: Parameters<typeof original>) => unknown).apply(prisma.executionEvent, args)
+      },
+    })
+    try {
+      // No `.catch`: the point of the fix is that this resolves.
+      await concludePlanning(brandRunId(runId))
+    } finally {
+      Object.defineProperty(prisma.executionEvent, 'findFirst', { configurable: true, writable: true, value: original })
+    }
+
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+    expect(run.status).toBe('failed')
+    const failures = await prisma.executionEvent.findMany({ where: { runId, type: 'run_failed' } })
+    expect(failures).toHaveLength(1)
+    expect((failures[0]?.payload as { reason: string }).reason).toContain('could not be concluded')
+    expect((failures[0]?.payload as { reason: string }).reason).toContain('the event log could not be read')
+    // Nothing was applied: the board is the one task it started with, and no re-plan is claimed.
+    expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(1)
+    expect(
+      await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' } }),
+    ).toBe(0)
   })
 
   it('fails the run and creates nothing when the additions themselves cannot be written', async (): Promise<void> => {
