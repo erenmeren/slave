@@ -72,7 +72,10 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     reason: 'operator',
     branch: 'slaveofai/T-abc-x',
   },
-  'workspace.goal_set': { goal: 'Ship the checkout flow' },
+  // M45 t1: `request` is the optional words a person typed when they asked for a change. Carried
+  // here so the registry is exercised against the payload the schema now allows -- the card reads
+  // the goal and is unaffected by it, which is the point (spec erratum E24).
+  'workspace.goal_set': { goal: 'Ship the checkout flow', request: 'add Apple Pay' },
   'workspace.plan_created': {
     goal: 'Ship the checkout flow',
     goalVersion: 1,

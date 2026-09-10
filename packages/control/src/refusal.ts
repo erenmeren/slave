@@ -87,6 +87,12 @@ export type ControlRefusal =
   | { readonly kind: 'workspace_not_found'; readonly workspaceId: string }
   | { readonly kind: 'invalid_goal' }
   /**
+   * M45 R3: `requestChange` was handed a blank request. Distinct from `invalid_goal` because
+   * nothing about the GOAL was wrong -- a person pressed "Tell the Supervisor" with an empty box,
+   * and telling them a goal must be non-empty would name the wrong thing.
+   */
+  | { readonly kind: 'invalid_request' }
+  /**
    * M40 erratum E5: `setGoal` was handed text that hashes to the CURRENT goal version's, so there
    * is nothing to record -- no row, no event, no cache move. A refusal rather than a silent
    * success because a version is what the re-plan trigger counts: manufacturing one for a re-save
@@ -357,6 +363,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `no workspace with id ${refusal.workspaceId}`
     case 'invalid_goal':
       return 'a goal must be a non-empty text'
+    case 'invalid_request':
+      return 'a change request must be a non-empty text'
     case 'goal_unchanged':
       return `the goal of project ${refusal.workspaceId} already reads exactly this at version ${String(refusal.version)}: nothing was recorded`
     case 'duplicate_name':

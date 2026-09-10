@@ -327,6 +327,30 @@ describe('the orchestrator CLI', () => {
     expect(await prisma.goalVersion.count({ where: { workspaceId: fixture.workspaceId } })).toBe(1)
   })
 
+  it('request-change writes a new version carrying the words', async (): Promise<void> => {
+    await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'Ship the checkout flow.'])
+
+    const result = await runCli(['request-change', '--workspace', fixture.workspaceId, '--request', 'Add Apple Pay'])
+
+    expect(result.code).toBe(0)
+    const parsed = JSON.parse(result.stdout) as { version: number; sha256: string; goal: string }
+    expect(parsed.version).toBe(2)
+    expect(parsed.goal).toContain('Add Apple Pay')
+    expect(parsed.goal).toContain('Ship the checkout flow.')
+    const version = await prisma.goalVersion.findUniqueOrThrow({
+      where: { workspaceId_version: { workspaceId: fixture.workspaceId, version: 2 } },
+    })
+    expect(version.request).toBe('Add Apple Pay')
+  })
+
+  it('exits non-zero on a blank request', async (): Promise<void> => {
+    const result = await runCli(['request-change', '--workspace', fixture.workspaceId, '--request', '  '])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/a change request must be a non-empty text/u)
+    expect(await prisma.goalVersion.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+  })
+
   it('prints every goal version newest first, with the diff against the version it replaced', async (): Promise<void> => {
     await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'ship checkout'])
     await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'ship checkout\nand the refunds flow'])

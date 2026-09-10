@@ -288,3 +288,83 @@ export function userWorkspaceStatus(facts: UserWorkspaceFacts): UserStatus<UserW
     needsYou: state === 'halted' || state === 'needs_you',
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The Supervisor
+// ---------------------------------------------------------------------------------------------
+
+export type UserSupervisorState =
+  | 'halted'
+  | 'off'
+  | 'decisions'
+  | 'answering'
+  | 'working'
+  | 'watching'
+  | 'idle'
+
+/**
+ * The facts one word about the Supervisor is decided from (M45 R1).
+ *
+ * A FACT BAG, not a `SupervisorReport`. `report.supervisor.pending` counts only the decisions
+ * inside `loadSupervisorWorld`'s `DECISION_WINDOW_MS` window, so a proposal older than that window
+ * -- still open, still waiting on a person -- would not be counted, and the word would be wrong in
+ * exactly the case it matters most (M45 plan erratum E3). `pendingDecisions` is the length of
+ * `listDecisions(workspaceId, { pending: true })`, which has no window.
+ *
+ * `tasksActive` is the same widened list `server/overview.ts` counts (`ready`, `running`,
+ * `verifying`, `reviewing`, `merging`, `rework`, `waiting`); `tasksOpen` is every non-terminal
+ * task, which is what tells "watching a board that has work left" from "nothing to watch".
+ */
+export interface UserSupervisorFacts {
+  readonly halted: boolean
+  /** `Workspace.supervisorEnabled`. False means "it reports but decides nothing". */
+  readonly enabled: boolean
+  readonly pendingDecisions: number
+  readonly pendingQuestions: number
+  readonly tasksActive: number
+  readonly tasksOpen: number
+}
+
+/** The six fixed words. `decisions` is absent because its label carries a count. */
+export const USER_SUPERVISOR_LABEL: Record<Exclude<UserSupervisorState, 'decisions'>, string> = {
+  halted: 'HALTED, NEEDS YOU',
+  off: 'OFF',
+  answering: 'ANSWERING',
+  working: 'WORKING',
+  watching: 'WATCHING',
+  idle: 'IDLE',
+}
+
+/**
+ * One word for what the Supervisor is doing (M45 R1).
+ *
+ * The order is the spec's precedence, and each step is a different question: is this project
+ * stopped; is the Supervisor switched off; is it waiting on ME; is it waiting on an answer; is
+ * anything running; is there anything left to watch. `watching` is the state the spec's own
+ * precedence chain omitted (plan erratum E3) -- enabled, nothing active, a board that still has
+ * work on it -- and it is the difference between a quiet project and a finished one.
+ *
+ * `needsYou` is true for exactly two of the seven: a halted project needs a person to release it,
+ * and a pending decision needs a person to answer it. A switched-off Supervisor needs nothing:
+ * somebody already decided that.
+ */
+export function userSupervisorStatus(facts: UserSupervisorFacts): UserStatus<UserSupervisorState> {
+  const state: UserSupervisorState = facts.halted
+    ? 'halted'
+    : !facts.enabled
+      ? 'off'
+      : facts.pendingDecisions > 0
+        ? 'decisions'
+        : facts.pendingQuestions > 0
+          ? 'answering'
+          : facts.tasksActive > 0
+            ? 'working'
+            : facts.tasksOpen > 0
+              ? 'watching'
+              : 'idle'
+  const label =
+    state === 'decisions'
+      ? `${String(facts.pendingDecisions)} DECISION${facts.pendingDecisions === 1 ? '' : 'S'} WAITING`
+      : USER_SUPERVISOR_LABEL[state]
+  return { state, label, needsYou: state === 'halted' || state === 'decisions' }
+}

@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { type GoalDiff, type Result, err, goalDiff, goalSha256, ok } from '@slave-of-ai/domain'
+import { type GoalDiff, type Result, composeGoal, err, goalDiff, goalSha256, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
@@ -29,31 +29,83 @@ export async function setGoal(
   workspaceId: string,
   goal: string,
   principal?: Principal,
+  options: { readonly request?: string } = {},
 ): Promise<Result<{ readonly version: number; readonly sha256: string }, ControlRefusal>> {
+  // Checked here as well as inside the writer: a blank goal is refused before a transaction is
+  // opened at all, exactly as it always was.
   if (goal.trim() === '') return err({ kind: 'invalid_goal' })
-  const sha256 = goalSha256(goal)
+  const result = await writeGoalVersion(workspaceId, () => goal, principal, options.request ?? null)
+  return result.ok ? ok({ version: result.value.version, sha256: result.value.sha256 }) : result
+}
 
-  // One locked transaction for the read, the decision and the two writes -- the `failTask` idiom on
-  // a workspace. Without `SELECT ... FOR UPDATE` two concurrent sets both read the same
-  // `goalVersion` and both try to write `goalVersion + 1`, and the compound unique
-  // `(workspaceId, version)` turns the loser into a thrown Prisma error instead of the next
-  // version. Both refusals below are reached BEFORE anything is written, so returning them as
-  // values is safe; a refusal after a write would have to throw or Prisma would commit that write.
+/**
+ * "Tell the Supervisor what changed" (M45 R3).
+ *
+ * The only honest path from a sentence to a plan that this system has today: the request amends
+ * the standing goal, the amendment is a new `GoalVersion`, and M40's trigger re-plans that version
+ * as a delta on the next tick. Nothing here starts a run, hires anybody or cancels a task -- the
+ * re-plan's additions land as tasks and its cancellations land as proposals a human approves,
+ * which is exactly what the timeline shows.
+ *
+ * The words are kept twice: on `GoalVersion.request`, so the history can show what was asked, and
+ * on the `workspace.goal_set` event, so the timeline can render the USER REQUEST lane without a
+ * second read.
+ *
+ * `at` is a parameter so a test can pin the date the composed entry carries; it is not part of the
+ * hash's meaning, only of the text.
+ */
+export async function requestChange(
+  workspaceId: string,
+  request: string,
+  principal?: Principal,
+  at: Date = new Date(),
+): Promise<Result<{ readonly version: number; readonly sha256: string; readonly goal: string }, ControlRefusal>> {
+  if (request.trim() === '') return err({ kind: 'invalid_request' })
+  return writeGoalVersion(workspaceId, (previous) => composeGoal(previous, request, at), principal, request.trim())
+}
+
+/**
+ * The one locked write behind both goal verbs (M45 plan erratum E6).
+ *
+ * `textOf` is a callback over the PREVIOUS text rather than a finished string, and that is the
+ * whole point: `requestChange` has to compose against the goal this lock is holding. Composing
+ * outside and then calling `setGoal` would read a body, lose the race to a concurrent set, and
+ * write an amendment to a document that no longer exists -- silently dropping the other edit.
+ *
+ * One locked transaction for the read, the decision and the two writes -- the `failTask` idiom on
+ * a workspace. Without `SELECT ... FOR UPDATE` two concurrent sets both read the same
+ * `goalVersion` and both try to write `goalVersion + 1`, and the compound unique
+ * `(workspaceId, version)` turns the loser into a thrown Prisma error instead of the next
+ * version. Both refusals below are reached BEFORE anything is written, so returning them as
+ * values is safe; a refusal after a write would have to throw or Prisma would commit that write.
+ *
+ * The event is appended AFTER the commit, exactly as `setGoal` always did.
+ */
+async function writeGoalVersion(
+  workspaceId: string,
+  textOf: (previous: string | null) => string,
+  principal: Principal | undefined,
+  request: string | null,
+): Promise<Result<{ readonly version: number; readonly sha256: string; readonly goal: string }, ControlRefusal>> {
   const outcome = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
     const workspace = await tx.workspace.findUnique({
       where: { id: workspaceId },
-      select: { id: true, goalVersion: true },
+      select: { id: true, goal: true, goalVersion: true },
     })
     if (workspace === null) {
       return { ok: false as const, error: { kind: 'workspace_not_found', workspaceId } as ControlRefusal }
     }
 
-    // Erratum E5, decided INSIDE the lock so the version it compares against is the version the
-    // insert below would follow. Only the CURRENT version is compared, never the whole history:
-    // returning to an older wording is a real edit and must produce a real version, because a
-    // version is what the re-plan trigger counts. `goalVersion: 0` means no version was ever
-    // recorded, so there is nothing to be unchanged from.
+    const goal = textOf(workspace.goal)
+    if (goal.trim() === '') return { ok: false as const, error: { kind: 'invalid_goal' } as ControlRefusal }
+    const sha256 = goalSha256(goal)
+
+    // Erratum E5 (M40), decided INSIDE the lock so the version it compares against is the version
+    // the insert below would follow. Only the CURRENT version is compared, never the whole
+    // history: returning to an older wording is a real edit and must produce a real version,
+    // because a version is what the re-plan trigger counts. `goalVersion: 0` means no version was
+    // ever recorded, so there is nothing to be unchanged from.
     const current =
       workspace.goalVersion === 0
         ? null
@@ -70,13 +122,13 @@ export async function setGoal(
 
     const version = workspace.goalVersion + 1
     await tx.goalVersion.create({
-      data: { workspaceId, version, text: goal, sha256, setByUserId: principal?.userId ?? null },
+      data: { workspaceId, version, text: goal, sha256, setByUserId: principal?.userId ?? null, request },
     })
     await tx.workspace.update({
       where: { id: workspaceId },
       data: { goal, goalSetByUserId: principal?.userId ?? null, goalVersion: version },
     })
-    return { ok: true as const, version }
+    return { ok: true as const, version, sha256, goal }
   })
   if (!outcome.ok) return err(outcome.error)
 
@@ -84,11 +136,14 @@ export async function setGoal(
     type: 'workspace.goal_set',
     workspaceId,
     actor: 'human',
-    payload: { goal, version: outcome.version, sha256 },
+    // Spread, not `request: request ?? undefined`: a `workspace.goal_set` written by `set-goal`
+    // must carry NO `request` key at all, so a reader can tell "no request was made" from "a
+    // request was made and was empty" without asking which verb wrote the row.
+    payload: { goal: outcome.goal, version: outcome.version, sha256: outcome.sha256, ...(request === null ? {} : { request }) },
     userId: principal?.userId ?? null,
   })
 
-  return ok({ version: outcome.version, sha256 })
+  return ok({ version: outcome.version, sha256: outcome.sha256, goal: outcome.goal })
 }
 
 /** One version of a workspace's goal as a reader sees it (M40 §4): the stored row, plus what

@@ -8,6 +8,7 @@ import {
   needsYou,
   userRunStatus,
   userSlaveStatus,
+  userSupervisorStatus,
   userTaskStatus,
   userWorkspaceStatus,
   type UserCardState,
@@ -206,5 +207,49 @@ describe('userWorkspaceStatus', () => {
     expect(userWorkspaceStatus({ ...base, halted: true }).needsYou).toBe(true)
     expect(userWorkspaceStatus({ ...base, tasksActive: 4 }).needsYou).toBe(false)
     expect(userWorkspaceStatus({ ...base, archived: true, needsYouCount: 9 }).needsYou).toBe(false)
+  })
+})
+
+describe('userSupervisorStatus', () => {
+  const base = {
+    halted: false, enabled: true, pendingDecisions: 0, pendingQuestions: 0, tasksActive: 0, tasksOpen: 0,
+  }
+
+  it('halted beats everything, and says a person is needed', () => {
+    const status = userSupervisorStatus({ ...base, halted: true, enabled: false, pendingDecisions: 3 })
+    expect(status.state).toBe('halted')
+    expect(status.label).toBe('HALTED, NEEDS YOU')
+    expect(status.needsYou).toBe(true)
+  })
+
+  it('a switched-off Supervisor says so, even with work in flight', () => {
+    const status = userSupervisorStatus({ ...base, enabled: false, tasksActive: 4 })
+    expect(status.state).toBe('off')
+    expect(status.label).toBe('OFF')
+    expect(status.needsYou).toBe(false)
+  })
+
+  it('pending decisions are counted into the label and need a person', () => {
+    expect(userSupervisorStatus({ ...base, pendingDecisions: 1 }).label).toBe('1 DECISION WAITING')
+    const many = userSupervisorStatus({ ...base, pendingDecisions: 3, pendingQuestions: 2, tasksActive: 5 })
+    expect(many.state).toBe('decisions')
+    expect(many.label).toBe('3 DECISIONS WAITING')
+    expect(many.needsYou).toBe(true)
+  })
+
+  it('an unanswered question outranks work in flight', () => {
+    const status = userSupervisorStatus({ ...base, pendingQuestions: 1, tasksActive: 2 })
+    expect(status.state).toBe('answering')
+    expect(status.label).toBe('ANSWERING')
+    expect(status.needsYou).toBe(false)
+  })
+
+  it('work in flight reads WORKING', () => {
+    expect(userSupervisorStatus({ ...base, tasksActive: 1, tasksOpen: 6 }).state).toBe('working')
+  })
+
+  it('open work with nothing active is WATCHING, and an empty board is IDLE', () => {
+    expect(userSupervisorStatus({ ...base, tasksOpen: 2 }).state).toBe('watching')
+    expect(userSupervisorStatus(base).state).toBe('idle')
   })
 })

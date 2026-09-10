@@ -151,6 +151,11 @@ model GoalVersion {
   /// Who set it, nullable for the same reason as `Workspace.goalSetByUserId`: the CLI and the
   /// orchestrator act with no user, and the backfilled v1 rows carry whatever that column held.
   setByUserId String?
+  /// M45 R3: the words a person typed into "Tell the Supervisor", when this version was made by
+  /// `requestChange` rather than by a whole-goal `setGoal`. Null is a real value and the common
+  /// one: every version written before M45, and every version written by the Settings editor or
+  /// by `set-goal`, was a statement of the goal rather than a request to change it.
+  request     String?
   createdAt   DateTime @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)

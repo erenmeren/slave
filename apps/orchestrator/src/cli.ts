@@ -47,6 +47,7 @@ import {
   renameSlave,
   renameCompanyTeam,
   renameTeam,
+  requestChange,
   requestPause,
   requestStop,
   restoreWorkspace,
@@ -155,6 +156,17 @@ const USAGE = `usage: orchestrator <command> [options]
                                        and that text's sha256. Refused (non-zero) when the new text
                                        is byte-identical to the current version -- nothing is
                                        recorded, because nothing changed.
+  request-change --workspace <id> --request "<text>"
+                                       tell the Supervisor what changed. The request AMENDS the
+                                       standing goal -- the document keeps its body and gains a
+                                       dated entry under "Requested changes" -- and that amendment
+                                       is a new VERSION, which is what makes the next tick re-plan
+                                       it as a delta. The words themselves are kept on the version
+                                       and on its event, so the project's timeline can show what
+                                       was asked and not only what it produced. Prints the version,
+                                       its sha256 and the composed goal. Nothing is hired, started
+                                       or cancelled here: a re-plan's additions become tasks and
+                                       its cancellations become proposals you approve.
   goal-history --workspace <id>        every version of this project's goal, newest first, as JSON:
                                        the text, its sha256, who set it, when, and the line-level
                                        diff against the version it replaced (null for v1).
@@ -995,6 +1007,19 @@ export async function main(argv: readonly string[]): Promise<number> {
       // JSON, like `show-context` and `supervisor-decisions`: the version is the number the re-plan
       // trigger counts and a caller has to be able to read it back without parsing a sentence.
       process.stdout.write(`${JSON.stringify({ version: result.value.version, sha256: result.value.sha256 })}\n`)
+      return 0
+    }
+
+    case 'request-change': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const request = requireFlag(flags, 'request')
+      // No `--by`: `GoalVersion.setByUserId` needs a `User` row and this CLI resolves no principal
+      // -- `set-goal` above passes none either (M45 plan erratum E9).
+      const result = await requestChange(workspaceId, request)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(
+        `${JSON.stringify({ version: result.value.version, sha256: result.value.sha256, goal: result.value.goal })}\n`,
+      )
       return 0
     }
 

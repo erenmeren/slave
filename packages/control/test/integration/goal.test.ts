@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@slave-of-ai/db/client'
 import { goalDiff, goalSha256 } from '@slave-of-ai/domain'
-import { listGoalVersions, setGoal } from '../../src/goal.js'
+import { listGoalVersions, requestChange, setGoal } from '../../src/goal.js'
 
 // A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
 const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-control-goal-'))
@@ -335,5 +335,104 @@ describe('listGoalVersions', () => {
 
     const mine = await listGoalVersions(fixture.workspace.id)
     expect(mine.ok && mine.value.map((view) => view.text)).toEqual(['Ours'])
+  })
+})
+
+describe('requestChange', () => {
+  let fixture: Fixture
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+    )
+    fixture = await seed()
+  })
+
+  it('composes the next version, keeps the words, and stamps the event', async () => {
+    const { workspace } = fixture
+    const first = await setGoal(workspace.id, 'Ship the checkout flow.')
+    expect(first.ok).toBe(true)
+
+    const result = await requestChange(workspace.id, 'Add Apple Pay', undefined, new Date('2026-09-10T09:00:00.000Z'))
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.version).toBe(2)
+    expect(result.value.goal).toContain('Ship the checkout flow.')
+    expect(result.value.goal).toContain('- 2026-09-10: Add Apple Pay')
+
+    const version = await prisma.goalVersion.findUniqueOrThrow({
+      where: { workspaceId_version: { workspaceId: workspace.id, version: 2 } },
+    })
+    expect(version.request).toBe('Add Apple Pay')
+    expect(version.text).toBe(result.value.goal)
+
+    const reloaded = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+    expect(reloaded.goalVersion).toBe(2)
+    expect(reloaded.goal).toBe(result.value.goal)
+
+    const events = await prisma.executionEvent.findMany({
+      where: { workspaceId: workspace.id, type: 'workspace_goal_set' },
+      orderBy: { seq: 'asc' },
+    })
+    expect(events).toHaveLength(2)
+    expect((events[1]?.payload as { request?: string }).request).toBe('Add Apple Pay')
+    expect((events[1]?.payload as { version?: number }).version).toBe(2)
+    // The set that made v1 carries NO request key at all -- "no request was made" is a different
+    // fact from "a request was made", and a reader must not have to ask which verb wrote the row.
+    expect(events[0]?.payload as Record<string, unknown>).not.toHaveProperty('request')
+  })
+
+  it('takes the request as the goal on a project that never had one', async () => {
+    const result = await requestChange(fixture.workspace.id, 'Build a billing service')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.version).toBe(1)
+    expect(result.value.goal).toBe('Build a billing service')
+  })
+
+  it('refuses a blank request in its own words, and records nothing', async () => {
+    const { workspace } = fixture
+    await setGoal(workspace.id, 'Ship it.')
+    const result = await requestChange(workspace.id, '   ')
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.kind).toBe('invalid_request')
+    expect(await prisma.goalVersion.count({ where: { workspaceId: workspace.id } })).toBe(1)
+  })
+
+  it('refuses an unknown project', async () => {
+    const result = await requestChange('00000000-0000-4000-8000-000000000000', 'Add Apple Pay')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.kind).toBe('workspace_not_found')
+  })
+
+  it('leaves the re-plan trigger looking at the new version', async () => {
+    const { workspace } = fixture
+    await setGoal(workspace.id, 'Ship it.')
+    await requestChange(workspace.id, 'Add Apple Pay')
+    const versions = await prisma.goalVersion.findMany({
+      where: { workspaceId: workspace.id }, orderBy: { version: 'asc' }, select: { version: true, request: true },
+    })
+    expect(versions).toEqual([{ version: 1, request: null }, { version: 2, request: 'Add Apple Pay' }])
+  })
+
+  it('composes against the goal as it stands, so a set between two requests is never dropped', async () => {
+    // The composition happens INSIDE the lock, over the text the transaction just read. A whole
+    // goal rewritten between two requests is therefore the body the second request amends -- the
+    // race a compose-then-setGoal caller would have lost silently.
+    const { workspace } = fixture
+    await setGoal(workspace.id, 'Ship the checkout flow.')
+    expect((await requestChange(workspace.id, 'Add Apple Pay', undefined, new Date('2026-09-10T00:00:00.000Z'))).ok).toBe(true)
+    expect((await setGoal(workspace.id, 'Ship the refunds flow.')).ok).toBe(true)
+
+    const third = await requestChange(workspace.id, 'Add SEPA', undefined, new Date('2026-09-12T00:00:00.000Z'))
+    expect(third.ok).toBe(true)
+    if (!third.ok) return
+    expect(third.value.version).toBe(4)
+    expect(third.value.goal).toBe('Ship the refunds flow.\n\n## Requested changes\n\n- 2026-09-12: Add SEPA\n')
+
+    const reloaded = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
+    expect(reloaded.goal).toBe(third.value.goal)
+    expect(reloaded.goalVersion).toBe(4)
   })
 })

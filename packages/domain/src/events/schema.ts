@@ -214,6 +214,11 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       goal: z.string().min(1),
       version: z.number().int().positive().optional(),
       sha256: z.string().min(1).optional(),
+      // M45 R3: the words a person typed when they asked for a change, kept beside the composed
+      // document so the timeline can show the REQUEST rather than the diff of the goal it
+      // produced. Optional, and null on every version written by `set-goal` or by the Settings
+      // editor -- those set a whole goal rather than asking for a change.
+      request: z.string().min(1).optional(),
     }),
   }),
   z.object({

@@ -614,6 +614,31 @@ describe('parseExecutionEvent', () => {
     }
   })
 
+  // ---- M45 t1: the words a person typed when they asked for a change ------------------------
+
+  it('accepts a workspace.goal_set carrying the words a person requested', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      actor: 'human',
+      type: 'workspace.goal_set',
+      payload: { goal: 'Ship it\n\n## Requested changes\n\n- 2026-09-10: add Apple Pay\n', version: 2, sha256: 'abc', request: 'add Apple Pay' },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'workspace.goal_set') {
+      expect(result.value.payload.request).toBe('add Apple Pay')
+    }
+  })
+
+  it('still accepts a workspace.goal_set with no request -- every version before M45 has none', () => {
+    const result = parseExecutionEvent({
+      ...BASE, actor: 'human', type: 'workspace.goal_set', payload: { goal: 'Ship it', version: 1, sha256: 'abc' },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'workspace.goal_set') {
+      expect(result.value.payload.request).toBeUndefined()
+    }
+  })
+
   it('rejects a workspace.goal_set whose version is zero -- a set always makes a version', () => {
     const result = parseExecutionEvent({
       ...BASE,
