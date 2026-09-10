@@ -253,6 +253,25 @@ model SlaveTemplate {
   /// template.profile ?? null` chain. Distinct from `description`, which stays the short catalog
   /// blurb; `profile` is what actually reaches a run's prompt.
   profile       String?
+  /// M42 §R1: where this template came from, when it is not hand-made. `<catalog>/<division>/<slug>`
+  /// -- unique, so a re-import finds the row it wrote last time no matter what the operator has
+  /// since renamed. NULL for every hand-made template, which is what "imported" means here.
+  sourceId       String?       @unique
+  /// The SHA-256 of the persona FILE as it was imported. The change detector: an unchanged file is
+  /// an unchanged row, and nothing is read or written for it.
+  sourceSha256   String?
+  /// The source directory this persona lived in -- the division. `role` is derived from it (R3) and
+  /// may have been translated by `--role-map`, so the untranslated fact is kept separately.
+  sourceDivision String?
+  /// M42 erratum E2: the SHA-256 of the profile text the IMPORT wrote, which is the only way to
+  /// tell an operator's edit from the import's own words. `setProfile({ templateId })` records
+  /// nothing at all -- no event, no hash, deliberately, because a catalog row has no workspace to
+  /// append an event to -- and `sourceSha256` cannot stand in: it hashes the FILE, and by the time
+  /// this question is asked the file has changed and the body that was written is gone. A stored
+  /// profile whose hash is not this one was edited (or cleared) by a person, and the import leaves
+  /// it alone.
+  profileSha256  String?
+  importedAt     DateTime?
   createdAt     DateTime       @default(now())
   companySlaves CompanySlave[]
 }
@@ -1096,4 +1115,35 @@ model SimulationModelUsage {
 
   @@unique([simulationId, seq])
   @@index([simulationId])
+}
+
+/// M42 §R5: one run of `import-catalog`, and the whole of its auditable record.
+///
+/// NOT an `ExecutionEvent`: that table's `workspaceId` is NOT NULL and every reader of the log is
+/// workspace-scoped, while the template catalog belongs to no project at all -- the same gap
+/// `setProfile`'s doc comment names for a template-level profile write. So the import writes a row
+/// of its own instead of inventing a workspace for an event, and `list-imports` and the web read
+/// this table.
+///
+/// `report` is the full per-row `ImportReport` (`packages/control/src/catalog.ts`) as JSONB: the
+/// counters beside it are the summary an operator scans, and the report is what they open when one
+/// of the counters is not what they expected. A dry run writes NO row (it changed nothing).
+model CatalogImport {
+  id         String   @id @default(uuid())
+  /// The catalog's name, which is the first segment of every `sourceId` this run wrote.
+  catalog    String
+  /// The absolute directory it was read from, on the daemon host's disk.
+  directory  String
+  /// WHO ran it, by NAME (`--by`), not a `Principal`: the CLI is this verb's only caller and has no
+  /// session -- `setProfile(target, profile, actor)`'s idiom.
+  by         String?
+  startedAt  DateTime
+  finishedAt DateTime
+  created    Int
+  updated    Int
+  unchanged  Int
+  skipped    Int
+  report     Json
+
+  @@index([startedAt])
 }
