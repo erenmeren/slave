@@ -991,6 +991,74 @@ describe('TaskDetailPanel (M45 R4: the expanded view)', () => {
     expect(screen.getByTestId('run-cost-row').textContent).toContain('0.25')
   })
 
+  // Fix round 1, IMPORTANT: `worktreePath` has been on the DTO since M23 B4 and was rendered
+  // nowhere -- so `collectable` said a tree existed and nothing on screen said WHERE. This is the
+  // folding proof R4 is actually about: the path is absent while the group is closed and there in
+  // full once it is open, rather than hidden for good.
+  it('folds the worktree path away rather than hiding it', () => {
+    const panel = render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={withRuns} onClose={() => {}} />)
+
+    expect(screen.queryByTestId('worktree-path')).toBeNull()
+    expect(panel.container.textContent).not.toContain('/r/.slaveofai/worktrees/T-1')
+
+    openGroup('worktree')
+    expect(screen.getByTestId('worktree-path').textContent).toBe('/r/.slaveofai/worktrees/T-1')
+  })
+
+  it('names no path for a run whose tree is already off disk', () => {
+    render(
+      <TaskDetailPanel
+        workspaceGoalVersion={0}
+        workspaceId="w1"
+        task={task({ status: 'done', collectable: false, runs: [{ ...runRow, worktreePath: null }] })}
+        onClose={() => {}}
+      />,
+    )
+    openGroup('worktree')
+    expect(screen.queryByTestId('worktree-path')).toBeNull()
+    expect(screen.getByText(/nothing to collect/u)).toBeTruthy()
+  })
+
+  // Fix round 1, minor 3: the Run rows and the Cost rows are two readings of the same runs, so both
+  // name each run the same way.
+  it('names each run by the same 8-char prefix in the Run group and the Cost group', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={withRuns} onClose={() => {}} />)
+    expect(screen.getByTestId('run-row').textContent).toContain(runRow.id.slice(0, 8))
+    openGroup('cost')
+    expect(screen.getByTestId('run-cost-row').textContent).toContain(runRow.id.slice(0, 8))
+  })
+
+  // Fix round 1, minor 4: spec Decision 6 -- an unmeasured run is a hole in the total, never a zero.
+  it('never claims $0.00 for runs whose runtime reported nothing', () => {
+    const unmeasured = { ...runRow, id: 'r2', costUsd: null }
+    const { unmount } = render(
+      <TaskDetailPanel
+        workspaceGoalVersion={0}
+        workspaceId="w1"
+        task={task({ status: 'done', runs: [{ ...runRow, costUsd: null }] })}
+        onClose={() => {}}
+      />,
+    )
+    // No run reported spend at all: the unknown mark, and no dollar figure anywhere on the line.
+    expect(screen.getByTestId('run-total-cost').textContent).toContain('—')
+    expect(screen.getByTestId('run-total-cost').textContent).not.toContain('$')
+    unmount()
+
+    render(
+      <TaskDetailPanel
+        workspaceGoalVersion={0}
+        workspaceId="w1"
+        task={task({ status: 'done', runs: [runRow, unmeasured] })}
+        onClose={() => {}}
+      />,
+    )
+    // One measured, one not: the measured spend, and the hole counted apart rather than folded in.
+    const total = screen.getByTestId('run-total-cost').textContent ?? ''
+    expect(total).toContain('$0.25')
+    expect(total).toContain('across 2 runs')
+    expect(total).toContain('1 unmeasured')
+  })
+
   it('points the events group at the Activity page filtered to this task', () => {
     render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ id: 't1' })} onClose={() => {}} />)
     openGroup('events')

@@ -372,66 +372,66 @@ export function SlavePanel({
         * an empty role set is precisely what makes a worker unreachable by a role-addressed message
         * (spec §7), so the mailbox and the roles that fill it read as one thing. */}
       <DetailsGroup group="messages" title="Messages">
-      {showMessageBox && (
-        <section data-testid="message-box" className="flex flex-col gap-1">
-          <h3 className="text-xs uppercase tracking-wide text-text-3">Message</h3>
-          {messageWritable ? (
-            <>
-              <textarea
-                data-testid="message-input"
-                value={draft}
-                onChange={(event) => setDraft(event.target.value)}
-                className="rounded border border-line bg-bg-0 p-2 text-xs text-text-1"
-                rows={3}
-              />
-              <Button
-                variant="ghost"
-                data-testid="message-save"
-                disabled={pending.has('message')}
-                onClick={() => void run('message', 'message', { message: draft })}
-                className="self-end"
-              >
-                save
-              </Button>
-            </>
-          ) : (
-            <p data-testid="message-hint" className="text-xs text-text-3">
-              pause to send an instruction
-            </p>
-          )}
-        </section>
-      )}
+        {showMessageBox && (
+          <section data-testid="message-box" className="flex flex-col gap-1">
+            <h3 className="text-xs uppercase tracking-wide text-text-3">Message</h3>
+            {messageWritable ? (
+              <>
+                <textarea
+                  data-testid="message-input"
+                  value={draft}
+                  onChange={(event) => setDraft(event.target.value)}
+                  className="rounded border border-line bg-bg-0 p-2 text-xs text-text-1"
+                  rows={3}
+                />
+                <Button
+                  variant="ghost"
+                  data-testid="message-save"
+                  disabled={pending.has('message')}
+                  onClick={() => void run('message', 'message', { message: draft })}
+                  className="self-end"
+                >
+                  save
+                </Button>
+              </>
+            ) : (
+              <p data-testid="message-hint" className="text-xs text-text-3">
+                pause to send an instruction
+              </p>
+            )}
+          </section>
+        )}
 
-      <section data-testid="runtime-roles-block" className="flex flex-col gap-1">
-        <h3 className="text-xs uppercase tracking-wide text-text-3">Runtime roles</h3>
-        {/* The same chips and the same warning the card and the Slaves table show -- an empty set
-          * means this worker is never a scheduler candidate, never staffed onto a review or a
-          * plan, and never a role-addressed message's recipient (spec §7). */}
-        <div className="flex flex-wrap items-center gap-[5px]">
-          <RuntimeRoleChips roles={slave.runtimeRoles} />
-        </div>
-        <input
-          data-testid="runtime-roles-input"
-          value={rolesDraft}
-          onChange={(event) => setRolesDraft(event.target.value)}
-          aria-label="Runtime roles, comma separated"
-          placeholder="backend, reviewer"
-          className="rounded border border-line bg-bg-0 p-2 text-xs text-text-1"
-        />
-        <Button
-          variant="ghost"
-          data-testid="runtime-roles-save"
-          disabled={pending.has('runtime-roles')}
-          onClick={() =>
-            void patch('runtime-roles', `/api/w/${workspaceId}/slaves/${slave.id}/runtime-roles`, {
-              roles: parseRoles(rolesDraft),
-            })
-          }
-          className="self-end"
-        >
-          save
-        </Button>
-      </section>
+        <section data-testid="runtime-roles-block" className="flex flex-col gap-1">
+          <h3 className="text-xs uppercase tracking-wide text-text-3">Runtime roles</h3>
+          {/* The same chips and the same warning the card and the Slaves table show -- an empty set
+            * means this worker is never a scheduler candidate, never staffed onto a review or a
+            * plan, and never a role-addressed message's recipient (spec §7). */}
+          <div className="flex flex-wrap items-center gap-[5px]">
+            <RuntimeRoleChips roles={slave.runtimeRoles} />
+          </div>
+          <input
+            data-testid="runtime-roles-input"
+            value={rolesDraft}
+            onChange={(event) => setRolesDraft(event.target.value)}
+            aria-label="Runtime roles, comma separated"
+            placeholder="backend, reviewer"
+            className="rounded border border-line bg-bg-0 p-2 text-xs text-text-1"
+          />
+          <Button
+            variant="ghost"
+            data-testid="runtime-roles-save"
+            disabled={pending.has('runtime-roles')}
+            onClick={() =>
+              void patch('runtime-roles', `/api/w/${workspaceId}/slaves/${slave.id}/runtime-roles`, {
+                roles: parseRoles(rolesDraft),
+              })
+            }
+            className="self-end"
+          >
+            save
+          </Button>
+        </section>
       </DetailsGroup>
 
       {/* `—`, the mark the Roster already uses for unknown -- never `$0.00`, which claims a

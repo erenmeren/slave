@@ -231,7 +231,11 @@ export function TaskDetailPanel({
               {task.runs.map((run) => (
                 <li key={run.id} data-testid="run-row" className="rounded border border-line p-2 text-xs text-text-2">
                   <div className="flex items-center justify-between">
-                    <span>{run.status}</span>
+                    {/* The same 8-char id prefix the Cost group's rows carry, so the two lists can
+                      * be matched row for row by eye (fix round 1, minor 3). */}
+                    <span>
+                      <span className="font-mono text-[10px] text-text-faint">{run.id.slice(0, 8)}</span> {run.status}
+                    </span>
                     <span className="font-mono">{run.toolCalls} calls</span>
                   </div>
                   {run.checkpoint !== null && run.checkpoint.pausedAtStep !== null && (
@@ -433,6 +437,22 @@ export function TaskDetailPanel({
         * have a worktree can be collected -- `task.collectable` is computed server-side on the DTO
         * (`buildTasksSnapshot`), so this panel never imports `TERMINAL` from the domain. */}
       <DetailsGroup group="worktree" title="Worktree">
+        {/* WHICH tree, on disk, per run (M45 R4 fix round 1). `worktreePath` has been on the DTO
+          * since M23 B4 and was rendered nowhere -- so `collectable` said a tree existed and
+          * nothing on screen said where. A path is exactly the kind of raw value R4 folds rather
+          * than hides: absent while the group is closed, and there in full once it is open. */}
+        {task.runs.some((run) => run.worktreePath !== null) && (
+          <ul className="flex flex-col gap-0.5">
+            {task.runs
+              .filter((run) => run.worktreePath !== null)
+              .map((run) => (
+                <li key={run.id} className="flex items-baseline gap-2">
+                  <span className="font-mono text-[10px] text-text-faint">{run.id.slice(0, 8)}</span>
+                  <span data-testid="worktree-path" className="font-mono text-[10px] text-text-3">{run.worktreePath}</span>
+                </li>
+              ))}
+          </ul>
+        )}
         {!collectable ? (
           <p className="text-xs text-text-3">nothing to collect — no run of this task has a tree left on disk</p>
         ) : (

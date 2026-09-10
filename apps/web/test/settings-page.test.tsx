@@ -1075,7 +1075,8 @@ describe('the danger zone', () => {
 // unchanged, which is what keeps `gate:m14-fidelity`'s numbers where they are.
 describe('SettingsClient (M44 E25 / M45 R5)', () => {
   it('renders inside the one page shell, with its own frame classes untouched', () => {
-    render(<SettingsClient adapters={[]} showReseed={false} mode="single-user" posture="single-user" />)
+    render(<SettingsClient adapters={[]} showReseed={false}
+      mode="loopback-only" posture="loopback-only · no accounts · cross-site requests refused" />)
     const shell = screen.getByTestId('page-shell')
     expect(shell.className).not.toContain('p-3')
     expect(shell.querySelector(':scope > div')?.className).toBe('flex flex-col gap-4 p-4')
