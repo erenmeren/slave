@@ -219,7 +219,7 @@ EOF
 - Consumes: nothing from Task 1.
 - Produces, for Task 3 (the gate) to rely on **by these exact names**:
   - fixture mode name: `m41-flow`
-  - argv flag: `--ask-on-task <task title>` — the value is a task TITLE, matched as `` prompt.includes(`Task: ${title}`) `` (erratum E2)
+  - argv flag: `--ask-on-task <token>` — the value is ONE WORD (spec E2/B5: `SLAVEOFAI_CLAUDE_ARGS` is split on single spaces), matched inside the prompt's `Task: <title>` line; the gate passes `core`, the last word of `Write the feature core`
   - environment variable read on the asking leg only: `FAKE_CLAUDE_ASK_JSON` (the `<slave-ask>` envelope JSON, e.g. `{"role":"qa","question":"…"}`)
   - plan fixture name: `plan-graph-scenario` (`fixtures/plan-graph-scenario.ndjson`)
   - the three task titles it plans, unchanged from `plan-graph`: `Write the feature core`, `Expose the API`, `Document and polish`
@@ -356,7 +356,7 @@ Add to `packages/providers/test/fake-claude.test.ts`, after the existing `descri
     it('the asking leg fires only for the named task: ask block in, no commit', async (): Promise<void> => {
       const { stdout } = await run(
         'node',
-        [FAKE, '--ask-on-task', CORE_TITLE, '--fixture', 'm41-flow', '-p', CORE_PROMPT],
+        [FAKE, '--ask-on-task', 'core', '--fixture', 'm41-flow', '-p', CORE_PROMPT],
         { cwd: repoDir, env: { ...process.env, FAKE_CLAUDE_ASK_JSON: ASK_JSON } },
       )
       // The envelope is appended to the LAST assistant text block, not emitted as a line of its
@@ -371,7 +371,7 @@ Add to `packages/providers/test/fake-claude.test.ts`, after the existing `descri
     it('a work run for ANOTHER task commits instead of asking, even with --ask-on-task set', async (): Promise<void> => {
       const { stdout } = await run(
         'node',
-        [FAKE, '--ask-on-task', CORE_TITLE, '--fixture', 'm41-flow', '-p', API_PROMPT],
+        [FAKE, '--ask-on-task', 'core', '--fixture', 'm41-flow', '-p', API_PROMPT],
         { cwd: repoDir, env: { ...process.env, FAKE_CLAUDE_ASK_JSON: ASK_JSON } },
       )
       expect(stdout).not.toContain('<slave-ask>')
@@ -382,7 +382,7 @@ Add to `packages/providers/test/fake-claude.test.ts`, after the existing `descri
     it('the RESUMED leg of the very same task commits instead of asking again', async (): Promise<void> => {
       const { stdout } = await run(
         'node',
-        [FAKE, '--ask-on-task', CORE_TITLE, '--fixture', 'm41-flow', '-p', CORE_PROMPT, '--resume', 'fake-session-complete'],
+        [FAKE, '--ask-on-task', 'core', '--fixture', 'm41-flow', '-p', CORE_PROMPT, '--resume', 'fake-session-complete'],
         { cwd: repoDir, env: { ...process.env, FAKE_CLAUDE_ASK_JSON: ASK_JSON } },
       )
       // `--resume` is the ONE thing the runtime itself puts on a resumed argv
@@ -406,7 +406,7 @@ Add to `packages/providers/test/fake-claude.test.ts`, after the existing `descri
       const env = { ...process.env }
       delete env.FAKE_CLAUDE_ASK_JSON
       await expect(
-        run('node', [FAKE, '--ask-on-task', CORE_TITLE, '--fixture', 'm41-flow', '-p', CORE_PROMPT], {
+        run('node', [FAKE, '--ask-on-task', 'core', '--fixture', 'm41-flow', '-p', CORE_PROMPT], {
           cwd: repoDir,
           env,
         }),
@@ -452,7 +452,7 @@ In `packages/providers/test/fake-claude.mjs`, insert this block immediately afte
 //                  A work run is the ASKING leg -- the m36-flow body,
 //                  `complete` with the `FAKE_CLAUDE_ASK_JSON` envelope
 //                  appended to its last assistant text block -- only when
-//                  ALL THREE hold: `--ask-on-task <task title>` is in ARGV,
+//                  ALL THREE hold: `--ask-on-task <token>` (one word) is in ARGV,
 //                  the prompt carries the literal `Task: <that title>`, and
 //                  argv has NO `--resume`. Every other work run, the resumed
 //                  leg included, writes `m41-work.txt`, commits it as `Fake
@@ -476,7 +476,7 @@ In `packages/providers/test/fake-claude.mjs`, insert this block immediately afte
 In `packages/providers/test/fake-claude.mjs`, immediately after `replanCancelId()` (and before `substituteCancelId`), add:
 
 ```js
-/** M41: the TITLE of the task a work run must stop and ask about -- `--ask-on-task <title>` from
+/** M41: the one-word TOKEN naming the task a work run must stop and ask about -- `--ask-on-task <token>` from
  *  ARGV, or `null` when the flag is absent, or present with another flag where its value should be
  *  (an omitted value is not a title). Same shape as {@link replanCancelId}, and argv for the same
  *  reason: it is the one per-daemon knob that reaches a run's child. */
@@ -498,10 +498,15 @@ function askOnTaskTitle() {
  * of the very session that asked can never ask again (the m36-flow discriminator, unchanged).
  */
 function isAskingLeg(prompt) {
-  const title = askOnTaskTitle()
-  if (title === null) return false
+  const token = askOnTaskTitle()
+  if (token === null) return false
   if (args.includes('--resume')) return false
-  return prompt.includes(`Task: ${title}`)
+  // The `task` section's own first line, and the token that identifies WHICH task inside it. A
+  // whole title cannot be the flag's value: `SLAVEOFAI_CLAUDE_ARGS` is split on a single space, so
+  // a flag value must be one word. The line is matched, not the bare token, so a token that also
+  // occurs in a description or an inbox message cannot turn some other run into an asking leg.
+  const line = prompt.split('\n').find((one) => one.startsWith('Task: '))
+  return line !== undefined && line.includes(token)
 }
 ```
 
@@ -643,7 +648,7 @@ git add packages/providers/test/fake-claude.mjs packages/providers/test/fake-cla
 git commit -m "$(cat <<'EOF'
 test(providers): m41 t2 — one fake-CLI mode for the whole story, and the plan fixture the story is told from
 
-`m41-flow` serves every arm one gate needs, and `--ask-on-task <title>` makes exactly one of two
+`m41-flow` serves every arm one gate needs, and `--ask-on-task <token>` makes exactly one of two
 workers stop and ask. The discriminator is the task TITLE, not its id: a work run's prompt renders
 `Task: <title>` and never carries the id (erratum E2).
 
@@ -1128,7 +1133,7 @@ try {
   const ASK_ON_TASK_TOKEN = CORE_TITLE.split(' ').at(-1)
 ```
 
-and Task 2's `isAskingLeg` must therefore match the token as the tail of the `Task:` line rather than the whole title. **Amend Task 2 Step 5's `isAskingLeg` to this body, and its tests to pass `'core'`:**
+and Task 2's `isAskingLeg` therefore matches the token inside the `Task:` line rather than the whole title. **Pre-flight ruling: this body is ALREADY what Task 2 Step 5 specifies (folded in before execution); Task 3 changes nothing in the fake CLI.** For reference, that body is:
 
 ```js
 function isAskingLeg(prompt) {
@@ -1144,7 +1149,7 @@ function isAskingLeg(prompt) {
 }
 ```
 
-(Task 2's tests then pass `'core'` as the `--ask-on-task` value; `CORE_PROMPT`'s `Task: Write the feature core` line contains it and `API_PROMPT`'s `Task: Expose the API` line does not. Update the two test cases that pass `CORE_TITLE` as the flag value to pass `'core'`, and keep `CORE_TITLE` for building the prompt.)
+(Task 2's tests already pass `'core'` as the `--ask-on-task` value; `CORE_PROMPT`'s `Task: Write the feature core` line contains it and `API_PROMPT`'s `Task: Expose the API` line does not.)
 
 Continue the setup:
 
@@ -2374,7 +2379,7 @@ name the file, the line range and the deltas, which is more precise than retypin
 helper and risking a silent divergence from the shape every other gate's failure report uses.
 
 **Type consistency.** `--ask-on-task` carries a **space-free token** everywhere: Task 2's
-`askOnTaskTitle()`/`isAskingLeg()` (as amended in Task 3 Step 4), Task 2's tests, and Task 3's
+`askOnTaskTitle()`/`isAskingLeg()` (token form, folded into Task 2 by the pre-flight ruling), Task 2's tests, and Task 3's
 `ASK_ON_TASK_TOKEN`. `m41-work.txt`, `plan-graph-scenario`, `m41-flow`, `FAKE_CLAUDE_ASK_JSON`,
 `PostgreSQL on port 5433` and the three plan titles are spelled identically in Task 2 and Task 3.
 The control/domain imports in Task 3 are all real exports (`packages/control/src/index.ts` re-exports
