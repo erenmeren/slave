@@ -67,3 +67,4 @@ jobs:
       - run: npm run gate:m38-supervisor
       - run: npm run gate:m39-supervisor-mailbox
       - run: npm run gate:m40-requirement-versioning
+      - run: npm run gate:m41-scenario

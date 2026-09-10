@@ -364,6 +364,22 @@ is due and not happening: `archived`, `halted`, `dedup` (this version was alread
 `retry_cap` or `live_planning_run`. Reading the prompt starts no run and records nothing — the tick
 is the only thing that dispatches one.
 
+## The whole story
+
+Every section above describes one seam. `npm run gate:m41-scenario` runs them in sequence, once,
+against real orchestrator daemons and the fake slave CLI — one requirement, one plan, a worker that
+stops to ask a question nobody in the company can answer, a Supervisor that answers it from a
+sentence in the worker's own task and wakes it up, work verified, reviewed by a slave that wrote
+none of it and merged onto `main` by a person, a changed requirement that produces a delta re-plan,
+and a human approving the one cancellation it proposed. Then, with nothing running, it asks the
+board, the goal history, the Supervisor, the mailbox, the spend and the event log what happened, and
+they all have to say the same thing. Running the seams together is how it found a defect none of
+them could see alone: a review run's own `run.succeeded` woke the daemon before the task had left
+`reviewing`, and a second reviewer started on the same branch — a review run now claims its task the
+way an implementation run does.
+
+`docs/scenarios/e2e-software-team.md` tells that story act by act, with what each one asserts.
+
 ## The Supervisor
 
 Every project has one, and it is not a slave: no `Slave` row, no runs, no worktree, no prompt of
@@ -553,9 +569,9 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m21-loose-ends`, `gate:m23-onboarding`, `gate:m29-simulation`, `gate:m30-simulation-compare`,
 `gate:m31a-llm-decisions`, `gate:m31b-software-sector`, `gate:m33-adopt`,
 `gate:m35-pipeline-honesty`, `gate:m36-messaging`, `gate:m37-run-context`, `gate:m38-supervisor`,
-`gate:m39-supervisor-mailbox` and `gate:m40-requirement-versioning` on every push — `m36` stops the
-orchestrator and starts it again mid-scenario, to prove a waiting slave's question survives a
-restart, `m37` reads a real run's prompt and worktree back to prove a slave was given the persona
+`gate:m39-supervisor-mailbox`, `gate:m40-requirement-versioning` and `gate:m41-scenario` on every
+push — `m36` stops the orchestrator and starts it again mid-scenario, to prove a waiting slave's
+question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was given the persona
 and the skills it was assigned, `m38` drives a real daemon until the Supervisor proposes the
 staffing a reviewer-less project needs, waits for a human to approve it, unblocks a review-capped
 task by itself, and escalates a project whose budget is gone without spending a cent to decide that,
@@ -565,7 +581,10 @@ typed over it, refuses to answer a question about an API key at all, re-addresse
 colleague who can, and deletes a month-old decision while leaving a month-old proposal alone, and
 `m40` drives one until a changed goal produces a delta re-plan whose addition is on the board and
 whose cancellation is still only a proposal, then approves it and shows the task that depended on
-the cancelled work still cannot start. That is 16 gates. Tests and gates share one Postgres — run
+the cancelled work still cannot start, and `m41` runs all of it as ONE story — plan, ask, a
+Supervisor answer, a resume, a review, a hand merge, a re-plan and an approval — and then asks every
+operator surface at once whether they agree about what happened
+(`docs/scenarios/e2e-software-team.md`). That is 17 gates. Tests and gates share one Postgres — run
 one at a time.
 
 ## Learn more
