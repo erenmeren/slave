@@ -6,7 +6,7 @@ import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-a
 import { prisma } from '@slave-of-ai/db/client'
 import { workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import type { SlaveRuntimeAdapter } from '@slave-of-ai/providers'
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { noteTickRan, reconcileOrphans, resetTickObservation, sweep, type SweepDeps } from '../../src/sweep.js'
 
 /**
@@ -64,6 +64,7 @@ async function eventTypesFor(workspaceId: string): Promise<readonly DomainEventT
 }
 
 const hoursAgo = (n: number): Date => new Date(Date.now() - n * 60 * 60 * 1000)
+const secondsAgo = (n: number): Date => new Date(Date.now() - n * 1000)
 
 describe('sweep and reconcileOrphans', () => {
   let fixture: Fixture
@@ -668,6 +669,80 @@ describe('sweep and reconcileOrphans', () => {
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(task.status).toBe('blocked')
     expect(task.activeRunId).toBeNull()
+    expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
+  })
+  // M42 t1 fix round 1 (spec E22): the grace is PER KIND. An implementation run's conclusion is not
+  // over when its row goes terminal -- the chained `verifyConcludedRun` still has the workspace's
+  // verify commands to run, up to `runTimeoutMs` each, before `advance()` releases the claim.
+  it('leaves an implementation claim alone through the workspace\'s whole verify window', async (): Promise<void> => {
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { runTimeoutMs: 60_000, verifyCommands: ['true'] } })
+    const run = await givenRun({ status: 'succeeded', pid: process.pid })
+    // Past the flat 30 s, and nowhere near past 30 s + one 60 s verify command.
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { terminalAt: secondsAgo(31), endedAt: secondsAgo(31) } })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'running', activeRunId: run.id } })
+
+    const report = await sweep(deps)
+
+    expect(report.strandedClaims).toEqual([])
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('running')
+    expect(task.activeRunId).toBe(run.id)
+  })
+
+  it('releases an implementation claim once the verify window has passed too', async (): Promise<void> => {
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { runTimeoutMs: 60_000, verifyCommands: ['true'] } })
+    const run = await givenRun({ status: 'succeeded', pid: process.pid })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { terminalAt: secondsAgo(91), endedAt: secondsAgo(91) } })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'running', activeRunId: run.id } })
+
+    const report = await sweep(deps)
+
+    expect(report.strandedClaims).toEqual([fixture.taskId])
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).status).toBe('rework')
+  })
+
+  it('releases a review claim on the flat grace alone: a review conclusion never runs a verify command', async (): Promise<void> => {
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { runTimeoutMs: 60_000, verifyCommands: ['true'] } })
+    const run = await givenRun({ status: 'failed', pid: process.pid, kind: 'review' })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { terminalAt: secondsAgo(31), endedAt: secondsAgo(31) } })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'reviewing', activeRunId: run.id } })
+
+    const report = await sweep(deps)
+
+    expect(report.strandedClaims).toEqual([fixture.taskId])
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('reviewing')
+    expect(task.activeRunId).toBeNull()
+  })
+
+  it('does not rework a task that moved off running between the arm\'s read and its write', async (): Promise<void> => {
+    // The race the `status` in the write's `where` exists for, made real: an operator's cancel (or
+    // any other writer) lands after this arm has decided the task is `running` and before it
+    // writes. Without that guard the write matches on `activeRunId` alone and drags the task back
+    // to `rework` from wherever it had legitimately gone.
+    const run = await givenRun({ status: 'succeeded', pid: process.pid })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { terminalAt: hoursAgo(1), endedAt: hoursAgo(1) } })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'running', activeRunId: run.id } })
+
+    const realUpdateMany = prisma.task.updateMany.bind(prisma.task)
+    const spy = vi.spyOn(prisma.task, 'updateMany')
+    // Cast because `updateMany` is declared to return Prisma's own branded promise, which nothing
+    // outside the client can construct; the arm only ever awaits it and reads `count`.
+    spy.mockImplementation(((args: Parameters<typeof realUpdateMany>[0]) => {
+      spy.mockRestore()
+      return (async (): Promise<{ readonly count: number }> => {
+        await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'cancelled' } })
+        return realUpdateMany(args)
+      })()
+    }) as unknown as typeof prisma.task.updateMany)
+
+    const report = await sweep(deps)
+    spy.mockRestore()
+
+    expect(report.strandedClaims).toEqual([])
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('cancelled')
+    expect(task.activeRunId).toBe(run.id)
     expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
   })
 })

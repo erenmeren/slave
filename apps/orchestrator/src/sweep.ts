@@ -54,17 +54,59 @@ const SWEEPABLE: readonly RunStatus[] = ORPHANABLE.filter((status: RunStatus) =>
 const TERMINAL: readonly RunStatus[] = ['stopped', 'succeeded', 'failed']
 
 /**
- * How long a run must have been terminal before its task's claim is treated as stranded (M42 t1).
+ * The FLOOR of the stranded-claim grace: the gap between a terminal write and the database work
+ * that follows it, in a process this one cannot see (M42 t1).
  *
- * `livePumpRunIds` closes the window inside THIS process exactly -- `activePumpRunIds.delete` runs
+ * `livePumpRunIds` closes that window inside THIS process exactly -- `activePumpRunIds.delete` runs
  * in the pump chain's `.finally()`, after `verifyConcludedRun`, so a run in the set still owns its
- * task. It says nothing about another process: the CLI's one-shot `tick` can run against a live
- * daemon (`startRun`'s own reasoning for claiming in the database rather than in memory), and its
- * conclusion has the same millisecond-wide gap between the run's terminal write and the task's
- * release. Thirty seconds is far past that gap and far short of anything an operator would notice,
- * and it makes this arm unable to race a conclusion rather than merely unlikely to.
+ * task. It says nothing about another process, and there is always another process to worry about:
+ * the CLI's one-shot `tick` and `resume-run` run the very same conclusion chain beside a live
+ * daemon (`startRun`'s own reasoning for claiming in the database rather than in memory). Thirty
+ * seconds is far past any run of database writes and far short of anything an operator would
+ * notice.
+ *
+ * It is a floor and not the whole grace because a conclusion is not only database writes. See
+ * {@link strandedClaimGraceMs}.
  */
 export const STRANDED_CLAIM_GRACE_MS = 30_000
+
+/** The workspace fields {@link strandedClaimGraceMs} needs -- the row `sweep` already loads. */
+export interface StrandedClaimGraceWorkspace {
+  readonly runTimeoutMs: number
+  readonly verifyCommands: readonly string[]
+}
+
+/**
+ * How long a run of this kind must have been terminal before its task's claim is stranded rather
+ * than merely mid-release (spec erratum E22).
+ *
+ * PER KIND, because the two conclusions are not the same length of work. A `review` run's
+ * conclusion is database-only -- `concludeReviewRun` parses the verdict text and moves the task --
+ * so the floor covers it with three orders of magnitude to spare. An `implementation` run's does
+ * not stop at the terminal write: `pumpRun` writes `succeeded` and only THEN chains
+ * `verifyConcludedRun`, which runs every one of the workspace's verify commands -- each of them
+ * allowed to take `runTimeoutMs` -- before `advance()` releases the claim. Under the flat floor
+ * this arm would reach a task whose CLI `tick` is three minutes into `npm test`, hand it back to
+ * `rework`, and the next tick's slave would adopt the worktree that verify is still running in:
+ * two slaves, one branch, which is the exact failure `Task.activeRunId` exists to prevent.
+ *
+ * `max(1, verifyCommands.length)` because a workspace with no verify commands still has a
+ * conclusion to run, and zero would collapse the whole allowance to the floor.
+ *
+ * What this does NOT cover, deliberately: a verify that legitimately outlives the workspace's own
+ * ceiling. Nothing can -- `runTimeoutMs` is what the workspace says the longest command may take,
+ * so waiting longer than the sum of them would mean disbelieving the workspace's own setting. The
+ * cost of the choice is on the other side: a process that really did die mid-verify leaves its
+ * task busy for the length of the longest verify the workspace allows, and self-heals only after
+ * that. Slow, and correct; the opposite trade loses work.
+ */
+export function strandedClaimGraceMs(
+  kind: 'implementation' | 'review' | 'planning',
+  workspace: StrandedClaimGraceWorkspace,
+): number {
+  if (kind === 'review') return STRANDED_CLAIM_GRACE_MS
+  return STRANDED_CLAIM_GRACE_MS + workspace.runTimeoutMs * Math.max(1, workspace.verifyCommands.length)
+}
 
 /**
  * Whether a tick has run in this process.
@@ -239,8 +281,9 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
  *
  * Three guards, and each one is load-bearing:
  *   1. `livePumpRunIds` -- a conclusion in flight in THIS process still owns its task.
- *   2. {@link STRANDED_CLAIM_GRACE_MS} -- a conclusion in flight in ANOTHER process does too, and
- *      this process cannot see its pump set.
+ *   2. {@link strandedClaimGraceMs} -- a conclusion in flight in ANOTHER process does too, and this
+ *      process cannot see its pump set. Per kind: an implementation conclusion has the workspace's
+ *      whole verify window still ahead of it after the terminal write, a review conclusion does not.
  *   3. the `status` in the `updateMany` `where` -- a task that has legitimately moved on since the
  *      read (a cancel, an operator's park) loses only the stale claim, never its status.
  *
@@ -248,20 +291,36 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
  * is announced for the implementation kind alone, mirroring `reconcileOrphans`, because §13 says no
  * failure is silent -- and announcing one for a review would be a lie about where the task went.
  */
-export async function reconcileStrandedClaims(deps: SweepDeps): Promise<readonly string[]> {
+export async function reconcileStrandedClaims(
+  deps: SweepDeps,
+  /** The workspace row `sweep` already loaded; re-read when a direct caller has none of its own. */
+  workspace?: StrandedClaimGraceWorkspace,
+): Promise<readonly string[]> {
   const claimed = await db.task.findMany({
     where: { workspaceId: deps.workspaceId, activeRunId: { not: null } },
     select: { id: true, status: true, activeRunId: true, attempt: true },
   })
   if (claimed.length === 0) return []
 
+  const grace =
+    workspace ??
+    (await db.workspace.findUniqueOrThrow({
+      where: { id: deps.workspaceId },
+      select: { runTimeoutMs: true, verifyCommands: true },
+    }))
+
+  const now = Date.now()
+  // `activeRunId as string` throughout: `{ not: null }` in the `where` above is what makes every
+  // one of these non-null, and Prisma's generated row type cannot express that narrowing.
   const runs = await db.slaveRun.findMany({
     where: {
       id: { in: claimed.map((task) => task.activeRunId as string) },
       status: { in: [...TERMINAL] },
-      terminalAt: { lt: new Date(Date.now() - STRANDED_CLAIM_GRACE_MS) },
+      // The FLOOR only, as a cheap prefilter -- a run inside even the shortest per-kind grace is
+      // inside every one of them. `strandedClaimGraceMs` below is what actually decides.
+      terminalAt: { lt: new Date(now - STRANDED_CLAIM_GRACE_MS) },
     },
-    select: { id: true, kind: true, status: true, terminalAt: true },
+    select: { id: true, taskId: true, kind: true, status: true, terminalAt: true },
   })
   const strandedBy = new Map(runs.map((run) => [run.id, run] as const))
 
@@ -269,7 +328,15 @@ export async function reconcileStrandedClaims(deps: SweepDeps): Promise<readonly
   for (const task of claimed) {
     const run = strandedBy.get(task.activeRunId as string)
     if (run === undefined) continue
+    // The claim is a bare `@unique` column, not a foreign key: nothing at the database level makes
+    // a task's `activeRunId` name a run that agrees the task is its own. It always does in practice
+    // -- `startRun` and `dispatchReview` write the pointer in the same breath as the run row -- but
+    // the release below is per KIND, so a pointer that disagreed would apply one run's rules to
+    // another run's task. Cheaper to check than to reason about.
+    if (run.taskId !== task.id) continue
     if (deps.livePumpRunIds?.has(run.id) === true) continue
+    if (run.terminalAt === null) continue
+    if (now - run.terminalAt.getTime() < strandedClaimGraceMs(run.kind, grace)) continue
 
     const toRework = run.kind !== 'review' && task.status === 'running'
     const write = await db.task.updateMany({
@@ -277,12 +344,10 @@ export async function reconcileStrandedClaims(deps: SweepDeps): Promise<readonly
       data: toRework ? { status: 'rework', activeRunId: null } : { activeRunId: null },
     })
     if (write.count === 0) continue
+    // No log line of its own: `strandedClaims` in the returned {@link SweepReport} is this arm's
+    // channel, exactly as `timedOut`/`overToolCap`/`deadPids` are the others', and the daemon
+    // prints the whole report when any of them is non-empty.
     released.push(task.id)
-    console.warn(
-      `[sweep] released task ${task.id}: its claim named run ${run.id} (${run.kind}), which has been ` +
-        `${run.status} since ${run.terminalAt?.toISOString() ?? 'an unrecorded time'} -- ` +
-        `${toRework ? 'back to rework, no attempt charged' : 'the claim only'}`,
-    )
     if (!toRework) continue
     await appendEvent({
       type: 'task.rework',
@@ -405,7 +470,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
 
   // After the dead-pid arm, deliberately: that arm concludes runs and releases their tasks itself,
   // and running this first would look at claims it is about to make current.
-  const strandedClaims = await reconcileStrandedClaims(deps)
+  const strandedClaims = await reconcileStrandedClaims(deps, workspace)
 
   return { timedOut, overToolCap, deadPids, strandedClaims }
 }

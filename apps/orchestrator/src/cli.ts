@@ -564,6 +564,24 @@ function flagText(flags: Flags, name: string): string | undefined {
   return value as string | undefined
 }
 
+/**
+ * `--by`, with a blank value treated as no value (M42 t1 fix round 1).
+ *
+ * `parseArgs` records `--by ""` as the empty string, not as absent, so `?? 'operator'` let it
+ * straight through to verbs that put it on an event payload -- where the schemas require a
+ * non-empty name (`slave.message_sent.answeredBy`, `slave.message_reassigned.actor`). The throw
+ * landed on `appendEvent`, AFTER the row the verb had already written: a non-zero exit over work
+ * that had actually succeeded. An operator who typed nothing meaningful named nobody, which is
+ * exactly what omitting the flag means.
+ *
+ * A name that is not blank is passed through byte for byte -- this trims only to decide, never to
+ * rewrite what somebody deliberately typed.
+ */
+function operatorName(flags: Flags): string {
+  const given = flagText(flags, 'by')
+  return given === undefined || given.trim() === '' ? 'operator' : given
+}
+
 /** Every value given for a repeatable flag, in order; a single occurrence still comes back as one-element. */
 function flagList(flags: Flags, name: string): readonly string[] {
   const value = flags[name]
@@ -698,7 +716,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     }
 
     case 'pause': {
-      const result = await requestPause(requireFlag(flags, 'run'), flagText(flags, 'by') ?? 'operator')
+      const result = await requestPause(requireFlag(flags, 'run'), operatorName(flags))
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`pause_requested: the gate will deny ${requireFlag(flags, 'run')}'s next tool call\n`)
       return 0
@@ -850,7 +868,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       const messageId = requireFlag(flags, 'message')
       const result = await answerQuestion(messageId, {
         body: requireFlag(flags, 'text'),
-        answeredBy: flagText(flags, 'by') ?? 'operator',
+        answeredBy: operatorName(flags),
       })
       if (!result.ok) throw new Error(refusalText(result.error))
 
@@ -874,7 +892,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       // does; there is no session here to name instead (see `approve-decision` below).
       const messageId = requireFlag(flags, 'message')
       const toSlaveId = requireFlag(flags, 'to')
-      const result = await reassignQuestion(messageId, toSlaveId, flagText(flags, 'by') ?? 'operator', 'human')
+      const result = await reassignQuestion(messageId, toSlaveId, operatorName(flags), 'human')
       if (!result.ok) throw new Error(refusalText(result.error))
       // No delivery pass, unlike `answer` above: re-addressing writes no answer, so nobody is
       // resumed by it. The question is now in another worker's inbox, and that worker reads it on
@@ -901,7 +919,7 @@ export async function main(argv: readonly string[]): Promise<number> {
 
     case 'emergency-stop': {
       const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
-      const result = await emergencyStop(workspaceId, flagText(flags, 'by') ?? 'operator')
+      const result = await emergencyStop(workspaceId, operatorName(flags))
       if (!result.ok) throw new Error(refusalText(result.error))
       const { engaged, requested, refused } = result.value
       process.stdout.write(
@@ -1160,7 +1178,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (clear === (file !== undefined)) throw new Error('exactly one of --file <path> or --clear is required')
       const profile = clear ? null : readFileSync(requireFlag(flags, 'file'), 'utf8')
 
-      const result = await setProfile(target, profile, flagText(flags, 'by') ?? 'operator')
+      const result = await setProfile(target, profile, operatorName(flags))
       if (!result.ok) throw new Error(refusalText(result.error))
       const which = 'slaveId' in target ? target.slaveId : 'templateId' in target ? target.templateId : target.companySlaveId
       process.stdout.write(clear ? `profile cleared on ${which}\n` : `profile set on ${which}\n`)
@@ -1173,7 +1191,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       // string splits to nothing rather than to one blank entry the verb would refuse.
       const raw = requireFlag(flags, 'roles')
       const roles = raw.trim() === '' ? [] : raw.split(',')
-      const result = await setRuntimeRoles(slaveId, roles, flagText(flags, 'by') ?? 'operator')
+      const result = await setRuntimeRoles(slaveId, roles, operatorName(flags))
       if (!result.ok) throw new Error(refusalText(result.error))
       const after = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, select: { runtimeRoles: true } })
       process.stdout.write(

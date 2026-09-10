@@ -613,6 +613,20 @@ describe('the orchestrator CLI', () => {
     expect(answered.deliveredAt).not.toBeNull()
   }, 30_000)
 
+  it('treats a blank --by as no name given rather than writing an empty one', async (): Promise<void> => {
+    // M42 t1 fix round 1: `--by ""` used to reach `answeredBy` as the empty string, which the
+    // answer row accepted and the `slave.message_sent` schema (`z.string().min(1)`) then rejected
+    // -- an `appendEvent` throw AFTER the answer was already written, leaving the CLI non-zero over
+    // a row it had successfully saved.
+    const { questionId } = await seedAWaitingRun()
+
+    const result = await runCli(['answer', '--message', questionId, '--text', 'payments-retry', '--by', ''])
+
+    expect(result.code).toBe(0)
+    const event = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'slave_message_sent' }, orderBy: { seq: 'desc' } })
+    expect((event.payload as { answeredBy?: string }).answeredBy).toBe('operator')
+  }, 30_000)
+
   it('answers exactly once when the same answer is given twice', async (): Promise<void> => {
     const { runId, questionId } = await seedAWaitingRun()
 
