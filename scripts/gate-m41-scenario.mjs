@@ -24,12 +24,14 @@
 //   2. M35's integration honesty becomes a measured ACT rather than a footnote: a task that is
 //      `done` with an unmerged branch does not unblock its dependent, and this gate reads that off
 //      the orchestrator's OWN `loadWorld` before merging the branch by hand.
-//   3. It is the only thing that makes acts 4 and 5 deterministic. `tick.ts` dispatches work FIRST
-//      and only then plans, reviews and merges -- so under auto-merge, daemon-4's very first tick
-//      would start `polish` before `dispatchPlanning` was ever reached, the re-plan's cancellation
-//      of a RUNNING task would be dropped by `applyCancelPolicy`, and act 6 would have nothing to
-//      approve. With integration in the operator's hands, `polish` is provably unstartable for as
-//      long as `api` is done-but-unconfirmed.
+//   3. It is the only thing that makes acts 4 and 5 deterministic, and it does it by a FACT about
+//      the board rather than by any claim about when a tick runs. `polish` depends on `api`, and
+//      `!autoMerge` means `api` reaches `done` with `integratedAt` NULL -- so `loadWorld` reports
+//      `dependenciesDone: false` for `polish` and no scheduler, however often it is woken, can
+//      start it until a person has merged and confirmed. Under auto-merge `api` would integrate
+//      itself, `polish` would be startable the instant it did, the re-plan's cancellation of a
+//      RUNNING task would be dropped by `applyCancelPolicy`, and act 6 would have nothing to
+//      approve.
 //
 // WHY THERE IS A FIFTH SLAVE NOBODY EVER DISPATCHES (erratum E1). `ask.ts`'s `recipientCanAnswer`
 // refuses an ask addressed to a role no OTHER slave holds -- parking a task to wait for nobody is
@@ -52,8 +54,8 @@
 // for it inside the `Task: ` line rather than on its own -- so a word that also occurs in some
 // other task's description cannot turn that run into an asking leg.
 //
-// WHY THE TWO PLANNING ACTS RUN UNDER `tick`, NOT UNDER A DAEMON (a correction to the brief's own
-// timing premise, measured on the first run of this file). The brief assumed a daemon's next
+// WHY THE TWO PLANNING ACTS RUN UNDER `tick`, NOT UNDER A DAEMON (erratum E16 -- a correction to
+// the brief's timing premise, measured on the first run of this file). The brief assumed a daemon's next
 // dispatch is one PERIOD away, so an act could land a plan and then stop the daemon inside that
 // window. It is not: `runDaemon` opens `subscribeEvents` and wakes the coalescer on EVERY event in
 // its workspace, so the `workspace.plan_created` that says the board exists is itself what wakes the
@@ -68,6 +70,12 @@
 // dispatched FIRST in a tick and only then is planning dispatched, so a single hand tick plans the
 // board, concludes the plan, and exits with the dispatch phase already behind it. Nothing is timed,
 // nothing is raced, and the claim is a certainty rather than a probability.
+//
+// So the cast is TWO real daemons and TWO hand ticks, not the brief's four daemons: `tick` for act
+// 1's plan, `daemon-1` for acts 2 to 4's core leg (it carries `--ask-on-task core` and the ask
+// envelope), `daemon-2` for act 4's api leg (no ask flag), `tick` again for act 5's re-plan (it
+// carries `--replan-cancel <polish>` on its own argv exactly as a daemon would have). Acts 6 and 7
+// run with nothing alive at all.
 //
 // WHERE A DAEMON IS STILL STOPPED AT A MEASURED POINT. Act 4 stops both of its daemons before work
 // that must not begin, and both are bounded by the DEPENDENCY GATE rather than by a clock:
@@ -160,12 +168,17 @@ import {
 import { NON_TERMINAL_RUN_STATUSES, goalSha256, runContextManifestSchema, summarise } from '../packages/domain/dist/index.js'
 import { loadWorld } from '../apps/orchestrator/dist/index.js'
 
-// 25 ms rather than m39/m40's 50: three acts end by stopping a daemon inside one tick period, and
-// the poll interval is half of what bounds that window.
+// How often this gate looks at the database while a daemon works, and nothing more (erratum E16).
+// It is deliberately NOT half of some window a stop has to fit inside: no act here races a tick.
+// 25 ms rather than m39/m40's 50 only because acts 2 to 4 wait on a dozen transitions in a row and
+// a tighter poll is a shorter gate.
 const POLL_INTERVAL_MS = 25
-// 750 ms rather than m39/m40's 500, for the same reason from the other side: the window between
-// "the thing this act waited for landed" and "the next tick dispatches" IS one period, and this
-// gate would rather spend a few seconds of wall clock than measure a race.
+// The daemon's timer, which on this system is a FALLBACK rather than the trigger (erratum E16):
+// `runDaemon` subscribes to the event stream and wakes the coalescer on every event in its
+// workspace, so a tick almost always runs because something was written, not because 750 ms passed.
+// The value therefore bounds only how long an act waits when nothing at all has happened -- 750
+// rather than m39/m40's 500 because acts 2 to 4 are the long ones and a spare quarter second per
+// idle tick is cheaper than the extra process wake-ups.
 const DAEMON_PERIOD_MS = 750
 // Generous, and every one of them bounds real work: a `git worktree add`, a fake CLI replay, a
 // verify pass, a supervised tick, a resume, a merge. Tuned to "a slow machine still passes".
@@ -929,6 +942,14 @@ try {
   if (apiBeforeIntegration.dependenciesDone !== false) {
     await fail('act 4: api reports dependenciesDone true while the work it depends on is done but still sitting on an unmerged branch')
   }
+  // Read for ITSELF, not inferred from api's (fix round 1, minor 3). The stop below names both
+  // tasks, and what makes that stop a measurement rather than a race is that NEITHER of them was
+  // startable -- `polish` sits behind `api`, which is not even done yet, and a claim about it that
+  // was only transitively true would be a claim this gate never actually took.
+  const polishBeforeMerge = await worldTask('act 4 (polish before the hand merge)', polishTask.id)
+  if (polishBeforeMerge.dependenciesDone !== false) {
+    await fail('act 4: polish reports dependenciesDone true though the api task it depends on has not even been written yet')
+  }
 
   await stopBeforeRunsFor('act 4 (before the merge)', daemon1, [apiTask, polishTask])
   await mergeAndConfirm('act 4', coreDone)
@@ -957,7 +978,13 @@ try {
   if (apiDone.integratedAt !== null) await fail('act 4: api integrated itself on a workspace that does not auto-merge')
   const apiRuns = await prisma.slaveRun.findMany({ where: { taskId: apiTask.id }, include: { slave: true } })
   console.log(`act 4 api runs: ${apiRuns.map((run) => `${run.kind} by ${run.slave.name} (${run.status})`).join(', ')}`)
-  if (apiRuns.filter((run) => run.kind === 'implementation').length !== 1) await fail(`act 4 started ${String(apiRuns.length)} implementation runs for api, expected one`)
+  const apiImplementations = apiRuns.filter((run) => run.kind === 'implementation')
+  if (apiImplementations.length !== 1) {
+    await fail(
+      `act 4 started ${String(apiImplementations.length)} implementation runs for api, expected one -- ` +
+        `api's runs are ${JSON.stringify(apiRuns.map((run) => `${run.kind}/${run.status}`))}`,
+    )
+  }
   const apiReview = apiRuns.find((run) => run.kind === 'review')
   if (apiReview === undefined || apiReview.slaveId !== rae.id) await fail('act 4: api was not reviewed by Rae')
   // Nobody asked anything this time.
@@ -1398,8 +1425,24 @@ try {
     // SupervisorDecision.
     await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})
   }
-  if (repoPath !== null) rmSync(repoPath, { recursive: true, force: true })
-  await prisma.$disconnect()
+  // The last two are the only statements left in this block that can throw, and a throw HERE is the
+  // worst kind (fix round 1, minor 5): out of a `finally` it replaces whatever the `try` was failing
+  // with -- the gate's own diagnosis, row dump and all -- and on the success path it would skip
+  // `process.exit(exitCode)` below and leave the process to exit on an unhandled rejection instead
+  // of on the 0 the story earned. A temp directory that would not delete and a Prisma client that
+  // would not close are both worth SAYING and neither is worth losing the run's verdict over.
+  if (repoPath !== null) {
+    try {
+      rmSync(repoPath, { recursive: true, force: true })
+    } catch (error) {
+      console.error(`teardown: could not remove the temporary repository ${repoPath}: ${String(error)}`)
+    }
+  }
+  try {
+    await prisma.$disconnect()
+  } catch (error) {
+    console.error(`teardown: Prisma would not disconnect cleanly: ${String(error)}`)
+  }
 }
 
 process.exit(exitCode)
