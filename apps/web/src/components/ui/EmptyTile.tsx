@@ -11,7 +11,7 @@ export function EmptyTile({
       type="button"
       data-testid="empty-tile"
       onClick={onClick}
-      className="flex flex-col items-center justify-center gap-1 rounded-tile border border-dashed border-line p-4 text-xs text-text-3 transition-colors hover:border-white/20 hover:text-text-2"
+      className="flex flex-col items-center justify-center gap-1 rounded-tile border border-dashed border-line p-4 text-xs text-text-3 transition-colors hover:border-line-hover hover:text-text-2"
     >
       <span aria-hidden className="text-base leading-none">
         +

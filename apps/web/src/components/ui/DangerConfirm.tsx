@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { Button } from './Button'
+import { useEscapeStack } from './useModalDismiss'
 
 /**
  * The two-click destructive action every M27 surface uses (spec §6). The caller composes
@@ -41,8 +42,15 @@ export function DangerConfirm({
   useEffect(() => {
     if (!open) return
     confirmRef.current?.focus()
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key !== 'Escape' || pending) return
+  }, [open])
+
+  // Through the SAME stack `useModalDismiss` uses, so a `DangerConfirm` inside a `Drawer` takes
+  // one Escape for itself and leaves the drawer open (M44 R3 fix round 1). `enabled: !pending`:
+  // mid-request the key is swallowed here rather than falling through to the drawer behind.
+  useEscapeStack({
+    open,
+    enabled: !pending,
+    onEscape: () => {
       // The idle trigger is UNMOUNTED while this is asking, so `triggerRef.current` is already
       // null here. The flag defers the intent to the effect below, which runs once the trigger has
       // remounted and re-attached its ref (the idiom `EmergencyStopButton` documented before M44
@@ -50,10 +58,8 @@ export function DangerConfirm({
       refocusTriggerRef.current = true
       setOpen(false)
       setErrorText(null)
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [open, pending])
+    },
+  })
 
   useEffect(() => {
     if (open || !refocusTriggerRef.current) return

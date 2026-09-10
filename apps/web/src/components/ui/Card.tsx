@@ -20,6 +20,8 @@ export function Card({
   readonly onClick?: () => void
   readonly className?: string
   readonly testId?: string
+  /** Spread BEFORE `data-testid`, so a caller cannot accidentally shadow the testid the rest of
+   *  the suite (and `gate:m14-fidelity`) queries this surface by. */
   readonly data?: Readonly<Record<`data-${string}`, string>>
   readonly children: React.ReactNode
 }): React.JSX.Element {
@@ -28,14 +30,14 @@ export function Card({
 
   if (onClick !== undefined) {
     return (
-      <button type="button" data-testid={testId} data-selected={selected} {...data} onClick={onClick} className={classes}>
+      <button type="button" {...data} data-testid={testId} data-selected={selected} onClick={onClick} className={classes}>
         {children}
       </button>
     )
   }
 
   return (
-    <div data-testid={testId} data-selected={selected} {...data} className={classes}>
+    <div {...data} data-testid={testId} data-selected={selected} className={classes}>
       {children}
     </div>
   )

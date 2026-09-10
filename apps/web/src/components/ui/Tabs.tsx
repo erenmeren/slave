@@ -20,6 +20,10 @@ const OFF = 'border-transparent text-text-3 hover:text-text-2'
  * now -- the project strip, Workforce, the Graph mode nav (which had plain buttons and an
  * `aria-current`, and a comment saying no shared component covered it) and the simulation tabs.
  *
+ * The `href` form renders `<Link>`s and nothing else, so it is safe in a SERVER component; the
+ * `onSelect` form takes a handler and therefore only works inside a client component. A tab strip
+ * that mixes the two is a strip whose consumer must be a client component.
+ *
  * It renders the CONTROLS, never the panels: every consumer here already owns its own content
  * switch, and a `role="tabpanel"` wrapper this component cannot see inside would only be a second
  * place for the two to disagree.

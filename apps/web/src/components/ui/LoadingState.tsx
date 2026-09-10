@@ -1,3 +1,5 @@
+import type React from 'react'
+
 /** "This is on its way" (M44 R3). `role="status"` + `aria-live="polite"`, NOT `role="alert"`: a
  *  screen reader should not be interrupted because a panel is fetching. */
 export function LoadingState({

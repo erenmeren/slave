@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
+import { useState } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
+import { DangerConfirm } from '../src/components/ui/DangerConfirm.js'
 import { Dialog } from '../src/components/ui/Dialog.js'
 import { Drawer } from '../src/components/ui/Drawer.js'
 
@@ -96,5 +98,93 @@ describe('Dialog and Drawer own Escape, the focus trap and the focus restore (M4
       rerender(<Harness open={false} />)
       expect(document.activeElement).toBe(document.body)
     })
+
+    it(`${name} closes when the scrim is clicked`, () => {
+      const onClose = vi.fn()
+      render(<Modal open onClose={onClose} label="L" testId="m"><button type="button">x</button></Modal>)
+      fireEvent.click(screen.getByTestId('m-scrim'))
+      expect(onClose).toHaveBeenCalledTimes(1)
+    })
+
+    it(`${name} ignores a scrim click while dismissible is false`, () => {
+      const onClose = vi.fn()
+      render(<Modal open dismissible={false} onClose={onClose} label="L" testId="m"><button type="button">x</button></Modal>)
+      fireEvent.click(screen.getByTestId('m-scrim'))
+      expect(onClose).not.toHaveBeenCalled()
+    })
+
+    it(`${name} still traps Tab while dismissible is false -- refusing to CLOSE is not refusing to HOLD focus`, () => {
+      render(
+        <Modal open dismissible={false} onClose={vi.fn()} label="L" testId="m">
+          <button type="button" data-testid="first">first</button>
+          <button type="button" data-testid="last">last</button>
+        </Modal>,
+      )
+      screen.getByTestId('last').focus()
+      fireEvent.keyDown(screen.getByTestId('m'), { key: 'Tab' })
+      expect(document.activeElement).toBe(screen.getByTestId('first'))
+    })
+
+    it(`${name} swallows Tab when nothing inside is focusable, rather than letting focus walk out`, () => {
+      // Every control disabled mid-POST, or a progress-only modal: there is nothing to cycle
+      // between, and the browser's default Tab would leave an aria-modal container.
+      render(
+        <Modal open onClose={vi.fn()} label="L" testId="m">
+          <button type="button" data-testid="only" disabled>working…</button>
+        </Modal>,
+      )
+      const node = screen.getByTestId('m')
+      expect(document.activeElement).toBe(node)
+      const notPrevented = fireEvent.keyDown(node, { key: 'Tab' })
+      expect(notPrevented).toBe(false)
+      expect(document.activeElement).toBe(node)
+    })
+
+    it(`${name} cycles forward off the container itself onto the first focusable`, () => {
+      render(
+        <Modal open onClose={vi.fn()} label="L" testId="m">
+          <button type="button" data-testid="first">first</button>
+          <button type="button" data-testid="last">last</button>
+        </Modal>,
+      )
+      const node = screen.getByTestId('m')
+      node.focus()
+      fireEvent.keyDown(node, { key: 'Tab' })
+      expect(document.activeElement).toBe(screen.getByTestId('first'))
+    })
   }
+})
+
+describe('Drawer geometry', () => {
+  it('takes the width it is given, and is 520px otherwise', () => {
+    const { rerender } = render(<Drawer open onClose={vi.fn()} label="L" testId="m"><button type="button">x</button></Drawer>)
+    expect(screen.getByTestId('m').className).toContain('w-[520px]')
+    rerender(<Drawer open width="w-[720px]" onClose={vi.fn()} label="L" testId="m"><button type="button">x</button></Drawer>)
+    expect(screen.getByTestId('m').className).toContain('w-[720px]')
+  })
+})
+
+describe('One Escape belongs to ONE layer (M44 R3 fix round 1)', () => {
+  function DrawerWithConfirm(): React.JSX.Element {
+    const [open, setOpen] = useState(true)
+    return (
+      <Drawer open={open} onClose={() => setOpen(false)} label="Settings" testId="d">
+        <DangerConfirm label="delete" testId="dc" confirmText="deletes it" onConfirm={async () => null} />
+      </Drawer>
+    )
+  }
+
+  it('a DangerConfirm inside a Drawer takes the first Escape for itself and leaves the drawer open', () => {
+    render(<DrawerWithConfirm />)
+    fireEvent.click(screen.getByTestId('dc'))
+    expect(document.activeElement).toBe(screen.getByTestId('dc-confirm'))
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('dc-confirm')).toBeNull()
+    expect(screen.getByTestId('d')).toBeTruthy()
+    expect(document.activeElement).toBe(screen.getByTestId('dc'))
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('d')).toBeNull()
+  })
 })

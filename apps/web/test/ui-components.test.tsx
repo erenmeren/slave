@@ -358,6 +358,26 @@ describe('Alert, EmptyState and LoadingState', () => {
     expect(node.getAttribute('aria-live')).toBe('polite')
     expect(node.textContent).toBe('loading…')
   })
+
+  it('LoadingState says what is loading when the caller has something better than the default', () => {
+    render(<LoadingState testId="loading" message="fetching the run history…" />)
+    expect(screen.getByTestId('loading').textContent).toBe('fetching the run history…')
+  })
+
+  it('Alert paints each variant on its own tone, not one shared surface', () => {
+    render(
+      <>
+        <Alert variant="error" testId="a-error">no</Alert>
+        <Alert variant="notice" testId="a-notice">hm</Alert>
+        <Alert variant="success" testId="a-success">yes</Alert>
+      </>,
+    )
+    expect(screen.getByTestId('a-error').className).toContain('tone-blocked')
+    expect(screen.getByTestId('a-notice').className).toContain('tone-waiting')
+    expect(screen.getByTestId('a-success').className).toContain('tone-done')
+    const classNames = ['a-error', 'a-notice', 'a-success'].map((id) => screen.getByTestId(id).className)
+    expect(new Set(classNames).size).toBe(3)
+  })
 })
 
 describe('PageShell', () => {
@@ -377,5 +397,11 @@ describe('PageShell', () => {
   it('renders children alone when nothing else is given', () => {
     render(<PageShell><p>only</p></PageShell>)
     expect(screen.getByTestId('page-shell').textContent).toBe('only')
+  })
+
+  it('takes a caller testId, for a page that nests one shell inside another', () => {
+    render(<PageShell testId="advanced-shell"><p>only</p></PageShell>)
+    expect(screen.getByTestId('advanced-shell')).toBeTruthy()
+    expect(screen.queryByTestId('page-shell')).toBeNull()
   })
 })
