@@ -4,7 +4,7 @@ import {
   listCompanies,
   listProjectTeams,
   listRoster,
-  listTemplates,
+  listWorkforceCatalogPage,
   listWorkspaceNames,
 } from '../../server/org'
 import { buildSkillsPage } from '../../server/skills'
@@ -23,6 +23,11 @@ const TAB_IDS: readonly WorkforceTab[] = ['slaves', 'departments', 'catalog', 's
  * to a tab and a reload or a shared link keeps it. An unknown value falls back to `slaves` rather
  * than rendering an empty page.
  *
+ * ONE catalog read, not two (M46 plan erratum E9): `listWorkforceCatalogPage()` answers both the
+ * Workforce Catalog's own rows and the `templates` the company manager and the New slave drawer
+ * take -- `listTemplates()` IS that call's `.rows`, so asking for both would have been the same
+ * `findMany` and the same `groupBy` run twice for one page.
+ *
  * `listRoster()` runs even though `listAllSlaves()` calls it internally: that function's return
  * shape has none of `RosterCompany`'s own structure (company -> department -> members), which the
  * New slave drawer and the company manager both need directly. One extra query per page load,
@@ -34,13 +39,13 @@ export default async function WorkforcePage({
   readonly searchParams: Promise<{ readonly tab?: string }>
 }): Promise<React.JSX.Element> {
   const { tab } = await searchParams
-  const [slaves, teams, workspaces, companies, roster, templates, catalogImports, skills] = await Promise.all([
+  const [slaves, teams, workspaces, companies, roster, catalog, catalogImports, skills] = await Promise.all([
     listAllSlaves(),
     listProjectTeams(),
     listWorkspaceNames(),
     listCompanies(),
     listRoster(),
-    listTemplates(),
+    listWorkforceCatalogPage(),
     listCatalogImports(),
     buildSkillsPage(),
   ])
@@ -53,7 +58,8 @@ export default async function WorkforcePage({
       workspaces={workspaces}
       companies={companies}
       roster={roster}
-      templates={templates}
+      templates={catalog.rows}
+      catalog={catalog}
       catalogImports={catalogImports}
       skills={skills}
     />

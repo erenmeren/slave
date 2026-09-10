@@ -2,7 +2,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WorkforceClient, type WorkforceTab } from '../src/components/workforce/WorkforceClient.js'
-import type { AllSlaveRow, AllSlavesPage } from '../src/server/org.js'
+import type { AllSlaveRow, AllSlavesPage, CatalogRowView, WorkforceCatalogView } from '../src/server/org.js'
 import type { SkillsPage } from '../src/server/skills.js'
 
 const routerRefresh = vi.fn()
@@ -62,6 +62,41 @@ function skillsPage(over: Partial<SkillsPage> = {}): SkillsPage {
   }
 }
 
+/** One `CatalogRowView`, the shape M46 t3's read model hands the Catalog tab. The M42-era cases
+ *  below state only the provenance fields they are about; everything else is a default. */
+function templateRow(over: Partial<CatalogRowView> = {}): CatalogRowView {
+  return {
+    id: 't1',
+    name: 'Hand Made',
+    role: 'engineering',
+    description: 'Builds the core.',
+    defaultModel: null,
+    defaultProvider: null,
+    catalogSlaveCount: 0,
+    sourceId: null,
+    sourceDivision: null,
+    importedAt: null,
+    sourceRepository: null,
+    sourceRevision: null,
+    sourceLicense: null,
+    source: 'local',
+    structured: false,
+    summary: 'Builds the core.',
+    capabilities: [],
+    expertise: [],
+    recommendedSkills: [],
+    mappingQuality: null,
+    overriddenFields: [],
+    rawOverride: false,
+    ...over,
+  }
+}
+
+const catalogPage = (rows: readonly CatalogRowView[]): WorkforceCatalogView => ({
+  rows,
+  facets: { divisions: [], capabilities: [], skills: [] },
+})
+
 /** Every prop `WorkforceClient` takes, defaulted to the empty shape, so a case states only what it
  *  is about. An explicit prop wins over the default (JSX prop order). */
 type WorkforceProps = React.ComponentProps<typeof WorkforceClient>
@@ -77,6 +112,7 @@ function TestWorkforceClient(
       companies={[]}
       roster={[]}
       templates={[]}
+      catalog={catalogPage([])}
       catalogImports={[]}
       skills={skillsPage()}
       {...props}
@@ -115,18 +151,22 @@ describe('WorkforceClient tabs (M44 R1)', () => {
     expect(screen.getByTestId('department-rename').textContent).toBe('Platform')
   })
 
-  // The team catalog that used to sit under the Projects page's cards (M24 T6), moved whole.
-  it('renders the template catalog, the company manager and the import log on the Catalog tab', () => {
+  // The team catalog that used to sit under the Projects page's cards (M24 T6), moved whole -- and
+  // rebuilt in place by M46 R6 as the Workforce Catalog. Nothing left the tab: the hand-made
+  // template form, the company manager and the import log are all still here.
+  it('renders the workforce catalog, the company manager and the import log on the Catalog tab', () => {
     render(<TestWorkforceClient />)
     expect(screen.queryByTestId('template-form')).toBeNull()
 
     fireEvent.click(screen.getByTestId('workforce-tab-catalog'))
 
-    expect(screen.getByText('Template catalog')).toBeTruthy()
+    expect(screen.getByText('Workforce catalog')).toBeTruthy()
     expect(screen.getByText('Companies')).toBeTruthy()
     expect(screen.getByText('Catalog imports')).toBeTruthy()
     expect(screen.getByTestId('template-form')).toBeTruthy()
     expect(screen.getByTestId('company-form')).toBeTruthy()
+    // E7: still one panel, now inside the tab's own Advanced disclosure.
+    expect(screen.getByTestId('catalog-advanced')).toBeTruthy()
     expect(screen.getByTestId('catalog-imports')).toBeTruthy()
   })
 
@@ -309,32 +349,35 @@ describe('WorkforceClient row click opens the panel', () => {
 // Projects home for the Workforce Catalog tab. M42 t4's subject is unchanged -- where an operator
 // reads what an import did.
 describe('the catalog import surfaces', () => {
-  const imported = {
+  const imported = templateRow({
     id: 't2',
     name: 'Core Builder',
-    role: 'engineering',
-    description: 'Builds the core.',
-    defaultModel: null,
-    defaultProvider: null,
-    catalogSlaveCount: 0,
     sourceId: 'catalog-m42/engineering/core-builder',
     sourceDivision: 'engineering',
+    sourceRepository: 'catalog-m42',
     importedAt: '2026-09-10T08:30:00.000Z',
-  }
-
-  it('marks an imported template with its division and the date it arrived', () => {
-    render(<TestWorkforceClient initialTab="catalog" templates={[imported]} />)
-
-    const chip = screen.getByTestId('template-source-t2')
-    expect(chip.textContent).toContain('engineering')
-    expect(chip.textContent).toContain('2026-09-10')
+    source: 'imported',
+    structured: true,
+    mappingQuality: 'full',
   })
 
-  it('shows no source chip on a hand-made template', () => {
-    const handMade = { ...imported, id: 't1', name: 'Hand Made', sourceId: null, sourceDivision: null, importedAt: null }
-    render(<TestWorkforceClient initialTab="catalog" templates={[handMade]} />)
+  // M46 R6 moved the provenance marker from the old template table's Name cell onto the Workforce
+  // Catalog's own Source cell -- the CLAIM is unchanged (an imported row says where it came from,
+  // a hand-made one says it was made here), only the handle that reads it.
+  it('marks an imported template with the catalog it came from', () => {
+    render(<TestWorkforceClient initialTab="catalog" catalog={catalogPage([imported])} />)
 
-    expect(screen.queryByTestId('template-source-t1')).toBeNull()
+    const chip = screen.getByTestId('catalog-source-t2')
+    expect(chip.textContent).toBe('imported · catalog-m42')
+    expect(chip.getAttribute('title')).toBe('catalog-m42/engineering/core-builder')
+  })
+
+  it('says a hand-made template was made here, and never calls it imported', () => {
+    render(<TestWorkforceClient initialTab="catalog" catalog={catalogPage([templateRow()])} />)
+
+    const chip = screen.getByTestId('catalog-source-t1')
+    expect(chip.textContent).toBe('local')
+    expect(chip.textContent).not.toContain('imported')
   })
 
   // Counts no other token in the row can produce: `2` was satisfied by the `2026` in the
@@ -345,7 +388,7 @@ describe('the catalog import surfaces', () => {
     render(
       <TestWorkforceClient
         initialTab="catalog"
-        templates={[imported]}
+        catalog={catalogPage([imported])}
         catalogImports={[
           { id: 'i1', catalog: 'catalog-m42', directory: '/srv/catalog-m42', by: 'operator', finishedAt: '2026-09-10T08:30:00.000Z', created: 17, updated: 5, unchanged: 23, skipped: 9 },
         ]}

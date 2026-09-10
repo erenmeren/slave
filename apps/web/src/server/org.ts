@@ -930,7 +930,7 @@ export async function listWorkforceCatalogPage(filters: WorkforceCatalogFilters 
 }
 
 /** Every slave template, unfiltered -- the shape `CompanyManager`'s member `<select>`, the New
- *  slave drawer and `TemplateCatalog` take, `catalogSlaveCount` (M27 §5.1) included: how many
+ *  slave drawer and `WorkforceCatalog` take, `catalogSlaveCount` (M27 §5.1) included: how many
  *  catalog slaves a `deleteSlaveTemplate` on this row would cascade. A superset of what they read
  *  before M46; nothing they used has moved or changed shape. */
 export async function listTemplates(): Promise<readonly CatalogRowView[]> {

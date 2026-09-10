@@ -5,7 +5,7 @@ import { PROVIDER_KINDS, PROVIDER_LABEL } from '../lib/providerLabel'
 
 /**
  * The shared `(provider, model)` pair's provider half (M12 Task 13 fix round 1, Important finding
- * 2): `ModelOverrideEditor`, `TemplateCatalog`'s creation form and `CompanyManager`'s add-member
+ * 2): `ModelOverrideEditor`, `TemplateForm`'s creation form and `CompanyManager`'s add-member
  * form each rendered their own ~16-line `<select>` block, differing only in `aria-label`,
  * `data-testid` and a Tailwind width -- this collapses that to one edit point. Every prop the
  * three call sites varied is explicit here rather than defaulted, so the brief's own

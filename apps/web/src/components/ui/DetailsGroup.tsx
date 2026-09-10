@@ -4,11 +4,16 @@ import { useId, useState } from 'react'
 import { SECTION_LABEL_CLASS } from './SectionLabel'
 
 /**
- * The ten groups M45 R4 names, in the order a panel shows them. A closed union so a group name
- * cannot be typed twice differently in two panels -- the gate reads `data-group`, and two
- * spellings of "verification" would be two groups to it.
+ * The ten groups M45 R4 names and the twelve M46 R6 names, in the order a panel shows them. A
+ * closed union so a group name cannot be typed twice differently in two panels -- the gate reads
+ * `data-group`, and two spellings of "verification" would be two groups to it.
+ *
+ * `skills` belongs to both lists and is written once for that same reason: one group name for one
+ * idea, because a `profileSkills` beside a `skills` would be two groups to the gate and one idea
+ * to a person.
  */
 export type DetailsGroupName =
+  // M45 R4: the ten groups a task or a worker panel shows.
   | 'run'
   | 'model'
   | 'profile'
@@ -19,6 +24,20 @@ export type DetailsGroupName =
   | 'cost'
   | 'worktree'
   | 'events'
+  // M46 R6: the twelve a specialist profile shows. `skills` above is reused -- one group name for
+  // one idea, because the gate reads `data-group` and two spellings would be two groups to it.
+  | 'identity'
+  | 'mission'
+  | 'capabilities'
+  | 'expertise'
+  | 'principles'
+  | 'constraints'
+  | 'workflow'
+  | 'deliverables'
+  | 'success'
+  | 'collaboration'
+  | 'source'
+  | 'advanced'
 
 /**
  * One `Details ▾` group (M45 R4).

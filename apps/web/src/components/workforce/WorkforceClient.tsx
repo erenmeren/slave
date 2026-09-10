@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import type { AllSlavesPage, ProjectTeamRow, RosterCompany } from '../../server/org'
+import type { AllSlavesPage, CatalogRowView, ProjectTeamRow, RosterCompany, WorkforceCatalogView } from '../../server/org'
 import type { OverviewSnapshot, SlaveCardData } from '../../server/overview'
 import type { SkillsPage } from '../../server/skills'
 import { AllSlavesTable } from '../AllSlavesTable'
@@ -11,8 +11,8 @@ import { CompanyManager, type CompanyRow } from '../CompanyManager'
 import { DepartmentsTable } from '../DepartmentsTable'
 import { SkillsClient } from '../SkillsClient'
 import { SlavePanel } from '../SlavePanel'
-import { TemplateCatalog, type TemplateRow } from '../TemplateCatalog'
 import { NewSlaveDrawer } from '../slaves/NewSlaveDrawer'
+import { WorkforceCatalog } from './WorkforceCatalog'
 import { Alert } from '../ui/Alert'
 import { Button } from '../ui/Button'
 import { LoadingState } from '../ui/LoadingState'
@@ -52,6 +52,7 @@ export function WorkforceClient({
   companies,
   roster,
   templates,
+  catalog,
   catalogImports,
   skills,
 }: {
@@ -61,7 +62,8 @@ export function WorkforceClient({
   readonly workspaces: readonly { readonly id: string; readonly name: string }[]
   readonly companies: readonly CompanyRow[]
   readonly roster: readonly RosterCompany[]
-  readonly templates: readonly TemplateRow[]
+  readonly templates: readonly CatalogRowView[]
+  readonly catalog: WorkforceCatalogView
   readonly catalogImports: readonly CatalogImportRow[]
   readonly skills: SkillsPage
 }): React.JSX.Element {
@@ -145,15 +147,24 @@ export function WorkforceClient({
       {tab === 'departments' && <DepartmentsTable teams={teams} workspaces={workspaces} />}
       {tab === 'catalog' && (
         <div className="flex flex-col gap-4">
-          <Panel title="Template catalog">
-            <TemplateCatalog templates={templates} />
+          <Panel title="Workforce catalog">
+            <WorkforceCatalog initial={catalog} />
           </Panel>
           <Panel title="Companies">
             <CompanyManager companies={companies} roster={roster} templates={templates} />
           </Panel>
-          <Panel title="Catalog imports">
-            <CatalogImports imports={catalogImports} />
-          </Panel>
+          {/* M46 plan erratum E7: the import log is per-import-RUN, not per template, so it stays
+              one panel on the tab instead of being repeated inside every profile drawer. It is
+              under `Advanced` because "which import ran when" is a question you ask after
+              something looks wrong, not while you are picking a specialist. */}
+          <details data-testid="catalog-advanced">
+            <summary className="cursor-pointer list-none text-xs text-text-3 hover:text-text-2">Advanced ▾</summary>
+            <div className="pt-3">
+              <Panel title="Catalog imports">
+                <CatalogImports imports={catalogImports} />
+              </Panel>
+            </div>
+          </details>
         </div>
       )}
       {tab === 'skills' && <SkillsClient page={skills} />}

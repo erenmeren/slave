@@ -9,7 +9,7 @@ import { onUnauthorized } from './onUnauthorized'
  * `graph/DepsMode.tsx` (`postDependency`) each carried their own small copy of this fetch-and-decode
  * logic before Task 9 wired all five to call `sendControl`/`postControl` here instead. Task 10 (M19
  * Series C) finished the sweep -- `PermissionMatrix`, `SkillsClient`, `ModelOverrideEditor`,
- * `TemplateCatalog`, `AssignCompanyDialog`, and `CompanyManager`'s three submits all dial
+ * `WorkforceCatalog`, `AssignCompanyDialog`, and `CompanyManager`'s three submits all dial
  * `sendControl` now too -- so "canonical" here is a repo-wide guarantee as of M19, not just the
  * shape a new call site should reach for.
  *

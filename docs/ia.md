@@ -35,7 +35,7 @@ before adding a surface.
 | Route | User goal | Decision | M44 | Later |
 |---|---|---|---|---|
 | `/` | See every project and what needs me | keep | Project cards read one word from `userWorkspaceStatus` and carry a "needs you" count; the all-workspaces KPI strip moved in from `/analytics`; the team catalog moved out to Workforce → Catalog | M45 rewrites the project card around the Supervisor |
-| `/workforce` | Everyone who works here | **new** | Four tabs: Slaves, Departments, Catalog, Skills — the panels are the existing ones, moved | M46 rebuilds Catalog around structured profiles; M47 adds capabilities |
+| `/workforce` | Everyone who works here | **new** | Four tabs: Slaves, Departments, Catalog, Skills — the panels are the existing ones, moved | M46 rebuilt Catalog as the Workforce Catalog — search, filters, one row per specialist and a profile drawer; the hand-made template form, the company manager and the import log are still there, the last under the tab's own Advanced. M47 adds capabilities |
 | `/slaves` | — | **merged into** `/workforce` (Slaves tab) | 307 redirect | — |
 | `/skills` | — | **merged into** `/workforce?tab=skills` | 307 redirect | — |
 | `/analytics` | Spend and throughput | **demoted** from the sidebar, route kept | All-workspaces view is a section on `/`; per-workspace view is reached from a project; the URL and its `?workspace=` scope are unchanged and bookmarkable | M53 replaces the tiles with per-profile evidence |
