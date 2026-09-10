@@ -1,0 +1,67 @@
+# Information architecture
+
+What each surface is for, and where anything that left a main path went. Written in M44 from an
+audit of every route, panel, control, token and test in `apps/web`; it is the contract M45–M56 read
+before adding a surface.
+
+## The rules
+
+1. **Do not build a dashboard for everything.** A number belongs on the page where somebody can act
+   on it. A new page needs a question no existing page answers.
+2. **Nothing is removed, only moved.** Every capability below is still reachable — by a tab, by a
+   menu, or by its own unchanged URL. This table is where you find out which.
+3. **One vocabulary.** A status a person reads comes from `packages/domain/src/status/user.ts`. The
+   raw value stays available — in `title`, in a `data-` attribute, or in the expanded view.
+4. **Real is not simulated.** Simulations live under `/sim`, carry a SIMULATION chip, and their
+   money is never shown beside model cost.
+5. **Advanced is a promise, not a graveyard.** Anything under Advanced keeps working, keeps its
+   tests and keeps its URL.
+
+## Top-level navigation
+
+| Entry | Route | The question it answers |
+|---|---|---|
+| Projects | `/` | What am I building, and what needs me? |
+| Workforce | `/workforce` | Who works here, and what can they do? |
+| Simulations | `/sim` | What would a company like this do? |
+| Settings | `/settings` | How is this installation set up? |
+
+## Global surfaces
+
+| Route | User goal | Decision | M44 | Later |
+|---|---|---|---|---|
+| `/` | See every project and what needs me | keep | Project cards read one word from `userWorkspaceStatus` and carry a "needs you" count; the all-workspaces KPI strip moved in from `/analytics`; the team catalog moved out to Workforce → Catalog | M45 rewrites the project card around the Supervisor |
+| `/workforce` | Everyone who works here | **new** | Four tabs: Slaves, Departments, Catalog, Skills — the panels are the existing ones, moved | M46 rebuilds Catalog around structured profiles; M47 adds capabilities |
+| `/slaves` | — | **merged into** `/workforce` (Slaves tab) | 307 redirect | — |
+| `/skills` | — | **merged into** `/workforce?tab=skills` | 307 redirect | — |
+| `/analytics` | Spend and throughput | **demoted** from the sidebar, route kept | All-workspaces view is a section on `/`; per-workspace view is reached from a project; the URL and its `?workspace=` scope are unchanged and bookmarkable | M53 replaces the tiles with per-profile evidence |
+| `/sim`, `/sim/:id`, `/sim/compare` | Try a company on synthetic data | unchanged | Status chips read words instead of enum values | — |
+| `/settings` | Provider adapters, security, reset demo data | unchanged | Reseed uses the one destructive recipe | — |
+| `/login` | Sign in | unchanged | — | — |
+
+## Project surfaces (`/w/:id/…`)
+
+| Route | User goal | Decision | M44 | Later |
+|---|---|---|---|---|
+| `/w/:id` Overview | What is happening right now | keep (tab 1) | Untouched content; the six leaks in its panels are closed | M45 rewrites it around the Supervisor |
+| `/w/:id/tasks` Tasks | What work exists, in what state | keep (tab 2) | Untouched | M45 adds progressive disclosure |
+| `/w/:id/activity` Activity | What happened, in order | keep (tab 3) | The event-type rail reads words; the raw prefix is on `data-prefix` and in `title` | — |
+| `/w/:id/settings` Settings | Goal, runtime, permissions, danger | keep (tab 4) | Emergency stop uses the one destructive recipe | — |
+| `/w/:id/graph` Graph | Five structural views of the project | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Graph` and by URL; all five modes intact; the mode nav is a real tablist now | M45 lifts the org mode's content into an Organization tab; Graph stays |
+| `/w/:id/office` Office | The team as a pixel office | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Office` and by URL; the canvas gains a label and a text line saying what it shows | — |
+
+## Panels that stay where they are, deliberately
+
+- `SlavePanel`, `GraphDrawer` and `TaskDetailPanel` are persistent side panels, not modals: they do
+  not close on Escape and do not trap focus, because a person reads them while working in the page
+  behind them. `Dialog`/`Drawer` are for the six things that ARE modal.
+- `HaltBanner` keeps its own component rather than becoming an `Alert`: four gates key off it.
+- The Tasks board's pill keeps its board vocabulary in M44. `userTaskStatus` is the domain's task
+  word and is wired to one thing here — the "needs you" count on a project card.
+
+## What "needs you" counts, exactly
+
+Today: tasks that are `blocked`, plus work that is `done` and not integrated on a project that does
+not merge by itself. Not yet: a task waiting on a question nobody can answer — that needs a per-task
+read, and it arrives with M45's needs-you queue. The number is honest about being a floor, and no
+surface calls it a total.

@@ -49,7 +49,7 @@ export function TasksClient({
             showing stale data: {error}
           </div>
         )}
-        <main className="grid grid-cols-6 gap-[10px] p-[16px]">
+        <div className="grid grid-cols-6 gap-[10px] p-[16px]">
           {BOARD_COLUMNS.map((column) => (
             <TaskColumn
               key={column}
@@ -59,7 +59,7 @@ export function TasksClient({
               onSelect={setSelectedId}
             />
           ))}
-        </main>
+        </div>
       </div>
       {selectedTask !== null && <TaskDetailPanel task={selectedTask} workspaceId={workspaceId} workspaceGoalVersion={view.workspace.goalVersion} onClose={() => setSelectedId(null)} />}
     </>

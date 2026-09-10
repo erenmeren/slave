@@ -241,7 +241,7 @@ export function OverviewClient({
         <TopStrip snapshot={view} />
         {/* The handoff's 3-column card grid at an 11px gap (design README §3a.1), narrowing to
           * two and then one rather than shrinking the cards past the anatomy they hold. */}
-        <main className="grid grid-cols-1 gap-[11px] px-[20px] pt-[16px] md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-[11px] px-[20px] pt-[16px] md:grid-cols-2 xl:grid-cols-3">
           {view.slaves.map((slave) => (
             <SlaveCard
               key={slave.id}
@@ -251,7 +251,7 @@ export function OverviewClient({
               onOpen={selectSlave}
             />
           ))}
-        </main>
+        </div>
         {/* The bottom row: "blocked · needs you" takes the remaining width beside the fixed 340px
           * live-events panel, with the merge queue underneath. */}
         <div className="flex gap-[11px] px-[20px] pt-[16px]">

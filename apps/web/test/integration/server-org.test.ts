@@ -201,6 +201,54 @@ describe('org query module', () => {
       expect(projects[0]?.goal).toBeNull()
       expect(projects[0]?.team.map((m) => m.name)).toEqual(['Alex'])
     })
+
+    // M44 R1: `needsYou` is `userTaskStatus(...).needsYou` counted per project, and its two
+    // countable clauses are exactly these -- a `blocked` task (a human is its only exit, M35) and
+    // finished work nothing will merge by itself. An auto-merge project drops the second clause
+    // entirely, which is the whole reason `autoMerge` is read here at all.
+    it('counts blocked tasks plus un-integrated done work, and drops the second half when the project auto-merges', async (): Promise<void> => {
+      await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title: 'Blocked task',
+          description: 'x',
+          status: 'blocked',
+          requiredRole: 'backend',
+          maxAttempts: 3,
+        },
+      })
+      await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title: 'Finished, nobody merged it',
+          description: 'x',
+          status: 'done',
+          integratedAt: null,
+          requiredRole: 'backend',
+          maxAttempts: 3,
+        },
+      })
+      // Integrated work needs nobody -- it must not join either count.
+      await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title: 'Finished and merged',
+          description: 'x',
+          status: 'done',
+          integratedAt: new Date(),
+          requiredRole: 'backend',
+          maxAttempts: 3,
+        },
+      })
+
+      const handMerge = (await listProjects()).find((p) => p.id === fixture.workspaceId)
+      expect(handMerge?.needsYou).toBe(2)
+
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { autoMerge: true } })
+
+      const autoMerge = (await listProjects()).find((p) => p.id === fixture.workspaceId)
+      expect(autoMerge?.needsYou).toBe(1)
+    })
   })
 
   describe('listRoster', () => {

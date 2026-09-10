@@ -76,32 +76,45 @@ describe('the shell', () => {
     pathname = '/w/w1'
   })
 
-  it('renders the six global rows in order: Projects, Slaves, Simulations, Skills, Analytics, Settings (M29 adds Simulations after Slaves)', () => {
+  it('renders the four global rows in order: Projects, Workforce, Simulations, Settings (M44 R1)', () => {
     render(<Sidebar />)
     const labels = screen.getAllByTestId('nav-row').map((row) => row.getAttribute('data-nav'))
-    expect(labels).toEqual(['Projects', 'Slaves', 'Simulations', 'Skills', 'Analytics', 'Settings'])
-    expect(navRow('Slaves').getAttribute('href')).toBe('/slaves')
+    expect(labels).toEqual(['Projects', 'Workforce', 'Simulations', 'Settings'])
+    expect(navRow('Workforce').getAttribute('href')).toBe('/workforce')
     expect(navRow('Simulations').getAttribute('href')).toBe('/sim')
-    expect(navRow('Skills').getAttribute('href')).toBe('/skills')
-    expect(navRow('Analytics').getAttribute('href')).toBe('/analytics')
     expect(navRow('Settings').getAttribute('href')).toBe('/settings')
   })
 
-  it('is 212px wide', () => {
+  it('has no Slaves, Skills or Analytics row -- they are a Workforce tab, a Workforce tab and a Projects section now', () => {
     render(<Sidebar />)
-    // Class string, not computed style: jsdom loads no CSS here. The gate reads `width: 212px`.
-    expect(screen.getByRole('navigation', { name: 'Primary' }).className).toContain('w-[212px]')
+    const labels = screen.getAllByTestId('nav-row').map((row) => row.getAttribute('data-nav'))
+    expect(labels).not.toContain('Slaves')
+    expect(labels).not.toContain('Skills')
+    expect(labels).not.toContain('Analytics')
   })
 
-  it('marks Projects current on / and on every /w/:id/... route — a project page is a Projects page opened', () => {
+  it('marks Workforce current on /workforce and on the routes that redirect into it', () => {
+    pathname = '/workforce'
+    const { rerender } = render(<Sidebar />)
+    expect(navRow('Workforce')).toHaveProperty('ariaCurrent', 'page')
+    pathname = '/slaves'
+    rerender(<Sidebar />)
+    expect(navRow('Workforce')).toHaveProperty('ariaCurrent', 'page')
+    pathname = '/skills'
+    rerender(<Sidebar />)
+    expect(navRow('Workforce')).toHaveProperty('ariaCurrent', 'page')
+  })
+
+  it('marks Projects current on /, on /w/:id/... and on /analytics -- analytics is a Projects fact', () => {
     pathname = '/'
     const { rerender } = render(<Sidebar />)
     expect(navRow('Projects')).toHaveProperty('ariaCurrent', 'page')
-
     pathname = '/w/w1/tasks'
     rerender(<Sidebar />)
     expect(navRow('Projects')).toHaveProperty('ariaCurrent', 'page')
-    expect(navRow('Slaves')).not.toHaveProperty('ariaCurrent', 'page')
+    pathname = '/analytics'
+    rerender(<Sidebar />)
+    expect(navRow('Projects')).toHaveProperty('ariaCurrent', 'page')
   })
 
   it('marks Settings current on the settings route', () => {
@@ -111,17 +124,43 @@ describe('the shell', () => {
     expect(navRow('Projects')).not.toHaveProperty('ariaCurrent', 'page')
   })
 
-  it('marks the selected row with the handoff selected surface and its teal rail', () => {
-    // Class string, not computed style (jsdom loads no CSS): `#151a21` is spec §3's "selected"
-    // surface and the `inset 2px 0 0` rail is the mockup's own. The gate reads both back.
-    pathname = '/w/w1'
+  it('is 212px wide at full width and collapses to a 52px icon rail below 900px (M44 R3/R6)', () => {
     render(<Sidebar />)
-    expect(navRow('Projects').className).toContain('bg-[#151a21]')
-    expect(navRow('Projects').className).toContain('inset_2px_0_0')
-    expect(navRow('Slaves').className).not.toContain('bg-[#151a21]')
+    // Class strings, not computed style: jsdom loads no CSS. gate:m44-ux-foundation reads the real
+    // widths back at 1440px and at 800px.
+    const nav = screen.getByRole('navigation', { name: 'Primary' })
+    expect(nav.className).toContain('w-[212px]')
+    expect(nav.className).toContain('max-[899px]:w-[52px]')
   })
 
-  it('renders no project section, no nav badges and no guardrail figures — those live in the project header and tabs now (M24 §2.2)', () => {
+  it('gives every row an accessible name that survives the collapse', () => {
+    render(<Sidebar />)
+    expect(navRow('Workforce').getAttribute('aria-label')).toBe('Workforce')
+    expect(navRow('Workforce').getAttribute('title')).toBe('Workforce')
+    // The collapsed rail shows one letter; the full label is hidden below 900px, not deleted.
+    expect(navRow('Workforce').textContent).toContain('Workforce')
+  })
+
+  it('puts a skip link first, before the nav, pointing at the one main landmark', () => {
+    render(<Sidebar />)
+    const skip = screen.getByTestId('skip-link')
+    expect(skip.getAttribute('href')).toBe('#main')
+    expect(skip.textContent).toBe('Skip to content')
+    expect(skip.compareDocumentPosition(screen.getByRole('navigation', { name: 'Primary' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('marks the selected row with the handoff selected surface and its teal rail', () => {
+    // Class string, not computed style (jsdom loads no CSS): `bg-bg-selected` is spec §3's
+    // "selected" surface token and the `inset 2px 0 0` rail is the mockup's own. The gate reads
+    // both back.
+    pathname = '/w/w1'
+    render(<Sidebar />)
+    expect(navRow('Projects').className).toContain('bg-bg-selected')
+    expect(navRow('Projects').className).toContain('inset_2px_0_0')
+    expect(navRow('Workforce').className).not.toContain('bg-bg-selected')
+  })
+
+  it('renders no project section, no nav badges and no guardrail figures -- those live in the project header and tabs now (M24 §2.2)', () => {
     pathname = '/w/w1/tasks'
     render(<Sidebar />)
     expect(screen.queryByTestId('project-section')).toBeNull()
@@ -129,7 +168,7 @@ describe('the shell', () => {
     expect(screen.queryAllByTestId(/^guardrail-/)).toEqual([])
   })
 
-  it('renders nothing on /login — the shell is a logged-in surface', () => {
+  it('renders nothing on /login -- the shell is a logged-in surface', () => {
     pathname = '/login'
     const { container } = render(<Sidebar />)
     expect(container.innerHTML).toBe('')

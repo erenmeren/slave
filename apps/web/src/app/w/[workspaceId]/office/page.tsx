@@ -17,7 +17,7 @@ export default async function OfficePageRoute({
   const { workspaceId } = await params
   const snapshot = await buildOfficeSnapshot(workspaceId)
   if (snapshot === null) {
-    return <main className="p-6 text-tone-blocked">no project with id {workspaceId}</main>
+    return <div className="p-6 text-tone-blocked">no project with id {workspaceId}</div>
   }
   // Keyed so a client-side project-to-project navigation remounts the office instead of animating
   // the old roster under the new URL.

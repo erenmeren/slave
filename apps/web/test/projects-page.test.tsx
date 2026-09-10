@@ -2,6 +2,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ProjectsClient } from '../src/components/ProjectsClient.js'
+import type { AnalyticsSnapshot } from '../src/server/analytics.js'
 import type { ProjectRow } from '../src/server/org.js'
 
 const routerRefresh = vi.fn()
@@ -30,6 +31,7 @@ function project(over: Partial<ProjectRow>): ProjectRow {
     unmeasuredRuns: 0,
     goal: null,
     team: [],
+    needsYou: 0,
     ...over,
   }
 }
@@ -41,17 +43,23 @@ const companies = [
 
 const projects = [project({})]
 
-// `templates`/`roster` are required on `ProjectsClient` -- they feed the team catalog, a real
-// feature, not test-only convenience (fix round 1). Most of this file's tests only exercise the
-// cards grid and don't care about the catalog's contents, so this wrapper defaults both to `[]`;
-// a test that does care (the M24 T6 describe block below) overrides them, since an explicit prop
-// in `props` wins over the wrapper's own default in JSX prop order.
+// M44 t3: `templates`/`roster`/`catalogImports` are gone -- the team catalog they fed moved to
+// Workforce -> Catalog, and its cases moved with it (`workforce-page.test.tsx`). What arrived in
+// its place is `analytics`, the all-workspaces snapshot the KPI section renders; most of this
+// file's cases only exercise the cards grid, so the wrapper defaults it to an empty snapshot and a
+// case that cares overrides it (an explicit prop in `props` wins in JSX prop order).
+const EMPTY_ANALYTICS: AnalyticsSnapshot = {
+  workspaceId: null,
+  seeded: false,
+  series: [],
+  kpis: [],
+  perSlave: [],
+}
 type ProjectsClientProps = React.ComponentProps<typeof ProjectsClient>
 function TestProjectsClient(
-  props: Omit<ProjectsClientProps, 'templates' | 'roster' | 'catalogImports'> &
-    Partial<Pick<ProjectsClientProps, 'templates' | 'roster' | 'catalogImports'>>,
+  props: Omit<ProjectsClientProps, 'analytics'> & Partial<Pick<ProjectsClientProps, 'analytics'>>,
 ): React.JSX.Element {
-  return <ProjectsClient templates={[]} roster={[]} catalogImports={[]} {...props} />
+  return <ProjectsClient analytics={EMPTY_ANALYTICS} {...props} />
 }
 
 describe('ProjectsClient', () => {
@@ -316,7 +324,7 @@ describe('ProjectsClient', () => {
 
   describe('the New project drawer and team catalog (M24 T6)', () => {
     it('has a New project button that opens the attach-a-repo drawer', () => {
-      render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      render(<TestProjectsClient projects={projects} companies={companies} />)
       expect(screen.queryByTestId('create-workspace-form')).toBeNull()
       fireEvent.click(screen.getByTestId('new-project'))
       expect(screen.getByRole('dialog', { name: /new project/i })).toBeTruthy()
@@ -325,14 +333,14 @@ describe('ProjectsClient', () => {
 
     it('opens the drawer on load when ?new=1 is in the URL', () => {
       search = 'new=1'
-      render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      render(<TestProjectsClient projects={projects} companies={companies} />)
       expect(screen.getByTestId('create-workspace-form')).toBeTruthy()
     })
 
     // Ruled minor (M24 final review): a reload after closing the drawer must not reopen it.
     it('clears ?new=1 on close so a reload does not reopen the drawer', () => {
       search = 'new=1'
-      render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      render(<TestProjectsClient projects={projects} companies={companies} />)
       fireEvent.click(screen.getByTestId('new-project-close'))
       expect(routerReplace).toHaveBeenCalledWith('/')
     })
@@ -341,20 +349,20 @@ describe('ProjectsClient', () => {
     // every other param -- `?new=1&archived=1` closes to `?archived=1`, not to `/`.
     it('clears ?new=1 on close without dropping ?archived=1', () => {
       search = 'new=1&archived=1'
-      render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      render(<TestProjectsClient projects={projects} companies={companies} />)
       fireEvent.click(screen.getByTestId('new-project-close'))
       expect(routerReplace).toHaveBeenCalledWith('/?archived=1')
     })
 
     it('does not touch the URL closing the drawer when it was opened by the button, not the param', () => {
-      render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      render(<TestProjectsClient projects={projects} companies={companies} />)
       fireEvent.click(screen.getByTestId('new-project'))
       fireEvent.click(screen.getByTestId('new-project-close'))
       expect(routerReplace).not.toHaveBeenCalled()
     })
 
     it('closes the drawer on Escape and on the close button', () => {
-      render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
+      render(<TestProjectsClient projects={projects} companies={companies} />)
 
       fireEvent.click(screen.getByTestId('new-project'))
       expect(screen.getByRole('dialog', { name: /new project/i })).toBeTruthy()
@@ -367,11 +375,35 @@ describe('ProjectsClient', () => {
       expect(screen.queryByRole('dialog', { name: /new project/i })).toBeNull()
     })
 
-    it('renders the team catalog below the cards', () => {
-      render(<TestProjectsClient projects={projects} companies={companies} templates={[]} roster={[]} />)
-      expect(screen.getByTestId('team-catalog')).toBeTruthy()
-      expect(screen.getByTestId('template-form')).toBeTruthy()
-      expect(screen.getByTestId('company-form')).toBeTruthy()
+    // M44 t3 (R1/E20): the team catalog left this page for Workforce -> Catalog, and the
+    // all-workspaces KPI strip arrived from `/analytics` in its place -- the one section on this
+    // page that is not about a single project. `/analytics` keeps its route and its link.
+    it('renders the all-workspaces analytics section where the team catalog used to be', () => {
+      render(
+        <TestProjectsClient
+          projects={projects}
+          companies={companies}
+          analytics={{
+            ...EMPTY_ANALYTICS,
+            kpis: [
+              { label: 'tasks done', value: '42', note: null },
+              { label: 'success', value: '92%', note: null },
+              { label: 'avg', value: '14m 20s', note: null },
+              { label: 'tokens', value: '1.2M', note: null },
+              { label: 'spend', value: '$8.43', note: '3 runs unmeasured' },
+              { label: 'slaves', value: '7', note: null },
+            ],
+          }}
+        />,
+      )
+      expect(screen.queryByTestId('team-catalog')).toBeNull()
+      expect(screen.queryByTestId('template-form')).toBeNull()
+      expect(screen.queryByTestId('company-form')).toBeNull()
+      expect(screen.getByTestId('all-projects-analytics')).toBeTruthy()
+      expect(screen.getByTestId('kpi-strip')).toBeTruthy()
+      expect(screen.getAllByTestId('kpi-tile')).toHaveLength(6)
+      expect(screen.getByTestId('kpi-note-spend').textContent).toBe('3 runs unmeasured')
+      expect(screen.getByRole('link', { name: /all/ }).getAttribute('href')).toBe('/analytics')
     })
   })
 })
@@ -431,15 +463,36 @@ describe('the handoff project card', () => {
     expect(screen.getAllByTestId('avatar-tile')).toHaveLength(2)
   })
 
-  it('maps halted to Halted, active work to Running, and quiet to Idle', () => {
-    const { rerender } = render(<TestProjectsClient projects={[project({ halted: true })]} companies={companies} />)
+  // M44 t3 (R4): the card's word comes from `userWorkspaceStatus` now, not from a table this file
+  // owned -- RUNNING became WORKING (the product says one word for "work is happening"), and
+  // ARCHIVED and WAITING FOR YOU are two states the old three-member table could not say at all.
+  it('reads its one word from the domain: archived, halted, needs-you, working, idle', () => {
+    const { rerender } = render(<TestProjectsClient projects={[project({ archived: true, halted: true })]} companies={companies} />)
+    expect(screen.getByTestId('status-pill').textContent).toBe('ARCHIVED')
+
+    rerender(<TestProjectsClient projects={[project({ halted: true })]} companies={companies} />)
     expect(screen.getByTestId('status-pill').textContent).toBe('HALTED')
 
+    rerender(<TestProjectsClient projects={[project({ needsYou: 2, taskCounts: { done: 0, total: 3, active: 2, blocked: 2 } })]} companies={companies} />)
+    expect(screen.getByTestId('status-pill').textContent).toBe('WAITING FOR YOU')
+
     rerender(<TestProjectsClient projects={[project({ halted: false, taskCounts: { done: 0, total: 3, active: 2, blocked: 0 } })]} companies={companies} />)
-    expect(screen.getByTestId('status-pill').textContent).toBe('RUNNING')
+    expect(screen.getByTestId('status-pill').textContent).toBe('WORKING')
 
     rerender(<TestProjectsClient projects={[project({ halted: false, taskCounts: { done: 3, total: 3, active: 0, blocked: 0 } })]} companies={companies} />)
     expect(screen.getByTestId('status-pill').textContent).toBe('IDLE')
+  })
+
+  // The count itself, under the goal line -- the number `docs/ia.md` is careful to call a floor.
+  it('says how many things need a person, singular and plural, and says nothing at zero', () => {
+    const { rerender } = render(<TestProjectsClient projects={[project({ needsYou: 0 })]} companies={companies} />)
+    expect(screen.queryByTestId('project-needs-you')).toBeNull()
+
+    rerender(<TestProjectsClient projects={[project({ needsYou: 1 })]} companies={companies} />)
+    expect(screen.getByTestId('project-needs-you').textContent).toBe('1 thing needs you')
+
+    rerender(<TestProjectsClient projects={[project({ needsYou: 3 })]} companies={companies} />)
+    expect(screen.getByTestId('project-needs-you').textContent).toBe('3 things need you')
   })
 
   it('caps the avatar row at six and says how many more', () => {
@@ -472,71 +525,5 @@ describe('the handoff project card', () => {
     ]
     render(<TestProjectsClient projects={[project({ team })]} companies={companies} />)
     expect(screen.queryByTestId('team-overflow')).toBeNull()
-  })
-  // M42 t4: where an operator reads what an import did -- the chip under an imported template's
-  // name, and the read-only list of runs.
-  describe('the catalog import surfaces', () => {
-    const imported = {
-      id: 't2',
-      name: 'Core Builder',
-      role: 'engineering',
-      description: 'Builds the core.',
-      defaultModel: null,
-      defaultProvider: null,
-      catalogSlaveCount: 0,
-      sourceId: 'catalog-m42/engineering/core-builder',
-      sourceDivision: 'engineering',
-      importedAt: '2026-09-10T08:30:00.000Z',
-    }
-
-    it('marks an imported template with its division and the date it arrived', () => {
-      render(<ProjectsClient projects={[project({})]} companies={companies} templates={[imported]} roster={[]} catalogImports={[]} />)
-
-      const chip = screen.getByTestId('template-source-t2')
-      expect(chip.textContent).toContain('engineering')
-      expect(chip.textContent).toContain('2026-09-10')
-    })
-
-    it('shows no source chip on a hand-made template', () => {
-      const handMade = { ...imported, id: 't1', name: 'Hand Made', sourceId: null, sourceDivision: null, importedAt: null }
-      render(<ProjectsClient projects={[project({})]} companies={companies} templates={[handMade]} roster={[]} catalogImports={[]} />)
-
-      expect(screen.queryByTestId('template-source-t1')).toBeNull()
-    })
-
-    // Counts no other token in the row can produce: `2` was satisfied by the `2026` in the
-    // timestamp and `4` by the `m42` in the catalog name, so both assertions passed with every
-    // count span deleted (fix round 1, important 1). These four, in this order, can only come
-    // from the four cells.
-    it('lists the catalog imports with their counts, one cell per column', () => {
-      render(
-        <ProjectsClient
-          projects={[project({})]}
-          companies={companies}
-          templates={[imported]}
-          roster={[]}
-          catalogImports={[
-            { id: 'i1', catalog: 'catalog-m42', directory: '/srv/catalog-m42', by: 'operator', finishedAt: '2026-09-10T08:30:00.000Z', created: 17, updated: 5, unchanged: 23, skipped: 9 },
-          ]}
-        />,
-      )
-
-      const row = screen.getByTestId('catalog-import-i1')
-      expect(row.textContent).toContain('catalog-m42')
-      expect(row.textContent).toContain('operator')
-      expect(row.textContent).toContain('2026-09-10 08:30:00')
-      expect(within(row).getAllByTestId('catalog-import-count').map((cell) => cell.textContent)).toEqual([
-        '17',
-        '5',
-        '23',
-        '9',
-      ])
-    })
-
-    it('says so when nothing has been imported', () => {
-      render(<ProjectsClient projects={[project({})]} companies={companies} templates={[]} roster={[]} catalogImports={[]} />)
-
-      expect(screen.getByTestId('catalog-imports').textContent).toContain('no catalog has been imported yet')
-    })
   })
 })

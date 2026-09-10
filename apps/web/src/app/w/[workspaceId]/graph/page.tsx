@@ -13,7 +13,7 @@ export default async function GraphPageRoute({
   const { workspaceId } = await params
   const snapshot = await buildGraphSnapshot(workspaceId)
   if (snapshot === null) {
-    return <main className="p-6 text-tone-blocked">no project with id {workspaceId}</main>
+    return <div className="p-6 text-tone-blocked">no project with id {workspaceId}</div>
   }
   // Keyed so a client-side workspace-to-workspace navigation remounts the client instead of
   // rendering the old workspace's state under the new URL.

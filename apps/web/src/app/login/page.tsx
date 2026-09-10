@@ -16,7 +16,7 @@ export default async function LoginPage({
   const { next } = await searchParams
   const mode = boundaryMode()
   return (
-    <main className="flex flex-1 items-center justify-center p-4">
+    <div className="flex flex-1 items-center justify-center p-4">
       <div className="w-full max-w-sm">
         <Panel title="sign in">
           {mode === 'accounts' ? (
@@ -31,6 +31,6 @@ export default async function LoginPage({
           )}
         </Panel>
       </div>
-    </main>
+    </div>
   )
 }

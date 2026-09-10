@@ -114,6 +114,17 @@ export interface ProjectRow {
    * `sumSpend` holds the rule.
    */
   readonly unmeasuredRuns: number
+  /**
+   * How many of this project's tasks need a PERSON before they move -- `userTaskStatus(...).needsYou`
+   * (M44 R1/R4), counted here so the Projects home does not have to fetch a board per card.
+   *
+   * Two of the projection's three inputs are cheap counts this function already makes: `blocked`,
+   * and `done` with `integratedAt: null` on a hand-merge project (`autoMerge === false`). The
+   * third -- a `waiting` task whose question nobody can answer (M39's unanswerable case) -- is a
+   * per-task join that is NOT made here; M45's needs-you queue is where a task-level read of this
+   * belongs. `docs/ia.md` records the narrower definition so nobody reads this as a total.
+   */
+  readonly needsYou: number
 }
 
 /** Every project (M27 §3.3, §7): hides an archived project by default -- `options?.includeArchived`
@@ -127,8 +138,13 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
     orderBy: { name: 'asc' },
   })
 
-  const [taskGroups, slaveRows, spendGroups, decisionGroups] = await Promise.all([
+  const [taskGroups, unintegratedDoneGroups, slaveRows, spendGroups, decisionGroups] = await Promise.all([
     prisma.task.groupBy({ by: ['workspaceId', 'status'], _count: { _all: true } }),
+    // The second half of `needsYou` (M44 R1): finished work sitting on a branch nothing will merge
+    // by itself. `integratedAt` is not a `by` column and cannot be counted out of the group above,
+    // so this is its own grouped read -- ONE query for every project, in the same pre-pass, rather
+    // than a query per card.
+    prisma.task.groupBy({ by: ['workspaceId'], where: { status: 'done', integratedAt: null }, _count: { _all: true } }),
     // `slave -> team -> workspaceId`, matching overview.ts's budget-bar spend source exactly (Task
     // 13, M17): a `planning` run (no Task row) still counts toward the workspace it ran under.
     // Prisma's `groupBy` cannot traverse a relation for its `by` columns, so the workspace each
@@ -234,6 +250,8 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
       .reduce((n, g) => n + g._count._all, 0)
   const totalOf = (workspaceId: string): number =>
     taskGroups.filter((g) => g.workspaceId === workspaceId).reduce((n, g) => n + g._count._all, 0)
+  const unintegratedDoneOf = (workspaceId: string): number =>
+    unintegratedDoneGroups.find((g) => g.workspaceId === workspaceId)?._count._all ?? 0
 
   return workspaces.map((workspace) => ({
     id: workspace.id,
@@ -260,6 +278,11 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
     team: workspace.teams
       .flatMap((team) => team.slaves)
       .map((slave) => ({ slaveId: slave.id, name: slave.name, status: teamSlaveLiveInfo.get(slave.id)?.status ?? 'idle' })),
+    // `needsYou(...)`'s two countable clauses, in the projection's own words: a `blocked` task
+    // needs a human by definition (M35), and `done`-but-not-integrated needs one only where
+    // nothing merges by itself. An auto-merge project contributes zero from the second clause,
+    // exactly as `userTaskStatus({ status: 'done', integrated: false, autoMerge: true })` says.
+    needsYou: countOf(workspace.id, ['blocked']) + (workspace.autoMerge ? 0 : unintegratedDoneOf(workspace.id)),
     // A workspace with no runs and no decisions at all has spent nothing and has nothing
     // unmeasured -- `sumSpendFromGroups([])` and an absent Supervisor entry both say exactly that.
     ...spendOf(workspace.id),

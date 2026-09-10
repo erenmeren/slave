@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import { formatDuration, formatTokens } from '../lib/format'
 import type { AnalyticsSnapshot } from '../server/analytics'
 import { BarChart } from './BarChart'
+import { KpiStrip } from './analytics/KpiStrip'
 import { AvatarTile } from './ui/AvatarTile'
 import { DataTable, Row } from './ui/DataTable'
 import { Panel } from './ui/Panel'
@@ -64,19 +65,9 @@ export function AnalyticsClient({
         </select>
       </div>
 
-      <div data-testid="kpi-strip" className="grid grid-cols-6 gap-px overflow-hidden rounded-tile border border-line bg-line">
-        {snapshot.kpis.map((kpi) => (
-          <div key={kpi.label} data-testid="kpi-tile" className="flex flex-col gap-1 bg-bg-1 p-[10px]">
-            <span className="font-mono text-[10.5px] uppercase tracking-[.09em] text-text-3">{kpi.label}</span>
-            <span className="font-mono text-[20px] font-semibold tracking-[-.8px] text-text-1">{kpi.value}</span>
-            {kpi.note !== null && (
-              <span data-testid={`kpi-note-${kpi.label}`} className="text-[9.5px] text-text-3">
-                {kpi.note}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
+      {/* M44 t3: the strip is `analytics/KpiStrip` now, so the Projects home's all-workspaces
+        * section renders the same six tiles from the same builder rather than a second recipe. */}
+      <KpiStrip kpis={snapshot.kpis} />
 
       <div className="grid grid-cols-2 gap-[16px]">
         <Panel title="tasks completed · 7 days">

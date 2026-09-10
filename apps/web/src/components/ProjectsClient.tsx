@@ -1,16 +1,18 @@
 'use client'
 
 import { useRef, useState } from 'react'
+import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import type { SlaveStatus } from '@slave-of-ai/domain'
-import { CARD_STATE_TONE, cardStateForSlave, type CardState } from '../lib/tones'
+import type { SlaveStatus, UserWorkspaceState } from '@slave-of-ai/domain'
+import { userWorkspaceStatus } from '@slave-of-ai/domain'
+import { CARD_STATE_TONE, cardStateForSlave } from '../lib/tones'
 import { sendControl } from '../lib/postControl'
-import type { ProjectRow, RosterCompany } from '../server/org'
+import type { AnalyticsSnapshot } from '../server/analytics'
+import type { ProjectRow } from '../server/org'
 import { AssignCompanyDialog } from './AssignCompanyDialog'
-import { CatalogImports, type CatalogImportRow } from './CatalogImports'
-import { CompanyManager, type CompanyRow } from './CompanyManager'
+import { KpiStrip } from './analytics/KpiStrip'
+import type { CompanyRow } from './CompanyManager'
 import { NewProjectDrawer } from './projects/NewProjectDrawer'
-import { TemplateCatalog, type TemplateRow } from './TemplateCatalog'
 import { AvatarTile } from './ui/AvatarTile'
 import { Button } from './ui/Button'
 import { Card } from './ui/Card'
@@ -20,24 +22,21 @@ import { Panel } from './ui/Panel'
 import { ProgressBar } from './ui/ProgressBar'
 import { SectionLabel } from './ui/SectionLabel'
 import { StatStrip } from './ui/StatStrip'
-import { StatusPill } from './ui/StatusPill'
+import { StatusPill, type StatusTone } from './ui/StatusPill'
 
-/** The M11 plan's Projects status mapping (Task 7 brief), rebuilt onto the shared `CardState`
- *  vocabulary for the handoff card (M14 Task 13): halted overrides everything else, then any
- *  in-flight task work reads as "working" (RUNNING), and an assigned-but-quiet project reads as
- *  idle. Only three of `CardState`'s ten members are ever reachable from a project -- the other
- *  seven describe an individual slave's run, which a project has none of itself. */
-function statusOf(project: ProjectRow): CardState {
-  if (project.halted) return 'blocked'
-  if (project.taskCounts.active > 0) return 'working'
-  return 'idle'
+/**
+ * A project's one word is `userWorkspaceStatus`'s now (M44 R4) -- the domain decides it, and this
+ * file keeps only the half the domain may not have: the tone the pill is painted in (erratum E2,
+ * `StatusTone` is an `apps/web` type). The old three-member table said "Halted / Running / Idle"
+ * and could not say ARCHIVED or WAITING FOR YOU at all.
+ */
+const WORKSPACE_TONE: Record<UserWorkspaceState, StatusTone> = {
+  archived: 'idle',
+  halted: 'blocked',
+  needs_you: 'waiting',
+  working: 'working',
+  idle: 'idle',
 }
-
-/** The handoff's own project-card wording (spec §5.6) -- "Halted / Running / Idle" -- which
- *  differs from `CARD_STATE_TONE`'s generic per-state labels ("BLOCKED" reads as a task fact, not
- *  a project one). Partial, not total: `statusOf` only ever returns these three states, and the
- *  `?? label` fallback below exists for the type checker, not for a reachable case. */
-const STATUS_LABEL: Partial<Record<CardState, string>> = { blocked: 'HALTED', working: 'RUNNING', idle: 'IDLE' }
 
 function ProjectCard({
   project,
@@ -53,8 +52,13 @@ function ProjectCard({
   readonly onCloseAssign: () => void
 }): React.JSX.Element {
   const router = useRouter()
-  const state = statusOf(project)
-  const { tone, label, pulse } = CARD_STATE_TONE[state]
+  const status = userWorkspaceStatus({
+    archived: project.archived,
+    halted: project.halted,
+    needsYouCount: project.needsYou,
+    tasksActive: project.taskCounts.active,
+  })
+  const tone = WORKSPACE_TONE[status.state]
   const pct = project.taskCounts.total > 0 ? Math.round((project.taskCounts.done / project.taskCounts.total) * 100) : 0
   // `Button` isn't a `forwardRef` component -- this wraps it so the dialog has an element to
   // return focus to on Escape (`EmergencyStopButton.tsx`'s trigger-refocus idiom), without
@@ -88,8 +92,16 @@ function ProjectCard({
             <div data-testid="project-description" className="mt-[2px] truncate text-[11px] text-[#7c8697]">
               {project.goal ?? 'no goal set'}
             </div>
+            {/* The count behind the WAITING FOR YOU pill, said in words (M44 R1). A floor, never a
+              * total -- `listProjects`' own doc comment and `docs/ia.md` both say what it counts
+              * and what it does not. */}
+            {project.needsYou > 0 && (
+              <span data-testid="project-needs-you" className="mt-[2px] block text-[11px] text-tone-waiting">
+                {project.needsYou} {project.needsYou === 1 ? 'thing needs' : 'things need'} you
+              </span>
+            )}
           </div>
-          <StatusPill tone={tone} label={STATUS_LABEL[state] ?? label} pulse={pulse} />
+          <StatusPill tone={tone} label={status.label} pulse={status.state === 'working'} />
         </div>
 
         <div aria-label="team" className="mt-[13px] flex flex-wrap items-center gap-1">
@@ -216,17 +228,14 @@ function ProjectCard({
 export function ProjectsClient({
   projects,
   companies,
-  templates,
-  roster,
-  catalogImports,
+  analytics,
 }: {
   readonly projects: readonly ProjectRow[]
   readonly companies: readonly CompanyRow[]
-  readonly templates: readonly TemplateRow[]
-  readonly roster: readonly RosterCompany[]
-  /** M42 §2: the last catalog imports, read only -- required for the same reason `templates` is,
-   *  so a caller with none passes `[]` rather than the panel silently going empty. */
-  readonly catalogImports: readonly CatalogImportRow[]
+  /** M44 R1: the ALL-workspaces snapshot, from the same `buildAnalytics` `/analytics` calls with a
+   *  null scope. Required, not optional -- a caller with nothing to show still passes a real empty
+   *  snapshot rather than the section silently disappearing. */
+  readonly analytics: AnalyticsSnapshot
 }): React.JSX.Element {
   const router = useRouter()
   const searchParams = useSearchParams()
@@ -271,15 +280,21 @@ export function ProjectsClient({
           />
         ))}
       </div>
-      <section data-testid="team-catalog" className="flex flex-col gap-4 px-[20px] pb-[20px]">
-        <Panel title="Template catalog">
-          <TemplateCatalog templates={templates} />
-        </Panel>
-        <Panel title="Companies">
-          <CompanyManager companies={companies} roster={roster} templates={templates} />
-        </Panel>
-        <Panel title="Catalog imports">
-          <CatalogImports imports={catalogImports} />
+      {/* M44 R1/E20: the ONE section here that is not about a single project. The team catalog
+        * that used to sit in this slot moved to Workforce -> Catalog; Analytics left the sidebar
+        * and its all-workspaces view arrived here instead, because a spend figure is a fact about
+        * the projects above it and belongs where somebody can act on it. `/analytics` keeps its
+        * route, its `?workspace=` scope and this link (`docs/ia.md`). */}
+      <section data-testid="all-projects-analytics" className="flex flex-col gap-4 px-[20px] pb-[20px]">
+        <Panel
+          title="across every project"
+          action={
+            <Link href="/analytics" className="text-[10px] text-text-3 hover:text-text-1">
+              all →
+            </Link>
+          }
+        >
+          <KpiStrip kpis={analytics.kpis} />
         </Panel>
       </section>
       <NewProjectDrawer

@@ -34,7 +34,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }):
     <html lang="en" className={`${plexSans.variable} ${plexMono.variable}`}>
       <body className="flex min-h-screen">
         <Sidebar />
-        <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+        {/* The one `main` landmark, and the skip link's target (M44 R6). `tabIndex={-1}` so the
+          * anchor can actually move focus here -- a `<main>` is not focusable by default, and a
+          * skip link that only scrolls has moved the viewport and not the keyboard. The nine
+          * page-level `<main>`s that used to sit inside this one are `<div>`s now (erratum E16):
+          * a document with ten main landmarks has none. */}
+        <main id="main" tabIndex={-1} className="flex min-w-0 flex-1 flex-col focus:outline-none">
+          {children}
+        </main>
       </body>
     </html>
   )
