@@ -74,3 +74,4 @@ Editing a task's title/description after creation (still immutable); versioning 
 - **§3 clarified — manifest widenings are optional on read.** `task.sha256` and `planning_goal.version` are optional in `runContextManifestSchema` (pre-M40 `RunContext` rows must stay readable by the web context route and `show-context`); every builder after M40 sets them (Task 1 review ruling).
 ### Task 3 (2026-09-10)
 - **E7 — added tasks are `ready`.** §1 said re-plan additions land as `backlog`; `concludePlanning` has always created planned tasks as `ready`, and `concludeReplan` mirrors it (one creation path). The scheduler's `dependenciesDone` gate still decides when they run.
+- **§1 clarified — the re-plan retry cap is silent.** Like the first-plan cap, exhausting `PLANNING_RETRY_CAP` for a goal version stops further attempts without a `guardrail.tripped`; the Supervisor's `no_planner`/stale counts and the web's stale badge are the operator's signal.
