@@ -61,6 +61,9 @@ export function ProjectSettingsClient({
         // The re-plan trigger's own question (`dispatchPlanning` check 2): every task the project
         // has, terminal ones included, which is exactly what `projectFootprint` counts.
         boardTaskCount={footprint.tasks}
+        // `tick` returns before `dispatchPlanning` while a halt stands, so the re-plan sentence
+        // must not be said on a halted project. Off the same field the halt banner above reads.
+        halted={workspace.haltedReason !== null}
       />
       <RuntimePanel
         key={`${workspace.provider ?? ''}|${workspace.budgetUsd ?? ''}`}

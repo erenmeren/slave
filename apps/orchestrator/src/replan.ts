@@ -53,11 +53,34 @@ export interface ReplanVerdict {
   /** Planning runs that FAILED since this version's `workspace.goal_set`. */
   readonly failedAttempts: number
   readonly retryCap: number
+  /**
+   * The workspace's RECORDED halt (`Workspace.haltedReason`), or `null`. `tick` returns before
+   * `dispatchPlanning` while one stands, so a re-plan that is otherwise due does not start.
+   *
+   * Only the recorded halt: the guardrails that stop scheduling without writing the column
+   * (concurrency, the budget, the circuit breaker) are re-evaluated by `decide()` on every tick from
+   * a world this read does not load, and claiming to know about them here would be a promise this
+   * function cannot keep.
+   */
+  readonly halted: string | null
+  /** `Workspace.archivedAt !== null`. An archived project is invisible to the scheduler (M27 §3.3):
+   *  `tick` returns before the world is even loaded. */
+  readonly archived: boolean
   /** Whether the next tick would start a re-plan run for this version -- every fact above,
    *  answered together. */
   readonly willReplan: boolean
-  /** What `dispatchPlanning` would dispatch, or `null`. Non-null even while a planning run is live:
-   *  that is a wait, not a refusal, and `dispatchPlanning` makes the check itself. */
+  /**
+   * The FIRST thing stopping a re-plan that the goal move has otherwise made due, or `null`.
+   *
+   * `null` also covers the two cases where nothing is being stopped at all: a board that is already
+   * current, and an empty board (which takes the first-plan path). "Nothing is due" and "something
+   * is in the way" are different answers, and an operator asking why the board has not caught up
+   * needs to be told which one they have.
+   */
+  readonly blockedBy: 'archived' | 'halted' | 'dedup' | 'retry_cap' | 'live_planning_run' | null
+  /** What `dispatchPlanning` would dispatch, or `null`. Non-null even while a planning run is live,
+   *  or while the workspace is halted: those are waits rather than refusals, and `tick` /
+   *  `dispatchPlanning` make those checks themselves. */
   readonly intent: ReplanIntent | null
 }
 
@@ -106,6 +129,15 @@ export async function replanVerdict(
   goalVersion: number,
   retryCap: number,
 ): Promise<ReplanVerdict> {
+  // What `tick` decides before `dispatchPlanning` is ever reached (tick.ts: archived first, then
+  // the halt). Read here rather than passed in, so the verdict is the same fact whoever asks --
+  // `replanIntent` pays one primary-key read it does not use, which is what one idea of the trigger
+  // costs.
+  const workspace = await prisma.workspace.findUniqueOrThrow({
+    where: { id: workspaceId },
+    select: { haltedReason: true, archivedAt: true },
+  })
+
   // 1. Has the goal actually moved past the board?
   const board = await prisma.task.findMany({
     where: { workspaceId, status: { notIn: [...TERMINAL] } },
@@ -169,6 +201,27 @@ export async function replanVerdict(
       ? { previousVersion: goalVersion - 1, version: goalVersion }
       : null
 
+  const archived = workspace.archivedAt !== null
+  // An empty board is the first plan, not a re-plan: `dispatchPlanning` never reaches this at all
+  // there, and saying "a re-plan will run" about a workspace that has never been planned would be
+  // a different promise than the one the tick keeps.
+  const due = goalMoved && boardTaskCount > 0
+  // In the order `tick` itself would reach them: archived before the world is loaded, the halt
+  // before dispatch, then `dispatchPlanning`'s own three.
+  const blockedBy = !due
+    ? null
+    : archived
+      ? ('archived' as const)
+      : workspace.haltedReason !== null
+        ? ('halted' as const)
+        : alreadyReplanned
+          ? ('dedup' as const)
+          : failedAttempts >= retryCap
+            ? ('retry_cap' as const)
+            : livePlanningRun
+              ? ('live_planning_run' as const)
+              : null
+
   return {
     goalVersion,
     boardVersion,
@@ -178,10 +231,10 @@ export async function replanVerdict(
     livePlanningRun,
     failedAttempts,
     retryCap,
-    // An empty board is the first plan, not a re-plan: `dispatchPlanning` never reaches this at
-    // all there, and saying "a re-plan will run" about a workspace that has never been planned
-    // would be a different promise than the one the tick keeps.
-    willReplan: intent !== null && !livePlanningRun && boardTaskCount > 0,
+    halted: workspace.haltedReason,
+    archived,
+    willReplan: due && blockedBy === null,
+    blockedBy,
     intent,
   }
 }

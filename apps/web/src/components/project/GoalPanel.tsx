@@ -41,6 +41,7 @@ export function GoalPanel({
   goal,
   goalVersion,
   boardTaskCount,
+  halted,
 }: {
   readonly workspaceId: string
   readonly goal: string | null
@@ -53,6 +54,18 @@ export function GoalPanel({
    *  than a re-plan, so the "a re-plan will run" sentence would be a promise the tick does not
    *  keep. */
   readonly boardTaskCount: number
+  /**
+   * Whether this project carries a recorded halt (`Workspace.haltedReason`), from the snapshot this
+   * tab already reads for its own halt banner.
+   *
+   * `setGoal` is NOT refused on a halted workspace -- an operator revising the requirement while
+   * everything is stopped is exactly what a halt is for -- but `tick` returns before
+   * `dispatchPlanning` while one stands, so "a re-plan will run on the next tick" would be a
+   * promise nothing is going to keep (fix round 1). An ARCHIVED project needs no flag of its own:
+   * the route refuses the write before the verb runs, so there is no successful save to say
+   * anything after.
+   */
+  readonly halted: boolean
 }): React.JSX.Element {
   const router = useRouter()
   const [editing, setEditing] = useState(false)
@@ -126,11 +139,16 @@ export function GoalPanel({
           no change — still v{unchangedAt}
         </span>
       )}
-      {replanComing && (
-        <span data-testid="goal-replan-note" className="text-xs text-tone-planning">
-          a re-plan will run on the next tick
-        </span>
-      )}
+      {replanComing &&
+        (halted ? (
+          <span data-testid="goal-replan-halted" className="text-xs text-tone-waiting">
+            the workspace is halted — re-plan waits for a resume
+          </span>
+        ) : (
+          <span data-testid="goal-replan-note" className="text-xs text-tone-planning">
+            a re-plan will run on the next tick
+          </span>
+        ))}
       {errorText !== null && (
         <span role="alert" data-testid="goal-error" className="text-xs text-tone-blocked">
           {errorText}

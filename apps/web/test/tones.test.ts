@@ -102,6 +102,16 @@ describe('cardStateFor', () => {
     expect(cardStateFor('idle', 'done')).toBe('completed')
   })
 
+  it('reads a cancelled task as cancelled, whatever the slave is doing, and a failed one as blocked', () => {
+    // M40 §6 (fix round 1): the two derivations agree on `cancelled`, so a slave holding a
+    // cancelled task cannot read BLOCKED on its card while the same task reads CANCELLED on the
+    // board. `failed` keeps the red it has always had -- a failure needs an operator.
+    expect(cardStateFor('idle', 'cancelled')).toBe('cancelled')
+    expect(cardStateFor('working', 'cancelled')).toBe('cancelled')
+    expect(CARD_STATE_TONE[cardStateFor('idle', 'cancelled')].tone).toBe('idle')
+    expect(cardStateFor('idle', 'failed')).toBe('blocked')
+  })
+
   it('defers to the slave everywhere else', () => {
     expect(cardStateFor('working', 'running')).toBe('working')
     expect(cardStateFor('paused', 'running')).toBe('paused')

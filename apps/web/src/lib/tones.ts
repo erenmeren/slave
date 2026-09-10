@@ -164,9 +164,10 @@ export function cardStateFor(slave: SlaveStatus, task: TaskStatus | null): CardS
  * takes the muted state of its own (M40 §6), so the card says what happened while the board still
  * files it where it belongs.
  *
- * `cardStateFor(slave, task)` is untouched and stays the SLAVE-first derivation: `SlaveCard` is
- * about a slave that happens to hold a task, and this function is about a task that may have no
- * slave at all.
+ * `cardStateFor(slave, task)` stays the SLAVE-first derivation: `SlaveCard` is about a slave that
+ * happens to hold a task, and this function is about a task that may have no slave at all. The two
+ * agree on `cancelled` (M40 §6, fix round 1): a slave holding a cancelled task must not read
+ * BLOCKED on its card while the same task reads CANCELLED on the board.
  */
 export function cardStateForTask(status: TaskStatus): CardState {
   switch (status) {

@@ -40,8 +40,8 @@ const task = (over: Partial<TaskBoardItem>): TaskBoardItem => ({
   ...over,
 })
 
-const snapshot = (tasks: readonly TaskBoardItem[]): TasksSnapshot => ({
-  workspace: { id: 'w1', name: 'W', haltedReason: null, goalVersion: 0 },
+const snapshot = (tasks: readonly TaskBoardItem[], goalVersion = 0): TasksSnapshot => ({
+  workspace: { id: 'w1', name: 'W', haltedReason: null, goalVersion },
   shellFacts: {
     workspace: { id: 'w1', name: 'W' },
     counts: { slavesWorking: 0, tasksActive: 0 },
@@ -687,6 +687,27 @@ describe('TasksClient', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /close/i }))
     expect(screen.queryByText('The full description')).toBeNull()
+  })
+
+  it('threads the snapshot\'s own goal version to the card and the panel, badging a stale task (fix round 1)', () => {
+    // Every other stale case renders `TaskCard`/`TaskDetailPanel` with a literal prop; this one
+    // proves the wiring that actually carries it -- `TasksSnapshot.workspace.goalVersion` through
+    // `TasksClient` and `TaskColumn` to both surfaces.
+    render(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', goalVersion: 1 })], 2)} />)
+
+    expect(screen.getByTestId('task-goal-version').textContent).toBe('goal v1')
+    expect(screen.getByTestId('task-stale').textContent).toBe('stale')
+
+    fireEvent.click(screen.getByText('Add the thing'))
+    expect(screen.getByTestId('task-panel-goal-version').textContent).toBe('goal v1')
+    expect(screen.getByTestId('task-panel-stale').textContent).toBe('stale')
+  })
+
+  it('leaves a task on the project\'s current goal version unbadged all the way through', () => {
+    render(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', goalVersion: 2 })], 2)} />)
+
+    expect(screen.getByTestId('task-goal-version').textContent).toBe('goal v2')
+    expect(screen.queryByTestId('task-stale')).toBeNull()
   })
 
   it('buckets an off-column status (rework) into the Todo column while the card still carries the true status', () => {

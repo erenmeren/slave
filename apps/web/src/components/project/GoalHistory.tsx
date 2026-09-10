@@ -23,6 +23,22 @@ import { SectionLabel } from '../ui/SectionLabel'
  * box, possibly months ago -- so all of it is rendered as JSX children (characters on the page,
  * never elements: spec §1, another party's text is data).
  */
+/**
+ * Whether a 200 body is actually the history (fix round 1, Minor 5).
+ *
+ * A shallow check, deliberately: it asks the one question the render below depends on -- is this a
+ * list of rows each carrying a numeric `version` -- rather than re-validating every field the route
+ * already built with `listGoalVersions`. A cast alone would let a proxy's HTML error page, or a
+ * route this page is one deploy out of step with, reach the map and throw inside render, where the
+ * component has no error span to put it in. This routes it to the one it already has.
+ */
+function isGoalHistory(data: unknown): data is readonly GoalVersionView[] {
+  return (
+    Array.isArray(data) &&
+    data.every((entry) => typeof entry === 'object' && entry !== null && typeof (entry as { version?: unknown }).version === 'number')
+  )
+}
+
 export function GoalHistory({ workspaceId }: { readonly workspaceId: string }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [entries, setEntries] = useState<readonly GoalVersionView[] | null>(null)
@@ -43,7 +59,11 @@ export function GoalHistory({ workspaceId }: { readonly workspaceId: string }): 
         setErrorText(errorMessage(data, response.status))
         return
       }
-      setEntries(data as readonly GoalVersionView[])
+      if (!isGoalHistory(data)) {
+        setErrorText('this project\u2019s goal history came back in a shape this page cannot read')
+        return
+      }
+      setEntries(data)
       setOpen(true)
     } catch (cause) {
       setErrorText(cause instanceof Error ? cause.message : String(cause))

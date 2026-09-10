@@ -59,7 +59,7 @@ describe('GoalPanel', () => {
   })
 
   it('renders the form when goal is null, and offers no history to read', () => {
-    render(<GoalPanel workspaceId="w1" goal={null} goalVersion={0} boardTaskCount={0} />)
+    render(<GoalPanel workspaceId="w1" goal={null} goalVersion={0} boardTaskCount={0} halted={false} />)
 
     expect(screen.getByRole('textbox', { name: 'workspace goal' })).toBeTruthy()
     expect(screen.getByTestId('goal-submit')).toBeTruthy()
@@ -70,7 +70,7 @@ describe('GoalPanel', () => {
   })
 
   it('posts the typed text to the goal route', async () => {
-    render(<GoalPanel workspaceId="w1" goal={null} goalVersion={0} boardTaskCount={0} />)
+    render(<GoalPanel workspaceId="w1" goal={null} goalVersion={0} boardTaskCount={0} halted={false} />)
     fireEvent.change(screen.getByTestId('goal-input'), { target: { value: 'ship the redesign' } })
 
     await act(async () => {
@@ -86,7 +86,7 @@ describe('GoalPanel', () => {
   })
 
   it('renders the goal read-only with its version when set', () => {
-    render(<GoalPanel workspaceId="w1" goal="ship the redesign" goalVersion={3} boardTaskCount={2} />)
+    render(<GoalPanel workspaceId="w1" goal="ship the redesign" goalVersion={3} boardTaskCount={2} halted={false} />)
 
     expect(screen.getByTestId('workspace-goal').textContent).toBe('ship the redesign')
     expect(screen.getByTestId('goal-version').textContent).toBe('v3')
@@ -94,13 +94,13 @@ describe('GoalPanel', () => {
   })
 
   it('shows no version chip for a goal that carries no recorded version', () => {
-    render(<GoalPanel workspaceId="w1" goal="hand-seeded before M40" goalVersion={0} boardTaskCount={1} />)
+    render(<GoalPanel workspaceId="w1" goal="hand-seeded before M40" goalVersion={0} boardTaskCount={1} halted={false} />)
 
     expect(screen.queryByTestId('goal-version')).toBeNull()
   })
 
   it('an edit button switches a set goal back to the form, seeded with the current goal', () => {
-    render(<GoalPanel workspaceId="w1" goal="ship checkout" goalVersion={1} boardTaskCount={0} />)
+    render(<GoalPanel workspaceId="w1" goal="ship checkout" goalVersion={1} boardTaskCount={0} halted={false} />)
     expect(screen.queryByTestId('goal-input')).toBeNull()
 
     fireEvent.click(screen.getByTestId('goal-edit'))
@@ -111,7 +111,7 @@ describe('GoalPanel', () => {
 
   it('a refusal lands in the alert span and is not mistaken for "no change"', async () => {
     wire({ post: new Response(JSON.stringify({ error: 'a goal must be a non-empty text', kind: 'invalid_goal' }), { status: 409 }) })
-    render(<GoalPanel workspaceId="w1" goal={null} goalVersion={0} boardTaskCount={0} />)
+    render(<GoalPanel workspaceId="w1" goal={null} goalVersion={0} boardTaskCount={0} halted={false} />)
     fireEvent.change(screen.getByTestId('goal-input'), { target: { value: '  ' } })
 
     await act(async () => {
@@ -135,7 +135,7 @@ describe('GoalPanel', () => {
         { status: 409 },
       ),
     })
-    render(<GoalPanel workspaceId="w1" goal="ship checkout" goalVersion={2} boardTaskCount={3} />)
+    render(<GoalPanel workspaceId="w1" goal="ship checkout" goalVersion={2} boardTaskCount={3} halted={false} />)
     fireEvent.click(screen.getByTestId('goal-edit'))
 
     await act(async () => {
@@ -151,7 +151,7 @@ describe('GoalPanel', () => {
   })
 
   it('says a re-plan will run after an edit that landed on a non-empty board', async () => {
-    render(<GoalPanel workspaceId="w1" goal="ship checkout" goalVersion={1} boardTaskCount={4} />)
+    render(<GoalPanel workspaceId="w1" goal="ship checkout" goalVersion={1} boardTaskCount={4} halted={false} />)
     fireEvent.click(screen.getByTestId('goal-edit'))
     fireEvent.change(screen.getByTestId('goal-input'), { target: { value: 'ship checkout and refunds' } })
 
@@ -162,8 +162,26 @@ describe('GoalPanel', () => {
     expect(screen.getByTestId('goal-replan-note').textContent).toBe('a re-plan will run on the next tick')
   })
 
+  it('says the re-plan waits when the project is halted, because tick returns before dispatch', async () => {
+    // Fix round 1, Important 1: `setGoal` is not refused on a halted workspace, but `tick` returns
+    // before `dispatchPlanning` while a halt stands -- so the original sentence would be a promise
+    // nothing is going to keep.
+    render(<GoalPanel workspaceId="w1" goal="ship checkout" goalVersion={1} boardTaskCount={4} halted />)
+    fireEvent.click(screen.getByTestId('goal-edit'))
+    fireEvent.change(screen.getByTestId('goal-input'), { target: { value: 'ship checkout and refunds' } })
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('goal-submit'))
+    })
+
+    expect(screen.getByTestId('goal-replan-halted').textContent).toBe('the workspace is halted — re-plan waits for a resume')
+    expect(screen.queryByTestId('goal-replan-note')).toBeNull()
+    // The save itself still landed: a halt stops scheduling, not the requirement.
+    expect(refresh).toHaveBeenCalled()
+  })
+
   it('says nothing about a re-plan when the board is empty -- that edit takes the first-plan path', async () => {
-    render(<GoalPanel workspaceId="w1" goal="ship checkout" goalVersion={1} boardTaskCount={0} />)
+    render(<GoalPanel workspaceId="w1" goal="ship checkout" goalVersion={1} boardTaskCount={0} halted={false} />)
     fireEvent.click(screen.getByTestId('goal-edit'))
     fireEvent.change(screen.getByTestId('goal-input'), { target: { value: 'ship checkout and refunds' } })
 
@@ -177,14 +195,14 @@ describe('GoalPanel', () => {
 
   describe('the history', () => {
     const open = async (): Promise<void> => {
-      render(<GoalPanel workspaceId="w1" goal="ship checkout\nand the refunds flow" goalVersion={2} boardTaskCount={2} />)
+      render(<GoalPanel workspaceId="w1" goal="ship checkout\nand the refunds flow" goalVersion={2} boardTaskCount={2} halted={false} />)
       await act(async () => {
         fireEvent.click(screen.getByTestId('goal-history-toggle'))
       })
     }
 
     it('reads the history route only once it is asked for, and lists the versions newest first', async () => {
-      render(<GoalPanel workspaceId="w1" goal="ship checkout" goalVersion={2} boardTaskCount={2} />)
+      render(<GoalPanel workspaceId="w1" goal="ship checkout" goalVersion={2} boardTaskCount={2} halted={false} />)
       expect(fetchMock).not.toHaveBeenCalled()
 
       await act(async () => {
@@ -239,9 +257,23 @@ describe('GoalPanel', () => {
       expect(fetchMock.mock.calls.filter((call) => call[0] === HISTORY_URL)).toHaveLength(2)
     })
 
+    it('routes a body it cannot read to the error span instead of throwing in render', async () => {
+      // Fix round 1, Minor 5: a proxy's HTML error page, or a route this page is one deploy out of
+      // step with, must not reach the map below as a cast.
+      wire({ history: new Response(JSON.stringify({ versions: 'not a list' }), { status: 200 }) })
+      render(<GoalPanel workspaceId="w1" goal="ship checkout" goalVersion={2} boardTaskCount={2} halted={false} />)
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('goal-history-toggle'))
+      })
+
+      expect(screen.getByTestId('goal-history-error').textContent).toMatch(/shape this page cannot read/)
+      expect(screen.queryByTestId('goal-history')).toBeNull()
+    })
+
     it('shows the route\'s own words when the read fails', async () => {
       wire({ history: new Response(JSON.stringify({ error: 'no such workspace' }), { status: 404 }) })
-      render(<GoalPanel workspaceId="w1" goal="ship checkout" goalVersion={2} boardTaskCount={2} />)
+      render(<GoalPanel workspaceId="w1" goal="ship checkout" goalVersion={2} boardTaskCount={2} halted={false} />)
 
       await act(async () => {
         fireEvent.click(screen.getByTestId('goal-history-toggle'))

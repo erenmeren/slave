@@ -397,9 +397,46 @@ describe('the orchestrator CLI', () => {
       livePlanningRun: false,
       failedAttempts: 0,
       retryCap: 2,
+      halted: null,
+      archived: false,
       willReplan: true,
+      blockedBy: null,
       intent: { previousVersion: 0, version: 1 },
     })
+  })
+
+  it('says a halted workspace will not re-plan, and names the halt as what is in the way', async (): Promise<void> => {
+    // Fix round 1, Important 1: `tick` returns before `dispatchPlanning` while a halt stands, so a
+    // verdict that ignored it would promise a re-plan nothing was going to start.
+    await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'ship checkout'])
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { haltedReason: 'emergency stop', haltedAt: new Date() },
+    })
+
+    const result = await runCli(['replan-status', '--workspace', fixture.workspaceId])
+
+    expect(result.code).toBe(0)
+    const verdict = JSON.parse(result.stdout) as { halted: string | null; willReplan: boolean; blockedBy: string | null; intent: unknown }
+    expect(verdict.halted).toBe('emergency stop')
+    expect(verdict.willReplan).toBe(false)
+    expect(verdict.blockedBy).toBe('halted')
+    // The re-plan is still DUE -- a halt delays it, it does not cancel the version's claim on one.
+    expect(verdict.intent).toEqual({ previousVersion: 0, version: 1 })
+  })
+
+  it('says an archived workspace will not re-plan either', async (): Promise<void> => {
+    // M27 §3.3: `tick` returns before the world is even loaded for an archived project.
+    await runCli(['set-goal', '--workspace', fixture.workspaceId, '--goal', 'ship checkout'])
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { archivedAt: new Date() } })
+
+    const result = await runCli(['replan-status', '--workspace', fixture.workspaceId])
+
+    expect(result.code).toBe(0)
+    const verdict = JSON.parse(result.stdout) as { archived: boolean; willReplan: boolean; blockedBy: string | null }
+    expect(verdict.archived).toBe(true)
+    expect(verdict.willReplan).toBe(false)
+    expect(verdict.blockedBy).toBe('archived')
   })
 
   it('says a current board will not re-plan', async (): Promise<void> => {
@@ -409,10 +446,12 @@ describe('the orchestrator CLI', () => {
     const result = await runCli(['replan-status', '--workspace', fixture.workspaceId])
 
     expect(result.code).toBe(0)
-    const verdict = JSON.parse(result.stdout) as { goalMoved: boolean; willReplan: boolean; boardVersion: number }
+    const verdict = JSON.parse(result.stdout) as { goalMoved: boolean; willReplan: boolean; boardVersion: number; blockedBy: string | null }
     expect(verdict.boardVersion).toBe(1)
     expect(verdict.goalMoved).toBe(false)
     expect(verdict.willReplan).toBe(false)
+    // Nothing is DUE, so nothing is in the way -- a different answer from "something is blocking it".
+    expect(verdict.blockedBy).toBeNull()
   })
 
   it('renders the re-plan prompt with --prompt and records no RunContext row for it', async (): Promise<void> => {
