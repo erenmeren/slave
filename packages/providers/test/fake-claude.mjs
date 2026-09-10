@@ -77,13 +77,14 @@
 //   can: it is passed through as `extraArgs` on every decision call, which
 //   is already how `--fixture` itself arrives.
 //   M40 adds the RE-PLAN arm to every mode that has a `"task graph"`
-//   check (today: `m8-flow`), in front of it: a prompt containing the
-//   literal `"replan"` (which `REPLAN_INSTRUCTIONS` always emits) replays
-//   `fixtures/replan-delta.ndjson` with `$CANCEL_ID` substituted from
-//   `--replan-cancel <id>` in ARGV -- and with the placeholder ELEMENT
-//   removed, so `cancel` is `[]`, when no such flag was passed. It sits
-//   behind the two decision arms and in front of the planning one: a
-//   re-plan answered with a first plan would rebuild the board.
+//   check (today: `m8-flow` and `m41-flow`), in front of it: a prompt
+//   containing the literal `"replan"` (which `REPLAN_INSTRUCTIONS` always
+//   emits) replays `fixtures/replan-delta.ndjson` with `$CANCEL_ID`
+//   substituted from `--replan-cancel <id>` in ARGV -- and with the
+//   placeholder ELEMENT removed, so `cancel` is `[]`, when no such flag
+//   was passed. It sits behind the two decision arms and in front of the
+//   planning one: a re-plan answered with a first plan would rebuild the
+//   board.
 //   m41-flow       synthetic, M41's whole-story mode: every arm one gate
 //                  needs, in one file, so a single daemon lineage can plan,
 //                  work, ask, be answered, resume, be reviewed and be

@@ -338,6 +338,10 @@ describe('fake-claude', () => {
       // own, so the pump reads it through the exact stream shape a real run produces.
       expect(stdout).toContain('<slave-ask>')
       expect(stdout).toContain('"recipientRole"'.replace('recipientRole', 'role'))
+      // That line alone cannot fail: `"role":"assistant"` sits on every assistant line of the
+      // `complete` capture. This is the envelope itself -- the ask JSON as it is escaped inside
+      // the text block, which is the only place the pump ever reads it from.
+      expect(stdout).toContain(JSON.stringify(`<slave-ask>\n${ASK_JSON}\n</slave-ask>`).slice(1, -1))
       // An ask is not work: the run stopped to ask, so it left nothing behind.
       expect(commitCount()).toBe(1)
       expect(execFileSync('git', ['status', '--porcelain'], { cwd: repoDir }).toString().trim()).toBe('')
