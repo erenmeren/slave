@@ -580,6 +580,17 @@ describe('GraphClient', () => {
 
     await waitFor(() => expect(screen.getByTestId('drawer-error').textContent).toBe('run is not pausable'))
   })
+
+  // M44 erratum E25 / M45 R5: the one page frame reaches this page too. `flush`, so it brings its
+  // landmark and its `page-shell` marker and none of its padding -- the page's own frame classes
+  // are unchanged, which is what keeps `gate:m14-fidelity`'s numbers where they are.
+  it('M44 E25 / M45 R5: renders inside the one page shell, with its own frame classes untouched', () => {
+    render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
+    const shell = screen.getByTestId('page-shell')
+    expect(shell.className).not.toContain('p-3')
+    expect(shell.querySelector(':scope > div')?.className).toContain('flex flex-1 flex-col')
+  })
+
 })
 
 describe('useLayoutedGraph', () => {

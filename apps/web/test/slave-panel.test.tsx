@@ -49,6 +49,16 @@ const feedEvent = (over: Partial<SlaveFeedEvent>): SlaveFeedEvent => ({
   ...over,
 })
 
+/** Opens one `DetailsGroup` by its `data-group` name (M45 R4). A closed group renders NO children
+ *  at all -- that is the primitive's whole contract -- so every case below that reads something now
+ *  folded away opens its group first rather than weakening the assertion. */
+function openGroup(group: string): void {
+  const section = document.querySelector(`[data-testid="details-group"][data-group="${group}"]`)
+  const toggle = section?.querySelector('button')
+  if (toggle === null || toggle === undefined) throw new Error(`no DetailsGroup named ${group} on screen`)
+  fireEvent.click(toggle)
+}
+
 describe('SlavePanel', () => {
   let fetchMock: ReturnType<typeof vi.fn>
 
@@ -77,6 +87,8 @@ describe('SlavePanel', () => {
         expect(screen.getByTestId('pause-button').getAttribute('disabled')).toBeNull()
         expect(screen.getByTestId('resume-button').getAttribute('disabled')).not.toBeNull()
         expect(screen.getByTestId('stop-button').getAttribute('disabled')).toBeNull()
+        // M45 R4: the message box is under the Messages group, which renders on open.
+        openGroup('messages')
         expect(screen.getByTestId('message-hint')).toBeTruthy()
         expect(screen.queryByTestId('message-input')).toBeNull()
       },
@@ -95,6 +107,7 @@ describe('SlavePanel', () => {
       expect(screen.getByTestId('pause-button').getAttribute('disabled')).not.toBeNull()
       expect(screen.getByTestId('resume-button').getAttribute('disabled')).toBeNull()
       expect(screen.getByTestId('stop-button').getAttribute('disabled')).toBeNull()
+      openGroup('messages')
       expect(screen.getByTestId('message-input')).toBeTruthy()
       expect(screen.queryByTestId('message-hint')).toBeNull()
     })
@@ -155,6 +168,8 @@ describe('SlavePanel', () => {
       expect(screen.getByTestId('pause-button').getAttribute('disabled')).not.toBeNull()
       expect(screen.getByTestId('resume-button').getAttribute('disabled')).not.toBeNull()
       expect(screen.getByTestId('stop-button').getAttribute('disabled')).not.toBeNull()
+      // Opened first, so this proves the box is ABSENT for an idle worker rather than merely folded.
+      openGroup('messages')
       expect(screen.queryByTestId('message-box')).toBeNull()
     })
   })
@@ -170,8 +185,10 @@ describe('SlavePanel', () => {
           onClose={() => {}}
         />,
       )
-      expect(screen.getByTestId('run-cost').textContent).toContain('1.25')
+      // M45 R4: the tool-call count leads the panel in the Run group; the money is its own group.
       expect(screen.getByTestId('run-tool-calls').textContent).toContain('7')
+      openGroup('cost')
+      expect(screen.getByTestId('run-cost').textContent).toContain('1.25')
     })
 
     it('shows the unknown mark, not $0.00, when the live run reports no cost', () => {
@@ -186,8 +203,9 @@ describe('SlavePanel', () => {
           onClose={() => {}}
         />,
       )
-      expect(screen.getByTestId('run-cost').textContent).toBe('—')
       expect(screen.getByTestId('run-tool-calls').textContent).toContain('7')
+      openGroup('cost')
+      expect(screen.getByTestId('run-cost').textContent).toBe('—')
     })
 
     it('renders the run\'s own provider, and the unknown mark when no run has resolved one', () => {
@@ -295,6 +313,7 @@ describe('SlavePanel', () => {
       // the RESUME control at all (fix round 1, finding 1).
       expect(screen.queryByTestId('resume-button')).toBeNull()
       expect(screen.getByTestId('answer-button').textContent).toBe('answer')
+      openGroup('messages')
       expect(screen.getByTestId('message-input')).toBeTruthy()
     })
 
@@ -452,6 +471,7 @@ describe('SlavePanel', () => {
         />,
       )
 
+      openGroup('messages')
       const input = screen.getByTestId('message-input')
       expect((input as HTMLTextAreaElement).value).toBe('first draft')
       fireEvent.change(input, { target: { value: 'also update the README' } })
@@ -485,6 +505,7 @@ describe('SlavePanel', () => {
         />,
       )
 
+      openGroup('messages')
       fireEvent.change(screen.getByTestId('message-input'), { target: { value: 'payments-retry' } })
       await act(async () => {
         fireEvent.click(screen.getByTestId('answer-button'))
@@ -513,6 +534,7 @@ describe('SlavePanel', () => {
       )
 
       expect(screen.getByTestId('answer-button').getAttribute('disabled')).not.toBeNull()
+      openGroup('messages')
       fireEvent.change(screen.getByTestId('message-input'), { target: { value: 'payments-retry' } })
       expect(screen.getByTestId('answer-button').getAttribute('disabled')).toBeNull()
     })
@@ -567,6 +589,7 @@ describe('SlavePanel', () => {
         />,
       )
 
+      openGroup('events')
       const rows = screen.getAllByTestId('feed-event').map((el) => el.textContent)
       expect(rows).toHaveLength(3)
       expect(rows[0]).toContain('seed one')
@@ -601,6 +624,7 @@ describe('SlavePanel', () => {
     it("shows the effective profile as TEXT in a textarea, with the level it came from", () => {
       render_({ profile: { text: '# Persona\n<b>careful</b> with payments', origin: 'company' } })
 
+      openGroup('profile')
       const input = screen.getByTestId('profile-input') as HTMLTextAreaElement
       // Another party's text is data (spec §1): the markup arrives as characters in a form
       // control, never as elements.
@@ -612,12 +636,14 @@ describe('SlavePanel', () => {
     it("names the worker-level profile as the worker's own", () => {
       render_({ profile: { text: 'mine', origin: 'slave' } })
 
+      openGroup('profile')
       expect(screen.getByTestId('profile-origin').textContent).toMatch(/own/i)
     })
 
     it('says when no level of the chain carries a profile, and leaves the box empty', () => {
       render_({ profile: null })
 
+      openGroup('profile')
       expect(screen.getByTestId('profile-origin').textContent).toMatch(/no profile/i)
       expect((screen.getByTestId('profile-input') as HTMLTextAreaElement).value).toBe('')
     })
@@ -625,6 +651,7 @@ describe('SlavePanel', () => {
     it('saving the profile PATCHes the slave profile route with the typed text', async () => {
       render_({ profile: { text: 'inherited text', origin: 'template' } })
 
+      openGroup('profile')
       fireEvent.change(screen.getByTestId('profile-input'), { target: { value: 'You are careful with payments.' } })
       await act(async () => {
         fireEvent.click(screen.getByTestId('profile-save'))
@@ -639,6 +666,7 @@ describe('SlavePanel', () => {
     it('clearing the textarea and saving sends an explicit null — the override goes, the level below shows through', async () => {
       render_({ profile: { text: 'my override', origin: 'slave' } })
 
+      openGroup('profile')
       fireEvent.change(screen.getByTestId('profile-input'), { target: { value: '   ' } })
       await act(async () => {
         fireEvent.click(screen.getByTestId('profile-save'))
@@ -656,6 +684,7 @@ describe('SlavePanel', () => {
       )
       render_({ profile: null })
 
+      openGroup('profile')
       fireEvent.change(screen.getByTestId('profile-input'), { target: { value: 'x' } })
       await act(async () => {
         fireEvent.click(screen.getByTestId('profile-save'))
@@ -667,6 +696,9 @@ describe('SlavePanel', () => {
     it('renders one chip per runtime role', () => {
       render_({ runtimeRoles: ['backend', 'reviewer'] })
 
+      // M45 R4: the roles live under Messages -- an empty set is what makes a worker unreachable
+      // by a role-addressed message (spec §7), so the mailbox and its roles read as one thing.
+      openGroup('messages')
       expect(screen.getAllByTestId('runtime-role-chip').map((chip) => chip.textContent)).toEqual(['backend', 'reviewer'])
       expect(screen.queryByTestId('not-dispatchable')).toBeNull()
     })
@@ -674,6 +706,7 @@ describe('SlavePanel', () => {
     it('warns that an empty set is parked: it can never be dispatched (spec §7)', () => {
       render_({ runtimeRoles: [] })
 
+      openGroup('messages')
       expect(screen.queryByTestId('runtime-role-chip')).toBeNull()
       expect(screen.getByTestId('not-dispatchable').textContent).toMatch(/cannot be dispatched/i)
     })
@@ -681,6 +714,7 @@ describe('SlavePanel', () => {
     it('saving the roles PATCHes the replacement set, split on commas exactly as the CLI splits --roles', async () => {
       render_({ runtimeRoles: ['backend'] })
 
+      openGroup('messages')
       fireEvent.change(screen.getByTestId('runtime-roles-input'), { target: { value: 'backend, reviewer' } })
       await act(async () => {
         fireEvent.click(screen.getByTestId('runtime-roles-save'))
@@ -698,6 +732,7 @@ describe('SlavePanel', () => {
     it('emptying the roles field parks the slave rather than sending one blank role', async () => {
       render_({ runtimeRoles: ['backend'] })
 
+      openGroup('messages')
       fireEvent.change(screen.getByTestId('runtime-roles-input'), { target: { value: '  ' } })
       await act(async () => {
         fireEvent.click(screen.getByTestId('runtime-roles-save'))
@@ -707,6 +742,97 @@ describe('SlavePanel', () => {
         '/api/w/w1/slaves/a1/runtime-roles',
         expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ roles: [] }) }),
       )
+    })
+  })
+
+  // ===============================================================================================
+  // M45 R4: progressive disclosure. The header keeps what a simple row shows; everything raw --
+  // the provider kind, the profile's origin, the runtime-role members, the feed -- is under a group.
+  // ===============================================================================================
+  describe('progressive disclosure (M45 R4)', () => {
+    it('groups the worker panel under the same Details names, in the spec order', () => {
+      render(<SlavePanel slave={slave({})} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />)
+      expect(screen.getAllByTestId('details-group').map((group) => group.getAttribute('data-group'))).toEqual([
+        'run',
+        'model',
+        'profile',
+        'skills',
+        'messages',
+        'cost',
+        'events',
+      ])
+    })
+
+    it('the header keeps the four things a simple row shows, ungrouped', () => {
+      render(<SlavePanel slave={slave({})} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />)
+      for (const id of ['status-dot', 'status-label', 'provider-chip', 'pause-button', 'resume-button', 'stop-button']) {
+        expect(screen.getByTestId(id).closest('[data-testid="details-group"]')).toBeNull()
+      }
+    })
+
+    it('leads with the Run group open and every other group closed', () => {
+      render(<SlavePanel slave={slave({ status: 'working', toolCalls: 7 })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />)
+      const open = screen
+        .getAllByTestId('details-group')
+        .filter((group) => group.getAttribute('data-open') === 'true')
+        .map((group) => group.getAttribute('data-group'))
+      expect(open).toEqual(['run'])
+      expect(screen.getByTestId('run-tool-calls').textContent).toContain('7')
+    })
+
+    it('expands the provider chip under Model, with the raw kind and the raw gate kept in title', () => {
+      render(
+        <SlavePanel slave={slave({ provider: 'cursor', gate: 'shell-only' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
+      )
+      expect(screen.queryByTestId('model-provider')).toBeNull()
+      openGroup('model')
+      expect(screen.getByTestId('model-provider').textContent).toBe('Cursor')
+      expect(screen.getByTestId('model-provider').getAttribute('title')).toBe('cursor')
+      expect(screen.getByTestId('model-gate').getAttribute('title')).toBe('shell-only')
+    })
+
+    it('names the latest skill this run used under Skills, and points at the catalog', () => {
+      render(
+        <SlavePanel slave={slave({ skill: 'writing-plans' })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
+      )
+      openGroup('skills')
+      expect(screen.getByTestId('panel-skill').textContent).toBe('writing-plans')
+      expect(screen.getByTestId('panel-skill-catalog').getAttribute('href')).toBe('/workforce?tab=skills')
+    })
+
+    it('shows the unknown mark under Skills when no Skill tool call has been seen on this run', () => {
+      render(<SlavePanel slave={slave({ skill: null })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />)
+      openGroup('skills')
+      expect(screen.getByTestId('panel-skill').textContent).toBe('—')
+    })
+
+    it('keeps the runtime-role members inside a group, never as a bare word in the header', () => {
+      render(
+        <SlavePanel slave={slave({ runtimeRoles: ['backend', 'reviewer'] })} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />,
+      )
+      expect(screen.queryByTestId('runtime-role-chip')).toBeNull()
+      openGroup('messages')
+      for (const chip of screen.getAllByTestId('runtime-role-chip')) {
+        expect(chip.closest('[data-testid="details-group"]')?.getAttribute('data-group')).toBe('messages')
+      }
+    })
+
+    it('keeps the cost figure in the Cost group and the live feed in the Events group', () => {
+      render(
+        <SlavePanel
+          slave={slave({ costUsd: 1.25, recentEvents: [feedEvent({ seq: 1, summary: 'seed one' })] })}
+          liveEvents={[]}
+          workspaceId="w1"
+          haltedReason={null}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.queryByTestId('run-cost')).toBeNull()
+      expect(screen.queryByTestId('feed-event')).toBeNull()
+      openGroup('cost')
+      expect(screen.getByTestId('run-cost').textContent).toContain('1.25')
+      openGroup('events')
+      expect(screen.getByTestId('feed-event').textContent).toContain('seed one')
     })
   })
 })

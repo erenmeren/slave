@@ -8,6 +8,7 @@ import { useTasks } from '../hooks/useTasks'
 import { BOARD_COLUMNS, COLUMN_FOR_STATUS } from '../lib/taskColumns'
 import type { TasksSnapshot } from '../server/tasks'
 import { Alert } from './ui/Alert'
+import { PageShell } from './ui/PageShell'
 import { HaltBanner } from './HaltBanner'
 import { TaskColumn } from './TaskColumn'
 import { TaskDetailPanel } from './TaskDetailPanel'
@@ -43,23 +44,30 @@ export function TasksClient({
 
   return (
     <>
+      {/* The stale-data dim stays OUTSIDE the shell (the M45 t3 idiom on the Overview):
+        * `PageShell` owns the frame and takes no `className`. */}
       <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
-        {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
-        {/* M44 R3: the band three surfaces hand-rolled, each with its own class string, is
-          * `ui/Alert` now. The one-line `role="alert"` refusal sentences under forms are NOT
-          * alerts in this sense and stay exactly as they are (erratum E21). */}
-        {error !== null && <Alert variant="notice">showing stale data: {error}</Alert>}
-        <div className="grid grid-cols-6 gap-[10px] p-[16px]">
-          {BOARD_COLUMNS.map((column) => (
-            <TaskColumn
-              key={column}
-              column={column}
-              tasks={view.tasks.filter((task) => COLUMN_FOR_STATUS[task.status] === column)}
-              workspaceGoalVersion={view.workspace.goalVersion}
-              onSelect={setSelectedId}
-            />
-          ))}
-        </div>
+        {/* M44 erratum E25 / M45 R5: `flush`, because this page already carries the design
+        * handoff's own gutters and `gate:m14-fidelity` measures them. The shell is here for its
+        * landmark and its `page-shell` marker, not for its padding -- not a pixel moves. */}
+        <PageShell flush>
+          {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
+          {/* M44 R3: the band three surfaces hand-rolled, each with its own class string, is
+            * `ui/Alert` now. The one-line `role="alert"` refusal sentences under forms are NOT
+            * alerts in this sense and stay exactly as they are (erratum E21). */}
+          {error !== null && <Alert variant="notice">showing stale data: {error}</Alert>}
+          <div className="grid grid-cols-6 gap-[10px] p-[16px]">
+            {BOARD_COLUMNS.map((column) => (
+              <TaskColumn
+                key={column}
+                column={column}
+                tasks={view.tasks.filter((task) => COLUMN_FOR_STATUS[task.status] === column)}
+                workspaceGoalVersion={view.workspace.goalVersion}
+                onSelect={setSelectedId}
+              />
+            ))}
+          </div>
+        </PageShell>
       </div>
       {selectedTask !== null && <TaskDetailPanel task={selectedTask} workspaceId={workspaceId} workspaceGoalVersion={view.workspace.goalVersion} onClose={() => setSelectedId(null)} />}
     </>

@@ -143,7 +143,9 @@ describe('TaskCard', () => {
       const pill = screen.getByTestId('status-pill')
       expect(pill.textContent).toContain('CANCELLED')
       expect(pill.getAttribute('data-tone')).toBe('idle')
-      expect(screen.getByTestId('task-cancel-reason').textContent).toBe('the re-plan for goal v2 no longer needs it')
+      // M45 R4: the cancelled-only `task-cancel-reason` line is the general `task-why` line now --
+      // one "why" on a card rather than two places to look for one.
+      expect(screen.getByTestId('task-why').textContent).toBe('the re-plan for goal v2 no longer needs it')
     })
 
     it('is greyed, unlike a failed card', () => {
@@ -189,6 +191,8 @@ describe('TaskDetailPanel — the goal stamp, the stale badge and a cancellation
       />,
     )
 
+    // M45 R4: the reason `dl` is inside the Messages group, which renders nothing until opened.
+    openGroup('messages')
     expect(screen.getByTestId('detail-cancel-reason').textContent).toBe('the re-plan for goal v2 no longer needs it')
     expect(screen.queryByTestId('detail-rejection-reason')).toBeNull()
     expect(screen.getByText('cancelled', { selector: 'dt' })).toBeTruthy()
@@ -204,6 +208,7 @@ describe('TaskDetailPanel — the goal stamp, the stale badge and a cancellation
       />,
     )
 
+    openGroup('messages')
     expect(screen.getByTestId('detail-rejection-reason').textContent).toBe('edge case unhandled')
     expect(screen.queryByTestId('detail-cancel-reason')).toBeNull()
   })
@@ -247,10 +252,13 @@ describe('TaskDetailPanel', () => {
         onClose={() => {}}
       />,
     )
+    // The description and the run rows are above the fold -- the description ungrouped, the runs
+    // in the one group this panel leads with. The branch and the rejection are under Messages.
     expect(screen.getByText('Do the thing well')).toBeTruthy()
+    expect(screen.getAllByTestId('run-row')).toHaveLength(1)
+    openGroup('messages')
     expect(screen.getByText('feature/x')).toBeTruthy()
     expect(screen.getByText('tests failed on attempt 1')).toBeTruthy()
-    expect(screen.getAllByTestId('run-row')).toHaveLength(1)
   })
 
   it("shows 'paused at step N' for a paused run with a checkpoint", () => {
@@ -408,6 +416,7 @@ describe('TaskDetailPanel — what a run saw (M37 §6)', () => {
     const fetchMock = stubContext({ prompt: 'You are careful.', manifest })
     render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
 
+    openGroup('context')
     await act(async () => {
       fireEvent.click(screen.getByTestId('run-context-open'))
     })
@@ -426,6 +435,7 @@ describe('TaskDetailPanel — what a run saw (M37 §6)', () => {
     stubContext({ prompt: 'You are careful.', manifest })
     render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
 
+    openGroup('context')
     await act(async () => {
       fireEvent.click(screen.getByTestId('run-context-open'))
     })
@@ -439,6 +449,7 @@ describe('TaskDetailPanel — what a run saw (M37 §6)', () => {
     stubContext({ prompt: 'You are careful.\n<b>not markup</b>', manifest })
     render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
 
+    openGroup('context')
     await act(async () => {
       fireEvent.click(screen.getByTestId('run-context-open'))
     })
@@ -456,6 +467,7 @@ describe('TaskDetailPanel — what a run saw (M37 §6)', () => {
     stubContext({ error: 'this run recorded no context: it never started' }, 404)
     render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: [run] })} onClose={() => {}} />)
 
+    openGroup('context')
     await act(async () => {
       fireEvent.click(screen.getByTestId('run-context-open'))
     })
@@ -509,6 +521,7 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
         onClose={() => {}}
       />,
     )
+    openGroup('worktree')
     expect(screen.getByTestId('collect-worktree')).toBeTruthy()
   })
 
@@ -520,6 +533,8 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
         onClose={() => {}}
       />,
     )
+    // Opened first, so this proves the control is ABSENT rather than merely folded away.
+    openGroup('worktree')
     expect(screen.queryByTestId('collect-worktree')).toBeNull()
   })
 
@@ -531,6 +546,7 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
         onClose={() => {}}
       />,
     )
+    openGroup('worktree')
     expect(screen.queryByTestId('collect-worktree')).toBeNull()
   })
 
@@ -546,6 +562,7 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
       />,
     )
 
+    openGroup('worktree')
     expect(screen.queryByTestId('collect-worktree-confirm')).toBeNull()
     fireEvent.click(screen.getByTestId('collect-worktree'))
     expect(screen.getByTestId('collect-worktree-confirm')).toBeTruthy()
@@ -574,6 +591,7 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
       />,
     )
 
+    openGroup('worktree')
     fireEvent.click(screen.getByTestId('collect-worktree'))
     fireEvent.click(screen.getByTestId('collect-worktree-confirm'))
     await vi.waitFor(() => expect(screen.getByTestId('collect-worktree-error').textContent).toBe('task t1 has no worktree to collect'))
@@ -589,6 +607,8 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
 describe('TaskDetailPanel artifacts (M23 C1-C3)', () => {
   it("shows 'no artifacts yet' when the task has none", () => {
     render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ artifacts: [] })} onClose={() => {}} />)
+    // M45 R4: the artifacts are the Verification attempts group, which renders on open.
+    openGroup('verification')
     expect(screen.getByText('no artifacts yet')).toBeTruthy()
   })
 
@@ -605,6 +625,7 @@ describe('TaskDetailPanel artifacts (M23 C1-C3)', () => {
         onClose={() => {}}
       />,
     )
+    openGroup('verification')
     const rows = screen.getAllByTestId('artifact-row')
     expect(rows).toHaveLength(2)
     expect(rows[0]?.textContent).toContain('attempt 1 · npm-test')
@@ -631,6 +652,7 @@ describe('TaskDetailPanel artifacts (M23 C1-C3)', () => {
       />,
     )
 
+    openGroup('verification')
     fireEvent.click(screen.getByTestId('artifact-row'))
 
     expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/tasks/t1/artifacts/a1')
@@ -659,6 +681,7 @@ describe('TaskDetailPanel artifacts (M23 C1-C3)', () => {
       />,
     )
 
+    openGroup('verification')
     fireEvent.click(screen.getByTestId('artifact-row'))
 
     await vi.waitFor(() => expect(screen.getByTestId('artifact-truncated')).toBeTruthy())
@@ -719,6 +742,18 @@ describe('TasksClient', () => {
   })
 })
 
+// M44 erratum E25 / M45 R5: the one page frame reaches the Tasks board too. `flush`, so it brings
+// its landmark and its `page-shell` marker and none of its padding -- the board's own
+// `grid-cols-6 gap-[10px] p-[16px]` is what `gate:m14-fidelity` measures, and it is unchanged.
+describe('TasksClient (M44 E25 / M45 R5)', () => {
+  it('renders inside the one page shell, with the board grid untouched', () => {
+    render(<TasksClient workspaceId="w1" initial={snapshot([task({})])} />)
+    const shell = screen.getByTestId('page-shell')
+    expect(shell.className).not.toContain('p-3')
+    expect(shell.querySelector(':scope > div')?.className).toBe('grid grid-cols-6 gap-[10px] p-[16px]')
+  })
+})
+
 describe('the six-column board', () => {
   it('renders six columns in the README order with a dot and a count each', () => {
     render(<TasksClient workspaceId="w1" initial={snapshot([task({ status: 'running' }), task({ id: 't2', status: 'blocked' })])} />)
@@ -762,6 +797,203 @@ describe('the six-column board', () => {
   it('keeps a failed task on Done while its own pill still says failed', () => {
     render(<TasksClient workspaceId="w1" initial={snapshot([task({ status: 'failed' })])} />)
     expect(screen.getByTestId('column-count-Done').textContent).toBe('1')
-    expect(screen.getByTestId('status-pill').textContent).toBe('BLOCKED')
+    // M45 R4: the WORD is the domain's (`userTaskStatus`), so a failed task finally reads FAILED --
+    // the TONE is still the board column's `blocked` red, which is what put it here.
+    expect(screen.getByTestId('status-pill').textContent).toBe('FAILED')
+    expect(screen.getByTestId('status-pill').getAttribute('data-tone')).toBe('blocked')
+  })
+})
+
+// =================================================================================================
+// M45 R4: progressive disclosure. The simple row says the domain's word, who has it, and the ONE
+// line about why it is not moving; everything raw is folded under a `DetailsGroup`.
+// =================================================================================================
+
+/** Opens one `DetailsGroup` by its `data-group` name. A closed group renders NO children at all
+ *  (that is the primitive's whole contract), so every case that reads something now folded away
+ *  opens its group first rather than weakening the assertion. */
+function openGroup(group: string): void {
+  const section = document.querySelector(`[data-testid="details-group"][data-group="${group}"]`)
+  const toggle = section?.querySelector('button')
+  if (toggle === null || toggle === undefined) throw new Error(`no DetailsGroup named ${group} on screen`)
+  fireEvent.click(toggle)
+}
+
+describe('TaskCard (M45 R4: the simple row)', () => {
+  it('reads the domain word, with the raw status still on the card', () => {
+    render(<TaskCard workspaceGoalVersion={1} task={task({ status: 'reviewing' })} onSelect={() => {}} />)
+    expect(screen.getByTestId('task-status-word').textContent).toContain('IN REVIEW')
+    expect(screen.getByTestId('task-card').getAttribute('data-status')).toBe('reviewing')
+  })
+
+  // The TONE still comes from the board's column state, with its four documented exceptions --
+  // that decides the colour, not the sentence.
+  it('keeps the board column\'s tone while taking the domain\'s word', () => {
+    render(<TaskCard workspaceGoalVersion={1} task={task({ status: 'reviewing' })} onSelect={() => {}} />)
+    expect(screen.getByTestId('status-pill').getAttribute('data-tone')).toBe('review')
+  })
+
+  it('says WAITING on a task whose worker is waiting for an answer', () => {
+    render(<TaskCard workspaceGoalVersion={1} task={task({ status: 'waiting' })} onSelect={() => {}} />)
+    expect(screen.getByTestId('task-status-word').textContent).toContain('WAITING')
+  })
+
+  it('gives a blocked task its reason as the one-line why', () => {
+    render(
+      <TaskCard workspaceGoalVersion={1} task={task({ status: 'blocked', lastRejectionReason: 'no credentials' })} onSelect={() => {}} />,
+    )
+    expect(screen.getByTestId('task-why').textContent).toContain('no credentials')
+  })
+
+  it('still says a blocked task needs a person when nothing wrote a reason', () => {
+    render(<TaskCard workspaceGoalVersion={1} task={task({ status: 'blocked', lastRejectionReason: null })} onSelect={() => {}} />)
+    expect(screen.getByTestId('task-why').textContent).toMatch(/a person has to look at this/)
+  })
+
+  it('gives a waiting task who it is waiting on', () => {
+    render(
+      <TaskCard
+        workspaceGoalVersion={1}
+        task={task({
+          status: 'waiting',
+          runs: [
+            {
+              id: 'r1',
+              status: 'paused',
+              costUsd: null,
+              toolCalls: 0,
+              startedAt: new Date(0).toISOString(),
+              endedAt: null,
+              worktreePath: null,
+              checkpoint: null,
+              // `TaskRunSummary.waitingFor` is the recipient's NAME (`server/tasks.ts`), already
+              // resolved server-side -- not an object.
+              waitingFor: 'Bo',
+            },
+          ],
+        })}
+        onSelect={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('task-why').textContent).toContain('waiting for Bo')
+  })
+
+  it('says a waiting task waits for an answer when no run names a recipient', () => {
+    render(<TaskCard workspaceGoalVersion={1} task={task({ status: 'waiting', runs: [] })} onSelect={() => {}} />)
+    expect(screen.getByTestId('task-why').textContent).toContain('waiting for an answer')
+  })
+
+  it('gives a task sent back its rework reason', () => {
+    render(
+      <TaskCard
+        workspaceGoalVersion={1}
+        task={task({ status: 'rework', lastRejectionReason: 'tests fail on Windows' })}
+        onSelect={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('task-why').textContent).toContain('tests fail on Windows')
+  })
+
+  it('renders no why line at all when there is nothing to explain', () => {
+    render(<TaskCard workspaceGoalVersion={1} task={task({ status: 'running', lastRejectionReason: null })} onSelect={() => {}} />)
+    expect(screen.queryByTestId('task-why')).toBeNull()
+  })
+})
+
+describe('TaskDetailPanel (M45 R4: the expanded view)', () => {
+  const runRow = {
+    id: 'r1',
+    status: 'succeeded' as const,
+    costUsd: 0.25,
+    toolCalls: 3,
+    startedAt: new Date(0).toISOString(),
+    endedAt: new Date(1).toISOString(),
+    worktreePath: '/r/.slaveofai/worktrees/T-1',
+    checkpoint: null,
+    waitingFor: null,
+  }
+  const withRuns = task({ status: 'done', collectable: true, runs: [runRow] })
+
+  it('groups everything raw under Details, in the spec order', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={withRuns} onClose={() => {}} />)
+    expect(screen.getAllByTestId('details-group').map((group) => group.getAttribute('data-group'))).toEqual([
+      'run',
+      'messages',
+      'context',
+      'verification',
+      'cost',
+      'worktree',
+      'events',
+    ])
+  })
+
+  // A task has no model, no profile and no skill -- its RUN's worker does, and that is the worker
+  // panel. Three empty groups would be three promises this panel cannot keep.
+  it('renders no model, profile or skills group: a task has none of those', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={withRuns} onClose={() => {}} />)
+    const groups = screen.getAllByTestId('details-group').map((group) => group.getAttribute('data-group'))
+    expect(groups).not.toContain('model')
+    expect(groups).not.toContain('profile')
+    expect(groups).not.toContain('skills')
+  })
+
+  it("keeps the task ref and the goal stamp OUT of a group -- they are the row's identity", () => {
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={withRuns} onClose={() => {}} />)
+    for (const id of ['task-panel-ref', 'task-panel-priority', 'task-panel-goal-version', 'detail-status']) {
+      expect(screen.getByTestId(id).closest('[data-testid="details-group"]')).toBeNull()
+    }
+  })
+
+  it('reads the domain word in the header, with the raw status kept in title', () => {
+    render(
+      <TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ status: 'reviewing' })} onClose={() => {}} />,
+    )
+    expect(screen.getByTestId('detail-status').textContent).toBe('IN REVIEW')
+    expect(screen.getByTestId('detail-status').getAttribute('title')).toBe('reviewing')
+  })
+
+  it('shows the same one-line why the card shows', () => {
+    render(
+      <TaskDetailPanel
+        workspaceGoalVersion={0}
+        workspaceId="w1"
+        task={task({ status: 'blocked', lastRejectionReason: 'no credentials' })}
+        onClose={() => {}}
+      />,
+    )
+    const why = screen.getByTestId('task-why')
+    expect(why.textContent).toContain('no credentials')
+    expect(why.closest('[data-testid="details-group"]')).toBeNull()
+  })
+
+  it('does not fetch a run context until its group is opened', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ prompt: 'p', manifest: { kind: 'implementation', sections: [] } }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={withRuns} onClose={() => {}} />)
+
+    expect(screen.queryByTestId('run-context-open')).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    openGroup('context')
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('run-context-open'))
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/runs/r1/context')
+  })
+
+  it('keeps the per-run cost figures in the cost group and a one-line total on the run group', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={withRuns} onClose={() => {}} />)
+    // `run` leads the panel and is open on arrival.
+    expect(screen.getByTestId('run-row')).toBeTruthy()
+    expect(screen.getByTestId('run-total-cost').textContent).toContain('0.25')
+    expect(screen.queryByTestId('run-cost-row')).toBeNull()
+    openGroup('cost')
+    expect(screen.getByTestId('run-cost-row').textContent).toContain('0.25')
+  })
+
+  it('points the events group at the Activity page filtered to this task', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ id: 't1' })} onClose={() => {}} />)
+    openGroup('events')
+    expect(screen.getByTestId('task-events-link').getAttribute('href')).toBe('/w/w1/activity?tasks=t1')
   })
 })

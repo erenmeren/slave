@@ -664,6 +664,17 @@ describe('ActivityClient', () => {
     render(<ActivityClient workspaceId="w1" initial={page({})} />)
     expect(publishShellFacts).toHaveBeenCalledWith('w1', page({}).shellFacts)
   })
+
+  // M44 erratum E25 / M45 R5: the one page frame reaches this page too. `flush`, so it brings its
+  // landmark and its `page-shell` marker and none of its padding -- the page's own frame classes
+  // are unchanged, which is what keeps `gate:m14-fidelity`'s numbers where they are.
+  it('M44 E25 / M45 R5: renders inside the one page shell, with its own frame classes untouched', () => {
+    render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+    const shell = screen.getByTestId('page-shell')
+    expect(shell.className).toContain('flex-1')
+    expect(shell.className).not.toContain('p-3')
+  })
+
 })
 
 describe('Timeline scroll anchoring', () => {

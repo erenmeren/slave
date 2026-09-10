@@ -11,6 +11,7 @@ import type { ShellFacts } from '../../server/shell'
 import { HaltBanner } from '../HaltBanner'
 import { Sparkline } from '../Sparkline'
 import { EmptyState } from '../ui/EmptyState'
+import { PageShell } from '../ui/PageShell'
 import { PanelHeader } from '../ui/PanelHeader'
 import { FilterBar } from './FilterBar'
 import { Timeline, type TimelineHandle } from './Timeline'
@@ -173,7 +174,11 @@ export function ActivityClient({
   }
 
   return (
-    <div className="flex flex-1 flex-col">
+    // M44 erratum E25 / M45 R5: `flush`, because this page owns its own gutters and
+    // `gate:m14-fidelity` measures the timeline rule against them. The shell is here for its
+    // landmark and its `page-shell` marker; it REPLACES the page's own `flex flex-1 flex-col`
+    // wrapper rather than nesting inside it, since that wrapper carried nothing else.
+    <PageShell flush>
       {initial.workspace.haltedReason !== null && <HaltBanner reason={initial.workspace.haltedReason} />}
       <FilterBar
         slaves={initial.slaves}
@@ -279,6 +284,6 @@ export function ActivityClient({
           </div>
         </aside>
       </div>
-    </div>
+    </PageShell>
   )
 }

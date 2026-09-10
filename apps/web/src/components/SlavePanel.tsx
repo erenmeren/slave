@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { userSlaveStatus } from '@slave-of-ai/domain'
 import type { SlaveFeedEvent } from '../lib/feedSummary'
 import { providerLabel } from '../lib/providerLabel'
@@ -11,6 +12,7 @@ import { DOT } from './SlaveCard'
 import { ShellOnlyMark } from './ShellOnlyMark'
 import { Button } from './ui/Button'
 import { Chip } from './ui/Chip'
+import { DetailsGroup } from './ui/DetailsGroup'
 
 type ControlAction = 'pause' | 'resume' | 'stop' | 'message' | 'answer' | 'profile' | 'runtime-roles'
 
@@ -27,6 +29,19 @@ const PROFILE_ORIGIN_TEXT: Record<'slave' | 'company' | 'template', string> = {
   slave: "this worker's own profile",
   company: 'inherited from its roster row — saving writes an override on this worker',
   template: 'inherited from its template — saving writes an override on this worker',
+}
+
+/**
+ * What a runtime's GATE means for the worker that runs on it (spec §8 / Decision 8), in words.
+ *
+ * The header keeps `ShellOnlyMark`, which marks the one gate spec §8 asks to be marked and nothing
+ * else; this line is the whole fact, and it lives inside the Model group, where the raw value
+ * belongs -- `title` carries `all-tools`/`shell-only`/`none` verbatim.
+ */
+const GATE_TEXT: Record<'all-tools' | 'shell-only' | 'none', string> = {
+  'all-tools': 'every tool this runtime has',
+  'shell-only': 'a shell, and nothing else',
+  none: 'no tools at all',
 }
 
 /** The one parse of a typed role set, mirroring `set-runtime-roles`'s own (`cli.ts`): an empty
@@ -207,17 +222,6 @@ export function SlavePanel({
 
       <div className="text-sm text-text-1">{slave.taskTitle ?? <span className="text-text-3">idle</span>}</div>
 
-      <div className="flex items-center gap-3 font-mono text-xs text-text-2">
-        {/* `—`, the mark the Roster already uses for unknown -- never `$0.00`, which claims a
-          *  measurement this run never made (spec Decision 6; M12 Task 9, ruling R3). */}
-        <span data-testid="run-cost">{slave.costUsd === null ? '—' : `$${slave.costUsd.toFixed(2)}`}</span>
-        <span data-testid="run-tool-calls">{slave.toolCalls} calls</span>
-        {status === 'paused' && waitingFor === null && slave.pausedAtStep !== null && (
-          <span data-testid="run-paused-step">paused at step {slave.pausedAtStep}</span>
-        )}
-        {waitingFor !== null && <span data-testid="run-waiting-step">waiting at step {slave.pausedAtStep ?? 0}</span>}
-      </div>
-
       {errorText !== null && (
         <div role="alert" data-testid="panel-error" className="rounded border border-tone-blocked/40 bg-tone-blocked/10 px-2 py-1.5 text-xs text-tone-blocked">
           {errorText}
@@ -275,6 +279,99 @@ export function SlavePanel({
         </p>
       )}
 
+      {/* ===========================================================================================
+        * M45 R4. Above this line is what a simple row shows: who this worker is, what it is doing
+        * in the domain's own word, and the three controls. Below it, every raw value -- the
+        * provider kind, the gate, the profile's origin, the runtime-role members, the feed -- is
+        * folded into a group, and a closed group renders nothing at all. The live feed is the
+        * reason that matters here: it is the longest list on the page and nobody arriving to press
+        * `pause` needs it rendered.
+        * ======================================================================================= */}
+
+      {/* The one group this panel leads with: what the current run is doing right now. The money
+        * moved one group down, to Cost, so this line answers one question rather than two. */}
+      <DetailsGroup group="run" title="Run" defaultOpen>
+        <div className="flex items-center gap-3 font-mono text-xs text-text-2">
+          <span data-testid="run-tool-calls">{slave.toolCalls} calls</span>
+          {status === 'paused' && waitingFor === null && slave.pausedAtStep !== null && (
+            <span data-testid="run-paused-step">paused at step {slave.pausedAtStep}</span>
+          )}
+          {waitingFor !== null && <span data-testid="run-waiting-step">waiting at step {slave.pausedAtStep ?? 0}</span>}
+        </div>
+      </DetailsGroup>
+
+      {/* The provider chip in the header, expanded: the runtime's WORD, its raw kind in `title`,
+        * and what its gate actually permits (spec §8 / Decision 8) with the raw gate in `title`.
+        * `ShellOnlyMark` stays in the header rather than moving here -- spec §8 asks for that one
+        * fact to be marked "wherever a worker's runtime is shown", and a mark behind a click is
+        * not a mark. */}
+      <DetailsGroup group="model" title="Model">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
+          <dt className="text-text-3">runtime</dt>
+          <dd data-testid="model-provider" title={slave.provider ?? undefined} className="text-text-2">
+            {providerLabel(slave.provider)}
+          </dd>
+          <dt className="text-text-3">tools</dt>
+          <dd data-testid="model-gate" title={slave.gate ?? undefined} className="text-text-2">
+            {slave.gate === null ? '—' : GATE_TEXT[slave.gate]}
+          </dd>
+        </dl>
+      </DetailsGroup>
+
+      {/* M37 §6. The persona a run is given, written only by its control verb, through the route
+        * below. */}
+      <DetailsGroup group="profile" title="Profile">
+        <section data-testid="profile-block" className="flex flex-col gap-1">
+          <p data-testid="profile-origin" className="text-[10.5px] text-text-3">
+            {slave.profile === null ? 'no profile — this worker is sent no persona' : PROFILE_ORIGIN_TEXT[slave.profile.origin]}
+          </p>
+          {/* A textarea, so another party's Markdown is characters in a form control and never
+            * elements (spec §1: another party's text is data). */}
+          <textarea
+            data-testid="profile-input"
+            value={profileDraft}
+            onChange={(event) => setProfileDraft(event.target.value)}
+            className="rounded border border-line bg-bg-0 p-2 text-xs text-text-1"
+            rows={6}
+          />
+          <Button
+            variant="ghost"
+            data-testid="profile-save"
+            disabled={pending.has('profile')}
+            // A blank box means "clear my override", which only an explicit `null` expresses: an
+            // empty string would win the `??` chain and render nothing, leaving the roster row and
+            // the template unable to show through again.
+            onClick={() =>
+              void patch('profile', `/api/w/${workspaceId}/slaves/${slave.id}/profile`, {
+                profile: profileDraft.trim() === '' ? null : profileDraft,
+              })
+            }
+            className="self-end"
+          >
+            save
+          </Button>
+        </section>
+      </DetailsGroup>
+
+      {/* The card's own latest-skill chip, said in full. This is a LIVE fact about this run -- the
+        * `summary` of its most recent `Skill` tool call (`server/overview.ts`) -- and not a list of
+        * what this worker may use; that catalog is its own page. */}
+      <DetailsGroup group="skills" title="Skills">
+        <p className="text-xs text-text-2">
+          <span data-testid="panel-skill" className="font-mono">{slave.skill ?? '—'}</span>
+        </p>
+        <p className="text-[10.5px] text-text-3">
+          the latest skill this run used; the catalog is on{' '}
+          <Link data-testid="panel-skill-catalog" href="/workforce?tab=skills" className="underline decoration-dotted hover:text-text-1">
+            Workforce → Skills
+          </Link>
+        </p>
+      </DetailsGroup>
+
+      {/* Messages holds BOTH writes, and the runtime roles belong here rather than ungrouped above:
+        * an empty role set is precisely what makes a worker unreachable by a role-addressed message
+        * (spec §7), so the mailbox and the roles that fill it read as one thing. */}
+      <DetailsGroup group="messages" title="Messages">
       {showMessageBox && (
         <section data-testid="message-box" className="flex flex-col gap-1">
           <h3 className="text-xs uppercase tracking-wide text-text-3">Message</h3>
@@ -304,40 +401,6 @@ export function SlavePanel({
           )}
         </section>
       )}
-
-      {/* M37 §6. The persona a run is given, and the roles it can be dispatched as -- both written
-        * only by their control verbs, through the two routes below. */}
-      <section data-testid="profile-block" className="flex flex-col gap-1">
-        <h3 className="text-xs uppercase tracking-wide text-text-3">Profile</h3>
-        <p data-testid="profile-origin" className="text-[10.5px] text-text-3">
-          {slave.profile === null ? 'no profile — this worker is sent no persona' : PROFILE_ORIGIN_TEXT[slave.profile.origin]}
-        </p>
-        {/* A textarea, so another party's Markdown is characters in a form control and never
-          * elements (spec §1: another party's text is data). */}
-        <textarea
-          data-testid="profile-input"
-          value={profileDraft}
-          onChange={(event) => setProfileDraft(event.target.value)}
-          className="rounded border border-line bg-bg-0 p-2 text-xs text-text-1"
-          rows={6}
-        />
-        <Button
-          variant="ghost"
-          data-testid="profile-save"
-          disabled={pending.has('profile')}
-          // A blank box means "clear my override", which only an explicit `null` expresses: an
-          // empty string would win the `??` chain and render nothing, leaving the roster row and
-          // the template unable to show through again.
-          onClick={() =>
-            void patch('profile', `/api/w/${workspaceId}/slaves/${slave.id}/profile`, {
-              profile: profileDraft.trim() === '' ? null : profileDraft,
-            })
-          }
-          className="self-end"
-        >
-          save
-        </Button>
-      </section>
 
       <section data-testid="runtime-roles-block" className="flex flex-col gap-1">
         <h3 className="text-xs uppercase tracking-wide text-text-3">Runtime roles</h3>
@@ -369,21 +432,33 @@ export function SlavePanel({
           save
         </Button>
       </section>
+      </DetailsGroup>
 
-      <section className="flex flex-1 flex-col gap-1 overflow-y-auto">
-        <h3 className="text-xs uppercase tracking-wide text-text-3">Live feed</h3>
-        {feed.length === 0 ? (
-          <p className="text-xs text-text-3">no events yet</p>
-        ) : (
-          <ul className="flex flex-col gap-1">
-            {feed.map((event) => (
-              <li key={event.seq} data-testid="feed-event" className="font-mono text-xs text-text-2">
-                {event.summary}
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {/* `—`, the mark the Roster already uses for unknown -- never `$0.00`, which claims a
+        * measurement this run never made (spec Decision 6; M12 Task 9, ruling R3). */}
+      <DetailsGroup group="cost" title="Cost">
+        <span data-testid="run-cost" className="font-mono text-xs text-text-2">
+          {slave.costUsd === null ? '—' : `$${slave.costUsd.toFixed(2)}`}
+        </span>
+      </DetailsGroup>
+
+      {/* The longest list on the page, and the one nobody arriving to press `pause` needs: a closed
+        * group renders none of it. */}
+      <DetailsGroup group="events" title="Events">
+        <section className="flex flex-1 flex-col gap-1 overflow-y-auto">
+          {feed.length === 0 ? (
+            <p className="text-xs text-text-3">no events yet</p>
+          ) : (
+            <ul className="flex flex-col gap-1">
+              {feed.map((event) => (
+                <li key={event.seq} data-testid="feed-event" className="font-mono text-xs text-text-2">
+                  {event.summary}
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      </DetailsGroup>
     </aside>
   )
 }

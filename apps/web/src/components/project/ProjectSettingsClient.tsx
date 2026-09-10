@@ -11,6 +11,7 @@ import { EmergencyStopButton } from '../EmergencyStopButton'
 import { HaltBanner } from '../HaltBanner'
 import { PermissionMatrix } from '../PermissionMatrix'
 import { DangerConfirm } from '../ui/DangerConfirm'
+import { PageShell } from '../ui/PageShell'
 import { Panel } from '../ui/Panel'
 import { GoalPanel } from './GoalPanel'
 import { RuntimePanel } from './RuntimePanel'
@@ -52,73 +53,79 @@ export function ProjectSettingsClient({
   useEffect((): (() => void) => () => publishShellFacts(workspace.id, null), [workspace.id])
 
   return (
-    <div className="flex flex-col gap-4 p-4">
-      {workspace.haltedReason !== null && <HaltBanner reason={workspace.haltedReason} />}
-      <GoalPanel
-        workspaceId={workspace.id}
-        goal={workspace.goal}
-        goalVersion={workspace.goalVersion}
-        // The re-plan trigger's own question (`dispatchPlanning` check 2): every task the project
-        // has, terminal ones included, which is exactly what `projectFootprint` counts.
-        boardTaskCount={footprint.tasks}
-        // `tick` returns before `dispatchPlanning` while a halt stands, so the re-plan sentence
-        // must not be said on a halted project. Off the same field the halt banner above reads.
-        halted={workspace.haltedReason !== null}
-      />
-      <RuntimePanel
-        key={`${workspace.provider ?? ''}|${workspace.budgetUsd ?? ''}`}
-        workspaceId={workspace.id}
-        provider={workspace.provider}
-        budgetUsd={workspace.budgetUsd}
-        costBlindBudgeted={workspace.costBlindBudgeted}
-        limits={{ maxConcurrentRuns: workspace.maxConcurrentRuns, runTimeoutMs: workspace.runTimeoutMs, maxAttempts: workspace.maxAttempts }}
-      />
-      <Panel title="slave permissions">
-        <PermissionMatrix sections={permissions === null ? [] : [permissions]} />
-      </Panel>
-      <Panel title="danger zone">
-        <div className="flex flex-col gap-3">
-          {!workspace.archived && (
+    // M44 erratum E25 / M45 R5: the shell WRAPS this page's own frame rather than replacing it --
+    // `flush` drops the shell's `gap-4 p-3 md:p-4` so the page keeps its own padding and gap
+    // exactly, and not a pixel moves. The shell is here for its landmark and its `page-shell`
+    // marker.
+    <PageShell flush>
+      <div className="flex flex-col gap-4 p-4">
+        {workspace.haltedReason !== null && <HaltBanner reason={workspace.haltedReason} />}
+        <GoalPanel
+          workspaceId={workspace.id}
+          goal={workspace.goal}
+          goalVersion={workspace.goalVersion}
+          // The re-plan trigger's own question (`dispatchPlanning` check 2): every task the project
+          // has, terminal ones included, which is exactly what `projectFootprint` counts.
+          boardTaskCount={footprint.tasks}
+          // `tick` returns before `dispatchPlanning` while a halt stands, so the re-plan sentence
+          // must not be said on a halted project. Off the same field the halt banner above reads.
+          halted={workspace.haltedReason !== null}
+        />
+        <RuntimePanel
+          key={`${workspace.provider ?? ''}|${workspace.budgetUsd ?? ''}`}
+          workspaceId={workspace.id}
+          provider={workspace.provider}
+          budgetUsd={workspace.budgetUsd}
+          costBlindBudgeted={workspace.costBlindBudgeted}
+          limits={{ maxConcurrentRuns: workspace.maxConcurrentRuns, runTimeoutMs: workspace.runTimeoutMs, maxAttempts: workspace.maxAttempts }}
+        />
+        <Panel title="slave permissions">
+          <PermissionMatrix sections={permissions === null ? [] : [permissions]} />
+        </Panel>
+        <Panel title="danger zone">
+          <div className="flex flex-col gap-3">
+            {!workspace.archived && (
+              <div className="flex items-center gap-3 rounded-card border border-tone-blocked/22 p-3">
+                <span className="text-xs text-text-2">stop every run in this project</span>
+                <span className="ml-auto">
+                  <EmergencyStopButton workspaceId={workspace.id} halted={workspace.haltedReason !== null} />
+                </span>
+              </div>
+            )}
             <div className="flex items-center gap-3 rounded-card border border-tone-blocked/22 p-3">
-              <span className="text-xs text-text-2">stop every run in this project</span>
-              <span className="ml-auto">
-                <EmergencyStopButton workspaceId={workspace.id} halted={workspace.haltedReason !== null} />
+              <span className="text-xs text-text-2">
+                {workspace.archived ? 'restore this project to active use' : 'archive this project'}
+              </span>
+              <span className="ml-auto flex flex-col items-end gap-1">
+                {workspace.archived ? (
+                  <Button variant="primary" size="sm" data-testid="restore-project" onClick={() => void restore()}>
+                    restore project
+                  </Button>
+                ) : (
+                  <DangerConfirm
+                    label="archive project"
+                    testId="archive-project"
+                    confirmText={
+                      `archives ${workspace.name}: ${plural(footprint.departments, 'department')}, ${plural(footprint.slaves, 'slave')}, ` +
+                      `${plural(footprint.tasks, 'task')}, ${plural(footprint.runs, 'run')} stay on record; nothing runs until you restore it`
+                    }
+                    onConfirm={async () => {
+                      const error = await sendControl(`/api/w/${workspace.id}/archive`, { method: 'POST' })
+                      if (error === null) router.push('/')
+                      return error
+                    }}
+                  />
+                )}
+                {restoreError !== null && (
+                  <span role="alert" data-testid="restore-project-error" className="text-xs text-tone-blocked">
+                    {restoreError}
+                  </span>
+                )}
               </span>
             </div>
-          )}
-          <div className="flex items-center gap-3 rounded-card border border-tone-blocked/22 p-3">
-            <span className="text-xs text-text-2">
-              {workspace.archived ? 'restore this project to active use' : 'archive this project'}
-            </span>
-            <span className="ml-auto flex flex-col items-end gap-1">
-              {workspace.archived ? (
-                <Button variant="primary" size="sm" data-testid="restore-project" onClick={() => void restore()}>
-                  restore project
-                </Button>
-              ) : (
-                <DangerConfirm
-                  label="archive project"
-                  testId="archive-project"
-                  confirmText={
-                    `archives ${workspace.name}: ${plural(footprint.departments, 'department')}, ${plural(footprint.slaves, 'slave')}, ` +
-                    `${plural(footprint.tasks, 'task')}, ${plural(footprint.runs, 'run')} stay on record; nothing runs until you restore it`
-                  }
-                  onConfirm={async () => {
-                    const error = await sendControl(`/api/w/${workspace.id}/archive`, { method: 'POST' })
-                    if (error === null) router.push('/')
-                    return error
-                  }}
-                />
-              )}
-              {restoreError !== null && (
-                <span role="alert" data-testid="restore-project-error" className="text-xs text-tone-blocked">
-                  {restoreError}
-                </span>
-              )}
-            </span>
           </div>
-        </div>
-      </Panel>
-    </div>
+        </Panel>
+      </div>
+    </PageShell>
   )
 }

@@ -5,6 +5,7 @@ import type { BoundaryMode } from '../lib/authEnv'
 import { DangerZone } from './DangerZone'
 import { LogoutButton } from './LogoutButton'
 import { ProviderAdapterCards } from './ProviderAdapterCards'
+import { PageShell } from './ui/PageShell'
 import { Panel } from './ui/Panel'
 
 /** The GLOBAL Settings page's root (M24 §4): three panels, none of them scoped to a project --
@@ -28,17 +29,23 @@ export function SettingsClient({
   readonly posture: string
 }): React.JSX.Element {
   return (
-    <div className="flex flex-col gap-4 p-4">
-      <Panel title="provider adapters">
-        <ProviderAdapterCards adapters={adapters} />
-      </Panel>
-      <Panel title="security">
-        <p data-testid="security-posture" className="font-mono text-[10px] text-text-3">
-          {posture}
-        </p>
-        {mode === 'accounts' && <LogoutButton />}
-      </Panel>
-      <DangerZone showReseed={showReseed} />
-    </div>
+    // M44 erratum E25 / M45 R5: the shell WRAPS this page's own frame rather than replacing it --
+    // `flush` drops the shell's `gap-4 p-3 md:p-4`, so the page keeps its own padding, gap and
+    // width exactly and not a pixel moves. The shell is here for its landmark and its
+    // `page-shell` marker.
+    <PageShell flush>
+      <div className="flex flex-col gap-4 p-4">
+        <Panel title="provider adapters">
+          <ProviderAdapterCards adapters={adapters} />
+        </Panel>
+        <Panel title="security">
+          <p data-testid="security-posture" className="font-mono text-[10px] text-text-3">
+            {posture}
+          </p>
+          {mode === 'accounts' && <LogoutButton />}
+        </Panel>
+        <DangerZone showReseed={showReseed} />
+      </div>
+    </PageShell>
   )
 }

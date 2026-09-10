@@ -543,3 +543,16 @@ describe('the handoff project card', () => {
     expect(screen.queryByTestId('team-overflow')).toBeNull()
   })
 })
+
+// M44 erratum E25 / M45 R5: the one page frame reaches this page too. `flush`, so it brings its
+// landmark and its `page-shell` marker and none of its padding -- the frame's own classes are
+// unchanged, which is what keeps `gate:m14-fidelity`'s numbers where they are.
+describe('ProjectsClient (M44 E25 / M45 R5)', () => {
+  it('renders inside the one page shell, with its own frame classes untouched', () => {
+    render(<TestProjectsClient projects={[project({ id: 'w1' })]} companies={companies} />)
+    const shell = screen.getByTestId('page-shell')
+    expect(shell.className).not.toContain('p-3')
+    // The page's own frame -- and its `px-[20px] pt-[18px]` gutters below it -- are untouched.
+    expect(shell.querySelector(':scope > div')?.className).toBe('flex flex-col')
+  })
+})

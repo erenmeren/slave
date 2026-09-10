@@ -1,6 +1,6 @@
 import { TASK_STATUSES } from '@slave-of-ai/db'
 import type { TaskStatus } from '@slave-of-ai/domain'
-import { cardStateForTask, CARD_STATE_TONE, toneForTaskStatus } from '../lib/tones'
+import { cardStateForTask, CARD_STATE_TONE, taskStatusWord, toneForTaskStatus } from '../lib/tones'
 import type { TaskBoardItem } from '../server/tasks'
 import { AvatarTile } from './ui/AvatarTile'
 import { StatusPill, TONE_BORDER_SOLID, TONE_DOT, TONE_FLASH_COLOR, TONE_TEXT, type StatusTone } from './ui/StatusPill'
@@ -48,6 +48,31 @@ export function isStale(goalVersion: number | null, workspaceGoalVersion: number
 }
 
 /**
+ * The one-line reason a task is not moving, or `null` when it is (M45 R4).
+ *
+ * Four states owe a person a sentence and no other does: `blocked` says what stopped it, `waiting`
+ * says who it waits on, `rework` says what came back from review, and `cancelled` says why it left
+ * the board. `running` and `done` explain themselves; anything else a person might want is in the
+ * expanded view, under a group.
+ *
+ * The reason column is `lastRejectionReason` for all three of the states that have one -- M40 §6
+ * documents that `cancelTask` writes the cancellation into the same column a review rejection
+ * uses, which is exactly why the WORD in front of it differs per state and the panel labels it
+ * apart.
+ */
+export function whyOf(task: TaskBoardItem): string | null {
+  if (task.status === 'blocked') return task.lastRejectionReason ?? 'blocked — a person has to look at this'
+  if (task.status === 'rework' || task.status === 'cancelled') return task.lastRejectionReason
+  if (task.status === 'waiting') {
+    // `TaskRunSummary.waitingFor` is already the recipient's NAME, resolved server-side
+    // (`server/tasks.ts`); a task can hold several runs and only the paused one carries it.
+    const waiting = task.runs.find((run) => run.waitingFor !== null)?.waitingFor
+    return waiting === undefined || waiting === null ? 'waiting for an answer' : `waiting for ${waiting}`
+  }
+  return null
+}
+
+/**
  * The handoff's compact card (design README §3a.3): title, status pill, assignee chip, step
  * counter (`attempt/maxAttempts`) — the id and priority live in the detail panel now (M24 §5.4).
  * Its state — and so its dot/pill tone — comes from
@@ -69,8 +94,9 @@ export function TaskCard({
   readonly onSelect: (id: string) => void
 }): React.JSX.Element {
   const state = cardStateForTask(task.status)
-  const { tone, label, pulse } = CARD_STATE_TONE[state]
+  const { tone, pulse } = CARD_STATE_TONE[state]
   const stale = isStale(task.goalVersion, workspaceGoalVersion)
+  const why = whyOf(task)
 
   return (
     <button
@@ -97,19 +123,30 @@ export function TaskCard({
               stale
             </span>
           )}
-          <StatusPill tone={tone} label={label} pulse={pulse} />
+          {/* M45 R4: the TONE is still the board column's (`cardStateForTask`, four documented
+            * exceptions and all) and the WORD is now the domain's -- the colour groups the card,
+            * the sentence names the state. `StatusPill` takes no testid of its own, so the wrapper
+            * is what Task 5's gate reads; the raw status is on the card's `data-status`, and in
+            * the pill's own `title`. */}
+          <span data-testid="task-status-word">
+            <StatusPill tone={tone} label={taskStatusWord(task.status, task.integratedAt !== null)} pulse={pulse} title={task.status} />
+          </span>
         </span>
       </span>
       <span data-testid="task-title" className="text-[11.5px] leading-[1.35] text-[#dbe1ea]">
         {task.title}
       </span>
-      {task.status === 'cancelled' && task.lastRejectionReason !== null && (
-        // WHY it is off the board, on the card itself: `cancelTask` keeps the reason on the task,
-        // and a cancelled card with no reason is the one an operator has to open to understand.
-        // Another party's text -- a re-plan's own sentence, or an operator's -- as JSX children,
-        // so it is characters and never elements (spec §1).
-        <span data-testid="task-cancel-reason" className="text-[10px] leading-[1.35] text-text-3">
-          {task.lastRejectionReason}
+      {why !== null && (
+        // M45 R4: the ONE line the simple row owes a person -- why this is not moving. It REPLACES
+        // the cancelled-only `task-cancel-reason` line, so there is one "why" on a card rather than
+        // two lines that would each have to be found. Another party's text -- a re-plan's own
+        // sentence, a reviewer's, an operator's -- as JSX children, so it is characters and never
+        // elements (spec §1).
+        <span
+          data-testid="task-why"
+          className={`text-[10px] leading-[1.35] ${task.status === 'cancelled' ? 'text-text-3' : 'text-tone-waiting'}`}
+        >
+          {why}
         </span>
       )}
       <span className="mt-[8px] flex items-center gap-[6px]">

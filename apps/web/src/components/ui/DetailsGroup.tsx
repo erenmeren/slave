@@ -1,0 +1,75 @@
+'use client'
+
+import { useId, useState } from 'react'
+import { SECTION_LABEL_CLASS } from './SectionLabel'
+
+/**
+ * The ten groups M45 R4 names, in the order a panel shows them. A closed union so a group name
+ * cannot be typed twice differently in two panels -- the gate reads `data-group`, and two
+ * spellings of "verification" would be two groups to it.
+ */
+export type DetailsGroupName =
+  | 'run'
+  | 'model'
+  | 'profile'
+  | 'skills'
+  | 'messages'
+  | 'context'
+  | 'verification'
+  | 'cost'
+  | 'worktree'
+  | 'events'
+
+/**
+ * One `Details ▾` group (M45 R4).
+ *
+ * Children are rendered only while OPEN, and that is the point rather than a nicety: three of
+ * these groups fetch on open (`run-context`, the artifacts, the live feed), and a panel that
+ * mounted ten collapsed groups with their subtrees rendered would issue every one of those
+ * requests to show a person nothing. It is also what makes the raw values honest -- ids, hashes
+ * and statuses live INSIDE a group, so the simple row above stays readable and nothing is hidden,
+ * only folded.
+ *
+ * A native `<details>` renders its subtree regardless of `open`, so this is a button and a region
+ * instead -- and it therefore owes a screen reader by hand the state a `<summary>` would have
+ * given for free: `aria-expanded`, `aria-controls`, and a region that names its own toggle.
+ */
+export function DetailsGroup({
+  group,
+  title,
+  defaultOpen = false,
+  children,
+}: {
+  readonly group: DetailsGroupName
+  readonly title: string
+  readonly defaultOpen?: boolean
+  readonly children: React.ReactNode
+}): React.JSX.Element {
+  const [open, setOpen] = useState(defaultOpen)
+  const id = useId()
+  const toggleId = `${id}-toggle`
+  const bodyId = `${id}-body`
+  return (
+    <section data-testid="details-group" data-group={group} data-open={open} className="flex flex-col gap-1">
+      <button
+        type="button"
+        id={toggleId}
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => setOpen((current) => !current)}
+        className={`flex items-center gap-1 text-left ${SECTION_LABEL_CLASS} hover:text-text-2`}
+      >
+        <span>{title}</span>
+        {/* The marker is decoration: `aria-expanded` above is what a screen reader reads, and a
+          * bare `▾` in the accessible name would make `getByRole('button', { name })` -- and a
+          * person listening -- read punctuation. */}
+        <span aria-hidden>{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div id={bodyId} role="group" aria-labelledby={toggleId} className="flex flex-col gap-2">
+          {children}
+        </div>
+      )}
+    </section>
+  )
+}

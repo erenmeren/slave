@@ -407,3 +407,16 @@ describe('OfficeClient', () => {
     expect(screen.queryByTestId('office-focus')).toBeNull()
   })
 })
+
+// M44 erratum E25 / M45 R5: the one page frame reaches this page too. `flush`, so it brings its
+// landmark and its `page-shell` marker and none of its padding -- the frame's own classes are
+// unchanged, which is what keeps `gate:m14-fidelity`'s numbers where they are.
+describe('OfficeClient (M44 E25 / M45 R5)', () => {
+  it('renders inside the one page shell, with its own frame classes untouched', async () => {
+    await mount()
+    const shell = screen.getByTestId('page-shell')
+    expect(shell.className).not.toContain('p-3')
+    // The office is untouched inside the shell: the canvas keeps its own box.
+    expect(shell.querySelector(':scope > div')?.className).toContain('h-[calc(100vh-52px-41px)]')
+  })
+})

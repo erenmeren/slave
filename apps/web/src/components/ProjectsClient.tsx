@@ -19,6 +19,7 @@ import { Card } from './ui/Card'
 import { Chip } from './ui/Chip'
 import { Panel } from './ui/Panel'
 import { ProgressBar } from './ui/ProgressBar'
+import { PageShell } from './ui/PageShell'
 import { SectionLabel } from './ui/SectionLabel'
 import { StatStrip } from './ui/StatStrip'
 import { StatusPill, type StatusTone } from './ui/StatusPill'
@@ -245,76 +246,82 @@ export function ProjectsClient({
   const showArchived = searchParams.get('archived') === '1'
 
   return (
-    <div className="flex flex-col">
-      <div className="flex items-center justify-between px-[20px] pt-[18px]">
-        <SectionLabel>Projects</SectionLabel>
-        <span className="flex items-center gap-3">
-          <label className="flex items-center gap-[6px] text-xs text-text-2">
-            <input
-              type="checkbox"
-              data-testid="show-archived"
-              checked={showArchived}
-              onChange={(event) => {
-                const query = new URLSearchParams(searchParams)
-                if (event.target.checked) query.set('archived', '1')
-                else query.delete('archived')
-                const search = query.toString()
-                router.replace(search === '' ? '/' : `/?${search}`)
-              }}
+    // M44 erratum E25 / M45 R5: the shell WRAPS this page's own frame rather than replacing it --
+    // `flush` drops the shell's `gap-4 p-3 md:p-4`, so the page keeps its own padding, gap and
+    // width exactly and not a pixel moves. The shell is here for its landmark and its
+    // `page-shell` marker.
+    <PageShell flush>
+      <div className="flex flex-col">
+        <div className="flex items-center justify-between px-[20px] pt-[18px]">
+          <SectionLabel>Projects</SectionLabel>
+          <span className="flex items-center gap-3">
+            <label className="flex items-center gap-[6px] text-xs text-text-2">
+              <input
+                type="checkbox"
+                data-testid="show-archived"
+                checked={showArchived}
+                onChange={(event) => {
+                  const query = new URLSearchParams(searchParams)
+                  if (event.target.checked) query.set('archived', '1')
+                  else query.delete('archived')
+                  const search = query.toString()
+                  router.replace(search === '' ? '/' : `/?${search}`)
+                }}
+              />
+              show archived
+            </label>
+            <Button variant="primary" size="sm" data-testid="new-project" onClick={() => setNewOpen(true)}>
+              + New project
+            </Button>
+          </span>
+        </div>
+        <div className="grid grid-cols-1 gap-[14px] p-[18px_20px] md:grid-cols-3">
+          {projects.map((project) => (
+            <ProjectCard
+              key={project.id}
+              project={project}
+              companies={companies}
+              assigning={assigningWorkspaceId === project.id}
+              onAssign={() => setAssigningWorkspaceId(project.id)}
+              onCloseAssign={() => setAssigningWorkspaceId(null)}
             />
-            show archived
-          </label>
-          <Button variant="primary" size="sm" data-testid="new-project" onClick={() => setNewOpen(true)}>
-            + New project
-          </Button>
-        </span>
+          ))}
+        </div>
+        {/* M44 R1/E20: the ONE section here that is not about a single project. The team catalog
+          * that used to sit in this slot moved to Workforce -> Catalog; Analytics left the sidebar
+          * and its all-workspaces view arrived here instead, because a spend figure is a fact about
+          * the projects above it and belongs where somebody can act on it. `/analytics` keeps its
+          * route, its `?workspace=` scope and this link (`docs/ia.md`). */}
+        <section data-testid="all-projects-analytics" className="flex flex-col gap-4 px-[20px] pb-[20px]">
+          <Panel
+            title="across every project"
+            action={
+              <Link href="/analytics" className="text-[10px] text-text-3 hover:text-text-1">
+                all →
+              </Link>
+            }
+          >
+            <KpiStrip kpis={kpis} />
+          </Panel>
+        </section>
+        <NewProjectDrawer
+          open={newOpen}
+          onClose={() => {
+            setNewOpen(false)
+            // Ruled minor (M24 final review): `?new=1` opened this drawer on load -- closing it
+            // without dropping the param left it in the URL to reopen the drawer on the next
+            // reload, even after the operator dismissed it on purpose. Dropped by MERGING into the
+            // current query (R13's rule, the same as `show archived` above): a bare `'/'` would
+            // also throw away `?archived=1`.
+            if (searchParams.get('new') === '1') {
+              const query = new URLSearchParams(searchParams)
+              query.delete('new')
+              const search = query.toString()
+              router.replace(search === '' ? '/' : `/?${search}`)
+            }
+          }}
+        />
       </div>
-      <div className="grid grid-cols-1 gap-[14px] p-[18px_20px] md:grid-cols-3">
-        {projects.map((project) => (
-          <ProjectCard
-            key={project.id}
-            project={project}
-            companies={companies}
-            assigning={assigningWorkspaceId === project.id}
-            onAssign={() => setAssigningWorkspaceId(project.id)}
-            onCloseAssign={() => setAssigningWorkspaceId(null)}
-          />
-        ))}
-      </div>
-      {/* M44 R1/E20: the ONE section here that is not about a single project. The team catalog
-        * that used to sit in this slot moved to Workforce -> Catalog; Analytics left the sidebar
-        * and its all-workspaces view arrived here instead, because a spend figure is a fact about
-        * the projects above it and belongs where somebody can act on it. `/analytics` keeps its
-        * route, its `?workspace=` scope and this link (`docs/ia.md`). */}
-      <section data-testid="all-projects-analytics" className="flex flex-col gap-4 px-[20px] pb-[20px]">
-        <Panel
-          title="across every project"
-          action={
-            <Link href="/analytics" className="text-[10px] text-text-3 hover:text-text-1">
-              all →
-            </Link>
-          }
-        >
-          <KpiStrip kpis={kpis} />
-        </Panel>
-      </section>
-      <NewProjectDrawer
-        open={newOpen}
-        onClose={() => {
-          setNewOpen(false)
-          // Ruled minor (M24 final review): `?new=1` opened this drawer on load -- closing it
-          // without dropping the param left it in the URL to reopen the drawer on the next
-          // reload, even after the operator dismissed it on purpose. Dropped by MERGING into the
-          // current query (R13's rule, the same as `show archived` above): a bare `'/'` would
-          // also throw away `?archived=1`.
-          if (searchParams.get('new') === '1') {
-            const query = new URLSearchParams(searchParams)
-            query.delete('new')
-            const search = query.toString()
-            router.replace(search === '' ? '/' : `/?${search}`)
-          }
-        }}
-      />
-    </div>
+    </PageShell>
   )
 }

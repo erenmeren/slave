@@ -87,8 +87,10 @@ describe('AnalyticsClient', () => {
   // h1 was clipped against the sidebar edge and both panels ran flush into the viewport. `p-4` is
   // the padding Settings and Slaves already use.
   it('pads the page the way the other global pages do', () => {
-    const { container } = render(<AnalyticsClient snapshot={snapshot()} workspaces={workspaces} seeded={false} />)
-    expect(container.firstElementChild?.className).toContain('p-4')
+    render(<AnalyticsClient snapshot={snapshot()} workspaces={workspaces} seeded={false} />)
+    // M45 R5: the page's own frame is one level in now, under the flush `PageShell`. The padding
+    // is still the page's own -- that is exactly what `flush` is for.
+    expect(screen.getByTestId('page-shell').querySelector(':scope > div')?.className).toContain('p-4')
   })
 
   it('shows the seeded caption only on the seeded workspace', () => {
@@ -106,5 +108,17 @@ describe('AnalyticsClient', () => {
 
     fireEvent.change(screen.getByLabelText('workspace'), { target: { value: '' } })
     expect(routerPush).toHaveBeenCalledWith('/analytics')
+  })
+})
+
+// M44 erratum E25 / M45 R5: the one page frame reaches this page too. `flush`, so it brings its
+// landmark and its `page-shell` marker and none of its padding -- the frame's own classes are
+// unchanged, which is what keeps `gate:m14-fidelity`'s numbers where they are.
+describe('AnalyticsClient (M44 E25 / M45 R5)', () => {
+  it('renders inside the one page shell, with its own frame classes untouched', () => {
+    render(<AnalyticsClient snapshot={snapshot()} workspaces={workspaces} seeded={false} />)
+    const shell = screen.getByTestId('page-shell')
+    expect(shell.className).not.toContain('p-3')
+    expect(shell.querySelector(':scope > div')?.className).toBe('flex flex-col gap-4 p-4')
   })
 })

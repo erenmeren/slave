@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import type { Manifest } from '@slave-of-ai/domain'
 import { onUnauthorized } from '../lib/onUnauthorized'
@@ -6,9 +7,10 @@ import { errorMessage, sendControl } from '../lib/postControl'
 import { sectionLine } from '../lib/runContextSummary'
 import { priorityChip } from '../lib/taskColumns'
 import type { TaskBoardItem } from '../server/tasks'
-import { TASK_STATUS_TEXT, goalStampText, isStale } from './TaskCard'
+import { taskStatusWord } from '../lib/tones'
+import { TASK_STATUS_TEXT, goalStampText, isStale, whyOf } from './TaskCard'
 import { Button } from './ui/Button'
-import { SectionLabel } from './ui/SectionLabel'
+import { DetailsGroup } from './ui/DetailsGroup'
 import { TONE_TEXT } from './ui/StatusPill'
 
 interface OpenArtifact {
@@ -25,6 +27,21 @@ interface OpenRunContext {
   readonly manifest: Manifest
 }
 
+/**
+ * A task, expanded (M45 R4).
+ *
+ * Above the fold, ungrouped, is the row's IDENTITY -- the ref, the priority, the goal stamp, the
+ * stale badge, the title, the projected status word, the awaiting-integration marker, the
+ * description, and the one line about why it is not moving. Everything else is folded into a
+ * `DetailsGroup`, and a closed group renders nothing at all: the artifacts and the run contexts
+ * are fetched on demand, and ten groups that all rendered would have issued every one of those
+ * requests to show a person nothing.
+ *
+ * There is NO `model`, `profile` or `skills` group here, and that is deliberate rather than an
+ * omission: a task has no model, no profile and no skill. Its RUN's worker has all three, and the
+ * worker panel (`SlavePanel`) is where they live. Three empty groups would be three promises this
+ * panel cannot keep.
+ */
 export function TaskDetailPanel({
   task,
   workspaceId,
@@ -51,6 +68,14 @@ export function TaskDetailPanel({
   // M23 B4 (controller ruling): `task.collectable` is computed server-side on the DTO
   // (`buildTasksSnapshot`) -- this panel never imports `TERMINAL` from `@slave-of-ai/domain`.
   const collectable = task.collectable
+
+  // M45 R4: the one line the Runs group keeps once the per-run figures move into Cost. Runs whose
+  // runtime reported nothing are counted apart rather than folded in as zero -- "we spent $0.42
+  // and do not know about two more runs" is a different fact from "we spent $0.42".
+  const measuredRuns = task.runs.filter((run) => run.costUsd !== null)
+  const totalCostUsd = measuredRuns.reduce((sum, run) => sum + (run.costUsd ?? 0), 0)
+  const unmeasuredRuns = task.runs.length - measuredRuns.length
+  const why = whyOf(task)
 
   const collect = async (): Promise<void> => {
     setPending(true)
@@ -154,8 +179,10 @@ export function TaskDetailPanel({
             )}
           </p>
           <h2 className="text-sm font-medium text-text-1">{task.title}</h2>
-          <span data-testid="detail-status" className={`text-xs ${TASK_STATUS_TEXT[task.status]}`}>
-            {task.status}
+          {/* M45 R4: the domain's word, the board column's colour, and the raw status kept in
+            * `title` where a person can hover it and a gate can read it. */}
+          <span data-testid="detail-status" title={task.status} className={`text-xs ${TASK_STATUS_TEXT[task.status]}`}>
+            {taskStatusWord(task.status, task.integratedAt !== null)}
           </span>
           {/* M35 t2: `done` means reviewed, not necessarily on the base branch yet -- the
               `!autoMerge` path leaves `integratedAt` null on purpose (branch/worktree left for a
@@ -174,108 +201,123 @@ export function TaskDetailPanel({
 
       <p className="text-sm text-text-2">{task.description}</p>
 
-      <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
-        <dt className="text-text-3">attempt</dt>
-        <dd className="font-mono text-text-2">
-          {task.attempt}/{task.maxAttempts}
-        </dd>
-        <dt className="text-text-3">branch</dt>
-        <dd className="font-mono text-text-2">{task.branch ?? '—'}</dd>
-        {task.lastRejectionReason !== null && (
-          // One column, two meanings, named apart (M40 §6): `cancelTask` writes the CANCELLATION
-          // reason into `lastRejectionReason`, and labelling that "rejection" would tell an
-          // operator a reviewer turned the work down when nobody reviewed it at all. Muted for a
-          // cancelled task, like its card: nothing here needs anybody.
-          <>
-            <dt className="text-text-3">{task.status === 'cancelled' ? 'cancelled' : 'rejection'}</dt>
-            <dd
-              data-testid={task.status === 'cancelled' ? 'detail-cancel-reason' : 'detail-rejection-reason'}
-              className={task.status === 'cancelled' ? 'text-text-3' : 'text-tone-waiting'}
-            >
-              {task.lastRejectionReason}
-            </dd>
-          </>
-        )}
-      </dl>
-
-      {collectable && (
-        <div className="flex items-center gap-2">
-          {!confirming ? (
-            <Button variant="ghost" size="sm" data-testid="collect-worktree" onClick={() => setConfirming(true)}>
-              Collect worktree
-            </Button>
-          ) : (
-            <>
-              <Button variant="danger" size="sm" data-testid="collect-worktree-confirm" disabled={pending} onClick={() => void collect()}>
-                remove the tree, keep the branch
-              </Button>
-              <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>cancel</Button>
-            </>
-          )}
-          {collectError !== null && (
-            <span role="alert" data-testid="collect-worktree-error" className="text-xs text-tone-blocked">
-              {collectError}
-            </span>
-          )}
-        </div>
+      {why !== null && (
+        // M45 R4: the SAME one line the card shows, for the same reason -- a person who opened this
+        // panel because a card was not moving should not have to hunt for why in a group.
+        <span
+          data-testid="task-why"
+          className={`text-xs ${task.status === 'cancelled' ? 'text-text-3' : 'text-tone-waiting'}`}
+        >
+          {why}
+        </span>
       )}
 
-      <section className="flex flex-col gap-2">
-        <SectionLabel>Runs</SectionLabel>
+      {/* The one group this panel leads with: what its runs are doing right now. */}
+      <DetailsGroup group="run" title="Run" defaultOpen>
         {task.runs.length === 0 ? (
           <p className="text-xs text-text-3">no runs yet</p>
         ) : (
+          <>
+            {/* One line, not a figure per row (M45 R4): the per-run money moved into the Cost
+              * group, and a run row that carried it was two questions in one line. `—` when no run
+              * reported spend at all, never `$0.00` -- that would claim a measurement nobody made
+              * (spec Decision 6). */}
+            <p data-testid="run-total-cost" className="font-mono text-[10.5px] text-text-3">
+              {measuredRuns.length === 0 ? '—' : `$${totalCostUsd.toFixed(2)}`} across {task.runs.length} run
+              {task.runs.length === 1 ? '' : 's'}
+              {unmeasuredRuns > 0 && ` · ${unmeasuredRuns} unmeasured`}
+            </p>
+            <ul className="flex flex-col gap-2">
+              {task.runs.map((run) => (
+                <li key={run.id} data-testid="run-row" className="rounded border border-line p-2 text-xs text-text-2">
+                  <div className="flex items-center justify-between">
+                    <span>{run.status}</span>
+                    <span className="font-mono">{run.toolCalls} calls</span>
+                  </div>
+                  {run.checkpoint !== null && run.checkpoint.pausedAtStep !== null && (
+                    <div className="mt-1 text-text-3">
+                      {/* M36 t3: a run waiting for another slave's answer is `paused`, but "paused at
+                        * step N" reads as a pause a human is being asked to end. Name what it is
+                        * actually waiting on instead. */}
+                      {run.waitingFor === null
+                        ? `paused at step ${run.checkpoint.pausedAtStep}`
+                        : `waiting for ${run.waitingFor} at step ${run.checkpoint.pausedAtStep}`}{' '}
+                      · session {run.checkpoint.sessionId} · {run.checkpoint.dirtyFileCount} dirty files
+                    </div>
+                  )}
+                  {run.checkpoint !== null && run.checkpoint.deniedDuringPause.length > 0 && (
+                    // `summary` is always `null` today (see `TaskRunSummary.checkpoint`'s own
+                    // comment: no join key exists), so this always renders the id-prefix fallback --
+                    // not a bug, a fact of the data. Same 8-char id-prefix convention as
+                    // `TaskCard`/`SlaveCard`'s `TASK-{id.slice(0, 8)}`; unlike a task's random UUID
+                    // this can render two Claude `toolu_01…` ids identically (they share that fixed
+                    // vendor prefix) -- an accepted limit of a best-effort display, not a bug to fix
+                    // here. `font-mono text-[10px] text-text-3`, adjacent to `SECTION_LABEL_CLASS`
+                    // (`ui/SectionLabel.tsx`) rather than reusing it: that class is for headings
+                    // (uppercase, wide tracking), and this is a value line, same relationship the
+                    // `paused at step` line above already has to it.
+                    <div className="mt-1 font-mono text-[10px] text-text-3">
+                      {run.checkpoint.deniedDuringPause.length} tool call{run.checkpoint.deniedDuringPause.length === 1 ? '' : 's'} denied
+                      during pause · {run.checkpoint.deniedDuringPause.map((denied) => denied.summary ?? `${denied.id.slice(0, 8)}…`).join(', ')}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </DetailsGroup>
+
+      {/* What was said to and about this task: the attempt counter the scheduler reads, the branch
+        * its work lives on, and the sentence a reviewer or a re-plan left behind. */}
+      <DetailsGroup group="messages" title="Messages">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
+          <dt className="text-text-3">attempt</dt>
+          <dd className="font-mono text-text-2">
+            {task.attempt}/{task.maxAttempts}
+          </dd>
+          <dt className="text-text-3">branch</dt>
+          <dd className="font-mono text-text-2">{task.branch ?? '—'}</dd>
+          {task.lastRejectionReason !== null && (
+            // One column, two meanings, named apart (M40 §6): `cancelTask` writes the CANCELLATION
+            // reason into `lastRejectionReason`, and labelling that "rejection" would tell an
+            // operator a reviewer turned the work down when nobody reviewed it at all. Muted for a
+            // cancelled task, like its card: nothing here needs anybody.
+            <>
+              <dt className="text-text-3">{task.status === 'cancelled' ? 'cancelled' : 'rejection'}</dt>
+              <dd
+                data-testid={task.status === 'cancelled' ? 'detail-cancel-reason' : 'detail-rejection-reason'}
+                className={task.status === 'cancelled' ? 'text-text-3' : 'text-tone-waiting'}
+              >
+                {task.lastRejectionReason}
+              </dd>
+            </>
+          )}
+        </dl>
+      </DetailsGroup>
+
+      {/* M37 §6, one group lower. Fetched on demand rather than with the snapshot: a prompt is the
+        * whole text a model was given, and shipping one per run into every board poll would dwarf
+        * the snapshot it rides in -- which is also why this group renders nothing until it is
+        * opened, so arriving at the panel costs no request at all. */}
+      <DetailsGroup group="context" title="Context sources">
+        {task.runs.length === 0 ? (
+          <p className="text-xs text-text-3">no runs yet, so nothing was assembled for one</p>
+        ) : (
           <ul className="flex flex-col gap-2">
             {task.runs.map((run) => (
-              <li key={run.id} data-testid="run-row" className="rounded border border-line p-2 text-xs text-text-2">
-                <div className="flex items-center justify-between">
-                  <span>{run.status}</span>
-                  <span className="font-mono">
-                    {/* `—` for a run whose runtime reported no spend (spec Decision 6). */}
-                    {run.costUsd === null ? '—' : `$${run.costUsd.toFixed(2)}`} · {run.toolCalls} calls
-                  </span>
-                </div>
-                {run.checkpoint !== null && run.checkpoint.pausedAtStep !== null && (
-                  <div className="mt-1 text-text-3">
-                    {/* M36 t3: a run waiting for another slave's answer is `paused`, but "paused at
-                      * step N" reads as a pause a human is being asked to end. Name what it is
-                      * actually waiting on instead. */}
-                    {run.waitingFor === null
-                      ? `paused at step ${run.checkpoint.pausedAtStep}`
-                      : `waiting for ${run.waitingFor} at step ${run.checkpoint.pausedAtStep}`}{' '}
-                    · session {run.checkpoint.sessionId} · {run.checkpoint.dirtyFileCount} dirty files
-                  </div>
-                )}
-                {run.checkpoint !== null && run.checkpoint.deniedDuringPause.length > 0 && (
-                  // `summary` is always `null` today (see `TaskRunSummary.checkpoint`'s own
-                  // comment: no join key exists), so this always renders the id-prefix fallback --
-                  // not a bug, a fact of the data. Same 8-char id-prefix convention as
-                  // `TaskCard`/`SlaveCard`'s `TASK-{id.slice(0, 8)}`; unlike a task's random UUID
-                  // this can render two Claude `toolu_01…` ids identically (they share that fixed
-                  // vendor prefix) -- an accepted limit of a best-effort display, not a bug to fix
-                  // here. `font-mono text-[10px] text-text-3`, adjacent to `SECTION_LABEL_CLASS`
-                  // (`ui/SectionLabel.tsx`) rather than reusing it: that class is for headings
-                  // (uppercase, wide tracking), and this is a value line, same relationship the
-                  // `paused at step` line above already has to it.
-                  <div className="mt-1 font-mono text-[10px] text-text-3">
-                    {run.checkpoint.deniedDuringPause.length} tool call{run.checkpoint.deniedDuringPause.length === 1 ? '' : 's'} denied
-                    during pause · {run.checkpoint.deniedDuringPause.map((denied) => denied.summary ?? `${denied.id.slice(0, 8)}…`).join(', ')}
-                  </div>
-                )}
-                {/* M37 §6. Fetched on demand rather than with the snapshot: a prompt is the whole
-                  * text a model was given, and shipping one per run into every board poll would
-                  * dwarf the snapshot it rides in. */}
+              <li key={run.id} data-testid="run-context-row" className="flex flex-col gap-1 text-xs text-text-2">
                 <button
                   type="button"
                   data-testid="run-context-open"
                   disabled={runContextPending}
                   onClick={() => void openRunContext(run.id)}
-                  className="mt-1 text-left text-[10.5px] text-text-3 underline decoration-dotted hover:text-text-1 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="text-left text-[10.5px] text-text-3 underline decoration-dotted hover:text-text-1 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   What this run saw
                 </button>
                 {runContext !== null && runContext.runId === run.id && (
-                  <div data-testid="run-context" className="mt-1 flex flex-col gap-1">
+                  <div data-testid="run-context" className="flex flex-col gap-1">
                     <ul className="flex flex-col gap-0.5">
                       {runContext.manifest.sections.map((source, index) => {
                         const line = sectionLine(source)
@@ -321,10 +363,11 @@ export function TaskDetailPanel({
             {runContextError}
           </span>
         )}
-      </section>
+      </DetailsGroup>
 
-      <section className="flex flex-col gap-2">
-        <SectionLabel>Artifacts</SectionLabel>
+      {/* The verify/merge logs a run wrote (M23 C1-C3) -- the attempts that proved, or failed to
+        * prove, that this task's work holds. Read on click, one at a time. */}
+      <DetailsGroup group="verification" title="Verification attempts">
         {task.artifacts.length === 0 ? (
           <p className="text-xs text-text-3">no artifacts yet</p>
         ) : (
@@ -367,7 +410,66 @@ export function TaskDetailPanel({
             )}
           </>
         )}
-      </section>
+      </DetailsGroup>
+
+      {/* What this task's runs actually spent, run by run. `—` for a run whose runtime reported no
+        * spend (spec Decision 6) -- never `$0.00`, which claims a measurement nobody made. */}
+      <DetailsGroup group="cost" title="Cost">
+        {task.runs.length === 0 ? (
+          <p className="text-xs text-text-3">no runs yet, so nothing has been spent</p>
+        ) : (
+          <ul className="flex flex-col gap-1 text-xs text-text-2">
+            {task.runs.map((run) => (
+              <li key={run.id} data-testid="run-cost-row" className="flex items-center justify-between font-mono text-[10.5px]">
+                <span className="text-text-3">{run.id.slice(0, 8)}</span>
+                <span>{run.costUsd === null ? '—' : `$${run.costUsd.toFixed(2)}`}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </DetailsGroup>
+
+      {/* M23 B4: the tree comes off disk, the branch stays. Only a terminal task whose runs still
+        * have a worktree can be collected -- `task.collectable` is computed server-side on the DTO
+        * (`buildTasksSnapshot`), so this panel never imports `TERMINAL` from the domain. */}
+      <DetailsGroup group="worktree" title="Worktree">
+        {!collectable ? (
+          <p className="text-xs text-text-3">nothing to collect — no run of this task has a tree left on disk</p>
+        ) : (
+          <div className="flex items-center gap-2">
+            {!confirming ? (
+              <Button variant="ghost" size="sm" data-testid="collect-worktree" onClick={() => setConfirming(true)}>
+                Collect worktree
+              </Button>
+            ) : (
+              <>
+                <Button variant="danger" size="sm" data-testid="collect-worktree-confirm" disabled={pending} onClick={() => void collect()}>
+                  remove the tree, keep the branch
+                </Button>
+                <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>cancel</Button>
+              </>
+            )}
+            {collectError !== null && (
+              <span role="alert" data-testid="collect-worktree-error" className="text-xs text-tone-blocked">
+                {collectError}
+              </span>
+            )}
+          </div>
+        )}
+      </DetailsGroup>
+
+      {/* A task has no event feed of its own, and inventing one here would be a second reader of the
+        * stream the Activity page already owns. `?tasks=` is `lib/activityFilters.ts`'s own
+        * parameter name for a task filter, so this link lands on that page already narrowed. */}
+      <DetailsGroup group="events" title="Events">
+        <Link
+          data-testid="task-events-link"
+          href={`/w/${workspaceId}/activity?tasks=${task.id}`}
+          className="text-xs text-text-3 underline decoration-dotted hover:text-text-1"
+        >
+          every event for this task →
+        </Link>
+      </DetailsGroup>
     </aside>
   )
 }

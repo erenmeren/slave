@@ -9,6 +9,7 @@ import { publishStreamState } from '../../hooks/useStreamState'
 import type { StreamEvent } from '../../hooks/useWorkspaceStream'
 import type { GraphSnapshot } from '../../server/graph'
 import { Alert } from '../ui/Alert'
+import { PageShell } from '../ui/PageShell'
 import { Tabs } from '../ui/Tabs'
 import { HaltBanner } from '../HaltBanner'
 import { CommunicationMode } from './CommunicationMode'
@@ -216,46 +217,52 @@ export function GraphClient({
   }
 
   return (
-    <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
-      {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
-      {/* M44 R3: `ui/Alert`, the same band the Overview and Tasks pages show. */}
-      {error !== null && <Alert variant="notice">showing stale data: {error}</Alert>}
-      {/* M44 R6/D10: five buttons with an `aria-current` were never a tablist to a screen reader,
-        * which is what they are to everyone else. `ui/Tabs` gives them `role="tablist"`/`"tab"`
-        * and `aria-selected`; the `graph-mode-<id>` testids and the `?mode=` state are unchanged,
-        * so every gate and every bookmark keeps working. `Tabs` brings its own `flex gap-1`, so
-        * this wrapper carries only the rule and the padding the strip had. `onSelect` hands back a
-        * plain `string`, and the id is resolved back through `MODE_TABS` rather than asserted with
-        * a cast -- an id that is not a mode cannot then set one. */}
-      <div className="border-b border-line px-3 py-2">
-        <Tabs
-          tabs={MODE_TABS.map((tab) => ({ id: tab.mode, label: tab.label }))}
-          current={mode}
-          ariaLabel="Graph mode"
-          testIdPrefix="graph-mode"
-          onSelect={(id) => {
-            const chosen = MODE_TABS.find((tab) => tab.mode === id)
-            if (chosen !== undefined) setMode(chosen.mode)
-          }}
-        />
-      </div>
-      <div className="relative flex min-h-0 flex-1">
-        <div className="relative min-w-0 flex-1">
-          {mode === 'org' && (
-            <>
-              <GraphCanvas nodes={positionedOrgNodes} edges={visibleOrgEdges} nodeTypes={ORG_NODE_TYPES} onNodeClick={onNodeClick} />
-              <Particles particles={particles} />
-            </>
-          )}
-          {mode === 'exec' && <ExecutionMode snapshot={view} />}
-          {mode === 'deps' && <DepsMode workspaceId={workspaceId} snapshot={view} />}
-          {mode === 'skill' && <SkillMode workspaceId={workspaceId} snapshot={view} toolCallTick={skillFrameTick} />}
-          {mode === 'comm' && <CommunicationMode workspaceId={workspaceId} frameTick={commFrameTick} />}
+    // M44 erratum E25 / M45 R5: the shell WRAPS this page's own frame rather than replacing it --
+    // `flush` drops the shell's `gap-4 p-3 md:p-4`, so the page keeps its own padding, gap and
+    // width exactly and not a pixel moves. The shell is here for its landmark and its
+    // `page-shell` marker.
+    <PageShell flush>
+      <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
+        {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
+        {/* M44 R3: `ui/Alert`, the same band the Overview and Tasks pages show. */}
+        {error !== null && <Alert variant="notice">showing stale data: {error}</Alert>}
+        {/* M44 R6/D10: five buttons with an `aria-current` were never a tablist to a screen reader,
+          * which is what they are to everyone else. `ui/Tabs` gives them `role="tablist"`/`"tab"`
+          * and `aria-selected`; the `graph-mode-<id>` testids and the `?mode=` state are unchanged,
+          * so every gate and every bookmark keeps working. `Tabs` brings its own `flex gap-1`, so
+          * this wrapper carries only the rule and the padding the strip had. `onSelect` hands back a
+          * plain `string`, and the id is resolved back through `MODE_TABS` rather than asserted with
+          * a cast -- an id that is not a mode cannot then set one. */}
+        <div className="border-b border-line px-3 py-2">
+          <Tabs
+            tabs={MODE_TABS.map((tab) => ({ id: tab.mode, label: tab.label }))}
+            current={mode}
+            ariaLabel="Graph mode"
+            testIdPrefix="graph-mode"
+            onSelect={(id) => {
+              const chosen = MODE_TABS.find((tab) => tab.mode === id)
+              if (chosen !== undefined) setMode(chosen.mode)
+            }}
+          />
         </div>
-        {selectedSlave !== null && (
-          <GraphDrawer workspaceId={workspaceId} slave={selectedSlave} onClose={() => setSelectedSlaveId(null)} />
-        )}
+        <div className="relative flex min-h-0 flex-1">
+          <div className="relative min-w-0 flex-1">
+            {mode === 'org' && (
+              <>
+                <GraphCanvas nodes={positionedOrgNodes} edges={visibleOrgEdges} nodeTypes={ORG_NODE_TYPES} onNodeClick={onNodeClick} />
+                <Particles particles={particles} />
+              </>
+            )}
+            {mode === 'exec' && <ExecutionMode snapshot={view} />}
+            {mode === 'deps' && <DepsMode workspaceId={workspaceId} snapshot={view} />}
+            {mode === 'skill' && <SkillMode workspaceId={workspaceId} snapshot={view} toolCallTick={skillFrameTick} />}
+            {mode === 'comm' && <CommunicationMode workspaceId={workspaceId} frameTick={commFrameTick} />}
+          </div>
+          {selectedSlave !== null && (
+            <GraphDrawer workspaceId={workspaceId} slave={selectedSlave} onClose={() => setSelectedSlaveId(null)} />
+          )}
+        </div>
       </div>
-    </div>
+    </PageShell>
   )
 }

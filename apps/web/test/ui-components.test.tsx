@@ -7,6 +7,7 @@ import { Button } from '../src/components/ui/Button.js'
 import { Card } from '../src/components/ui/Card.js'
 import { Chip } from '../src/components/ui/Chip.js'
 import { DataTable, Row } from '../src/components/ui/DataTable.js'
+import { DetailsGroup } from '../src/components/ui/DetailsGroup.js'
 import { EmptyState } from '../src/components/ui/EmptyState.js'
 import { EmptyTile } from '../src/components/ui/EmptyTile.js'
 import { LoadingState } from '../src/components/ui/LoadingState.js'
@@ -492,5 +493,75 @@ describe('PageShell', () => {
     rerender(<PageShell flush><span>x</span></PageShell>)
     expect(getByTestId('page-shell').className).not.toContain('p-3')
     expect(getByTestId('page-shell').className).not.toContain('gap-4')
+  })
+})
+
+// M45 R4: the one disclosure both detail panels are built out of. Children render ONLY while the
+// group is open, and that is the contract rather than a nicety -- three of the ten groups fetch on
+// mount, and a panel that rendered ten collapsed groups would issue every one of those requests to
+// show a person nothing.
+describe('DetailsGroup', () => {
+  it('is closed by default and names itself for a test and a gate', () => {
+    render(
+      <DetailsGroup group="run" title="Run">
+        <span data-testid="inside">x</span>
+      </DetailsGroup>,
+    )
+    const group = screen.getByTestId('details-group')
+    expect(group.getAttribute('data-group')).toBe('run')
+    expect(group.getAttribute('data-open')).toBe('false')
+    expect(screen.queryByTestId('inside')).toBeNull()
+  })
+
+  it('renders its children only once opened, so a closed group costs nothing', () => {
+    render(
+      <DetailsGroup group="cost" title="Cost">
+        <span data-testid="inside">x</span>
+      </DetailsGroup>,
+    )
+    fireEvent.click(screen.getByText('Cost'))
+    expect(screen.getByTestId('inside')).toBeTruthy()
+    expect(screen.getByTestId('details-group').getAttribute('data-open')).toBe('true')
+  })
+
+  it('can start open, for the one group a panel leads with', () => {
+    render(
+      <DetailsGroup group="run" title="Run" defaultOpen>
+        <span data-testid="inside">x</span>
+      </DetailsGroup>,
+    )
+    expect(screen.getByTestId('inside')).toBeTruthy()
+  })
+
+  // A native `<details>` renders its subtree regardless of `open`, which is exactly what this
+  // primitive exists not to do -- so it is a button and a region, and it owes a screen reader the
+  // state a `<summary>` would have given for free.
+  it('is a real disclosure button: keyboard-reachable, with aria-expanded tracking the state', () => {
+    render(
+      <DetailsGroup group="events" title="Events">
+        <span data-testid="inside">x</span>
+      </DetailsGroup>,
+    )
+    const toggle = screen.getByRole('button', { name: 'Events' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.getAttribute('type')).toBe('button')
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    // The region the button controls exists once open, and says which button names it.
+    const region = document.getElementById(toggle.getAttribute('aria-controls') ?? '')
+    expect(region).not.toBeNull()
+    expect(region?.getAttribute('aria-labelledby')).toBe(toggle.id)
+  })
+
+  it('closes again on a second press, dropping its children back out of the DOM', () => {
+    render(
+      <DetailsGroup group="skills" title="Skills">
+        <span data-testid="inside">x</span>
+      </DetailsGroup>,
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
+    expect(screen.getByTestId('inside')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Skills' }))
+    expect(screen.queryByTestId('inside')).toBeNull()
   })
 })

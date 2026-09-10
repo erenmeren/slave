@@ -1,4 +1,4 @@
-import { USER_CARD_LABEL, userRunStatus, userSlaveStatus, type UserCardState } from '@slave-of-ai/domain'
+import { USER_CARD_LABEL, userRunStatus, userSlaveStatus, userTaskStatus, type UserCardState } from '@slave-of-ai/domain'
 import type { SlaveStatus, RunStatus, TaskStatus } from '@slave-of-ai/domain'
 import type { StatusTone } from '../components/ui/StatusPill'
 import { COLUMN_FOR_STATUS, COLUMN_STATE } from './taskColumns'
@@ -182,6 +182,20 @@ export function cardStateForTask(status: TaskStatus): CardState {
       throw new Error(`cardStateForTask: unhandled TaskStatus ${JSON.stringify(unhandled)}`)
     }
   }
+}
+
+/**
+ * The WORD a task's pill reads, from the domain (M44 erratum E3's deferred half, delivered here).
+ *
+ * M44 kept the board's pill on `cardStateForTask`'s column vocabulary and said so; M45 R4 is where
+ * that changes. The TONE still comes from the column state -- that is the board's own grouping,
+ * with its four documented exceptions, and it decides which colour a card is, not what it says.
+ * The word comes from `userTaskStatus`, which is the one vocabulary `docs/ia.md` rule 3 names, so
+ * a `failed` task reads FAILED under a red pill instead of borrowing `blocked`'s word for its
+ * colour's sake. The raw status stays on the card's `data-status`, where it always was.
+ */
+export function taskStatusWord(status: TaskStatus, integrated: boolean): string {
+  return userTaskStatus({ status, integrated }).label
 }
 
 /**
