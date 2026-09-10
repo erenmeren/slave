@@ -3,8 +3,15 @@ import { toRunState } from '@slave-of-ai/db'
 import {
   capabilitiesOf,
   listCatalogImports as listCatalogImportRows,
+  listWorkforceCatalog,
+  readTemplateProfile,
+  type ControlRefusal,
   type ProviderCapabilities,
   type ProviderKind,
+  type TemplateProfileView,
+  type WorkforceCatalogFacets,
+  type WorkforceCatalogFilters,
+  type WorkforceCatalogRow,
 } from '@slave-of-ai/control'
 import {
   deriveSlaveStatus,
@@ -12,6 +19,7 @@ import {
   sumSpendFromGroups,
   NON_TERMINAL_RUN_STATUSES,
   SUPERVISOR_PER_CALL_CAP_USD,
+  type Result,
   type SlaveStatus,
   type SpendGroup,
   type TaskStatus,
@@ -895,52 +903,54 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
   return { rows: [...projectRows, ...catalogRows], departmentsByWorkspace, templatesByCompany }
 }
 
-/** Every slave template, `catalogSlaveCount` (M27 §5.1) added beside the rest: how many catalog
- *  slaves (`CompanySlave.templateId`) a `deleteSlaveTemplate` on this row would cascade --
- *  `TemplateCatalog`'s `template-delete` confirm names it. One `companySlave.groupBy`, not a
- *  per-row query. */
-export async function listTemplates(): Promise<
-  readonly {
-    id: string
-    name: string
-    role: string
-    description: string
-    defaultModel: string | null
-    defaultProvider: ProviderKind | null
-    catalogSlaveCount: number
-    /** M42 §2: provenance. Null on a hand-made template, which is what "not imported" means.
-     *  `importedAt` is an ISO string, not a `Date`: this row is a prop of a `'use client'`
-     *  component, `GoalVersionView.createdAt`'s idiom. */
-    sourceId: string | null
-    sourceDivision: string | null
-    importedAt: string | null
-  }[]
-> {
-  const [templates, catalogSlaveGroups] = await Promise.all([
-    prisma.slaveTemplate.findMany({
-      select: {
-        id: true,
-        name: true,
-        role: true,
-        description: true,
-        defaultModel: true,
-        provider: true,
-        sourceId: true,
-        sourceDivision: true,
-        importedAt: true,
-      },
-      orderBy: { name: 'asc' },
-    }),
-    prisma.companySlave.groupBy({ by: ['templateId'], _count: { _all: true } }),
-  ])
-  const catalogSlaveCountByTemplate = new Map(catalogSlaveGroups.map((g) => [g.templateId, g._count._all] as const))
-  return templates.map(({ provider, importedAt, ...rest }) => ({
-    ...rest,
-    defaultProvider: provider,
-    importedAt: importedAt === null ? null : importedAt.toISOString(),
-    catalogSlaveCount: catalogSlaveCountByTemplate.get(rest.id) ?? 0,
-  }))
+/** One catalog row as a `'use client'` component receives it: `WorkforceCatalogRow` with its one
+ *  `Date` turned into an ISO string, `GoalVersionView.createdAt`'s idiom. Every other field is
+ *  already JSON, so this is the whole of the crossing. */
+export type CatalogRowView = Omit<WorkforceCatalogRow, 'importedAt'> & { readonly importedAt: string | null }
+
+export interface WorkforceCatalogView {
+  readonly rows: readonly CatalogRowView[]
+  /** Computed over EVERY row, before the filters ran (M46 R6): a menu built from the filtered rows
+   *  collapses to the value already chosen, which makes it impossible to change your mind. */
+  readonly facets: WorkforceCatalogFacets
 }
+
+/**
+ * The Workforce Catalog page and its route (M46 R6), over ONE read (plan erratum E9):
+ * `listWorkforceCatalog` already does the `findMany` plus the `companySlave.groupBy` that
+ * `listTemplates` used to do here, and doing it twice on a page that renders both the catalog and
+ * the company manager would be two queries for one answer.
+ */
+export async function listWorkforceCatalogPage(filters: WorkforceCatalogFilters = {}): Promise<WorkforceCatalogView> {
+  const page = await listWorkforceCatalog(filters)
+  return {
+    rows: page.rows.map((row) => ({ ...row, importedAt: row.importedAt === null ? null : row.importedAt.toISOString() })),
+    facets: page.facets,
+  }
+}
+
+/** Every slave template, unfiltered -- the shape `CompanyManager`'s member `<select>`, the New
+ *  slave drawer and `TemplateCatalog` take, `catalogSlaveCount` (M27 §5.1) included: how many
+ *  catalog slaves a `deleteSlaveTemplate` on this row would cascade. A superset of what they read
+ *  before M46; nothing they used has moved or changed shape. */
+export async function listTemplates(): Promise<readonly CatalogRowView[]> {
+  return (await listWorkforceCatalogPage()).rows
+}
+
+/** One template's whole specialist profile, for the drawer (plan erratum E10): far too much to put
+ *  on every catalog row -- three kilobytes times a few hundred templates to draw a table -- and
+ *  exactly what one open drawer needs. `template_not_found` is its only refusal, so the route this
+ *  backs is a 200 or a 404 and nothing else. */
+export async function readTemplateProfileView(
+  templateId: string,
+): Promise<Result<TemplateProfileView, ControlRefusal>> {
+  return readTemplateProfile(templateId)
+}
+
+/** What `GET /api/org/templates/:id/profile` serialises, under the name the client names it: every
+ *  field of `TemplateProfileView` is already JSON-safe (`ProfileSpec.source.importedAt` is an ISO
+ *  string, erratum E21), so this is that type rather than a second hand-written copy of it. */
+export type TemplateProfileViewJson = TemplateProfileView
 
 /** M42 §2: the last ten import runs, for the catalog imports panel. Dates as ISO strings, for the
  *  same reason `listTemplates` above hands out one. */

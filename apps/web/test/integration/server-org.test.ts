@@ -610,8 +610,12 @@ describe('org query module', () => {
       // beside `defaultModel`, `null` here because this fixture's `slaveTemplate.create` above
       // sets no `provider`. `catalogSlaveCount: 0` (M27 §5.1): no `CompanySlave` uses this
       // template, the case the next test's `1` contrasts with.
+      // `objectContaining`, not a whole literal, since M46 (plan erratum E18): `listTemplates` is
+      // now `listWorkforceCatalog`'s rows, which carry the structured facets the catalog page
+      // renders beside these. Every key this case already asserted is still asserted here; the
+      // new fields have a case of their own below rather than being smuggled into this one.
       expect(templates).toEqual([
-        {
+        expect.objectContaining({
           id: expect.any(String),
           name: 'Backend Engineer',
           role: 'backend',
@@ -623,7 +627,7 @@ describe('org query module', () => {
           sourceId: null,
           sourceDivision: null,
           importedAt: null,
-        },
+        }),
       ])
       expect(companies).toEqual([{ id: expect.any(String), name: 'Acme Robotics' }])
     })
@@ -675,6 +679,65 @@ describe('org query module', () => {
         sourceDivision: 'engineering',
         importedAt: importedAt.toISOString(),
       })
+    })
+
+    // M46 plan erratum E18: the fields `listWorkforceCatalog` added to every row have their own
+    // case rather than widening one of M11/M27/M42's. `structured` is the whole distinction the
+    // Workforce Catalog draws -- a row whose `profileSpec` parsed shows capabilities and offers
+    // Customise; one that has none shows neither.
+    it('carries the structured facets of an imported template, and none for a hand-made one', async (): Promise<void> => {
+      await prisma.slaveTemplate.create({ data: { name: 'Hand Made', role: 'backend' } })
+      await prisma.slaveTemplate.create({
+        data: {
+          name: 'Core Builder',
+          role: 'engineering',
+          sourceId: 'catalog-m46/engineering/core-builder',
+          sourceSha256: 'abc',
+          sourceDivision: 'engineering',
+          sourceRevision: 'rev1',
+          sourceLicense: 'MIT',
+          importedAt: new Date('2026-09-11T09:00:00.000Z'),
+          profileSpec: {
+            identity: 'i',
+            summary: 'Builds the core module.',
+            mission: '',
+            runtimeRole: 'engineering',
+            capabilities: ['Design the module boundary'],
+            expertise: [],
+            operatingPrinciples: [],
+            constraints: [],
+            workflow: [],
+            deliverables: [],
+            successCriteria: [],
+            collaborationHints: [],
+            recommendedSkills: [],
+            body: 'b',
+            source: {
+              repository: 'catalog-m46',
+              path: 'engineering/core-builder.md',
+              revision: 'rev1',
+              license: 'MIT',
+              importedAt: '2026-09-11T09:00:00.000Z',
+              mappingQuality: 'partial',
+            },
+          },
+        },
+      })
+
+      const rows = await listTemplates()
+
+      const core = rows.find((row) => row.name === 'Core Builder')
+      expect(core?.structured).toBe(true)
+      expect(core?.source).toBe('imported')
+      expect(core?.summary).toBe('Builds the core module.')
+      expect(core?.capabilities).toEqual(['Design the module boundary'])
+      expect(core?.mappingQuality).toBe('partial')
+      expect(core?.sourceLicense).toBe('MIT')
+      const handMade = rows.find((row) => row.name === 'Hand Made')
+      expect(handMade?.structured).toBe(false)
+      expect(handMade?.source).toBe('local')
+      expect(handMade?.capabilities).toEqual([])
+      expect(handMade?.mappingQuality).toBeNull()
     })
   })
 })

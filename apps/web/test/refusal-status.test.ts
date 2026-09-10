@@ -142,4 +142,16 @@ describe('refusalStatus', () => {
       expect(refusalStatus(kind)).toBe(kind.endsWith('_not_found') ? 404 : 409)
     }
   })
+
+  // M46 (plan erratum E17): the profile-override verbs' three kinds, spelled out because the
+  // routes that serve them (`PATCH …/overrides`, `DELETE …/overrides/:field`) also answer 404 for
+  // a missing template -- so the pair "the template exists, the request does not make sense" has
+  // to read 409 here, not 404, or a drawer would tell an operator the template is gone.
+  it('answers 409 for the three profile-override refusals, whose templates were found', () => {
+    for (const kind of ['profile_not_structured', 'invalid_profile_overrides', 'unknown_profile_field'] as const) {
+      expect(ALL_KINDS[kind]).toBe(true)
+      expect(refusalStatus(kind)).toBe(409)
+    }
+    expect(refusalStatus('template_not_found')).toBe(404)
+  })
 })
