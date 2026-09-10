@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { refusalText, setGoal } from '@slave-of-ai/control'
+import { refusalText, setGoal, syncCapabilityTaxonomy } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
@@ -540,6 +540,109 @@ describe('concludePlanning', () => {
       where: { workspaceId: fixture.workspaceId, type: 'workspace_plan_created' },
     })
     expect(planCreated).toHaveLength(0)
+  })
+
+  /**
+   * M47 R3: a graph written in the taxonomy's vocabulary, concluded in process.
+   *
+   * Hand-seeded rather than driven through the fake CLI on purpose: the fake's planning fixture is
+   * a fixed file with no capabilities in it, and the flag that would let a test choose another one
+   * arrives in Task 5. What is under test is `concludePlanning`, and this is the same shape case
+   * (d) above already uses to feed it a graph.
+   */
+  async function concludeGraph(fixture: Fixture, graph: unknown): Promise<string> {
+    const managerId = await addManager(fixture.teamId)
+    const now = new Date()
+    const run = await prisma.slaveRun.create({
+      data: { slaveId: managerId, kind: 'planning', status: 'succeeded', startedAt: now, terminalAt: now, endedAt: now },
+    })
+    await prisma.executionEvent.create({
+      data: {
+        type: 'run_output',
+        workspaceId: fixture.workspaceId,
+        slaveId: managerId,
+        runId: run.id,
+        actor: 'slave',
+        payload: { text: JSON.stringify(graph) },
+      },
+    })
+    await concludePlanning(brandRunId(run.id))
+    return run.id
+  }
+
+  it('stores the required capabilities and derives the role from them (M47 R3)', async (): Promise<void> => {
+    // The taxonomy is a TABLE, and this run's derivation reads it: reconciled first so the case
+    // does not depend on when the test database was last seeded.
+    await syncCapabilityTaxonomy()
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await concludeGraph(fixture, {
+      tasks: [
+        {
+          key: 'a',
+          title: 'Harden the login',
+          description: 'Review the authentication path.',
+          capabilities: ['security.application'],
+          dependsOn: [],
+        },
+      ],
+    })
+
+    const task = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    expect(task.requiredCapabilities).toEqual(['security.application'])
+    expect(task.requiredRole).toBe('security')
+    // ...and the event says what was STORED, not what the planner asked for.
+    const event = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, type: 'workspace_plan_created' },
+    })
+    expect((event.payload as { tasks: { role: string }[] }).tasks[0]?.role).toBe('security')
+  })
+
+  it("keeps the planner's own role when it named one, capabilities or not", async (): Promise<void> => {
+    await syncCapabilityTaxonomy()
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await concludeGraph(fixture, {
+      tasks: [
+        {
+          key: 'a',
+          title: 'Harden the login',
+          description: 'Review the authentication path.',
+          role: 'backend',
+          capabilities: ['security.application'],
+          dependsOn: [],
+        },
+      ],
+    })
+
+    const task = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    expect(task.requiredRole).toBe('backend')
+    expect(task.requiredCapabilities).toEqual(['security.application'])
+  })
+
+  it('drops a key the taxonomy does not have and records it on the plan event', async (): Promise<void> => {
+    await syncCapabilityTaxonomy()
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await concludeGraph(fixture, {
+      tasks: [
+        {
+          key: 'a',
+          title: 'Harden the login',
+          description: 'Review the authentication path.',
+          role: 'backend',
+          capabilities: ['nope.nothing'],
+          dependsOn: [],
+        },
+      ],
+    })
+
+    const event = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, type: 'workspace_plan_created' },
+    })
+    expect((event.payload as { droppedCapabilities?: string[] }).droppedCapabilities).toEqual(['nope.nothing'])
+    const task = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    expect(task.requiredCapabilities).toEqual([])
   })
 
   it('(e) the daemon-shape follow-through: a further tick starts an implementation run for the root task', async (): Promise<void> => {

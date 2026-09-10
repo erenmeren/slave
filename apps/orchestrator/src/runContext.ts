@@ -450,6 +450,40 @@ async function replanSection(input: {
   }
 }
 
+/** How many keys a planning prompt is shown. The taxonomy is ~50 rows today and an operator may
+ *  add more; a prompt is not the place for an unbounded list, and `capped` on the source is what
+ *  tells a reader the planner was shown a subset. */
+const CAPABILITY_KEYS_IN_PROMPT = 80
+
+/**
+ * The vocabulary a plan may be written in (M47 R3, plan erratum E3).
+ *
+ * A SECTION rather than part of `PLANNING_GRAPH_INSTRUCTIONS`: that constant is pure, static and
+ * pinned byte-for-byte, and this list is per-workspace data read out of a table. It renders LAST
+ * (`SECTION_ORDER.planning`), so the keys sit directly above the trailer that asks for them.
+ *
+ * The text must never contain the quoted literals `"verdict"`, `"replan"` or `"task graph"`: the
+ * fake CLI selects its review, re-plan and planning arms on exactly those, and a first-plan prompt
+ * carrying `"replan"` would be answered with a delta fixture. A test pins it.
+ */
+async function capabilitiesSection(): Promise<Section | null> {
+  const rows = await prisma.capability.findMany({ orderBy: { key: 'asc' }, select: { key: true, label: true } })
+  if (rows.length === 0) return null
+  const shown = rows.slice(0, CAPABILITY_KEYS_IN_PROMPT)
+  return {
+    kind: 'capabilities',
+    text: block('CAPABILITIES YOU MAY ASK FOR', [
+      'Each task in the JSON object you return may carry a "capabilities" array. Use ONLY the keys',
+      'below, exactly as they are spelt; a key that is not here is dropped. A task may name none,',
+      'in which case give it a "role" instead.',
+      '',
+      ...shown.map((row) => `- ${row.key}: ${row.label}`),
+      ...(rows.length > shown.length ? ['', `(${String(rows.length - shown.length)} further keys are not listed.)`] : []),
+    ]),
+    source: { kind: 'capabilities', keys: shown.map((row) => row.key), capped: rows.length > shown.length },
+  }
+}
+
 /** The `planning_goal` section: the requirement itself, and WHICH version of it (M40 §1). Shared by
  *  the builder below and by {@link renderReplanPreview}, so an operator previewing a re-plan reads
  *  the same first section the run would be given. */
@@ -495,6 +529,10 @@ export async function renderReplanPreview(input: {
       version: input.version,
     }),
   ]
+  // On the same terms as a real run (E3), so the preview a person reads IS the prompt the run
+  // would be given -- keys included.
+  const capabilities = await capabilitiesSection()
+  if (capabilities !== null) sections.push(capabilities)
   return renderRunContext('planning', sections).prompt
 }
 
@@ -661,6 +699,11 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
         }),
       )
     }
+    // M47 R3: the keys this plan may be written in, last of the planning sections and therefore
+    // directly above whichever trailer `renderRunContext` picks. A delta names capabilities the
+    // same way a first plan does, so a re-plan gets the list too.
+    const capabilities = await capabilitiesSection()
+    if (capabilities !== null) sections.push(capabilities)
   }
 
   const { prompt, manifest } = renderRunContext(input.kind, sections)

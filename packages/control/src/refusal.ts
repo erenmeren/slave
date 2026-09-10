@@ -110,6 +110,12 @@ export type ControlRefusal =
   | { readonly kind: 'goal_unchanged'; readonly workspaceId: string; readonly version: number }
   | { readonly kind: 'duplicate_name'; readonly name: string }
   | { readonly kind: 'template_not_found'; readonly templateId: string }
+  /** M47 R1: a capability key nothing in the taxonomy table has. Nothing matches on a key that is
+   *  not a row -- `capabilities add` is how one gets there. */
+  | { readonly kind: 'capability_not_found'; readonly key: string }
+  /** M47 R1: a key, label or role that cannot become a taxonomy row (a malformed key, a blank
+   *  label, a role that is not a role, a key that already exists). */
+  | { readonly kind: 'invalid_capability'; readonly detail: string }
   /** M46 R2: `profileOverrides` are a partial of `profileSpec`, and there is no spec on this row to
    *  be partial OF -- a hand-made template, or one whose catalog has not been imported since M46.
    *  Refused rather than invented: writing overrides against an empty spec would re-render the
@@ -392,6 +398,10 @@ export function refusalText(refusal: ControlRefusal): string {
       return `the name "${refusal.name}" is already taken`
     case 'template_not_found':
       return `no template with id ${refusal.templateId}`
+    case 'capability_not_found':
+      return `there is no capability "${refusal.key}" in the taxonomy: add it with \`capabilities add\` first`
+    case 'invalid_capability':
+      return `that capability cannot be added: ${refusal.detail}`
     case 'company_not_found':
       return `no company with id ${refusal.companyId}`
     case 'company_team_not_found':

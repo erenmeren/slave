@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
+import { syncCapabilityTaxonomy } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   ANSWER_BLOCK_OPEN,
@@ -620,9 +621,39 @@ describe('buildRunContext', () => {
       expect(prompt).toContain('"task graph"')
       expect(prompt).not.toContain('"verdict"')
       expect(prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
-      expect(manifest.sections.map((section) => section.kind)).toEqual(['profile', 'planning_goal'])
+      // `capabilities` is present whenever the taxonomy table has rows, which it does here (M47
+      // E3) -- it renders LAST, directly above the trailer that asks for the keys.
+      expect(manifest.sections.map((section) => section.kind)).toEqual(['profile', 'planning_goal', 'capabilities'])
       // Nothing was injected into the primary checkout (spec erratum E4).
       expect(existsSync(join(fixture.repoPath, '.claude/skills/writing-plans'))).toBe(false)
+    })
+
+    it('shows a planning run the taxonomy keys, above the trailer, and says so in the manifest', async () => {
+      await syncCapabilityTaxonomy()
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { goal: 'Ship the checkout redesign' } })
+      const planningRun = await prisma.slaveRun.create({
+        data: { slaveId: fixture.slaveId, status: 'starting', kind: 'planning' },
+      })
+
+      const { prompt, manifest } = await buildRunContext({
+        runId: planningRun.id,
+        kind: 'planning',
+        slaveId: fixture.slaveId,
+        workspaceId: fixture.workspaceId,
+        taskId: null,
+        worktreePath: null,
+        provider: 'claude_code',
+        skillRoots: fixture.skillRoots,
+      })
+
+      expect(prompt).toContain('- security.application: Application security')
+      expect(prompt.indexOf('CAPABILITIES YOU MAY ASK FOR')).toBeLessThan(prompt.indexOf(PLANNING_GRAPH_INSTRUCTIONS))
+      expect(prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
+      // The three literals the fake CLI routes on: a planning prompt that carried any of them in
+      // THIS section would be answered from the wrong fixture.
+      const section = prompt.slice(prompt.indexOf('CAPABILITIES YOU MAY ASK FOR'), prompt.indexOf(PLANNING_GRAPH_INSTRUCTIONS))
+      for (const literal of ['"verdict"', '"replan"', '"task graph"']) expect(section).not.toContain(literal)
+      expect(manifest.sections.at(-1)).toEqual({ kind: 'capabilities', keys: expect.any(Array), capped: false })
     })
   })
   describe('a re-plan run', () => {
@@ -711,7 +742,12 @@ describe('buildRunContext', () => {
       expect(prompt).not.toContain('"verdict"')
       expect(prompt.endsWith(REPLAN_INSTRUCTIONS)).toBe(true)
 
-      expect(manifest.sections.map((section) => section.kind)).toEqual(['profile', 'planning_goal', 'replan'])
+      expect(manifest.sections.map((section) => section.kind)).toEqual([
+        'profile',
+        'planning_goal',
+        'replan',
+        'capabilities',
+      ])
       expect(manifest.sections).toContainEqual({
         kind: 'replan',
         previousVersion: 1,

@@ -275,4 +275,16 @@ describe('parsePlanDelta -- the capability cap is STRUCTURAL (fix round 1)', () 
     if (out.ok) return
     expect(out.error).toContain('more than 10 capabilities')
   })
+
+  // M47 t2 (carried ruling), the pattern's half of the same move: a label where a key belongs is a
+  // NAMED structural refusal, not a shape violation that quietly re-runs an earlier draft.
+  it('rejects a label where a key belongs, by name', () => {
+    const out = parsePlanDelta(
+      json({ add: [addTask({ capabilities: ['Application security'] })], cancel: [], keep: [] }),
+      EXISTING,
+    )
+    expect(out.ok).toBe(false)
+    if (out.ok) return
+    expect(out.error).toBe('added task "docs" asks for "Application security", which is not a capability key')
+  })
 })

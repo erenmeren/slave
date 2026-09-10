@@ -389,6 +389,49 @@ describe('importCatalog', () => {
     ])
   })
 
+  // M47 R1: the persona's own words, resolved against the taxonomy table. `syncCapabilityTaxonomy`
+  // runs inside `importCatalog` itself, so this needs no set-up beyond the persona.
+  it('resolves a persona capability to a taxonomy key and keeps what did not resolve (M47 R1)', async (): Promise<void> => {
+    const body = '## Core Capabilities\n\n- Application security\n- Vibes\n'
+    const result = await importOne([entry('appsec', 'Appsec Reviewer', body)])
+    expect(result.ok).toBe(true)
+
+    const row = await prisma.slaveTemplate.findUniqueOrThrow({
+      where: { sourceId: `${CATALOG}/engineering/appsec` },
+    })
+    expect(row.capabilityKeys).toEqual(['security.application'])
+    expect(row.unresolvedCapabilities).toEqual(['Vibes'])
+  })
+
+  it('resolves a collaboration hint to the persona it names, whichever order they imported in (M47 R5)', async (): Promise<void> => {
+    // The hint sentence names a persona that is imported AFTER the one writing it -- the whole
+    // point of the second pass (plan erratum E11).
+    const advisor = entry('gate-platform-builder', 'Gate Platform Builder')
+    const author = entry(
+      'appsec',
+      'Appsec Reviewer',
+      '## Core Capabilities\n\n- Application security\n\n## Collaboration\n\n- Consult the Gate Platform Builder about application security.\n',
+    )
+    const entries = [author, advisor]
+    expect((await importOne(entries)).ok).toBe(true)
+
+    const hints = await prisma.collaborationHint.findMany({ include: { targetTemplate: true } })
+    expect(hints).toHaveLength(1)
+    expect(hints[0]?.targetTemplate?.name).toBe('Gate Platform Builder')
+    expect(hints[0]?.capability).toBe('security.application')
+    // A second import of the same directory replaces rather than doubles.
+    expect((await importOne(entries)).ok).toBe(true)
+    expect(await prisma.collaborationHint.count()).toBe(1)
+  })
+
+  it('never writes a hint pointing at the persona that wrote it (M47 t1 review)', async (): Promise<void> => {
+    const body = '## Collaboration\n\n- Consult the Self Reviewer before shipping.\n'
+    expect((await importOne([entry('self-reviewer', 'Self Reviewer', body)])).ok).toBe(true)
+    const hints = await prisma.collaborationHint.findMany()
+    expect(hints).toHaveLength(1)
+    expect(hints[0]?.targetTemplateId).toBeNull()
+  })
+
   it('refuses an empty catalog and an unusable role map, writing nothing', async (): Promise<void> => {
     expect(await importOne([])).toEqual({ ok: false, error: { kind: 'catalog_empty', directory: DIRECTORY } })
     const bad = await importOne([entry('core-builder', 'Core Builder')], { roleMap: { engineering: '  ' } })

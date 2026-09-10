@@ -40,6 +40,9 @@ function row(over: Partial<CatalogRowView> = {}): CatalogRowView {
       'Delete what nobody calls',
       'Read a build back',
     ],
+    // M47 R1: the same capabilities resolved to taxonomy keys. Empty here -- these fixtures are
+    // M46-era rows, and an unresolved persona bullet is exactly what an empty list means.
+    capabilityKeys: [],
     expertise: ['Load-bearing code'],
     recommendedSkills: ['writing-plans'],
     mappingQuality: 'full',

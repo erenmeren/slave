@@ -185,4 +185,19 @@ describe('parsePlanGraph -- the capability cap is STRUCTURAL (fix round 1)', () 
     )
     expect(out.ok).toBe(true)
   })
+
+  // M47 t2 (carried ruling): the KEY PATTERN left the shape for the same reason the count did. A
+  // planner that writes a LABEL where a key belongs is the likeliest way this field goes wrong,
+  // and while the pattern lived in the shape that graph fell back to an earlier candidate object
+  // in the same message -- executing a draft the planner had already revised, over a spelling.
+  it('rejects a label where a key belongs, by name rather than falling back to an earlier draft', () => {
+    const text = [
+      JSON.stringify({ tasks: [{ key: 'a', title: 't', description: 'd', role: 'backend' }] }),
+      JSON.stringify({ tasks: [{ key: 'a', title: 't', description: 'd', capabilities: ['Application security'] }] }),
+    ].join('\n')
+    const out = parsePlanGraph(text)
+    expect(out.ok).toBe(false)
+    if (out.ok) return
+    expect(out.error).toBe('task "a" asks for "Application security", which is not a capability key')
+  })
 })

@@ -403,6 +403,27 @@ describe('assignCompany', () => {
     }
   })
 
+  // M47 R2: a materialised worker carries what its template PROVIDES, and the roles those
+  // capabilities project to are ADDED to its runtime role set -- never instead of the catalog role.
+  it('materializes the template capabilities and adds the roles they project to (M47 R2)', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const company = await prisma.company.create({ data: { name: 'Capable Corp' } })
+    const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
+    const template = await prisma.slaveTemplate.create({
+      data: { name: `Capable ${company.id}`, role: 'backend', capabilityKeys: ['security.application'] },
+    })
+    await prisma.companySlave.create({
+      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Sam' },
+    })
+
+    const result = await assignCompany(workspace.id, company.id)
+    expect(result.ok).toBe(true)
+
+    const slave = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: workspace.id } } })
+    expect(slave.capabilities).toEqual(['security.application'])
+    expect([...slave.runtimeRoles].toSorted()).toEqual(['backend', 'security'])
+  })
+
   it('re-running immediately creates nothing new but still emits an event with an empty workers array', async (): Promise<void> => {
     const workspace = await seedWorkspace()
     const { companyId } = await seedCompanyWithRoster(3)

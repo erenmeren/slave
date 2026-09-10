@@ -7,6 +7,7 @@ import {
   adoptSimulation,
   answerQuestion,
   approveDecision,
+  addCapability,
   archiveWorkspace,
   cancelTask,
   assignCompany,
@@ -29,9 +30,11 @@ import {
   deleteUser,
   emergencyStop,
   haltSimulation,
+  hireFromTemplate,
   importCatalog,
   injectExternalEvent,
   listCatalogImports,
+  listCapabilities,
   listDecisions,
   listGoalVersions,
   listPendingQuestions,
@@ -55,6 +58,7 @@ import {
   resumeSimulation,
   setProfile,
   setRuntimeRoles,
+  setSlaveCapabilities,
   setSlaveModel,
   setSlaveRole,
   setGoal,
@@ -66,6 +70,7 @@ import {
   startAutoRun,
   stepSimulation,
   stopAutoRun,
+  syncCapabilityTaxonomy,
   syncSkillCatalog,
   tickSimulations,
   plural,
@@ -254,6 +259,27 @@ const USAGE = `usage: orchestrator <command> [options]
   show-context --run <id> [--prompt]   what this run was told: the manifest of the sections its
                                        prompt was assembled from, and with --prompt the prompt
                                        itself after a rule
+
+  capabilities sync                    reconcile the capability taxonomy against the checked-in
+                                       list: adds what is missing, brings a seed row back to what
+                                       the list says, and never touches a row an operator added.
+  capabilities add --key <domain.name> --label <text> --role <r> [--synonyms a,b]
+                                       add an operator's own capability. The key's prefix IS its
+                                       domain, and --role is the runtime role it projects to.
+  capabilities list                    every capability: key, label and the role it projects to.
+  set-capabilities --slave <id> --capabilities a,b [--by <name>]
+                                       what this slave PROVIDES. Keys, labels and synonyms are all
+                                       accepted and resolved to keys; a word matching nothing is
+                                       reported on stderr and not stored. The capabilities replace;
+                                       the runtime roles they project to are ADDED, never removed
+                                       -- use set-runtime-roles to take a role away.
+                                       --capabilities '' clears them.
+  hire --workspace <id> --template <id> --why <text> [--capability <key>] [--temporary]
+                                       put a specialist from the catalog on this project, carrying
+                                       its template's capabilities and the roles those project to.
+                                       Re-running for the same template REUSES the worker already
+                                       hired from it rather than hiring a second. --why is required:
+                                       it is the record of why this worker is here.
 
   supervise --workspace <id> [--dry-run]
                                        one pass of the Supervisor over this workspace: observes
@@ -1459,6 +1485,70 @@ export async function main(argv: readonly string[]): Promise<number> {
         after.runtimeRoles.length === 0
           ? `${slaveId} now holds no runtime roles: it cannot be dispatched until it holds one\n`
           : `runtime roles set to ${after.runtimeRoles.join(', ')} on ${slaveId}\n`,
+      )
+      return 0
+    }
+
+    case 'capabilities': {
+      // `capabilities sync | add | list` -- one command with a subcommand, the `skills` verb's own
+      // shape in this file (the sub-verb is a positional, and `parseArgs` collects only flags, so
+      // it is read off the raw argv), because three sibling top-level verbs for one table would
+      // read as three unrelated features.
+      const sub = argv[1] ?? 'list'
+      if (sub === 'sync') {
+        const out = await syncCapabilityTaxonomy()
+        process.stdout.write(
+          `taxonomy synced: ${String(out.created)} added, ${String(out.updated)} brought back to the checked-in list\n`,
+        )
+        return 0
+      }
+      if (sub === 'add') {
+        const result = await addCapability({
+          key: requireFlag(flags, 'key'),
+          label: requireFlag(flags, 'label'),
+          role: requireFlag(flags, 'role'),
+          ...(flagText(flags, 'synonyms') === undefined ? {} : { synonyms: requireFlag(flags, 'synonyms').split(',') }),
+        })
+        if (!result.ok) throw new Error(refusalText(result.error))
+        process.stdout.write(`${result.value.key} added: ${result.value.label}, dispatched as "${result.value.role}"\n`)
+        return 0
+      }
+      if (sub === 'list') {
+        for (const record of await listCapabilities()) {
+          process.stdout.write(`${record.key}\t${record.label}\t-> ${record.role}\n`)
+        }
+        return 0
+      }
+      throw new Error('capabilities takes sync, add or list')
+    }
+
+    case 'set-capabilities': {
+      const slaveId = requireFlag(flags, 'slave')
+      // `--capabilities ''` clears them, the `--roles ''` idiom: an empty set is a real state.
+      const raw = requireFlag(flags, 'capabilities')
+      const result = await setSlaveCapabilities(slaveId, raw.trim() === '' ? [] : raw.split(','), operatorName(flags))
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(
+        `${slaveId} provides ${result.value.keys.length === 0 ? 'nothing' : result.value.keys.join(', ')}; ` +
+          `runtime roles ${result.value.runtimeRoles.join(', ')}\n`,
+      )
+      // Printed, never silent: an unresolved sentence is a fact about the taxonomy an operator can act on.
+      for (const unresolved of result.value.unresolved) {
+        process.stderr.write(`WARNING: "${unresolved}" matches no capability in the taxonomy and was not stored\n`)
+      }
+      return 0
+    }
+
+    case 'hire': {
+      const result = await hireFromTemplate(requireFlag(flags, 'workspace'), requireFlag(flags, 'template'), {
+        rationale: requireFlag(flags, 'why'),
+        ...(flagText(flags, 'capability') === undefined ? {} : { capabilities: [requireFlag(flags, 'capability')] }),
+        ...('temporary' in flags ? { temporary: true } : {}),
+      })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(
+        `${result.value.reused ? 'reused' : 'hired'} ${result.value.slaveId}: provides ${result.value.capabilities.join(', ')}, ` +
+          `dispatchable as ${result.value.runtimeRoles.join(', ')}\n`,
       )
       return 0
     }

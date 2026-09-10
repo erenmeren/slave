@@ -10,15 +10,19 @@ import {
   personaErrorText,
   personaToProfileSpec,
   personaToTemplate,
+  normaliseCapabilities,
+  normaliseCollaborationHint,
   profileOverridesSchema,
   profileSpecSchema,
   renderProfileSpec,
+  type CapabilityRecord,
   type MappingQuality,
   type ProfileOverridableField,
   type ProfileOverrides,
   type ProfileSpec,
   type Result,
 } from '@slave-of-ai/domain'
+import { listCapabilities, syncCapabilityTaxonomy } from './capability.js'
 import { isUniqueConstraintViolation } from './prisma-errors.js'
 import type { ControlRefusal } from './refusal.js'
 
@@ -163,6 +167,12 @@ export async function importCatalog(
   const roleMap = normaliseRoleMap(input.roleMap)
   if (!roleMap.ok) return roleMap
 
+  // R1: nothing matches on a key that is not a row, so the table is reconciled before a single
+  // persona is read. Cheap and idempotent -- `{ created: 0, updated: 0 }` on every import after
+  // the first.
+  await syncCapabilityTaxonomy()
+  const taxonomy = await listCapabilities()
+
   const startedAt = new Date()
   const created: RowOutcome[] = []
   const updated: RowOutcome[] = []
@@ -170,7 +180,7 @@ export async function importCatalog(
   const skipped: SkippedRow[] = []
 
   for (const entry of input.entries) {
-    const outcome = await importRow(entry, input, roleMap.value, startedAt)
+    const outcome = await importRow(entry, input, roleMap.value, startedAt, taxonomy)
     // A `switch` with a `never` default rather than an if/else chain whose last arm is a silent
     // catch-all: a fifth outcome added later must be routed HERE deliberately, and the compiler is
     // what says so -- an `else unchanged.push(...)` would have swallowed it into the wrong bucket.
@@ -203,6 +213,14 @@ export async function importCatalog(
     return ok({ importId: null, dryRun: true, catalog: input.catalog, directory: input.directory, ...report })
   }
 
+  // R5, plan erratum E11: hints resolve against EVERY template, so a sentence naming a persona
+  // that is imported later in the same run still finds it. Per template it is a replace, under
+  // `@@unique([templateId, text])`, so a re-import can never double an edge.
+  await writeCollaborationHints(
+    [...created, ...updated, ...unchanged].flatMap((outcome) => (outcome.templateId === null ? [] : [outcome.templateId])),
+    taxonomy,
+  )
+
   const row = await prisma.catalogImport.create({
     data: {
       catalog: input.catalog,
@@ -227,6 +245,7 @@ async function importRow(
   input: ImportCatalogInput,
   roleMap: Readonly<Record<string, string>> | undefined,
   importedAt: Date,
+  taxonomy: readonly CapabilityRecord[],
 ): Promise<Outcome> {
   const parsed = parsePersona({ path: entry.path, text: entry.text })
   if (!parsed.ok) {
@@ -268,6 +287,14 @@ async function importRow(
     importedAt,
     runtimeRole: draft.role,
   })
+
+  // Both halves of R1's promise, computed with the mapping and outside the transaction: the KEYS a
+  // catalog search and `formTeam` read, and the sentences that matched none of them -- kept
+  // verbatim so an operator can see what the taxonomy is missing.
+  const { keys: capabilityKeys, unresolved: unresolvedCapabilities } = normaliseCapabilities(
+    upstream.capabilities,
+    taxonomy,
+  )
 
   try {
     return await prisma.$transaction(async (tx): Promise<Outcome> => {
@@ -329,6 +356,8 @@ async function importRow(
               profile,
               profileSha256: goalSha256(profile),
               profileSpec: upstream as unknown as Prisma.InputJsonValue,
+              capabilityKeys: [...capabilityKeys],
+              unresolvedCapabilities: [...unresolvedCapabilities],
               sourceId: draft.sourceId,
               sourceSha256: draft.sourceSha256,
               sourceDivision: draft.sourceDivision,
@@ -407,6 +436,8 @@ async function importRow(
             profile: structuredProfile,
             profileSha256: goalSha256(structuredProfile),
             profileSpec: upstream as unknown as Prisma.InputJsonValue,
+            capabilityKeys: [...capabilityKeys],
+            unresolvedCapabilities: [...unresolvedCapabilities],
             sourceRevision: input.revision ?? null,
             sourceLicense: input.license ?? null,
             importedAt,
@@ -452,6 +483,11 @@ async function importRow(
           profile,
           profileSha256: goalSha256(profile),
           profileSpec: upstream as unknown as Prisma.InputJsonValue,
+          // Recomputed from the NEW upstream spec, which is the point: a persona that gained a
+          // capability bullet gains the key, and one whose bullet the taxonomy has since learned
+          // stops being unresolved.
+          capabilityKeys: [...capabilityKeys],
+          unresolvedCapabilities: [...unresolvedCapabilities],
           description: draft.description,
           sourceSha256: draft.sourceSha256,
           sourceDivision: draft.sourceDivision,
@@ -465,6 +501,50 @@ async function importRow(
   } catch (error) {
     if (error instanceof CatalogRowRefused) return { kind: 'skipped', row: error.row }
     throw error
+  }
+}
+
+/**
+ * The hint pass (R5). One read of every template's name, one read of the specs being re-hinted,
+ * and one replace per template -- never a query per sentence.
+ *
+ * Runs after the row loop, so a sentence naming a persona imported LATER in the same run still
+ * finds it (plan erratum E11), and after the dry-run return above, so a preview writes no edges.
+ */
+async function writeCollaborationHints(
+  templateIds: readonly string[],
+  taxonomy: readonly CapabilityRecord[],
+): Promise<void> {
+  if (templateIds.length === 0) return
+  const names = await prisma.slaveTemplate.findMany({ select: { id: true, name: true } })
+  const rows = await prisma.slaveTemplate.findMany({
+    where: { id: { in: [...templateIds] } },
+    select: { id: true, profileSpec: true },
+  })
+  for (const row of rows) {
+    const spec = profileSpecSchema.safeParse(row.profileSpec)
+    if (!spec.success) continue
+    // The template's OWN name is excluded (`normaliseCollaborationHint`'s caller contract): a
+    // persona that mentions its own title would otherwise advise consulting itself.
+    const others = names.filter((name) => name.id !== row.id)
+    const drafts = spec.data.collaborationHints.map((sentence) => normaliseCollaborationHint(sentence, others, taxonomy))
+    await prisma.$transaction([
+      prisma.collaborationHint.deleteMany({ where: { templateId: row.id, source: 'import' } }),
+      prisma.collaborationHint.createMany({
+        data: drafts.map((draft) => ({
+          templateId: row.id,
+          text: draft.text,
+          // Belt and braces over the exclusion above (M47 t1 review): the owner is filtered out of
+          // `others`, and a self-edge that reached this line anyway -- two templates sharing a
+          // name, a helper called with the wrong list -- is written as "names nobody" rather than
+          // as a worker advising itself.
+          targetTemplateId: draft.targetTemplateId === row.id ? null : draft.targetTemplateId,
+          capability: draft.capability,
+          source: 'import',
+        })),
+        skipDuplicates: true,
+      }),
+    ])
   }
 }
 
@@ -543,6 +623,10 @@ export interface WorkforceCatalogRow {
   readonly structured: boolean
   readonly summary: string
   readonly capabilities: readonly string[]
+  /** M47 R1: the same capabilities, resolved to taxonomy KEYS at import. Beside the free text
+   *  rather than instead of it -- the free text is what the search box matches and what an
+   *  unstructured row shows, and a key is what `formTeam` and a capability filter read. */
+  readonly capabilityKeys: readonly string[]
   readonly expertise: readonly string[]
   readonly recommendedSkills: readonly string[]
   readonly mappingQuality: MappingQuality | null
@@ -593,6 +677,7 @@ interface CatalogTemplateRow {
   sourceRevision: string | null
   sourceLicense: string | null
   importedAt: Date | null
+  capabilityKeys: string[]
 }
 
 function catalogRowOf(
@@ -623,6 +708,7 @@ function catalogRowOf(
     // undefined, and an empty cell where the catalog blurb would do is a worse row than the blurb.
     summary: (effective?.summary ?? '') || template.description,
     capabilities: effective?.capabilities ?? [],
+    capabilityKeys: template.capabilityKeys,
     expertise: effective?.expertise ?? [],
     recommendedSkills: effective?.recommendedSkills ?? [],
     mappingQuality: spec.success ? (spec.data.source?.mappingQuality ?? null) : null,
@@ -684,6 +770,7 @@ export async function listWorkforceCatalog(filters: WorkforceCatalogFilters = {}
         sourceRevision: true,
         sourceLicense: true,
         importedAt: true,
+        capabilityKeys: true,
       },
       orderBy: { name: 'asc' },
     }),

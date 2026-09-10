@@ -3,9 +3,17 @@ import {
   slaveId as brandSlaveId,
   runId as brandRunId,
   parsePlanGraph,
+  type CapabilityRecord,
   type RunId,
 } from '@slave-of-ai/domain'
-import { admitProvider, refusalText, resolveDenyList, runFilePaths, writePermissionsFile } from '@slave-of-ai/control'
+import {
+  admitProvider,
+  listCapabilities,
+  refusalText,
+  resolveDenyList,
+  runFilePaths,
+  writePermissionsFile,
+} from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
 import type { SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
@@ -98,22 +106,31 @@ export async function concludePlanning(runId: RunId): Promise<void> {
     throw new Error(`workspace ${workspaceId} has no goal, but ran planning run ${run.id}`)
   }
 
+  // R3: the taxonomy is the vocabulary a plan is written in, and the table is the authority on it.
+  // Read ONCE for the whole graph, before the transaction -- three hundred tasks must not be three
+  // hundred taxonomy reads.
+  const taxonomy = await listCapabilities()
+  const dropped = new Set<string>()
+
   const created = await prisma.$transaction(async (tx) => {
     const idByKey = new Map<string, string>()
     const rows: Array<{ readonly id: string; readonly title: string; readonly role: string }> = []
     for (const planTask of parsed.value.tasks) {
+      const { keys, unresolved } = normaliseCapabilitiesStrict(planTask.capabilities, taxonomy)
+      for (const key of unresolved) dropped.add(key)
+      // R2's precedence, and E1/E2's guarantee that it is total: an explicit role wins (the
+      // planner said what it wanted and the vocabulary is older than this milestone); otherwise
+      // the role of the FIRST valid capability the task asked for. `validateStructure` refuses a
+      // task with neither, so this is never null for a task a plan created.
+      const requiredRole = planTask.role ?? roleOfFirst(keys, taxonomy)
       const task = await tx.task.create({
         data: {
           workspaceId,
           title: planTask.title,
           description: planTask.description,
           status: 'ready',
-          // M47 t1 (plan erratum E2): `PlanTask.role` is optional now, and `?? null` is what
-          // "the planner named no role" stores. Task 2 replaces this with the DERIVED role -- the
-          // role the task's capabilities project to -- and writes `requiredCapabilities` beside
-          // it; until then a capability-only graph stores a null role, exactly as a hand-made
-          // task with no role does.
-          requiredRole: planTask.role ?? null,
+          requiredRole,
+          requiredCapabilities: [...keys],
           createdBy: 'slave',
           createdByUserId: workspace.goalSetByUserId,
           maxAttempts: workspace.maxAttempts,
@@ -172,8 +189,52 @@ export async function concludePlanning(runId: RunId): Promise<void> {
       goal: workspace.goal,
       goalVersion: workspace.goalVersion,
       tasks: created.map((task) => ({ id: task.id, title: task.title, role: task.role })),
+      // E14: a key the table does not have is DROPPED, and a silently ignored vocabulary is how an
+      // operator concludes the feature does not work. Absent when nothing was dropped, so a plan
+      // written entirely in the taxonomy's words carries no field about it at all.
+      ...(dropped.size === 0 ? {} : { droppedCapabilities: [...dropped].toSorted() }),
     },
   })
+}
+
+/**
+ * The keys a task may keep, and the ones it may not (R3).
+ *
+ * A model can only be told which keys exist; it cannot be prevented from inventing one. An
+ * invented key is DROPPED -- nothing matches on a key that is not in the table (R1) -- and
+ * recorded on the plan event, because a silently ignored vocabulary is how an operator concludes
+ * the feature does not work. Deliberately NOT `normaliseCapabilities`: the planner was given exact
+ * keys, and accepting a label here would let a plan name capabilities in a different vocabulary
+ * from the one the prompt showed it.
+ */
+export function normaliseCapabilitiesStrict(
+  values: readonly string[],
+  taxonomy: readonly CapabilityRecord[],
+): { readonly keys: readonly string[]; readonly unresolved: readonly string[] } {
+  const known = new Set(taxonomy.map((record) => record.key))
+  const keys: string[] = []
+  const unresolved: string[] = []
+  for (const value of values) {
+    const key = value.trim()
+    if (key === '') continue
+    if (!known.has(key)) {
+      if (!unresolved.includes(key)) unresolved.push(key)
+      continue
+    }
+    if (!keys.includes(key)) keys.push(key)
+  }
+  return { keys, unresolved }
+}
+
+/** The DERIVED dispatch role (R2): the role of the first capability the task asked for that the
+ *  taxonomy knows. `null` only when the task asked for nothing the table has -- in which case the
+ *  planner's own role is what stands, and `validateStructure` guaranteed there is one. */
+export function roleOfFirst(keys: readonly string[], taxonomy: readonly CapabilityRecord[]): string | null {
+  for (const key of keys) {
+    const record = taxonomy.find((row) => row.key === key)
+    if (record !== undefined) return record.role
+  }
+  return null
 }
 
 /**

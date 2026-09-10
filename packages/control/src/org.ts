@@ -1,8 +1,9 @@
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
-import { NON_TERMINAL_RUN_STATUSES, type Result, err, ok } from '@slave-of-ai/domain'
+import { NON_TERMINAL_RUN_STATUSES, projectRoles, type CapabilityRecord, type Result, err, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { PROVIDER_KINDS, type ProviderKind } from '@slave-of-ai/providers'
 import { admitProvider } from './budget.js'
+import { listCapabilities } from './capability.js'
 import type { Principal } from './principal.js'
 import { isUniqueConstraintViolation } from './prisma-errors.js'
 import type { ControlRefusal } from './refusal.js'
@@ -290,7 +291,11 @@ export async function assignCompany(
 
   let outcome: Result<AssignReport, ControlRefusal>
   try {
-    outcome = await prisma.$transaction(async (tx) => assignCompanyTx(tx, workspaceId, companyId, options))
+    // The taxonomy is read ONCE here, outside the transaction, and handed down (R2). A caller that
+    // passed its own keeps it -- `adoptSimulation` builds its options and would otherwise have this
+    // one overwritten.
+    const taxonomy = options?.taxonomy ?? (await listCapabilities())
+    outcome = await prisma.$transaction(async (tx) => assignCompanyTx(tx, workspaceId, companyId, { ...options, taxonomy }))
   } catch (error) {
     // `AssignmentRefused` (M34 t2 fix round 2): thrown, not returned, from a refusal
     // `assignCompanyTx` only discovers after it has already written to this SAME transaction --
@@ -319,7 +324,15 @@ export async function assignCompany(
  *  roles the RUNTIME dispatches on (`manager`, `reviewer`), never the simulation's own vocabulary.
  *  `requiredRole` is not touched by an override: that column names the role a TASK needs, and
  *  neither assignment nor adoption creates a task. */
-export interface AssignOptions { readonly roleOverrides?: Readonly<Record<string, string>> }
+export interface AssignOptions {
+  readonly roleOverrides?: Readonly<Record<string, string>>
+  /** M47 R2: the capability taxonomy, read ONCE by the caller (`assignCompany` does) and handed
+   *  down, because this function runs inside somebody else's transaction and must not open a
+   *  second connection to read a table. ABSENT means "project nothing", which is exactly what every
+   *  pre-M47 caller and every fixture means: a worker then materialises with the runtime roles M33
+   *  and M37 already gave it, and no capability projects anything on top. */
+  readonly taxonomy?: readonly CapabilityRecord[]
+}
 
 /**
  * Thrown by {@link assignCompanyTx} for the ONE refusal it can only discover after it has already
@@ -458,12 +471,20 @@ export async function assignCompanyTx(
       // emits -- the planner emits CATALOG roles. `role` itself keeps the override, unchanged from
       // M33: it is the title an operator reads on the roster.
       const override = options?.roleOverrides?.[companySlave.name]
+      // M47 R2: a materialised worker carries what its template PROVIDES, and its runtime roles
+      // are seeded with the roles those capabilities project to -- ADDITIVELY, on top of the
+      // override-and-catalog pair M33/M37 already write. The set only ever grows here: an
+      // override is a translation, a projection is an addition, and neither is a replacement.
+      const capabilities = template.capabilityKeys
       const worker = await tx.slave.create({
         data: {
           teamId: team.id,
           name: companySlave.name,
           role: override ?? template.role,
-          runtimeRoles: [...new Set([override ?? template.role, template.role])],
+          runtimeRoles: [
+            ...new Set([override ?? template.role, template.role, ...projectRoles(capabilities, options?.taxonomy ?? [])]),
+          ],
+          capabilities: [...capabilities],
           companySlaveId: companySlave.id,
         },
       })

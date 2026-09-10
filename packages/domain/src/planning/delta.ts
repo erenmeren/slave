@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { CAPABILITY_KEY_PATTERN } from '../capability/taxonomy.js'
 import { jsonObjectsLastToFirst } from '../json/last-object.js'
 import { err, ok, type Result } from '../result.js'
 import type { TaskStatus } from '../task/state.js'
@@ -80,6 +81,13 @@ function validateDelta(delta: PlanDelta, existingTaskIds: readonly string[]): Re
     }
     if (task.capabilities.length > MAX_TASK_CAPABILITIES) {
       return err(`added task "${task.key}" asks for more than ${String(MAX_TASK_CAPABILITIES)} capabilities`)
+    }
+    // `validateStructure`'s spelling rule, for the same reason (M47 t2): the shape lets any
+    // non-empty string through so a bad one cannot make an earlier draft run in its place, and the
+    // refusal is named here.
+    const malformed = task.capabilities.find((key) => !CAPABILITY_KEY_PATTERN.test(key))
+    if (malformed !== undefined) {
+      return err(`added task "${task.key}" asks for "${malformed}", which is not a capability key`)
     }
   }
 

@@ -1402,6 +1402,78 @@ describe('the orchestrator CLI', () => {
       expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).runtimeRoles).toEqual(['backend'])
     }, 30_000)
 
+    // M47 §2: the three verbs behind a capability. Real subprocess, like everything else here.
+    it('lists the taxonomy and adds an operator capability', async (): Promise<void> => {
+      const synced = await runCli(['capabilities', 'sync'])
+      expect(synced.code).toBe(0)
+      expect(synced.stdout).toContain('taxonomy synced')
+
+      const listed = await runCli(['capabilities', 'list'])
+      expect(listed.code).toBe(0)
+      expect(listed.stdout).toContain('security.application')
+      expect(listed.stdout).toContain('-> security')
+
+      const key = `m47cli.${String(Date.now())}`
+      const added = await runCli(['capabilities', 'add', '--key', key, '--label', 'A local thing', '--role', 'backend'])
+      expect(added.code).toBe(0)
+      expect((await runCli(['capabilities', 'list'])).stdout).toContain(key)
+      await prisma.capability.delete({ where: { key } })
+
+      const bad = await runCli(['capabilities', 'add', '--key', 'Not A Key', '--label', 'x', '--role', 'backend'])
+      expect(bad.code).not.toBe(0)
+      expect(bad.stderr).toContain('is not a key')
+    }, 60_000)
+
+    it('sets capabilities on a slave and warns on stderr about a word the taxonomy does not have', async (): Promise<void> => {
+      const result = await runCli([
+        'set-capabilities',
+        '--slave',
+        fixture.slaveId,
+        '--capabilities',
+        'Application security,Vibes',
+      ])
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('provides security.application')
+      expect(result.stderr).toContain('"Vibes" matches no capability in the taxonomy')
+
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })
+      expect(row.capabilities).toEqual(['security.application'])
+      // The role is ADDED to what the slave already held, never a replacement.
+      expect(row.runtimeRoles).toEqual(['backend', 'security'])
+    }, 60_000)
+
+    it('hires a specialist once and reuses it the second time', async (): Promise<void> => {
+      const template = await prisma.slaveTemplate.create({
+        data: { name: `Security Reviewer ${String(Date.now())}`, role: 'security', capabilityKeys: ['security.application'] },
+      })
+
+      const first = await runCli([
+        'hire',
+        '--workspace',
+        fixture.workspaceId,
+        '--template',
+        template.id,
+        '--why',
+        'the board needs application security',
+      ])
+      expect(first.code).toBe(0)
+      expect(first.stdout).toContain('hired ')
+      expect(first.stdout).toContain('provides security.application')
+
+      const second = await runCli([
+        'hire',
+        '--workspace',
+        fixture.workspaceId,
+        '--template',
+        template.id,
+        '--why',
+        'and again',
+      ])
+      expect(second.code).toBe(0)
+      expect(second.stdout).toContain('reused ')
+      expect(await prisma.slave.count({ where: { hiredFromTemplateId: template.id } })).toBe(1)
+    }, 60_000)
+
     it('prints a run context manifest, and its prompt after a rule with --prompt', async (): Promise<void> => {
       const run = await prisma.slaveRun.create({
         data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'succeeded' },

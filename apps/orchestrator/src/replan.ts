@@ -10,9 +10,15 @@ import {
   type Situation,
   type TaskStatus,
 } from '@slave-of-ai/domain'
-import { loadSupervisorWorld, recordDecision, refusalText } from '@slave-of-ai/control'
+import { listCapabilities, loadSupervisorWorld, recordDecision, refusalText } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
+// The two derivation helpers live beside `concludePlanning`, their first consumer, and are shared
+// from there rather than copied: a delta-added task and a first-plan task must derive their role
+// the same way or the board would hold two kinds of task. The import direction closes a cycle with
+// `planning.ts` -- the same shape `planning.ts` and `tick.ts` already have, and safe for the same
+// reason: both are hoisted function declarations, called long after either module is evaluated.
+import { normaliseCapabilitiesStrict, roleOfFirst } from './planning.js'
 
 /** The `replan` entry of a run's recorded manifest -- the only thing that tells a re-plan run from
  *  a first-plan run, since both are `kind: 'planning'` (spec erratum E2/E4). */
@@ -427,6 +433,9 @@ export async function concludeReplan(runId: RunId): Promise<void> {
       // ...and the ones that were allowed but did not happen anyway (fix round 1). The three lists
       // together account for every id the model asked to cancel.
       failedProposals: proposals.failed,
+      // E14: the keys the table does not have, dropped from the tasks that named them. Absent when
+      // there were none, exactly as on `workspace.plan_created`.
+      ...(applied.dropped.length === 0 ? {} : { droppedCapabilities: [...applied.dropped] }),
     },
   })
 }
@@ -479,6 +488,10 @@ type AppliedDelta =
       readonly created: readonly { readonly id: string; readonly title: string }[]
       readonly board: readonly BoardRow[]
       readonly delta: PlanDelta
+      /** M47 E14: the keys the taxonomy does not have, dropped from the tasks that asked for them
+       *  and carried out to `workspace.replanned` -- the first plan's own reporting, on the delta
+       *  path. */
+      readonly dropped: readonly string[]
     }
   | { readonly ok: false; readonly reason: string }
 
@@ -532,20 +545,28 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
     // that disagrees with a sentence). `goalVersion` is the version THIS re-plan derived from --
     // the run's own manifest, not `workspace.goalVersion`, which may have moved again while this
     // run was in flight.
+    // R3, the same read `concludePlanning` makes and for the same reason: once for the delta,
+    // never once per added task.
+    const taxonomy = await listCapabilities()
+    const dropped = new Set<string>()
+
     const created = await prisma.$transaction(async (tx) => {
       const idByKey = new Map<string, string>()
       const added: Array<{ readonly id: string; readonly title: string }> = []
       for (const planTask of parsed.value.add) {
+        const { keys, unresolved } = normaliseCapabilitiesStrict(planTask.capabilities, taxonomy)
+        for (const key of unresolved) dropped.add(key)
+        // `concludePlanning`'s precedence, character for character: an explicit role wins, and
+        // otherwise the role of the first capability the taxonomy knows.
+        const requiredRole = planTask.role ?? roleOfFirst(keys, taxonomy)
         const task = await tx.task.create({
           data: {
             workspaceId,
             title: planTask.title,
             description: planTask.description,
             status: 'ready',
-            // M47 t1 (plan erratum E2), the same line as `concludePlanning`'s: an optional role
-            // stores null when the planner named none, and Task 2 derives it from the task's
-            // capabilities instead.
-            requiredRole: planTask.role ?? null,
+            requiredRole,
+            requiredCapabilities: [...keys],
             createdBy: 'slave',
             createdByUserId: workspace.goalSetByUserId,
             maxAttempts: workspace.maxAttempts,
@@ -569,7 +590,7 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
       return added
     })
 
-    return { ok: true, created, board, delta: parsed.value }
+    return { ok: true, created, board, delta: parsed.value, dropped: [...dropped].toSorted() }
   } catch (error) {
     return {
       ok: false,

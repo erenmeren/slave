@@ -107,6 +107,8 @@ function templateRow(over: Partial<CatalogRowView> = {}): CatalogRowView {
     structured: false,
     summary: 'Builds the core.',
     capabilities: [],
+    // M47 R1: the taxonomy keys beside the free text. A hand-made row has none.
+    capabilityKeys: [],
     expertise: [],
     recommendedSkills: [],
     mappingQuality: null,

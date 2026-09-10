@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { capabilityKeySchema } from '../capability/taxonomy.js'
+import { CAPABILITY_KEY_PATTERN } from '../capability/taxonomy.js'
 import { jsonObjectsLastToFirst } from '../json/last-object.js'
 import { err, ok, type Result } from '../result.js'
 
@@ -37,11 +37,13 @@ const planTaskSchema = z.object({
   description: z.string().min(1),
   role: z.string().min(1).optional(),
   dependsOn: z.array(z.string()).default([]),
-  // UNBOUNDED here on purpose (fix round 1): a shape violation makes `parsePlanGraph` fall back to
-  // an EARLIER candidate object in the same message, so a cap enforced at this level would silently
-  // execute a draft the planner had already revised. The count is a structural rule, checked in
-  // {@link validateStructure} with a named error, exactly as the duplicate-key and cycle rules are.
-  capabilities: z.array(capabilityKeySchema).default([]),
+  // A plain non-empty string here on purpose (fix round 1, and M47 t2 for the PATTERN): a shape
+  // violation makes `parsePlanGraph` fall back to an EARLIER candidate object in the same message,
+  // so neither the count nor the spelling may be enforced at this level -- a planner that wrote a
+  // LABEL where a key belongs would otherwise have an already-revised draft executed on its
+  // behalf, over a spelling. Both are structural rules, checked in {@link validateStructure} with
+  // named errors, exactly as the duplicate-key and cycle rules are.
+  capabilities: z.array(z.string().min(1)).default([]),
 })
 
 /** How many capabilities one task may ask for. A task naming eleven has not been decomposed --
@@ -80,6 +82,15 @@ function validateStructure(graph: PlanGraph): Result<PlanGraph, string> {
     }
     if (task.capabilities.length > MAX_TASK_CAPABILITIES) {
       return err(`task "${task.key}" asks for more than ${String(MAX_TASK_CAPABILITIES)} capabilities`)
+    }
+    // The vocabulary is KEYS (R1, R3): the prompt shows the planner keys and nothing else, so a
+    // label here is a plan written in a vocabulary nobody offered. Refused by name rather than
+    // dropped, because a task whose only capabilities were labels would derive no role at all --
+    // and `droppedCapabilities` (which reports keys the TABLE does not have) cannot rescue a
+    // string that could never have been a key.
+    const malformed = task.capabilities.find((key) => !CAPABILITY_KEY_PATTERN.test(key))
+    if (malformed !== undefined) {
+      return err(`task "${task.key}" asks for "${malformed}", which is not a capability key`)
     }
   }
 
