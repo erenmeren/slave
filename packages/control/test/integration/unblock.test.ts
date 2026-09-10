@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { decide, DEFAULT_GUARDRAIL_LIMITS, slaveId, taskId, type SchedulableTask, type World } from '@slave-of-ai/domain'
+import { decide, DEFAULT_GUARDRAIL_LIMITS, REVIEW_RETRY_CAP, slaveId, taskId, type SchedulableTask, type World } from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { refusalText } from '../../src/refusal.js'
 import { requestStop } from '../../src/stop.js'
@@ -47,6 +47,14 @@ async function makeBlockedTask(
     },
   })
   return { id: task.id }
+}
+
+/** A team and one worker, for the cases that need real `SlaveRun` rows to reason about: since M42
+ *  t1 `unblockTask` reads the task's runs to decide WHERE an unblock sends it. */
+async function makeSlave(workspaceId: string): Promise<{ readonly id: string }> {
+  return prisma.slave.create({
+    data: { team: { create: { workspaceId, name: 'Engineering' } }, name: 'Alex', role: 'backend' },
+  })
 }
 
 /** Proves "becomes schedulable" the way `decide()` itself defines it, not by trusting the status
@@ -175,7 +183,9 @@ describe('unblockTask', () => {
     const events = await prisma.executionEvent.findMany({ where: { taskId: task.id, type: 'task_unblocked' } })
     expect(events).toHaveLength(1)
     expect(events[0]?.actor).toBe('human')
-    expect(events[0]?.payload).toEqual({ attempt: 1, maxAttempts: 3 })
+    // `status` says where the unblock actually sent it (M42 t1): `rework` for a task that was not
+    // parked under review.
+    expect(events[0]?.payload).toEqual({ attempt: 1, maxAttempts: 3, status: 'rework' })
   })
 
   it('stamps the envelope actor system when the Supervisor is the one unblocking (M38 t2)', async (): Promise<void> => {
@@ -187,7 +197,7 @@ describe('unblockTask', () => {
     const events = await prisma.executionEvent.findMany({ where: { taskId: task.id, type: 'task_unblocked' } })
     expect(events[0]?.actor).toBe('system')
     // Nothing else about the verb moves with the origin: the same write, the same payload.
-    expect(events[0]?.payload).toEqual({ attempt: 1, maxAttempts: 3 })
+    expect(events[0]?.payload).toEqual({ attempt: 1, maxAttempts: 3, status: 'rework' })
     expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('rework')
   })
 
@@ -285,7 +295,7 @@ describe('unblockTask', () => {
       expect(schedulable(after)).toBe(true)
 
       const events = await prisma.executionEvent.findMany({ where: { taskId: task.id, type: 'task_unblocked' } })
-      expect(events[0]?.payload).toEqual({ attempt: 3, maxAttempts: 4 })
+      expect(events[0]?.payload).toEqual({ attempt: 3, maxAttempts: 4, status: 'rework' })
     })
 
     it('an allowance on a task NOT at its ceiling changes nothing about maxAttempts', async (): Promise<void> => {
@@ -320,5 +330,80 @@ describe('unblockTask', () => {
     const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
     expect(after.status).toBe('rework')
     expect(await prisma.executionEvent.count({ where: { taskId: task.id, type: 'task_unblocked' } })).toBe(1)
+  })
+  // M42 t1 (spec R6b): WHERE an unblock sends the task depends on which run parked it.
+  it('returns a task blocked under review to reviewing, not rework, and charges no attempt', async (): Promise<void> => {
+    // `rework` would spend an implementation attempt re-doing work nobody has judged wrong -- the
+    // same argument `sweep.ts` makes for a review run's own release (M41 t3b).
+    const slave = await makeSlave(workspaceId)
+    const task = await makeBlockedTask(workspaceId, { attempt: 1, maxAttempts: 3 })
+    await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId: slave.id, kind: 'implementation', status: 'succeeded', startedAt: new Date(Date.now() - 60_000) },
+    })
+    await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId: slave.id, kind: 'review', status: 'failed', startedAt: new Date() },
+    })
+
+    const result = await unblockTask(task.id)
+
+    expect(result).toEqual({ ok: true, value: { status: 'reviewing' } })
+    const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(after.status).toBe('reviewing')
+    expect(after.attempt).toBe(1)
+    const event = await prisma.executionEvent.findFirstOrThrow({ where: { workspaceId, taskId: task.id }, orderBy: { seq: 'desc' } })
+    expect((event.payload as { status?: string }).status).toBe('reviewing')
+  })
+
+  it('sends a task whose review budget is spent to rework instead: reviewing would re-park it on the next tick', async (): Promise<void> => {
+    // `dispatchReview` counts review runs since the LATEST implementation run and parks the task
+    // again the moment that count reaches REVIEW_RETRY_CAP. A fresh implementation run is the only
+    // thing that resets it, so `rework` is the only unblock that actually moves.
+    const slave = await makeSlave(workspaceId)
+    const task = await makeBlockedTask(workspaceId, { attempt: 1, maxAttempts: 3 })
+    const impl = new Date(Date.now() - 60_000)
+    await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId: slave.id, kind: 'implementation', status: 'succeeded', startedAt: impl },
+    })
+    for (let i = 0; i < REVIEW_RETRY_CAP; i += 1) {
+      await prisma.slaveRun.create({
+        data: { taskId: task.id, slaveId: slave.id, kind: 'review', status: 'failed', startedAt: new Date(impl.getTime() + 1_000 * (i + 1)) },
+      })
+    }
+
+    const result = await unblockTask(task.id)
+
+    expect(result).toEqual({ ok: true, value: { status: 'rework' } })
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('rework')
+  })
+
+  it('still sends a task blocked under an implementation run to rework', async (): Promise<void> => {
+    const slave = await makeSlave(workspaceId)
+    const task = await makeBlockedTask(workspaceId, { attempt: 1, maxAttempts: 3 })
+    await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId: slave.id, kind: 'implementation', status: 'failed', startedAt: new Date() },
+    })
+
+    const result = await unblockTask(task.id)
+
+    expect(result).toEqual({ ok: true, value: { status: 'rework' } })
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('rework')
+  })
+
+  it('does not check the attempt ceiling on the reviewing path: no implementation attempt is spent', async (): Promise<void> => {
+    const slave = await makeSlave(workspaceId)
+    const task = await makeBlockedTask(workspaceId, { attempt: 5, maxAttempts: 5 })
+    await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId: slave.id, kind: 'implementation', status: 'succeeded', startedAt: new Date(Date.now() - 60_000) },
+    })
+    await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId: slave.id, kind: 'review', status: 'failed', startedAt: new Date() },
+    })
+
+    const result = await unblockTask(task.id)
+
+    expect(result).toEqual({ ok: true, value: { status: 'reviewing' } })
+    const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(after.maxAttempts).toBe(5)
+    expect(after.attempt).toBe(5)
   })
 })

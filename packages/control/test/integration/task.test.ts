@@ -217,10 +217,12 @@ describe('cancelTask', () => {
   })
 
   it('refuses a reviewing task whose activeRunId names a live review run with task_run_active, not task_not_cancellable', async () => {
-    // The claim check runs before the status check (`cancelTask`'s own ordering), so a task that
-    // fails BOTH -- reviewing is not cancellable AND it is claimed -- is refused for the claim, the
-    // more specific and more urgent of the two reasons: nothing about this task's own board status
-    // should move while a run still holds it.
+    // The ORDER is the assertion (M41 t3b, re-pinned as M42 t1 / spec R6c). The claim check runs
+    // before the status check (`cancelTask`'s own ordering), so a task that fails BOTH -- reviewing
+    // is not cancellable AND it is claimed, which is the ordinary shape of a task under review now
+    // that `dispatchReview` claims one -- is refused for the claim, the more specific and more
+    // urgent of the two reasons: nothing about this task's own board status should move while a run
+    // still holds it.
     const team = await prisma.team.create({ data: { workspaceId: f.workspaceId, name: 'Engineering' } })
     const slave = await prisma.slave.create({
       data: { teamId: team.id, name: 'Rae', role: 'Reviewer', runtimeRoles: ['reviewer'] },

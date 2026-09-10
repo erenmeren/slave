@@ -795,7 +795,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       const allowAnotherAttempt = 'allow-another-attempt' in flags
       const result = await unblockTask(taskIdFlag, { allowAnotherAttempt })
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`task ${taskIdFlag} is unblocked and back in rework\n`)
+      process.stdout.write(`task ${taskIdFlag} is unblocked and back in ${result.value.status}\n`)
       return 0
     }
 

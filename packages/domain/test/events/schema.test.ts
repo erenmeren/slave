@@ -786,4 +786,34 @@ describe('parseExecutionEvent', () => {
     })
     expect(result.ok).toBe(false)
   })
+  it('keeps answeredBy on a slave.message_sent payload (M42 t1)', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      actor: 'human',
+      type: 'slave.message_sent',
+      payload: { body: 'the retry queue', messageId: 'm1', kind: 'answer', answeredBy: 'supervisor' },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'slave.message_sent') {
+      expect(result.value.payload.answeredBy).toBe('supervisor')
+    }
+  })
+
+  it('keeps status on a task.unblocked payload and still parses one without it (M42 t1)', () => {
+    const withStatus = parseExecutionEvent({
+      ...BASE,
+      actor: 'human',
+      type: 'task.unblocked',
+      taskId: 't1',
+      payload: { attempt: 1, maxAttempts: 3, status: 'reviewing' },
+    })
+    expect(withStatus.ok).toBe(true)
+    if (withStatus.ok && withStatus.value.type === 'task.unblocked') {
+      expect(withStatus.value.payload.status).toBe('reviewing')
+    }
+    // Every row written before M42 records the two counters and nothing else.
+    expect(
+      parseExecutionEvent({ ...BASE, actor: 'human', type: 'task.unblocked', taskId: 't1', payload: { attempt: 1, maxAttempts: 3 } }).ok,
+    ).toBe(true)
+  })
 })

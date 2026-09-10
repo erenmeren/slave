@@ -74,6 +74,12 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       recipientSlaveId: z.string().min(1).nullable().optional(),
       recipientRole: z.string().min(1).nullable().optional(),
       expectsReply: z.boolean().optional(),
+      /** M42 t1 (spec R6d): WHO answered, by name -- the CLI's operator, or `supervisor`, which the
+       *  envelope's closed three-way `Actor` has no member for. `answerQuestion`
+       *  (`packages/control/src/messaging.ts`) has written this since M36 t3; the payload object is
+       *  not strict, so an undeclared field was silently dropped on every read instead of failing
+       *  anything. Optional, because a worker-authored message never carries one. */
+      answeredBy: z.string().min(1).optional(),
     }),
   }),
   // M39 t2: `reassignQuestion` (packages/control/src/messaging.ts) put an unanswered question in
@@ -367,7 +373,14 @@ export const executionEventSchema = z.discriminatedUnion('type', [
   z.object({
     ...envelope,
     type: z.literal('task.unblocked'),
-    payload: z.object({ attempt: z.number().int().nonnegative(), maxAttempts: z.number().int().positive() }),
+    payload: z.object({
+      attempt: z.number().int().nonnegative(),
+      maxAttempts: z.number().int().positive(),
+      /** M42 t1 (spec R6b): where the task actually went -- `rework`, or `reviewing` for a task that
+       *  was parked while it was under review. Optional on read: every row written before M42
+       *  records the two counters and nothing else. */
+      status: z.enum(['rework', 'reviewing']).optional(),
+    }),
   }),
   // M38 t1: the five events the Supervisor's control verbs write (spec section 2). All appended by
   // `packages/control/src/supervisor.ts`, and all with `actor: 'system'` EXCEPT the

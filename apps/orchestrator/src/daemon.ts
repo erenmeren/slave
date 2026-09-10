@@ -195,7 +195,12 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
       // surprise. Until M9 wired this line, `sweep()` had no production caller at all and the
       // runTimeoutMs / maxToolCallsPerRun limits were enforced by nothing.
       const swept = await sweep({ workspaceId: deps.workspaceId, registry: deps.registry, livePumpRunIds: activePumpRunIds })
-      if (swept.timedOut.length > 0 || swept.overToolCap.length > 0 || swept.deadPids.length > 0) {
+      if (
+        swept.timedOut.length > 0 ||
+        swept.overToolCap.length > 0 ||
+        swept.deadPids.length > 0 ||
+        swept.strandedClaims.length > 0
+      ) {
         process.stdout.write(`${JSON.stringify({ sweep: swept })}\n`)
       }
     } catch (error) {

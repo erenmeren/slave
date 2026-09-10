@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { type Result, err, ok } from '@slave-of-ai/domain'
+import { REVIEW_RETRY_CAP, type Result, err, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
@@ -43,6 +43,15 @@ export interface UnblockTaskInput {
  * itself. `rework` costs nothing when the leftover state turns out not to exist either --
  * `acquireWorktree` only adopts when `provisionWorktree` actually throws, so a task with a
  * genuinely clean worktree is provisioned fresh either way.
+ *
+ * Since M42 t1 (spec R6b) there is a second destination, and only one. A task parked while it was
+ * being REVIEWED goes back to `reviewing`: a review run holds no implementation attempt, and
+ * `rework` would spend one re-doing work nobody has judged wrong -- the same argument `sweep.ts`
+ * makes for a review run's own release. It goes back to `reviewing` only while a review can still
+ * run, though: `dispatchReview`'s `REVIEW_RETRY_CAP` counts review runs since the latest
+ * implementation run, so a task whose review budget is spent would be re-parked `blocked` on the
+ * next tick, and for that task `rework` -- a fresh implementation run, which is what resets that
+ * count -- is the only unblock that moves anything.
  *
  * This reads as the opposite of `tick.ts`'s `failToStart`, which picks `blocked` SPECIFICALLY so
  * the task is NOT `rework` -- its own comment says landing in `rework` "would hold for one tick
@@ -88,7 +97,7 @@ export async function unblockTask(
   taskId: string,
   input: UnblockTaskInput = {},
   principal?: Principal,
-): Promise<Result<void, ControlRefusal>> {
+): Promise<Result<{ readonly status: 'rework' | 'reviewing' }, ControlRefusal>> {
   const task = await prisma.task.findUnique({ where: { id: taskId } })
   if (task === null) return err({ kind: 'task_not_found', taskId })
   if (task.status !== 'blocked') return err({ kind: 'task_not_blocked', taskId, status: task.status })
@@ -96,7 +105,43 @@ export async function unblockTask(
     return err({ kind: 'task_run_active', taskId, runId: task.activeRunId })
   }
 
-  const atCeiling = task.attempt >= task.maxAttempts
+  // Which run parked this task, and therefore where it belongs. All four parks null `activeRunId`
+  // in the same write that sets `blocked`, so the blocking run is not on the row any more -- the
+  // task's most recent run is. A `review` kind means the task was in `reviewing` when it was
+  // parked (the review retry cap, or an operator cancelling a review run through `stop.ts`).
+  const latestRun = await prisma.slaveRun.findFirst({
+    where: { taskId },
+    orderBy: { startedAt: 'desc' },
+    select: { kind: true, startedAt: true },
+  })
+
+  // ... and whether sending it back there would accomplish anything. `dispatchReview` counts review
+  // runs since the latest IMPLEMENTATION run and parks the task `blocked` again the moment that
+  // count reaches REVIEW_RETRY_CAP -- so unblocking a cap-spent task to `reviewing` is an unblock
+  // that undoes itself on the very next tick, which is exactly the invert-in-one-tick failure this
+  // function's own doc comment refuses for `ready`. A fresh implementation run is the only thing
+  // that resets that count, and `rework` is how one is started.
+  const reviewBudgetSpent = async (): Promise<boolean> => {
+    const latestImpl = await prisma.slaveRun.findFirst({
+      where: { taskId, kind: 'implementation' },
+      orderBy: { startedAt: 'desc' },
+      select: { startedAt: true },
+    })
+    if (latestImpl === null) return true
+    const attempts = await prisma.slaveRun.count({
+      where: { taskId, kind: 'review', startedAt: { gt: latestImpl.startedAt } },
+    })
+    return attempts >= REVIEW_RETRY_CAP
+  }
+
+  const status: 'rework' | 'reviewing' =
+    latestRun?.kind === 'review' && !(await reviewBudgetSpent()) ? 'reviewing' : 'rework'
+
+  // The ceiling governs IMPLEMENTATION attempts, and the `reviewing` path spends none: the next run
+  // this task gets is a review run, bounded by REVIEW_RETRY_CAP rather than by `maxAttempts`.
+  // Checking it there would refuse an unblock that could not have burnt the attempt it is refusing
+  // to allow.
+  const atCeiling = status === 'rework' && task.attempt >= task.maxAttempts
   if (atCeiling && input.allowAnotherAttempt !== true) {
     return err({ kind: 'attempt_ceiling_reached', taskId, attempt: task.attempt, maxAttempts: task.maxAttempts })
   }
@@ -104,7 +149,7 @@ export async function unblockTask(
 
   const claimed = await prisma.task.updateMany({
     where: { id: taskId, status: 'blocked', activeRunId: null },
-    data: { status: 'rework', maxAttempts },
+    data: { status, maxAttempts },
   })
   if (claimed.count === 0) {
     // Lost a race -- another call (or, in principle, some other writer) moved this task between
@@ -120,8 +165,8 @@ export async function unblockTask(
     workspaceId: task.workspaceId,
     taskId,
     actor: input.origin ?? 'human',
-    payload: { attempt: task.attempt, maxAttempts },
+    payload: { attempt: task.attempt, maxAttempts, status },
     userId: principal?.userId ?? null,
   })
-  return ok(undefined)
+  return ok({ status })
 }

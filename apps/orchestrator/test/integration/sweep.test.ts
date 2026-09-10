@@ -73,7 +73,7 @@ describe('sweep and reconcileOrphans', () => {
   let concludeDuringCancel: boolean
 
   const givenRun = async (data: {
-    status: 'working' | 'paused' | 'starting' | 'stopping' | 'succeeded' | 'pause_requested' | 'resuming'
+    status: 'working' | 'paused' | 'starting' | 'stopping' | 'succeeded' | 'failed' | 'pause_requested' | 'resuming'
     pid?: number | null
     toolCalls?: number
     startedAt?: Date
@@ -301,7 +301,7 @@ describe('sweep and reconcileOrphans', () => {
 
     const report = await sweep(deps)
 
-    expect(report).toEqual({ timedOut: [], overToolCap: [], deadPids: [] })
+    expect(report).toEqual({ timedOut: [], overToolCap: [], deadPids: [], strandedClaims: [] })
     expect(cancelled).toEqual([])
     expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
   })
@@ -394,7 +394,7 @@ describe('sweep and reconcileOrphans', () => {
 
     // The other half of the same race: a run already terminal is not swept at all, so no cancel is
     // issued and nothing announces one.
-    expect(report).toEqual({ timedOut: [], overToolCap: [], deadPids: [] })
+    expect(report).toEqual({ timedOut: [], overToolCap: [], deadPids: [], strandedClaims: [] })
     expect(cancelled).toEqual([])
     expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
   })
@@ -464,7 +464,7 @@ describe('sweep and reconcileOrphans', () => {
     // it is reached. Seeded away from the boundary, `>` and `>=` are indistinguishable.
     const report = await sweep(deps)
 
-    expect(report).toEqual({ timedOut: [], overToolCap: [], deadPids: [] })
+    expect(report).toEqual({ timedOut: [], overToolCap: [], deadPids: [], strandedClaims: [] })
   })
 
   it('counts only the runs it actually failed', async (): Promise<void> => {
@@ -535,7 +535,7 @@ describe('sweep and reconcileOrphans', () => {
 
     const report = await sweep(deps)
 
-    expect(report).toEqual({ timedOut: [], overToolCap: [], deadPids: [] })
+    expect(report).toEqual({ timedOut: [], overToolCap: [], deadPids: [], strandedClaims: [] })
     expect(cancelled).toEqual([])
   })
 
@@ -595,6 +595,79 @@ describe('sweep and reconcileOrphans', () => {
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(task.status).toBe('merging')
     expect(task.mergeClaimedAt).toBeNull()
+    expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
+  })
+  it('releases a task whose activeRunId names a terminal implementation run: rework, no attempt charged', async (): Promise<void> => {
+    // The strand this arm exists for: `pumpRun` wrote the run terminal and the process died before
+    // its chained `verifyConcludedRun` could release the task. Nothing else in the milestone looks
+    // at a task whose claim points at a run that is already over.
+    const run = await givenRun({ status: 'succeeded', pid: process.pid })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { terminalAt: hoursAgo(1), endedAt: hoursAgo(1) } })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'running', activeRunId: run.id, attempt: 1 } })
+
+    const report = await sweep(deps)
+
+    expect(report.strandedClaims).toEqual([fixture.taskId])
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('rework')
+    expect(task.activeRunId).toBeNull()
+    // A daemon that died is not the slave failing -- `reconcileOrphans`' own rule.
+    expect(task.attempt).toBe(1)
+    expect(await eventTypesFor(fixture.workspaceId)).toEqual(['task.rework'])
+  })
+
+  it('releases only the CLAIM of a task whose activeRunId names a terminal review run, leaving it reviewing', async (): Promise<void> => {
+    const run = await givenRun({ status: 'failed', pid: process.pid, kind: 'review' })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { terminalAt: hoursAgo(1), endedAt: hoursAgo(1) } })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'reviewing', activeRunId: run.id } })
+
+    const report = await sweep(deps)
+
+    expect(report.strandedClaims).toEqual([fixture.taskId])
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('reviewing')
+    expect(task.activeRunId).toBeNull()
+    // `rework` would be a lie about where the task went AND an implementation attempt spent on work
+    // nobody judged wrong, so no `task.rework` is announced for this kind (sweep.ts's own rule).
+    expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
+  })
+
+  it('leaves a stranded claim alone while a pump in this process still owns the run', async (): Promise<void> => {
+    // `activePumpRunIds.delete(runId)` runs in the pump chain's `.finally()`, AFTER
+    // `verifyConcludedRun` -- so a run still in the set has not finished releasing its task.
+    const run = await givenRun({ status: 'succeeded', pid: process.pid })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { terminalAt: hoursAgo(1), endedAt: hoursAgo(1) } })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'running', activeRunId: run.id } })
+
+    const report = await sweep({ ...deps, livePumpRunIds: new Set([run.id]) })
+
+    expect(report.strandedClaims).toEqual([])
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).activeRunId).toBe(run.id)
+  })
+
+  it('leaves a claim alone until the run has been terminal for the grace period', async (): Promise<void> => {
+    // A one-shot `tick` in ANOTHER process has an in-flight window this process's set cannot see.
+    const run = await givenRun({ status: 'succeeded', pid: process.pid })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { terminalAt: new Date(), endedAt: new Date() } })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'running', activeRunId: run.id } })
+
+    const report = await sweep(deps)
+
+    expect(report.strandedClaims).toEqual([])
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).activeRunId).toBe(run.id)
+  })
+
+  it('unclaims but does not rework a task that has already moved off running', async (): Promise<void> => {
+    const run = await givenRun({ status: 'failed', pid: process.pid })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { terminalAt: hoursAgo(1), endedAt: hoursAgo(1) } })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'blocked', activeRunId: run.id } })
+
+    const report = await sweep(deps)
+
+    expect(report.strandedClaims).toEqual([fixture.taskId])
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('blocked')
+    expect(task.activeRunId).toBeNull()
     expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
   })
 })

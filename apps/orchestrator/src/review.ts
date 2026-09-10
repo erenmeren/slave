@@ -4,6 +4,7 @@ import {
   runId as brandRunId,
   taskId as brandTaskId,
   parseReviewVerdict,
+  REVIEW_RETRY_CAP,
   type RunId,
 } from '@slave-of-ai/domain'
 import { admitProvider, refusalText, resolveDenyList, runFilePaths, writePermissionsFile } from '@slave-of-ai/control'
@@ -21,9 +22,6 @@ import { gitIn } from './worktree.js'
 
 /** A single unified diff capped this many characters, past which it is truncated with a marker. */
 const DIFF_CHAR_LIMIT = 60_000
-
-/** How many review runs a task may burn before its cycle is escalated rather than retried (Erratum 2). */
-const REVIEW_RETRY_CAP = 2
 
 /** Task ids already warned about as unreviewable -- once per daemon lifetime, not once per tick
  *  (M15 spec §3 B5): the seeded `reviewing` fixture task made this line the daemon log's loudest
