@@ -119,7 +119,13 @@ describe('actionText', () => {
 
   it('names the worker a materialise_company_worker brings over', () => {
     expect(
-      actionText({ kind: 'materialise_company_worker', companySlaveId: 'cs1', capability: 'security.application', name: 'Sam' }),
+      actionText({
+        kind: 'materialise_company_worker',
+        companySlaveId: 'cs1',
+        capability: 'security.application',
+        name: 'Sam',
+        rationale: 'Sam is already on the company roster and provides Application security.',
+      }),
     ).toBe('bring Sam onto this project from the company roster, for security.application')
   })
 

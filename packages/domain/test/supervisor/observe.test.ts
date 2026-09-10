@@ -447,6 +447,34 @@ describe('observe -- capability_unstaffed (M47 R4)', () => {
     expect(keys(observe(w))).toEqual([['ready_unstaffed', 'security']])
   })
 
+  // Fix round 1, Minor 3: the E8 combination the first pass tested only one half of at a time.
+  it('raises one capability situation, and no role gap, for a task with one staffed and one unstaffed key', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [
+        task({
+          status: 'ready',
+          requiredRole: 'security',
+          requiredCapabilities: ['backend.api-design', 'security.application'],
+        }),
+      ],
+      // Holds `backend`, so `backend.api-design` is staffed and `security.application` is not.
+      slaves: [slave({ runtimeRoles: ['backend'] })],
+    })
+    expect(keys(observe(w))).toEqual([['capability_unstaffed', 'security.application']])
+  })
+
+  it('raises the role gap for a task whose capabilities are ALL staffed but whose typed role is unheld', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [
+        task({ status: 'ready', requiredRole: 'qa', requiredCapabilities: ['backend.api-design'] }),
+      ],
+      slaves: [slave({ runtimeRoles: ['backend'] })],
+    })
+    expect(keys(observe(w))).toEqual([['ready_unstaffed', 'qa']])
+  })
+
   it('produces a situation that validates against situationSchema', () => {
     const w = world({
       taxonomy: TAXONOMY,

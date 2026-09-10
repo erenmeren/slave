@@ -6,6 +6,7 @@ import {
   listCapabilities,
   listOrganization,
   materialiseCompanySlave,
+  mergeRuntimeRoles,
   setSlaveCapabilities,
   syncCapabilityTaxonomy,
 } from '../../src/capability.js'
@@ -28,6 +29,10 @@ beforeEach(async (): Promise<void> => {
   await prisma.capability.deleteMany({ where: { createdBy: { not: 'seed' } } })
   await syncCapabilityTaxonomy()
 })
+
+/** The `slave.runtime_roles_changed` rows written for one worker. */
+const roleEvents = (slaveId: string) =>
+  prisma.executionEvent.findMany({ where: { type: 'slave_runtime_roles_changed', slaveId } })
 
 async function workspace(): Promise<{ workspaceId: string; teamId: string }> {
   const ws = await prisma.workspace.create({
@@ -106,6 +111,65 @@ describe('setSlaveCapabilities', () => {
 
   it('refuses a slave that is not there', async (): Promise<void> => {
     const out = await setSlaveCapabilities('nope', ['appsec'], 'operator')
+    expect(out.ok).toBe(false)
+    if (out.ok) return
+    expect(out.error.kind).toBe('slave_not_found')
+  })
+})
+
+/**
+ * Fix round 1, Important 1. The Supervisor's `assign_capability` is the first AUTO-APPLIED runtime
+ * role write in the system, and the M38 helper it used to go through read the slave outside the
+ * lock its write took: `setSlaveCapabilities` committing `['backend','frontend']` in between meant
+ * `frontend` was silently dropped by a union computed from a stale read.
+ */
+describe('mergeRuntimeRoles', () => {
+  it('unions the adds into what the worker holds, held first', async (): Promise<void> => {
+    const { teamId } = await workspace()
+    const slave = await prisma.slave.create({
+      data: { teamId, name: 'Rae', role: 'Engineer', runtimeRoles: ['backend'] },
+    })
+    const out = await mergeRuntimeRoles(slave.id, ['security'], 'supervisor')
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.value.runtimeRoles).toEqual(['backend', 'security'])
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slave.id } })).runtimeRoles).toEqual([
+      'backend',
+      'security',
+    ])
+    expect(await roleEvents(slave.id)).toHaveLength(1)
+  })
+
+  it('writes nothing and records nothing when the worker already holds every add', async (): Promise<void> => {
+    const { teamId } = await workspace()
+    const slave = await prisma.slave.create({
+      data: { teamId, name: 'Rae', role: 'Engineer', runtimeRoles: ['backend'] },
+    })
+    expect((await mergeRuntimeRoles(slave.id, ['security'], 'supervisor')).ok).toBe(true)
+    const again = await mergeRuntimeRoles(slave.id, ['security'], 'supervisor')
+    expect(again.ok).toBe(true)
+    if (!again.ok) return
+    expect(again.value.runtimeRoles).toEqual(['backend', 'security'])
+    // One event, from the first call: a set that did not move is not a fact worth a row.
+    expect(await roleEvents(slave.id)).toHaveLength(1)
+  })
+
+  it('keeps BOTH writes when a capability edit and a merge land back to back', async (): Promise<void> => {
+    const { teamId } = await workspace()
+    const slave = await prisma.slave.create({
+      data: { teamId, name: 'Rae', role: 'Engineer', runtimeRoles: ['backend'] },
+    })
+    // The operator's edit gives them `frontend` (through the taxonomy) -- and the Supervisor's
+    // merge, which read the roster before that landed, must not take it away again.
+    await prisma.slave.update({ where: { id: slave.id }, data: { runtimeRoles: ['backend', 'frontend'] } })
+    const out = await mergeRuntimeRoles(slave.id, ['security'], 'supervisor')
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.value.runtimeRoles).toEqual(['backend', 'frontend', 'security'])
+  })
+
+  it('refuses a slave that is not there', async (): Promise<void> => {
+    const out = await mergeRuntimeRoles('nope', ['security'], 'supervisor')
     expect(out.ok).toBe(false)
     if (out.ok) return
     expect(out.error.kind).toBe('slave_not_found')

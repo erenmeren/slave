@@ -965,6 +965,40 @@ describe('loadSupervisorWorld -- the capability facts (M47 R4)', () => {
     expect(world.slaves[0]?.capabilities).toEqual(['security.application'])
   })
 
+  it('stops paying for the roster and the catalog once every capability-bearing task is finished', async () => {
+    // Fix round 1, Minor 6. The gate is `teamPlanOf`'s own filter: a board with no READY or BLOCKED
+    // task asking for anything has no gap to staff, and three queries a tick to answer that is a
+    // cost with no answer in it.
+    const f = await seed()
+    await makeTask(f, { title: 'hardened', status: 'done', requiredCapabilities: ['security.application'] })
+    await makeTask(f, { title: 'shipped', status: 'failed', requiredCapabilities: ['security.application'] })
+    await prisma.slaveTemplate.create({
+      data: { name: 'M47 World Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+
+    const { world } = await loadSupervisorWorld(f.workspaceId, NOW)
+    expect(world.taxonomy).toEqual([])
+    expect(world.company).toEqual([])
+    expect(world.catalog).toEqual([])
+    // The task's own keys are still carried: they come off a row the loader already reads.
+    expect(world.tasks.map((task) => task.requiredCapabilities)).toEqual([
+      ['security.application'],
+      ['security.application'],
+    ])
+  })
+
+  it('reads all three for a BLOCKED task too, which is a gap somebody still has to fill', async () => {
+    const f = await seed()
+    await makeTask(f, { title: 'stuck', status: 'blocked', requiredCapabilities: ['security.application'] })
+    await prisma.slaveTemplate.create({
+      data: { name: 'M47 World Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+
+    const { world } = await loadSupervisorWorld(f.workspaceId, NOW)
+    expect(world.taxonomy.length).toBeGreaterThan(0)
+    expect(world.catalog).toHaveLength(1)
+  })
+
   it('reads all three the moment one task names a capability, and carries the keys through', async () => {
     const f = await seed()
     await makeTask(f, { title: 'harden', status: 'ready', requiredCapabilities: ['security.application'] })

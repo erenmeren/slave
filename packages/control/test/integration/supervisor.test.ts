@@ -1617,7 +1617,13 @@ describe('applyDecision -- the M47 capability actions', () => {
 
     const recorded = await record(
       f,
-      { kind: 'materialise_company_worker', companySlaveId: rosterWorker.id, capability: CAPABILITY, name: 'Sam' },
+      {
+        kind: 'materialise_company_worker',
+        companySlaveId: rosterWorker.id,
+        capability: CAPABILITY,
+        name: 'Sam',
+        rationale: 'Sam is already on the company roster and provides Application security.',
+      },
       'proposed',
       { subjectId: CAPABILITY, situation: capabilitySituation() },
     )
@@ -1626,7 +1632,11 @@ describe('applyDecision -- the M47 capability actions', () => {
     expect((await approveDecision(recorded.id, { userId: f.userId })).ok).toBe(true)
     const materialised = await prisma.slave.findFirstOrThrow({ where: { companySlaveId: rosterWorker.id } })
     expect(materialised.runtimeRoles).toContain('security')
-    expect(materialised.selectionRationale).toContain(CAPABILITY)
+    // Fix round 1, Minor 5: the sentence the rules wrote, in the taxonomy's WORDS -- what the
+    // Organization view shows beside this worker months later -- not the raw key.
+    expect(materialised.selectionRationale).toBe(
+      'Sam is already on the company roster and provides Application security.',
+    )
   })
 
   it('records a failed decision rather than throwing when the template has since been deleted', async () => {

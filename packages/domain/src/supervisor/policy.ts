@@ -57,8 +57,17 @@ export function tierOf(action: Action, world: SupervisorWorld, situationKind: Si
     // nothing -- the worker's own row already records that it provides the capability, and the
     // role being granted is the one that capability projects to by definition (R2). Nobody new
     // arrives, nothing is spent, and the union never takes a role away.
+    //
+    // Except onto a BUSY worker (fix round 1, Important 2). R4's first offer is the IDLE worker who
+    // already provides the capability, and `staffableSlaves` has refused to offer a role change on
+    // a busy one since M38 for the reason that matters here: its run is in flight and its roles
+    // must not move under it. `formTeam` only SORTS idle-first, so the sole provider of a
+    // capability can be busy and the offer is still made -- rightly, a human may approve it -- but
+    // a tick must not apply it by itself. A worker the world does not hold is `applied` as before:
+    // `applyDecision` re-reads the row and refuses `slave_not_found` if it is really gone, and
+    // proposing here would park every offer made against a roster a caller had not filled.
     case 'assign_capability':
-      return 'applied'
+      return world.slaves.find((slave) => slave.id === action.slaveId)?.busy === true ? 'proposed' : 'applied'
     // Both bring a WORKER onto a project. Never automatic: a roster is a person's decision, and
     // a hire is a commitment the Supervisor may propose and may not make.
     case 'materialise_company_worker':

@@ -106,7 +106,13 @@ function actionOf(proposal: TeamProposal, capability: string, world: SupervisorW
         role: projectRoles([capability], world.taxonomy)[0] ?? '',
       }
     case 'company_worker':
-      return { kind: 'materialise_company_worker', companySlaveId: proposal.pick.id, capability, name: proposal.pick.name }
+      return {
+        kind: 'materialise_company_worker',
+        companySlaveId: proposal.pick.id,
+        capability,
+        name: proposal.pick.name,
+        rationale: proposal.rationale,
+      }
     case 'project_worker':
       return {
         kind: 'hire_from_catalog',
@@ -241,10 +247,13 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
       break
 
     case 'capability_unstaffed': {
-      // `subjectId` IS the capability key (spec §2 as M47 extends it). The offers are `formTeam`'s
-      // proposals for THIS capability, in the order it ranked them: an existing capable worker,
-      // then the company roster, then the catalog. Each carries its own rationale sentence, which
-      // is what a human -- and the model -- judges the offer by.
+      // `subjectId` IS the capability key (spec §2 as M47 extends it). `formTeam` has already made
+      // the choice R4 fixes -- an existing capable worker, else the company roster, else the
+      // catalog -- and it covers each missing capability with exactly ONE pick, so this filter
+      // yields ONE offer (fix round 1, Minor 4: it is not a ranked list of three). The loop stands
+      // because zero is the other real answer: a capability nobody anywhere provides is
+      // `unfillable`, and then the last resorts below are the whole catalogue. The proposal's own
+      // rationale sentence is what a human -- and the model -- judges the offer by.
       for (const proposal of teamPlanOf(world).proposals.filter((one) => one.covers.includes(situation.subjectId))) {
         const action = actionOf(proposal, situation.subjectId, world)
         if (action !== null) offers.push(candidate(action, world, situation.kind, proposal.rationale))

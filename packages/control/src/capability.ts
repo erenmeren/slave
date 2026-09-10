@@ -141,6 +141,64 @@ export async function setSlaveCapabilities(
   return ok({ keys, unresolved, runtimeRoles: outcome.runtimeRoles })
 }
 
+/**
+ * Add runtime roles to a worker WITHOUT ever taking one away, with the read and the write under one
+ * lock (fix round 1, Important 1).
+ *
+ * `setRuntimeRoles` (`profile.ts`) is a REPLACEMENT -- that is its contract, and the operator-facing
+ * verb should keep it. M38's `addRuntimeRoles` therefore read the worker outside that verb's own
+ * transaction, unioned in JavaScript and handed the result over to be written verbatim, which is a
+ * lost update waiting for a second writer. It waited until M47: `assign_capability` is the first
+ * runtime-role write a TICK makes by itself, so `setSlaveCapabilities` committing a role between
+ * that read and that write would have had it silently deleted a moment later.
+ *
+ * So: `FOR UPDATE` on the row, read, union, update, one transaction -- `setSlaveCapabilities`'
+ * shape exactly, through the same {@link lockedSlave}. HELD FIRST, then whatever is new, which is
+ * the order M37's own union writes and the order the panel reads.
+ *
+ * The event is appended only when the set actually MOVED. A `slave.runtime_roles_changed` whose
+ * roles equal yesterday's is noise on a timeline a person reads, and an approval of a proposal
+ * somebody has meanwhile satisfied by hand is exactly how one arrives.
+ *
+ * `slave_not_found` is reached before anything is written, so it is RETURNED rather than thrown --
+ * the transaction has nothing to roll back.
+ */
+export async function mergeRuntimeRoles(
+  slaveId: string,
+  adds: readonly string[],
+  actor: string,
+  origin: 'human' | 'system' = 'human',
+): Promise<Result<{ readonly runtimeRoles: readonly string[] }, ControlRefusal>> {
+  const outcome = await prisma.$transaction(async (tx) => {
+    const slave = await lockedSlave(tx, slaveId)
+    if (slave === null) return null
+    const runtimeRoles = [...slave.runtimeRoles]
+    for (const role of adds) {
+      const trimmed = role.trim()
+      // A blank role is not a role. `actionSchema` already refuses one on the way in
+      // (`role: z.string().min(1)`); dropping it here means a hand-edited row cannot write an
+      // empty string into a set the scheduler matches on.
+      if (trimmed !== '' && !runtimeRoles.includes(trimmed)) runtimeRoles.push(trimmed)
+    }
+    // Both sets only ever grow here, so a length that did not move is a set that did not move --
+    // the same reading `hireFromTemplate`'s reuse branch makes.
+    const changed = runtimeRoles.length !== slave.runtimeRoles.length
+    if (changed) await tx.slave.update({ where: { id: slaveId }, data: { runtimeRoles } })
+    return { workspaceId: slave.workspaceId, runtimeRoles, changed }
+  })
+  if (outcome === null) return err({ kind: 'slave_not_found', slaveId })
+  if (outcome.changed) {
+    await appendEvent({
+      type: 'slave.runtime_roles_changed',
+      workspaceId: outcome.workspaceId,
+      slaveId,
+      actor: origin,
+      payload: { slaveId, roles: outcome.runtimeRoles, actor },
+    })
+  }
+  return ok({ runtimeRoles: outcome.runtimeRoles })
+}
+
 /** The row plus the workspace the event needs, under `FOR UPDATE` -- `lockSlave`'s shape from
  *  `org.ts`, re-read here because that helper returns the whole include and this file needs two
  *  fields. */

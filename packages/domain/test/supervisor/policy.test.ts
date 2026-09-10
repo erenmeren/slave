@@ -12,7 +12,13 @@ const ACTIONS: Readonly<Record<Action['kind'], Action>> = {
   raise_max_attempts: { kind: 'raise_max_attempts', taskId: 't1' },
   set_runtime_roles: { kind: 'set_runtime_roles', slaveId: 's1', roles: ['reviewer'] },
   assign_capability: { kind: 'assign_capability', slaveId: 's1', capability: 'security.application', role: 'security' },
-  materialise_company_worker: { kind: 'materialise_company_worker', companySlaveId: 'cs1', capability: 'security.application', name: 'Sam' },
+  materialise_company_worker: {
+    kind: 'materialise_company_worker',
+    companySlaveId: 'cs1',
+    capability: 'security.application',
+    name: 'Sam',
+    rationale: 'Sam is already on the company roster and provides Application security.',
+  },
   hire_from_catalog: {
     kind: 'hire_from_catalog',
     templateId: 'tpl1',
@@ -102,6 +108,28 @@ describe('tierOf', () => {
       expect(tierOf(ACTIONS.materialise_company_worker, RUNNING, kind)).toBe('proposed')
       expect(tierOf(ACTIONS.hire_from_catalog, RUNNING, kind)).toBe('proposed')
     }
+  })
+
+  /**
+   * Fix round 1, Important 2. R4's first offer is the IDLE worker who already provides the
+   * capability, and `staffableSlaves` has refused to offer a role change on a busy worker since
+   * M38 for the same reason: its run is in flight and its roles must not move under it.
+   * `formTeam` only SORTS idle-first, so the sole provider of a capability can be busy and the
+   * offer is still made -- rightly, a human may approve it. What must not happen is a tick
+   * applying it by itself.
+   */
+  it('proposes rather than applies an assign_capability whose worker is busy', () => {
+    const busy = world({ slaves: [slave({ id: 's1', busy: true })] })
+    const idle = world({ slaves: [slave({ id: 's1', busy: false })] })
+    expect(tierOf(ACTIONS.assign_capability, busy, 'capability_unstaffed')).toBe('proposed')
+    expect(tierOf(ACTIONS.assign_capability, idle, 'capability_unstaffed')).toBe('applied')
+  })
+
+  it('applies an assign_capability naming a worker the world no longer holds, as the union it is', () => {
+    // Not a guess about a stranger: `applyDecision` re-reads the row and refuses `slave_not_found`
+    // if the worker really is gone, and a `proposed` here would park every offer made against a
+    // roster the world had not finished loading.
+    expect(tierOf(ACTIONS.assign_capability, world({ slaves: [] }), 'capability_unstaffed')).toBe('applied')
   })
 
   it('leaves the other tiers alone whatever the situation kind is', () => {

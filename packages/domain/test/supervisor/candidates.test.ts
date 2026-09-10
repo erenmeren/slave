@@ -438,7 +438,29 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
       catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false }],
     })
     const offers = candidates(situation, w)
-    expect(offers[0]?.action.kind).toBe('materialise_company_worker')
+    // Fix round 1, Minor 5: the rationale travels ON the action, because it is what is stored on
+    // the worker as `selectionRationale` -- "why selected", read months later by a person. The
+    // capability KEY is not that sentence.
+    expect(offers[0]?.action).toEqual({
+      kind: 'materialise_company_worker',
+      companySlaveId: 'cs1',
+      capability: 'security.application',
+      name: 'Sam',
+      rationale: expect.stringContaining('Application security'),
+    })
+    expect(offers[0]?.tier).toBe('proposed')
+  })
+
+  // Fix round 1, Important 2: the offer stands -- a human may still approve it -- but a tick must
+  // not write a new runtime role onto a worker whose run is in flight.
+  it('proposes rather than applies the existing-worker offer when that worker is busy', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [task({ status: 'ready', requiredCapabilities: ['security.application'] })],
+      slaves: [slave({ id: 's1', name: 'Rae', capabilities: ['security.application'], runtimeRoles: ['backend'], busy: true })],
+    })
+    const offers = candidates(situation, w)
+    expect(offers[0]?.action.kind).toBe('assign_capability')
     expect(offers[0]?.tier).toBe('proposed')
   })
 

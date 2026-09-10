@@ -25,7 +25,7 @@ import {
   ok,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
-import { hireFromTemplate, materialiseCompanySlave } from './capability.js'
+import { hireFromTemplate, materialiseCompanySlave, mergeRuntimeRoles } from './capability.js'
 import { answerQuestion, reassignQuestion } from './messaging.js'
 import { setRuntimeRoles } from './profile.js'
 import type { Principal } from './principal.js'
@@ -397,12 +397,17 @@ async function carryOut(
       // The UNION, like `set_runtime_roles` (spec §4): the worker keeps every role it holds and
       // gains the one this capability projects to. A proposal can wait a day, and a role granted
       // meanwhile must not be taken back by an approval.
-      return reached(await addRuntimeRoles(action.slaveId, [action.role], origin))
+      //
+      // Through `mergeRuntimeRoles`, not M38's `addRuntimeRoles` (fix round 1, Important 1): this
+      // is the first runtime-role write a TICK makes by itself, and the read has to be inside the
+      // lock the write takes or a concurrent `setSlaveCapabilities` loses a role to it.
+      return reached(await mergeRuntimeRoles(action.slaveId, [action.role], SUPERVISOR_ACTOR, origin))
     case 'materialise_company_worker':
+      // The rationale the rules wrote, verbatim -- `formTeam`'s sentence names the capability in
+      // the taxonomy's WORDS ("Application security"), and that sentence is what the Organization
+      // view shows beside the worker months later (fix round 1, Minor 5).
       return reached(
-        await materialiseCompanySlave(decision.workspaceId, action.companySlaveId, {
-          rationale: `Brought onto this project because the board needs ${action.capability}.`,
-        }),
+        await materialiseCompanySlave(decision.workspaceId, action.companySlaveId, { rationale: action.rationale }),
       )
     case 'hire_from_catalog':
       return reached(

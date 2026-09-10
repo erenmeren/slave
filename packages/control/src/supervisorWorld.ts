@@ -503,7 +503,14 @@ export async function loadSupervisorWorld(
       // a capability: a project planned before this milestone -- or one whose planner named plain
       // roles -- gets exactly the queries it got before, and no tick scans hundreds of templates
       // to answer a question nobody asked. One query each, never one per capability.
-      const asksForCapabilities = taskRows.some((row) => row.requiredCapabilities.length > 0)
+      //
+      // The gate is the SAME filter `teamPlanOf` applies (`ready` or `blocked`), not "any task ever"
+      // (fix round 1, Minor 6): a finished 200-task project whose history is full of capabilities
+      // has no gap left to staff, and paying three queries a tick to build a roster and a catalog
+      // `formTeam` would then be handed zero requirements for is a cost with no answer in it.
+      const asksForCapabilities = taskRows.some(
+        (row) => (row.status === 'ready' || row.status === 'blocked') && row.requiredCapabilities.length > 0,
+      )
       const taxonomy = asksForCapabilities ? await loadTaxonomy(tx) : []
       const companyRows = asksForCapabilities ? await loadCompanyRoster(tx, workspaceId) : []
       const catalogRows = asksForCapabilities ? await loadCatalogEntries(tx, slaveRows) : []
