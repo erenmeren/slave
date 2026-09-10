@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -259,6 +259,136 @@ describe('fake-claude', () => {
     })
   })
 
+  describe('m41-flow (M41: the whole story in one mode)', () => {
+    /** The one line `runContext.ts`'s `task` section always renders (erratum E2): a work run's
+     *  prompt carries `Task: <title>`, and its task's ID appears nowhere in it. */
+    const CORE_TITLE = 'Write the feature core'
+    const CORE_PROMPT = `You are a slave.\n\nTask: ${CORE_TITLE}\n\nImplement the core module the goal asks for.`
+    const API_PROMPT = 'You are a slave.\n\nTask: Expose the API\n\nWire the core into the public surface.'
+    const ASK_JSON = JSON.stringify({ role: 'qa', question: 'Which database should this service connect to?' })
+
+    let repoDir: string
+
+    beforeEach(() => {
+      repoDir = mkdtempSync(path.join(tmpdir(), 'fake-claude-m41-flow-'))
+      execFileSync('git', ['init', '-q'], { cwd: repoDir })
+      execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'initial commit'], {
+        cwd: repoDir,
+      })
+    })
+
+    afterEach(() => {
+      rmSync(repoDir, { recursive: true, force: true })
+    })
+
+    const commitCount = (): number =>
+      execFileSync('git', ['log', '--oneline'], { cwd: repoDir }).toString().trim().split('\n').length
+
+    it('replays the story plan fixture as a static mode, quote and cost intact', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'plan-graph-scenario'])
+      const result = parseLines(stdout).find((l) => l.type === 'result') as
+        | { result?: string; total_cost_usd?: number }
+        | undefined
+      // The sentence `supervisor-answer.ndjson` cites. Without it in the asking task's own
+      // description the Supervisor's answer could never be `sourced`, which is the whole of act 3.
+      expect(result?.result).toContain('PostgreSQL on port 5433')
+      expect(result?.result).toContain('"key":"core"')
+      // Same cost as `plan-graph`, so the gate's spend table stays one lookup (ruling R4).
+      expect(result?.total_cost_usd).toBe(0.20933900000000003)
+    })
+
+    it('a planning run replays plan-graph-scenario, NOT the stock plan-graph, and makes no commit', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm41-flow', '-p', 'produce the "task graph" now'], {
+        cwd: repoDir,
+      })
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('PostgreSQL on port 5433')
+      expect(commitCount()).toBe(1)
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: repoDir }).toString().trim()).toBe('')
+    })
+
+    it('a review run replays the approval fixture and makes no commit', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm41-flow', '-p', 'respond with "verdict" json'], {
+        cwd: repoDir,
+      })
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"verdict":"approve"')
+      expect(commitCount()).toBe(1)
+    })
+
+    it('a re-plan run replays the delta with --replan-cancel substituted, and makes no commit', async (): Promise<void> => {
+      const { stdout } = await run(
+        'node',
+        [FAKE, '--replan-cancel', 'task-to-drop', '--fixture', 'm41-flow', '-p', 'this is a "replan"'],
+        { cwd: repoDir },
+      )
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"cancel":["task-to-drop"]')
+      expect(result?.result).toContain('"key":"docs"')
+      expect(commitCount()).toBe(1)
+    })
+
+    it('the asking leg fires only for the named task: ask block in, no commit', async (): Promise<void> => {
+      const { stdout } = await run(
+        'node',
+        [FAKE, '--ask-on-task', 'core', '--fixture', 'm41-flow', '-p', CORE_PROMPT],
+        { cwd: repoDir, env: { ...process.env, FAKE_CLAUDE_ASK_JSON: ASK_JSON } },
+      )
+      // The envelope is appended to the LAST assistant text block, not emitted as a line of its
+      // own, so the pump reads it through the exact stream shape a real run produces.
+      expect(stdout).toContain('<slave-ask>')
+      expect(stdout).toContain('"recipientRole"'.replace('recipientRole', 'role'))
+      // An ask is not work: the run stopped to ask, so it left nothing behind.
+      expect(commitCount()).toBe(1)
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: repoDir }).toString().trim()).toBe('')
+    })
+
+    it('a work run for ANOTHER task commits instead of asking, even with --ask-on-task set', async (): Promise<void> => {
+      const { stdout } = await run(
+        'node',
+        [FAKE, '--ask-on-task', 'core', '--fixture', 'm41-flow', '-p', API_PROMPT],
+        { cwd: repoDir, env: { ...process.env, FAKE_CLAUDE_ASK_JSON: ASK_JSON } },
+      )
+      expect(stdout).not.toContain('<slave-ask>')
+      expect(commitCount()).toBe(2)
+      expect(readFileSync(path.join(repoDir, 'm41-work.txt'), 'utf8')).toContain('You are a slave.')
+    })
+
+    it('the RESUMED leg of the very same task commits instead of asking again', async (): Promise<void> => {
+      const { stdout } = await run(
+        'node',
+        [FAKE, '--ask-on-task', 'core', '--fixture', 'm41-flow', '-p', CORE_PROMPT, '--resume', 'fake-session-complete'],
+        { cwd: repoDir, env: { ...process.env, FAKE_CLAUDE_ASK_JSON: ASK_JSON } },
+      )
+      // `--resume` is the ONE thing the runtime itself puts on a resumed argv
+      // (`ClaudeCodeAdapter.resume`), so a second ask on the same session is impossible by
+      // construction rather than by wording.
+      expect(stdout).not.toContain('<slave-ask>')
+      expect(commitCount()).toBe(2)
+    })
+
+    it('a work run with no --ask-on-task at all commits', async (): Promise<void> => {
+      await run('node', [FAKE, '--fixture', 'm41-flow', '-p', CORE_PROMPT], { cwd: repoDir })
+      expect(commitCount()).toBe(2)
+    })
+
+    it('ignores an --ask-on-task whose value is another flag', async (): Promise<void> => {
+      await run('node', [FAKE, '--ask-on-task', '--fixture', 'm41-flow', '-p', CORE_PROMPT], { cwd: repoDir })
+      expect(commitCount()).toBe(2)
+    })
+
+    it('refuses the asking leg with no envelope in the environment, rather than asking nothing', async (): Promise<void> => {
+      const env = { ...process.env }
+      delete env.FAKE_CLAUDE_ASK_JSON
+      await expect(
+        run('node', [FAKE, '--ask-on-task', 'core', '--fixture', 'm41-flow', '-p', CORE_PROMPT], {
+          cwd: repoDir,
+          env,
+        }),
+      ).rejects.toMatchObject({ code: 2 })
+    })
+  })
+
   describe('the supervisor arm (M38)', () => {
     const ANSWER = '"candidateIndex":0'
     /** A prompt with the one literal `buildDecisionPrompt` always emits. */
@@ -313,7 +443,7 @@ describe('fake-claude', () => {
     })
 
     it('is armed in every prompt-sniffing mode, ahead of the verdict and task-graph checks', async (): Promise<void> => {
-      for (const mode of ['m8-flow', 'm8a-flow', 'm36-flow']) {
+      for (const mode of ['m8-flow', 'm8a-flow', 'm36-flow', 'm41-flow']) {
         const { stdout } = await run('node', [FAKE, '--fixture', mode, '-p', `${PROMPT} "verdict" "task graph"`], {
           cwd: repoDir,
         })
@@ -358,7 +488,7 @@ describe('fake-claude', () => {
     })
 
     it('is armed in every prompt-sniffing mode, and makes no commit doing it', async (): Promise<void> => {
-      for (const mode of ['m8-flow', 'm8a-flow', 'm36-flow']) {
+      for (const mode of ['m8-flow', 'm8a-flow', 'm36-flow', 'm41-flow']) {
         const { stdout } = await run('node', [FAKE, '--fixture', mode, '-p', `${PROMPT} "verdict" "task graph"`], {
           cwd: repoDir,
         })

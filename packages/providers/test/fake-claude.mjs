@@ -84,6 +84,39 @@
 //   removed, so `cancel` is `[]`, when no such flag was passed. It sits
 //   behind the two decision arms and in front of the planning one: a
 //   re-plan answered with a first plan would rebuild the board.
+//   m41-flow       synthetic, M41's whole-story mode: every arm one gate
+//                  needs, in one file, so a single daemon lineage can plan,
+//                  work, ask, be answered, resume, be reviewed and be
+//                  re-planned without ever changing modes. Precedence,
+//                  first match wins: the two decision arms
+//                  (`"candidateIndex"`, then `"sources"`), the re-plan arm
+//                  (`"replan"`), planning (`"task graph"`), review
+//                  (`"verdict"`), and finally work.
+//                  Its planning arm replays `plan-graph-scenario`, NOT the
+//                  stock `plan-graph`: the story needs a `core` task whose
+//                  description carries the sentence `supervisor-answer`
+//                  cites (`PostgreSQL on port 5433`), and editing the stock
+//                  fixture would silently change what m8 and m40 measure.
+//                  A work run is the ASKING leg -- the m36-flow body,
+//                  `complete` with the `FAKE_CLAUDE_ASK_JSON` envelope
+//                  appended to its last assistant text block -- only when
+//                  ALL THREE hold: `--ask-on-task <token>` (one word) is in ARGV,
+//                  the prompt carries the literal `Task: <that title>`, and
+//                  argv has NO `--resume`. Every other work run, the resumed
+//                  leg included, writes `m41-work.txt`, commits it as `Fake
+//                  Claude`, and replays `complete`.
+//                  ARGV is the channel because a run's spawn args are the
+//                  only deterministic per-daemon knob a gate has (M39 E6);
+//                  `SLAVEOFAI_CLAUDE_ARGS` rides through as `extraArgs` on
+//                  every run and every decision call. The TITLE is the
+//                  discriminator, not the task id, because a work run's
+//                  prompt does not contain its task's id at all (M41 E2):
+//                  `apps/orchestrator/src/runContext.ts` renders the `task`
+//                  section as `Task: <title>\n\n<description>`, and ids
+//                  appear only in a planning or re-plan run's board lines.
+//                  Two workers share the `backend` role in that story and
+//                  exactly one of them may stop to ask, which is what the
+//                  discriminator is for.
 //   anything else  replays `fixtures/<name>.ndjson` verbatim, exit 0 -- real
 //                  captures show process exit code 0 even for hook-crash,
 //                  hook-deny, and permission-denied runs, so the fake matches
@@ -241,6 +274,39 @@ function replanCancelId() {
   return named === undefined || named.startsWith('-') ? null : named
 }
 
+/** M41: the one-word TOKEN naming the task a work run must stop and ask about -- `--ask-on-task <token>` from
+ *  ARGV, or `null` when the flag is absent, or present with another flag where its value should be
+ *  (an omitted value is not a title). Same shape as {@link replanCancelId}, and argv for the same
+ *  reason: it is the one per-daemon knob that reaches a run's child. */
+function askOnTaskTitle() {
+  const index = args.indexOf('--ask-on-task')
+  const named = index === -1 ? undefined : args[index + 1]
+  return named === undefined || named.startsWith('-') ? null : named
+}
+
+/**
+ * M41: is THIS work run the asking leg?
+ *
+ * Three facts, all of them the runtime's rather than this file's. The FLAG says which task the
+ * gate wants a question from. `Task: <title>` is the one line the run-context `task` section
+ * always renders (`apps/orchestrator/src/runContext.ts`), and it is what identifies the task a
+ * prompt is about -- erratum E2: the task's ID is not in a work run's prompt anywhere, so keying
+ * on an id would silently never match and the story would run with no question in it. And
+ * `--resume` is what `ClaudeCodeAdapter.resume` appends and nothing else does, so the resumed leg
+ * of the very session that asked can never ask again (the m36-flow discriminator, unchanged).
+ */
+function isAskingLeg(prompt) {
+  const token = askOnTaskTitle()
+  if (token === null) return false
+  if (args.includes('--resume')) return false
+  // The `task` section's own first line, and the token that identifies WHICH task inside it. A
+  // whole title cannot be the flag's value: `SLAVEOFAI_CLAUDE_ARGS` is split on a single space, so
+  // a flag value must be one word. The line is matched, not the bare token, so a token that also
+  // occurs in a description or an inbox message cannot turn some other run into an asking leg.
+  const line = prompt.split('\n').find((one) => one.startsWith('Task: '))
+  return line !== undefined && line.includes(token)
+}
+
 /** Rewrites `$CANCEL_ID` wherever it appears in a parsed fixture line's strings: replaced by the
  *  id when there is one, and otherwise removed ARRAY ELEMENT AND ALL (`"$CANCEL_ID"`, quotes
  *  included, since the delta lives inside a JSON string) so `cancel` comes out empty. Walks the
@@ -383,6 +449,63 @@ async function main() {
     // A work run: the m8a-flow work body verbatim -- leave a real commit in the worktree
     // (cwd), then replay success.
     writeFileSync(path.join(process.cwd(), 'm8a-work.txt'), `${prompt.slice(0, 80)}\n`)
+    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
+    execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '-m', 'fake work'], { cwd: process.cwd() })
+    await replayFixture('complete')
+    return
+  }
+
+  if (fixtureName === 'm41-flow') {
+    const prompt = await promptText()
+    if (await supervisorArm(prompt)) return
+    if (await answerArm(prompt)) return
+    if (await replanArm(prompt)) return
+    if (prompt.includes('"task graph"')) {
+      // The story's OWN plan (ruling R4): three `backend` tasks core -> api -> polish, whose
+      // `core` description carries the sentence `supervisor-answer.ndjson` cites verbatim.
+      await replayFixture('plan-graph-scenario')
+      return
+    }
+    if (prompt.includes('"verdict"')) {
+      await replayFixture('review-approve')
+      return
+    }
+    if (isAskingLeg(prompt)) {
+      // The asking leg, verbatim from m36-flow. The envelope comes from the environment, not from
+      // this file: the recipient is a role (or a slave id) that only the caller seeding the
+      // workspace knows. A RUN inherits the daemon's environment, which is why this one channel is
+      // an env var while `--ask-on-task` has to be argv.
+      const askJson = process.env.FAKE_CLAUDE_ASK_JSON
+      if (askJson === undefined || askJson.trim() === '') {
+        process.stderr.write('fake-claude: m41-flow was told to ask on this task but has no FAKE_CLAUDE_ASK_JSON (the <slave-ask> envelope) in the environment\n')
+        process.exit(2)
+      }
+      // Appended to the LAST assistant text block of the real `complete` capture rather than
+      // emitted as a synthetic line of its own: the block then reaches the pump through the exact
+      // stream shape a real run produces, and the fixture's own `system:init` line still supplies
+      // the session id the checkpoint is written from.
+      const lines = readFixtureLines('complete')
+      let patched = false
+      for (let i = lines.length - 1; i >= 0 && !patched; i -= 1) {
+        const parsed = JSON.parse(lines[i])
+        if (parsed.type !== 'assistant') continue
+        const block = parsed.message?.content?.find?.((part) => part.type === 'text')
+        if (block === undefined) continue
+        block.text = `${block.text}\n\n<slave-ask>\n${askJson}\n</slave-ask>`
+        lines[i] = JSON.stringify(parsed)
+        patched = true
+      }
+      if (!patched) {
+        process.stderr.write('fake-claude: m41-flow could not find an assistant text block in the complete fixture\n')
+        process.exit(2)
+      }
+      await writeLines(lines)
+      process.exit(0)
+    }
+    // Any other work run, the RESUMED leg included: the m8a-flow work body verbatim -- a real
+    // commit in the worktree (cwd) -- and then `complete` UNmodified, so this leg carries no ask
+    // block and concludes for real.
+    writeFileSync(path.join(process.cwd(), 'm41-work.txt'), `${prompt.slice(0, 80)}\n`)
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '-m', 'fake work'], { cwd: process.cwd() })
     await replayFixture('complete')

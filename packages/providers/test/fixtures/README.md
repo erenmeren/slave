@@ -69,10 +69,42 @@ should be brought in line the next time they are touched.
 | `review-approve.ndjson`, `review-reject.ndjson`, `review-invalid.ndjson` | `a16add4` | `complete`'s transcript with the final `result.result` replaced by the reviewer's JSON verdict — approve, reject, and a malformed verdict. They drive the fake CLI's `m8a-flow` mode. |
 | `plan-graph.ndjson` | `e8f2bb0` | Same base, with `result.result` carrying a planning task graph. Drives `m8-flow`'s planning arm. |
 | `replan-delta.ndjson` | M40 Task 3 | `plan-graph`'s transcript with its final assistant text block and `result.result` replaced by a re-plan DELTA (one `docs` addition, one `cancel` id, an empty `keep`) and `total_cost_usd` at 0.03. The `$CANCEL_ID` token is a placeholder, not JSON a model wrote: the id to cancel is a row the caller seeded, so `fake-claude.mjs`'s re-plan arm substitutes it from `--replan-cancel <id>` in argv, or removes the element entirely when no flag is passed. |
+| `plan-graph-scenario.ndjson` | M41 Task 2 | `plan-graph`'s transcript with its three task DESCRIPTIONS rewritten and nothing else — same three titles, same `backend` roles, same `core → api → polish` chain, same `total_cost_usd` (0.209). The `core` description carries the sentence `supervisor-answer.ndjson` cites (`PostgreSQL on port 5433`) verbatim, which is what lets the M41 scenario's Supervisor answer a question from the asking task's own text; the stock `plan-graph` descriptions carry no such sentence, and editing that file instead would have silently changed what `gate-m8-plan` and `gate-m40-requirement-versioning` measure. Drives `m41-flow`'s planning arm. |
 | `permission-matrix-deny.ndjson` | M18 Task 6 fix round 1; **re-recorded from the real CLI in M19 Task A1** | A real orchestrator-driven run against a real permission matrix — see the section below for its full provenance. `Read` allowed, then `Bash` (`npm test`) met this repo's own `PreToolUse` hook denying with the M18 grammar (`permission matrix denies 'run tests' (Bash) for this slave`), the agent adapted and reported instead of retrying, and the `result` line is honest about the denial: `is_error: false` but `permission_denials` carries the denied `toolu_01LiQfhzhqKJPfrr4pAD1Xjs`, exactly as `hook-deny.ndjson` measures the real CLI doing for a hook deny of any kind. |
 
-The three review fixtures, `plan-graph` and `replan-delta` share `complete`'s `session_id`
-(`fake-session-complete`) because they are edits of it, not separate captures.
+The three review fixtures, `plan-graph`, `plan-graph-scenario` and `replan-delta` share `complete`'s
+`session_id` (`fake-session-complete`) because they are edits of it, not separate captures.
+
+### `plan-graph-scenario.ndjson` — the substitution, as a runnable command
+
+Three description strings, each appearing exactly twice (the final assistant text block and the
+terminal `result.result` carry the same JSON string), replaced mechanically. The script refuses to
+run if it does not find exactly two of each, so it cannot half-apply:
+
+```bash
+node -e '
+const fs = require("node:fs")
+const src = fs.readFileSync("packages/providers/test/fixtures/plan-graph.ndjson", "utf8")
+const swaps = [
+  ["Implement the core module the goal asks for.",
+   "Implement the core module the goal asks for. The service talks to PostgreSQL on port 5433 in every environment, including the gate's own."],
+  ["Wire the core into the public surface.",
+   "Wire the core into the public surface, over the same database the core module uses."],
+  ["README and cleanup on top of the API.",
+   "README and cleanup on top of the API, once the endpoint is real."],
+]
+let out = src
+for (const [from, to] of swaps) {
+  const found = out.split(from).length - 1
+  if (found !== 2) throw new Error("expected 2 occurrences of " + JSON.stringify(from) + ", found " + found)
+  out = out.split(from).join(to)
+}
+fs.writeFileSync("packages/providers/test/fixtures/plan-graph-scenario.ndjson", out)
+'
+```
+
+Nothing else was altered: line count, ordering, `session_id`, `total_cost_usd` and every other field
+are `plan-graph`'s own.
 
 ## `permission-matrix-deny.ndjson` — the M19 capture that retired the hand-authored one
 
