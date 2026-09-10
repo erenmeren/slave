@@ -35,8 +35,11 @@ const CHIPS = 3
  * filterable, each row opening the specialist profile behind it.
  *
  * Rows come from `/api/org/catalog` rather than from a page prop, seeded by the server's first
- * read so nothing flashes. That is what lets a filter change, a template creation and an override
- * all refresh the list without `router.refresh()` re-running the Workforce page's eight loaders.
+ * read -- of the SAME filters this component parses out of the URL (`/workforce/page.tsx` reads
+ * them with `parseCatalogFilters` too, M46 final wave M1), so a shared `?q=` link opens on the
+ * rows its filter bar says it is showing rather than on the whole catalog. That is what lets a
+ * filter change, a template creation and an override all refresh the list without
+ * `router.refresh()` re-running the Workforce page's eight loaders.
  *
  * The `workforce-catalog` handle and each row's `catalog-row-<id>` are WRAPPERS around the
  * `DataTable`/`Row` primitives rather than props passed into them: an element carries one

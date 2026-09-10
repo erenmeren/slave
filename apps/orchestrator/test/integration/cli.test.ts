@@ -2615,6 +2615,29 @@ describe('the orchestrator CLI', () => {
       expect(await prisma.catalogImport.count()).toBe(1)
     })
 
+    // M46 final wave, M4. The E22 backfill writes a `profileSpec` onto a row whose FILE has not
+    // changed, so its outcome is `unchanged` and the report said nothing at all -- an operator
+    // re-importing an old catalog to get specialist profiles had no way to see it had worked.
+    it('says how many unchanged rows it structured (E22), and stays silent when it structured none', async (): Promise<void> => {
+      const dir = catalogDir()
+      await runCli(['import-catalog', '--dir', dir])
+
+      const quiet = await runCli(['import-catalog', '--dir', dir])
+      expect(quiet.stdout).toContain('unchanged 1')
+      expect(quiet.stdout).not.toContain('structured')
+
+      // A pre-M46 row: the same file, the same hash, no spec.
+      await prisma.$executeRawUnsafe('UPDATE "SlaveTemplate" SET "profileSpec" = NULL')
+
+      const result = await runCli(['import-catalog', '--dir', dir])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('unchanged 1')
+      expect(result.stdout).toContain('structured 1')
+      const row = await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'CLI Core Builder' } })
+      expect(row.profileSpec).not.toBeNull()
+    })
+
     it('a dry run prints what would happen and writes nothing at all', async (): Promise<void> => {
       const dir = catalogDir()
 

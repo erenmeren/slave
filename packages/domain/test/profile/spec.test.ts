@@ -9,6 +9,7 @@ import {
   PROFILE_SPEC_FIELDS,
   effectiveProfileSpec,
   emptyProfileSpec,
+  importedProfilePrefix,
   overriddenFields,
   profileOverridesSchema,
   profileSourceId,
@@ -151,6 +152,16 @@ describe('renderProfileSpec', () => {
 
   it('writes no prefix line and no heading for a spec with no source and empty fields', () => {
     expect(renderProfileSpec({ ...emptyProfileSpec(), summary: 'Just a line.' })).toBe('## In one line\nJust a line.')
+  })
+
+  // The docblock's own claim, pinned (final wave, deferred minor): a spec with nothing at all in
+  // it renders the source's prefix line and stops. There are no words to withhold, and the line
+  // naming the file is still true.
+  it('renders the lone prefix line for a blank spec that has a source, and nothing at all without one', () => {
+    expect(renderProfileSpec({ ...emptyProfileSpec(), source })).toBe(
+      importedProfilePrefix(profileSourceId(source), new Date(source.importedAt)),
+    )
+    expect(renderProfileSpec(emptyProfileSpec())).toBe('')
   })
 
   it('is byte-stable: the same spec renders the same text twice', () => {

@@ -131,31 +131,46 @@ export function ProfileDrawer({
    * override disappeared under the click that made one. The previous answer stays on screen until
    * the new one lands; the first load starts in `loading` because that is this state's initial
    * value, not because this function sets it.
+   *
+   * `settled` is what the arriving answer makes stale, and NOTHING else (final wave, M3). Clearing
+   * every draft here meant a Save on one field silently threw away the text an operator had typed
+   * into three others -- under the click that said Save, with nothing on screen to say it had
+   * happened. A saved field drops its draft because the server's answer now IS that text; an
+   * untouched field keeps what is in it. `'raw'` names the raw Markdown box, which is not a
+   * `ProfileSpecField` and is only stale after a raw save or a clear.
    */
-  const load = (): void => {
+  const load = (settled: ReadonlyArray<ProfileSpecField | 'raw'> = []): void => {
     void fetch(`/api/org/templates/${templateId}/profile`)
       .then(async (response) => (response.ok ? ((await response.json()) as TemplateProfileView) : null))
       .then((view) => {
         setState(view === null ? { kind: 'error' } : { kind: 'ready', view })
-        setDrafts({})
-        setRawDraft(null)
+        if (settled.length > 0) {
+          setDrafts((now) => {
+            const next = { ...now }
+            for (const key of settled) if (key !== 'raw') delete next[key]
+            return next
+          })
+        }
+        if (settled.includes('raw')) setRawDraft(null)
       })
       .catch(() => setState({ kind: 'error' }))
   }
 
-  useEffect(load, [templateId])
+  useEffect(() => load(), [templateId])
 
-  const after = (error: string | null): void => {
-    setErrorText(error)
-    if (error === null) {
-      load()
-      onChanged()
+  const after =
+    (settled: ReadonlyArray<ProfileSpecField | 'raw'>) =>
+    (error: string | null): void => {
+      setErrorText(error)
+      if (error === null) {
+        load(settled)
+        onChanged()
+      }
     }
-  }
 
   const saveField = async (field: ProfileOverridableField, spec: ProfileSpec): Promise<void> => {
     const text = drafts[field] ?? toText(spec, field)
-    after(
+    after([field])(
       await sendControl(`/api/org/templates/${templateId}/overrides`, {
         method: 'PATCH',
         body: { patch: { [field]: fromText(field, text) } },
@@ -204,10 +219,15 @@ export function ProfileDrawer({
               className={`w-full ${INPUT_SHELL}`}
             />
             <span className="flex gap-2">
+              {/* Disabled until the text differs from the effective value (final wave, M2): the
+                * raw Save's guard, for the same reason one level down. A Save on a textarea
+                * nobody typed in writes the value that is already there back AS an override,
+                * pinning that field against every future import having changed nothing. */}
               <Button
                 variant="ghost"
                 size="sm"
                 data-testid={`profile-field-save-${name_}`}
+                disabled={drafts[name_] === undefined || drafts[name_] === toText(current, name_)}
                 onClick={() => void saveField(name_, current)}
               >
                 Save
@@ -218,7 +238,9 @@ export function ProfileDrawer({
                   size="sm"
                   data-testid={`profile-field-reset-${name_}`}
                   onClick={() => {
-                    void sendControl(`/api/org/templates/${templateId}/overrides/${name_}`, { method: 'DELETE' }).then(after)
+                    void sendControl(`/api/org/templates/${templateId}/overrides/${name_}`, { method: 'DELETE' }).then(
+                      after([name_]),
+                    )
                   }}
                 >
                   Reset
@@ -345,32 +367,39 @@ export function ProfileDrawer({
                 void sendControl(`/api/org/templates/${templateId}/profile`, {
                   method: 'PUT',
                   body: { profile: rawDraft ?? '' },
-                }).then(after)
+                }).then(after(['raw']))
               }}
             >
               Save raw override
             </Button>
             {view.rawOverride && (
+              /* An EMPTY overrides patch, not `PUT { profile: null }` (final wave, I2). The PUT
+               * wrote a null profile and left `profileSha256` on the last render's stamp, so the
+               * importer's raw-override predicate stayed true and every later import skipped the
+               * row `locally_edited` -- a template with no profile at all, permanently unable to
+               * get one back. `writeOverrides` re-renders the effective spec (upstream merged with
+               * whatever fields are still customised above) and RE-STAMPS the hash, which is the
+               * one way back to a row imports will speak to again. */
               <Button
                 variant="ghost"
                 size="sm"
                 data-testid="profile-raw-clear"
                 onClick={() => {
-                  void sendControl(`/api/org/templates/${templateId}/profile`, {
-                    method: 'PUT',
-                    body: { profile: null },
-                  }).then(after)
+                  void sendControl(`/api/org/templates/${templateId}/overrides`, {
+                    method: 'PATCH',
+                    body: { patch: {} },
+                  }).then(after(['raw']))
                 }}
               >
                 Clear it
               </Button>
             )}
           </span>
-          <span className="text-xs text-text-3">
+          <span data-testid="profile-raw-clear-notice" className="text-xs text-text-3">
             Saving here replaces the rendered profile with your words until you clear it, and the
-            next import will skip this template rather than overwrite them. Clearing it leaves this
-            template without a profile until its catalog is imported again or a field above is
-            saved.
+            next import will skip this template rather than overwrite them. Clearing it brings the
+            rendered profile back -- the catalog&apos;s text with the fields customised above
+            merged in -- and the next import treats this template as ordinary again.
           </span>
         </DetailsGroup>
       )}

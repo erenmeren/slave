@@ -627,9 +627,12 @@ function catalogRowOf(
     recommendedSkills: effective?.recommendedSkills ?? [],
     mappingQuality: spec.success ? (spec.data.source?.mappingQuality ?? null) : null,
     overriddenFields: overrides.success ? overriddenFields(overrides.data) : [],
-    // Scoped to a structured row on purpose: a hand-made template has no upstream to have
-    // overridden, so its Markdown is not an override of anything (plan erratum E5).
-    rawOverride: spec.success && rawOverride,
+    // NOT scoped to a structured row (final wave, M5). A hand-made template still shows nothing --
+    // it has no `profileSha256`, so no import ever wrote its Markdown and there is nothing for it
+    // to be an override OF (plan erratum E5) -- but a row imported BEFORE M46 has a stamp and no
+    // spec, and if a person edited its Markdown the importer skips it `locally_edited` on every
+    // run. Hiding the chip there left the one row the operator has to act on looking ordinary.
+    rawOverride,
   }
 }
 
@@ -690,12 +693,17 @@ export async function listWorkforceCatalog(filters: WorkforceCatalogFilters = {}
     // `sha256(convert_to(text,'UTF8'))` hex is byte-identical to `goalSha256` (the same digest over
     // the same bytes), and `IS DISTINCT FROM` is what makes a CLEARED profile -- NULL against a
     // recorded hash -- come back true, exactly as `importCatalog` reads it.
+    //
+    // The WHERE is on the STAMP, not on the spec (final wave, M5): a stamp is what an import
+    // leaves behind, so every row that has one has a profile an import wrote and a person may
+    // since have rewritten -- a pre-M46 row included. A hand-made template has no stamp and is
+    // simply absent from this result, which the `?? false` below reads as "no override".
     prisma.$queryRaw<{ id: string; rawOverride: boolean }[]>`
       SELECT id,
              (CASE WHEN "profile" IS NULL THEN NULL ELSE encode(sha256(convert_to("profile", 'UTF8')), 'hex') END)
                IS DISTINCT FROM "profileSha256" AS "rawOverride"
       FROM "SlaveTemplate"
-      WHERE "profileSpec" IS NOT NULL
+      WHERE "profileSha256" IS NOT NULL
     `,
   ])
   const countByTemplate = new Map(catalogSlaveGroups.map((group) => [group.templateId, group._count._all] as const))

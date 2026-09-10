@@ -4,15 +4,29 @@ import {
   listCompanies,
   listProjectTeams,
   listRoster,
+  listTemplates,
   listWorkforceCatalogPage,
   listWorkspaceNames,
 } from '../../server/org'
 import { buildSkillsPage } from '../../server/skills'
+import { parseCatalogFilters } from '../../lib/catalogFilters'
 import { WorkforceClient, type WorkforceTab } from '../../components/workforce/WorkforceClient'
 
 export const dynamic = 'force-dynamic'
 
 const TAB_IDS: readonly WorkforceTab[] = ['slaves', 'departments', 'catalog', 'skills']
+
+/** Next hands a repeated param (`?capability=a&capability=b`) as an array; the catalog's filters
+ *  are one value each, so the first wins -- the same thing `URLSearchParams.get` does for the
+ *  client hook reading the same URL. */
+function queryOf(params: Record<string, string | readonly string[] | undefined>): URLSearchParams {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(params)) {
+    const first = typeof value === 'string' ? value : value?.[0]
+    if (first !== undefined) query.set(key, first)
+  }
+  return query
+}
 
 /**
  * The people (M44 R1): every slave, the departments they sit on, the catalog they are made from,
@@ -28,6 +42,13 @@ const TAB_IDS: readonly WorkforceTab[] = ['slaves', 'departments', 'catalog', 's
  * take -- `listTemplates()` IS that call's `.rows`, so asking for both would have been the same
  * `findMany` and the same `groupBy` run twice for one page.
  *
+ * The catalog read takes the URL's filters (M46 final wave, M1), parsed by the same
+ * `parseCatalogFilters` the client hook uses, so `WorkforceCatalog` is seeded with the rows its
+ * filter bar already claims to be showing. Unfiltered, that was always true; a shared
+ * `?q=`/`?capability=` link painted the WHOLE catalog until the client's first refetch replaced
+ * it. The exception is `templates`, which the pickers on two other tabs staff a company FROM and
+ * which must stay the whole catalog: a FILTERED url is the one case that pays for a second read.
+ *
  * `listRoster()` runs even though `listAllSlaves()` calls it internally: that function's return
  * shape has none of `RosterCompany`'s own structure (company -> department -> members), which the
  * New slave drawer and the company manager both need directly. One extra query per page load,
@@ -36,19 +57,24 @@ const TAB_IDS: readonly WorkforceTab[] = ['slaves', 'departments', 'catalog', 's
 export default async function WorkforcePage({
   searchParams,
 }: {
-  readonly searchParams: Promise<{ readonly tab?: string }>
+  readonly searchParams: Promise<Record<string, string | readonly string[] | undefined>>
 }): Promise<React.JSX.Element> {
-  const { tab } = await searchParams
-  const [slaves, teams, workspaces, companies, roster, catalog, catalogImports, skills] = await Promise.all([
-    listAllSlaves(),
-    listProjectTeams(),
-    listWorkspaceNames(),
-    listCompanies(),
-    listRoster(),
-    listWorkforceCatalogPage(),
-    listCatalogImports(),
-    buildSkillsPage(),
-  ])
+  const params = await searchParams
+  const tab = typeof params.tab === 'string' ? params.tab : undefined
+  const filters = parseCatalogFilters(queryOf(params))
+  const filtered = Object.keys(filters).length > 0
+  const [slaves, teams, workspaces, companies, roster, catalog, allTemplates, catalogImports, skills] =
+    await Promise.all([
+      listAllSlaves(),
+      listProjectTeams(),
+      listWorkspaceNames(),
+      listCompanies(),
+      listRoster(),
+      listWorkforceCatalogPage(filters),
+      filtered ? listTemplates() : Promise.resolve(null),
+      listCatalogImports(),
+      buildSkillsPage(),
+    ])
   const initialTab = TAB_IDS.find((id) => id === tab) ?? 'slaves'
   return (
     <WorkforceClient
@@ -58,7 +84,7 @@ export default async function WorkforcePage({
       workspaces={workspaces}
       companies={companies}
       roster={roster}
-      templates={catalog.rows}
+      templates={allTemplates ?? catalog.rows}
       catalog={catalog}
       catalogImports={catalogImports}
       skills={skills}

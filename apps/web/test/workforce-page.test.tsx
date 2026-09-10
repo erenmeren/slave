@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WorkforceClient, type WorkforceTab } from '../src/components/workforce/WorkforceClient.js'
+import WorkforcePage from '../src/app/workforce/page.js'
 import type { AllSlaveRow, AllSlavesPage, CatalogRowView, WorkforceCatalogView } from '../src/server/org.js'
 import type { SkillsPage } from '../src/server/skills.js'
 
@@ -13,6 +14,29 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: routerRefresh, replace: routerReplace }),
   useSearchParams: () => new URLSearchParams(search),
 }))
+
+/**
+ * The Workforce page itself is a server component that reads eight loaders, one of which opens
+ * Postgres and another of which scans the skills directories on disk. The wiring this file is
+ * about -- WHICH filters reach the catalog read, and what the pickers are handed -- is above all
+ * of that, so the loaders are stubs and the read model keeps its own integration coverage
+ * (`test/integration/workforce-catalog.test.ts`).
+ */
+const listWorkforceCatalogPage = vi.fn(async (_filters?: unknown) => catalogPage([templateRow()]))
+const listTemplates = vi.fn(async () => [templateRow()] as readonly CatalogRowView[])
+
+vi.mock('../src/server/org.js', () => ({
+  listAllSlaves: async () => page([]),
+  listProjectTeams: async () => [],
+  listWorkspaceNames: async () => [],
+  listCompanies: async () => [],
+  listRoster: async () => [],
+  listCatalogImports: async () => [],
+  listWorkforceCatalogPage: (filters?: unknown) => listWorkforceCatalogPage(filters),
+  listTemplates: () => listTemplates(),
+}))
+
+vi.mock('../src/server/skills.js', () => ({ buildSkillsPage: async () => skillsPage() }))
 
 function slaveRow(over: Partial<AllSlaveRow> = {}): AllSlaveRow {
   return {
@@ -411,5 +435,68 @@ describe('the catalog import surfaces', () => {
     render(<TestWorkforceClient initialTab="catalog" />)
 
     expect(screen.getByTestId('catalog-imports').textContent).toContain('no catalog has been imported yet')
+  })
+})
+
+/**
+ * M46 final wave, M1. `WorkforceCatalog`'s docblock says its rows are "seeded by the server's
+ * first read so nothing flashes" -- which was only true for an unfiltered URL. The page called
+ * `listWorkforceCatalogPage()` with no arguments, so a shared `?q=` or `?capability=` link painted
+ * the WHOLE catalog for as long as the client's first refetch took to come back, under a filter
+ * bar that already said otherwise. The page parses the same five params the client hook parses.
+ */
+describe('the Workforce page seeds the catalog from the URL (M46 M1)', () => {
+  beforeEach(() => {
+    listWorkforceCatalogPage.mockClear()
+    listTemplates.mockClear()
+  })
+
+  const renderPage = async (searchParams: Record<string, string>) =>
+    (await WorkforcePage({ searchParams: Promise.resolve(searchParams) })) as unknown as {
+      props: { catalog: WorkforceCatalogView; templates: readonly CatalogRowView[]; initialTab: WorkforceTab }
+    }
+
+  it('passes the URL\u2019s filters into the catalog read', async () => {
+    await renderPage({ tab: 'catalog', q: ' rollout ', capability: 'Run the work back', source: 'imported', skill: 'writing-plans', division: 'engineering' })
+
+    expect(listWorkforceCatalogPage).toHaveBeenCalledWith({
+      q: 'rollout',
+      division: 'engineering',
+      capability: 'Run the work back',
+      source: 'imported',
+      skill: 'writing-plans',
+    })
+  })
+
+  it('drops a source token outside the vocabulary rather than reading an empty catalog', async () => {
+    await renderPage({ source: 'nonsense' })
+
+    expect(listWorkforceCatalogPage).toHaveBeenCalledWith({})
+  })
+
+  it('reads the catalog exactly once when no filter is in the URL, and the pickers share that read', async () => {
+    const element = await renderPage({ tab: 'catalog' })
+
+    expect(listWorkforceCatalogPage).toHaveBeenCalledTimes(1)
+    expect(listTemplates).not.toHaveBeenCalled()
+    // Erratum E9's one read per page: `templates` IS the catalog's rows, the same array.
+    expect(element.props.templates).toBe(element.props.catalog.rows)
+  })
+
+  it('keeps the pickers unfiltered when the catalog is filtered, at the cost of one extra read', async () => {
+    // The New slave drawer and the company manager staff a company FROM `templates`; filtering it
+    // with the Catalog tab's search box would hide most of the catalog behind a box on another
+    // tab. The second read is paid only on a filtered URL.
+    listTemplates.mockResolvedValueOnce([templateRow(), templateRow({ id: 't2', name: 'Verifier' })])
+
+    const element = await renderPage({ source: 'local' })
+
+    expect(listWorkforceCatalogPage).toHaveBeenCalledWith({ source: 'local' })
+    expect(listTemplates).toHaveBeenCalledTimes(1)
+    expect(element.props.templates.map((row) => row.name)).toEqual(['Hand Made', 'Verifier'])
+  })
+
+  it('still falls back to the Slaves tab for an unknown ?tab=', async () => {
+    expect((await renderPage({ tab: 'nonsense' })).props.initialTab).toBe('slaves')
   })
 })

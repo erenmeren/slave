@@ -682,10 +682,20 @@ async function mustGetRun(runId: string) {
 function describeImport(report: ImportReport): string {
   const lines: string[] = []
   if (report.dryRun) lines.push('DRY RUN: nothing was written.')
+  // M46 E22, final wave M4: the backfill writes a `profileSpec` onto a row whose FILE has not
+  // changed, so its outcome is `unchanged` and nothing in this report mentioned it -- an operator
+  // re-importing an old catalog precisely to get specialist profiles could not tell it had
+  // happened. APPENDED to the four counts, never mixed into them: `structured` is a subset of
+  // `unchanged`, and the four numbers are what the m42 gate reads. Printed only when there is one,
+  // like `overrides kept` below.
+  const structured = [...report.created, ...report.updated, ...report.unchanged].filter(
+    (row) => row.structured === true,
+  ).length
   lines.push(
     `${report.catalog} (${report.directory}): created ${String(report.created.length)}, ` +
       `updated ${String(report.updated.length)}, unchanged ${String(report.unchanged.length)}, ` +
-      `skipped ${String(report.skipped.length)}`,
+      `skipped ${String(report.skipped.length)}` +
+      (structured > 0 ? `, structured ${String(structured)}` : ''),
   )
   for (const row of report.created) lines.push(`  created  ${row.name}  [${row.role}]  ${row.sourceId}`)
   for (const row of report.updated) {

@@ -165,11 +165,16 @@ describe('WorkforceCatalog rows', () => {
   })
 
   // Fix round 1, minor 4: every `Row` is the only child of its wrapper, so `Row`'s own
-  // `last:border-b-0` matched ALL of them and the table drew no separator anywhere.
-  it('draws a separator under every row but the last', () => {
+  // `last:border-b-0` matched ALL of them and the table drew no separator anywhere. The final
+  // wave (I1) found the first fix still shipped `last:border-b-0` on the non-last rows -- and a
+  // `:last-child` rule of higher specificity than `.border-b` still won on every wrapped row, so
+  // the separator was still missing. A row whose caller manages position carries NO `:last-child`
+  // rule at all: the non-last rows get a plain `border-b`, the last one gets neither.
+  it('draws a separator under every row but the last, with no :last-child rule to undo it', () => {
     render(<WorkforceCatalog initial={view([row(), row({ id: 't2' }), row({ id: 't3' })])} />)
-    const borders = screen.getAllByTestId('data-table-row').map((node) => node.className.includes('border-b'))
-    expect(borders).toEqual([true, true, false])
+    const classNames = screen.getAllByTestId('data-table-row').map((node) => node.className)
+    expect(classNames.map((name) => name.includes('border-b'))).toEqual([true, true, false])
+    expect(classNames.map((name) => name.includes('last:border-b-0'))).toEqual([false, false, false])
   })
 
   it('never prints a bare mapping-quality token as visible text (docs/ia.md rule 3)', () => {
@@ -551,6 +556,59 @@ describe('ProfileDrawer', () => {
     )
   })
 
+  // Final wave, M2: the same guard the raw Save has had since round 1, for the same reason. A
+  // Save pressed on a textarea nobody typed in would write the EFFECTIVE value back as an
+  // override -- pinning that field against every future import, having changed nothing.
+  it('will not save a field that has not been edited', async () => {
+    await openDrawer()
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('profile-customise'))
+    })
+
+    const save = (): HTMLButtonElement => screen.getByTestId('profile-field-save-summary') as HTMLButtonElement
+    expect(save().disabled).toBe(true)
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('profile-field-input-summary'), { target: { value: 'Mine.' } })
+    })
+    expect(save().disabled).toBe(false)
+
+    // Typed back to exactly the effective text is untouched again.
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('profile-field-input-summary'), {
+        target: { value: withEffective.effective.summary },
+      })
+    })
+    expect(save().disabled).toBe(true)
+  })
+
+  // Final wave, M3: `load()` used to clear EVERY draft, so saving one field threw away the text
+  // an operator had typed into the others -- silently, under a click that said Save.
+  it('keeps the other fields\u2019 unsaved text when one field is saved', async () => {
+    await openDrawer()
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('profile-customise'))
+    })
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('profile-field-input-summary'), { target: { value: 'Saved summary.' } })
+    })
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('profile-field-input-mission'), { target: { value: 'Still being typed.' } })
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('profile-field-save-summary'))
+    })
+
+    // The saved field goes back to the server's answer; the other one keeps what was typed.
+    expect((screen.getByTestId('profile-field-input-mission') as HTMLTextAreaElement).value).toBe(
+      'Still being typed.',
+    )
+    expect((screen.getByTestId('profile-field-input-summary') as HTMLTextAreaElement).value).toBe(
+      withEffective.effective.summary,
+    )
+  })
+
   it('shows the refusal text beside the field when the write is declined', async () => {
     await openDrawer()
     fetchMock.mockImplementation(async (url: string) =>
@@ -563,6 +621,10 @@ describe('ProfileDrawer', () => {
     )
     await act(async () => {
       fireEvent.click(screen.getByTestId('profile-customise'))
+    })
+    // Typed, because an untouched Save is disabled (final wave, M2) and would write nothing.
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('profile-field-input-constraints'), { target: { value: 'Mine' } })
     })
     await act(async () => {
       fireEvent.click(screen.getByTestId('profile-field-save-constraints'))
@@ -596,10 +658,31 @@ describe('ProfileDrawer', () => {
     await act(async () => {
       fireEvent.click(screen.getByTestId('profile-raw-clear'))
     })
+    // Final wave, I2: NOT `PUT { profile: null }`. That wrote a null profile and left
+    // `profileSha256` at the last render's stamp, so the raw-override predicate stayed true and
+    // every later import skipped the row `locally_edited` -- permanently, with no profile at all.
+    // The empty overrides patch re-renders the effective spec and re-stamps the hash, which is the
+    // only way back to a row an import will speak to again.
     expect(fetchMock).toHaveBeenCalledWith(
+      '/api/org/templates/t1/overrides',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ patch: {} }) }),
+    )
+    expect(fetchMock).not.toHaveBeenCalledWith(
       '/api/org/templates/t1/profile',
       expect.objectContaining({ method: 'PUT', body: JSON.stringify({ profile: null }) }),
     )
+  })
+
+  // The copy beside the two buttons has to be true, because it is the only place an operator is
+  // told what Clear it does (final wave, I2).
+  it('says clearing restores the rendered profile rather than emptying it', async () => {
+    await openDrawer({ rawOverride: true })
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId('profile-drawer')).getByText('Advanced'))
+    })
+    const notice = screen.getByTestId('profile-raw-clear-notice').textContent ?? ''
+    expect(notice).toContain('rendered profile')
+    expect(notice).not.toContain('without a profile')
   })
 
   // Fix round 1, minor 6: an untouched Save would have written the rendered profile back AS a raw

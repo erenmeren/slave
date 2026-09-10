@@ -201,6 +201,44 @@ describe('DataTable', () => {
     // The card's own rounding is unchanged -- this is a scroll fix, not a shape change (D8).
     expect(table.className).toContain('rounded-card')
   })
+
+  // M46 final wave, I1. `last` has three states, not two. Omitted means "my rows are direct
+  // children, keep the `:last-child` rule you always had"; given means "I wrap my rows, so the
+  // selector cannot see position -- I say which one is last". The broken middle state was a
+  // wrapped non-last row that carried BOTH `border-b` and `last:border-b-0`: it is the only child
+  // of its wrapper, so `.last\:border-b-0:last-child` (0,2,0) beat `.border-b` (0,1,0) and the
+  // separator vanished from every row of every wrapping table.
+  it('drops the :last-child rule as soon as the caller says which row is last', () => {
+    render(
+      <DataTable columns="1fr" header={['Name']}>
+        <div>
+          <Row columns="1fr" last={false}>
+            <span>first</span>
+          </Row>
+        </div>
+        <div>
+          <Row columns="1fr" last={true}>
+            <span>second</span>
+          </Row>
+        </div>
+      </DataTable>,
+    )
+    const [first, second] = screen.getAllByTestId('data-table-row')
+    expect(first?.className).toContain('border-b')
+    expect(first?.className).not.toContain('last:border-b-0')
+    expect(second?.className).not.toContain('border-b')
+  })
+
+  it('keeps the :last-child rule for a caller whose rows are direct children', () => {
+    render(
+      <DataTable columns="1fr" header={['Name']}>
+        <Row columns="1fr">
+          <span>only</span>
+        </Row>
+      </DataTable>,
+    )
+    expect(screen.getByTestId('data-table-row').className).toContain('last:border-b-0')
+  })
 })
 
 describe('ProgressBar', () => {

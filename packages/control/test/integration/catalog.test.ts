@@ -522,6 +522,61 @@ describe('importCatalog and the structured profile (M46)', () => {
     expect((row.profileSpec as { body: string }).body).not.toContain('A rewritten body')
   })
 
+  // Final wave, I2. The drawer's `Clear it` sends an EMPTY overrides patch rather than
+  // `setProfile(..., null)`, and this is why: `setProfile` writes the profile column without
+  // touching `profileSha256`, so a cleared row still looked hand-edited to every later import and
+  // stayed frozen with no profile at all. `setProfileOverrides(id, {})` re-renders the effective
+  // spec and re-stamps the hash, so the row rejoins the catalog.
+  it('an empty overrides patch lifts a RAW override and hands the row back to the importer', async (): Promise<void> => {
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')] }, 'operator')
+    const template = await prisma.slaveTemplate.findFirstOrThrow()
+    await setProfile({ templateId: template.id }, 'This is what I want this worker to be, in my own words.', 'operator')
+
+    const cleared = await setProfileOverrides(template.id, {}, 'operator')
+    expect(cleared.ok).toBe(true)
+
+    const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: template.id } })
+    const spec = profileSpecSchema.safeParse(row.profileSpec)
+    expect(spec.success).toBe(true)
+    if (!spec.success) return
+    // The operator's words are gone and the rendered profile is back, byte for byte...
+    expect(row.profile).toBe(renderProfileSpec(effectiveProfileSpec(spec.data, {})))
+    // ...with the import's own stamp over it, which is the half `setProfile` could never write.
+    expect(row.profileSha256).toBe(goalSha256(row.profile as string))
+    expect(row.profileOverrides).toBeNull()
+
+    const result = await importCatalog(
+      {
+        catalog: CATALOG,
+        directory: DIRECTORY,
+        entries: [structured('core-builder', 'Core Builder', 'A rewritten body for the same file.')],
+      },
+      'operator',
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.skipped).toEqual([])
+    expect(result.value.updated).toHaveLength(1)
+    const after = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: template.id } })
+    expect(after.profile).toContain('A rewritten body')
+  })
+
+  // The same row read the way the drawer reads it: no raw override left to clear.
+  it('an empty overrides patch clears the raw-override flag the drawer reads', async (): Promise<void> => {
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')] }, 'operator')
+    const template = await prisma.slaveTemplate.findFirstOrThrow()
+    await setProfile({ templateId: template.id }, 'my own words', 'operator')
+    expect((await readTemplateProfile(template.id)).ok).toBe(true)
+
+    await setProfileOverrides(template.id, {}, 'operator')
+
+    const view = await readTemplateProfile(template.id)
+    expect(view.ok).toBe(true)
+    if (!view.ok) return
+    expect(view.value.rawOverride).toBe(false)
+    expect(view.value.overridden).toEqual([])
+  })
+
   it('a structured customisation is NOT locally_edited -- that is what re-stamping the hash buys', async (): Promise<void> => {
     await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')] }, 'operator')
     const template = await prisma.slaveTemplate.findFirstOrThrow()
@@ -768,6 +823,48 @@ describe('listWorkforceCatalog', () => {
     // is the drawer's business -- the row carries the enum.
     expect(page.rows[0]?.mappingQuality).toBe('partial')
     expect(page.facets.skills).toEqual(['code-review', 'refactoring'])
+  })
+
+  // Final wave, M5. `rawOverride` was scoped to a row whose spec PARSED, which left the one row
+  // the chip matters most for showing nothing: a template imported before M46 has no spec, and if
+  // its Markdown was hand-edited the importer skips it `locally_edited` on every run -- forever,
+  // with nothing on the surface saying why. The predicate is about the profile column and its
+  // stamp, not about the spec.
+  it('marks a hand-edited pre-M46 row as a raw override even though it has no spec', async (): Promise<void> => {
+    const profile = 'imported profile, as an M42-era import composed it'
+    await prisma.slaveTemplate.create({
+      data: {
+        name: 'Untouched Pre-M46',
+        role: 'engineering',
+        profile,
+        profileSha256: goalSha256(profile),
+        sourceId: `${CATALOG}/engineering/untouched`,
+        sourceDivision: 'engineering',
+      },
+    })
+    const edited = await prisma.slaveTemplate.create({
+      data: {
+        name: 'Edited Pre-M46',
+        role: 'engineering',
+        profile,
+        profileSha256: goalSha256(profile),
+        sourceId: `${CATALOG}/engineering/edited`,
+        sourceDivision: 'engineering',
+      },
+    })
+    await setProfile({ templateId: edited.id }, 'my own words', 'operator')
+    await prisma.slaveTemplate.create({ data: { name: 'Hand Made', role: 'backend', profile: 'my own words' } })
+
+    const page = await listWorkforceCatalog()
+    const rowFor = (name: string) => page.rows.find((row) => row.name === name)
+
+    expect(rowFor('Edited Pre-M46')?.rawOverride).toBe(true)
+    expect(rowFor('Edited Pre-M46')?.structured).toBe(false)
+    // A pre-M46 row nobody touched is NOT an override -- its Markdown is still the import's own.
+    expect(rowFor('Untouched Pre-M46')?.rawOverride).toBe(false)
+    // Still nothing for a hand-made template: no `profileSha256`, so no import ever wrote it and
+    // there is nothing its text could be an override OF (plan erratum E5).
+    expect(rowFor('Hand Made')?.rawOverride).toBe(false)
   })
 
   it('marks a CLEARED profile as a raw override, exactly as the importer calls it locally_edited', async (): Promise<void> => {

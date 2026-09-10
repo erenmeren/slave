@@ -408,9 +408,12 @@ npm run orchestrator -- show-profile --template <id> --markdown
 
 A persona whose headings the mapper recognises comes through in full; one written to a different
 shape comes through in part; one written to no shape at all comes through as itself. The profile
-says which of the three happened rather than pretending. **Nothing is thrown away**: the sections
-the mapper does not know are still in the profile, in the persona's own words, and they are the
-first thing dropped if a profile is too long for a prompt rather than the only thing kept.
+says which of the three happened rather than pretending. **The sections the mapper does not
+recognise are kept whole**, in the persona's own words, and they are the first thing dropped if a
+profile is too long for a prompt rather than the only thing kept. A section the mapper DOES
+recognise is lifted into its field, which means it is condensed: a mission keeps its first
+sentence, a prose subsection keeps its title, a workflow keeps its numbered steps. The file itself
+is always one `show-profile --markdown` away.
 
 A specialist profile stays distinct from a RUNTIME ROLE. The profile says what a worker is for; the
 runtime roles (`set-runtime-roles`) are what it can be dispatched as, and they are the only thing

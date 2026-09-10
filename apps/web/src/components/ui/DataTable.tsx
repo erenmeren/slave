@@ -43,22 +43,31 @@ export function DataTable({
  * each row in its own element (`CatalogImports`, `WorkforceCatalog` — both wrap so the row can
  * carry a second identity without renaming the `data-table-row` handle four gates read) makes
  * every `Row` the only child of its wrapper. `:last-child` then matched ALL of them and the table
- * lost every separator (M46 t4 fix round 1). A wrapping caller says which row is last; a caller
- * whose rows are direct children says nothing and keeps the selector it always had.
+ * lost every separator (M46 t4 fix round 1).
+ *
+ * So `last` has THREE states, not two (M46 final wave, I1). Omitting it means "my rows are direct
+ * children of the row list": the row keeps the `:last-child` rule it always had. Passing it means
+ * "I wrap my rows, so the selector cannot see position" — the caller owns the separator, and the
+ * `:last-child` rule must not ship at all. Round 1 kept emitting it next to `border-b` on the
+ * non-last rows, and since each of those is the only child of its wrapper,
+ * `.last\:border-b-0:last-child` (0,2,0) still beat `.border-b` (0,1,0): the separator was still
+ * missing from every row of every wrapping table.
  */
 export function Row({
   columns,
-  last = false,
+  last,
   children,
 }: {
   readonly columns: string
   readonly last?: boolean
   readonly children: React.ReactNode
 }): React.JSX.Element {
+  const border =
+    last === undefined ? 'border-b border-white/[0.05] last:border-b-0' : last ? '' : 'border-b border-white/[0.05]'
   return (
     <div
       data-testid="data-table-row"
-      className={`grid items-center gap-2 px-3 py-2 ${last ? '' : 'border-b border-white/[0.05] last:border-b-0'}`}
+      className={`grid items-center gap-2 px-3 py-2 ${border}`}
       style={{ gridTemplateColumns: columns }}
     >
       {children}

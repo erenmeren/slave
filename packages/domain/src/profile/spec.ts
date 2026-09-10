@@ -369,8 +369,16 @@ export function sliceCodePoints(value: string, max: number): string {
  * than the entire cap, and nothing else to say. It cannot happen for an imported persona (M42
  * refuses a file whose composed profile is over the cap before the mapper ever runs, plan erratum
  * E6); it can happen for an operator who pastes 20 000 characters into one override. This function
- * never returns an empty string for a spec that has anything to say, and never returns more than
- * `PROFILE_MAX_CHARS`.
+ * never returns more than `PROFILE_MAX_CHARS`, and never answers a spec that has something to say
+ * with an empty string.
+ *
+ * **What a spec with NOTHING to say renders** (final wave, deferred minor). A spec whose fourteen
+ * fields are all blank has nothing this function can put in front of a model: with no source it
+ * renders `''`, and with a source it renders that source's prefix line ALONE -- the sentence
+ * naming the file and the day it was imported, and not a word more. That is intended: the prefix
+ * is a true statement about where this profile came from, and it is the only true statement left.
+ * The "not just the prefix line" rule above is about a spec whose sections are too LONG to fit,
+ * where dropping them all would hide words that exist; here there are none to hide.
  */
 export function renderProfileSpec(spec: ProfileSpec): string {
   const prefix =

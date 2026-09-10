@@ -1,6 +1,7 @@
 import { importCatalog, setProfile, setProfileOverrides } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { PROFILE_MAX_CHARS } from '@slave-of-ai/domain'
 import { listTemplates, listWorkforceCatalogPage, readTemplateProfileView } from '../../src/server/org.js'
 import { GET as catalogGET } from '../../src/app/api/org/catalog/route.js'
 import { GET as profileGET, PUT as profilePUT } from '../../src/app/api/org/templates/[templateId]/profile/route.js'
@@ -215,6 +216,23 @@ describe('the workforce catalog read model', () => {
 
       expect(response.status).toBe(404)
       expect(await response.json()).toMatchObject({ error: expect.any(String) })
+    })
+
+    // The one refusal this route has that is not about identity (M46 final wave, deferred minor):
+    // a raw override longer than the cap a prompt is assembled under is declined by the verb, and
+    // the shell turns that into a 409 rather than storing a profile no run could ever be given.
+    it('is 409 profile_too_long for a raw override past the cap, and stores nothing', async (): Promise<void> => {
+      const coreId = await coreBuilderId()
+      const before = await readTemplateProfileView(coreId)
+
+      const response = await profilePUT(putRequest({ profile: 'x'.repeat(PROFILE_MAX_CHARS + 1) }), templateParams(coreId))
+
+      expect(response.status).toBe(409)
+      const body = (await response.json()) as { error: string }
+      expect(body.error).toContain(String(PROFILE_MAX_CHARS))
+      const after = await readTemplateProfileView(coreId)
+      expect(after.ok && after.value.markdown).toBe(before.ok ? before.value.markdown : null)
+      expect(after.ok && after.value.rawOverride).toBe(false)
     })
 
     it('writes the raw Markdown override, and clears it back to the render', async (): Promise<void> => {
