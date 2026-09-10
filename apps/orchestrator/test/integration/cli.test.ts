@@ -173,7 +173,7 @@ describe('the orchestrator CLI', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "SupervisorDecision", "ExecutionEvent", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "SupervisorDecision", "ExecutionEvent", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate", "CatalogImport", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -692,6 +692,34 @@ describe('the orchestrator CLI', () => {
     expect(`${result.stdout}${result.stderr}`).toMatch(/attempt ceiling/)
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(task.status).toBe('blocked')
+  })
+
+  it('prints "back in reviewing" for a review-blocked task under the cap (M5)', async (): Promise<void> => {
+    // Under REVIEW_RETRY_CAP (2): one review run since the latest implementation run, so
+    // `unblockTask` sends it back to `reviewing` rather than `rework` (spec R6b).
+    await prisma.slaveRun.create({
+      data: {
+        taskId: fixture.taskId,
+        slaveId: fixture.slaveId,
+        kind: 'implementation',
+        status: 'succeeded',
+        startedAt: new Date(Date.now() - 60_000),
+      },
+    })
+    await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, kind: 'review', status: 'failed', startedAt: new Date() },
+    })
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'blocked', activeRunId: null, attempt: 1, maxAttempts: 3 },
+    })
+
+    const result = await runCli(['unblock-task', '--task', fixture.taskId])
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain(`task ${fixture.taskId} is unblocked and back in reviewing`)
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('reviewing')
   })
 
   it('unblocks a task at its attempt ceiling given --allow-another-attempt, raising the ceiling by exactly one', async (): Promise<void> => {
@@ -2583,6 +2611,17 @@ describe('the orchestrator CLI', () => {
       expect((await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'CLI Core Builder' } })).role).toBe('backend')
     })
 
+    it('refuses a --role-map naming one division twice, before anything is imported (I2)', async (): Promise<void> => {
+      const dir = catalogDir()
+
+      const result = await runCli(['import-catalog', '--dir', dir, '--role-map', 'engineering=backend,engineering=frontend'])
+
+      expect(result.code).not.toBe(0)
+      expect(`${result.stdout}${result.stderr}`).toContain('the division "engineering" is named twice')
+      expect(await prisma.slaveTemplate.count()).toBe(0)
+      expect(await prisma.catalogImport.count()).toBe(0)
+    })
+
     it('trims what an operator typed around a --role-map entry', async (): Promise<void> => {
       const dir = catalogDir()
 
@@ -2613,6 +2652,23 @@ describe('the orchestrator CLI', () => {
 
       expect(result.code).not.toBe(0)
       expect(`${result.stdout}${result.stderr}`).toContain('no persona was found')
+    })
+
+    it('warns and imports nothing when divisions.json names nothing that exists on disk (M2)', async (): Promise<void> => {
+      const root = mkdtempSync(join(tmpdir(), 'cli-catalog-m42-stale-'))
+      catalogDirs.push(root)
+      mkdirSync(join(root, 'engineering'), { recursive: true })
+      writeFileSync(join(root, 'divisions.json'), JSON.stringify({ divisions: { lost: { label: 'Lost' } } }))
+      writeFileSync(join(root, 'engineering', 'core-builder.md'), '---\nname: Stale Builder\n---\n\nYou build.\n')
+
+      const result = await runCli(['import-catalog', '--dir', root])
+
+      expect(result.code).not.toBe(0)
+      const text = `${result.stdout}${result.stderr}`
+      expect(text).toContain('WARNING')
+      expect(text).toContain('divisions.json names "lost"')
+      expect(text).toContain('no persona was found')
+      expect(await prisma.slaveTemplate.count()).toBe(0)
     })
 
     it('says the role stays put when --role-map disagrees with a template already created', async (): Promise<void> => {
@@ -2752,12 +2808,22 @@ describe('the orchestrator CLI', () => {
     })
 
     it('refuses a --limit that is not a positive integer', async (): Promise<void> => {
-      for (const limit of ['0', 'abc']) {
+      // (M3) `Number.parseInt` reads a leading run of digits and ignores what follows it, so
+      // `3abc` and `3.9` both used to parse as `3` and sail through: --limit must match a whole
+      // string of digits, not merely start with one.
+      for (const limit of ['0', 'abc', '3abc', '3.9', '-1', ' 3', '3 ', '+3']) {
         const result = await runCli(['list-imports', '--limit', limit])
 
         expect(result.code).not.toBe(0)
         expect(`${result.stdout}${result.stderr}`).toContain('--limit must be a positive integer')
       }
+    })
+
+    it('prints a note when --limit is clamped to the verb\'s ceiling of 100 (M3)', async (): Promise<void> => {
+      const result = await runCli(['list-imports', '--limit', '500'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('--limit 500 was clamped to 100')
     })
 
     it('list-imports says so when nothing has been imported', async (): Promise<void> => {

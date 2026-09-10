@@ -311,7 +311,12 @@ async function importRow(
       }
 
       const existing = await tx.slaveTemplate.findUniqueOrThrow({ where: { id: existingId } })
-      const drift = existing.role === draft.role ? {} : { roleDrift: { stored: existing.role, mapped: draft.role } }
+      // E10 fix round 2: drift is a claim the OPERATOR made this run, not a comparison against
+      // the fallback role a bare re-import (no --role-map at all) computes for its division. A
+      // division absent from this run's map -- because there IS no map, or the map does not
+      // mention it -- has nothing to compare the stored role against.
+      const mapped = roleMap?.[entry.division]
+      const drift = mapped !== undefined && mapped !== existing.role ? { roleDrift: { stored: existing.role, mapped } } : {}
       const outcomeRow: RowOutcome = {
         sourceId: draft.sourceId,
         name: existing.name,

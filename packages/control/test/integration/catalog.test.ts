@@ -266,6 +266,21 @@ describe('importCatalog', () => {
     expect((await prisma.slaveTemplate.findFirstOrThrow()).role).toBe('backend')
   })
 
+  it('no map -> no roleDrift on a re-import of a template created under a map', async (): Promise<void> => {
+    await importOne([entry('core-builder', 'Core Builder')], { roleMap: { engineering: 'backend' } })
+    expect((await prisma.slaveTemplate.findFirstOrThrow()).role).toBe('backend')
+
+    // A plain re-import (no --role-map at all) has nothing to compare the stored role against: a
+    // division's fallback role ('engineering', the division name) is not a claim that the role
+    // SHOULD be that, so it must never be reported as a drift.
+    const again = await importOne([entry('core-builder', 'Core Builder')])
+
+    expect(again.ok).toBe(true)
+    if (!again.ok) return
+    expect(again.value.unchanged[0]?.roleDrift).toBeUndefined()
+    expect((await prisma.slaveTemplate.findFirstOrThrow()).role).toBe('backend')
+  })
+
   it('records one CatalogImport row with the counters and the report', async (): Promise<void> => {
     const result = await importOne([
       entry('core-builder', 'Core Builder'),

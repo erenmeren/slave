@@ -1070,12 +1070,31 @@ export async function main(argv: readonly string[]): Promise<number> {
               .filter((division) => division !== '')
       const roleMapText = flagText(flags, 'role-map')
       const roleMap: Record<string, string> = {}
+      // Collected as pairs, not written straight into `roleMap`, so a repeated division is
+      // DETECTED rather than one entry silently overwriting the other: a plain object cannot hold
+      // two values under one key, so writing as we go would let `engineering=backend,engineering=
+      // frontend` collapse to whichever came last before `normaliseRoleMap`'s own duplicate check
+      // -- built for exactly this -- ever saw two entries to compare (I2). The trim happens here,
+      // not there, only because the check needs it: two divisions distinct before trimming
+      // (`" engineering "` and `"engineering"`) are the SAME duplicate the verb refuses.
+      const roleMapPairs: [string, string][] = []
       for (const pair of roleMapText === undefined ? [] : roleMapText.split(',')) {
         const [division, role] = pair.split('=')
         if (division === undefined || role === undefined) {
           throw new Error(`--role-map entries look like division=role; got ${JSON.stringify(pair)}`)
         }
-        roleMap[division.trim()] = role.trim()
+        roleMapPairs.push([division.trim(), role.trim()])
+      }
+      const seenRoleMapDivisions = new Set<string>()
+      for (const [division, role] of roleMapPairs) {
+        if (seenRoleMapDivisions.has(division)) {
+          // The verb's own wording (`normaliseRoleMap`'s `invalid_role_map` detail), reached
+          // through `refusalText` rather than typed out a second time: two spellings of the same
+          // refusal is how they drift apart.
+          throw new Error(refusalText({ kind: 'invalid_role_map', detail: `the division "${division}" is named twice` }))
+        }
+        seenRoleMapDivisions.add(division)
+        roleMap[division] = role
       }
 
       const walk = readCatalogDirectory(dir, {
@@ -1090,6 +1109,16 @@ export async function main(argv: readonly string[]): Promise<number> {
       for (const division of walk.missingDivisions) {
         process.stderr.write(
           `WARNING: --division names "${division}", which is not a directory in this catalog; nothing was read from it\n`,
+        )
+      }
+      // M2 fix round 2: `divisions.json` itself named a division that is not there -- a fact about
+      // the catalog's own manifest, not about anything the operator typed, so it gets its own
+      // wording rather than borrowing `--division`'s. When every declared division is stale this
+      // is the only WARNING printed at all, `walk.entries` is empty, and `importCatalog` below
+      // refuses with `catalog_empty` -- there is nothing left for this run to do.
+      for (const division of walk.staleManifestDivisions) {
+        process.stderr.write(
+          `WARNING: divisions.json names "${division}", which is not a directory in this catalog; nothing was read from it\n`,
         )
       }
       // Against the divisions the WALK resolved, not the ones that yielded entries (fix round 1,
@@ -1120,8 +1149,20 @@ export async function main(argv: readonly string[]): Promise<number> {
 
     case 'list-imports': {
       const limitText = flagText(flags, 'limit')
+      // (M3) `Number.parseInt` reads a leading run of digits and silently drops whatever follows
+      // it -- `3abc` and `3.9` both used to parse as `3` and sail through. `/^\d+$/` is the whole
+      // string or nothing, which is also what rules out a leading `-` or `+` and stray whitespace
+      // without a second check.
+      if (limitText !== undefined && !/^\d+$/.test(limitText)) {
+        throw new Error('--limit must be a positive integer')
+      }
       const limit = limitText === undefined ? 10 : Number.parseInt(limitText, 10)
-      if (!Number.isInteger(limit) || limit < 1) throw new Error('--limit must be a positive integer')
+      if (limit < 1) throw new Error('--limit must be a positive integer')
+      // The verb itself clamps to its own ceiling of 100 (a caller cannot pull the whole table
+      // into a response) -- reported here, not refused, because a `--limit 500` typed by an
+      // operator who forgot the ceiling is still answered with the closest thing to what they
+      // asked for, just told so they do not conclude the flag was ignored.
+      if (limit > 100) process.stdout.write(`note: --limit ${String(limit)} was clamped to 100\n`)
       const rows = await listCatalogImports(limit)
       if (rows.length === 0) {
         process.stdout.write('no catalog has been imported yet\n')

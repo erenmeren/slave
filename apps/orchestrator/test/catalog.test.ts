@@ -133,6 +133,31 @@ describe('readCatalogDirectory', () => {
     expect(readCatalogDirectory(root, { catalog: 'named' }).entries[0]?.sourceId).toBe('named/engineering/one')
   })
 
+  it('reports every division as stale, and imports nothing, when divisions.json parsed but names nothing on disk (M2)', () => {
+    // The manifest parsed cleanly -- this is NOT the "missing, unreadable or malformed" case that
+    // falls back to "every subdirectory". Every name it lists is stale, and falling back anyway
+    // would silently import directories the operator never declared, with no sign the manifest is
+    // out of date.
+    const root = makeCatalog({ 'engineering/one.md': PERSONA }, { lost: { label: 'Lost' } })
+
+    const walk = readCatalogDirectory(root)
+
+    expect(walk.divisions).toEqual([])
+    expect(walk.missingDivisions).toEqual([])
+    expect(walk.staleManifestDivisions).toEqual(['lost'])
+    expect(walk.entries).toEqual([])
+  })
+
+  it('an explicit --division list never consults the manifest, so it reports missing rather than stale', () => {
+    const root = makeCatalog({ 'engineering/one.md': PERSONA }, { lost: { label: 'Lost' } })
+
+    const walk = readCatalogDirectory(root, { divisions: ['engineering', 'lost'] })
+
+    expect(walk.divisions).toEqual(['engineering'])
+    expect(walk.missingDivisions).toEqual(['lost'])
+    expect(walk.staleManifestDivisions).toEqual([])
+  })
+
   it('hands the file over byte for byte, CRLF included', () => {
     // `sourceSha256` is taken over exactly this string, and it is what decides "unchanged" on the
     // next import. Normalising line endings here would make every re-import of a catalog written

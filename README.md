@@ -366,7 +366,7 @@ is the only thing that dispatches one.
 
 ## Importing a catalog
 
-A team you already have written down does not have to be typed in again. Point the daemon at a
+A team you already have written down does not have to be typed in again. Point the CLI at a
 directory of persona files and they become templates:
 
 ```bash
@@ -375,8 +375,8 @@ npm run orchestrator -- import-catalog --dir /srv/personas --role-map engineerin
 npm run orchestrator -- list-imports
 ```
 
-A persona is a Markdown file with a small front matter block — `name` is the only field that is
-required — under a directory named for its division. The division becomes the template's role, and
+A persona is a Markdown file with a small front matter block — `name` and a non-empty body are the
+only fields that are required — under a directory named for its division. The division becomes the template's role, and
 `--role-map` translates one into whatever your workers are dispatched as; only `manager` and
 `reviewer` mean anything to the scheduler, everything else is a label. The persona's own text
 becomes the template's profile, kept word for word, with one line in front of it saying where it

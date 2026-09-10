@@ -101,7 +101,10 @@ export interface StrandedClaimGraceWorkspace {
  * that. Slow, and correct; the opposite trade loses work.
  */
 export function strandedClaimGraceMs(
-  kind: 'implementation' | 'review' | 'planning',
+  // `'planning'` narrowed out (parked cleanup): a planning run holds no task's claim at all (M8b,
+  // `verify.ts`'s `advance`), so it can never reach the one call site below -- the parameter said
+  // otherwise only because `SlaveRun.kind` has a third member.
+  kind: 'implementation' | 'review',
   workspace: StrandedClaimGraceWorkspace,
 ): number {
   if (kind === 'review') return STRANDED_CLAIM_GRACE_MS
@@ -336,6 +339,9 @@ export async function reconcileStrandedClaims(
     if (run.taskId !== task.id) continue
     if (deps.livePumpRunIds?.has(run.id) === true) continue
     if (run.terminalAt === null) continue
+    // A `planning` run never holds a task's claim (M8b) -- reaching one here would be bad data,
+    // not a claim to reconcile, and this is also what narrows `run.kind` for `strandedClaimGraceMs`.
+    if (run.kind === 'planning') continue
     if (now - run.terminalAt.getTime() < strandedClaimGraceMs(run.kind, grace)) continue
 
     const toRework = run.kind !== 'review' && task.status === 'running'

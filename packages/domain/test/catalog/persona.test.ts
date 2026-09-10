@@ -144,4 +144,32 @@ describe('personaToTemplate', () => {
     expect(result.error.length).toBeGreaterThan(PROFILE_MAX_CHARS)
     expect(result.error.length).toBeGreaterThan(parsed.value.body.length)
   })
+
+  it('accepts a composed profile of EXACTLY the cap, and refuses one character over it', () => {
+    // The comparison is `> PROFILE_MAX_CHARS`, not `>=` -- a persona whose composed profile lands
+    // on the cap exactly is not over it. Built from the real prefix rather than a hand-counted
+    // constant: `importedProfilePrefix`'s length depends on the sourceId and the date, and a
+    // hand-counted body would silently drift the moment either changed.
+    const build = (targetLength: number, slug: string): ReturnType<typeof personaToTemplate> => {
+      const sourceId = `${mapping.catalog}/${mapping.division}/${slug}`
+      const prefixLength = importedProfilePrefix(sourceId, mapping.importedAt).length
+      const bodyLength = targetLength - prefixLength - '\n\n'.length
+      const body = 'x'.repeat(bodyLength)
+      const text = `---\nname: Boundary\n---\n\n${body}`
+      const parsed = parsePersona({ path: 'x.md', text })
+      if (!parsed.ok) throw new Error('fixture')
+      return personaToTemplate(parsed.value, { ...mapping, slug, text })
+    }
+
+    const atCap = build(PROFILE_MAX_CHARS, 'boundary-at-cap')
+    expect(atCap.ok).toBe(true)
+    if (atCap.ok) expect(atCap.value.profile.length).toBe(PROFILE_MAX_CHARS)
+
+    const overCap = build(PROFILE_MAX_CHARS + 1, 'boundary-over-cap')
+    expect(overCap.ok).toBe(false)
+    if (!overCap.ok) {
+      expect(overCap.error.kind).toBe('profile_too_long')
+      expect(overCap.error.length).toBe(PROFILE_MAX_CHARS + 1)
+    }
+  })
 })

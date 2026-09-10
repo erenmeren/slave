@@ -11,6 +11,12 @@ export interface CatalogWalk {
   readonly divisions: readonly string[]
   /** Explicit `--division` names with no directory behind them, dropped rather than walked. */
   readonly missingDivisions: readonly string[]
+  /** M2 fix round 2: `divisions.json` names with no directory behind them, when the manifest
+   *  parsed but not one of its declared divisions exists on disk -- a distinct case from
+   *  `missingDivisions`, which is about what the OPERATOR typed rather than what the catalog
+   *  itself declares. Non-empty only when `options.divisions` was not given (an explicit
+   *  `--division` list is checked against disk directly and never consults the manifest). */
+  readonly staleManifestDivisions: readonly string[]
   readonly entries: readonly CatalogEntry[]
 }
 
@@ -37,11 +43,18 @@ const NOT_PERSONAS = new Set(['readme.md', 'contributing.md', 'security.md'])
  * this milestone was designed against. Its structure is `{ divisions: { "<dir>": {...} } }`, so the
  * set is that object's KEYS. A missing, unreadable or malformed file is not a failure: the walk
  * falls back to "every subdirectory", which is what a catalog with no manifest means.
+ *
+ * A manifest that PARSED is a different story even when every name it lists is stale (M2 fix round
+ * 2): that is not "no manifest", so falling back to "every subdirectory" would silently import
+ * directories the operator never declared and give no sign the manifest is out of date. `stale`
+ * carries exactly those declared-but-nonexistent names back to `readCatalogDirectory`, which
+ * reports them and imports nothing for them, rather than guessing "every subdirectory" instead.
  */
-function divisionsOf(dir: string): readonly string[] {
+function divisionsOf(dir: string): { readonly usable: readonly string[]; readonly stale: readonly string[] } {
   const subdirectories = readdirSync(dir, { withFileTypes: true })
     .filter((item) => item.isDirectory() && !item.name.startsWith('.'))
     .map((item) => item.name)
+    .sort()
   try {
     const parsed: unknown = JSON.parse(readFileSync(join(dir, 'divisions.json'), 'utf8'))
     const declared =
@@ -53,12 +66,16 @@ function divisionsOf(dir: string): readonly string[] {
         ? Object.keys(parsed.divisions)
         : []
     // A declared name with no directory behind it is dropped rather than walked: `readdirSync` on
-    // a path that does not exist throws, and a stale manifest entry is not a reason to fail an
-    // import of the divisions that DO exist.
+    // a path that does not exist throws, and a stale manifest entry -- among others that ARE
+    // usable -- is not a reason to fail an import of the divisions that DO exist.
     const usable = declared.filter((name) => subdirectories.includes(name))
-    return usable.length > 0 ? usable : subdirectories
+    if (usable.length > 0) return { usable, stale: [] }
+    // Nothing declared exists on disk. `declared.length === 0` means the file did not even declare
+    // a `divisions` object worth reading -- indistinguishable from malformed -- so that case still
+    // falls back; every OTHER declared-but-entirely-stale case is reported rather than guessed at.
+    return declared.length > 0 ? { usable: [], stale: declared } : { usable: subdirectories, stale: [] }
   } catch {
-    return subdirectories
+    return { usable: subdirectories, stale: [] }
   }
 }
 
@@ -110,7 +127,13 @@ export function readCatalogDirectory(
 ): CatalogWalk {
   const root = resolve(dir)
   const catalog = options?.catalog ?? basename(root)
-  const requested = options?.divisions ?? divisionsOf(root)
+  // An explicit `--division` list is checked against disk directly and never consults the
+  // manifest at all -- `staleManifestDivisions` is a fact about `divisions.json`, which this branch
+  // never reads. Read once, not once per field: `divisionsOf` walks the directory and re-reads the
+  // manifest file itself.
+  const manifest = options?.divisions === undefined ? divisionsOf(root) : undefined
+  const staleManifestDivisions = manifest?.stale ?? []
+  const requested = options?.divisions ?? manifest?.usable ?? []
 
   // A `--division` naming a directory that is not there is DROPPED and reported, not walked (fix
   // round 1, minor 3): `readdirSync` throws ENOENT, and one mistyped name in
@@ -133,5 +156,5 @@ export function readCatalogDirectory(
       })
     }
   }
-  return { catalog, divisions, missingDivisions, entries }
+  return { catalog, divisions, missingDivisions, staleManifestDivisions, entries }
 }
