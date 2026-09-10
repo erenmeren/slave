@@ -464,6 +464,17 @@ describe('ProfileDrawer', () => {
     expect(chips[0]?.getAttribute('title')).toBe('security.application')
   })
 
+  // Fix round 1, minor 3: `capabilityKeys: []` is the ORDINARY M46 row -- every legacy persona --
+  // and "no capabilities recorded" above its real capability bullets said the opposite of the truth.
+  it('says nothing about matchable capabilities for a template that has none', async () => {
+    await openDrawer()
+
+    expect(screen.queryByTestId('profile-capability-keys')).toBeNull()
+    expect(screen.getByTestId('profile-drawer').textContent).not.toContain('no capabilities recorded')
+    // The persona's own bullets are untouched by the guard.
+    expect(screen.getByTestId('profile-field-capabilities').textContent).toContain('Design the module boundary')
+  })
+
   it('names the keys the taxonomy does not have, and says how to make them matchable', async () => {
     await openDrawer({}, row({ capabilityKeys: ['security.application', 'nope.missing'] }), TAXONOMY)
 

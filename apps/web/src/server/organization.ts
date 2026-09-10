@@ -45,7 +45,21 @@ export interface OrganizationView {
     readonly text: string
     readonly targetTemplateName: string | null
     readonly capability: string | null
+    /** The words for {@link capability}, carried beside it rather than resolved on the page: the
+     *  key stays for `title` and `data-`, and a surface prints the label (`docs/ia.md` rule 3).
+     *  Null exactly when `capability` is -- most handoff sentences name a role, not a key. */
+    readonly capabilityLabel: string | null
   }[]
+  /**
+   * How many `pending` staffing proposals this page is NOT showing (fix round 1, minor 4).
+   *
+   * A proposal is recorded against a capability, and by the time a human reaches it somebody may
+   * have been given the role that covers it -- the gap is gone, no need row carries the proposal,
+   * and it is still waiting on a person on the Overview. A count, not the rows: answering it
+   * belongs where the decision queue lives, and a second Approve here would be a second place to
+   * keep in step.
+   */
+  readonly pendingElsewhere: number
   readonly taskTitles: Readonly<Record<string, string>>
 }
 
@@ -64,7 +78,16 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
   // (right for a tick, wrong for a route, which owes its caller a 404).
   if (!org.ok) return null
   const taxonomy = await listCapabilities()
-  const { world } = await loadSupervisorWorld(workspaceId, now)
+  // The check above and the loader below are two reads, and a project can be deleted between them
+  // (fix round 1, minor 5). That is a 404 as much as the check's own refusal is -- but ONLY that
+  // one error: anything else is a failure this route must not dress up as "no such project".
+  let world
+  try {
+    world = (await loadSupervisorWorld(workspaceId, now)).world
+  } catch (cause) {
+    if (!isRecordNotFound(cause)) throw cause
+    return null
+  }
   const plan = teamPlanOf(world)
   const pending = await listDecisions(workspaceId, { pending: true })
   const taskTitles = Object.fromEntries(world.tasks.map((task) => [task.id, task.title] as const))
@@ -74,15 +97,22 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
   // every need, every covered row and every unfillable one.
   const label = labeller(taxonomy)
 
-  const covered = new Set(plan.covered.map((one) => one.capability))
-  const unfillable = new Set(plan.unfillable)
+  /**
+   * The gaps, off the PLAN and nothing else (fix round 1, Critical).
+   *
+   * `formTeam` splits what the board's ready and blocked work asks for into three: covered,
+   * proposed, and unfillable -- so the proposals' `covers` IS the set of gaps somebody can fill,
+   * with no second reading of "what is missing" to disagree with it. The round-1 version added
+   * every task's `requiredCapabilities` on top of that, over EVERY status, and a `done` task's
+   * capability then rendered as "nobody can be dispatched for API design" with no proposal under
+   * it while the worker holding that role sat two rows above (D5: one computation, one answer).
+   *
+   * `covers`, not `proposal.capability`: one pick may close several gaps at once, and `capability`
+   * is only the first of them -- the rest are gaps a person still has to see.
+   */
   const needs = plan.proposals
-    .map((proposal) => proposal.capability)
-    .concat(world.tasks.flatMap((task) => task.requiredCapabilities))
-    .filter(
-      (capability, index, all) =>
-        all.indexOf(capability) === index && !covered.has(capability) && !unfillable.has(capability),
-    )
+    .flatMap((proposal) => proposal.covers)
+    .filter((capability, index, all) => all.indexOf(capability) === index)
     .toSorted()
     .map((capability) => {
       const decisions = pending.filter(
@@ -100,6 +130,8 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
       }
     })
 
+  const shown = new Set(needs.map((need) => need.capability))
+
   return {
     workers: org.value.workers.map((worker) => ({
       slaveId: worker.slaveId,
@@ -114,9 +146,23 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
     needs,
     covered: plan.covered.map((one) => ({ capability: one.capability, label: label(one.capability), by: one.by })),
     unfillable: plan.unfillable.map((capability) => ({ capability, label: label(capability) })),
-    hints: org.value.hints,
+    hints: org.value.hints.map((hint) => ({
+      ...hint,
+      capabilityLabel: hint.capability === null ? null : label(hint.capability),
+    })),
+    pendingElsewhere: pending.filter(
+      (decision) => decision.situationKind === 'capability_unstaffed' && !shown.has(decision.subjectId),
+    ).length,
     taskTitles,
   }
+}
+
+/** Prisma's "a record this operation depended on was not found" (`P2025`), which is what
+ *  `findUniqueOrThrow` inside the world loader's transaction raises for a workspace that has been
+ *  deleted. Read off the code rather than the message: the message is prose and is translated by
+ *  nothing, but it is also not a contract. */
+function isRecordNotFound(cause: unknown): boolean {
+  return typeof cause === 'object' && cause !== null && (cause as { code?: unknown }).code === 'P2025'
 }
 
 /** `capabilityLabel`'s answer, over ONE index built once. The key itself is the fallback, exactly

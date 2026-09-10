@@ -1,6 +1,6 @@
 import { syncCapabilityTaxonomy } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildOrganization, type OrganizationView } from '../../src/server/organization'
 import { GET as organizationGET } from '../../src/app/api/w/[workspaceId]/organization/route'
 import { seedWorkspace, truncateAll } from './projectFixture'
@@ -10,6 +10,28 @@ import { seedWorkspace, truncateAll } from './projectFixture'
 vi.mock('next/headers', () => ({
   cookies: async () => ({ get: (): undefined => undefined }),
 }))
+
+/**
+ * What `loadSupervisorWorld` throws instead of loading, when a case asks it to -- `null` means "do
+ * the real thing", which is every case but the two TOCTOU ones.
+ *
+ * A mutable holder rather than `mockImplementation`, because `vi.mock` is hoisted above every
+ * `const` in this file and the factory may not close over one that is not yet initialised.
+ */
+const loaderThrows: { value: unknown } = { value: null }
+
+vi.mock('@slave-of-ai/control', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@slave-of-ai/control')>()
+  return {
+    ...actual,
+    loadSupervisorWorld: async (
+      ...args: Parameters<typeof actual.loadSupervisorWorld>
+    ): ReturnType<typeof actual.loadSupervisorWorld> => {
+      if (loaderThrows.value !== null) throw loaderThrows.value
+      return actual.loadSupervisorWorld(...args)
+    },
+  }
+})
 
 /**
  * `buildOrganization` (M47 R6) against a real board: three workers who each got here a different
@@ -61,8 +83,11 @@ describe('buildOrganization', () => {
         teamId: fixture.teamId,
         name: 'Rae',
         role: 'backend',
-        runtimeRoles: ['backend'],
-        capabilities: ['backend.api-design'],
+        // `data` and `qa` are here so the settled tasks below ask for something Rae genuinely
+        // provides AND may be dispatched for -- the case is about the task's STATUS, not about a
+        // gap dressed up as one.
+        runtimeRoles: ['backend', 'data', 'qa'],
+        capabilities: ['backend.api-design', 'data.pipelines', 'qa.test-automation'],
       },
     })
     // Hired for this project, and PROVIDES the missing capability without holding its role -- the
@@ -79,17 +104,21 @@ describe('buildOrganization', () => {
       },
     })
 
-    for (const [title, capability] of [
-      ['Ship the checkout API', 'backend.api-design'],
-      ['Review the checkout API', 'security.application'],
-      ['Ship the phone app', 'mobile.ios'],
+    for (const [title, capability, status] of [
+      ['Ship the checkout API', 'backend.api-design', 'ready'],
+      ['Review the checkout API', 'security.application', 'ready'],
+      ['Ship the phone app', 'mobile.ios', 'ready'],
+      // Two SETTLED tasks (fix round 1, Critical): a board's gaps are what its ready and blocked
+      // work asks for, and neither of these is either.
+      ['Load the nightly warehouse', 'data.pipelines', 'done'],
+      ['Automate the smoke suite', 'qa.test-automation', 'running'],
     ] as const) {
       await prisma.task.create({
         data: {
           workspaceId,
           title,
           description: 'seeded by the M47 organization fixture',
-          status: 'ready',
+          status,
           requiredRole: 'dev',
           requiredCapabilities: [capability],
           maxAttempts: 3,
@@ -125,6 +154,10 @@ describe('buildOrganization', () => {
         modelCalled: false,
       },
     })
+  })
+
+  afterEach(() => {
+    loaderThrows.value = null
   })
 
   afterAll(async (): Promise<void> => {
@@ -164,8 +197,73 @@ describe('buildOrganization', () => {
         text: 'Consult the Gate Platform Builder before changing an endpoint.',
         targetTemplateName: 'Gate Platform Builder',
         capability: 'backend.api-design',
+        // The words beside the key (fix round 1, Important): the caption prints this and keeps the
+        // key one attribute away, like every other capability on this page.
+        capabilityLabel: 'API design',
       },
     ])
+  })
+
+  // Fix round 1, Critical. The needs list is the PLAN's gaps and nothing else: a second reading of
+  // "what is missing" -- one over every task the board has ever held -- reported a done task's
+  // capability as unstaffed while the worker holding its role sat two rows above it.
+  it('never calls a settled task\'s capability a gap, however the roster stands', async () => {
+    const view = await buildOrganization(workspaceId)
+    if (view === null) return
+    const named = [
+      ...view.needs.map((need) => need.capability),
+      ...view.covered.map((one) => one.capability),
+      ...view.unfillable.map((one) => one.capability),
+    ]
+    expect(named).not.toContain('data.pipelines')
+    expect(named).not.toContain('qa.test-automation')
+    expect(view.covered.map((one) => one.capability)).toEqual(['backend.api-design'])
+  })
+
+  // Fix round 1, minor 4. A proposal whose capability somebody has since been given a role for is
+  // still waiting on a human somewhere; this page owes them the fact that it is not showing it.
+  it('counts the pending staffing proposals no need row can show', async () => {
+    const before = await buildOrganization(workspaceId)
+    expect(before?.pendingElsewhere).toBe(0)
+
+    await prisma.supervisorDecision.create({
+      data: {
+        workspaceId,
+        situationKind: 'capability_unstaffed',
+        // Covered by Rae, so no need row carries it -- and the proposal is still pending.
+        subjectId: 'backend.api-design',
+        situation: {
+          kind: 'capability_unstaffed',
+          subjectId: 'backend.api-design',
+          summary: 'Nobody on this project can be dispatched for API design.',
+          facts: {},
+        },
+        candidates: [],
+        chosenIndex: 0,
+        action: { kind: 'escalate_to_human', summary: 'nobody provides API design' },
+        rationale: 'stale by the time a human got to it',
+        tier: 'proposed',
+        status: 'pending',
+        decidedBy: 'rules',
+        modelCalled: false,
+      },
+    })
+
+    const after = await buildOrganization(workspaceId)
+    expect(after?.pendingElsewhere).toBe(1)
+    expect(after?.needs.map((need) => need.capability)).toEqual(['security.application'])
+  })
+
+  // Fix round 1, minor 5. `listOrganization` says the project is there and the world loader opens
+  // its own transaction a moment later: a project deleted in between is a 404, not a 500.
+  it('is null when the project is deleted between the check and the world load', async () => {
+    loaderThrows.value = Object.assign(new Error('record not found'), { code: 'P2025' })
+    expect(await buildOrganization(workspaceId)).toBeNull()
+  })
+
+  it('still throws when the world load fails for any other reason', async () => {
+    loaderThrows.value = new Error('the database went away')
+    await expect(buildOrganization(workspaceId)).rejects.toThrow('the database went away')
   })
 
   it('is null for a workspace that is not there', async () => {

@@ -11,6 +11,7 @@ import { ProposalRow } from '../SupervisorPanel'
 import { Alert } from '../ui/Alert'
 import { Chip } from '../ui/Chip'
 import { DataTable, Row } from '../ui/DataTable'
+import { DetailsGroup } from '../ui/DetailsGroup'
 import { EmptyState } from '../ui/EmptyState'
 import { PageShell } from '../ui/PageShell'
 import { Panel } from '../ui/Panel'
@@ -21,6 +22,10 @@ import { CapabilityChips } from './CapabilityChips'
  *  are free to move, the primitive is not (`WorkforceCatalog`'s own note). */
 const COLUMNS = '1fr 90px 1.6fr 1.8fr 90px'
 const HEADER = ['Worker', 'Kind', 'Provides', 'Why they are here', 'Doing'] as const
+
+/** How many advisory edges stand open. Five is what fits under the roster without turning the page
+ *  into a list of suggestions; past it the group is folded and says how to open it. */
+const ADVICE_OPEN_MAX = 5
 
 /**
  * The Organization tab (M47 R6): who works on this project, why each of them was chosen, what they
@@ -143,8 +148,9 @@ export function OrganizationClient({
           )}
         </Panel>
 
-        {view.needs.length > 0 && (
+        {(view.needs.length > 0 || view.pendingElsewhere > 0) && (
           <Panel title="what this project still needs">
+            {view.needs.length > 0 && (
             <div data-testid="organization-needs" className="flex flex-col gap-3">
               {view.needs.map((need) => (
                 <section
@@ -186,6 +192,18 @@ export function OrganizationClient({
                 </section>
               ))}
             </div>
+            )}
+            {/* A proposal recorded against a capability somebody has since been given the role for
+              * (fix round 1, minor 4): no need row above carries it, and it is still waiting on a
+              * person. The COUNT and where to answer it -- never a second Approve, which would be a
+              * second place to keep the decision queue in step. */}
+            {view.pendingElsewhere > 0 && (
+              <span data-testid="organization-pending-elsewhere" className="text-xs text-text-3">
+                {plural(view.pendingElsewhere, 'staffing proposal')}{' '}
+                {view.pendingElsewhere === 1 ? 'is' : 'are'} waiting on the Overview: the gap each was
+                made about is no longer one.
+              </span>
+            )}
           </Panel>
         )}
 
@@ -212,28 +230,38 @@ export function OrganizationClient({
         )}
 
         {view.hints.length > 0 && (
-          <Panel title="who to consult">
-            <ul className="flex flex-col gap-1">
-              {view.hints.map((hint, index) => (
-                <li
-                  key={`${hint.slaveId}-${String(index)}`}
-                  data-testid="organization-hint"
-                  className="flex flex-col gap-0.5"
-                >
-                  <span className="font-mono text-[10px] text-text-3">
-                    {nameOf(hint.slaveId, view)}
-                    {hint.targetTemplateName === null ? '' : ` → ${hint.targetTemplateName}`}
-                    {hint.capability === null ? '' : ` · ${hint.capability}`}
-                  </span>
-                  {/* A persona's own sentence, as characters (spec §1) -- never
-                    * `dangerouslySetInnerHTML`, and never a link this page would resolve. */}
-                  <span className="text-xs text-text-1">{hint.text}</span>
-                </li>
-              ))}
-            </ul>
-            <span data-testid="organization-advice">
-              <SectionLabel>advice from this worker&apos;s profile — it never decides who does the work</SectionLabel>
-            </span>
+          <Panel>
+            {/* Folded once there is more than a handful (fix round 1, minor 6): a persona may carry
+              * thirty handoff sentences, and thirty of them under a roster of three is a page about
+              * advice. `DetailsGroup` renders its children only while open, which is exactly the
+              * behaviour wanted here -- nothing below is fetched or measured. */}
+            <DetailsGroup group="collaboration" title="Who to consult" defaultOpen={view.hints.length <= ADVICE_OPEN_MAX}>
+              <ul className="flex flex-col gap-1">
+                {view.hints.map((hint, index) => (
+                  <li
+                    key={`${hint.slaveId}-${String(index)}`}
+                    data-testid="organization-hint"
+                    data-capability={hint.capability ?? ''}
+                    className="flex flex-col gap-0.5"
+                  >
+                    <span className="font-mono text-[10px] text-text-3">
+                      {nameOf(hint.slaveId, view)}
+                      {hint.targetTemplateName === null ? '' : ` → ${hint.targetTemplateName}`}
+                      {/* The LABEL, with the key on `data-capability` above (`docs/ia.md` rule 3):
+                        * the chips two panels up read `API design`, and this line read
+                        * `backend.api-design` for the same capability. */}
+                      {hint.capabilityLabel === null ? '' : ` · ${hint.capabilityLabel}`}
+                    </span>
+                    {/* A persona's own sentence, as characters (spec §1) -- never
+                      * `dangerouslySetInnerHTML`, and never a link this page would resolve. */}
+                    <span className="text-xs text-text-1">{hint.text}</span>
+                  </li>
+                ))}
+              </ul>
+              <SectionLabel testId="organization-advice">
+                advice from this worker&apos;s profile — it never decides who does the work
+              </SectionLabel>
+            </DetailsGroup>
           </Panel>
         )}
       </div>

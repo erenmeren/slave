@@ -327,8 +327,12 @@ export function ProfileDrawer({
           <DetailsGroup key={group} group={group} title={title} defaultOpen>
             {/* M47 §2: the matchable keys, as the taxonomy's own words, ABOVE the persona's
               * free-text bullets -- the same chip the Organization tab prints, so one capability
-              * reads the same wherever it is shown. */}
-            {group === 'capabilities' && (
+              * reads the same wherever it is shown.
+              *
+              * Only when the row HAS keys (fix round 1, minor 3): `capabilityKeys: []` is every
+              * template imported before M47, and `CapabilityChips`' own "no capabilities recorded"
+              * standing above a persona's four capability bullets said the opposite of the truth. */}
+            {group === 'capabilities' && capabilityKeys.length > 0 && (
               <div data-testid="profile-capability-keys" className="flex flex-col gap-1">
                 <span className="text-[10px] uppercase tracking-wide text-text-3">Matchable capabilities</span>
                 <CapabilityChips capabilities={resolved} max={resolved.length} />

@@ -90,12 +90,32 @@ const view: OrganizationView = {
       text: 'Consult the Gate Platform Builder before changing an endpoint.',
       targetTemplateName: 'Gate Platform Builder',
       capability: 'backend.api-design',
+      capabilityLabel: 'API design',
     },
   ],
+  pendingElsewhere: 0,
   taskTitles: { t1: 'Review the checkout API' },
 }
 
-const EMPTY: OrganizationView = { workers: [], needs: [], covered: [], unfillable: [], hints: [], taskTitles: {} }
+const EMPTY: OrganizationView = {
+  workers: [],
+  needs: [],
+  covered: [],
+  unfillable: [],
+  hints: [],
+  pendingElsewhere: 0,
+  taskTitles: {},
+}
+
+/** `count` advisory edges, so the collapsed case has something to collapse. */
+const hints = (count: number): OrganizationView['hints'] =>
+  Array.from({ length: count }, (_unused, index) => ({
+    slaveId: 's3',
+    text: `Consult somebody about thing ${String(index)}.`,
+    targetTemplateName: null,
+    capability: null,
+    capabilityLabel: null,
+  }))
 
 let fetchMock: ReturnType<typeof vi.fn>
 
@@ -163,6 +183,60 @@ describe('OrganizationClient', () => {
     const hint = screen.getByTestId('organization-hint')
     expect(hint.textContent).toContain('Consult the Gate Platform Builder')
     expect(screen.getByTestId('organization-advice').textContent).toContain('advice')
+  })
+
+  // Fix round 1, Important: the chip above this line reads `API design`, and the line under it read
+  // `backend.api-design`. One capability, one word for it, wherever it is shown.
+  it('names the hint\'s capability in words, with the key only in an attribute', () => {
+    render(<OrganizationClient workspaceId="w1" initial={view} />)
+    const hint = screen.getByTestId('organization-hint')
+    expect(hint.textContent).toContain('API design')
+    expect(hint.textContent).not.toContain('backend.api-design')
+    expect(hint.getAttribute('data-capability')).toBe('backend.api-design')
+  })
+
+  // Fix round 1, minor 6: a persona with thirty handoff sentences would otherwise print thirty
+  // lines under a roster of three.
+  it('folds the advice away when there is more than a handful of it', () => {
+    render(<OrganizationClient workspaceId="w1" initial={{ ...view, hints: hints(6) }} />)
+    expect(screen.queryAllByTestId('organization-hint')).toHaveLength(0)
+    const group = screen.getAllByTestId('details-group').find((node) => node.getAttribute('data-group') === 'collaboration')
+    expect(group?.getAttribute('data-open')).toBe('false')
+
+    fireEvent.click(within(group as HTMLElement).getByRole('button'))
+    expect(screen.getAllByTestId('organization-hint')).toHaveLength(6)
+  })
+
+  it('leaves a handful of advice open, so a short list needs no click', () => {
+    render(<OrganizationClient workspaceId="w1" initial={{ ...view, hints: hints(5) }} />)
+    expect(screen.getAllByTestId('organization-hint')).toHaveLength(5)
+  })
+
+  // Fix round 1, nit 7: the caption IS the section label, rather than a span wrapped around one.
+  it('puts the advice caption on the section label itself', () => {
+    render(<OrganizationClient workspaceId="w1" initial={view} />)
+    const caption = screen.getByTestId('organization-advice')
+    expect(caption.className).toContain('font-mono')
+    expect(within(caption).queryByTestId('section-label')).toBeNull()
+  })
+
+  // Fix round 1, minor 4: a proposal whose capability somebody has since been given a role for is
+  // shown by no need row, and is still waiting on a human.
+  it('says how many staffing proposals are waiting somewhere this page cannot show them', () => {
+    render(<OrganizationClient workspaceId="w1" initial={{ ...view, pendingElsewhere: 2 }} />)
+    const line = screen.getByTestId('organization-pending-elsewhere')
+    expect(line.textContent).toContain('2 staffing proposals')
+    expect(line.textContent).toContain('Overview')
+  })
+
+  it('says nothing about proposals elsewhere when there are none', () => {
+    render(<OrganizationClient workspaceId="w1" initial={view} />)
+    expect(screen.queryByTestId('organization-pending-elsewhere')).toBeNull()
+  })
+
+  it('shows the elsewhere line even on a project with no needs of its own', () => {
+    render(<OrganizationClient workspaceId="w1" initial={{ ...view, needs: [], pendingElsewhere: 1 }} />)
+    expect(screen.getByTestId('organization-pending-elsewhere').textContent).toContain('1 staffing proposal')
   })
 
   it('renders an empty project without pretending anything is wrong', () => {
