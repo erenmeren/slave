@@ -276,6 +276,23 @@ model SlaveTemplate {
   /// profile whose hash is not this one was edited (or cleared) by a person, and the import leaves
   /// it alone.
   profileSha256  String?
+  /// M46 R1: the UPSTREAM structured profile -- what the importer mapped out of the persona file
+  /// (`profileSpecSchema`, `packages/domain/src/profile/spec.ts`). Importer-owned: an operator
+  /// never edits this column, which is exactly what makes an override survive the next import.
+  /// NULL on every hand-made template and on every row imported before this milestone.
+  profileSpec      Json?
+  /// M46 R1: the LOCAL half -- a PARTIAL object of the same shape holding only the fields an
+  /// operator changed. `effectiveProfileSpec(profileSpec, profileOverrides)` is what `profile`
+  /// above is rendered from, and the two live apart so an import can rewrite one without touching
+  /// the other.
+  profileOverrides Json?
+  /// M46 R4: the commit of the catalog checkout this row was last imported from, when the
+  /// directory was inside a git work tree. NULL otherwise -- and NULL is the ordinary case for a
+  /// directory somebody copied off a share.
+  sourceRevision   String?
+  /// M46 R4: the licence named by the first line of a LICENSE file at the catalog root (`MIT
+  /// License` -> `MIT`). Attribution, not a copy: no licence text is vendored anywhere.
+  sourceLicense    String?
   importedAt     DateTime?
   createdAt     DateTime       @default(now())
   companySlaves CompanySlave[]
