@@ -5,8 +5,9 @@ import { useRouter } from 'next/navigation'
 import type { RosterCompany } from '../../server/org'
 import { sendControl } from '../../lib/postControl'
 import type { TemplateRow } from '../TemplateCatalog'
-import { GhostButton, TextField } from '../ui/FormControls'
+import { TextField } from '../ui/FormControls'
 import { TeamBlock } from './TeamBlock'
+import { Button } from '../ui/Button'
 
 /** An expanded company's department templates (each with its members and add-member form) plus
  *  the company's own "add department" form (name only). */
@@ -67,9 +68,9 @@ export function CompanyDetail({
             } as React.InputHTMLAttributes<HTMLInputElement>
           }
         />
-        <GhostButton type="submit" data-testid="department-template-submit" disabled={pending || teamName === ''}>
+        <Button variant="ghost" size="sm" type="submit" data-testid="department-template-submit" disabled={pending || teamName === ''}>
           Add department
-        </GhostButton>
+        </Button>
         {errorText !== null && (
           <span role="alert" data-testid="department-template-error" className="text-xs text-tone-blocked">
             {errorText}

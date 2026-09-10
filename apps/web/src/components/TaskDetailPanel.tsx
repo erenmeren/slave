@@ -8,7 +8,6 @@ import { priorityChip } from '../lib/taskColumns'
 import type { TaskBoardItem } from '../server/tasks'
 import { TASK_STATUS_TEXT, goalStampText, isStale } from './TaskCard'
 import { Button } from './ui/Button'
-import { GhostButton, PrimaryButton } from './ui/FormControls'
 import { SectionLabel } from './ui/SectionLabel'
 import { TONE_TEXT } from './ui/StatusPill'
 
@@ -202,15 +201,15 @@ export function TaskDetailPanel({
       {collectable && (
         <div className="flex items-center gap-2">
           {!confirming ? (
-            <GhostButton data-testid="collect-worktree" onClick={() => setConfirming(true)}>
+            <Button variant="ghost" size="sm" data-testid="collect-worktree" onClick={() => setConfirming(true)}>
               Collect worktree
-            </GhostButton>
+            </Button>
           ) : (
             <>
-              <PrimaryButton tone="blocked" data-testid="collect-worktree-confirm" disabled={pending} onClick={() => void collect()}>
+              <Button variant="danger" size="sm" data-testid="collect-worktree-confirm" disabled={pending} onClick={() => void collect()}>
                 remove the tree, keep the branch
-              </PrimaryButton>
-              <GhostButton onClick={() => setConfirming(false)}>cancel</GhostButton>
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>cancel</Button>
             </>
           )}
           {collectError !== null && (

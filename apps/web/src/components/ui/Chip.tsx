@@ -4,14 +4,18 @@ import { TONE_BORDER, TONE_FILL, TONE_TEXT, type StatusTone } from './StatusPill
  *  `StatusTone` using the same `1a`-alpha fill / `3d`-alpha border pattern as `StatusPill`. */
 export function Chip({
   tone,
+  title,
   children,
 }: {
   readonly tone?: StatusTone
+  /** The raw value behind a projected word (M44 R5) -- the same contract `StatusPill`'s own
+   *  `title` carries. */
+  readonly title?: string
   readonly children: React.ReactNode
 }): React.JSX.Element {
   const surface = tone !== undefined ? `${TONE_FILL[tone]} ${TONE_BORDER[tone]} ${TONE_TEXT[tone]}` : 'border-line bg-bg-2 text-text-2'
   return (
-    <span data-testid="chip" data-tone={tone} className={`inline-flex items-center rounded-chip border px-2 py-0.5 text-xs ${surface}`}>
+    <span data-testid="chip" data-tone={tone} {...(title === undefined ? {} : { title })} className={`inline-flex items-center rounded-chip border px-2 py-0.5 text-xs ${surface}`}>
       {children}
     </span>
   )

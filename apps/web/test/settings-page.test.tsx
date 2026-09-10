@@ -1013,10 +1013,13 @@ describe('the permission matrix', () => {
 
 describe('the danger zone', () => {
   it('offers reset demo data only when the server said it is available', () => {
+    // M44 R3: the reseed control is a `DangerConfirm` now, so its trigger carries the component's
+    // own testid convention -- `reseed`, not `reseed-button` (`reseed-confirm`/`reseed-cancel` are
+    // unchanged, because that is what `DangerConfirm` already calls them).
     const { rerender } = render(<DangerZone showReseed={false} />)
-    expect(screen.queryByTestId('reseed-button')).toBeNull()
+    expect(screen.queryByTestId('reseed')).toBeNull()
 
     rerender(<DangerZone showReseed />)
-    expect(screen.getByTestId('reseed-button')).toBeTruthy()
+    expect(screen.getByTestId('reseed')).toBeTruthy()
   })
 })

@@ -16,12 +16,26 @@ const TABS = [
   { id: 'settings', label: 'Settings', path: (id: string) => `/w/${id}/settings`, exact: false },
 ] as const
 
-/** Graph and Office. COMPLETE and reachable -- by this menu and by their unchanged URLs. They left
- *  the strip because a normal user does not need five graph modes or a pixel office to find out
- *  what the project is doing, not because anything was taken away (`docs/ia.md`). */
+/**
+ * Graph, Office and this project's Analytics. COMPLETE and reachable -- by this menu and by their
+ * unchanged URLs. Graph and Office left the strip because a normal user does not need five graph
+ * modes or a pixel office to find out what the project is doing, not because anything was taken
+ * away (`docs/ia.md`).
+ *
+ * Analytics is the third for a different reason: `docs/ia.md` demotes `/analytics` from the
+ * sidebar and promises "the per-workspace view is reached FROM a project" -- this menu is the one
+ * place that promise can hold, and it is the smaller of the two candidates (the alternative was a
+ * fifth control in the Activity tab's own header). Its testid is `analytics-link` rather than the
+ * `advanced-item-<id>` the other two carry, because it is a named contract of that IA promise and
+ * not merely the third row of a menu.
+ *
+ * `live` is false for it always: the route lives outside `/w/[workspaceId]`, so this component is
+ * not even mounted there, and `pathname` never carries the `?workspace=` scope that would match.
+ */
 const ADVANCED = [
-  { id: 'graph', label: 'Graph', path: (id: string) => `/w/${id}/graph` },
-  { id: 'office', label: 'Office', path: (id: string) => `/w/${id}/office` },
+  { id: 'graph', label: 'Graph', testId: 'advanced-item-graph', path: (id: string) => `/w/${id}/graph` },
+  { id: 'office', label: 'Office', testId: 'advanced-item-office', path: (id: string) => `/w/${id}/office` },
+  { id: 'analytics', label: 'Analytics', testId: 'analytics-link', path: (id: string) => `/analytics?workspace=${id}` },
 ] as const
 
 /**
@@ -120,7 +134,7 @@ export function ProjectTabs({
               <Link
                 key={item.id}
                 role="menuitem"
-                data-testid={`advanced-item-${item.id}`}
+                data-testid={item.testId}
                 href={item.path(workspaceId)}
                 aria-current={isLive(item.path(workspaceId), false) ? 'page' : undefined}
                 onClick={() => setOpen(false)}

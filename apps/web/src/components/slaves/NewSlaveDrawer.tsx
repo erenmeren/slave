@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { ProviderKind } from '@slave-of-ai/control'
 import type { RosterCompany } from '../../server/org'
@@ -8,7 +8,9 @@ import { postControl, sendControl } from '../../lib/postControl'
 import { ModelSelect } from '../ModelSelect'
 import { ProviderSelect } from '../ProviderSelect'
 import type { TemplateRow } from '../TemplateCatalog'
-import { FieldLabel, INPUT_SHELL, PrimaryButton, SelectField, TextField } from '../ui/FormControls'
+import { FieldLabel, INPUT_SHELL, SelectField, TextField } from '../ui/FormControls'
+import { Drawer } from '../ui/Drawer'
+import { Button } from '../ui/Button'
 
 const NEW_DEPARTMENT = '__new__'
 
@@ -17,7 +19,7 @@ const NEW_DEPARTMENT = '__new__'
  * provider+model -- with an optional "assign to project" step. Two existing calls in sequence:
  * `POST /api/org/slaves`, then `POST /api/w/:id/company` when a project was chosen. If the first
  * succeeds and the second is refused, the drawer stays open showing the refusal and says the
- * catalog row exists (nothing is rolled back). `NewProjectDrawer`'s frame: scrim, dialog, Escape.
+ * catalog row exists (nothing is rolled back). `NewProjectDrawer`'s frame, which is `ui/Drawer` now (M44 R3).
  *
  * Fix round 1 (Important findings): `SlavesClient` renders this unconditionally -- `!open`
  * returns `null`, it never unmounts -- so its form state outlives a close/reopen unless reset
@@ -98,26 +100,6 @@ export function NewSlaveDrawer({
     reset()
     onClose()
   }
-
-  useEffect(() => {
-    if (!open) return
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape') close()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `close` is recreated every render
-    // (it closes over `reset()`, `onClose` and now `pending`), but listing `close` itself here
-    // would resubscribe on every render (it has no stable identity); `pending` is listed instead
-    // of it. That is no longer optional the way it was before `close` gained its `pending` guard
-    // (M25 final review, folded minor): this effect otherwise keeps the `close` closure from
-    // whenever it last ran -- typically mount, `pending` false then -- forever, so Escape would
-    // never see a submit's `pending` become true and the guard could never fire. `reset()` and
-    // `onClose` still need no entry of their own, the same reasoning as before: `reset()` only
-    // calls this component's own state setters and `onClose` is a prop that does no more than
-    // that either, so a stale closure over either one re-arms the exact same listener a fresh one
-    // would.
-  }, [open, pending])
 
   if (!open) return null
 
@@ -204,15 +186,11 @@ export function NewSlaveDrawer({
   }
 
   return (
-    <div className="fixed inset-0 z-30 flex justify-end">
-      <button type="button" aria-label="close" data-testid="new-slave-scrim" onClick={close} className="flex-1 bg-black/50" />
-      <aside
-        role="dialog"
-        aria-modal="true"
-        aria-label="New slave"
-        data-testid="new-slave-drawer"
-        className="flex w-[520px] max-w-full flex-col gap-4 overflow-y-auto border-l border-line bg-bg-1 p-5 shadow-[0_6px_22px_rgba(0,0,0,.45)]"
-      >
+    // M44 R3: `ui/Drawer` owns Escape, the scrim, the Tab trap and focus restore. `dismissible`
+    // carries the same mid-submit guard `close()` has always had -- the scrim and Escape are both
+    // inert while a POST is in flight -- and `close` keeps its own copy, because the ✕ button
+    // below routes through it too.
+    <Drawer open={open} onClose={close} label="New slave" testId="new-slave-drawer" dismissible={!pending}>
         <div className="flex items-center justify-between">
           <h2 className="text-[14.5px] font-semibold tracking-[-.2px] text-text-1">New slave</h2>
           <button type="button" data-testid="new-slave-close" onClick={close} className="text-text-3 hover:text-text-1">
@@ -285,9 +263,9 @@ export function NewSlaveDrawer({
             ))}
           </SelectField>
           <div className="flex items-center gap-3">
-            <PrimaryButton type="submit" data-testid="new-slave-submit" disabled={pending || !ready || createdSlave}>
+            <Button variant="primary" size="sm" type="submit" data-testid="new-slave-submit" disabled={pending || !ready || createdSlave}>
               {createdSlave ? 'created' : pending ? 'creating…' : 'Create slave'}
-            </PrimaryButton>
+            </Button>
             {errorText !== null && (
               <span role="alert" data-testid="new-slave-error" className="text-xs text-tone-blocked">
                 {errorText}
@@ -301,7 +279,6 @@ export function NewSlaveDrawer({
           </div>
           {createdButUnassigned && <p className="text-xs text-text-3">catalog slave created; assign from the project card</p>}
         </form>
-      </aside>
-    </div>
+    </Drawer>
   )
 }

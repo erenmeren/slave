@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { SimulationSummary } from '@slave-of-ai/control'
-import { GhostButton, PrimaryButton, SelectField, TextField } from '../ui/FormControls'
+import { SelectField, TextField } from '../ui/FormControls'
+import { Button } from '../ui/Button'
 
 /** The auto-run control (M30 §6): hands the run to the orchestrator's daemon rather than the
  *  page's own click-to-step. It does not step anything itself -- it only sets the row's
@@ -22,7 +23,7 @@ export function AutoRunControls({
   const runnable = summary.status === 'ready' || summary.status === 'running'
   if (summary.autoRun !== null) {
     return (
-      <GhostButton data-testid="sim-auto-run-stop" disabled={pending} onClick={onStop}>Stop auto-run</GhostButton>
+      <Button variant="ghost" size="sm" data-testid="sim-auto-run-stop" disabled={pending} onClick={onStop}>Stop auto-run</Button>
     )
   }
   if (!runnable) return null
@@ -34,7 +35,7 @@ export function AutoRunControls({
         <option value="5000">5 s</option>
       </SelectField>
       <TextField label="until day" inputProps={{ 'data-testid': 'sim-auto-run-until', value: untilDay, inputMode: 'numeric', className: 'w-16', onChange: (event) => setUntilDay(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
-      <PrimaryButton data-testid="sim-auto-run-start" disabled={pending} onClick={() => onStart(Number.parseInt(everyMs, 10), Number.parseInt(untilDay, 10))}>Auto-run</PrimaryButton>
+      <Button variant="primary" size="sm" data-testid="sim-auto-run-start" disabled={pending} onClick={() => onStart(Number.parseInt(everyMs, 10), Number.parseInt(untilDay, 10))}>Auto-run</Button>
       <span className="text-xs text-text-3">steps one day every {everyMs} ms at the daemon&rsquo;s pace; needs <code>npm run orchestrator -- daemon</code> running</span>
     </div>
   )

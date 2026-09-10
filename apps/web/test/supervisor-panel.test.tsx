@@ -206,7 +206,10 @@ describe('SupervisorPanel', () => {
       ],
     })
 
-    expect(screen.getByTestId('supervisor-proposal-kind').textContent).toBe('stale_task')
+    // M44 R5 leak 5: the kind chip printed the enum member. The word is what a person reads; the
+    // raw kind stays in `title`.
+    expect(screen.getByTestId('supervisor-proposal-kind').textContent).toBe('Work the goal no longer needs')
+    expect(screen.getByTestId('supervisor-proposal-kind').getAttribute('title')).toBe('stale_task')
     expect(screen.getByTestId('supervisor-proposal-action').textContent).toBe(
       'cancel task Wire up the refunds form: the re-plan for goal v2 no longer needs it',
     )
@@ -257,16 +260,47 @@ describe('SupervisorPanel', () => {
     expect(screen.getByTestId('supervisor-pending-empty').textContent).toMatch(/nothing is waiting/i)
   })
 
-  it('lists recent decisions with their tier, status, decider and rationale', async () => {
+  it('lists recent decisions with their status, decider and rationale', async () => {
     await mount()
 
     const rows = screen.getAllByTestId('supervisor-decision-row')
     expect(rows).toHaveLength(2)
-    expect(rows[1]?.textContent).toContain('proposed')
-    expect(rows[1]?.textContent).toContain('approved')
-    expect(rows[1]?.textContent).toContain('rules')
+    // M44 R5 leak 5: the raw record used to BE the line (`no_reviewer · proposed · approved · by
+    // rules`). `tier` left the visible line -- `status` already says what happened to the decision
+    // -- and the whole record, tier included, is in the meta node's `title`.
+    expect(rows[1]?.textContent).toContain('Approved')
+    expect(rows[1]?.textContent).toContain('the rules')
+    expect(rows[1]?.textContent).not.toContain('proposed')
+    expect(screen.getAllByTestId('supervisor-decision-meta')[1]?.getAttribute('title')).toBe(
+      'no_reviewer · proposed · approved · rules',
+    )
     expect(screen.getAllByTestId('supervisor-decision-rationale')[1]?.textContent).toBe(
       'The review cap was the only thing holding it.',
+    )
+  })
+
+  it('reads a recent decision as a sentence, with the raw record in the title (M44 R5)', async () => {
+    await mount({
+      recent: [
+        decision({
+          id: 'd9',
+          situationKind: 'no_reviewer',
+          tier: 'proposed',
+          status: 'approved',
+          decidedBy: 'model',
+          rationale: 'the project has nobody who can review',
+          failureReason: null,
+        }),
+      ],
+    })
+
+    const row = screen.getAllByTestId('supervisor-decision-row')[0]
+    expect(row?.textContent).toContain('No reviewer')
+    expect(row?.textContent).toContain('Approved')
+    expect(row?.textContent).toContain('the model')
+    expect(row?.textContent).not.toContain('no_reviewer')
+    expect(row?.querySelector('[data-testid="supervisor-decision-meta"]')?.getAttribute('title')).toBe(
+      'no_reviewer · proposed · approved · model',
     )
   })
 

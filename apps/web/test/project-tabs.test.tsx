@@ -31,6 +31,18 @@ describe('ProjectTabs', () => {
     expect(screen.getByRole('menu').getAttribute('aria-label')).toBe('Advanced')
   })
 
+  // `docs/ia.md` demotes `/analytics` from the sidebar and promises the per-workspace view is
+  // reached FROM a project. This menu is where that promise is kept (M44 Task 4).
+  it('reaches this project\'s analytics, scoped by ?workspace=, from the same menu', () => {
+    pathname = '/w/w1'
+    render(<ProjectTabs workspaceId="w1" initialTasksActive={0} />)
+    fireEvent.click(screen.getByTestId('project-advanced'))
+    const link = screen.getByTestId('analytics-link')
+    expect(link.getAttribute('href')).toBe('/analytics?workspace=w1')
+    expect(link.textContent).toBe('Analytics')
+    expect(link.getAttribute('role')).toBe('menuitem')
+  })
+
   it('closes the Advanced menu on Escape and gives focus back to its trigger', () => {
     pathname = '/w/w1'
     render(<ProjectTabs workspaceId="w1" initialTasksActive={0} />)

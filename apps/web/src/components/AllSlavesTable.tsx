@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { userSlaveStatus } from '@slave-of-ai/domain'
 import type { AllSlaveRow, AllSlavesPage } from '../server/org'
 import { sendControl } from '../lib/postControl'
 import { RuntimeRoleChips } from './RuntimeRoleChips'
 import { SlaveRowActions } from './SlaveRowActions'
-import { toneForStatus } from '../lib/tones'
+import { KNOWN_SLAVE_STATUSES, toneForStatus } from '../lib/tones'
 import { ModelOverrideEditor } from './ModelOverrideEditor'
 import { ShellOnlyMark } from './ShellOnlyMark'
 import { AvatarTile } from './ui/AvatarTile'
@@ -175,6 +176,12 @@ export function AllSlavesTable({
     <DataTable columns={COLUMNS} header={[...HEADER]}>
       {rows.map((row) => {
         const tone = toneForStatus(row.status)
+        // R5 leak 1: this pill printed `row.status` -- "pausing" where the Overview card said
+        // PAUSING. Both words come from the same projection now, and the raw value stays one hover
+        // away. `AllSlaveRow.status` is a bare `string`, so an unknown member falls back to its own
+        // uppercased self rather than throwing at render time (`toneForStatus`'s own rule).
+        const known = KNOWN_SLAVE_STATUSES.find((member) => member === row.status)
+        const word = known === undefined ? row.status.toUpperCase() : userSlaveStatus(known).label
         // Plain locals, not `row.slaveId`/`row.workspaceId` property accesses: TS narrows a
         // captured variable across the `onClick` closure below, but not a captured property.
         const { slaveId, workspaceId } = row
@@ -217,7 +224,7 @@ export function AllSlavesTable({
                 {row.projectName}
               </span>
             )}
-            <StatusPill tone={tone} label={row.status} />
+            <StatusPill tone={tone} label={word} title={row.status} />
             <div data-testid="worker-task" className="min-w-0 pr-[14px]">
               {row.currentTask === null ? (
                 <span className="text-xs text-text-3">—</span>

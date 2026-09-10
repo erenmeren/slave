@@ -69,7 +69,12 @@ describe('SkillsClient', () => {
 
   it('marks a skill whose file is gone as missing without hiding its history', () => {
     render(<SkillsClient page={page()} />)
-    expect(screen.getByTestId('skill-state-s3').textContent).toBe('missing')
+    // M44 R5 leak 4: the raw `SkillRow['state']` used to be the label. READY/MISSING are words;
+    // the raw value stays on the node for a gate and one hover away for a person.
+    expect(screen.getByTestId('skill-state-s3').textContent).toBe('MISSING')
+    expect(screen.getByTestId('skill-state-s3').getAttribute('data-state')).toBe('missing')
+    expect(screen.getByTestId('skill-state-s3').getAttribute('title')).toBe('missing')
+    expect(screen.getByTestId('skill-state-s1').textContent).toBe('READY')
     expect(screen.getByTestId('skill-runs-s3').textContent).toBe('2')
   })
 

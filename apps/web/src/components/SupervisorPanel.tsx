@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { PROFILE_MAX_CHARS, type Action } from '@slave-of-ai/domain'
+import { DECIDER_LABEL, DECISION_STATUS_LABEL, PROFILE_MAX_CHARS, SITUATION_LABEL, type Action } from '@slave-of-ai/domain'
 // Type-only, so nothing from `server/supervisor.ts` (and nothing it imports -- control, and the
 // Prisma client under it) reaches the client bundle. The same rule `useOverview.ts` states for
 // `OverviewSnapshot`.
@@ -9,6 +9,7 @@ import type { SupervisorView } from '../server/supervisor'
 import { errorMessage, sendControl } from '../lib/postControl'
 import { onUnauthorized } from '../lib/onUnauthorized'
 import { Button } from './ui/Button'
+import { EmptyState } from './ui/EmptyState'
 import { Panel } from './ui/Panel'
 
 /**
@@ -195,8 +196,10 @@ function ProposalRow({
   return (
     <li data-testid="supervisor-proposal" className="flex flex-col gap-1 rounded border border-line p-2">
       <div className="flex items-baseline gap-2">
-        <span data-testid="supervisor-proposal-kind" className="shrink-0 font-mono text-[10px] text-text-3">
-          {decision.situationKind}
+        {/* R5 leak 5: this chip printed the `SituationKind` member. The domain's own label says
+          * what is stuck; the raw kind stays in `title`. */}
+        <span data-testid="supervisor-proposal-kind" title={decision.situationKind} className="shrink-0 font-mono text-[10px] text-text-3">
+          {SITUATION_LABEL[decision.situationKind]}
         </span>
         {/* Every one of these is another party's text -- the situation the rules wrote, and a
           * rationale a MODEL may have written. Interpolated as JSX children, so it is characters
@@ -488,15 +491,23 @@ export function SupervisorPanel({
         <div className="flex flex-col gap-1">
           <h4 className="text-[10px] uppercase tracking-wide text-text-3">recent decisions</h4>
           {recent.length === 0 ? (
-            <span data-testid="supervisor-recent-empty" className="text-xs text-text-3">
-              no decisions yet
-            </span>
+            <EmptyState testId="supervisor-recent-empty" message="no decisions yet" />
           ) : (
             <ul className="flex flex-col gap-1">
               {recent.map((decision) => (
                 <li key={decision.id} data-testid="supervisor-decision-row" className="flex flex-col gap-0.5">
-                  <span className="font-mono text-[10px] text-text-3">
-                    {decision.situationKind} · {decision.tier} · {decision.status} · by {decision.decidedBy}
+                  {/* R5 leak 5: this line WAS the database record (`no_reviewer · proposed ·
+                    * pending · by model`). It is a sentence now. `tier` leaves the visible line --
+                    * `status` already says what happened to the decision, and the two read as a
+                    * duplicate to anyone who does not know the difference -- but the whole record,
+                    * tier included, is one hover away in `title`. */}
+                  <span
+                    data-testid="supervisor-decision-meta"
+                    title={`${decision.situationKind} · ${decision.tier} · ${decision.status} · ${decision.decidedBy}`}
+                    className="text-[10px] text-text-3"
+                  >
+                    {SITUATION_LABEL[decision.situationKind]} · {DECISION_STATUS_LABEL[decision.status]} · decided by{' '}
+                    {DECIDER_LABEL[decision.decidedBy]}
                     {decision.failureReason === null ? '' : ` · ${decision.failureReason}`}
                   </span>
                   <span data-testid="supervisor-decision-rationale" className="text-[11px] text-text-2">

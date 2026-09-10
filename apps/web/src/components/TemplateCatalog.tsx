@@ -8,9 +8,10 @@ import { sendControl } from '../lib/postControl'
 import { Chip } from './ui/Chip'
 import { DangerConfirm } from './ui/DangerConfirm'
 import { DataTable, Row } from './ui/DataTable'
-import { FieldLabel, INPUT_SHELL, PrimaryButton, TextField } from './ui/FormControls'
+import { FieldLabel, INPUT_SHELL, TextField } from './ui/FormControls'
 import { ModelSelect } from './ModelSelect'
 import { ProviderSelect } from './ProviderSelect'
+import { Button } from './ui/Button'
 
 /** A row from `listTemplates` (`server/org.ts`) -- no exported type there, so this is the one
  *  place that names the shape; `CompanyManager.tsx`'s add-member template `<select>` imports it
@@ -199,9 +200,9 @@ export function TemplateCatalog({ templates }: { readonly templates: readonly Te
             className="w-32"
           />
         </label>
-        <PrimaryButton type="submit" data-testid="template-submit" disabled={pending || name === '' || role === ''}>
+        <Button variant="primary" size="sm" type="submit" data-testid="template-submit" disabled={pending || name === '' || role === ''}>
           Add template
-        </PrimaryButton>
+        </Button>
         {errorText !== null && (
           <span role="alert" data-testid="template-error" className="text-xs text-tone-blocked">
             {errorText}

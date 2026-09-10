@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { SlaveStatus, UserWorkspaceState } from '@slave-of-ai/domain'
@@ -17,7 +17,6 @@ import { AvatarTile } from './ui/AvatarTile'
 import { Button } from './ui/Button'
 import { Card } from './ui/Card'
 import { Chip } from './ui/Chip'
-import { PrimaryButton } from './ui/FormControls'
 import { Panel } from './ui/Panel'
 import { ProgressBar } from './ui/ProgressBar'
 import { SectionLabel } from './ui/SectionLabel'
@@ -60,10 +59,6 @@ function ProjectCard({
   })
   const tone = WORKSPACE_TONE[status.state]
   const pct = project.taskCounts.total > 0 ? Math.round((project.taskCounts.done / project.taskCounts.total) * 100) : 0
-  // `Button` isn't a `forwardRef` component -- this wraps it so the dialog has an element to
-  // return focus to on Escape (`EmergencyStopButton.tsx`'s trigger-refocus idiom), without
-  // touching the shared `ui/` component to add ref forwarding it doesn't otherwise need.
-  const triggerWrapRef = useRef<HTMLDivElement>(null)
   const [restoreError, setRestoreError] = useState<string | null>(null)
 
   // Reversible (spec §3.4), so unlike archive there is no confirm here -- posting straight from
@@ -167,9 +162,9 @@ function ProjectCard({
       </Card>
       {project.archived ? (
         <div className="flex flex-col gap-1">
-          <PrimaryButton data-testid="restore-project" className="w-full" onClick={(event) => { event.stopPropagation(); void restore() }}>
+          <Button variant="primary" size="sm" data-testid="restore-project" className="w-full" onClick={(event) => { event.stopPropagation(); void restore() }}>
             restore
-          </PrimaryButton>
+          </Button>
           {restoreError !== null && (
             <span role="alert" data-testid="restore-project-error" className="text-xs text-tone-blocked">
               {restoreError}
@@ -179,22 +174,23 @@ function ProjectCard({
       ) : (
         <>
           {project.companyName === null && (
-            <div ref={triggerWrapRef} className="w-full">
-              <Button
-                variant="ghost"
-                className="w-full"
-                data-testid="assign-company-button"
-                onClick={(event) => {
-                  event.stopPropagation()
-                  onAssign()
-                }}
-              >
-                Assign company
-              </Button>
-            </div>
+            // M44 R3: the wrapper `<div>` this button sat in existed only to give the dialog a ref
+            // to return focus to. `Button` forwards a ref now, and `ui/Dialog` reads the opener off
+            // `document.activeElement` anyway, so both are gone.
+            <Button
+              variant="ghost"
+              className="w-full"
+              data-testid="assign-company-button"
+              onClick={(event) => {
+                event.stopPropagation()
+                onAssign()
+              }}
+            >
+              Assign company
+            </Button>
           )}
           {assigning && (
-            <AssignCompanyDialog workspaceId={project.id} companies={companies} onClose={onCloseAssign} triggerRef={triggerWrapRef} />
+            <AssignCompanyDialog workspaceId={project.id} companies={companies} onClose={onCloseAssign} />
           )}
         </>
       )}
@@ -268,9 +264,9 @@ export function ProjectsClient({
             />
             show archived
           </label>
-          <PrimaryButton data-testid="new-project" onClick={() => setNewOpen(true)}>
+          <Button variant="primary" size="sm" data-testid="new-project" onClick={() => setNewOpen(true)}>
             + New project
-          </PrimaryButton>
+          </Button>
         </span>
       </div>
       <div className="grid grid-cols-1 gap-[14px] p-[18px_20px] md:grid-cols-3">

@@ -7,6 +7,7 @@ import { useSelectedId } from '../hooks/useSelectedId'
 import { useTasks } from '../hooks/useTasks'
 import { BOARD_COLUMNS, COLUMN_FOR_STATUS } from '../lib/taskColumns'
 import type { TasksSnapshot } from '../server/tasks'
+import { Alert } from './ui/Alert'
 import { HaltBanner } from './HaltBanner'
 import { TaskColumn } from './TaskColumn'
 import { TaskDetailPanel } from './TaskDetailPanel'
@@ -44,11 +45,10 @@ export function TasksClient({
     <>
       <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
         {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
-        {error !== null && (
-          <div role="alert" className="border-b border-tone-waiting/40 bg-tone-waiting/10 px-4 py-1.5 text-xs text-tone-waiting">
-            showing stale data: {error}
-          </div>
-        )}
+        {/* M44 R3: the band three surfaces hand-rolled, each with its own class string, is
+          * `ui/Alert` now. The one-line `role="alert"` refusal sentences under forms are NOT
+          * alerts in this sense and stay exactly as they are (erratum E21). */}
+        {error !== null && <Alert variant="notice">showing stale data: {error}</Alert>}
         <div className="grid grid-cols-6 gap-[10px] p-[16px]">
           {BOARD_COLUMNS.map((column) => (
             <TaskColumn

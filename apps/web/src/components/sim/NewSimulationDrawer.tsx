@@ -1,11 +1,13 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { sectors, type SectorName } from '@slave-of-ai/simulation'
 import { errorMessage } from '../../lib/postControl'
 import { ModelSelect } from '../ModelSelect'
-import { PrimaryButton, SelectField, TextField } from '../ui/FormControls'
+import { Drawer } from '../ui/Drawer'
+import { SelectField, TextField } from '../ui/FormControls'
+import { Button } from '../ui/Button'
 
 export interface SimulationCompanyOption { readonly id: string; readonly name: string; readonly slaves: number }
 
@@ -45,13 +47,6 @@ export function NewSimulationDrawer({
   const [pending, setPending] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape' && !pending) onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [open, onClose, pending])
-
   if (!open) return null
   const isLlm = decisionProvider === 'llm'
   const companies = companiesBySector[sector] ?? []
@@ -82,9 +77,8 @@ export function NewSimulationDrawer({
     }
   }
   return (
-    <div className="fixed inset-0 z-30 flex justify-end">
-      <button type="button" aria-label="close" data-testid="new-simulation-scrim" onClick={() => { if (!pending) onClose() }} className="flex-1 bg-black/50" />
-      <aside role="dialog" aria-modal="true" aria-label="New simulation" data-testid="new-simulation-drawer" className="flex w-[520px] max-w-full flex-col gap-4 overflow-y-auto border-l border-line bg-bg-1 p-5 shadow-[0_6px_22px_rgba(0,0,0,.45)]">
+    // M44 R3: `ui/Drawer`, with the same `!pending` guard the scrim and the Escape handler carried.
+    <Drawer open={open} onClose={onClose} label="New simulation" testId="new-simulation-drawer" dismissible={!pending}>
         <div className="flex items-center justify-between">
           <h2 className="text-[14.5px] font-semibold tracking-[-.2px] text-text-1">New simulation</h2>
           <button type="button" data-testid="new-simulation-close" onClick={() => { if (!pending) onClose() }} className="text-text-3 hover:text-text-1">✕</button>
@@ -134,10 +128,9 @@ export function NewSimulationDrawer({
           </>
         )}
         <div className="flex items-center gap-3">
-          <PrimaryButton data-testid="new-simulation-submit" disabled={pending || companyId === '' || name.trim() === '' || (isLlm && !consent)} onClick={() => void submit()}>{pending ? 'creating…' : 'Create simulation'}</PrimaryButton>
+          <Button variant="primary" size="sm" data-testid="new-simulation-submit" disabled={pending || companyId === '' || name.trim() === '' || (isLlm && !consent)} onClick={() => void submit()}>{pending ? 'creating…' : 'Create simulation'}</Button>
           {errorText !== null && <span role="alert" data-testid="new-simulation-error" className="text-xs text-tone-blocked">{errorText}</span>}
         </div>
-      </aside>
-    </div>
+    </Drawer>
   )
 }

@@ -314,6 +314,11 @@ describe('ProjectsClient', () => {
     it('closes on Escape and returns focus to the trigger button', () => {
       render(<TestProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
       const trigger = screen.getByTestId('assign-company-button')
+      // M44 R3: `ui/Dialog` restores focus to whatever had it when the dialog OPENED, read off
+      // `document.activeElement` -- which is what a real browser leaves on a clicked button, and
+      // what jsdom's `fireEvent.click` (unlike a real pointer press) does not do on its own. The
+      // dialog no longer takes a `triggerRef` prop, so the opener has to actually be focused here.
+      trigger.focus()
       fireEvent.click(trigger)
       expect(screen.getByTestId('assign-company-dialog')).toBeTruthy()
 
@@ -321,6 +326,18 @@ describe('ProjectsClient', () => {
 
       expect(screen.queryByTestId('assign-company-dialog')).toBeNull()
       expect(document.activeElement).toBe(trigger)
+    })
+
+    // M44 R3: the dialog's hand-rolled `role="presentation"` click-away is `ui/Dialog`'s scrim now
+    // -- a real `<button aria-label="close">` at `${testId}-scrim`, inert while a POST is in flight.
+    it('closes when the scrim is clicked, through the shared dialog frame', () => {
+      render(<TestProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
+      fireEvent.click(screen.getByTestId('assign-company-button'))
+      expect(screen.getByTestId('assign-company-dialog').getAttribute('aria-modal')).toBe('true')
+
+      fireEvent.click(screen.getByTestId('assign-company-dialog-scrim'))
+
+      expect(screen.queryByTestId('assign-company-dialog')).toBeNull()
     })
   })
 
@@ -374,6 +391,19 @@ describe('ProjectsClient', () => {
       fireEvent.click(screen.getByTestId('new-project'))
       expect(screen.getByRole('dialog', { name: /new project/i })).toBeTruthy()
       fireEvent.click(screen.getByTestId('new-project-close'))
+      expect(screen.queryByRole('dialog', { name: /new project/i })).toBeNull()
+    })
+
+    // M44 R3: the drawer's own `useEffect` Escape handler and its `<aside>`/scrim markup are
+    // `ui/Drawer` now. The Escape case above is unchanged and still passes; this adds the scrim,
+    // which the primitive names `${testId}-scrim`.
+    it('closes the drawer on its scrim, through the shared drawer frame', () => {
+      render(<TestProjectsClient projects={projects} companies={companies} />)
+      fireEvent.click(screen.getByTestId('new-project'))
+      expect(screen.getByTestId('new-project-drawer').getAttribute('aria-modal')).toBe('true')
+
+      fireEvent.click(screen.getByTestId('new-project-drawer-scrim'))
+
       expect(screen.queryByRole('dialog', { name: /new project/i })).toBeNull()
     })
 

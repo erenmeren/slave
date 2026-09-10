@@ -521,6 +521,27 @@ describe('ActivityClient', () => {
     expect(screen.queryAllByTestId('volume-bar')).toHaveLength(0)
   })
 
+  // M44 R5 leak 3: the rail printed the SQL prefix (`task.*`) as its label. It names the family
+  // now; `data-prefix` (which the case above pins) and the label's `title` keep the raw key.
+  it('names each event kind instead of printing its prefix, and keeps the prefix on the node (M44 R5)', () => {
+    render(
+      <ActivityClient
+        workspaceId="w1"
+        initial={page({ typeVolumes: [{ prefix: 'task.*', count: 9 }, { prefix: 'run.*', count: 4 }] })}
+      />,
+    )
+    const bars = screen.getAllByTestId('volume-bar')
+    expect(bars.map((b) => b.getAttribute('data-prefix'))).toEqual(['task.*', 'run.*'])
+    expect(bars[0]?.textContent).toContain('Tasks')
+    expect(bars[0]?.textContent).not.toContain('task.*')
+    expect(bars[0]?.querySelector('[data-testid="volume-label"]')?.getAttribute('title')).toBe('task.*')
+  })
+
+  it('falls back to the raw prefix for a kind it has no word for', () => {
+    render(<ActivityClient workspaceId="w1" initial={page({ typeVolumes: [{ prefix: 'future.*', count: 1 }] })} />)
+    expect(screen.getAllByTestId('volume-bar')[0]?.textContent).toContain('future.*')
+  })
+
   it('filtering to a roster row dims every card that is not that slave', () => {
     render(
       <ActivityClient

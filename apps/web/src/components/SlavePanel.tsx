@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { userSlaveStatus } from '@slave-of-ai/domain'
 import type { SlaveFeedEvent } from '../lib/feedSummary'
 import type { SlaveCardData } from '../server/overview'
 import { sendControl } from '../lib/postControl'
@@ -178,8 +179,15 @@ export function SlavePanel({
             <h2 className="text-sm font-medium text-text-1">{slave.name}</h2>
             <span className="text-xs text-text-3">{slave.role}</span>
           </div>
-          <span data-testid="status-label" className="ml-1 text-xs text-text-2">
-            {slave.status}
+          {/* R5 leak 2: this printed the raw `SlaveStatus`. The projected word is what a person
+            * reads; `data-status` and `title` keep the raw value on the node. */}
+          <span
+            data-testid="status-label"
+            data-status={slave.status}
+            title={slave.status}
+            className="ml-1 text-xs text-text-2"
+          >
+            {userSlaveStatus(slave.status).label}
           </span>
           {/* The bare kind here, `—` when no run has resolved one (M12 Task 9, ruling R10).
             *  The shell-only gate mark (spec §8) is `ShellOnlyMark` (M12 Task 13 fix round 1,

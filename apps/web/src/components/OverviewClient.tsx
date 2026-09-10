@@ -13,7 +13,9 @@ import { HaltBanner } from './HaltBanner'
 import { SupervisorPanel } from './SupervisorPanel'
 import { postControl } from '../lib/postControl'
 import { TopStrip } from './TopStrip'
+import { Alert } from './ui/Alert'
 import { Button } from './ui/Button'
+import { EmptyState } from './ui/EmptyState'
 import { Panel } from './ui/Panel'
 
 /**
@@ -33,9 +35,7 @@ export function BlockedPanel({
     <div className="min-w-0 flex-1">
       <Panel title="blocked · needs you">
         {items.length === 0 ? (
-          <p data-testid="blocked-empty" className="text-xs text-text-3">
-            nothing needs you
-          </p>
+          <EmptyState testId="blocked-empty" message="nothing needs you" />
         ) : (
           <ul className="flex flex-col gap-2">
             {items.map((item) => (
@@ -94,9 +94,7 @@ export function LiveEventsPanel({
     <div data-testid="live-events" className="w-[340px] shrink-0">
       <Panel title="live events" action={<Link href={`/w/${workspaceId}/activity`}>all →</Link>}>
         {events.length === 0 ? (
-          <p data-testid="live-events-empty" className="text-xs text-text-3">
-            no events yet
-          </p>
+          <EmptyState testId="live-events-empty" message="no events yet" />
         ) : (
           <ul className="flex flex-col gap-1">
             {events.map((event) => (
@@ -129,9 +127,9 @@ export function MergeQueuePanel({ queue }: { readonly queue: OverviewSnapshot['m
   return (
     <Panel title="merge queue · serial">
       {queue.length === 0 ? (
-        <p data-testid="merge-empty" className="text-xs text-text-3">
-          nothing in the queue
-        </p>
+        // The brief calls this one `merge-queue-empty`; the testid in the code has always been
+        // `merge-empty` and four cases query it, so the testid is kept and only the component moves.
+        <EmptyState testId="merge-empty" message="nothing in the queue" />
       ) : (
         <ol className="flex flex-col gap-1">
           {queue.map((task) => (
@@ -225,18 +223,18 @@ export function OverviewClient({
           * (`SUPERVISOR_PANEL_MIN_REFRESH_MS`), because this stream fires several times a second
           * while a run is live. */}
         <SupervisorPanel workspaceId={workspaceId} refreshKey={view} />
-        {error !== null && (
-          <div role="alert" className="border-b border-tone-waiting/40 bg-tone-waiting/10 px-4 py-1.5 text-xs text-tone-waiting">
-            showing stale data: {error}
-          </div>
-        )}
+        {/* M44 R3: the band three surfaces hand-rolled, each with its own class string, is
+          * `ui/Alert` now. The one-line `role="alert"` refusal sentences under forms are NOT
+          * alerts in this sense and stay exactly as they are (erratum E21). */}
+        {error !== null && <Alert variant="notice">showing stale data: {error}</Alert>}
         {view.workspace.adoptedFrom !== null && (
-          <div data-testid="ws-adopted-from" className="border-b border-line bg-bg-1 px-4 py-1.5 text-xs text-text-3">
+          // M44 R3: the second full-width band on this page, now the same component as the first.
+          <Alert variant="notice" testId="ws-adopted-from">
             organisation adopted from simulation{' '}
-            <Link href={`/sim/${view.workspace.adoptedFrom.simulationId}`} className="text-text-2 underline">
+            <Link href={`/sim/${view.workspace.adoptedFrom.simulationId}`} className="underline">
               {view.workspace.adoptedFrom.name}
             </Link>
-          </div>
+          </Alert>
         )}
         <TopStrip snapshot={view} />
         {/* The handoff's 3-column card grid at an 11px gap (design README §3a.1), narrowing to

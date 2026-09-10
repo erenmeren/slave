@@ -9,7 +9,8 @@ import type { TemplateRow } from './TemplateCatalog'
 import { CompanyDetail } from './company/CompanyDetail'
 import { DangerConfirm } from './ui/DangerConfirm'
 import { EmptyTile } from './ui/EmptyTile'
-import { PrimaryButton, TextField } from './ui/FormControls'
+import { TextField } from './ui/FormControls'
+import { Button } from './ui/Button'
 
 /** A row from `listCompanies` (`server/org.ts`) -- no exported type there, so this is the one
  *  place that names the shape. */
@@ -133,9 +134,9 @@ export function CompanyManager({
             } as React.InputHTMLAttributes<HTMLInputElement>
           }
         />
-        <PrimaryButton type="submit" data-testid="company-submit" disabled={pending || name === ''}>
+        <Button variant="primary" size="sm" type="submit" data-testid="company-submit" disabled={pending || name === ''}>
           Add company
-        </PrimaryButton>
+        </Button>
         {errorText !== null && (
           <span role="alert" data-testid="company-error" className="text-xs text-tone-blocked">
             {errorText}

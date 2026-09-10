@@ -6,9 +6,10 @@ import type { SimulationSummary } from '@slave-of-ai/control'
 import type { SectorName } from '@slave-of-ai/simulation'
 import { Card } from '../ui/Card'
 import { Chip } from '../ui/Chip'
-import { PrimaryButton } from '../ui/FormControls'
 import { Panel } from '../ui/Panel'
+import { SIMULATION_STATUS_LABEL } from '../../lib/simulationLabels'
 import { NewSimulationDrawer, type SimulationCompanyOption } from './NewSimulationDrawer'
+import { Button } from '../ui/Button'
 
 const STATUS_TONE = { ready: 'idle', running: 'working', paused: 'paused', finished: 'done', halted: 'blocked' } as const
 
@@ -26,7 +27,7 @@ export function SimulationsClient({
   const [open, setOpen] = useState(false)
   return (
     <div className="flex flex-col gap-4 p-6">
-      <Panel title="Simulations" action={<PrimaryButton data-testid="new-simulation" onClick={() => setOpen(true)}>+ New simulation</PrimaryButton>}>
+      <Panel title="Simulations" action={<Button variant="primary" size="sm" data-testid="new-simulation" onClick={() => setOpen(true)}>+ New simulation</Button>}>
         {cards.length === 0 ? (
           <p data-testid="sim-empty" className="text-xs text-text-3">No simulations yet. Create the first run from a catalog company whose roster fits the sector.</p>
         ) : (
@@ -51,7 +52,7 @@ export function SimulationsClient({
                     )}
                     <div className="flex items-center gap-2 text-xs text-text-2">
                       <span>day {card.simTime} / {card.horizonDays}</span>
-                      <Chip tone={STATUS_TONE[card.status]}>{card.status}</Chip>
+                      <Chip tone={STATUS_TONE[card.status]} title={card.status}>{SIMULATION_STATUS_LABEL[card.status]}</Chip>
                       {card.decisionProvider === 'llm' && <Chip tone="working">llm</Chip>}
                       {card.autoRun !== null && <Chip tone="working">auto-run</Chip>}
                     </div>

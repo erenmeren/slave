@@ -5,10 +5,12 @@ import { useActivityStream } from '../../hooks/useActivityStream'
 import { publishShellFacts } from '../../hooks/useShellFacts'
 import { publishStreamState } from '../../hooks/useStreamState'
 import { useUrlFilters } from '../../hooks/useUrlFilters'
+import { eventPrefixLabel } from '../../lib/eventLabels'
 import type { ActivityPage } from '../../server/activity'
 import type { ShellFacts } from '../../server/shell'
 import { HaltBanner } from '../HaltBanner'
 import { Sparkline } from '../Sparkline'
+import { EmptyState } from '../ui/EmptyState'
 import { PanelHeader } from '../ui/PanelHeader'
 import { FilterBar } from './FilterBar'
 import { Timeline, type TimelineHandle } from './Timeline'
@@ -226,7 +228,11 @@ export function ActivityClient({
             {initial.typeVolumes.map((volume) => (
               <div key={volume.prefix} data-testid="volume-bar" data-prefix={volume.prefix}>
                 <div className="flex justify-between font-mono text-[10.5px] text-text-2">
-                  <span>{volume.prefix}</span>
+                  {/* R5 leak 3: this printed the SQL prefix. `eventPrefixLabel` names the family;
+                    * `data-prefix` on the bar and this `title` keep the raw key. */}
+                  <span data-testid="volume-label" title={volume.prefix}>
+                    {eventPrefixLabel(volume.prefix)}
+                  </span>
                   <span className="text-text-3">{volume.count}</span>
                 </div>
                 <div className="mt-[4px] h-[4px] overflow-hidden rounded-[2px] bg-white/[0.06]">
@@ -245,9 +251,7 @@ export function ActivityClient({
               // A kind with no events in the window is OMITTED, never drawn as a zero bar
               // (`ActivityPage.typeVolumes`) — so a silent 24 hours has nothing to draw at all,
               // and says so rather than showing an empty box.
-              <p data-testid="volume-empty" className="font-mono text-[10.5px] text-text-3">
-                no events in the last 24h
-              </p>
+              <EmptyState testId="volume-empty" message="no events in the last 24h" />
             )}
           </div>
           <div className="mt-6">

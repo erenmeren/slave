@@ -319,6 +319,27 @@ describe('Button (M44 R3: one button, three variants, two sizes)', () => {
     render(<Button variant="ghost" data-testid="my-button">x</Button>)
     expect(screen.getByTestId('my-button').getAttribute('data-variant')).toBe('ghost')
   })
+
+  // Carried over from `form-controls.test.tsx` when M44 Task 4 deleted `GhostButton`/
+  // `PrimaryButton`, whose own cases pinned these two. Both are real regression guards, not
+  // restatements: M16's final review I1 found `hover:text-text-0` naming a token Tailwind v4 never
+  // generates (there is no `--text-0` in `globals.css`), so the ghost hover brighten was DEAD --
+  // only the border moved. And the 5px chip radius is the one geometry the two systems shared, so
+  // it has to keep being asserted somewhere now that only one of them is left.
+  it('brightens ghost text to a real token on hover, never to a nonexistent text-0', () => {
+    render(<Button variant="ghost" size="sm" data-testid="gb-hover">cancel</Button>)
+    const button = screen.getByTestId('gb-hover')
+    expect(button.className).toContain('hover:text-text-1')
+    expect(button.className).not.toContain('text-text-0')
+  })
+
+  it('carries the 5px chip radius on every variant, and passes disabled through', () => {
+    render(<><Button variant="ghost" size="sm" data-testid="gb" disabled>cancel</Button><Button variant="danger" size="sm" data-testid="db">stop</Button></>)
+    const ghost = screen.getByTestId('gb') as HTMLButtonElement
+    expect(ghost.className).toContain('rounded-chip')
+    expect(ghost.disabled).toBe(true)
+    expect(screen.getByTestId('db').className).toContain('rounded-chip')
+  })
 })
 
 describe('Card (M44 R3, erratum E1: additive only)', () => {

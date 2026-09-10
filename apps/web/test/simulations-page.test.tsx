@@ -40,7 +40,9 @@ describe('SimulationsClient', () => {
     expect(within(first).getByTestId('sim-sector-chip').textContent).toBe('trade')
     expect(first.textContent).toContain('policy A')
     expect(first.textContent).toContain('day 4 / 30')
-    expect(first.textContent).toContain('running')
+    // M44 R5 leak 6: the status chip printed the raw `SimulationStatus`. Words now, raw in `title`.
+    expect(first.textContent).toContain('Running')
+    expect(within(first).getByTitle('running').textContent).toBe('Running')
     expect(first.textContent).toContain('rules provider')
     fireEvent.click(within(first).getByRole('button'))
     expect(routerPush).toHaveBeenCalledWith('/sim/s1')
@@ -100,9 +102,29 @@ describe('SimulationsClient', () => {
     expect(screen.getByTestId('new-simulation-error').textContent).toContain('already exists')
     expect(screen.getByTestId('new-simulation-drawer')).toBeTruthy()
   })
+  // M44 R3: the drawer's own scrim and `document` Escape listener are `ui/Drawer` now. Escape is
+  // guarded by `dismissible={!pending}`, the same `!pending` check the deleted handler carried.
+  it('closes the New simulation drawer on its scrim and on Escape (M44 R3)', () => {
+    render(<SimulationsClient cards={[]} companiesBySector={companiesBySector} />)
+    fireEvent.click(screen.getByTestId('new-simulation'))
+    expect(screen.getByTestId('new-simulation-drawer').getAttribute('aria-modal')).toBe('true')
+    fireEvent.click(screen.getByTestId('new-simulation-drawer-scrim'))
+    expect(screen.queryByTestId('new-simulation-drawer')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('new-simulation'))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('new-simulation-drawer')).toBeNull()
+  })
   it('a card cloned from another run shows "clone of <name>"', () => {
     render(<SimulationsClient cards={[card({ clonedFromId: 's0', clonedFromName: 'Q3 plan' })]} companiesBySector={companiesBySector} />)
     expect(screen.getByTestId('sim-card-s1').textContent).toContain('clone of Q3 plan')
+  })
+  it('says what a run is doing rather than printing its status value (M44 R5)', () => {
+    render(<SimulationsClient cards={[card({ status: 'finished' }), card({ id: 's3', status: 'halted' })]} companiesBySector={companiesBySector} />)
+    const chips = screen.getAllByTestId('chip')
+    expect(chips.map((chip) => chip.textContent)).toContain('Finished')
+    expect(chips.map((chip) => chip.textContent)).toContain('Halted')
+    expect(chips.map((chip) => chip.textContent)).not.toContain('finished')
   })
   it('a card with autoRun set shows the auto-run chip', () => {
     render(<SimulationsClient cards={[card({ autoRun: { everyMs: 1000, untilDay: 30, lastStepAt: null } })]} companiesBySector={companiesBySector} />)

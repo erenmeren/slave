@@ -11,10 +11,10 @@ import { EmergencyStopButton } from '../EmergencyStopButton'
 import { HaltBanner } from '../HaltBanner'
 import { PermissionMatrix } from '../PermissionMatrix'
 import { DangerConfirm } from '../ui/DangerConfirm'
-import { PrimaryButton } from '../ui/FormControls'
 import { Panel } from '../ui/Panel'
 import { GoalPanel } from './GoalPanel'
 import { RuntimePanel } from './RuntimePanel'
+import { Button } from '../ui/Button'
 
 /** The project Settings tab (M24 §4; M27 §3.4): goal, runtime, this project's permissions, and
  *  the danger zone -- the stop (hidden once the project is archived, since an archived project
@@ -92,9 +92,9 @@ export function ProjectSettingsClient({
             </span>
             <span className="ml-auto flex flex-col items-end gap-1">
               {workspace.archived ? (
-                <PrimaryButton data-testid="restore-project" onClick={() => void restore()}>
+                <Button variant="primary" size="sm" data-testid="restore-project" onClick={() => void restore()}>
                   restore project
-                </PrimaryButton>
+                </Button>
               ) : (
                 <DangerConfirm
                   label="archive project"

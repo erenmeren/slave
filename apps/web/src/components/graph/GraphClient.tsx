@@ -8,6 +8,8 @@ import { publishShellFacts } from '../../hooks/useShellFacts'
 import { publishStreamState } from '../../hooks/useStreamState'
 import type { StreamEvent } from '../../hooks/useWorkspaceStream'
 import type { GraphSnapshot } from '../../server/graph'
+import { Alert } from '../ui/Alert'
+import { Tabs } from '../ui/Tabs'
 import { HaltBanner } from '../HaltBanner'
 import { CommunicationMode } from './CommunicationMode'
 import { DepsMode } from './DepsMode'
@@ -216,30 +218,21 @@ export function GraphClient({
   return (
     <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
       {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
-      {error !== null && (
-        <div role="alert" className="border-b border-tone-waiting/40 bg-tone-waiting/10 px-4 py-1.5 text-xs text-tone-waiting">
-          showing stale data: {error}
-        </div>
-      )}
-      {/* No `ui/` component covers a segmented mode toggle with an `aria-current` "current tab"
-       *  state -- `Button`'s bordered-pill affordance (spec §3, meant for standalone actions)
-       *  would visually redesign this into something the handoff never asked for here. Left on its
-       *  existing token-based recipe, same as the "stale data" banner just above (no `ui/`
-       *  alert/banner component exists either) -- both predate this task and stay as-is. */}
-      <nav aria-label="Graph mode" className="flex gap-1 border-b border-line px-3 py-2">
-        {MODE_TABS.map((tab) => (
-          <button
-            key={tab.mode}
-            type="button"
-            data-testid={`graph-mode-${tab.mode}`}
-            aria-current={mode === tab.mode ? 'page' : undefined}
-            onClick={() => setMode(tab.mode)}
-            className={`rounded px-2 py-1 text-xs ${mode === tab.mode ? 'bg-bg-2 text-text-1' : 'text-text-2 hover:text-text-1'}`}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </nav>
+      {/* M44 R3: `ui/Alert`, the same band the Overview and Tasks pages show. */}
+      {error !== null && <Alert variant="notice">showing stale data: {error}</Alert>}
+      {/* M44 R6/D10: five buttons with an `aria-current` were never a tablist to a screen reader,
+        * which is what they are to everyone else. `ui/Tabs` gives them `role="tablist"`/`"tab"`
+        * and `aria-selected`; the `graph-mode-<id>` testids and the `?mode=` state are unchanged,
+        * so every gate and every bookmark keeps working. */}
+      <div className="flex gap-1 border-b border-line px-3 py-2">
+        <Tabs
+          tabs={MODE_TABS.map((tab) => ({ id: tab.mode, label: tab.label }))}
+          current={mode}
+          ariaLabel="Graph mode"
+          testIdPrefix="graph-mode"
+          onSelect={(id) => setMode(id as GraphMode)}
+        />
+      </div>
       <div className="relative flex min-h-0 flex-1">
         <div className="relative min-w-0 flex-1">
           {mode === 'org' && (

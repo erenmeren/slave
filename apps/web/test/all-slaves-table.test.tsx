@@ -118,6 +118,21 @@ describe('AllSlavesTable', () => {
     expect(screen.queryByTestId('slave-delete')).toBeNull()
   })
 
+  // M44 R5 leak 1: this pill printed the raw `deriveSlaveStatus` value, so the Slaves table said
+  // "pausing" where the Overview card said PAUSING. Both come from the domain projection now, and
+  // the raw value stays one hover away -- backend state fidelity is never weakened for the UI.
+  it('says PAUSING, not "pausing", and keeps the raw status where a person can still find it (M44 R5)', () => {
+    render(<AllSlavesTable initial={page([row({ slaveId: 'a1', name: 'Alex', status: 'pausing' })])} onOpen={vi.fn()} />)
+    const pill = screen.getAllByTestId('status-pill')[0]
+    expect(pill?.textContent).toContain('PAUSING')
+    expect(pill?.textContent).not.toContain('pausing')
+    expect(pill?.getAttribute('title')).toBe('pausing')
+    // `pausing` is the `pause_requested` card state, which rides the amber `waiting` tone (and
+    // pulses) rather than the settled grey-blue `paused` -- `lib/tones.ts`'s own distinction, and
+    // the reason this case pins the tone as well as the word.
+    expect(pill?.getAttribute('data-tone')).toBe('waiting')
+  })
+
   it("calls onOpen with the clicked project row's own slaveId and workspaceId", () => {
     const onOpen = vi.fn()
     render(<AllSlavesTable initial={page([row({ slaveId: 'a9', workspaceId: 'w9', name: 'Alex' })])} onOpen={onOpen} />)

@@ -12,8 +12,9 @@ import { SlaveRowActions } from '../SlaveRowActions'
 import type { TemplateRow } from '../TemplateCatalog'
 import { DangerConfirm } from '../ui/DangerConfirm'
 import { DataTable, Row } from '../ui/DataTable'
-import { FieldLabel, GhostButton, INPUT_SHELL, SelectField, TextField } from '../ui/FormControls'
+import { FieldLabel, INPUT_SHELL, SelectField, TextField } from '../ui/FormControls'
 import { SectionLabel } from '../ui/SectionLabel'
+import { Button } from '../ui/Button'
 
 export const MEMBER_COLUMNS = '1fr 110px 160px 140px 120px 120px'
 export const MEMBER_HEADER = ['Name', 'Role', 'Template', 'Model', 'Provider', ''] as const
@@ -235,9 +236,9 @@ export function TeamBlock({
             className="w-40"
           />
         </label>
-        <GhostButton type="submit" data-testid="member-submit" disabled={memberPending || templateId === '' || name === ''}>
+        <Button variant="ghost" size="sm" type="submit" data-testid="member-submit" disabled={memberPending || templateId === '' || name === ''}>
           Add member
-        </GhostButton>
+        </Button>
         {memberErrorText !== null && (
           <span role="alert" data-testid="member-error" className="text-xs text-tone-blocked">
             {memberErrorText}

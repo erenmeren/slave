@@ -528,7 +528,11 @@ describe('SlavePanel', () => {
       // Success renders no error and does not flip the slave's own status client-side — the
       // panel still shows the prop it was given ('working') until the refetch loop updates it.
       expect(screen.queryByRole('alert')).toBeNull()
-      expect(screen.getByTestId('status-label').textContent).toBe('working')
+      // M44 R5 leak 2: the header printed the raw `SlaveStatus`. It reads the projected word now
+      // and keeps the raw value on the node, so this case still proves "the prop it was given".
+      expect(screen.getByTestId('status-label').textContent).toBe('WORKING')
+      expect(screen.getByTestId('status-label').getAttribute('title')).toBe('working')
+      expect(screen.getByTestId('status-label').getAttribute('data-status')).toBe('working')
     })
   })
 

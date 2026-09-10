@@ -168,6 +168,19 @@ describe('SimulationClient', () => {
     expect(routerPush).toHaveBeenCalledWith('/sim/c1')
     expect(screen.queryByTestId('sim-clone-drawer')).toBeNull()
   })
+  // M44 R3: both sim drawers moved onto `ui/Drawer`, which names the scrim `${testId}-scrim` and
+  // takes their `!pending` Escape guard as `dismissible`.
+  it('closes the Clone drawer on its scrim and on Escape (M44 R3)', () => {
+    render(<SimulationClient initial={snapshot()} />)
+    fireEvent.click(screen.getByTestId('sim-clone-open'))
+    expect(screen.getByTestId('sim-clone-drawer').getAttribute('aria-modal')).toBe('true')
+    fireEvent.click(screen.getByTestId('sim-clone-drawer-scrim'))
+    expect(screen.queryByTestId('sim-clone-drawer')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('sim-clone-open'))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('sim-clone-drawer')).toBeNull()
+  })
   it('a 409 on clone keeps the drawer open with sim-clone-error', async () => {
     render(<SimulationClient initial={snapshot()} />)
     fireEvent.click(screen.getByTestId('sim-clone-open'))
@@ -436,6 +449,22 @@ describe('SimulationClient', () => {
     it('the button is absent when the snapshot says not adoptable (a trade run)', () => {
       render(<SimulationClient initial={snapshot({ adoptable: false })} />)
       expect(screen.queryByTestId('sim-adopt-open')).toBeNull()
+    })
+
+    it('closes the Adopt drawer on its scrim and on Escape (M44 R3)', async () => {
+      fetchMock.mockResolvedValue(new Response(JSON.stringify(preview), { status: 200 }))
+      render(<SimulationClient initial={snapshot({ adoptable: true })} />)
+      await act(async () => { fireEvent.click(screen.getByTestId('sim-adopt-open')) })
+      expect(screen.getByTestId('sim-adopt-drawer').getAttribute('aria-modal')).toBe('true')
+      // Its width is the one drawer in the app that is not 520px, written as a literal class in
+      // `AdoptDrawer`'s own source so Tailwind v4 generates it.
+      expect(screen.getByTestId('sim-adopt-drawer').className).toContain('w-[560px]')
+      fireEvent.click(screen.getByTestId('sim-adopt-drawer-scrim'))
+      expect(screen.queryByTestId('sim-adopt-drawer')).toBeNull()
+
+      await act(async () => { fireEvent.click(screen.getByTestId('sim-adopt-open')) })
+      fireEvent.keyDown(document, { key: 'Escape' })
+      expect(screen.queryByTestId('sim-adopt-drawer')).toBeNull()
     })
 
     it('opens the drawer, fetches the preview, and renders the roles table (run role → the runtime role it becomes), the workspace select, the settings proposal and the locked autoMerge', async () => {

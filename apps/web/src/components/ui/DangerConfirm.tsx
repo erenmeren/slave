@@ -21,6 +21,7 @@ export function DangerConfirm({
   confirmText,
   disabled = false,
   title,
+  confirmName,
   onConfirm,
   className = '',
 }: {
@@ -29,6 +30,14 @@ export function DangerConfirm({
   readonly confirmText: string
   readonly disabled?: boolean
   readonly title?: string
+  /**
+   * The `alertdialog`'s accessible name, when `confirm <label>` is not the sentence a screen
+   * reader should hear (M44 Task 4). The trigger's own label is written for the eye and is
+   * sometimes a shout: the project header's stop button says `STOP`, and "confirm STOP" is a
+   * worse announcement than the "confirm emergency stop" that control has always made. Default
+   * stays `confirm ${label}`, so a caller that needs nothing says nothing.
+   */
+  readonly confirmName?: string
   readonly onConfirm: () => Promise<string | null>
   readonly className?: string
 }): React.JSX.Element {
@@ -93,7 +102,7 @@ export function DangerConfirm({
     )
   }
   return (
-    <span role="alertdialog" aria-label={`confirm ${label}`} className={`flex flex-wrap items-center gap-2 ${className}`.trim()}>
+    <span role="alertdialog" aria-label={confirmName ?? `confirm ${label}`} className={`flex flex-wrap items-center gap-2 ${className}`.trim()}>
       <Button ref={confirmRef} variant="danger" size="sm" data-testid={`${testId}-confirm`} disabled={pending} onClick={() => void confirm()}>
         {pending ? 'working…' : confirmText}
       </Button>

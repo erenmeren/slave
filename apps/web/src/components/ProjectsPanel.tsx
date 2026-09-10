@@ -6,7 +6,8 @@ import type { ProviderKind } from '@slave-of-ai/control'
 import { errorMessage } from '../lib/postControl'
 import { onUnauthorized } from '../lib/onUnauthorized'
 import { ProviderSelect } from './ProviderSelect'
-import { FieldLabel, INPUT_SHELL, PrimaryButton, TextField } from './ui/FormControls'
+import { FieldLabel, INPUT_SHELL, TextField } from './ui/FormControls'
+import { Button } from './ui/Button'
 
 /** One command per line, trimmed, blanks dropped -- the shape both `verifyCommands` and
  *  `setupCommands` want, and the shape the CLI's own repeatable `--verify`/`--setup` flags land in
@@ -214,9 +215,9 @@ export function ProjectsPanel(): React.JSX.Element {
       </div>
 
       <div className="flex items-center gap-2">
-        <PrimaryButton type="submit" data-testid="create-workspace-submit" disabled={pending || !canSubmit}>
+        <Button variant="primary" size="sm" type="submit" data-testid="create-workspace-submit" disabled={pending || !canSubmit}>
           attach repository
-        </PrimaryButton>
+        </Button>
         {errorText !== null && (
           <span role="alert" data-testid="create-workspace-error" className="text-xs text-tone-blocked">
             {errorText}

@@ -7,7 +7,8 @@ import { plural } from '../lib/plural'
 import { sendControl } from '../lib/postControl'
 import { DangerConfirm } from './ui/DangerConfirm'
 import { DataTable, Row } from './ui/DataTable'
-import { PrimaryButton, SelectField, TextField } from './ui/FormControls'
+import { SelectField, TextField } from './ui/FormControls'
+import { Button } from './ui/Button'
 
 const COLUMNS = '1fr 1fr 90px 170px'
 const HEADER = ['Project', 'Department', 'Slaves', ''] as const
@@ -158,9 +159,9 @@ function NewDepartmentForm({ workspaces }: { readonly workspaces: readonly { id:
           className: 'w-44',
         } as React.InputHTMLAttributes<HTMLInputElement>}
       />
-      <PrimaryButton type="submit" data-testid="department-submit" disabled={pending || none || name === ''}>
+      <Button variant="primary" size="sm" type="submit" data-testid="department-submit" disabled={pending || none || name === ''}>
         New department
-      </PrimaryButton>
+      </Button>
       {none && <span className="text-xs text-text-3">attach a project first</span>}
       {errorText !== null && (
         <span role="alert" data-testid="department-error" className="text-xs text-tone-blocked">

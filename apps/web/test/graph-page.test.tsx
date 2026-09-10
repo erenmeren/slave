@@ -412,6 +412,20 @@ describe('GraphClient', () => {
     expect(screen.getByTestId('graph-mode-skill').textContent).toBe('Skill chain')
   })
 
+  // M44 R6/D10: five buttons carrying `aria-current` announced themselves as five buttons. They
+  // are a real tablist now (`ui/Tabs`), and the two attributes below are the whole of what that
+  // means to a screen reader -- the testids and the `?mode=` state are unchanged.
+  it('is a real tablist, not five buttons with an aria-current (M44 R6)', async () => {
+    render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
+    await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
+
+    expect(screen.getByRole('tablist', { name: 'Graph mode' })).toBeTruthy()
+    expect(screen.getAllByRole('tab')).toHaveLength(5)
+    expect(screen.getByTestId('graph-mode-org').getAttribute('role')).toBe('tab')
+    expect(screen.getByTestId('graph-mode-org').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('graph-mode-skill').getAttribute('aria-selected')).toBe('false')
+  })
+
   // Forced consequence of the same unlock (not itself the named sanctioned edit): the old
   // assertion here was the literal opposite of Task 11's mandate -- a click now genuinely
   // switches mode and renders `SkillMode`'s own canvas rather than no-op'ing.

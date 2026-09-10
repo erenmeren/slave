@@ -1,13 +1,16 @@
 import type React from 'react'
-import { Button } from './Button'
 import { SECTION_LABEL_CLASS } from './SectionLabel'
 
 /**
  * The handoff's form language, written once (M16 spec §2). Appearance only: no state, no
  * fetch — behaviour stays with the callers, and every prop spread passes the caller's
  * testids, aria contracts, handlers and values through untouched. The FIELD radius lives here
- * (`rounded-tile`, the 7px input/tile token); the 5px chip/button radius now lives in `ui/Button`,
- * which the two button aliases at the bottom of this file delegate to (M44 R3/E14).
+ * (`rounded-tile`, the 7px input/tile token); the 5px chip/button radius lives in `ui/Button`.
+ *
+ * There is no button here any more. `GhostButton`/`PrimaryButton` were this file's own second
+ * button system; M44 R3 folded them into `ui/Button` as `size="sm"` aliases and Task 4 migrated
+ * the last of their thirty-odd call sites, so they are gone -- a `<GhostButton>` anywhere is a
+ * BUILD error now rather than a second way to draw the same control.
  */
 export function FieldLabel({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
   return <span className={SECTION_LABEL_CLASS}>{children}</span>
@@ -57,22 +60,4 @@ export function SelectField({
       {select}
     </label>
   )
-}
-
-/**
- * M44 R3: the second button system is gone. These two are ALIASES of `ui/Button` at `size="sm"`,
- * which is that component's name for the exact geometry these carried (`px-2.5 py-1`, radius 5) --
- * so the thirty-five call sites did not move when the two systems became one. They stay exported
- * so this milestone is not also a thirty-five-file rename; Task 4 migrates the call sites and
- * these go with the last of them.
- */
-export function GhostButton(props: React.ButtonHTMLAttributes<HTMLButtonElement>): React.JSX.Element {
-  return <Button variant="ghost" size="sm" {...props} />
-}
-
-export function PrimaryButton({
-  tone = 'working',
-  ...rest
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { readonly tone?: 'working' | 'blocked' }): React.JSX.Element {
-  return <Button variant={tone === 'blocked' ? 'danger' : 'primary'} size="sm" {...rest} />
 }

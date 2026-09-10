@@ -312,7 +312,20 @@ export function OfficeClient({
 
   return (
     <div ref={wrapRef} className="relative h-[calc(100vh-52px-41px)] min-h-[360px] w-full overflow-hidden bg-[#07080b]">
-      <canvas ref={canvasRef} data-testid="office-canvas" className="block h-full w-full cursor-grab" />
+      <canvas
+        ref={canvasRef}
+        data-testid="office-canvas"
+        role="img"
+        aria-label={`The project's office: ${hud.slaves} slaves across ${hud.departments} departments, ${hud.working} working`}
+        className="block h-full w-full cursor-grab"
+      />
+      {/* The canvas is a picture. This line is the same facts as text, for a person who cannot see
+        * it and for a person whose browser draws nothing -- it is NOT a replacement office, and
+        * the Focus card below already gives the per-slave detail (M44 R6). */}
+      <p data-testid="office-fallback" className="sr-only">
+        {hud.slaves} slaves across {hud.departments} departments; {hud.working} working now. The
+        same information is on the Overview tab as cards.
+      </p>
       <OfficeHud
         view={hud}
         onHour={(hour) => {

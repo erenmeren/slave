@@ -3,7 +3,9 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { errorMessage } from '../../lib/postControl'
-import { PrimaryButton, SelectField, TextField } from '../ui/FormControls'
+import { Drawer } from '../ui/Drawer'
+import { SelectField, TextField } from '../ui/FormControls'
+import { Button } from '../ui/Button'
 
 /** Fix round 1, Minor #4: a blank field or one that is not a whole number must not silently fall
  *  back to a default the person never chose -- it blocks the submit and says so. A blank, a
@@ -91,15 +93,6 @@ export function AdoptDrawer({
     }
   }, [open, simulationId])
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (event: KeyboardEvent): void => {
-      if (event.key === 'Escape' && !pending) onClose()
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [open, onClose, pending])
-
   if (!open) return null
 
   const leadName = preview?.leadName ?? null
@@ -142,9 +135,11 @@ export function AdoptDrawer({
   }
 
   return (
-    <div className="fixed inset-0 z-30 flex justify-end">
-      <button type="button" aria-label="close" data-testid="sim-adopt-scrim" onClick={() => { if (!pending) onClose() }} className="flex-1 bg-black/50" />
-      <aside role="dialog" aria-modal="true" aria-label="Adopt this organisation" data-testid="sim-adopt-drawer" className="flex w-[560px] max-w-full flex-col gap-4 overflow-y-auto border-l border-line bg-bg-1 p-5 shadow-[0_6px_22px_rgba(0,0,0,.45)]">
+    // M44 R3: `ui/Drawer` owns Escape, the scrim, the Tab trap and focus restore. `dismissible`
+    // is the same `!pending` guard the hand-rolled scrim and Escape handler both carried. The
+    // width is written as a LITERAL Tailwind class here, in the caller's own source, because
+    // Tailwind v4 only generates a utility it can find as literal text.
+    <Drawer open={open} onClose={onClose} label="Adopt this organisation" testId="sim-adopt-drawer" width="w-[560px]" dismissible={!pending}>
         <div className="flex items-center justify-between">
           <h2 className="text-[14.5px] font-semibold tracking-[-.2px] text-text-1">Adopt this organisation</h2>
           <button type="button" data-testid="sim-adopt-close" onClick={() => { if (!pending) onClose() }} className="text-text-3 hover:text-text-1">✕</button>
@@ -205,14 +200,13 @@ export function AdoptDrawer({
               </label>
             )}
             <div className="flex items-center gap-3">
-              <PrimaryButton data-testid="sim-adopt-submit" disabled={pending || preview.workspaces.length === 0 || workspaceId === '' || !maxConcurrentValid || !maxAttemptsValid} onClick={() => void submit()}>
+              <Button variant="primary" size="sm" data-testid="sim-adopt-submit" disabled={pending || preview.workspaces.length === 0 || workspaceId === '' || !maxConcurrentValid || !maxAttemptsValid} onClick={() => void submit()}>
                 {pending ? 'adopting…' : 'Adopt this organisation'}
-              </PrimaryButton>
+              </Button>
               {errorText !== null && <span role="alert" data-testid="sim-adopt-error" className="text-xs text-tone-blocked">{errorText}</span>}
             </div>
           </>
         )}
-      </aside>
-    </div>
+    </Drawer>
   )
 }

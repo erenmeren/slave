@@ -10,13 +10,14 @@ import { sendControl } from '../../lib/postControl'
 import type { SimulationSnapshot, JournalRow } from '../../server/simulation'
 import { Chip } from '../ui/Chip'
 import { DangerConfirm } from '../ui/DangerConfirm'
-import { PrimaryButton, GhostButton, SelectField, TextField } from '../ui/FormControls'
+import { SelectField, TextField } from '../ui/FormControls'
 import { Panel } from '../ui/Panel'
 import { AdoptDrawer } from './AdoptDrawer'
 import { AutoRunControls } from './AutoRunControls'
 import { CloneDrawer } from './CloneDrawer'
 import { JournalTable } from './JournalTable'
 import { SimulationStrip } from './SimulationStrip'
+import { Button } from '../ui/Button'
 
 type Tab = 'overview' | 'decisions' | 'journal'
 
@@ -156,20 +157,20 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
             <span className="text-xs text-text-3">an llm run steps only through auto-run (the daemon makes the model calls); a call already in flight finishes and is billed</span>
           ) : (
             <>
-              <PrimaryButton data-testid="sim-step" disabled={pending || !steppable} onClick={() => void call('step', stepBody({ steps: 1 }))}>Step 1 day</PrimaryButton>
+              <Button variant="primary" size="sm" data-testid="sim-step" disabled={pending || !steppable} onClick={() => void call('step', stepBody({ steps: 1 }))}>Step 1 day</Button>
               <TextField inputProps={{ 'aria-label': 'run to day', 'data-testid': 'sim-run-to-day', value: runToDay, inputMode: 'numeric', className: 'w-16', onChange: (event) => setRunToDay(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
-              <PrimaryButton data-testid="sim-run-to" disabled={pending || !steppable} onClick={() => void call('step', stepBody({ untilDay: Number.parseInt(runToDay, 10) }))}>Run to day</PrimaryButton>
+              <Button variant="primary" size="sm" data-testid="sim-run-to" disabled={pending || !steppable} onClick={() => void call('step', stepBody({ untilDay: Number.parseInt(runToDay, 10) }))}>Run to day</Button>
             </>
           )}
           {summary.status === 'paused' ? (
-            <GhostButton data-testid="sim-resume" disabled={pending} onClick={() => void call('resume')}>Resume</GhostButton>
+            <Button variant="ghost" size="sm" data-testid="sim-resume" disabled={pending} onClick={() => void call('resume')}>Resume</Button>
           ) : (
-            <GhostButton data-testid="sim-pause" disabled={pending || !runnable} onClick={() => void call('pause')}>Pause</GhostButton>
+            <Button variant="ghost" size="sm" data-testid="sim-pause" disabled={pending || !runnable} onClick={() => void call('pause')}>Pause</Button>
           )}
           <DangerConfirm label="Halt" testId="sim-halt" confirmText="halt this simulation: no further step, ever" disabled={pending || summary.status === 'finished' || summary.status === 'halted'} onConfirm={async () => { const error = await sendControl(`${base}/halt`, { method: 'POST', body: { reason: 'operator' } }); if (error === null) router.refresh(); return error }} />
-          <GhostButton data-testid="sim-inject-open" disabled={summary.status === 'finished' || summary.status === 'halted'} onClick={() => setInjectOpen((v) => !v)}>Add external event</GhostButton>
-          <GhostButton data-testid="sim-clone-open" onClick={() => setCloneOpen(true)}>Clone…</GhostButton>
-          {adoptable && <GhostButton data-testid="sim-adopt-open" onClick={() => setAdoptOpen(true)}>Adopt this organisation…</GhostButton>}
+          <Button variant="ghost" size="sm" data-testid="sim-inject-open" disabled={summary.status === 'finished' || summary.status === 'halted'} onClick={() => setInjectOpen((v) => !v)}>Add external event</Button>
+          <Button variant="ghost" size="sm" data-testid="sim-clone-open" onClick={() => setCloneOpen(true)}>Clone…</Button>
+          {adoptable && <Button variant="ghost" size="sm" data-testid="sim-adopt-open" onClick={() => setAdoptOpen(true)}>Adopt this organisation…</Button>}
           <AutoRunControls summary={summary} pending={pending} onStart={(everyMs, untilDay) => void call('auto-run', { everyMs, untilDay })} onStop={() => void call('auto-run/stop')} />
           {initial.compareCandidates.length > 0 && (
             <SelectField
@@ -221,7 +222,7 @@ export function SimulationClient({ initial }: { readonly initial: SimulationSnap
                 />
               )
             })}
-            <PrimaryButton data-testid="sim-inject-submit" disabled={pending || hasEmptyInjectSelect} onClick={() => void submitInject()}>Add</PrimaryButton>
+            <Button variant="primary" size="sm" data-testid="sim-inject-submit" disabled={pending || hasEmptyInjectSelect} onClick={() => void submitInject()}>Add</Button>
             <span className="text-xs text-text-3">a clone of this run's scenario will not carry an event added here</span>
           </div>
         )}

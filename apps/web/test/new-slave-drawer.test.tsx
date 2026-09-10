@@ -233,6 +233,23 @@ describe('NewSlaveDrawer', () => {
     expect(onClose).toHaveBeenCalledTimes(2)
   })
 
+  // M44 R3: the hand-rolled frame (its own scrim, its own `document` Escape listener, no Tab
+  // trap at all) is `ui/Drawer` now. This pins the three promises AT THIS CALL SITE -- the
+  // primitive's own suite proves them in isolation, and this proves this drawer actually gets them.
+  it('closes on its scrim and on Escape, through the shared drawer frame (M44 R3)', () => {
+    const onScrim = vi.fn()
+    const { unmount } = drawer(onScrim)
+    expect(screen.getByTestId('new-slave-drawer').getAttribute('aria-modal')).toBe('true')
+    fireEvent.click(screen.getByTestId('new-slave-drawer-scrim'))
+    expect(onScrim).toHaveBeenCalledTimes(1)
+    unmount()
+
+    const onEscape = vi.fn()
+    drawer(onEscape)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onEscape).toHaveBeenCalledTimes(1)
+  })
+
   // Folded minor (M25 final review): while a submit is in flight, the scrim, the ✕ button and
   // Escape must not tear the drawer down out from under it -- a deferred fetch stands in for a
   // submit that has not resolved yet.
@@ -252,7 +269,9 @@ describe('NewSlaveDrawer', () => {
     await waitFor(() => expect((screen.getByTestId('new-slave-submit') as HTMLButtonElement).disabled).toBe(true))
 
     fireEvent.click(screen.getByTestId('new-slave-close'))
-    fireEvent.click(screen.getByTestId('new-slave-scrim'))
+    // M44 R3: the frame is `ui/Drawer` now, whose scrim is `${testId}-scrim`. The guard itself is
+    // unchanged -- `dismissible={!pending}` on the primitive, plus `close()`'s own `pending` check.
+    fireEvent.click(screen.getByTestId('new-slave-drawer-scrim'))
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(onClose).not.toHaveBeenCalled()
 

@@ -120,9 +120,16 @@ export function StatusPill({
   tone,
   label,
   pulse,
+  title,
 }: {
   readonly tone: StatusTone
   readonly label: string
+  /**
+   * The RAW value the label was projected from, on the element for a person to hover and for a
+   * gate to read (M44 R5). Backend state fidelity is never weakened for the UI: a pill that says
+   * PAUSING still has to be able to tell you it means `pausing`.
+   */
+  readonly title?: string
   /**
    * Overrides the tone's own in-flight default. `lib/tones.ts`'s `CARD_STATE_TONE` supplies it,
    * because pulse is a fact about the STATE and two states can share one tone: `pause_requested`
@@ -138,6 +145,7 @@ export function StatusPill({
     <span
       data-testid="status-pill"
       data-tone={tone}
+      {...(title === undefined ? {} : { title })}
       className={`inline-flex items-center gap-1.5 rounded-pill border px-[7px] py-[3px] font-mono text-[9.5px] uppercase tracking-wide ${TONE_FILL[tone]} ${TONE_BORDER[tone]} ${TONE_TEXT[tone]}`}
     >
       <span aria-hidden className={`h-[5px] w-[5px] rounded-full ${TONE_DOT[tone]} ${pulseClass}`} />

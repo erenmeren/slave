@@ -163,6 +163,22 @@ describe('OfficeClient', () => {
     }
   })
 
+  // M44 R6: the canvas is the least accessible surface in the app -- a bare `<canvas>` announced
+  // nothing at all. It says what it is drawing now, and repeats the same facts as text for a
+  // reader that cannot see it and a browser that draws nothing.
+  it('names what the canvas is drawing and repeats it as text (M44 R6)', async () => {
+    await mount()
+    const canvas = screen.getByTestId('office-canvas')
+    expect(canvas.getAttribute('role')).toBe('img')
+    expect(canvas.getAttribute('aria-label')).toBe(
+      "The project's office: 3 slaves across 2 departments, 1 working",
+    )
+    const fallback = screen.getByTestId('office-fallback')
+    expect(fallback.textContent).toContain('3 slaves across 2 departments')
+    expect(fallback.textContent).toContain('1 working now')
+    expect(fallback.className).toContain('sr-only')
+  })
+
   it('locks the hour from the slider and LIVE clears it', async () => {
     await mount()
     fireEvent.change(screen.getByTestId('office-hour'), { target: { value: '21' } })

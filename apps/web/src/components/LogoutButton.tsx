@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { sendControl } from '../lib/postControl'
-import { GhostButton } from './ui/FormControls'
+import { Button } from './ui/Button'
 
 /** Settings' Logout (M20 spec §3.4): clears the cookie through the logout route, then lands on
  *  /login. A refusal (a cross-site call, a dead server) shows beside the button, never blank. */
@@ -24,9 +24,9 @@ export function LogoutButton(): React.JSX.Element {
 
   return (
     <div className="flex items-center gap-2">
-      <GhostButton data-testid="logout" disabled={busy} onClick={() => void logout()}>
+      <Button variant="ghost" size="sm" data-testid="logout" disabled={busy} onClick={() => void logout()}>
         log out
-      </GhostButton>
+      </Button>
       {error !== null && (
         <span role="alert" className="text-xs text-tone-blocked">
           {error}

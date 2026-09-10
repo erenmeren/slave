@@ -106,3 +106,27 @@ export type DecisionStatus = (typeof DECISION_STATUSES)[number]
  *  apart without inspecting the rationale. */
 export const DECIDERS = ['model', 'rules'] as const
 export type Decider = (typeof DECIDERS)[number]
+
+/** What a tier means to a person (M44 R5): what actually happened to the chosen action. */
+export const TIER_LABEL: Record<Tier, string> = {
+  applied: 'Done',
+  proposed: 'Waiting for you',
+  escalated: 'Escalated to you',
+  noop: 'Nothing to do',
+}
+
+/** A decision's life, in words. `pending` is the only OPEN state, and it is the one that says so. */
+export const DECISION_STATUS_LABEL: Record<DecisionStatus, string> = {
+  applied: 'Applied',
+  pending: 'Waiting for you',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  expired: 'Expired',
+  failed: 'Failed',
+}
+
+/** Who picked the candidate. */
+export const DECIDER_LABEL: Record<Decider, string> = {
+  model: 'the model',
+  rules: 'the rules',
+}

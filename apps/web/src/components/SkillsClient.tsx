@@ -6,6 +6,7 @@ import { sendControl } from '../lib/postControl'
 import { CARD_STATE_TONE, cardStateForSlave } from '../lib/tones'
 import type { SkillsPage, SkillRow } from '../server/skills'
 import { Button } from './ui/Button'
+import { EmptyState } from './ui/EmptyState'
 import { Chip } from './ui/Chip'
 import { EmptyTile } from './ui/EmptyTile'
 import { PanelHeader } from './ui/PanelHeader'
@@ -16,6 +17,11 @@ const STATE_TEXT: Record<SkillRow['state'], string> = {
   ready: 'text-tone-working',
   missing: 'text-tone-blocked',
 }
+
+/** R5 leak 4: the raw `SkillRow['state']` used to be the label. `missingSince !== null` means the
+ *  file the catalog scanned is gone, which is a fact about the disk, not a word a person should
+ *  have to decode. */
+const SKILL_STATE_LABEL: Record<SkillRow['state'], string> = { ready: 'READY', missing: 'MISSING' }
 
 const STATE_FILL: Record<SkillRow['state'], string> = {
   ready: 'bg-tone-working',
@@ -70,15 +76,11 @@ export function SkillsClient({ page }: { readonly page: SkillsPage }): React.JSX
         {page.slaves.length === 0 && (
           // Said once, at the top, rather than beside every disabled button: the reason no row can
           // be assigned is a fact about the org, not about any one skill.
-          <p data-testid="skills-no-slaves" className="text-xs text-text-3">
-            no slaves yet
-          </p>
+          <EmptyState testId="skills-no-slaves" message="no slaves yet" />
         )}
 
         {page.providers.length === 0 && (
-          <p data-testid="skills-empty" className="text-xs text-text-3">
-            no skills found — run `orchestrator skills sync` to scan the roots below
-          </p>
+          <EmptyState testId="skills-empty" message="no skills found — run `orchestrator skills sync` to scan the roots below" />
         )}
 
         {page.providers.map((provider) => (
@@ -109,8 +111,13 @@ export function SkillsClient({ page }: { readonly page: SkillsPage }): React.JSX
                     <div className="min-w-0 flex-1">
                       <div className="flex items-baseline gap-2">
                         <span className="truncate font-mono text-[12.5px] text-text-1">{skill.name}</span>
-                        <span data-testid={`skill-state-${skill.id}`} className={`font-mono text-[9.5px] ${STATE_TEXT[skill.state]}`}>
-                          {skill.state}
+                        <span
+                          data-testid={`skill-state-${skill.id}`}
+                          data-state={skill.state}
+                          title={skill.state}
+                          className={`font-mono text-[9.5px] ${STATE_TEXT[skill.state]}`}
+                        >
+                          {SKILL_STATE_LABEL[skill.state]}
                         </span>
                       </div>
                       <p className="truncate text-[11px] text-text-3" title={skill.description}>

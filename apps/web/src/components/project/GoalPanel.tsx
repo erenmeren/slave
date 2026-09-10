@@ -4,9 +4,10 @@ import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import { errorMessage } from '../../lib/postControl'
 import { onUnauthorized } from '../../lib/onUnauthorized'
-import { FieldLabel, PrimaryButton, TextField } from '../ui/FormControls'
+import { FieldLabel, TextField } from '../ui/FormControls'
 import { Panel } from '../ui/Panel'
 import { GoalHistory } from './GoalHistory'
+import { Button } from '../ui/Button'
 
 /** What one save came back with: the version it wrote, or the refusal it was answered with. The
  *  `kind` is what tells `goal_unchanged` -- a person pressing save on the words already there --
@@ -221,9 +222,9 @@ export function GoalPanel({
             } as React.InputHTMLAttributes<HTMLInputElement>
           }
         />
-        <PrimaryButton type="submit" data-testid="goal-submit" disabled={pending}>
+        <Button variant="primary" size="sm" type="submit" data-testid="goal-submit" disabled={pending}>
           set goal
-        </PrimaryButton>
+        </Button>
       </form>
       {outcomeLines}
       {/* Only once there is a history to read: a project whose goal has never been set has no

@@ -2,7 +2,8 @@
 
 import { useState } from 'react'
 import { sendControl } from '../lib/postControl'
-import { PrimaryButton, TextField } from './ui/FormControls'
+import { TextField } from './ui/FormControls'
+import { Button } from './ui/Button'
 
 /** Two fields, one button, the M16 kit (M23 spec §7 F5). Submits through `sendControl` like every
  *  other mutation in this app; on success the browser navigates to `next` (already run through
@@ -62,9 +63,9 @@ export function LoginForm({ next }: { readonly next: string }): React.JSX.Elemen
           {error}
         </p>
       )}
-      <PrimaryButton type="submit" data-testid="login-submit" disabled={busy || username.length === 0 || password.length === 0}>
+      <Button variant="primary" size="sm" type="submit" data-testid="login-submit" disabled={busy || username.length === 0 || password.length === 0}>
         sign in
-      </PrimaryButton>
+      </Button>
     </form>
   )
 }

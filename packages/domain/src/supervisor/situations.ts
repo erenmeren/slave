@@ -66,3 +66,26 @@ export const situationSchema: z.ZodType<Situation> = z.object({
   summary: z.string().min(1),
   facts: z.record(z.union([z.string(), z.number(), z.boolean(), z.null()])),
 })
+
+/**
+ * What each situation is called when a person reads it (M44 R5). `SITUATION_KINDS` are keys, and a
+ * key rendered as prose is the leak M44 closes -- the Supervisor panel's recent-decision rows read
+ * `no_reviewer · proposed · pending · by model`.
+ *
+ * `Record<SituationKind, string>` is load-bearing: a twelfth kind fails the build here rather than
+ * turning up on the page as an identifier. Each label says what is STUCK, in the words the report
+ * already uses; the decision's own `situation.summary` carries the specifics beside it.
+ */
+export const SITUATION_LABEL: Record<SituationKind, string> = {
+  no_reviewer: 'No reviewer',
+  no_planner: 'No planner',
+  review_cap_blocked: 'Review attempts used up',
+  task_failed: 'Task failed',
+  task_blocked_human: 'Blocked, needs a person',
+  stale_task: 'Work the goal no longer needs',
+  waiting_stale: 'Waiting too long',
+  unanswerable_question: 'Question nobody can answer',
+  ready_unstaffed: 'Ready work, nobody to do it',
+  done_not_integrated_stale: 'Finished, not integrated',
+  workspace_halted: 'Project halted',
+}

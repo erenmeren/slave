@@ -66,10 +66,10 @@ export function cardStateForSlave(status: SlaveStatus): CardState {
  * always `deriveSlaveStatus`'s output, so anything outside the vocabulary falls back to `idle`
  * rather than throwing at render time.
  */
+export const KNOWN_SLAVE_STATUSES = ['idle', 'starting', 'working', 'pausing', 'paused', 'resuming', 'stopping'] as const
+
 export function toneForStatus(status: string): StatusTone {
-  const known = (['idle', 'starting', 'working', 'pausing', 'paused', 'resuming', 'stopping'] as const).find(
-    (member) => member === status,
-  )
+  const known = KNOWN_SLAVE_STATUSES.find((member) => member === status)
   return CARD_STATE_TONE[known === undefined ? 'idle' : cardStateForSlave(known)].tone
 }
 

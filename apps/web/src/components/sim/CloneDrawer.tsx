@@ -4,7 +4,9 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { sectors, type SectorName } from '@slave-of-ai/simulation'
 import { errorMessage } from '../../lib/postControl'
-import { PrimaryButton, SelectField, TextField } from '../ui/FormControls'
+import { Drawer } from '../ui/Drawer'
+import { SelectField, TextField } from '../ui/FormControls'
+import { Button } from '../ui/Button'
 
 const OTHER: Record<'A' | 'B', 'A' | 'B'> = { A: 'B', B: 'A' }
 
@@ -38,13 +40,6 @@ export function CloneDrawer({
     setErrorText(null)
   }, [open, sourceName, otherPolicy])
 
-  useEffect(() => {
-    if (!open) return
-    const onKey = (event: KeyboardEvent): void => { if (event.key === 'Escape' && !pending) onClose() }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [open, onClose, pending])
-
   if (!open) return null
   const submit = async (): Promise<void> => {
     if (pending) return
@@ -67,9 +62,8 @@ export function CloneDrawer({
     }
   }
   return (
-    <div className="fixed inset-0 z-30 flex justify-end">
-      <button type="button" aria-label="close" data-testid="sim-clone-scrim" onClick={() => { if (!pending) onClose() }} className="flex-1 bg-black/50" />
-      <aside role="dialog" aria-modal="true" aria-label="Clone simulation" data-testid="sim-clone-drawer" className="flex w-[520px] max-w-full flex-col gap-4 overflow-y-auto border-l border-line bg-bg-1 p-5 shadow-[0_6px_22px_rgba(0,0,0,.45)]">
+    // M44 R3: `ui/Drawer`, with the same `!pending` guard the scrim and the Escape handler carried.
+    <Drawer open={open} onClose={onClose} label="Clone simulation" testId="sim-clone-drawer" dismissible={!pending}>
         <div className="flex items-center justify-between">
           <h2 className="text-[14.5px] font-semibold tracking-[-.2px] text-text-1">Clone simulation</h2>
           <button type="button" data-testid="sim-clone-close" onClick={() => { if (!pending) onClose() }} className="text-text-3 hover:text-text-1">✕</button>
@@ -82,10 +76,9 @@ export function CloneDrawer({
         </SelectField>
         <TextField label="seed" inputProps={{ 'aria-label': 'clone seed', 'data-testid': 'sim-clone-seed', value: seed, disabled: pending, inputMode: 'numeric', onChange: (event) => setSeed(event.target.value) } as React.InputHTMLAttributes<HTMLInputElement>} />
         <div className="flex items-center gap-3">
-          <PrimaryButton data-testid="sim-clone-submit" disabled={pending || name.trim() === ''} onClick={() => void submit()}>{pending ? 'cloning…' : 'Clone simulation'}</PrimaryButton>
+          <Button variant="primary" size="sm" data-testid="sim-clone-submit" disabled={pending || name.trim() === ''} onClick={() => void submit()}>{pending ? 'cloning…' : 'Clone simulation'}</Button>
           {errorText !== null && <span role="alert" data-testid="sim-clone-error" className="text-xs text-tone-blocked">{errorText}</span>}
         </div>
-      </aside>
-    </div>
+    </Drawer>
   )
 }

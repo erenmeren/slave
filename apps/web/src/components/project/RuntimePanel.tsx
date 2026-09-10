@@ -6,8 +6,9 @@ import type { ProviderKind } from '@slave-of-ai/control'
 import { formatTimeout } from '../../lib/format'
 import { sendControl } from '../../lib/postControl'
 import { ProviderSelect } from '../ProviderSelect'
-import { FieldLabel, INPUT_SHELL, PrimaryButton, TextField } from '../ui/FormControls'
+import { FieldLabel, INPUT_SHELL, TextField } from '../ui/FormControls'
 import { Panel } from '../ui/Panel'
+import { Button } from '../ui/Button'
 
 /**
  * The Settings tab's runtime panel (M24 §4, moved off the Overview card of the same shape): the
@@ -88,9 +89,9 @@ export function RuntimePanel({
               className={INPUT_SHELL}
             />
           </label>
-          <PrimaryButton type="submit" data-testid="runtime-provider-submit" disabled={pending}>
+          <Button variant="primary" size="sm" type="submit" data-testid="runtime-provider-submit" disabled={pending}>
             set runtime
-          </PrimaryButton>
+          </Button>
         </form>
 
         <form
@@ -133,9 +134,9 @@ export function RuntimePanel({
             />
             <FieldLabel>not budgeted</FieldLabel>
           </label>
-          <PrimaryButton type="submit" data-testid="runtime-budget-submit" disabled={pending}>
+          <Button variant="primary" size="sm" type="submit" data-testid="runtime-budget-submit" disabled={pending}>
             set budget
-          </PrimaryButton>
+          </Button>
         </form>
 
         <dl data-testid="runtime-limits" className="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-[6px] border-t border-line pt-3 font-mono text-[10.5px]">
