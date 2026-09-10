@@ -299,6 +299,71 @@ In the UI, every run in the task panel has a **What this run saw** button (serve
 `GET /api/w/<id>/runs/<runId>/context`): the same section list, with any missing skills highlighted,
 and the full prompt in a collapsed block underneath.
 
+## Requirements have versions
+
+The goal you set is the requirement the whole project works from, and it is **versioned**. Every
+accepted `set-goal` writes a new immutable version — v1, v2, v3 — and prints the number it wrote
+with the hash of the text:
+
+```bash
+npm run orchestrator -- set-goal --workspace <id> --goal "Ship the importer, and document it"
+# {"version":2,"sha256":"ed9aad…"}
+npm run orchestrator -- goal-history --workspace <id>   # every version, newest first, with diffs
+```
+
+Setting the goal to the text it already reads is **not** an edit: nothing is recorded and the
+command exits non-zero saying which version already reads that. The **Goal** panel in the UI shows
+`v<N>`, keeps the same history with a line-by-line diff of each edit, says *no change — still v2*
+when you save the same words, and tells you *a re-plan will run on the next tick* when you save a
+new goal on a board that already has tasks.
+
+**Every planned task remembers which version produced it.** The board shows `goal v<N>` on each
+card, and a card whose version is behind the project's carries a **stale** badge — the work was
+derived from a requirement that has since moved. Hand-made tasks are *unstamped*: no plan derived
+them, so there is no version for them to be behind.
+
+**Changing the goal on a board that already has tasks runs a re-plan.** On the next tick a manager
+gets one run whose prompt carries the previous goal, the new goal and the current board, and asks
+for a **delta** — what to add, what to cancel, what to keep. Then:
+
+- **Additions apply at once.** They land on the board as `ready` tasks stamped with the new
+  version, exactly like a first plan's.
+- **Cancellations are only proposals.** Each one becomes a Supervisor proposal you approve or
+  reject ([The Supervisor](#the-supervisor)); nothing is taken off the board until you say so. A
+  wrong addition costs one row you can cancel; a wrong cancellation costs real planned work.
+- **Nothing in flight is ever touched.** A running, reviewing, merging or finished task cannot be
+  cancelled by a re-plan at all — the request is dropped and recorded in the log with the status
+  that refused it.
+- **One re-plan per version**, and its failures count against the same planning retry cap as a
+  first plan. Edit the goal twice before a tick runs and it is the latest version that gets the
+  re-plan.
+
+The activity timeline records all three moments — the re-plan starting, what it decided, and each
+cancellation. Approving one greys the card (and its node in the org graph) with the reason on it,
+and leaves anything that **depended** on it blocked: the work was never done, so the dependent
+stays unschedulable until you remove the dependency. You can take a task off the board yourself the
+same way:
+
+```bash
+npm run orchestrator -- cancel-task --task <id> --reason "the goal no longer needs this"
+```
+
+Only a task that has not started (`backlog`, `ready` or `blocked`) can be cancelled, by you or by
+an approved proposal.
+
+To see what the next tick will do about a goal you just changed — and read the exact prompt the
+re-plan would be given, without starting anything:
+
+```bash
+npm run orchestrator -- replan-status --workspace <id>            # willReplan, and what is in the way
+npm run orchestrator -- replan-status --workspace <id> --prompt   # …and the prompt that run would get
+```
+
+`willReplan` comes with `blockedBy`, which names the first thing standing in the way when a re-plan
+is due and not happening: `archived`, `halted`, `dedup` (this version was already re-planned),
+`retry_cap` or `live_planning_run`. Reading the prompt starts no run and records nothing — the tick
+is the only thing that dispatches one.
+
 ## The Supervisor
 
 Every project has one, and it is not a slave: no `Slave` row, no runs, no worktree, no prompt of
@@ -487,9 +552,10 @@ The `npm run gate:*` scripts are end-to-end proofs of each milestone against fak
 they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m20-auth`,
 `gate:m21-loose-ends`, `gate:m23-onboarding`, `gate:m29-simulation`, `gate:m30-simulation-compare`,
 `gate:m31a-llm-decisions`, `gate:m31b-software-sector`, `gate:m33-adopt`,
-`gate:m35-pipeline-honesty`, `gate:m36-messaging`, `gate:m37-run-context`, `gate:m38-supervisor`
-and `gate:m39-supervisor-mailbox` on every push — `m36` stops the orchestrator and starts it again
-mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's
+`gate:m35-pipeline-honesty`, `gate:m36-messaging`, `gate:m37-run-context`, `gate:m38-supervisor`,
+`gate:m39-supervisor-mailbox` and `gate:m40-requirement-versioning` on every push — `m36` stops the
+orchestrator and starts it again mid-scenario, to prove a waiting slave's question survives a
+restart, `m37` reads a real run's
 prompt and worktree back to prove a slave was given the persona and the skills it was assigned,
 `m38` drives a real daemon until the Supervisor proposes the staffing a reviewer-less project needs,
 waits for a human to approve it, unblocks a review-capped task by itself, and escalates a project
@@ -497,8 +563,10 @@ whose budget is gone without spending a cent to decide that, and `m39` drives on
 Supervisor answers a question from a quote in the asking task and wakes the slave that was waiting,
 drafts an answer it cannot prove and sends only the words a human typed over it, refuses to answer a
 question about an API key at all, re-addresses a stale one to a colleague who can, and deletes a
-month-old decision while leaving a month-old proposal alone. Tests and gates share one Postgres —
-run one at a time.
+month-old decision while leaving a month-old proposal alone, and `m40` drives one until a changed
+goal produces a delta re-plan whose addition is on the board and whose cancellation is still only a
+proposal, then approves it and shows the task that depended on the cancelled work still cannot
+start. That is 16 gates. Tests and gates share one Postgres — run one at a time.
 
 ## Learn more
 

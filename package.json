@@ -49,7 +49,8 @@
     "gate:m36-messaging": "tsc --build && node --env-file=.env scripts/gate-m36-messaging.mjs",
     "gate:m37-run-context": "tsc --build && node --env-file=.env scripts/gate-m37-run-context.mjs",
     "gate:m38-supervisor": "tsc --build && node --env-file=.env scripts/gate-m38-supervisor.mjs",
-    "gate:m39-supervisor-mailbox": "tsc --build && node --env-file=.env scripts/gate-m39-supervisor-mailbox.mjs"
+    "gate:m39-supervisor-mailbox": "tsc --build && node --env-file=.env scripts/gate-m39-supervisor-mailbox.mjs",
+    "gate:m40-requirement-versioning": "tsc --build && node --env-file=.env scripts/gate-m40-requirement-versioning.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",
