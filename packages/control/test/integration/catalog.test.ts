@@ -554,6 +554,110 @@ describe('importCatalog and the structured profile (M46)', () => {
     if (!result.ok) return
     expect(result.value.updated[0]?.overridesKept).toBe(0)
   })
+  /** A row exactly as an M42-era import left it: a composed Markdown profile with its hash, and
+   *  no `profileSpec` at all. The shape erratum E22 is about. */
+  const preM46Row = async (): Promise<{ id: string; profile: string }> => {
+    const file = entry('core-builder', 'Core Builder')
+    const importedAt = new Date('2026-09-01T00:00:00.000Z')
+    const profile = `${importedProfilePrefix(file.sourceId, importedAt)}\n\n# Core Builder\n\nYou build the core module and its tests.`
+    const row = await prisma.slaveTemplate.create({
+      data: {
+        name: 'Core Builder',
+        role: 'engineering',
+        description: 'Core Builder does one thing well.',
+        profile,
+        profileSha256: goalSha256(profile),
+        sourceId: file.sourceId,
+        sourceSha256: goalSha256(file.text),
+        sourceDivision: 'engineering',
+        importedAt,
+      },
+    })
+    return { id: row.id, profile }
+  }
+
+  it('structures a row imported before M46 even though its file has not changed (E22)', async (): Promise<void> => {
+    const before = await preM46Row()
+
+    const result = await importCatalog(
+      {
+        catalog: CATALOG,
+        directory: DIRECTORY,
+        entries: [structured('core-builder', 'Core Builder')],
+        revision: 'rev-m46',
+        license: 'MIT',
+      },
+      'operator',
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // The FILE did not change, so the row is still `unchanged` -- it is the spec that was missing.
+    expect(result.value.updated).toEqual([])
+    expect(result.value.skipped).toEqual([])
+    expect(result.value.unchanged[0]?.structured).toBe(true)
+    const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: before.id } })
+    const spec = profileSpecSchema.safeParse(row.profileSpec)
+    expect(spec.success).toBe(true)
+    if (!spec.success) return
+    expect(row.profile).toBe(renderProfileSpec(spec.data))
+    expect(row.profileSha256).toBe(goalSha256(row.profile as string))
+    expect(row.sourceRevision).toBe('rev-m46')
+    expect(row.sourceLicense).toBe('MIT')
+    // The file's own hash was already right and is not re-advanced by this.
+    expect(row.sourceSha256).toBe(goalSha256(structured('core-builder', 'Core Builder').text))
+  })
+
+  it('leaves a pre-M46 row whose profile a person wrote ALONE, unchanged file and all (M42 c2)', async (): Promise<void> => {
+    const created = await preM46Row()
+    await setProfile({ templateId: created.id }, 'This is what I want this worker to be, in my own words.', 'operator')
+    const before = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: created.id } })
+
+    const result = await importCatalog(
+      { catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], revision: 'rev-m46' },
+      'operator',
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.unchanged[0]?.structured).toBeUndefined()
+    // Every column, byte for byte: structuring a row is a WRITE, and this row is one no import may
+    // write to until the operator resolves the disagreement.
+    expect(await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: created.id } })).toEqual(before)
+  })
+
+  it('an unchanged file keeps the revision it came from (E22)', async (): Promise<void> => {
+    await importCatalog(
+      { catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], revision: 'rev1' },
+      'operator',
+    )
+
+    const again = await importCatalog(
+      { catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], revision: 'rev2' },
+      'operator',
+    )
+
+    expect(again.ok).toBe(true)
+    if (!again.ok) return
+    expect(again.value.unchanged).toHaveLength(1)
+    expect(again.value.unchanged[0]?.structured).toBeUndefined()
+    const row = await prisma.slaveTemplate.findFirstOrThrow()
+    expect(row.sourceRevision).toBe('rev1')
+  })
+
+  it('a dry run says a pre-M46 row WOULD be structured and writes nothing', async (): Promise<void> => {
+    const before = await preM46Row()
+
+    const result = await importCatalog(
+      { catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], dryRun: true },
+      'operator',
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.unchanged[0]?.structured).toBe(true)
+    expect((await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: before.id } })).profileSpec).toBeNull()
+  })
 })
 
 describe('listWorkforceCatalog', () => {
@@ -609,11 +713,21 @@ describe('listWorkforceCatalog', () => {
 
   it('narrows by capability, by division and by source, and keeps the facets whole', async (): Promise<void> => {
     await prisma.slaveTemplate.create({ data: { name: 'Hand Made', role: 'backend' } })
+    // A hand-made template whose ROLE happens to spell a division. It is not in that division:
+    // a division is a directory a catalog was imported from (plan erratum E22), and this row was
+    // never imported from anything.
+    await prisma.slaveTemplate.create({ data: { name: 'Hand Made Engineer', role: 'engineering' } })
     await importTwo()
 
     expect((await listWorkforceCatalog({ capability: 'Run the work back' })).rows.map((row) => row.name)).toEqual(['Verifier'])
-    expect((await listWorkforceCatalog({ division: 'engineering' })).rows).toHaveLength(2)
-    expect((await listWorkforceCatalog({ source: 'local' })).rows.map((row) => row.name)).toEqual(['Hand Made'])
+    expect((await listWorkforceCatalog({ division: 'engineering' })).rows.map((row) => row.name)).toEqual([
+      'Core Builder',
+      'Verifier',
+    ])
+    expect((await listWorkforceCatalog({ source: 'local' })).rows.map((row) => row.name)).toEqual([
+      'Hand Made',
+      'Hand Made Engineer',
+    ])
     // Filtered rows, UNfiltered facets: a menu that collapsed to the one value already chosen
     // would be a menu you cannot change your mind in.
     expect((await listWorkforceCatalog({ source: 'local' })).facets.capabilities).toContain('Design the module boundary')
@@ -630,6 +744,52 @@ describe('listWorkforceCatalog', () => {
     expect(page.rows.find((row) => row.name === 'Core Builder')?.rawOverride).toBe(true)
     // No spec, no upstream, nothing to override (plan erratum E5).
     expect(page.rows.find((row) => row.name === 'Hand Made')?.rawOverride).toBe(false)
+  })
+  it('narrows by recommended skill, and offers the skills and the mapping quality it found', async (): Promise<void> => {
+    const skilled = {
+      sourceId: `${CATALOG}/engineering/refactorer`,
+      division: 'engineering',
+      slug: 'refactorer',
+      path: `${DIRECTORY}/engineering/refactorer.md`,
+      text:
+        '---\nname: Refactorer\ndescription: Refactorer does one thing well.\nskills: refactoring, code-review\n---\n\n' +
+        '# Refactorer\n\n## Core Mission\n\nKeep the seams clean.\n\n' +
+        '## Core Capabilities\n- Split a module in two\n\n## Domain Expertise\n- Legacy code\n\n' +
+        '## Critical Rules\n- You MUST never leave a red test behind\n',
+    }
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [skilled], revision: 'rev1' }, 'operator')
+    await importTwo()
+
+    const page = await listWorkforceCatalog({ skill: 'refactoring' })
+
+    expect(page.rows.map((row) => row.name)).toEqual(['Refactorer'])
+    expect(page.rows[0]?.recommendedSkills).toEqual(['refactoring', 'code-review'])
+    // Four canonical slots filled is `partial` (the mapper's own threshold), and the LABEL for it
+    // is the drawer's business -- the row carries the enum.
+    expect(page.rows[0]?.mappingQuality).toBe('partial')
+    expect(page.facets.skills).toEqual(['code-review', 'refactoring'])
+  })
+
+  it('marks a CLEARED profile as a raw override, exactly as the importer calls it locally_edited', async (): Promise<void> => {
+    await importTwo()
+    const core = await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'Core Builder' } })
+    await setProfile({ templateId: core.id }, null, 'operator')
+
+    const page = await listWorkforceCatalog()
+    expect(page.rows.find((row) => row.name === 'Core Builder')?.rawOverride).toBe(true)
+
+    // The same predicate, reached through the importer: a changed file for that row is skipped.
+    const result = await importCatalog(
+      {
+        catalog: CATALOG,
+        directory: DIRECTORY,
+        entries: [entry('core-builder', 'Core Builder', 'A rewritten body for the same file.')],
+      },
+      'operator',
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.skipped[0]?.reason).toBe('locally_edited')
   })
 })
 
@@ -673,5 +833,33 @@ describe('readTemplateProfile', () => {
     const result = await readTemplateProfile('11111111-1111-1111-1111-111111111111')
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error.kind).toBe('template_not_found')
+  })
+  it('says rawOverride when a person wrote the Markdown over a structured profile', async (): Promise<void> => {
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')] }, 'operator')
+    const template = await prisma.slaveTemplate.findFirstOrThrow()
+    await setProfile({ templateId: template.id }, 'my own words', 'operator')
+
+    const result = await readTemplateProfile(template.id)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.rawOverride).toBe(true)
+    expect(result.value.markdown).toBe('my own words')
+    // The upstream half is still there to go back to -- that is what makes the raw override
+    // recoverable rather than a one-way door.
+    expect(result.value.upstream?.body).not.toBe('my own words')
+  })
+
+  it('says rawOverride for a CLEARED profile too (fix round 1, minor 2)', async (): Promise<void> => {
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')] }, 'operator')
+    const template = await prisma.slaveTemplate.findFirstOrThrow()
+    await setProfile({ templateId: template.id }, null, 'operator')
+
+    const result = await readTemplateProfile(template.id)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.rawOverride).toBe(true)
+    expect(result.value.markdown).toBeNull()
   })
 })

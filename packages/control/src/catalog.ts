@@ -38,7 +38,12 @@ export interface ImportCatalogInput {
   /** Runs the parser AND the policy (which reads the database) and writes nothing at all. */
   readonly dryRun?: boolean
   /** M46 R4: the commit of the catalog checkout, read once per import by the CLI's walk (the
-   *  control package touches no disk). NULL when the directory is not inside a git work tree. */
+   *  control package touches no disk). NULL when the directory is not inside a git work tree.
+   *
+   *  Written only when the row is written: an UNCHANGED file keeps the revision it came from
+   *  (erratum E22), because the provenance of a persona is the checkout its BYTES were read from,
+   *  and re-stamping every row on every import would erase exactly that. A row structured for the
+   *  first time is a write, so it takes this run's revision. */
   readonly revision?: string | null
   /** M46 R4: the licence named by a LICENSE file at the catalog root, `MIT License` -> `MIT`. */
   readonly license?: string | null
@@ -57,6 +62,10 @@ export interface RowOutcome {
   /** M46 R2: how many of this row's fields an operator had customised, and the update kept. Only
    *  on an `updated` row -- there is nothing to keep on a row being created. */
   readonly overridesKept?: number
+  /** M46 erratum E22: this row was imported before M46, had no `profileSpec`, and this import gave
+   *  it one WITHOUT its file having changed. The outcome is still `unchanged` -- the file is what
+   *  `unchanged` is about -- so this flag is the only way to see that a write happened. */
+  readonly structured?: boolean
 }
 
 export interface SkippedRow {
@@ -361,16 +370,55 @@ async function importRow(
         ...drift,
       }
 
+      // The raw-override predicate, computed once and read twice (M46 erratum E22): the stored
+      // profile is not the text the last import wrote, so a person wrote it -- or CLEARED it,
+      // which is why a null profile goes through the same comparison rather than around it.
+      const storedSha = existing.profile === null ? null : goalSha256(existing.profile)
+      const rawOverride = storedSha !== existing.profileSha256
+
       // (c) The file has not changed. Nothing is read further and nothing is written -- including
       // for a row whose profile an operator HAS edited: the import has nothing to say about a
       // profile it is not being asked to replace.
-      if (existing.sourceSha256 === draft.sourceSha256) return { kind: 'unchanged', row: outcomeRow }
+      if (existing.sourceSha256 === draft.sourceSha256) {
+        // M46 erratum E22: except once. A template imported before this milestone has no
+        // `profileSpec`, and its file will not change just because the repository learned to map
+        // one -- so a row that has never been structured is structured here, from the file the
+        // import is already holding. The OUTCOME stays `unchanged`, because that word is about the
+        // file; `structured` says what happened to the row.
+        //
+        // Never over a raw override: that row's Markdown is somebody's own words, and rendering a
+        // freshly mapped spec over them is precisely the write `locally_edited` exists to prevent
+        // (M42's case (c2) writes nothing at all, and still does). And no overrides are merged in
+        // here -- `setProfileOverrides` refuses a row with no spec, so a row reaching this branch
+        // has none to keep.
+        if (existing.profileSpec !== null || rawOverride) return { kind: 'unchanged', row: outcomeRow }
+
+        const structuredRow: RowOutcome = { ...outcomeRow, structured: true }
+        if (input.dryRun === true) return { kind: 'unchanged', row: structuredRow }
+
+        const structuredProfile = renderProfileSpec(upstream)
+        // `importedAt` moves with the rest: the rendered Markdown opens with the line naming the
+        // day this text was written from the file (`importedProfilePrefix`, read out of
+        // `spec.source.importedAt`), and a column disagreeing with the sentence in the profile
+        // beside it is a fact nobody can act on.
+        await tx.slaveTemplate.update({
+          where: { id: existing.id },
+          data: {
+            profile: structuredProfile,
+            profileSha256: goalSha256(structuredProfile),
+            profileSpec: upstream as unknown as Prisma.InputJsonValue,
+            sourceRevision: input.revision ?? null,
+            sourceLicense: input.license ?? null,
+            importedAt,
+          },
+        })
+        return { kind: 'unchanged', row: structuredRow }
+      }
 
       // (e) The stored profile is not the one the last import wrote, so a person wrote it (or
       // cleared it). Their words win, and `sourceSha256` is deliberately NOT advanced: the next
       // import must see the same disagreement rather than quietly accepting the file.
-      const storedSha = existing.profile === null ? null : goalSha256(existing.profile)
-      if (storedSha !== existing.profileSha256) {
+      if (rawOverride) {
         return {
           kind: 'skipped',
           row: {
@@ -499,9 +547,11 @@ export interface WorkforceCatalogRow {
   readonly recommendedSkills: readonly string[]
   readonly mappingQuality: MappingQuality | null
   readonly overriddenFields: readonly ProfileOverridableField[]
-  /** The Markdown was written by hand over a structured profile (R5, plan erratum E4): the stored
-   *  profile's hash disagrees with the one the last write recorded. It is the same predicate
-   *  `importCatalog` uses for `locally_edited`, which is exactly the point. */
+  /** The Markdown was written by hand over a structured profile -- or cleared -- (R5, plan errata
+   *  E4/E22): the stored profile's hash disagrees with the one the last write recorded. This is
+   *  the SAME predicate `importCatalog` skips `locally_edited` on, character for character, a
+   *  cleared (`null`) profile included: a badge that disagreed with what the next import will do
+   *  is worse than no badge. */
   readonly rawOverride: boolean
 }
 
@@ -524,25 +574,31 @@ export interface WorkforceCatalogPage {
   readonly facets: WorkforceCatalogFacets
 }
 
+/** The fourteen columns a row needs -- `profile` is NOT one of them (fix round 1, minor 3): the
+ *  Markdown is up to sixteen kilobytes a row and nothing on a catalog card shows it. The one thing
+ *  it was read for, the raw-override hash, is computed in Postgres instead and arrives as
+ *  `rawOverride`. */
+interface CatalogTemplateRow {
+  id: string
+  name: string
+  role: string
+  description: string
+  defaultModel: string | null
+  provider: ProviderKind | null
+  profileSha256: string | null
+  profileSpec: unknown
+  profileOverrides: unknown
+  sourceId: string | null
+  sourceDivision: string | null
+  sourceRevision: string | null
+  sourceLicense: string | null
+  importedAt: Date | null
+}
+
 function catalogRowOf(
-  template: {
-    id: string
-    name: string
-    role: string
-    description: string
-    defaultModel: string | null
-    provider: ProviderKind | null
-    profile: string | null
-    profileSha256: string | null
-    profileSpec: unknown
-    profileOverrides: unknown
-    sourceId: string | null
-    sourceDivision: string | null
-    sourceRevision: string | null
-    sourceLicense: string | null
-    importedAt: Date | null
-  },
+  template: CatalogTemplateRow,
   catalogSlaveCount: number,
+  rawOverride: boolean,
 ): WorkforceCatalogRow {
   const spec = profileSpecSchema.safeParse(template.profileSpec)
   const overrides = profileOverridesSchema.safeParse(template.profileOverrides ?? {})
@@ -563,19 +619,23 @@ function catalogRowOf(
     sourceLicense: template.sourceLicense,
     source: template.sourceId === null ? 'local' : 'imported',
     structured: spec.success,
-    summary: effective?.summary ?? template.description,
+    // `||`, not `??`: a spec whose `summary` the mapper could not fill is an EMPTY string, not
+    // undefined, and an empty cell where the catalog blurb would do is a worse row than the blurb.
+    summary: (effective?.summary ?? '') || template.description,
     capabilities: effective?.capabilities ?? [],
     expertise: effective?.expertise ?? [],
     recommendedSkills: effective?.recommendedSkills ?? [],
     mappingQuality: spec.success ? (spec.data.source?.mappingQuality ?? null) : null,
     overriddenFields: overrides.success ? overriddenFields(overrides.data) : [],
-    rawOverride: spec.success && template.profile !== null && goalSha256(template.profile) !== template.profileSha256,
+    // Scoped to a structured row on purpose: a hand-made template has no upstream to have
+    // overridden, so its Markdown is not an override of anything (plan erratum E5).
+    rawOverride: spec.success && rawOverride,
   }
 }
 
 function matches(row: WorkforceCatalogRow, filters: WorkforceCatalogFilters): boolean {
   if (filters.source !== undefined && row.source !== filters.source) return false
-  if (filters.division !== undefined && (row.sourceDivision ?? row.role) !== filters.division) return false
+  if (filters.division !== undefined && row.sourceDivision !== filters.division) return false
   if (filters.capability !== undefined && !row.capabilities.includes(filters.capability)) return false
   if (filters.skill !== undefined && !row.recommendedSkills.includes(filters.skill)) return false
   const q = (filters.q ?? '').trim().toLowerCase()
@@ -598,18 +658,51 @@ function matches(row: WorkforceCatalogRow, filters: WorkforceCatalogFilters): bo
  * The FACETS are computed over every row, before filtering. A filter menu built from the filtered
  * rows collapses to whatever was already chosen, which makes it impossible to change your mind.
  *
- * A DIVISION is a fact about a catalog, so the division menu is built from `sourceDivision` alone
- * and a hand-made template contributes none: its `role` is a role somebody typed, and offering it
- * as a division would put "backend" in a menu of directories that has no such directory. The
- * MATCH still falls back to `role`, so a division filter that happens to name one finds it.
+ * A DIVISION is a directory a catalog was imported from, so both the menu and the match read
+ * `sourceDivision` alone (plan erratum E22): the facet list IS the definition of the word on this
+ * surface, and a hand-made template whose `role` happens to spell "engineering" was never in that
+ * directory. Hand-made rows are reached through `source: 'local'` and free text instead.
  */
 export async function listWorkforceCatalog(filters: WorkforceCatalogFilters = {}): Promise<WorkforceCatalogPage> {
-  const [templates, catalogSlaveGroups] = await Promise.all([
-    prisma.slaveTemplate.findMany({ orderBy: { name: 'asc' } }),
+  const [templates, catalogSlaveGroups, rawOverrides] = await Promise.all([
+    prisma.slaveTemplate.findMany({
+      select: {
+        id: true,
+        name: true,
+        role: true,
+        description: true,
+        defaultModel: true,
+        provider: true,
+        profileSha256: true,
+        profileSpec: true,
+        profileOverrides: true,
+        sourceId: true,
+        sourceDivision: true,
+        sourceRevision: true,
+        sourceLicense: true,
+        importedAt: true,
+      },
+      orderBy: { name: 'asc' },
+    }),
     prisma.companySlave.groupBy({ by: ['templateId'], _count: { _all: true } }),
+    // The raw-override predicate, computed in POSTGRES so the profile text stays there: it is the
+    // only reason a catalog listing would read a sixteen-kilobyte column it never displays.
+    // `sha256(convert_to(text,'UTF8'))` hex is byte-identical to `goalSha256` (the same digest over
+    // the same bytes), and `IS DISTINCT FROM` is what makes a CLEARED profile -- NULL against a
+    // recorded hash -- come back true, exactly as `importCatalog` reads it.
+    prisma.$queryRaw<{ id: string; rawOverride: boolean }[]>`
+      SELECT id,
+             (CASE WHEN "profile" IS NULL THEN NULL ELSE encode(sha256(convert_to("profile", 'UTF8')), 'hex') END)
+               IS DISTINCT FROM "profileSha256" AS "rawOverride"
+      FROM "SlaveTemplate"
+      WHERE "profileSpec" IS NOT NULL
+    `,
   ])
   const countByTemplate = new Map(catalogSlaveGroups.map((group) => [group.templateId, group._count._all] as const))
-  const all = templates.map((template) => catalogRowOf(template, countByTemplate.get(template.id) ?? 0))
+  const rawByTemplate = new Map(rawOverrides.map((row) => [row.id, row.rawOverride] as const))
+  const all = templates.map((template) =>
+    catalogRowOf(template, countByTemplate.get(template.id) ?? 0, rawByTemplate.get(template.id) ?? false),
+  )
 
   const divisions = new Set<string>()
   const capabilities = new Set<string>()
@@ -659,7 +752,10 @@ export async function readTemplateProfile(templateId: string): Promise<Result<Te
     overrides,
     effective: spec.success ? effectiveProfileSpec(spec.data, overrides) : null,
     markdown: row.profile,
-    rawOverride: spec.success && row.profile !== null && goalSha256(row.profile) !== row.profileSha256,
+    // The importer's own comparison, cleared profile included (fix round 1, minor 2): a `null`
+    // profile against a recorded hash is a person having cleared it, which is `locally_edited`
+    // there and a raw override here.
+    rawOverride: spec.success && (row.profile === null ? null : goalSha256(row.profile)) !== row.profileSha256,
     overridden: overriddenFields(overrides),
   })
 }
