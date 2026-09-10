@@ -1,6 +1,7 @@
 import { unblockTask } from '@slave-of-ai/control'
 import { ok } from '@slave-of-ai/domain'
 import { taskControlResponse } from '../../../../../../../server/taskControlRoute'
+import { archivedRefusal } from '../../../../../../../server/workspaceControlRoute'
 import { requirePrincipal } from '../../../../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
@@ -12,6 +13,11 @@ export const dynamic = 'force-dynamic'
  * No new autonomy and no new rules: `unblockTask` still refuses a task that is not `blocked`, one
  * with a live run, and one at its attempt ceiling, and still decides for itself whether the task
  * belongs in `rework` or back in `reviewing`.
+ *
+ * An archived project is not a project anybody writes to (M27 §3.3), and `taskControlResponse` has
+ * no archived check of its own -- it 404s a task outside this workspace, not one inside an archived
+ * one. `archivedRefusal` therefore runs FIRST, exactly as the task-dependency route does it (final
+ * wave I1): without it a blocked task could be put back on an archived project's board.
  *
  * `taskControlResponse` takes a `Result<void, ...>` and this verb returns the status it chose, so
  * the success arm is mapped rather than the shell widened: which status it picked is shown by the
@@ -25,6 +31,8 @@ export async function POST(
   const gate = await requirePrincipal()
   if ('response' in gate) return gate.response
   const { workspaceId, taskId } = await context.params
+  const archived = await archivedRefusal(workspaceId)
+  if (archived !== null) return archived
   return taskControlResponse(workspaceId, taskId, async () => {
     const result = await unblockTask(taskId, {}, gate.principal ?? undefined)
     return result.ok ? ok(undefined) : result

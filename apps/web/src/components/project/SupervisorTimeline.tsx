@@ -223,6 +223,9 @@ export function SupervisorTimeline({
                       <textarea
                         data-testid="timeline-answer-input"
                         data-message-id={messageId}
+                        // Named for a screen reader (final wave M2): a placeholder is not a name,
+                        // and it disappears the moment somebody types.
+                        aria-label="Answer the question"
                         value={answer}
                         rows={2}
                         placeholder="the answer this slave receives"
@@ -344,7 +347,14 @@ export function SupervisorTimeline({
                     <span className="shrink-0 text-[10px] text-text-3">+{entry.collapsedCount} earlier</span>
                   )}
                 </div>
-                {entry.detail !== null && <span className="text-[11px] text-text-2">{entry.detail}</span>}
+                {/* TWO LINES, whatever the payload carries (final wave I3): a goal document, a
+                  * long rationale or a worker's paragraph is a second line here, not a page. The
+                  * whole of it stays one hover away, the way the brief's objective tile does it. */}
+                {entry.detail !== null && (
+                  <span title={entry.detail} className="line-clamp-2 text-[11px] text-text-2">
+                    {entry.detail}
+                  </span>
+                )}
                 {entry.taskTitle !== null && (
                   <span className="font-mono text-[10px] text-text-3">{entry.taskTitle}</span>
                 )}

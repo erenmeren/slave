@@ -30,6 +30,17 @@ const NEEDS_YOU_TONE: Readonly<Record<NeedsYouItem['kind'], StatusTone>> = {
   integrate: 'review',
 }
 
+/**
+ * How many rows the two GROWING lists show before they hand off to the page that holds all of them
+ * (final wave I4).
+ *
+ * R1 promises eight facts on one screen, and `gate:m45-project-experience` measures every tile
+ * against the 900px fold -- but an unbounded list makes that measurement a statement about the
+ * SEEDED project rather than about the design. Five rows is what the tallest tile can carry and
+ * still leave its neighbours above the fold; the rest is one link away, never dropped silently.
+ */
+const BRIEF_LIST_MAX = 5
+
 /** What each kind of "verified" actually means, said out loud rather than left as a member. */
 const VERIFIED_WORD: Readonly<Record<NonNullable<ProjectBriefFacts['latestVerified']>['kind'], string>> = {
   integrated: 'integrated into the base branch',
@@ -116,6 +127,8 @@ export function ProjectBrief({
 }): React.JSX.Element {
   const { objective, supervisor, work, cost, needsYou, latestVerified, team, recentChanges } = brief
   const supervisorTone: StatusTone = supervisor.needsYou ? 'blocked' : supervisor.state === 'working' ? 'working' : 'idle'
+  const needsYouShown = needsYou.slice(0, BRIEF_LIST_MAX)
+  const teamShown = team.slice(0, BRIEF_LIST_MAX)
 
   return (
     <div
@@ -135,7 +148,9 @@ export function ProjectBrief({
               {objective.text}
             </span>
             <div className="flex items-center gap-2">
-              <Chip>v{objective.version}</Chip>
+              {/* Version 0 is "no version was ever saved" (final wave M6): a `v0` chip beside a
+                * goal somebody plainly wrote claims a version that does not exist. */}
+              {objective.version > 0 && <Chip>v{objective.version}</Chip>}
               <Link href={`/w/${workspaceId}/settings`} className="text-[11px] text-text-2 underline">
                 edit →
               </Link>
@@ -201,7 +216,7 @@ export function ProjectBrief({
           <EmptyState testId="needs-you-empty" message="nothing needs you" />
         ) : (
           <ul className="flex flex-col gap-1">
-            {needsYou.map((item) => (
+            {needsYouShown.map((item) => (
               <li key={`${item.kind}-${item.id}`} data-testid="needs-you-row" className="flex items-baseline gap-2 text-xs">
                 <Chip tone={NEEDS_YOU_TONE[item.kind]} title={item.kind}>
                   {NEEDS_YOU_WORD[item.kind]}
@@ -211,6 +226,14 @@ export function ProjectBrief({
                 </Link>
               </li>
             ))}
+            {needsYou.length > needsYouShown.length && (
+              // The board is where every one of them can be worked, so that is where the rest go.
+              <li data-testid="needs-you-more" className="text-[11px]">
+                <Link href={`/w/${workspaceId}/tasks`} className="text-text-2 underline">
+                  +{needsYou.length - needsYouShown.length} more
+                </Link>
+              </li>
+            )}
           </ul>
         )}
       </Tile>
@@ -233,7 +256,7 @@ export function ProjectBrief({
           <EmptyState testId="brief-team-empty" message="nobody works here yet" />
         ) : (
           <ul className="flex flex-col gap-1">
-            {team.map((member) => {
+            {teamShown.map((member) => {
               const tone = toneForCardLabel(member.status)
               const body = (
                 <>
@@ -268,6 +291,15 @@ export function ProjectBrief({
                 </li>
               )
             })}
+            {team.length > teamShown.length && (
+              // The Team strip on this same page already lists every worker, so the rest are an
+              // anchor away rather than a navigation: `#team` is `OverviewClient`'s own section.
+              <li data-testid="team-more" className="text-[11px]">
+                <a href="#team" className="text-text-2 underline">
+                  +{team.length - teamShown.length} more
+                </a>
+              </li>
+            )}
           </ul>
         )}
       </Tile>

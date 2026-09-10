@@ -52,5 +52,10 @@ export function composeGoal(previous: string | null, request: string, at: Date):
   const next = lines.findIndex((line, index) => index > heading && /^#{1,6}\s/u.test(line))
   let end = next === -1 ? lines.length : next
   while (end > heading + 1 && lines[end - 1]?.trim() === '') end -= 1
-  return `${[...lines.slice(0, end), entry, ...lines.slice(end)].join('\n')}\n`
+  // Nothing between the heading and where the entry lands means an operator typed the heading and
+  // left the list empty. The first bullet then opens the section, so it gets the blank line the
+  // heading-opening path above gives it -- otherwise the same composer produces two different
+  // shapes for the same document depending on who wrote the heading (final wave, parked minor).
+  const opening = end === heading + 1 ? [''] : []
+  return `${[...lines.slice(0, end), ...opening, entry, ...lines.slice(end)].join('\n')}\n`
 }

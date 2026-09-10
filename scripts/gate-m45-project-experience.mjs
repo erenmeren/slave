@@ -486,8 +486,24 @@ try {
     runId: failedRun.id,
     payload: { tool: 'Bash', summary: CHATTER },
   })
+  // The POSITIVE counterpart of that negative (final wave I2). `run.paused` is a `run.*` type on
+  // the WORK IN PROGRESS lane (`LANE_BY_TYPE['run.paused']` is `'work'`), so a negative written as
+  // "no type beginning `run.`" would have passed by excluding an event the domain deliberately
+  // keeps -- and would have kept passing if the lane table ever dropped it. With this row seeded,
+  // stage 2 asserts the two named chatter types are gone AND that this one arrived.
+  await event('run.paused', {
+    actor: 'slave',
+    taskId: waitingTask.id,
+    slaveId: developer.id,
+    runId: waitingRun.id,
+    // The domain's own payload for this type (`ExecutionEvent`'s `run.paused` arm is
+    // `{ atStep: number }`), so the row the gate seeds is a row the system could really write.
+    payload: { atStep: 7 },
+  })
   const seededEvents = await prisma.executionEvent.count({ where: { workspaceId } })
-  console.log(`stage 0: ${String(seededEvents)} events in the log, including one run.tool_call carrying ${JSON.stringify(CHATTER)}`)
+  console.log(
+    `stage 0: ${String(seededEvents)} events in the log, including one run.tool_call carrying ${JSON.stringify(CHATTER)} and one run.paused on the WORK IN PROGRESS lane`,
+  )
   console.log('stage 0 PASSED: a project with a v2 goal made by request-change, eight tasks, three runs, a question nobody holds, two decisions and a river of chatter')
 
   // ---- The real web shell, on a free port, loopback-bound. -------------------------------------
@@ -843,10 +859,25 @@ try {
     console.log(`stage 2: ${type} → ${lane} (${String(found.length)} entr(y/ies))`)
   }
 
-  const chatterEntries = entries.filter((entry) => (entry.type ?? '').startsWith('run.'))
-  console.log(`stage 2: entries whose type begins "run." = ${String(chatterEntries.length)}`)
+  // MODEL CHATTER is the spec's own two types -- `run.output` and `run.tool_call` (R2, and
+  // `LANE_BY_TYPE`'s doc comment). Not "everything beginning `run.`": `run.paused` and
+  // `run.resumed` are WORK IN PROGRESS entries the domain puts on the timeline on purpose, and a
+  // prefix negative quietly asserted the opposite of the lane table (final wave I2).
+  const CHATTER_TYPES = ['run.output', 'run.tool_call']
+  const chatterEntries = entries.filter((entry) => CHATTER_TYPES.includes(entry.type ?? ''))
+  console.log(`stage 2: entries of ${JSON.stringify(CHATTER_TYPES)} = ${String(chatterEntries.length)}`)
   if (chatterEntries.length > 0) {
     await fail(`stage 2: model chatter reached the timeline: ${JSON.stringify(chatterEntries)}`)
+  }
+  // And the positive that makes the negative a measurement rather than a prefix rule: the seeded
+  // `run.paused` IS on the timeline, on WORK IN PROGRESS.
+  const pausedEntries = entries.filter((entry) => entry.type === 'run.paused')
+  console.log(`stage 2: run.paused entries = ${JSON.stringify(pausedEntries)}`)
+  if (pausedEntries.length !== 1) {
+    await fail(`stage 2: ${String(pausedEntries.length)} run.paused entr(y/ies), expected the one seeded — a run.* type the domain KEEPS`)
+  }
+  if (pausedEntries[0]?.lane !== 'work') {
+    await fail(`stage 2: the run.paused entry is on lane ${JSON.stringify(pausedEntries[0]?.lane)}, expected "work"`)
   }
   const { shown: pageStrings } = await readVisibleText(null)
   const chatterLeak = pageStrings.filter((entry) => entry.text.includes(CHATTER))
@@ -907,7 +938,9 @@ try {
   if (restored.length !== entries.length) {
     await fail(`stage 2: turning the filter off left ${String(restored.length)} entries, expected the original ${String(entries.length)}`)
   }
-  console.log('stage 2 PASSED: six lanes from the domain, the seeded events on the right ones, DECISION REQUIRED pinned, and no run.* chatter')
+  console.log(
+    'stage 2 PASSED: six lanes from the domain, the seeded events on the right ones, DECISION REQUIRED pinned, run.paused kept and run.output/run.tool_call gone',
+  )
 
   // ============================================================================================
   // Stage 3: exactly four things need a person, and every link works.

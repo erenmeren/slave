@@ -1127,5 +1127,30 @@ describe('the control routes', () => {
       expect(response.status).toBe(401)
       expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.task.id } })).status).toBe('blocked')
     })
+
+    /** M45 final wave, I1: an archived project is not a project anybody writes to (M27 §3.3). The
+     *  route reached `unblockTask` directly at first, and `taskControlResponse` has no archived
+     *  check of its own -- so an archived project's blocked task could be put back on the board.
+     *  `archivedRefusal` runs first now, exactly as the task-dependency route does it. */
+    it('(e) 409s an archived project, leaving the task blocked and writing no event', async (): Promise<void> => {
+      await park()
+      await prisma.workspace.update({ where: { id: fixture.workspace.id }, data: { archivedAt: new Date() } })
+
+      const response = await post(fixture.workspace.id, fixture.task.id)
+
+      expect(response.status).toBe(409)
+      expect(((await response.json()) as { error: string }).error).toContain('is archived')
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.task.id } })).status).toBe('blocked')
+      expect(await prisma.executionEvent.count({ where: { type: 'task_unblocked', taskId: fixture.task.id } })).toBe(0)
+    })
+
+    it('(f) 404s an unknown project -- the archived guard answers before the verb', async (): Promise<void> => {
+      await park()
+
+      const response = await post('00000000-0000-4000-8000-000000000000', fixture.task.id)
+
+      expect(response.status).toBe(404)
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.task.id } })).status).toBe('blocked')
+    })
   })
 })

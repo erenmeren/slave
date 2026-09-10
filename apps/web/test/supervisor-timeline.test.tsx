@@ -100,6 +100,14 @@ describe('SupervisorTimeline', () => {
     expect(screen.queryByTestId('timeline-decisions')).toBeNull()
   })
 
+  /** M45 final wave, M2: a textarea with only a placeholder is unnamed to a screen reader, and a
+   *  placeholder disappears the moment somebody types. */
+  it('names the answer box for a screen reader', () => {
+    render(<SupervisorTimeline workspaceId="w1" entries={[]} needsYou={[QUESTION]} />)
+    expect(screen.getByTestId('timeline-answer-input').getAttribute('aria-label')).toBe('Answer the question')
+    expect(screen.getByLabelText('Answer the question')).toBeTruthy()
+  })
+
   it('anchors each pending decision and each question, so the needs-you links land on them', () => {
     render(<SupervisorTimeline workspaceId="w1" entries={[DECISION_ENTRY]} needsYou={[QUESTION]} />)
     expect(document.getElementById('decision-d1')).toBeTruthy()
@@ -121,6 +129,16 @@ describe('SupervisorTimeline', () => {
     // And nothing a model said while working reaches this river at all -- `laneFor` gives
     // `run.tool_call` no lane, so it never becomes an entry.
     expect(screen.getByTestId('timeline').textContent).not.toContain('run.')
+  })
+
+  /** M45 final wave, I3: a detail is a SECOND LINE, and an entry whose payload carries a goal
+   *  document or a long rationale must not push the rest of the river off the screen. */
+  it('clamps an entry detail to two lines', () => {
+    render(<SupervisorTimeline workspaceId="w1" entries={ENTRIES} needsYou={[]} />)
+    const detail = screen.getByText('reading src/pay.ts')
+    expect(detail.className).toContain('line-clamp-2')
+    // The whole sentence stays reachable on hover, the way the brief's objective tile does it.
+    expect(detail.getAttribute('title')).toBe('reading src/pay.ts')
   })
 
   it('says how many earlier messages an entry stands for', () => {
@@ -312,6 +330,13 @@ describe('SupervisorRequest', () => {
     expect(screen.getByTestId('supervisor-request-result').textContent).toContain('goal v3')
     // A sent request leaves the box empty, ready for the next one.
     expect((screen.getByTestId('supervisor-request-input') as HTMLTextAreaElement).value).toBe('')
+  })
+
+  /** M45 final wave, M2: the same naming the timeline's answer box got. */
+  it('names the request box for a screen reader', () => {
+    render(<SupervisorRequest workspaceId="w1" />)
+    expect(screen.getByTestId('supervisor-request-input').getAttribute('aria-label')).toBe('Tell the Supervisor')
+    expect(screen.getByLabelText('Tell the Supervisor')).toBeTruthy()
   })
 
   it('will not send an empty request', () => {

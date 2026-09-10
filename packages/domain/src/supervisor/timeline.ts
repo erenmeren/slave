@@ -148,10 +148,23 @@ export function laneFor(subject: TimelineSubject): TimelineLane | null {
  * question and a blocked task are all still waiting on a person, so all three are false.
  */
 export function isResolvedDecision(subject: TimelineSubject): boolean {
-  return (
-    subject.source === 'event' &&
-    (subject.type === 'supervisor.applied' || subject.type === 'supervisor.resolved')
-  )
+  // A `switch` over the discriminant with a `never` default, not a boolean expression (final wave,
+  // parked minor): a fifth `TimelineSubject` arm then fails the BUILD here, the way `LANE_BY_TYPE`
+  // fails it for a fiftieth event type. An expression would have answered `false` for the new arm
+  // and left a renderer silently muting -- or not muting -- something nobody classified.
+  switch (subject.source) {
+    case 'event':
+      return subject.type === 'supervisor.applied' || subject.type === 'supervisor.resolved'
+    // All three are still waiting on a person, so none of them is a decision already taken.
+    case 'decision':
+    case 'question':
+    case 'blocked_task':
+      return false
+    default: {
+      const unreachable: never = subject
+      return unreachable
+    }
+  }
 }
 
 /** The three numbers a `workspace.replanned` payload carries, plus how many tasks survived it. */

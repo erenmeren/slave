@@ -142,6 +142,27 @@ describe('buildSupervisorTimeline', () => {
     expect(entries[0]?.detail).toBe('Ship the checkout flow')
   })
 
+  /** M45 final wave, I3: a request's entry used to carry the WHOLE composed goal document as its
+   *  second line -- every earlier request, every heading, in a river of one-line entries. The
+   *  request is already the title; the version is the one fact the title does not carry. */
+  it('does not put the whole goal document under a request entry', async (): Promise<void> => {
+    const { workspaceId } = await seedWorkspace({})
+    const goal = 'Ship the checkout flow.\n\n## Requested changes\n\n- 2026-09-09: Add Apple Pay\n'
+    await appendEvent({
+      type: 'workspace.goal_set',
+      workspaceId,
+      actor: 'human',
+      payload: { goal, version: 2, sha256: 'b', request: 'Add Apple Pay' },
+    })
+
+    const entries = await buildSupervisorTimeline(workspaceId)
+
+    expect(entries[0]?.title).toBe('Add Apple Pay')
+    expect(entries[0]?.detail).toBe('v2')
+    expect(entries[0]?.detail).not.toContain('Requested changes')
+    expect(entries[0]?.detail).not.toContain('Ship the checkout flow')
+  })
+
   it('puts every pending decision in the DECISION REQUIRED lane with its row attached', async (): Promise<void> => {
     const { workspaceId } = await seedWorkspace({})
     const decision = await seedPendingDecision(workspaceId, { subjectId: 'reviewer' })

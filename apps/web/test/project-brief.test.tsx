@@ -112,6 +112,71 @@ describe('ProjectBrief', () => {
     expect(within(rows[0] as HTMLElement).getByTestId('chip').getAttribute('title')).toBe('blocked_task')
   })
 
+  /**
+   * M45 final wave, I4: R1's promise is EIGHT FACTS ON ONE SCREEN, and a queue that grows with the
+   * project keeps that promise only while the project is small. Five rows and a way to the rest.
+   */
+  it('caps the needs-you list at five rows and links to the rest', () => {
+    const many = Array.from({ length: 7 }, (_, index) => ({
+      kind: 'blocked_task' as const,
+      id: `t${String(index)}`,
+      title: `Blocked task ${String(index)}`,
+      href: `/w/w1/tasks?task=t${String(index)}`,
+      since: '2026-09-09T08:00:00.000Z',
+      taskId: `t${String(index)}`,
+      decisionId: null,
+      messageId: null,
+    }))
+    render(<ProjectBrief workspaceId="w1" brief={{ ...BRIEF, needsYou: many }} />)
+    expect(screen.getAllByTestId('needs-you-row')).toHaveLength(5)
+    const more = screen.getByTestId('needs-you-more')
+    expect(more.textContent).toContain('+2 more')
+    expect(more.querySelector('a')?.getAttribute('href')).toBe('/w/w1/tasks')
+  })
+
+  it('shows no overflow row when the needs-you queue is exactly five', () => {
+    const five = Array.from({ length: 5 }, (_, index) => ({
+      kind: 'question' as const,
+      id: `m${String(index)}`,
+      title: `Question ${String(index)}`,
+      href: `/w/w1#question-m${String(index)}`,
+      since: '2026-09-09T08:00:00.000Z',
+      taskId: null,
+      decisionId: null,
+      messageId: `m${String(index)}`,
+    }))
+    render(<ProjectBrief workspaceId="w1" brief={{ ...BRIEF, needsYou: five }} />)
+    expect(screen.getAllByTestId('needs-you-row')).toHaveLength(5)
+    expect(screen.queryByTestId('needs-you-more')).toBeNull()
+  })
+
+  it('caps the team list at five rows and sends the rest to the Team strip', () => {
+    const many = Array.from({ length: 8 }, (_, index) => ({
+      slaveId: `s${String(index)}`,
+      name: `Worker ${String(index)}`,
+      roleLabel: 'developer',
+      status: 'WORKING',
+      taskTitle: null,
+      company: false,
+    }))
+    render(<ProjectBrief workspaceId="w1" brief={{ ...BRIEF, team: many }} />)
+    expect(screen.getAllByTestId('team-row')).toHaveLength(5)
+    const more = screen.getByTestId('team-more')
+    expect(more.textContent).toContain('+3 more')
+    expect(more.querySelector('a')?.getAttribute('href')).toBe('#team')
+  })
+
+  /** M45 final wave, M6: version 0 is "no version has ever been saved", and a `v0` chip beside a
+   *  goal somebody clearly wrote reads as a version somebody made. */
+  it('shows no version chip on an objective that has no saved version', () => {
+    render(<ProjectBrief workspaceId="w1" brief={{ ...BRIEF, objective: { text: 'Ship the checkout flow', version: 0 } }} />)
+    const tile = tileFor('objective')
+    expect(tile.textContent).toContain('Ship the checkout flow')
+    expect(tile.textContent).not.toContain('v0')
+    // The way to the editor stays, chip or no chip.
+    expect(within(tile).getAllByRole('link')[0]?.getAttribute('href')).toBe('/w/w1/settings')
+  })
+
   it('says nothing is verified yet rather than leaving the tile blank', () => {
     render(<ProjectBrief workspaceId="w1" brief={{ ...BRIEF, latestVerified: null, needsYou: [] }} />)
     expect(tileFor('latest-verified').textContent).toContain('nothing verified yet')

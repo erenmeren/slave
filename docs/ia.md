@@ -86,3 +86,8 @@ grouped counts:
 Not yet: a task waiting on a question nobody can answer — that needs a per-task read, and it
 arrives with M45's needs-you queue. The number is honest about being a floor, and no surface calls
 it a total.
+
+M45 shipped that queue on the project Overview (`apps/web/src/server/needsYou.ts`) and it does make
+that per-task read, so the two numbers can disagree: the card's count (`apps/web/src/server/org.ts`,
+grouped) stays the FLOOR and the queue is the fuller answer. Reconciling them — one reader, one
+number, on both surfaces — is booked for M46.

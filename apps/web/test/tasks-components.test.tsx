@@ -253,12 +253,50 @@ describe('TaskDetailPanel', () => {
       />,
     )
     // The description and the run rows are above the fold -- the description ungrouped, the runs
-    // in the one group this panel leads with. The branch and the rejection are under Messages.
+    // in the one group this panel leads with. M45 final wave, M1: Messages now carries ONLY the
+    // sentence a reviewer left behind. The attempt counter went to the Run group beside the runs
+    // it describes; the branch went to the Worktree group, because a branch name is a raw git
+    // value and R4 keeps those folded (the Run group leads open).
     expect(screen.getByText('Do the thing well')).toBeTruthy()
     expect(screen.getAllByTestId('run-row')).toHaveLength(1)
+    expect(screen.getByText('1/3')).toBeTruthy()
+    // Folded, so it is not on screen at all until somebody asks for it.
+    expect(screen.queryByTestId('detail-branch')).toBeNull()
+    openGroup('worktree')
+    expect(screen.getByTestId('detail-branch').textContent).toBe('feature/x')
     openGroup('messages')
-    expect(screen.getByText('feature/x')).toBeTruthy()
     expect(screen.getByText('tests failed on attempt 1')).toBeTruthy()
+  })
+
+  /** M45 final wave, M1: a task that has never run still has an attempt counter, and the Run group
+   *  is where it is read -- `no runs yet` is a fact about the RUN LIST alone. */
+  it('keeps the attempt counter in the Run group with no runs at all', () => {
+    render(
+      <TaskDetailPanel workspaceGoalVersion={0}
+        workspaceId="w1"
+        task={task({ attempt: 0, branch: null, runs: [] })}
+        onClose={() => {}}
+      />,
+    )
+    const group = document.querySelector('[data-testid="details-group"][data-group="run"]')
+    expect(group?.textContent).toContain('no runs yet')
+    expect(group?.textContent).toContain('0/3')
+    // A task with no branch says so rather than leaving the value blank.
+    openGroup('worktree')
+    expect(screen.getByTestId('detail-branch').textContent).toBe('—')
+  })
+
+  /** M45 final wave, M1: Messages is for what was SAID, and a task nobody has said anything about
+   *  opens onto a sentence rather than an empty list. */
+  it('says so when nothing has been said about the task', () => {
+    render(
+      <TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ lastRejectionReason: null })} onClose={() => {}} />,
+    )
+    openGroup('messages')
+    const group = document.querySelector('[data-testid="details-group"][data-group="messages"]')
+    expect(group?.textContent).toContain('nothing said about this task yet')
+    expect(group?.textContent).not.toContain('attempt')
+    expect(group?.textContent).not.toContain('branch')
   })
 
   it("shows 'paused at step N' for a paused run with a checkpoint", () => {

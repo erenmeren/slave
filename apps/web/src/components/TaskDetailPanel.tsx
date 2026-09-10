@@ -214,6 +214,27 @@ export function TaskDetailPanel({
 
       {/* The one group this panel leads with: what its runs are doing right now. */}
       <DetailsGroup group="run" title="Run" defaultOpen>
+        {/*
+          * The attempt counter the scheduler reads (final wave M1). A fact about the WORK, so it
+          * belongs beside the runs it describes rather than under Messages, which is for the
+          * sentences a reviewer or a re-plan left behind. Above the run list and outside its empty
+          * case: a task that has never run still has an attempt counter, and `no runs yet` is a
+          * fact about the LIST alone.
+          *
+          * Its OTHER half, the branch, went to the Worktree group instead of coming here with it:
+          * a branch name is a raw git value, R4 folds raw values behind a disclosure, and this
+          * group leads OPEN. `gate:m45-project-experience` stage 6 measures exactly that -- the
+          * task's uuid, its branch and its worktree path must be absent from the panel until a
+          * person opens the group holding them -- so an always-open branch would be a regression
+          * against R4 dressed up as a tidy-up. Messages keeps only the sentence either way, which
+          * is what M1 asked for.
+          */}
+        <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
+          <dt className="text-text-3">attempt</dt>
+          <dd className="font-mono text-text-2">
+            {task.attempt}/{task.maxAttempts}
+          </dd>
+        </dl>
         {task.runs.length === 0 ? (
           <p className="text-xs text-text-3">no runs yet</p>
         ) : (
@@ -272,32 +293,28 @@ export function TaskDetailPanel({
         )}
       </DetailsGroup>
 
-      {/* What was said to and about this task: the attempt counter the scheduler reads, the branch
-        * its work lives on, and the sentence a reviewer or a re-plan left behind. */}
+      {/* What was SAID to and about this task: the sentence a reviewer or a re-plan left behind,
+        * and nothing else (final wave M1 -- the attempt counter and the branch moved into the Run
+        * group, where the work they describe is). A task nobody has said anything about says so,
+        * rather than opening onto an empty list. */}
       <DetailsGroup group="messages" title="Messages">
-        <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
-          <dt className="text-text-3">attempt</dt>
-          <dd className="font-mono text-text-2">
-            {task.attempt}/{task.maxAttempts}
-          </dd>
-          <dt className="text-text-3">branch</dt>
-          <dd className="font-mono text-text-2">{task.branch ?? '—'}</dd>
-          {task.lastRejectionReason !== null && (
-            // One column, two meanings, named apart (M40 §6): `cancelTask` writes the CANCELLATION
-            // reason into `lastRejectionReason`, and labelling that "rejection" would tell an
-            // operator a reviewer turned the work down when nobody reviewed it at all. Muted for a
-            // cancelled task, like its card: nothing here needs anybody.
-            <>
-              <dt className="text-text-3">{task.status === 'cancelled' ? 'cancelled' : 'rejection'}</dt>
-              <dd
-                data-testid={task.status === 'cancelled' ? 'detail-cancel-reason' : 'detail-rejection-reason'}
-                className={task.status === 'cancelled' ? 'text-text-3' : 'text-tone-waiting'}
-              >
-                {task.lastRejectionReason}
-              </dd>
-            </>
-          )}
-        </dl>
+        {task.lastRejectionReason === null ? (
+          <p className="text-xs text-text-3">nothing said about this task yet</p>
+        ) : (
+          // One column, two meanings, named apart (M40 §6): `cancelTask` writes the CANCELLATION
+          // reason into `lastRejectionReason`, and labelling that "rejection" would tell an
+          // operator a reviewer turned the work down when nobody reviewed it at all. Muted for a
+          // cancelled task, like its card: nothing here needs anybody.
+          <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
+            <dt className="text-text-3">{task.status === 'cancelled' ? 'cancelled' : 'rejection'}</dt>
+            <dd
+              data-testid={task.status === 'cancelled' ? 'detail-cancel-reason' : 'detail-rejection-reason'}
+              className={task.status === 'cancelled' ? 'text-text-3' : 'text-tone-waiting'}
+            >
+              {task.lastRejectionReason}
+            </dd>
+          </dl>
+        )}
       </DetailsGroup>
 
       {/* M37 §6, one group lower. Fetched on demand rather than with the snapshot: a prompt is the
@@ -437,6 +454,13 @@ export function TaskDetailPanel({
         * have a worktree can be collected -- `task.collectable` is computed server-side on the DTO
         * (`buildTasksSnapshot`), so this panel never imports `TERMINAL` from the domain. */}
       <DetailsGroup group="worktree" title="Worktree">
+        {/* WHICH branch the work lives on (final wave M1): the same kind of raw git value as the
+          * paths below it, folded the same way, and beside the one button that talks about it
+          * ("remove the tree, keep the branch"). `—` for a task no run has branched yet. */}
+        <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
+          <dt className="text-text-3">branch</dt>
+          <dd data-testid="detail-branch" className="font-mono text-text-2">{task.branch ?? '—'}</dd>
+        </dl>
         {/* WHICH tree, on disk, per run (M45 R4 fix round 1). `worktreePath` has been on the DTO
           * since M23 B4 and was rendered nowhere -- so `collectable` said a tree existed and
           * nothing on screen said where. A path is exactly the kind of raw value R4 folds rather

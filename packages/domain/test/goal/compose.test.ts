@@ -33,6 +33,21 @@ describe('composeGoal', () => {
     )
   })
 
+  /** M45 final wave, parked domain minor: an operator who typed the heading and left the list empty
+   *  got the first bullet welded to it -- `## Requested changes\n- …`, which the composer's own
+   *  heading-opening path would never have produced. Same shape, whoever wrote the heading. */
+  it('opens a blank line between a bullet-less heading and the first entry', () => {
+    expect(composeGoal('Body.\n\n## Requested changes\n', 'Add Apple Pay', AT)).toBe(
+      'Body.\n\n## Requested changes\n\n- 2026-09-10: Add Apple Pay\n',
+    )
+  })
+
+  it('keeps the separation when a bullet-less heading is followed by another section', () => {
+    expect(
+      composeGoal('Body.\n\n## Requested changes\n\n## Constraints\n\n- No new dependencies\n', 'Add Apple Pay', AT),
+    ).toBe('Body.\n\n## Requested changes\n\n- 2026-09-10: Add Apple Pay\n\n## Constraints\n\n- No new dependencies\n')
+  })
+
   it('takes the request AS the goal when the project has none yet', () => {
     expect(composeGoal(null, 'Build a billing service', AT)).toBe('Build a billing service')
   })

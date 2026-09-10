@@ -156,7 +156,7 @@ export async function buildSupervisorTimeline(
       laneLabel: LANE_LABEL[lane],
       at: row.ts.toISOString(),
       title: titleFor(type, payload, titles),
-      detail: detailFor(payload),
+      detail: detailFor(type, payload),
       taskId: row.taskId,
       taskTitle: row.taskId === null ? null : (titles[row.taskId] ?? null),
       eventType: type,
@@ -243,9 +243,23 @@ function titleFor(
   }
 }
 
-/** The second line, when the payload carries one. A FIELD loop rather than a per-type table:
- *  erratum E5 declined a label table for the ~49 event types, and the same ruling applies here. */
-function detailFor(payload: Record<string, unknown>): string | null {
+/**
+ * The second line, when the payload carries one. A FIELD loop rather than a per-type table:
+ * erratum E5 declined a label table for the ~49 event types, and the same ruling applies here.
+ *
+ * ONE type is named, and only because its payload carries two different things (final wave I3): a
+ * `workspace.goal_set` written by a REQUEST already has that request as its title, and its `goal`
+ * is the whole composed document -- objective, every heading, every earlier dated bullet. Printing
+ * that as the second line of a one-line-per-entry river buried the rest of the story under one
+ * entry. The version is the one fact the title does not carry, so that is what the second line
+ * says. A goal set with no request keeps the goal as its detail: there the title is `set the goal
+ * to v1` and the document IS what happened (the component clamps it to two lines).
+ */
+function detailFor(type: DomainEventType, payload: Record<string, unknown>): string | null {
+  if (type === 'workspace.goal_set' && typeof payload['request'] === 'string' && payload['request'] !== '') {
+    const version = payload['version']
+    return typeof version === 'number' ? `v${String(version)}` : null
+  }
   for (const field of ['goal', 'body', 'reason', 'branch', 'summary'] as const) {
     const value = payload[field]
     if (typeof value === 'string' && value !== '') return value

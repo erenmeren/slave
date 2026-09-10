@@ -58,6 +58,9 @@ export function SupervisorRequest({ workspaceId }: { readonly workspaceId: strin
           * -- the same reason the Supervisor panel's profile box is one. */}
         <textarea
           data-testid="supervisor-request-input"
+          // Named for a screen reader (final wave M2): the Panel's title is a heading, not a
+          // label, and the placeholder vanishes as soon as somebody types.
+          aria-label="Tell the Supervisor"
           value={text}
           rows={2}
           placeholder="what changed, in your own words — it becomes the next goal version"
