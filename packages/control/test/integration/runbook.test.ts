@@ -1,6 +1,6 @@
 import { RUNBOOK_SEED } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   addRunbook,
   adoptRunbook,
@@ -26,7 +26,7 @@ afterAll(async () => {
   await prisma.task.deleteMany({ where: { workspaceId } })
   await prisma.executionEvent.deleteMany({ where: { workspaceId } })
   await prisma.workspace.deleteMany({ where: { id: workspaceId } })
-  await prisma.runbookTemplate.deleteMany({ where: { key: 'gate-hand-written' } })
+  await prisma.runbookTemplate.deleteMany({ where: { key: { startsWith: 'gate-' } } })
   await prisma.$disconnect()
 })
 
@@ -43,20 +43,20 @@ describe('syncRunbooks', () => {
     expect(row.name).toBe('Bug fix')
   })
 
-  it('never touches a human row', async () => {
-    await prisma.runbookTemplate.create({
-      data: {
-        key: 'gate-hand-written',
-        name: 'Hand written',
-        description: 'mine',
-        stages: [
-          { key: 'only', title: 'Only', objective: 'Do it', capabilities: [], dependsOn: [], expectedOutputs: [], gates: [], retry: null, escalation: null },
-        ],
-        source: 'human',
-      },
-    })
-    await syncRunbooks()
-    expect((await prisma.runbookTemplate.findUniqueOrThrow({ where: { key: 'gate-hand-written' } })).name).toBe('Hand written')
+  // On a SEED key, which is the only way the `existing.source !== 'seed'` guard is reached at all:
+  // a row under a key the checked-in list does not hold is never visited by the loop.
+  it('never touches a human row that holds a seed key', async () => {
+    await prisma.runbookTemplate.update({ where: { key: 'bug-fix' }, data: { source: 'human', name: 'Mine' } })
+
+    expect(await syncRunbooks()).toEqual({ created: 0, updated: 0 })
+
+    const row = await prisma.runbookTemplate.findUniqueOrThrow({ where: { key: 'bug-fix' } })
+    expect(row.name).toBe('Mine')
+    expect(row.source).toBe('human')
+
+    // Handed back, so every case below reads the seeded table the file's first line established.
+    await prisma.runbookTemplate.update({ where: { key: 'bug-fix' }, data: { source: 'seed' } })
+    expect(await syncRunbooks()).toEqual({ created: 0, updated: 1 })
   })
 })
 
@@ -75,6 +75,16 @@ describe('listRunbooks / readRunbook', () => {
     expect(rows.every((row) => typeof row.workspaceCount === 'number')).toBe(true)
   })
 
+  // Fix round 1, Minor 4: one coercion for both readers of a stored `source`.
+  it('reads a source nothing recognises as human, never as the word on the row', async () => {
+    await prisma.runbookTemplate.update({ where: { key: 'security-review' }, data: { source: 'imported' } })
+    const result = await readRunbook('security-review')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.source).toBe('human')
+    await prisma.runbookTemplate.update({ where: { key: 'security-review' }, data: { source: 'seed' } })
+  })
+
   it('refuses a key nobody has, by name', async () => {
     const result = await readRunbook('nope')
     expect(result).toEqual({ ok: false, error: { kind: 'runbook_not_found', key: 'nope' } })
@@ -87,6 +97,23 @@ describe('addRunbook', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.error.kind).toBe('invalid_runbook')
+  })
+
+  // Fix round 1, Minor 5: the pre-check is a read followed by an insert, and nothing serialises the
+  // pair -- two operators adding the same key at once both read "free". Whichever way the two runs
+  // interleave, exactly one row is written and the other caller gets the refusal rather than a
+  // thrown P2002: the pre-check catches the serialised order, the `catch` catches the raced one.
+  it('refuses a duplicate key rather than throwing, however the two adds interleave', async () => {
+    const draft = { key: 'gate-raced', name: 'Raced', description: 'x', stages: [{ key: 'a', title: 'A', objective: 'a' }] }
+    const [first, second] = await Promise.all([addRunbook(draft), addRunbook(draft)])
+
+    expect([first.ok, second.ok].filter(Boolean)).toHaveLength(1)
+    const refused = first.ok ? second : first
+    expect(refused.ok).toBe(false)
+    if (refused.ok) return
+    expect(refused.error.kind).toBe('invalid_runbook')
+    expect(await prisma.runbookTemplate.count({ where: { key: 'gate-raced' } })).toBe(1)
+    await prisma.runbookTemplate.deleteMany({ where: { key: 'gate-raced' } })
   })
 
   it('forces source to human, so a hand-written runbook can never be rewritten by a sync', async () => {
@@ -158,8 +185,19 @@ describe('adoptRunbook', () => {
 })
 
 describe('runbookStatus', () => {
-  it('reports the current stage and each stage state from the board', async () => {
+  /** The stage ladder, as the panel reads it: key then state, in `stageOrder`. */
+  const ladder = async (): Promise<readonly (readonly [string, string])[]> => {
+    const status = await runbookStatus(workspaceId)
+    if (!status.ok) throw new Error('runbookStatus refused a project it was given')
+    return status.value.stages.map((stage) => [stage.key, stage.state] as const)
+  }
+
+  beforeEach(async () => {
+    await prisma.task.deleteMany({ where: { workspaceId } })
     await adoptRunbook(workspaceId, 'feature-delivery')
+  })
+
+  it('reports the current stage and each stage state from the board', async () => {
     await prisma.task.createMany({
       data: [
         { workspaceId, title: 'A', description: 'a', status: 'done', maxAttempts: 3, stage: 'design' },
@@ -171,13 +209,80 @@ describe('runbookStatus', () => {
     if (!status.ok) return
     expect(status.value.currentStage).toBe('implement')
     expect(status.value.stagesMissing).toEqual(['verify', 'review', 'release'])
+    // Fix round 1, Important 1: a stage AFTER the current one with no tasks has not been SKIPPED --
+    // it has not been reached. `missing` is reserved for a stage the plan went past.
     expect(status.value.stages.map((stage) => [stage.key, stage.state])).toEqual([
       ['design', 'done'],
       ['implement', 'active'],
+      ['verify', 'pending'],
+      ['review', 'pending'],
+      ['release', 'pending'],
+    ])
+  })
+
+  // Fix round 1, Important 1(a): the state a project is in the moment somebody adopts a runbook.
+  // The old ladder called the current stage `missing`, so "current stage: Design" sat above a table
+  // saying design had been skipped.
+  it('calls the current stage active on an empty board, and the rest pending', async () => {
+    expect(await ladder()).toEqual([
+      ['design', 'active'],
+      ['implement', 'pending'],
+      ['verify', 'pending'],
+      ['review', 'pending'],
+      ['release', 'pending'],
+    ])
+    const status = await runbookStatus(workspaceId)
+    expect(status.ok).toBe(true)
+    if (!status.ok) return
+    expect(status.value.currentStage).toBe('design')
+    expect(status.value.stages.every((stage) => stage.taskCount === 0)).toBe(true)
+  })
+
+  // Fix round 1, Important 1(b): with every staged task terminal the current stage is the LAST one
+  // (`measureAdherence`'s E7 rule), and the old ladder then said current = Release AND Release
+  // missing in the same breath.
+  it('with every staged task terminal, the last stage is active and the skipped ones are missing', async () => {
+    await prisma.task.create({
+      data: { workspaceId, title: 'A', description: 'a', status: 'done', maxAttempts: 3, stage: 'design' },
+    })
+    const status = await runbookStatus(workspaceId)
+    expect(status.ok).toBe(true)
+    if (!status.ok) return
+    expect(status.value.currentStage).toBe('release')
+    expect(status.value.stages.map((stage) => [stage.key, stage.state])).toEqual([
+      ['design', 'done'],
+      ['implement', 'missing'],
       ['verify', 'missing'],
       ['review', 'missing'],
-      ['release', 'missing'],
+      ['release', 'active'],
     ])
+  })
+
+  // Fix round 1, Important 1(c): a task stamped with a stage this runbook has no key for is a fact
+  // about the board, reported beside the ladder rather than dropped or crashed on.
+  it('reports a stage the runbook has no key for, mid-flight', async () => {
+    await prisma.task.createMany({
+      data: [
+        { workspaceId, title: 'A', description: 'a', status: 'done', maxAttempts: 3, stage: 'design' },
+        { workspaceId, title: 'B', description: 'b', status: 'running', maxAttempts: 3, stage: 'implement' },
+        { workspaceId, title: 'C', description: 'c', status: 'ready', maxAttempts: 3, stage: 'shipit' },
+        { workspaceId, title: 'D', description: 'd', status: 'ready', maxAttempts: 3 },
+      ],
+    })
+    const status = await runbookStatus(workspaceId)
+    expect(status.ok).toBe(true)
+    if (!status.ok) return
+    expect(status.value.unknownStages).toEqual(['shipit'])
+    expect(status.value.currentStage).toBe('implement')
+    expect(status.value.stages.map((stage) => [stage.key, stage.state])).toEqual([
+      ['design', 'done'],
+      ['implement', 'active'],
+      ['verify', 'pending'],
+      ['review', 'pending'],
+      ['release', 'pending'],
+    ])
+    // An unknown stage is never a row of the ladder: the ladder is the runbook's own stages.
+    expect(status.value.stages.map((stage) => stage.key)).not.toContain('shipit')
   })
 
   it('is empty rather than a refusal for a project that has adopted nothing', async () => {

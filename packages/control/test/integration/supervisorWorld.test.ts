@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { adoptRunbook, syncRunbooks } from '../../src/runbook.js'
 import { workspaceSpend } from '../../src/spend.js'
 import { workspaceStats } from '../../src/stats.js'
-import { loadSupervisorWorld } from '../../src/supervisorWorld.js'
+import { RUNBOOKS_IN_WORLD_MAX, loadSupervisorWorld } from '../../src/supervisorWorld.js'
 
 const NOW = new Date('2026-09-09T12:00:00.000Z')
 const ago = (ms: number): Date => new Date(NOW.getTime() - ms)
@@ -1123,6 +1123,46 @@ describe('loadSupervisorWorld -- the runbook fields (M48 R5, E6, E8)', () => {
     // A board is enough to stop the scan: this project has already been planned.
     await makeTask(fixture, { title: 'Already planned', status: 'ready' })
     expect((await loadSupervisorWorld(fixture.workspaceId, NOW)).world.runbooks).toEqual([])
+  })
+
+  // Fix round 1, Minor 3: a full catalog import can translate thousands of persona runbooks, and a
+  // Supervisor world is built once a tick. Bounded key-ascending, the `CATALOG_ENTRIES_MAX` rule.
+  it('offers at most RUNBOOKS_IN_WORLD_MAX of them, key ascending', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship the checkout endpoint' })
+    const stages = [
+      { key: 'only', title: 'Only', objective: 'Do it', capabilities: [], dependsOn: [], expectedOutputs: [], gates: [], retry: null, escalation: null },
+    ]
+    await prisma.runbookTemplate.createMany({
+      data: Array.from({ length: RUNBOOKS_IN_WORLD_MAX + 5 }, (_unused, index) => ({
+        key: `bound-${String(index).padStart(4, '0')}`,
+        name: `Bound ${String(index)}`,
+        description: 'one of many',
+        stages,
+        source: 'human',
+      })),
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+
+    expect(world.runbooks).toHaveLength(RUNBOOKS_IN_WORLD_MAX)
+    const keys = world.runbooks.map((runbook) => runbook.key)
+    expect(keys).toEqual(keys.toSorted())
+    expect(keys[0]).toBe('bound-0000')
+
+    // This is the file's last block, so its rows would otherwise outlive the run: `reset()` only
+    // reaches `RunbookTemplate` at the START of the next case.
+    await prisma.runbookTemplate.deleteMany({ where: { key: { startsWith: 'bound-' } } })
+  })
+
+  // Fix round 1, Minor 4: the loader coerces a stored `source` the same way `readRunbook` does --
+  // one helper, so the panel and the CLI cannot disagree about what a hand-edited row is.
+  it('reads a source nothing recognises as human', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship the checkout endpoint' })
+    await adoptRunbook(fixture.workspaceId, 'feature-delivery')
+    await prisma.runbookTemplate.update({ where: { key: 'feature-delivery' }, data: { source: 'imported' } })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.runbook?.source).toBe('human')
   })
 
   it('offers nothing to a project with no goal to match a runbook against', async (): Promise<void> => {

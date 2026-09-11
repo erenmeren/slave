@@ -10,12 +10,12 @@ import {
   isStaffableTask,
   parseHandoffContract,
   parseRunbookStages,
+  runbookSourceOf,
   type ActionKind,
   type CapabilityRecord,
   type DecisionStatus,
   type HandoffContract,
   type Runbook,
-  type RunbookSource,
   type SituationKind,
   type SupervisorCatalogEntry,
   type SupervisorCompanyWorker,
@@ -435,16 +435,21 @@ function runbookOf(row: {
     requiredCapabilities: row.requiredCapabilities,
     optionalCapabilities: row.optionalCapabilities,
     stages: stages.ok ? stages.value : [],
-    source: row.source as RunbookSource,
+    source: runbookSourceOf(row.source),
     sourceTemplateId: row.sourceTemplateId,
   }
 }
+
+/** A bound, for `CATALOG_ENTRIES_MAX`'s reason: one catalog import translates a persona runbook per
+ *  persona, and a Supervisor world is built once a tick. Key ascending, so the same rows come back
+ *  in the same order and `recommendRunbooks` is still deterministic when the bound bites. */
+export const RUNBOOKS_IN_WORLD_MAX = 200
 
 /** M48 R5: the runbooks this project could adopt. Read ONLY when `runbook_recommended` could fire
  *  -- a goal, no adopted runbook, and an empty board. A project that has already chosen, or one
  *  with a board, pays for no scan at all. */
 async function loadRunbooks(tx: Prisma.TransactionClient): Promise<readonly Runbook[]> {
-  const rows = await tx.runbookTemplate.findMany({ orderBy: { key: 'asc' } })
+  const rows = await tx.runbookTemplate.findMany({ orderBy: { key: 'asc' }, take: RUNBOOKS_IN_WORLD_MAX })
   return rows.flatMap((row) => {
     const runbook = runbookOf(row)
     // A row nothing can read recommends nothing: it would score on keywords and then offer an

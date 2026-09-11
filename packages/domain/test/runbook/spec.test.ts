@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { RUNBOOK_MAX_STAGES, parseRunbookStages, stageOrder, type RunbookStage } from '../../src/runbook/spec.js'
+import {
+  RUNBOOK_MAX_STAGES,
+  parseRunbookStages,
+  runbookSourceOf,
+  stageOrder,
+  type RunbookStage,
+} from '../../src/runbook/spec.js'
 
 const stage = (overrides: Partial<RunbookStage> & { key: string }): RunbookStage => ({
   title: `Stage ${overrides.key}`,
@@ -77,5 +83,22 @@ describe('stageOrder', () => {
 
   it('orders two independent stages by key, not by the order they were written in', () => {
     expect(stageOrder([stage({ key: 'zeta' }), stage({ key: 'alpha' })]).map((s) => s.key)).toEqual(['alpha', 'zeta'])
+  })
+})
+
+describe('runbookSourceOf', () => {
+  it('passes the three sources through', () => {
+    expect(runbookSourceOf('seed')).toBe('seed')
+    expect(runbookSourceOf('persona')).toBe('persona')
+    expect(runbookSourceOf('human')).toBe('human')
+  })
+
+  // A stored `source` is a plain `String` column with a default, so a hand-edited row, a restored
+  // dump or a future writer can hold anything. `human` is the safe reading: a sync rewrites `seed`
+  // rows and an import rewrites `persona` ones, and neither may touch a row nobody can classify.
+  it('reads anything else as human, which is the source nothing rewrites', () => {
+    expect(runbookSourceOf('imported')).toBe('human')
+    expect(runbookSourceOf('')).toBe('human')
+    expect(runbookSourceOf('SEED')).toBe('human')
   })
 })

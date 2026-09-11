@@ -2,20 +2,20 @@ import { RUNBOOK_SEED } from '@slave-of-ai/db'
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   RUNBOOK_KEY_PATTERN,
-  TERMINAL,
   err,
   measureAdherence,
   ok,
   parseRunbookStages,
+  runbookSourceOf,
   stageOrder,
   type Result,
   type Runbook,
-  type RunbookSource,
   type RunbookStage,
   type TaskStatus,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
+import { isUniqueConstraintViolation } from './prisma-errors.js'
 import type { ControlRefusal } from './refusal.js'
 
 /** A runbook as every surface reads it: the domain shape plus the one fact only the database has. */
@@ -57,9 +57,7 @@ function viewOf(row: RunbookRow, workspaceCount: number): RunbookView {
     requiredCapabilities: row.requiredCapabilities,
     optionalCapabilities: row.optionalCapabilities,
     stages: parsed.ok ? parsed.value : [],
-    source: (['seed', 'persona', 'human'] as readonly string[]).includes(row.source)
-      ? (row.source as RunbookSource)
-      : 'human',
+    source: runbookSourceOf(row.source),
     sourceTemplateId: row.sourceTemplateId,
     workspaceCount,
   }
@@ -188,27 +186,41 @@ export async function addRunbook(input: unknown, by?: string): Promise<Result<Ru
     return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
   }
 
-  const existing = await prisma.runbookTemplate.findUnique({ where: { key } })
-  if (existing !== null) return err({ kind: 'invalid_runbook', detail: `a runbook with the key "${key}" already exists` })
-
-  const row = await prisma.runbookTemplate.create({
-    data: {
-      key,
-      name,
-      description,
-      keywords: strings('keywords'),
-      requiredCapabilities: strings('requiredCapabilities'),
-      optionalCapabilities: strings('optionalCapabilities'),
-      stages: jsonStages(stages.value),
-      source: 'human',
-    },
-    include: { _count: { select: { workspaces: true } } },
+  const taken = err<ControlRefusal>({
+    kind: 'invalid_runbook',
+    detail: `a runbook with the key "${key}" already exists`,
   })
+  const existing = await prisma.runbookTemplate.findUnique({ where: { key } })
+  if (existing !== null) return taken
+
   // `by` is the operator's name on the CLI. Recorded nowhere yet -- a runbook is not workspace-
   // scoped, and `ExecutionEvent` is; the import log is M46's answer for catalog provenance and a
   // runbook log is not this milestone's scope (spec §3).
   void by
-  return ok(viewOf(row, row._count.workspaces))
+
+  try {
+    const row = await prisma.runbookTemplate.create({
+      data: {
+        key,
+        name,
+        description,
+        keywords: strings('keywords'),
+        requiredCapabilities: strings('requiredCapabilities'),
+        optionalCapabilities: strings('optionalCapabilities'),
+        stages: jsonStages(stages.value),
+        source: 'human',
+      },
+      include: { _count: { select: { workspaces: true } } },
+    })
+    return ok(viewOf(row, row._count.workspaces))
+  } catch (error) {
+    // The read above and this insert are two statements with nothing serialising them, so two
+    // operators adding the same key at once both read "free" (`org.ts`' own reason for catching
+    // rather than trusting a pre-query). The unique index is the real gate; the loser is told the
+    // same thing the pre-check would have told it, rather than being handed a raw P2002.
+    if (isUniqueConstraintViolation(error)) return taken
+    throw error
+  }
 }
 
 export interface AdoptOutcome {
@@ -334,10 +346,18 @@ export interface RunbookStatusView {
  * Where this project is in its runbook (R6) -- what `runbook-status` prints and what the Overview's
  * panel renders.
  *
- * The four stage states are the four things a person can be told: `missing` (the plan skipped it),
- * `done` (every task of it is terminal), `active` (it is the current stage), `pending` (it has work
- * that has not started and is not current). ONE derivation, here, so the CLI and the page cannot
- * disagree about which stage a project is on.
+ * The four stage states are the four things a person can be told, read AGAINST the current stage
+ * rather than off the task counts alone (fix round 1, Important 1):
+ * - `active` -- it IS the current stage, whether or not any task has reached it yet. Checked first,
+ *   because the alternative is a panel saying "current stage: Design" over a row saying design was
+ *   skipped, which is what a board on the day a runbook is adopted looks like.
+ * - `done` -- it is BEFORE the current stage and has tasks. Every one of them is terminal by
+ *   construction: the current stage is the first with a live task.
+ * - `missing` -- it is BEFORE the current stage and has none. This is the only honest reading of
+ *   "the plan skipped it", and the measurement this milestone exists to make.
+ * - `pending` -- it is AFTER the current stage. Not reached is not skipped, with tasks or without.
+ *
+ * ONE derivation, here, so the CLI and the page cannot disagree about which stage a project is on.
  */
 export async function runbookStatus(workspaceId: string): Promise<Result<RunbookStatusView, ControlRefusal>> {
   const workspace = await prisma.workspace.findUnique({
@@ -356,14 +376,20 @@ export async function runbookStatus(workspaceId: string): Promise<Result<Runbook
     runbook.stages,
     tasks.map((task) => ({ id: task.id, stage: task.stage, status: task.status as TaskStatus })),
   )
-  const countByStage = new Map<string, { total: number; live: number }>()
+  // Counts only. Whether a stage's work is FINISHED is not asked here: `measureAdherence` already
+  // decided where the live work is, and the ladder below reads every other state off that one
+  // answer -- a second opinion about terminality is exactly how the CLI and the panel drift apart.
+  const countByStage = new Map<string, number>()
   for (const task of tasks) {
     if (task.stage === null) continue
-    const bucket = countByStage.get(task.stage) ?? { total: 0, live: 0 }
-    bucket.total += 1
-    if (!TERMINAL.includes(task.status as TaskStatus)) bucket.live += 1
-    countByStage.set(task.stage, bucket)
+    countByStage.set(task.stage, (countByStage.get(task.stage) ?? 0) + 1)
   }
+
+  // `-1` only when the runbook has no stages at all -- a row whose `stages` will not parse, which
+  // `viewOf` reads as an empty list. There is then nothing to label, so the branch it feeds is
+  // unreachable; it is written defensively rather than asserted away.
+  const ordered = stageOrder(runbook.stages)
+  const currentIndex = ordered.findIndex((stage) => stage.key === adherence.currentStage)
 
   return ok({
     runbook,
@@ -371,17 +397,17 @@ export async function runbookStatus(workspaceId: string): Promise<Result<Runbook
     stagesCovered: adherence.stagesCovered,
     stagesMissing: adherence.stagesMissing,
     unknownStages: adherence.unknownStages,
-    stages: stageOrder(runbook.stages).map((stage) => {
-      const counts = countByStage.get(stage.key)
+    stages: ordered.map((stage, index) => {
+      const taskCount = countByStage.get(stage.key) ?? 0
       const state =
-        counts === undefined
-          ? 'missing'
-          : stage.key === adherence.currentStage
-            ? 'active'
-            : counts.live === 0
-              ? 'done'
-              : 'pending'
-      return { key: stage.key, title: stage.title, taskCount: counts?.total ?? 0, state }
+        index === currentIndex
+          ? 'active'
+          : currentIndex !== -1 && index < currentIndex
+            ? taskCount === 0
+              ? 'missing'
+              : 'done'
+            : 'pending'
+      return { key: stage.key, title: stage.title, taskCount, state }
     }),
   })
 }

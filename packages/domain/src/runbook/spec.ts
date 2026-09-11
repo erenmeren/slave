@@ -37,6 +37,21 @@ export interface RunbookStage {
 export const RUNBOOK_SOURCES = ['seed', 'persona', 'human'] as const
 export type RunbookSource = (typeof RUNBOOK_SOURCES)[number]
 
+/**
+ * A stored `RunbookTemplate.source` as a {@link RunbookSource}, anything unrecognised reading as
+ * `human`.
+ *
+ * The column is a plain `String` with a default, so a hand-edited row, a restored dump or a writer
+ * added later can hold a word this union does not. `human` is the SAFE reading and the only one:
+ * `syncRunbooks` rewrites `seed` rows and `importCatalog` rewrites `persona` ones, so a row nobody
+ * can classify must fall into the one bucket neither of them touches. One definition site (M17
+ * census rule) -- both `viewOf` and the Supervisor loader's `runbookOf` call it, so the Workforce
+ * tab and the Supervisor panel cannot disagree about what a hand-edited row is.
+ */
+export function runbookSourceOf(value: string): RunbookSource {
+  return (RUNBOOK_SOURCES as readonly string[]).includes(value) ? (value as RunbookSource) : 'human'
+}
+
 /** A whole runbook, as the pure functions here and every reader see it. The DATA lives in
  *  `RunbookTemplate`; nothing in `packages/domain` reads a database, so every function below takes
  *  runbooks as an argument -- which is also what makes each of them a three-line fixture. */

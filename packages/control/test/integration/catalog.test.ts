@@ -320,6 +320,9 @@ describe('importCatalog', () => {
     expect(result.value.created[0]?.templateId).toBeNull()
     expect(await prisma.slaveTemplate.count()).toBe(0)
     expect(await prisma.catalogImport.count()).toBe(0)
+    // Fix round 1, Minor 5: the persona-runbook pass runs after the dry-run return, so a preview
+    // writes no runbook either.
+    expect(await prisma.runbookTemplate.count()).toBe(0)
   })
 
   it('trims both halves of every --role-map entry before anyone reads it', async (): Promise<void> => {
