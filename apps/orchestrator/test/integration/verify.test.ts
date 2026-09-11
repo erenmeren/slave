@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { addRunbook, adoptRunbook } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, taskId as brandTaskId } from '@slave-of-ai/domain'
@@ -90,7 +91,13 @@ async function eventTypesFor(workspaceId: string): Promise<readonly DomainEventT
 
 describe('verify and advance', () => {
   let fixture: Fixture
-  let base: { taskId: ReturnType<typeof brandTaskId>; worktreePath: string; artifactDir: string; timeoutMs: number }
+  let base: {
+    taskId: ReturnType<typeof brandTaskId>
+    worktreePath: string
+    artifactDir: string
+    timeoutMs: number
+    stage: { key: string; gates: readonly string[] } | null
+  }
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
@@ -102,6 +109,9 @@ describe('verify and advance', () => {
       worktreePath: fixture.worktreePath,
       artifactDir: fixture.artifactDir,
       timeoutMs: 10_000,
+      // M48 R6: every case in this describe is about the WORKSPACE's own commands, and a task with
+      // no stage is what every task planned before this milestone carries.
+      stage: null,
     }
   })
 
@@ -593,5 +603,191 @@ describe('verifyConcludedRun releases a task after a run concludes failed', () =
     })
 
     await expect(verifyConcludedRun(brandRunId(run.id))).resolves.toBeUndefined()
+  })
+})
+
+/**
+ * M48 R6: the stage's own gates, run after the workspace's and attributed to the stage when one
+ * fails. A gate is a project's answer to "what does this phase have to prove".
+ */
+describe('stage gates (M48 R6)', () => {
+  const KEY = 'gate-m48-verify'
+
+  interface StageFixture {
+    readonly workspaceId: string
+    readonly taskId: string
+    readonly runId: string
+  }
+
+  /** A succeeded implementation run with a worktree, for a task that may or may not carry a stage
+   *  -- the shape `verifyConcludedRun` runs the commands against. */
+  async function seedRunningTask(options: {
+    readonly stage: string | null
+    readonly verifyCommands?: readonly string[]
+  }): Promise<StageFixture> {
+    const repoPath = makeRepo()
+    repos.push(repoPath)
+    const workspace = await prisma.workspace.create({
+      data: {
+        name: 'Checkout Platform',
+        repoPath,
+        baseBranch: 'main',
+        verifyCommands: [...(options.verifyCommands ?? ['true'])],
+        setupCommands: [],
+        maxAttempts: 5,
+      },
+    })
+    const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+    const slave = await prisma.slave.create({
+      data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
+    })
+    const worktree = await provisionWorktree({
+      repoPath,
+      baseBranch: 'main',
+      taskKey: 'TASK-048',
+      slug: 'stage-gate',
+      setupCommands: [],
+    })
+    const task = await prisma.task.create({
+      data: {
+        workspaceId: workspace.id,
+        title: 'Add the thing',
+        description: 'make it work',
+        status: 'running',
+        requiredRole: 'backend',
+        maxAttempts: workspace.maxAttempts,
+        branch: worktree.branch,
+        ...(options.stage === null ? {} : { stage: options.stage }),
+      },
+    })
+    const run = await prisma.slaveRun.create({
+      data: {
+        taskId: task.id,
+        slaveId: slave.id,
+        kind: 'implementation',
+        status: 'succeeded',
+        worktreePath: worktree.path,
+        terminalAt: new Date(),
+        endedAt: new Date(),
+      },
+    })
+    await prisma.task.update({ where: { id: task.id }, data: { activeRunId: run.id } })
+    return { workspaceId: workspace.id, taskId: task.id, runId: run.id }
+  }
+
+  /** The one runbook this describe adopts: one stage, carrying whichever gates the case wants.
+   *  Written through `addRunbook` the first time -- the verb is what validates a stage list -- and
+   *  the gates then set directly, because the row outlives the truncation these cases run under. */
+  async function adoptGateRunbook(workspaceId: string, gates: readonly string[]): Promise<void> {
+    const existing = await prisma.runbookTemplate.findUnique({ where: { key: KEY } })
+    if (existing === null) {
+      const added = await addRunbook({
+        key: KEY,
+        name: 'Gate verify',
+        description: 'x',
+        stages: [{ key: 'implement', title: 'Implement', objective: 'Build', gates: [...gates] }],
+      })
+      expect(added.ok).toBe(true)
+    } else {
+      await prisma.runbookTemplate.update({
+        where: { key: KEY },
+        data: {
+          stages: [
+            {
+              key: 'implement',
+              title: 'Implement',
+              objective: 'Build',
+              capabilities: [],
+              dependsOn: [],
+              expectedOutputs: [],
+              gates: [...gates],
+              retry: null,
+              escalation: null,
+            },
+          ],
+        },
+      })
+    }
+    const adopted = await adoptRunbook(workspaceId, KEY)
+    expect(adopted.ok).toBe(true)
+  }
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  afterAll(async (): Promise<void> => {
+    await prisma.runbookTemplate.deleteMany({ where: { key: KEY } })
+  })
+
+  it('runs the stage gate after the workspace commands, and names the stage when the gate fails', async (): Promise<void> => {
+    const fixture = await seedRunningTask({ stage: 'implement' })
+    await adoptGateRunbook(fixture.workspaceId, ['false'])
+
+    await verifyConcludedRun(brandRunId(fixture.runId))
+
+    const event = await prisma.executionEvent.findFirstOrThrow({
+      where: { taskId: fixture.taskId, type: 'task_verify_failed' },
+    })
+    expect(event.payload).toMatchObject({ command: 'false', stage: 'implement' })
+    const artifacts = await prisma.artifact.findMany({ where: { taskId: fixture.taskId }, orderBy: { createdAt: 'asc' } })
+    // The workspace's own `true` ran first and passed; the stage's `false` ran second and failed.
+    expect(artifacts).toHaveLength(2)
+    expect(readFileSync(artifacts[1]?.path ?? '', 'utf8')).toContain('stage "implement" gate')
+    // ...and the slave-facing reason names it too: `lastRejectionReason` is the next run's prompt.
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).lastRejectionReason).toContain(
+      'stage "implement" gate',
+    )
+  })
+
+  it('leaves a task with no stage exactly as it was: the workspace commands and nothing else', async (): Promise<void> => {
+    const fixture = await seedRunningTask({ stage: null })
+    await adoptGateRunbook(fixture.workspaceId, ['false'])
+
+    await verifyConcludedRun(brandRunId(fixture.runId))
+
+    const event = await prisma.executionEvent.findFirstOrThrow({
+      where: { taskId: fixture.taskId, type: 'task_verify_passed' },
+    })
+    expect(event).toBeDefined()
+    expect(await prisma.artifact.count({ where: { taskId: fixture.taskId } })).toBe(1)
+  })
+
+  // Plan erratum E10: the refusal is about proving NOTHING, and a stage gate proves something.
+  it('verifies for real on a workspace with no verifyCommands when the stage has a gate', async (): Promise<void> => {
+    const fixture = await seedRunningTask({ stage: 'implement', verifyCommands: [] })
+    await adoptGateRunbook(fixture.workspaceId, ['true'])
+
+    await verifyConcludedRun(brandRunId(fixture.runId))
+
+    expect(await prisma.executionEvent.count({ where: { taskId: fixture.taskId, type: 'guardrail_tripped' } })).toBe(0)
+    expect(await prisma.executionEvent.count({ where: { taskId: fixture.taskId, type: 'task_verify_passed' } })).toBe(1)
+  })
+
+  it('attributes a WORKSPACE command failure to no stage, even for a staged task', async (): Promise<void> => {
+    // A workspace command is the project's own, whatever stage the task is in: telling an operator
+    // the PROCESS failed over a command every task in the project runs would send them to the
+    // wrong place. The two strings differ, which is what the attribution reads.
+    const fixture = await seedRunningTask({ stage: 'implement', verifyCommands: ['exit 7'] })
+    await adoptGateRunbook(fixture.workspaceId, ['true'])
+
+    await verifyConcludedRun(brandRunId(fixture.runId))
+
+    const event = await prisma.executionEvent.findFirstOrThrow({
+      where: { taskId: fixture.taskId, type: 'task_verify_failed' },
+    })
+    expect(event.payload).toMatchObject({ command: 'exit 7', exitCode: 7 })
+    expect(event.payload).not.toHaveProperty('stage')
+  })
+
+  it('runs the workspace commands alone for a stage the adopted runbook does not have', async (): Promise<void> => {
+    const fixture = await seedRunningTask({ stage: 'a-stage-nobody-has' })
+    await adoptGateRunbook(fixture.workspaceId, ['false'])
+
+    await verifyConcludedRun(brandRunId(fixture.runId))
+
+    expect(await prisma.executionEvent.count({ where: { taskId: fixture.taskId, type: 'task_verify_passed' } })).toBe(1)
   })
 })

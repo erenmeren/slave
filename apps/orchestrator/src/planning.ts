@@ -3,19 +3,23 @@ import {
   slaveId as brandSlaveId,
   runId as brandRunId,
   capabilityIndex,
+  measureAdherence,
   parsePlanGraph,
+  stageOrder,
   type CapabilityRecord,
   type RunId,
+  type Runbook,
 } from '@slave-of-ai/domain'
 import {
   admitProvider,
   listCapabilities,
   refusalText,
   resolveDenyList,
+  runbookForWorkspace,
   runFilePaths,
   writePermissionsFile,
 } from '@slave-of-ai/control'
-import { prisma } from '@slave-of-ai/db/client'
+import { Prisma, prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
 import type { SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
@@ -68,7 +72,17 @@ export async function concludePlanning(runId: RunId): Promise<void> {
     orderBy: { seq: 'asc' },
   })
   const text = rows.map((row) => (row.payload as { text: string }).text).join('\n')
-  const parsed = parsePlanGraph(text)
+
+  // R2: the adopted runbook decides which stages a plan may name, what a stage's tasks are allowed
+  // to retry, and what adherence is measured against. ONE read for the whole graph.
+  const runbook = await runbookForWorkspace(workspaceId)
+  const stages = runbook === null ? [] : stageOrder(runbook.stages)
+  const stageByKey = new Map(stages.map((stage) => [stage.key, stage] as const))
+
+  const parsed = parsePlanGraph(
+    text,
+    stages.map((stage) => stage.key),
+  )
 
   if (!parsed.ok) {
     await failPlanningRun(run, workspaceId, `planning run produced no valid task graph: ${parsed.error}`)
@@ -114,6 +128,7 @@ export async function concludePlanning(runId: RunId): Promise<void> {
     readonly planTask: (typeof parsed.value.tasks)[number]
     readonly keys: readonly string[]
     readonly requiredRole: string
+    readonly maxAttempts: number
   }> = []
   for (const planTask of parsed.value.tasks) {
     const { keys, unresolved } = normaliseCapabilitiesStrict(planTask.capabilities, taxonomy)
@@ -130,13 +145,17 @@ export async function concludePlanning(runId: RunId): Promise<void> {
       )
       return
     }
-    derived.push({ planTask, keys, requiredRole })
+    // The stage's own retry cap, when it sets one (R2). Read at CREATION and never re-read: a
+    // runbook edited a week later must not silently move the budget of work already on the board,
+    // which is the same reason `Task.maxAttempts` is a column rather than a lookup.
+    const stageRetry = planTask.stage === undefined ? undefined : stageByKey.get(planTask.stage)?.retry
+    derived.push({ planTask, keys, requiredRole, maxAttempts: stageRetry?.maxAttempts ?? workspace.maxAttempts })
   }
 
   const created = await prisma.$transaction(async (tx) => {
     const idByKey = new Map<string, string>()
     const rows: Array<{ readonly id: string; readonly title: string; readonly role: string }> = []
-    for (const { planTask, keys, requiredRole } of derived) {
+    for (const { planTask, keys, requiredRole, maxAttempts } of derived) {
       const task = await tx.task.create({
         data: {
           workspaceId,
@@ -147,7 +166,16 @@ export async function concludePlanning(runId: RunId): Promise<void> {
           requiredCapabilities: [...keys],
           createdBy: 'slave',
           createdByUserId: workspace.goalSetByUserId,
-          maxAttempts: workspace.maxAttempts,
+          maxAttempts,
+          // R1: null is a real value and the common one before this milestone. `parsePlanGraph` has
+          // already refused every graph whose handoff was not a contract (plan erratum E16), so a
+          // value here is always a whole one.
+          // `Prisma.DbNull`, never a bare `null`: on a NULLABLE Json column a bare `null` is the
+          // JSON value null rather than SQL NULL (`pump.ts`' own note), and every reader of this
+          // column asks "is there a contract", which SQL NULL is the honest answer to.
+          handoff:
+            planTask.handoff === undefined ? Prisma.DbNull : (planTask.handoff as unknown as Prisma.InputJsonValue),
+          stage: planTask.stage ?? null,
           // M40 §1: which requirement produced this task. `workspace.goalVersion` IS the version
           // of the `goal` this run was given (Task 3 adds the delta re-plan, where the version a
           // task is stamped with is the one the re-plan derived from rather than simply the
@@ -208,8 +236,34 @@ export async function concludePlanning(runId: RunId): Promise<void> {
       // operator concludes the feature does not work. Absent when nothing was dropped, so a plan
       // written entirely in the taxonomy's words carries no field about it at all.
       ...(dropped.size === 0 ? {} : { droppedCapabilities: [...dropped].toSorted() }),
+      // R2: the measured adherence. SOFT -- `stagesMissing` is a report, never a refusal. Absent
+      // entirely when no runbook is adopted, exactly as `droppedCapabilities` is absent when
+      // nothing was dropped.
+      ...(runbook === null
+        ? {}
+        : {
+            runbook: {
+              id: runbook.id,
+              key: runbook.key,
+              ...adherenceOf(runbook, derived),
+            },
+          }),
     },
   })
+}
+
+/** The `stagesCovered`/`stagesMissing` pair for a freshly derived plan (R2). Measured over the plan
+ *  rather than over the board, because the board is what the plan is about to become and a
+ *  concurrent hand-made task is not evidence about this plan's adherence. */
+export function adherenceOf(
+  runbook: Runbook,
+  derived: readonly { readonly planTask: { readonly stage?: string | undefined } }[],
+): { readonly stagesCovered: readonly string[]; readonly stagesMissing: readonly string[] } {
+  const measured = measureAdherence(
+    runbook.stages,
+    derived.map((entry, index) => ({ id: String(index), stage: entry.planTask.stage ?? null, status: 'ready' as const })),
+  )
+  return { stagesCovered: measured.stagesCovered, stagesMissing: measured.stagesMissing }
 }
 
 /**

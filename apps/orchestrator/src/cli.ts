@@ -8,6 +8,8 @@ import {
   answerQuestion,
   approveDecision,
   addCapability,
+  addRunbook,
+  adoptRunbook,
   archiveWorkspace,
   backfillSlaveCapabilities,
   cancelTask,
@@ -39,6 +41,7 @@ import {
   listDecisions,
   listGoalVersions,
   listPendingQuestions,
+  listRunbooks,
   listUsers,
   loadSimulation,
   loadSupervisorWorld,
@@ -46,6 +49,7 @@ import {
   moveCompanySlave,
   pauseSimulation,
   reassignQuestion,
+  readRunbook,
   readTemplateProfile,
   refusalText,
   rejectDecision,
@@ -57,6 +61,7 @@ import {
   requestStop,
   restoreWorkspace,
   resumeSimulation,
+  runbookStatus,
   setProfile,
   setRuntimeRoles,
   setSlaveCapabilities,
@@ -72,6 +77,7 @@ import {
   stepSimulation,
   stopAutoRun,
   syncCapabilityTaxonomy,
+  syncRunbooks,
   syncSkillCatalog,
   tickSimulations,
   plural,
@@ -89,6 +95,7 @@ import {
   filterFresh,
   observe,
   runContextManifestSchema,
+  stageOrder,
   workspaceId as brandWorkspaceId,
   type WorkspaceId,
 } from '@slave-of-ai/domain'
@@ -274,6 +281,24 @@ const USAGE = `usage: orchestrator <command> [options]
                                        materialised from, and add the runtime roles those project
                                        to. Only workers whose own capability set is empty; never
                                        one an operator has described by hand. Run once per project.
+  runbooks sync                        reconcile the runbook table against the checked-in list:
+                                       adds what is missing, brings a seed row back to what the
+                                       list says, and never touches a persona or human row.
+  runbooks list                        every runbook: key, name, stage count, where it came from,
+                                       and how many projects follow it.
+  runbooks show <key>                  one runbook's stages in order, with the capabilities, gates,
+                                       retry and escalation of each.
+  runbooks add --file <path.json>      write your own runbook from one JSON object. Its source is
+                                       always human, so a sync can never rewrite it.
+  adopt-runbook --workspace <id> --runbook <key>
+                                       the project follows this runbook. The next planning run is
+                                       asked to adapt it; nothing re-plans by itself.
+  adopt-runbook --workspace <id> --clear
+                                       the project follows no runbook. Tasks keep the stage they
+                                       were planned with.
+  runbook-status --workspace <id>      where this project is in its runbook: the current stage, and
+                                       each stage's state -- done, active, pending or missing from
+                                       the plan.
   set-capabilities --slave <id> --capabilities a,b [--by <name>]
                                        what this slave PROVIDES. Keys, labels and synonyms are all
                                        accepted and resolved to keys; a word matching nothing is
@@ -1540,6 +1565,94 @@ export async function main(argv: readonly string[]): Promise<number> {
         return 0
       }
       throw new Error('capabilities takes sync, add, backfill or list')
+    }
+
+    case 'runbooks': {
+      // `runbooks sync | list | show <key> | add --file <path>` -- `capabilities`' own shape in this
+      // file (the sub-verb is a positional read off raw argv, because `parseArgs` collects only
+      // flags), for its own reason: four sibling top-level verbs for one table would read as four
+      // unrelated features.
+      const sub = argv[1] ?? 'list'
+      if (sub === 'sync') {
+        const out = await syncRunbooks()
+        process.stdout.write(
+          `runbooks synced: ${String(out.created)} added, ${String(out.updated)} brought back to the checked-in list\n`,
+        )
+        return 0
+      }
+      if (sub === 'list') {
+        for (const runbook of await listRunbooks()) {
+          process.stdout.write(
+            `${runbook.key}\t${runbook.name}\t${String(runbook.stages.length)} stages\t${runbook.source}\t${String(runbook.workspaceCount)} project(s)\n`,
+          )
+        }
+        return 0
+      }
+      if (sub === 'show') {
+        const key = argv[2]
+        if (key === undefined) throw new Error('runbooks show needs a key')
+        const result = await readRunbook(key)
+        if (!result.ok) throw new Error(refusalText(result.error))
+        const runbook = result.value
+        process.stdout.write(`${runbook.name} (${runbook.key}, ${runbook.source})\n${runbook.description}\n`)
+        for (const stage of stageOrder(runbook.stages)) {
+          process.stdout.write(
+            `  ${stage.key}: ${stage.title} -- ${stage.objective}\n` +
+              (stage.capabilities.length === 0 ? '' : `    capabilities: ${stage.capabilities.join(', ')}\n`) +
+              (stage.gates.length === 0 ? '' : `    gates: ${stage.gates.join(' && ')}\n`) +
+              (stage.retry === null ? '' : `    retry: ${String(stage.retry.maxAttempts)} attempts\n`) +
+              (stage.escalation === null ? '' : `    escalation: ${stage.escalation}\n`),
+          )
+        }
+        return 0
+      }
+      if (sub === 'add') {
+        const file = requireFlag(flags, 'file')
+        const result = await addRunbook(JSON.parse(readFileSync(file, 'utf8')) as unknown, operatorName(flags))
+        if (!result.ok) throw new Error(refusalText(result.error))
+        process.stdout.write(`${result.value.key} added: ${String(result.value.stages.length)} stages, source human\n`)
+        return 0
+      }
+      throw new Error('runbooks takes sync, list, show or add')
+    }
+
+    case 'adopt-runbook': {
+      const workspaceId = requireFlag(flags, 'workspace')
+      // `--clear` and `--runbook` are the two halves of one column, so they are one verb. Clearing
+      // a project that has adopted nothing is a no-op that says so, rather than a refusal: there is
+      // nothing to report and nothing to undo.
+      const key = 'clear' in flags ? null : requireFlag(flags, 'runbook')
+      const result = await adoptRunbook(workspaceId, key, { origin: 'human' })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(
+        result.value.adopted === null
+          ? result.value.changed
+            ? `${workspaceId} follows no runbook now\n`
+            : `${workspaceId} already followed no runbook: nothing was recorded\n`
+          : `${workspaceId} follows ${result.value.adopted.name} (${result.value.adopted.key})` +
+            `${result.value.changed ? '' : ' already'}\n`,
+      )
+      return 0
+    }
+
+    case 'runbook-status': {
+      // D12: the ladder is derived in ONE place, so this verb and the Overview panel cannot
+      // disagree about what a stage's state is.
+      const result = await runbookStatus(requireFlag(flags, 'workspace'))
+      if (!result.ok) throw new Error(refusalText(result.error))
+      const status = result.value
+      if (status.runbook === null) {
+        process.stdout.write('no runbook adopted\n')
+        return 0
+      }
+      process.stdout.write(`${status.runbook.name} (${status.runbook.key}), current stage: ${status.currentStage ?? 'none'}\n`)
+      for (const stage of status.stages) {
+        process.stdout.write(`  ${stage.state === 'active' ? '>' : ' '} ${stage.key}\t${stage.state}\t${String(stage.taskCount)} task(s)\n`)
+      }
+      if (status.unknownStages.length > 0) {
+        process.stderr.write(`WARNING: ${status.unknownStages.join(', ')} name(s) no stage of this runbook\n`)
+      }
+      return 0
     }
 
     case 'set-capabilities': {

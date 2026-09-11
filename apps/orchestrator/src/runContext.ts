@@ -3,16 +3,22 @@ import { createHash } from 'node:crypto'
 import { cpSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { skillRoots, skillSourceDir, type SkillRoots } from '@slave-of-ai/control'
+import { runbookForWorkspace, skillRoots, skillSourceDir, type SkillRoots } from '@slave-of-ai/control'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   PROFILE_MAX_CHARS,
   SECTION_ORDER,
   TERMINAL,
+  defuseRoutingLiterals,
   effectiveProfile,
+  handoffCanonicalJson,
   neutraliseMarkers,
+  parseHandoffContract,
+  renderHandoff,
   renderRunContext,
+  stageOrder,
   type Manifest,
+  type Runbook,
   type Section,
 } from '@slave-of-ai/domain'
 import type { ProviderKind } from '@slave-of-ai/providers'
@@ -484,6 +490,115 @@ async function capabilitiesSection(): Promise<Section | null> {
   }
 }
 
+/**
+ * The contract this run is being handed (M48 R4).
+ *
+ * Right after the `task` section on BOTH the implementation and the review order: a reviewer that
+ * judges a diff against a paragraph is what this milestone ends, and the reviewer reads the same
+ * row the worker did.
+ *
+ * `null` for a task with no contract -- a hand-made task, or one planned before this milestone --
+ * and for a column that will not parse. The second is deliberate and is not silent for an operator
+ * (plan decision D9): `renderHandoff` never sees a half-contract, and the prompt a worker gets is
+ * exactly the one it would have got before M48 rather than a dispatch that throws. The section's
+ * absence from the manifest is the record.
+ *
+ * The hash is over the contract's CANONICAL JSON, not over the rendered text and not folded into
+ * `task.sha256` (spec R4, plan decision D2): that hash is `title + '\n' + description`, and M37/M41
+ * both pin it.
+ */
+function handoffSection(task: { readonly id: string; readonly handoff: unknown }): Section | null {
+  const parsed = parseHandoffContract(task.handoff)
+  if (!parsed.ok) return null
+  return {
+    kind: 'handoff',
+    // The whole section text, heading and closing rule included, comes from the domain: a test in
+    // `packages/domain` pins it byte for byte, the way `REVIEW_VERDICT_INSTRUCTIONS` is pinned.
+    text: renderHandoff(parsed.value),
+    source: { kind: 'handoff', taskId: task.id, sha256: sha256(handoffCanonicalJson(parsed.value)) },
+  }
+}
+
+/** The shape both planning sections ask for, spelt once. Deliberately NOT inside
+ *  `PLANNING_GRAPH_INSTRUCTIONS`: that constant is byte-pinned against its pre-M37 source, and the
+ *  literal `"task graph"` in it is what the fake CLI's planning arm selects on. */
+const HANDOFF_SHAPE_LINES: readonly string[] = [
+  'Each task in the JSON object you return carries, beside its other fields:',
+  '  "stage": "<one of the stage keys above>",',
+  '  "handoff": {"objective":"...","expectedOutput":"...","acceptanceCriteria":["..."],',
+  '              "knownConstraints":["..."],"evidenceRequired":["..."],"contextReferences":["..."]}',
+  'objective and expectedOutput are required; the four lists may be empty and are capped at 12',
+  'items. Every string is at most 400 characters. A task with no handoff is a task nobody can',
+  'review against anything.',
+]
+
+/**
+ * What a planning run is told about the way this project works (M48 R4).
+ *
+ * A SECTION rather than part of `PLANNING_GRAPH_INSTRUCTIONS`, for `capabilities`' own reason (M47
+ * plan erratum E3): that constant is pure, static and byte-pinned, and a runbook is per-workspace
+ * data. It renders after `capabilities`, so the prompt reads goal, vocabulary, process, request.
+ *
+ * The stages are in {@link stageOrder}, never in row order, so two runs over one runbook are shown
+ * the same list. Every piece of a stage's own text goes through `defuseRoutingLiterals` and
+ * `neutraliseMarkers` -- a runbook row is written by a person or translated from a persona, and a
+ * stage objective quoting `"verdict"` would answer this planning run with a review fixture.
+ */
+function runbookSection(runbook: Runbook): Section | null {
+  const ordered = stageOrder(runbook.stages)
+  if (ordered.length === 0) return null
+  const safe = (text: string): string => defuseRoutingLiterals(neutraliseMarkers(singleLine(text)))
+  return {
+    kind: 'runbook',
+    text: block('THE WAY THIS PROJECT WORKS', [
+      `This project follows the "${safe(runbook.name)}" runbook: ${safe(runbook.description)}`,
+      'Adapt it into the task graph. Give every task you return a "stage" naming one of the keys',
+      'below, and a "handoff" object. You may skip a stage this goal does not need; you may give one',
+      'stage several tasks. Nothing is refused for skipping a stage -- the gap is simply reported.',
+      '',
+      ...ordered.flatMap((stage) => [
+        `- ${stage.key}: ${safe(stage.title)} -- ${safe(stage.objective)}`,
+        ...(stage.capabilities.length === 0 ? [] : [`    capabilities: ${stage.capabilities.join(', ')}`]),
+        ...(stage.dependsOn.length === 0 ? [] : [`    after: ${stage.dependsOn.join(', ')}`]),
+        ...(stage.expectedOutputs.length === 0 ? [] : [`    leaves behind: ${stage.expectedOutputs.map(safe).join('; ')}`]),
+      ]),
+      '',
+      ...HANDOFF_SHAPE_LINES,
+    ]),
+    source: { kind: 'runbook', runbookId: runbook.id, key: runbook.key, stageKeys: ordered.map((stage) => stage.key) },
+  }
+}
+
+/** The same request, minus the stages, for a project that has adopted no runbook (M48 R4). The
+ *  contract is worth asking for whether or not a process was chosen. */
+function handoffProtocolSection(): Section {
+  return {
+    kind: 'handoff_protocol',
+    text: block('WHAT EVERY TASK MUST HAND OVER', [
+      'This project has not adopted a runbook, so you decide the shape of the work. Every task you',
+      'return still carries a handoff: what it is for, what exists when it is done, and how anybody',
+      'can tell.',
+      '',
+      ...HANDOFF_SHAPE_LINES.filter((line) => !line.startsWith('  "stage"')),
+    ]),
+    source: { kind: 'handoff_protocol' },
+  }
+}
+
+/**
+ * The process section a planning prompt carries: the adopted runbook, or -- with none adopted --
+ * the contract alone (M48 R4). NEVER both: `SECTION_ORDER.planning` has a slot for each, and
+ * exactly one is produced here, which is what makes the mutual exclusion a property of this
+ * function rather than of the renderer.
+ *
+ * Shared by {@link buildRunContext} and {@link renderReplanPreview}, so the preview an operator
+ * reads IS the prompt the run would be given.
+ */
+async function processSection(workspaceId: string): Promise<Section | null> {
+  const runbook = await runbookForWorkspace(workspaceId)
+  return runbook === null ? handoffProtocolSection() : runbookSection(runbook)
+}
+
 /** The `planning_goal` section: the requirement itself, and WHICH version of it (M40 §1). Shared by
  *  the builder below and by {@link renderReplanPreview}, so an operator previewing a re-plan reads
  *  the same first section the run would be given. */
@@ -533,6 +648,10 @@ export async function renderReplanPreview(input: {
   // would be given -- keys included.
   const capabilities = await capabilitiesSection()
   if (capabilities !== null) sections.push(capabilities)
+  // M48 R4, on the same terms and for the same reason: the process a re-plan is asked to follow is
+  // part of the prompt, so it is part of the preview.
+  const process = await processSection(input.workspaceId)
+  if (process !== null) sections.push(process)
   return renderRunContext('planning', sections).prompt
 }
 
@@ -565,7 +684,10 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
       ? null
       : await prisma.task.findUniqueOrThrow({
           where: { id: input.taskId },
-          select: { id: true, title: true, description: true, lastRejectionReason: true },
+          // M48 R4: `handoff` rides along for the section below. `stage` deliberately does NOT --
+          // a stage is a label, and naming it to a worker would invite it to reason about a
+          // process it cannot change.
+          select: { id: true, title: true, description: true, lastRejectionReason: true, handoff: true },
         })
   const workspace =
     input.kind === 'planning'
@@ -662,6 +784,12 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
       // `Task: ` label and a blank line), so the same task hashes the same from any builder.
       source: { kind: 'task', taskId: task.id, sha256: sha256(`${task.title}\n${task.description}`) },
     })
+    // M48 R4. After the task, on the implementation AND the review order -- `order.includes` is
+    // what keeps one `if` honest for both.
+    if (order.includes('handoff')) {
+      const handoff = handoffSection(task)
+      if (handoff !== null) sections.push(handoff)
+    }
     // The whole point of spec §8's loop: a rework is supposed to act on why the last attempt was
     // rejected, and one that arrives without it is just a retry. Never on a review run, whose
     // order has no place for it -- the reviewer judges this diff, not the last one.
@@ -704,6 +832,9 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     // same way a first plan does, so a re-plan gets the list too.
     const capabilities = await capabilitiesSection()
     if (capabilities !== null) sections.push(capabilities)
+    // M48 R4: how this project works, or -- with no runbook adopted -- the contract alone.
+    const process = await processSection(input.workspaceId)
+    if (process !== null) sections.push(process)
   }
 
   const { prompt, manifest } = renderRunContext(input.kind, sections)

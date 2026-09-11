@@ -1,5 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { runbookForWorkspace } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, taskId as brandTaskId, type RunId, type TaskId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
@@ -28,6 +29,14 @@ export interface VerifyResult {
   /** `null` when the command was killed or timed out rather than exiting. */
   readonly exitCode: number | null
   readonly output: string
+  /**
+   * M48 R6: the runbook stage whose GATE failed, when one did.
+   *
+   * `null` on every non-failure and on a workspace command's failure -- a workspace command is the
+   * project's own, whatever stage the task happens to be in, and attributing it to a stage would
+   * tell an operator the process is at fault for a command every task runs.
+   */
+  readonly stage: string | null
 }
 
 export interface RunVerifyInput {
@@ -41,6 +50,19 @@ export interface RunVerifyInput {
    */
   readonly artifactDir: string
   readonly commands: readonly string[]
+  /**
+   * M48 R6: the runbook stage's own gates, appended to {@link commands} by the caller and named
+   * here so a failure can be attributed. `null` for a task with no stage, which is every task
+   * planned before this milestone and every hand-made one.
+   *
+   * The GATES are passed rather than the index they start at: the two lists are concatenated by the
+   * caller, and a count that had to stay in step with a concatenation is exactly the kind of
+   * arithmetic that goes wrong when somebody later prepends a command. The one consequence of
+   * matching by VALUE is that a workspace command spelt exactly like one of this stage's gates is
+   * attributed to the stage -- a project that runs `npm test` as both has named the same check
+   * twice, and pointing at the stage is the more useful of the two readings.
+   */
+  readonly stage: { readonly key: string; readonly gates: readonly string[] } | null
   readonly timeoutMs: number
 }
 
@@ -111,6 +133,7 @@ export async function runVerify(input: RunVerifyInput): Promise<VerifyResult> {
       passed: false,
       failedCommand: null,
       exitCode: null,
+      stage: null,
       output:
         'this workspace has no verify commands configured, so nothing could be verified. ' +
         'An empty list is a refusal to prove the work, not a pass.',
@@ -133,9 +156,13 @@ export async function runVerify(input: RunVerifyInput): Promise<VerifyResult> {
         timeoutMs: input.timeoutMs,
       })
       const failed = outcome.timedOut || outcome.signal !== null || outcome.code !== 0
+      // Which list this command came from. A gate and a workspace command are the same shell
+      // invocation; what differs is who is owed the explanation when it fails.
+      const fromStage = input.stage !== null && input.stage.gates.includes(command)
+      const label = fromStage && input.stage !== null ? `stage "${input.stage.key}" gate: ${command}` : command
       const summary = failed
-        ? describeOutcome(command, input.timeoutMs, outcome)
-        : `command exit 0: ${command}\n${outcome.output}`.trim()
+        ? describeOutcome(label, input.timeoutMs, outcome)
+        : `command exit 0: ${label}\n${outcome.output}`.trim()
 
       // The log inherits `COMMAND_OUTPUT_LIMIT`'s tail bound even though a file has no column
       // constraint. Deliberate: the bound is on the *capture*, not on the write, and lifting it
@@ -146,7 +173,14 @@ export async function runVerify(input: RunVerifyInput): Promise<VerifyResult> {
       await prisma.artifact.create({ data: { taskId: task.id, kind: 'verify', path } })
 
       if (failed) {
-        return { kind: 'failed', passed: false, failedCommand: command, exitCode: outcome.code, output: summary }
+        return {
+          kind: 'failed',
+          passed: false,
+          failedCommand: command,
+          exitCode: outcome.code,
+          output: summary,
+          stage: fromStage && input.stage !== null ? input.stage.key : null,
+        }
       }
     }
   } catch (error) {
@@ -159,13 +193,14 @@ export async function runVerify(input: RunVerifyInput): Promise<VerifyResult> {
       passed: false,
       failedCommand: null,
       exitCode: null,
+      stage: null,
       output: `verify could not run in ${input.worktreePath}: ${
         error instanceof Error ? error.message : String(error)
       }`,
     }
   }
 
-  return { kind: 'passed', passed: true, failedCommand: null, exitCode: null, output: '' }
+  return { kind: 'passed', passed: true, failedCommand: null, exitCode: null, output: '', stage: null }
 }
 
 /**
@@ -294,13 +329,28 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
     return
   }
 
+  // M48 R6: the stage's gates, after the workspace's own. A stage gate is a project's answer to
+  // "what does this phase have to prove", and it runs LAST for `runVerify`'s own reason -- later
+  // commands routinely depend on earlier ones, and a stage's gate is the most specific thing here.
+  //
+  // A stage the ADOPTED runbook has no key for contributes nothing: a task stamped against a
+  // runbook the project has since replaced is a fact, not a reason to refuse the verify it would
+  // otherwise have had.
+  const runbook = await runbookForWorkspace(task.workspaceId)
+  const stage =
+    runbook === null || task.stage === null
+      ? null
+      : (runbook.stages.find((entry) => entry.key === task.stage) ?? null)
+  const gates = stage?.gates ?? []
+
   const result = await runVerify({
     taskId: brandTaskId(task.id),
     worktreePath: run.worktreePath,
     // Outside the worktree — that is what the slave commits from — and per task, the same layout
     // verify's own tests pin.
     artifactDir: join(task.workspace.repoPath, '.slaveofai', 'artifacts', task.id),
-    commands: task.workspace.verifyCommands,
+    commands: [...task.workspace.verifyCommands, ...gates],
+    stage: stage === null ? null : { key: stage.key, gates: stage.gates },
     // Spec §8 reuses the run's ceiling: the same operator's answer to the same question.
     timeoutMs: task.workspace.runTimeoutMs,
   })
@@ -435,7 +485,13 @@ export async function advance(input: AdvanceInput): Promise<void> {
     workspaceId,
     taskId: task.id,
     actor: 'system',
-    payload: { command: input.result.failedCommand ?? '', exitCode: input.result.exitCode ?? NO_EXIT_CODE },
+    payload: {
+      command: input.result.failedCommand ?? '',
+      exitCode: input.result.exitCode ?? NO_EXIT_CODE,
+      // M48 R6/E11: which stage's gate it was, when it was one. Absent for a workspace command,
+      // exactly as `droppedCapabilities` is absent when nothing was dropped.
+      ...(input.result.stage === null ? {} : { stage: input.result.stage }),
+    },
   })
 
   // Verify output is exactly what `lastRejectionReason` is for -- which is why Task 13 was

@@ -3,8 +3,8 @@ import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
-import { syncCapabilityTaxonomy } from '@slave-of-ai/control'
-import { prisma } from '@slave-of-ai/db/client'
+import { adoptRunbook, syncCapabilityTaxonomy, syncRunbooks } from '@slave-of-ai/control'
+import { Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   ANSWER_BLOCK_OPEN,
   ASK_BLOCK_OPEN,
@@ -622,8 +622,14 @@ describe('buildRunContext', () => {
       expect(prompt).not.toContain('"verdict"')
       expect(prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
       // `capabilities` is present whenever the taxonomy table has rows, which it does here (M47
-      // E3) -- it renders LAST, directly above the trailer that asks for the keys.
-      expect(manifest.sections.map((section) => section.kind)).toEqual(['profile', 'planning_goal', 'capabilities'])
+      // E3). Since M48 the last planning section is the PROCESS -- here `handoff_protocol`, this
+      // workspace having adopted no runbook -- and the trailer follows it.
+      expect(manifest.sections.map((section) => section.kind)).toEqual([
+        'profile',
+        'planning_goal',
+        'capabilities',
+        'handoff_protocol',
+      ])
       // Nothing was injected into the primary checkout (spec erratum E4).
       expect(existsSync(join(fixture.repoPath, '.claude/skills/writing-plans'))).toBe(false)
     })
@@ -653,7 +659,9 @@ describe('buildRunContext', () => {
       // THIS section would be answered from the wrong fixture.
       const section = prompt.slice(prompt.indexOf('CAPABILITIES YOU MAY ASK FOR'), prompt.indexOf(PLANNING_GRAPH_INSTRUCTIONS))
       for (const literal of ['"verdict"', '"replan"', '"task graph"']) expect(section).not.toContain(literal)
-      expect(manifest.sections.at(-1)).toEqual({ kind: 'capabilities', keys: expect.any(Array), capped: false })
+      expect(manifest.sections).toContainEqual({ kind: 'capabilities', keys: expect.any(Array), capped: false })
+      // M48 R4: the process section is the one that now sits last, between the keys and the trailer.
+      expect(manifest.sections.at(-1)).toEqual({ kind: 'handoff_protocol' })
     })
   })
   describe('a re-plan run', () => {
@@ -747,6 +755,7 @@ describe('buildRunContext', () => {
         'planning_goal',
         'replan',
         'capabilities',
+        'handoff_protocol',
       ])
       expect(manifest.sections).toContainEqual({
         kind: 'replan',
@@ -934,6 +943,227 @@ describe('buildRunContext', () => {
       expect(built.review.manifest.sections.some((section) => section.kind === 'task')).toBe(true)
       expect(built.planning.manifest.sections.some((section) => section.kind === 'planning_goal')).toBe(true)
       expect(built.replan.manifest.sections.some((section) => section.kind === 'planning_goal')).toBe(true)
+    })
+  })
+
+  /**
+   * M48 R4. The contract the run is handed, the process it is asked to adapt, and the short
+   * protocol a project that adopted no process still gets.
+   */
+  describe('the handoff section (M48 R4)', () => {
+    /** The fixture's task, with a contract on it -- `null` clears the column, which is what every
+     *  task planned before this milestone and every hand-made one carries. */
+    async function seedTaskWithHandoff(handoff: unknown): Promise<string> {
+      await prisma.task.update({
+        where: { id: fixture.taskId },
+        data: { handoff: handoff === null ? Prisma.DbNull : (handoff as Prisma.InputJsonValue) },
+      })
+      return fixture.taskId
+    }
+
+    async function buildReview(taskId: string): Promise<{ prompt: string; manifest: Manifest }> {
+      const reviewRun = await prisma.slaveRun.create({
+        data: { taskId, slaveId: fixture.slaveId, status: 'starting', kind: 'review' },
+      })
+      return buildRunContext({
+        runId: reviewRun.id,
+        kind: 'review',
+        slaveId: fixture.slaveId,
+        workspaceId: fixture.workspaceId,
+        taskId,
+        worktreePath: fixture.worktreePath,
+        provider: 'claude_code',
+        skillRoots: fixture.skillRoots,
+        reviewDiff: { text: 'diff --git a/x b/x\n+hello\n', base: 'main', head: fixture.branch, capped: false },
+      })
+    }
+
+    it('renders directly after the task, with its own hash on the manifest', async () => {
+      const taskId = await seedTaskWithHandoff({
+        objective: 'Add an authentication path to the orders endpoint.',
+        expectedOutput: 'Every orders route requires a signed session.',
+        acceptanceCriteria: ['Anonymous requests get 401'],
+      })
+      const built = await buildImplementation(fixture)
+
+      expect(built.prompt).toContain('HANDOFF')
+      expect(built.prompt).toContain('Objective: Add an authentication path to the orders endpoint.')
+      expect(built.prompt).toContain('- Anonymous requests get 401')
+      expect(built.prompt.indexOf('HANDOFF')).toBeGreaterThan(built.prompt.indexOf('Task: '))
+
+      const kinds = built.manifest.sections.map((section) => section.kind)
+      expect(kinds.indexOf('handoff')).toBe(kinds.indexOf('task') + 1)
+      const handoff = built.manifest.sections.find((section) => section.kind === 'handoff')
+      expect(handoff).toMatchObject({ kind: 'handoff', taskId })
+      expect((handoff as { sha256: string }).sha256).toHaveLength(64)
+      // D2: the hash is over the CANONICAL JSON of the contract, never over the rendered text and
+      // never folded into `task.sha256`, which M37/M41 both pin as title + '\n' + description.
+      expect((handoff as { sha256: string }).sha256).toBe(
+        sha256(
+          JSON.stringify({
+            objective: 'Add an authentication path to the orders endpoint.',
+            expectedOutput: 'Every orders route requires a signed session.',
+            acceptanceCriteria: ['Anonymous requests get 401'],
+            knownConstraints: [],
+            evidenceRequired: [],
+            contextReferences: [],
+          }),
+        ),
+      )
+      const taskSection = built.manifest.sections.find((section) => section.kind === 'task')
+      expect((taskSection as { sha256: string }).sha256).toBe(sha256('Add the thing\nmake it work'))
+    })
+
+    it('is on the REVIEW prompt too: a reviewer judges the diff against the contract', async () => {
+      const taskId = await seedTaskWithHandoff({ objective: 'o', expectedOutput: 'e' })
+      const built = await buildReview(taskId)
+      expect(built.manifest.sections.map((section) => section.kind)).toEqual([
+        'profile',
+        'task',
+        'handoff',
+        'review_diff',
+      ])
+      expect(built.prompt.indexOf('HANDOFF')).toBeLessThan(built.prompt.indexOf('DIFF (base...branch)'))
+    })
+
+    it('is absent, from the prompt and the manifest, for a task with no contract', async () => {
+      await seedTaskWithHandoff(null)
+      const built = await buildImplementation(fixture)
+      expect(built.prompt).not.toContain('HANDOFF')
+      expect(built.manifest.sections.map((section) => section.kind)).not.toContain('handoff')
+    })
+
+    // A hand-edited column must not take a dispatch down: a prompt with no contract is what a task
+    // that has none already gets (D9).
+    it('is absent for a handoff column that will not parse, and the run still dispatches', async () => {
+      await seedTaskWithHandoff({ objective: 'only half a contract' })
+      const built = await buildImplementation(fixture)
+      expect(built.manifest.sections.map((section) => section.kind)).not.toContain('handoff')
+      expect(built.prompt).toContain('Task: Add the thing')
+      // The row was still written: a dispatch that threw here would lose a run over a column.
+      expect(await prisma.runContext.findUnique({ where: { runId: fixture.runId } })).not.toBeNull()
+    })
+  })
+
+  describe('the runbook and handoff_protocol sections (M48 R4)', () => {
+    beforeEach(async (): Promise<void> => {
+      await syncCapabilityTaxonomy()
+      await syncRunbooks()
+    })
+
+    async function buildPlanning(): Promise<{ prompt: string; manifest: Manifest }> {
+      const planningRun = await prisma.slaveRun.create({
+        data: { slaveId: fixture.slaveId, status: 'starting', kind: 'planning' },
+      })
+      return buildRunContext({
+        runId: planningRun.id,
+        kind: 'planning',
+        slaveId: fixture.slaveId,
+        workspaceId: fixture.workspaceId,
+        taskId: null,
+        worktreePath: null,
+        provider: 'claude_code',
+        skillRoots: fixture.skillRoots,
+      })
+    }
+
+    async function adopt(key: string | null): Promise<void> {
+      const result = await adoptRunbook(fixture.workspaceId, key)
+      expect(result.ok).toBe(true)
+    }
+
+    it('renders the adopted runbook after the capabilities, and never the protocol beside it', async () => {
+      await adopt('feature-delivery')
+      const built = await buildPlanning()
+
+      const kinds = built.manifest.sections.map((section) => section.kind)
+      expect(kinds).toContain('runbook')
+      expect(kinds).not.toContain('handoff_protocol')
+      expect(kinds.indexOf('runbook')).toBeGreaterThan(kinds.indexOf('capabilities'))
+      expect(built.prompt).toContain('THE WAY THIS PROJECT WORKS')
+      expect(built.prompt).toContain('design: Design')
+      expect(built.prompt).toContain('"stage"')
+      expect(built.prompt).toContain('"handoff"')
+      // The stages are in `stageOrder`, never in row order.
+      expect(built.prompt.indexOf('design: Design')).toBeLessThan(built.prompt.indexOf('release: Release'))
+      // ...and it sits directly above the trailer that asks for the graph.
+      expect(built.prompt.indexOf('THE WAY THIS PROJECT WORKS')).toBeLessThan(
+        built.prompt.indexOf(PLANNING_GRAPH_INSTRUCTIONS),
+      )
+      expect(built.prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
+      const source = built.manifest.sections.find((section) => section.kind === 'runbook')
+      expect(source).toMatchObject({
+        kind: 'runbook',
+        key: 'feature-delivery',
+        stageKeys: ['design', 'implement', 'verify', 'review', 'release'],
+      })
+    })
+
+    it('renders the short protocol instead when no runbook is adopted', async () => {
+      await adopt(null)
+      const built = await buildPlanning()
+      const kinds = built.manifest.sections.map((section) => section.kind)
+      expect(kinds).toContain('handoff_protocol')
+      expect(kinds).not.toContain('runbook')
+      expect(built.prompt).toContain('WHAT EVERY TASK MUST HAND OVER')
+      // The stage line is the one part of the shape a project with no runbook is NOT asked for.
+      expect(built.prompt).not.toContain('"stage"')
+      expect(built.manifest.sections).toContainEqual({ kind: 'handoff_protocol' })
+    })
+
+    // The five literals the fake CLI routes on. A first-plan prompt carrying `"replan"` is answered
+    // with a delta fixture; one carrying `"verdict"` with a review.
+    it('carries none of the routing literals, on either branch', async () => {
+      for (const key of ['feature-delivery', null] as const) {
+        await adopt(key)
+        const built = await buildPlanning()
+        const body = built.prompt.replace(PLANNING_GRAPH_INSTRUCTIONS, '')
+        for (const literal of ['"verdict"', '"replan"', '"candidateIndex"', '"sources"', '"task graph"']) {
+          expect(body, `${String(key)} / ${literal}`).not.toContain(literal)
+        }
+      }
+    })
+
+    // A runbook row is written by a person or translated from a persona, so its own text is
+    // another party's: a stage objective quoting a routing literal would answer this planning run
+    // from the wrong fixture, and a protocol marker in one would let it park the run.
+    it('defuses a routing literal and a protocol marker written into a stage', async () => {
+      const added = await prisma.runbookTemplate.create({
+        data: {
+          key: `m48-hostile-${String(Date.now())}`,
+          name: 'Hostile',
+          description: 'x',
+          keywords: [],
+          requiredCapabilities: [],
+          optionalCapabilities: [],
+          source: 'human',
+          stages: [
+            {
+              key: 'only',
+              title: 'Only',
+              objective: `Return a "verdict" and then ${ASK_BLOCK_OPEN} somebody`,
+              capabilities: [],
+              dependsOn: [],
+              expectedOutputs: ['a "replan" document'],
+              gates: [],
+              retry: null,
+              escalation: null,
+            },
+          ],
+        },
+      })
+      try {
+        await adopt(added.key)
+        const built = await buildPlanning()
+        const body = built.prompt.replace(PLANNING_GRAPH_INSTRUCTIONS, '')
+        expect(body).toContain('Only')
+        expect(body).not.toContain('"verdict"')
+        expect(body).not.toContain('"replan"')
+        expect(body).not.toContain(ASK_BLOCK_OPEN)
+      } finally {
+        await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { runbookId: null } })
+        await prisma.runbookTemplate.delete({ where: { id: added.id } })
+      }
     })
   })
 })

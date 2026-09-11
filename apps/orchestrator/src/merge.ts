@@ -201,6 +201,12 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
     // this pass's log silently overwrites the implementation attempt's.
     artifactDir: join(workspace.repoPath, '.slaveofai', 'artifacts', task.id, 'merge'),
     commands: workspace.verifyCommands,
+    // M48 R6: the workspace's own commands and nothing else. The stage gates are
+    // `verifyConcludedRun`'s (spec R6 names that function), and this pass asks a different
+    // question -- "does the REBASED tree still hold up" -- of a task that has already been through
+    // its stage's gate and been approved. Re-running the gate here would charge a merge-conflict
+    // path for a phase the work has left.
+    stage: null,
     timeoutMs: workspace.runTimeoutMs,
   })
   if (result.kind !== 'passed') {

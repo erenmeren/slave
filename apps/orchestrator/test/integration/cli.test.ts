@@ -1548,6 +1548,112 @@ describe('the orchestrator CLI', () => {
     }, 30_000)
   })
 
+  // M48 R5/R6: the four runbook sub-verbs, adoption and the stage ladder. Real subprocesses, like
+  // everything else in this file -- exit codes and argv parsing are what a command-line tool gets
+  // wrong.
+  describe('runbooks, adoption and the stage ladder (M48)', () => {
+    it('syncs, lists and shows a runbook', async (): Promise<void> => {
+      const synced = await runCli(['runbooks', 'sync'])
+      expect(synced.code).toBe(0)
+      expect(synced.stdout).toContain('runbooks synced: ')
+
+      const listed = await runCli(['runbooks', 'list'])
+      expect(listed.code).toBe(0)
+      const row = listed.stdout.split('\n').find((line) => line.startsWith('feature-delivery\t'))
+      // The project count is a live count over a database this file shares, so only the four
+      // fields this verb is about are pinned.
+      expect(row).toMatch(/^feature-delivery\tFeature delivery\t5 stages\tseed\t\d+ project\(s\)$/)
+
+      const shown = await runCli(['runbooks', 'show', 'feature-delivery'])
+      expect(shown.code).toBe(0)
+      expect(shown.stdout.split('\n')[0]).toBe('Feature delivery (feature-delivery, seed)')
+      expect(shown.stdout).toContain('  design: Design -- Decide the shape of the change before anybody writes it.')
+      expect(shown.stdout).toContain('    retry: 2 attempts')
+      expect(shown.stdout).toContain('    escalation: ')
+
+      const missing = await runCli(['runbooks', 'show', 'no-such-runbook'])
+      expect(missing.code).not.toBe(0)
+      expect(missing.stderr).toContain('no-such-runbook')
+    }, 60_000)
+
+    it('adds an operator runbook from a file, always as a human row', async (): Promise<void> => {
+      const key = `m48cli-${String(Date.now())}`
+      const file = join(mkdtempSync(join(tmpdir(), 'slaveofai-runbook-')), 'runbook.json')
+      writeFileSync(
+        file,
+        JSON.stringify({
+          key,
+          name: 'Ours',
+          description: 'the way we do it',
+          source: 'seed',
+          stages: [{ key: 'only', title: 'Only', objective: 'Do it' }],
+        }),
+      )
+      try {
+        const added = await runCli(['runbooks', 'add', '--file', file])
+        expect(added.code).toBe(0)
+        expect(added.stdout.split('\n')[0]).toBe(`${key} added: 1 stages, source human`)
+        // D8: `source` is forced to human whatever the file said, so a sync can never rewrite it.
+        expect((await prisma.runbookTemplate.findUniqueOrThrow({ where: { key } })).source).toBe('human')
+
+        const again = await runCli(['runbooks', 'add', '--file', file])
+        expect(again.code).not.toBe(0)
+        expect(again.stderr).toContain(key)
+      } finally {
+        await prisma.runbookTemplate.deleteMany({ where: { key } })
+      }
+    }, 60_000)
+
+    it('adopts a runbook, says so the second time, and clears it again', async (): Promise<void> => {
+      expect((await runCli(['runbooks', 'sync'])).code).toBe(0)
+
+      const adopted = await runCli(['adopt-runbook', '--workspace', fixture.workspaceId, '--runbook', 'feature-delivery'])
+      expect(adopted.code).toBe(0)
+      expect(adopted.stdout).toBe(`${fixture.workspaceId} follows Feature delivery (feature-delivery)\n`)
+
+      const repeated = await runCli(['adopt-runbook', '--workspace', fixture.workspaceId, '--runbook', 'feature-delivery'])
+      expect(repeated.code).toBe(0)
+      expect(repeated.stdout).toBe(`${fixture.workspaceId} follows Feature delivery (feature-delivery) already\n`)
+
+      const cleared = await runCli(['adopt-runbook', '--workspace', fixture.workspaceId, '--clear'])
+      expect(cleared.code).toBe(0)
+      expect(cleared.stdout).toBe(`${fixture.workspaceId} follows no runbook now\n`)
+
+      const clearedAgain = await runCli(['adopt-runbook', '--workspace', fixture.workspaceId, '--clear'])
+      expect(clearedAgain.code).toBe(0)
+      expect(clearedAgain.stdout).toBe(`${fixture.workspaceId} already followed no runbook: nothing was recorded\n`)
+
+      const unknown = await runCli(['adopt-runbook', '--workspace', fixture.workspaceId, '--runbook', 'no-such-runbook'])
+      expect(unknown.code).not.toBe(0)
+    }, 60_000)
+
+    it('reports where the project is in its runbook, and warns about a stage it does not have', async (): Promise<void> => {
+      expect((await runCli(['runbooks', 'sync'])).code).toBe(0)
+
+      const none = await runCli(['runbook-status', '--workspace', fixture.workspaceId])
+      expect(none.code).toBe(0)
+      expect(none.stdout).toBe('no runbook adopted\n')
+
+      expect(
+        (await runCli(['adopt-runbook', '--workspace', fixture.workspaceId, '--runbook', 'feature-delivery'])).code,
+      ).toBe(0)
+      await prisma.task.update({ where: { id: fixture.taskId }, data: { stage: 'design' } })
+
+      const status = await runCli(['runbook-status', '--workspace', fixture.workspaceId])
+      expect(status.code).toBe(0)
+      const lines = status.stdout.split('\n')
+      expect(lines[0]).toBe('Feature delivery (feature-delivery), current stage: design')
+      expect(lines[1]).toBe('  > design\tactive\t1 task(s)')
+      expect(lines[2]).toBe('    implement\tpending\t0 task(s)')
+
+      // A task stamped with a stage this runbook has no key for is a fact, not a crash.
+      await prisma.task.update({ where: { id: fixture.taskId }, data: { stage: 'shipit' } })
+      const warned = await runCli(['runbook-status', '--workspace', fixture.workspaceId])
+      expect(warned.code).toBe(0)
+      expect(warned.stderr).toContain('shipit')
+    }, 60_000)
+  })
+
   describe('create-workspace', () => {
     it('creates a workspace from a real repo and prints its id', async () => {
       const dir = makeRepo()

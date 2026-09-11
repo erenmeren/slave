@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { refusalText, setGoal, syncCapabilityTaxonomy } from '@slave-of-ai/control'
+import { adoptRunbook, refusalText, setGoal, syncCapabilityTaxonomy, syncRunbooks } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
@@ -724,6 +724,107 @@ describe('concludePlanning', () => {
     expect(core.status).toBe('running')
     expect(core.activeRunId).not.toBeNull()
   })
+
+  /**
+   * M48 R2: the adopted runbook decides which stages a plan may name, what a stage's tasks may
+   * retry, and what the plan's adherence is measured against. Fed in process, exactly as the
+   * capability cases above are: the fake CLI's runbook-aware planning fixture lands in Task 5.
+   */
+  describe('the contract and the stage on the board (M48 R2)', () => {
+    async function adopt(workspaceId: string, key: string | null): Promise<void> {
+      await syncRunbooks()
+      const result = await adoptRunbook(workspaceId, key)
+      expect(result.ok).toBe(true)
+    }
+
+    it('writes the handoff, the stage and the stage retry, and reports adherence on the event', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      await adopt(fixture.workspaceId, 'feature-delivery')
+
+      await concludeGraph(fixture, {
+        tasks: [
+          {
+            key: 'design',
+            title: 'Decide the shape',
+            description: 'd',
+            role: 'backend',
+            stage: 'design',
+            handoff: {
+              objective: 'Decide the interface',
+              expectedOutput: 'An interface the rest is written against',
+              acceptanceCriteria: ['It names every route'],
+            },
+          },
+          { key: 'build', title: 'Build it', description: 'd', role: 'backend', stage: 'verify', dependsOn: ['design'] },
+        ],
+      })
+
+      const tasks = await prisma.task.findMany({ where: { workspaceId: fixture.workspaceId }, orderBy: { createdAt: 'asc' } })
+      expect(tasks[0]?.stage).toBe('design')
+      expect(tasks[0]?.handoff).toMatchObject({ objective: 'Decide the interface', acceptanceCriteria: ['It names every route'] })
+      expect(tasks[0]?.maxAttempts).toBe(3) // the workspace's own: the design stage sets no retry
+      expect(tasks[1]?.stage).toBe('verify')
+      expect(tasks[1]?.maxAttempts).toBe(2) // the verify stage's retry.maxAttempts
+      expect(tasks[1]?.handoff).toBeNull()
+
+      const event = await prisma.executionEvent.findFirstOrThrow({
+        where: { workspaceId: fixture.workspaceId, type: 'workspace_plan_created' },
+      })
+      expect(event.payload).toMatchObject({
+        runbook: { key: 'feature-delivery', stagesCovered: ['design', 'verify'], stagesMissing: ['implement', 'review', 'release'] },
+      })
+    })
+
+    it('refuses a stage the adopted runbook does not have, and leaves the board empty (E1)', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      await adopt(fixture.workspaceId, 'feature-delivery')
+
+      const runId = await concludeGraph(fixture, {
+        tasks: [{ key: 'k', title: 'T', description: 'd', role: 'backend', stage: 'polish' }],
+      })
+
+      expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+      const failure = await prisma.executionEvent.findFirstOrThrow({ where: { runId, type: 'run_failed' } })
+      expect((failure.payload as { reason: string }).reason).toContain('names stage "polish"')
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })).status).toBe('failed')
+    })
+
+    // Plan erratum E16: a half-contract is a planning failure, not a silent null column -- and the
+    // refusal happens BEFORE a single row is written.
+    it('refuses a malformed handoff and leaves the board empty', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+
+      const runId = await concludeGraph(fixture, {
+        tasks: [{ key: 'k', title: 'T', description: 'd', role: 'backend', handoff: { objective: 'only half' } }],
+      })
+
+      expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+      const failure = await prisma.executionEvent.findFirstOrThrow({ where: { runId, type: 'run_failed' } })
+      expect((failure.payload as { reason: string }).reason).toContain('handoff that is not a contract')
+    })
+
+    it('carries no runbook block on the event when no runbook is adopted', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      await adopt(fixture.workspaceId, null)
+
+      await concludeGraph(fixture, {
+        tasks: [{ key: 'k', title: 'T', description: 'd', role: 'backend', stage: 'anything-at-all' }],
+      })
+
+      const event = await prisma.executionEvent.findFirstOrThrow({
+        where: { workspaceId: fixture.workspaceId, type: 'workspace_plan_created' },
+      })
+      expect(event.payload).not.toHaveProperty('runbook')
+      // The stage is still STORED: an empty stage list is "no runbook adopted", under which any
+      // stage stands (E1), and a label nobody can measure is still what the planner said.
+      const task = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+      expect(task.stage).toBe('anything-at-all')
+    })
+  })
 })
 
 /**
@@ -1166,6 +1267,107 @@ describe('a re-plan', () => {
     expect(
       await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'workspace_plan_created' } }),
     ).toBe(0)
+  })
+
+  // M48 R2, on the delta path: an addition carries the same three things a first plan's task does,
+  // and the same adherence is reported -- measured over what the DELTA added, never over the board.
+  it('gives an addition its stage, its contract and the stage retry, and reports adherence', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    await syncRunbooks()
+    expect((await adoptRunbook(fixture.workspaceId, 'feature-delivery')).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+
+    const runId = await seedConcludedReplan(
+      fixture,
+      JSON.stringify({
+        add: [
+          {
+            key: 'prove',
+            title: 'Prove the new endpoint',
+            description: 'write the test',
+            role: 'backend',
+            stage: 'verify',
+            handoff: {
+              objective: 'Prove the endpoint answers',
+              expectedOutput: 'A green verify log naming the endpoint',
+              acceptanceCriteria: ['The test fails without the change'],
+            },
+            dependsOn: [],
+          },
+        ],
+        cancel: [],
+        keep: [existing.id],
+      }),
+      [existing.id],
+    )
+
+    await concludePlanning(brandRunId(runId))
+
+    const added = await prisma.task.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, title: 'Prove the new endpoint' },
+    })
+    expect(added.stage).toBe('verify')
+    expect(added.handoff).toMatchObject({ objective: 'Prove the endpoint answers' })
+    // The verify stage's own retry cap, not the workspace's 3.
+    expect(added.maxAttempts).toBe(2)
+
+    const replanned = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' },
+    })
+    expect(replanned.payload).toMatchObject({
+      runbook: {
+        key: 'feature-delivery',
+        stagesCovered: ['verify'],
+        stagesMissing: ['design', 'implement', 'review', 'release'],
+      },
+    })
+  })
+
+  it('refuses a delta naming a stage the adopted runbook does not have, and adds nothing', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    await syncRunbooks()
+    expect((await adoptRunbook(fixture.workspaceId, 'feature-delivery')).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+
+    const runId = await seedConcludedReplan(
+      fixture,
+      JSON.stringify({
+        add: [{ key: 'k', title: 'T', description: 'd', role: 'backend', stage: 'polish', dependsOn: [] }],
+        cancel: [],
+        keep: [existing.id],
+      }),
+      [existing.id],
+    )
+
+    await concludePlanning(brandRunId(runId))
+
+    expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(1)
+    const failure = await prisma.executionEvent.findFirstOrThrow({ where: { runId, type: 'run_failed' } })
+    expect((failure.payload as { reason: string }).reason).toContain('names stage "polish"')
+  })
+
+  it('carries no runbook block on workspace.replanned when no runbook is adopted', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const runId = await seedConcludedReplan(
+      fixture,
+      JSON.stringify({
+        add: [{ key: 'k', title: 'T', description: 'd', role: 'backend', dependsOn: [] }],
+        cancel: [],
+        keep: [existing.id],
+      }),
+      [existing.id],
+    )
+
+    await concludePlanning(brandRunId(runId))
+
+    const replanned = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' },
+    })
+    expect(replanned.payload).not.toHaveProperty('runbook')
   })
 
   it('drops a cancellation for work that FINISHED while the re-plan was thinking, rather than failing the delta', async (): Promise<void> => {

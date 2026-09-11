@@ -4,21 +4,23 @@ import {
   candidates,
   parsePlanDelta,
   runContextManifestSchema,
+  stageOrder,
   type PlanDelta,
   type RunId,
+  type Runbook,
   type SectionSource,
   type Situation,
   type TaskStatus,
 } from '@slave-of-ai/domain'
-import { listCapabilities, loadSupervisorWorld, recordDecision, refusalText } from '@slave-of-ai/control'
-import { prisma } from '@slave-of-ai/db/client'
+import { listCapabilities, loadSupervisorWorld, recordDecision, refusalText, runbookForWorkspace } from '@slave-of-ai/control'
+import { Prisma, prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
 // The two derivation helpers live beside `concludePlanning`, their first consumer, and are shared
 // from there rather than copied: a delta-added task and a first-plan task must derive their role
 // the same way or the board would hold two kinds of task. The import direction closes a cycle with
 // `planning.ts` -- the same shape `planning.ts` and `tick.ts` already have, and safe for the same
 // reason: both are hoisted function declarations, called long after either module is evaluated.
-import { normaliseCapabilitiesStrict, roleOfFirst } from './planning.js'
+import { adherenceOf, normaliseCapabilitiesStrict, roleOfFirst } from './planning.js'
 
 /** The `replan` entry of a run's recorded manifest -- the only thing that tells a re-plan run from
  *  a first-plan run, since both are `kind: 'planning'` (spec erratum E2/E4). */
@@ -436,6 +438,18 @@ export async function concludeReplan(runId: RunId): Promise<void> {
       // E14: the keys the table does not have, dropped from the tasks that named them. Absent when
       // there were none, exactly as on `workspace.plan_created`.
       ...(applied.dropped.length === 0 ? {} : { droppedCapabilities: [...applied.dropped] }),
+      // R2: the adherence of what this DELTA added, on the same terms as `workspace.plan_created`.
+      // Absent entirely when no runbook is adopted.
+      ...(applied.runbook === null
+        ? {}
+        : {
+            runbook: {
+              id: applied.runbook.id,
+              key: applied.runbook.key,
+              stagesCovered: [...applied.stagesCovered],
+              stagesMissing: [...applied.stagesMissing],
+            },
+          }),
     },
   })
 }
@@ -492,6 +506,13 @@ type AppliedDelta =
        *  and carried out to `workspace.replanned` -- the first plan's own reporting, on the delta
        *  path. */
       readonly dropped: readonly string[]
+      /** M48 R2: the runbook this delta was planned against, `null` when the project has adopted
+       *  none -- and, with it, the adherence measured over what the delta ADDED. Carried out
+       *  rather than re-derived by `concludeReplan`, so the stage keys the parse was checked
+       *  against and the keys the event reports cannot come from two different reads. */
+      readonly runbook: Runbook | null
+      readonly stagesCovered: readonly string[]
+      readonly stagesMissing: readonly string[]
     }
   | { readonly ok: false; readonly reason: string }
 
@@ -531,9 +552,16 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
       orderBy: { createdAt: 'asc' },
       select: { id: true, title: true, status: true, goalVersion: true },
     })
+    // R2, `concludePlanning`'s own read and for its own reasons: which stages an addition may name,
+    // what it may retry, and what this delta's adherence is measured against. Once for the delta.
+    const runbook = await runbookForWorkspace(workspaceId)
+    const stages = runbook === null ? [] : stageOrder(runbook.stages)
+    const stageByKey = new Map(stages.map((stage) => [stage.key, stage] as const))
+
     const parsed = parsePlanDelta(
       text,
       board.map((task) => task.id),
+      stages.map((stage) => stage.key),
     )
     if (!parsed.ok) return { ok: false, reason: `planning run produced no valid re-plan delta: ${parsed.error}` }
 
@@ -560,6 +588,7 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
       readonly planTask: (typeof parsed.value.add)[number]
       readonly keys: readonly string[]
       readonly requiredRole: string
+      readonly maxAttempts: number
     }> = []
     for (const planTask of parsed.value.add) {
       const { keys, unresolved } = normaliseCapabilitiesStrict(planTask.capabilities, taxonomy)
@@ -573,13 +602,16 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
           reason: `planning run produced no valid re-plan delta: added task "${planTask.key}" asks only for capabilities the taxonomy does not have`,
         }
       }
-      derived.push({ planTask, keys, requiredRole })
+      // The stage's own retry cap, read at CREATION exactly as `concludePlanning` reads it: a
+      // runbook edited later must not move the budget of work already on the board.
+      const stageRetry = planTask.stage === undefined ? undefined : stageByKey.get(planTask.stage)?.retry
+      derived.push({ planTask, keys, requiredRole, maxAttempts: stageRetry?.maxAttempts ?? workspace.maxAttempts })
     }
 
     const created = await prisma.$transaction(async (tx) => {
       const idByKey = new Map<string, string>()
       const added: Array<{ readonly id: string; readonly title: string }> = []
-      for (const { planTask, keys, requiredRole } of derived) {
+      for (const { planTask, keys, requiredRole, maxAttempts } of derived) {
         const task = await tx.task.create({
           data: {
             workspaceId,
@@ -590,7 +622,15 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
             requiredCapabilities: [...keys],
             createdBy: 'slave',
             createdByUserId: workspace.goalSetByUserId,
-            maxAttempts: workspace.maxAttempts,
+            maxAttempts,
+            // R1/R2, `concludePlanning`'s own two lines: `parsePlanDelta` has already refused every
+            // delta whose handoff was not a contract (E16) and every stage this runbook does not
+            // have (E1), so a value here is always a whole one. `Prisma.DbNull` for the reason
+            // `concludePlanning` states: on a nullable Json column a bare `null` is the JSON value
+            // null, not SQL NULL.
+            handoff:
+              planTask.handoff === undefined ? Prisma.DbNull : (planTask.handoff as unknown as Prisma.InputJsonValue),
+            stage: planTask.stage ?? null,
             goalVersion: version,
           },
         })
@@ -611,7 +651,15 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
       return added
     })
 
-    return { ok: true, created, board, delta: parsed.value, dropped: [...dropped].toSorted() }
+    return {
+      ok: true,
+      created,
+      board,
+      delta: parsed.value,
+      dropped: [...dropped].toSorted(),
+      runbook,
+      ...(runbook === null ? { stagesCovered: [], stagesMissing: [] } : adherenceOf(runbook, derived)),
+    }
   } catch (error) {
     return {
       ok: false,
