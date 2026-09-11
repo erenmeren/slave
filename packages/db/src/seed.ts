@@ -42,7 +42,7 @@ const ROSTER: readonly { name: string; template: string }[] = [
  */
 export async function seed(): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "CatalogImport", "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "CollaborationHint", "RunbookTemplate", "Capability", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "MemorySource", "Memory", "CatalogImport", "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "CollaborationHint", "RunbookTemplate", "Capability", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
 
   // M47 R1: the taxonomy is DATA, and a seeded database has it. Written straight through Prisma

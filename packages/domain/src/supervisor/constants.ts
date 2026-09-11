@@ -110,3 +110,12 @@ export const DECISION_RETENTION_MS = 30 * 86_400_000
 /** The most rows one prune pass deletes. The pass runs on every supervised tick, so a backlog
  *  drains over several ticks rather than one tick holding a long delete transaction open. */
 export const PRUNE_BATCH = 500
+
+/** How long an OBSERVATION candidate may sit unverified before it is clutter rather than a
+ *  pending judgement (M49 R2). Twenty-four hours: a task verified the same day answers its own
+ *  candidate, and one that never verifies has told us something else. */
+export const MEMORY_CANDIDATE_STALE_MS = 24 * 3_600_000
+
+/** How many stale candidates make a situation. Below five it is one task nobody finished; at five
+ *  it is a habit, and the Supervisor may say so. */
+export const STALE_CANDIDATES_MIN = 5

@@ -29,9 +29,9 @@ function section(kind: Section['kind'], text: string, source: Section['source'])
 describe('SECTION_ORDER', () => {
   it('lists the fixed order for each run kind', () => {
     expect(SECTION_ORDER).toEqual({
-      implementation: ['profile', 'roster', 'skills', 'inbox', 'ask_protocol', 'task', 'handoff', 'rejection'],
+      implementation: ['profile', 'roster', 'skills', 'inbox', 'ask_protocol', 'task', 'handoff', 'memory', 'rejection'],
       review: ['profile', 'skills', 'task', 'handoff', 'review_diff'],
-      planning: ['profile', 'planning_goal', 'replan', 'capabilities', 'runbook', 'handoff_protocol'],
+      planning: ['profile', 'planning_goal', 'replan', 'capabilities', 'runbook', 'handoff_protocol', 'memory'],
     })
   })
 })
@@ -336,5 +336,31 @@ describe('M48 section order', () => {
     expect(manifest.sections.map((s) => s.kind)).toEqual(['planning_goal', 'capabilities', 'runbook'])
     expect(prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
     expect(prompt.indexOf('RB')).toBeGreaterThan(prompt.indexOf('C'))
+  })
+
+  it('M49 R3: a memory section renders after the contract and before the rejection', () => {
+    const { prompt, manifest } = renderRunContext('implementation', [
+      { kind: 'rejection', text: 'REJECTION', source: { kind: 'rejection', taskId: 't1' } },
+      { kind: 'memory', text: 'WHAT THE ORGANISATION KNOWS', source: { kind: 'memory', memoryIds: ['m1'], capped: false } },
+      { kind: 'task', text: 'TASK', source: { kind: 'task', taskId: 't1', sha256: 'abc' } },
+    ])
+    expect(prompt).toBe('TASK\n\nWHAT THE ORGANISATION KNOWS\n\nREJECTION')
+    expect(manifest.sections.map((source) => source.kind)).toEqual(['task', 'memory', 'rejection'])
+  })
+
+  it('M49 R3: a memory section is the last thing a planning prompt carries before the trailer', () => {
+    const { prompt } = renderRunContext('planning', [
+      { kind: 'memory', text: 'KNOWLEDGE', source: { kind: 'memory', memoryIds: ['m1'], capped: true } },
+      { kind: 'planning_goal', text: 'GOAL: ship it', source: { kind: 'planning_goal', sha256: 'abc', version: 1 } },
+    ])
+    expect(prompt).toBe(`GOAL: ship it\n\nKNOWLEDGE\n\n${PLANNING_GRAPH_INSTRUCTIONS}`)
+  })
+
+  it('M49 R3: a review run has no place for one, and asking is a caller bug', () => {
+    expect(() =>
+      renderRunContext('review', [
+        { kind: 'memory', text: 'KNOWLEDGE', source: { kind: 'memory', memoryIds: [], capped: false } },
+      ]),
+    ).toThrow('unknown section memory for run kind review')
   })
 })

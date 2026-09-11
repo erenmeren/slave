@@ -46,6 +46,7 @@ const ACTIONS: Readonly<Record<Action['kind'], Action>> = {
   reassign_question: { kind: 'reassign_question', messageId: 'm1', toSlaveId: 's2' },
   mark_task_failed: { kind: 'mark_task_failed', taskId: 't1', reason: 'dead end' },
   cancel_task: { kind: 'cancel_task', taskId: 't1', reason: 'the new goal no longer needs it' },
+  discard_stale_candidates: { kind: 'discard_stale_candidates', workspaceId: 'ws-1', count: 9 },
   escalate_to_human: { kind: 'escalate_to_human', summary: 'a human must look' },
   no_action: { kind: 'no_action' },
 }
@@ -78,6 +79,8 @@ describe('tierOf', () => {
     ['mark_task_failed', 'proposed', 'proposed'],
     // M40 ruling R1: a cancellation is never automatic -- a wrong deletion costs real planned work.
     ['cancel_task', 'proposed', 'proposed'],
+    // M49 R2: withdrawing what workers reported is a person's call, halted or not.
+    ['discard_stale_candidates', 'proposed', 'proposed'],
     ['escalate_to_human', 'escalated', 'escalated'],
     ['no_action', 'noop', 'noop'],
   ]
@@ -384,5 +387,13 @@ describe('chooseByRules', () => {
 
   it('refuses an empty list rather than inventing an index', () => {
     expect(() => chooseByRules([], 'review_cap_blocked')).toThrow()
+  })
+})
+
+describe('discard_stale_candidates (M49 R2)', () => {
+  it('M49 R2: withdrawing a worker\u2019s reports is never automatic', () => {
+    expect(
+      tierOf({ kind: 'discard_stale_candidates', workspaceId: 'ws-1', count: 9 }, world(), 'memory_candidates_piling'),
+    ).toBe('proposed')
   })
 })

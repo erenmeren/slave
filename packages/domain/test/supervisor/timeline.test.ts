@@ -15,8 +15,8 @@ describe('LANE_BY_TYPE', () => {
     expect(Object.keys(LANE_BY_TYPE).sort()).toEqual(Object.keys(EVENT_TYPE_BY_DOMAIN_TYPE).sort())
   })
 
-  it('carries the 50 members the schema has today -- a fifty-first is a deliberate decision', () => {
-    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(50)
+  it('carries the 52 members the schema has today -- a fifty-third is a deliberate decision', () => {
+    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(52)
   })
 
   it('every value is a lane this file names, or null', () => {
@@ -84,6 +84,23 @@ describe('laneFor', () => {
 
   it('answers null for anything the timeline does not show', () => {
     expect(laneFor({ source: 'event', type: 'run.tool_call', actor: 'slave' })).toBeNull()
+  })
+
+  it('M49 R4: a verified memory is a verified result and a candidate is on no lane at all', () => {
+    expect(laneFor({ source: 'event', type: 'memory.recorded', actor: 'system', memoryStatus: 'verified' })).toBe('verified')
+    expect(laneFor({ source: 'event', type: 'memory.recorded', actor: 'slave', memoryStatus: 'candidate' })).toBeNull()
+    expect(laneFor({ source: 'event', type: 'memory.recorded', actor: 'system' })).toBeNull()
+  })
+
+  it('M49 R4: a memory a PERSON moved is a decision; one the system moved is on no lane', () => {
+    expect(laneFor({ source: 'event', type: 'memory.changed', actor: 'human' })).toBe('decision')
+    expect(laneFor({ source: 'event', type: 'memory.changed', actor: 'system' })).toBeNull()
+  })
+
+  // Plan erratum E5: both must keep a NON-NULL default, or the web never queries them.
+  it('M49 E5: both memory types carry a non-null default lane', () => {
+    expect(LANE_BY_TYPE['memory.recorded']).not.toBeNull()
+    expect(LANE_BY_TYPE['memory.changed']).not.toBeNull()
   })
 })
 

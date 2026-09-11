@@ -1,6 +1,7 @@
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   ACTION_KINDS,
+  MEMORY_CANDIDATE_STALE_MS,
   NON_TERMINAL_RUN_STATUSES,
   PENDING_TTL_MS,
   RUN_PROMPT_MAX_CHARS,
@@ -670,6 +671,19 @@ export async function loadSupervisorWorld(
         [...new Set(questionRows.flatMap((row) => (row.senderRunId === null ? [] : [row.senderRunId])))],
       )
 
+      // M49 R2: how many OBSERVATION candidates nothing has verified in over a day. A COUNT and
+      // never the rows (plan erratum E11): the only predicate that reads it asks "how many", and
+      // this is exactly the read `Memory`'s `(workspaceId, status, type, createdAt)` index exists
+      // for -- no row leaves the database for it.
+      const staleMemoryCandidates = await tx.memory.count({
+        where: {
+          workspaceId,
+          status: 'candidate',
+          type: 'observation',
+          createdAt: { lt: new Date(now.getTime() - MEMORY_CANDIDATE_STALE_MS) },
+        },
+      })
+
       const decisionRows = await tx.supervisorDecision.findMany({
         where: { workspaceId, createdAt: { gte: new Date(now.getTime() - DECISION_WINDOW_MS) } },
         select: {
@@ -797,6 +811,7 @@ export async function loadSupervisorWorld(
         catalog: catalogRows,
         runbook: adopted,
         runbooks,
+        staleMemoryCandidates,
       }
 
       return {

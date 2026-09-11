@@ -146,6 +146,14 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     reason: 'task_not_failable',
   },
   'workspace.runbook_adopted': { runbookId: 'rb-0123456789', key: 'feature-delivery', name: 'Feature delivery' },
+  'memory.recorded': {
+    memoryId: 'mem-0123456789',
+    type: 'fact',
+    scope: 'workspace',
+    status: 'verified',
+    sourceKind: 'verification',
+  },
+  'memory.changed': { memoryId: 'mem-0123456789', from: 'candidate', to: 'superseded' },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {

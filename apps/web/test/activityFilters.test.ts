@@ -29,11 +29,13 @@ describe('parseActivityFilters', () => {
   // M27 §3.2 widened this chip with the project archive/restore lifecycle events; M37 t3 widened
   // it again with the two roster writes (a persona rewritten, a runtime role set replaced); M38 t1
   // with the Supervisor's five decision events; M40 t1 with the two delta re-plan events; M48 t1
-  // with `workspace.runbook_adopted`.
-  it('expands kinds=workspace to the created, goal, plan, re-plan, runbook, company-assigned, settings-changed, org-changed, archived, restored, slave-configuration and supervisor event types', () => {
+  // with `workspace.runbook_adopted`; M49 t1 with the two memory events.
+  it('expands kinds=workspace to the created, goal, plan, re-plan, runbook, memory, company-assigned, settings-changed, org-changed, archived, restored, slave-configuration and supervisor event types', () => {
     const result = parseActivityFilters(new URLSearchParams('kinds=workspace'))
     if (!result.ok) throw new Error(result.error)
     expect([...result.filters.types].sort()).toEqual([
+      'memory.changed',
+      'memory.recorded',
       'org.changed',
       'slave.profile_changed',
       'slave.runtime_roles_changed',

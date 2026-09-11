@@ -957,3 +957,37 @@ describe('M48 events', () => {
     expect(parseExecutionEvent({ ...envelope, actor: 'system', type: 'task.verify_failed', payload: { command: 'npm test', exitCode: 1 } }).ok).toBe(true)
   })
 })
+
+describe('M49 events', () => {
+  const ENVELOPE = { seq: 1, ts: '2026-09-12T00:00:00.000Z', workspaceId: 'w1', actor: 'system' as const }
+
+  it('M49 R4: memory.recorded carries what was learnt, and the task rides on the envelope', () => {
+    const parsed = parseExecutionEvent({
+      ...ENVELOPE,
+      taskId: 't1',
+      type: 'memory.recorded',
+      payload: { memoryId: 'm1', type: 'fact', scope: 'workspace', status: 'verified', sourceKind: 'verification' },
+    })
+    expect(parsed.ok).toBe(true)
+    // Plan erratum E13: the payload has no taskId of its own to disagree with the envelope's.
+    expect(
+      parseExecutionEvent({
+        ...ENVELOPE,
+        type: 'memory.recorded',
+        payload: { memoryId: 'm1', type: 'fact', scope: 'workspace', status: 'verified', sourceKind: 'verification', taskId: 't1' },
+      }).ok,
+    ).toBe(false)
+  })
+
+  it('M49 R4: memory.changed names both ends of the move, and a reason only when there is one', () => {
+    expect(
+      parseExecutionEvent({ ...ENVELOPE, type: 'memory.changed', payload: { memoryId: 'm1', from: 'candidate', to: 'verified' } }).ok,
+    ).toBe(true)
+    expect(
+      parseExecutionEvent({ ...ENVELOPE, type: 'memory.changed', payload: { memoryId: 'm1', from: 'verified', to: 'removed', reason: 'wrong' } }).ok,
+    ).toBe(true)
+    expect(
+      parseExecutionEvent({ ...ENVELOPE, type: 'memory.changed', payload: { memoryId: 'm1', from: 'candidate', to: 'nonsense' } }).ok,
+    ).toBe(false)
+  })
+})

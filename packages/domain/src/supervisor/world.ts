@@ -284,6 +284,13 @@ export interface SupervisorWorld {
   /** The runbooks this workspace COULD adopt (R5). EMPTY unless `runbook_recommended` could fire
    *  -- the loader does not pay for a table scan on a project that has already chosen. */
   readonly runbooks: readonly Runbook[]
+  /**
+   * How many OBSERVATION candidates in this workspace are older than
+   * `MEMORY_CANDIDATE_STALE_MS` (M49 R2). A COUNT and never the memories themselves (plan erratum
+   * E11): this world holds no unbounded list, the only predicate that reads it asks "how many",
+   * and one `count` over the index costs a tick nothing and returns no rows.
+   */
+  readonly staleMemoryCandidates: number
 }
 
 /**

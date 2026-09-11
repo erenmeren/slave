@@ -137,6 +137,8 @@ model Workspace {
   tasks                  Task[]
   supervisorDecisions    SupervisorDecision[]
   goalVersions           GoalVersion[]
+  /// M49 R1: what this PROJECT knows (`scope: workspace`).
+  memories               Memory[]
 
   @@index([adoptedFromSimulationId])
 }
@@ -251,6 +253,8 @@ model Slave {
   skills      SlaveSkill[]
   runs        SlaveRun[]
   messages    SlaveMessage[]
+  /// M49 R1: this WORKER's own lessons and procedures (`scope: worker`).
+  memories    Memory[]
 
   @@index([teamId])
 }
@@ -426,6 +430,8 @@ model Company {
 
   workspaces  Workspace[]
   simulations SimulationRun[]
+  /// M49 R1: what the COMPANY knows (`scope: company`).
+  memories    Memory[]
 }
 
 model CompanyTeam {
@@ -628,6 +634,8 @@ model Task {
   approvals     Approval[]
   dependencies  TaskDependency[] @relation("dependent")
   dependents    TaskDependency[] @relation("dependedOn")
+  /// M49 R1: what was learnt ON this task. SetNull on the other side -- knowledge outlives it.
+  memories      Memory[]
 
   @@index([workspaceId, status])
 }
@@ -719,6 +727,8 @@ model SlaveRun {
   /// The recorded run-context row (M37 §2) -- exists before the child process starts (`buildRunContext`,
   /// Task 2); a run without one never spawned.
   context    RunContext?
+  /// M49 R1: what was learnt FROM this run. SetNull on the other side.
+  memories   Memory[]
 
   @@index([taskId])
   @@index([slaveId, status])
@@ -782,6 +792,113 @@ model RunContext {
   createdAt DateTime @default(now())
 
   run SlaveRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+}
+
+/// M49 R1: one piece of what this organisation knows, with the provenance that says where it came
+/// from. NOTHING here is ever deleted -- `status: superseded` points at what replaced it and
+/// `status: removed` keeps the reason, and both rows stay.
+///
+/// Exactly one of `companyId`/`workspaceId`/`slaveId` is set, and it is the one `scope` names.
+/// Enforced by `memoryDraftSchema` and `recordMemory` rather than by a CHECK constraint (plan
+/// decision D1): Prisma's PSL cannot express one, and this milestone's migration has to survive
+/// `prisma migrate diff` reporting no difference.
+///
+/// `confidence` and `verifiedBy` are plain strings rather than enums (plan decision D6): the
+/// vocabulary is closed in `packages/domain/src/memory/types.ts` and validated at read, and four
+/// enums is what §2 names.
+model Memory {
+  id              String           @id @default(uuid())
+  type            MemoryType
+  scope           MemoryScope
+  companyId       String?
+  workspaceId     String?
+  slaveId         String?
+  title           String
+  body            String
+  status          MemoryStatus     @default(candidate)
+  /// `sourced` | `interpretation` -- M39's own vocabulary, the only one this system has.
+  confidence      String           @default("interpretation")
+  sourceKind      MemorySourceKind
+  /// An event seq, a decision id, a goal version, a run id -- a pointer a human follows, as TEXT.
+  sourceRef       String?
+  createdBy       Actor
+  createdByUserId String?
+  /// SetNull, not Cascade: what was learnt outlives the task it was learnt on.
+  taskId          String?
+  runId           String?
+  goalVersion     Int?
+  capabilities    String[]         @default([])
+  verifiedAt      DateTime?
+  /// `verification` | `review` | `human`.
+  verifiedBy      String?
+  supersededById  String?
+  removedReason   String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  company      Company?       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  workspace    Workspace?     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  slave        Slave?         @relation(fields: [slaveId], references: [id], onDelete: Cascade)
+  task         Task?          @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  run          SlaveRun?      @relation(fields: [runId], references: [id], onDelete: SetNull)
+  supersededBy Memory?        @relation("MemorySupersedes", fields: [supersededById], references: [id], onDelete: SetNull)
+  supersedes   Memory[]       @relation("MemorySupersedes")
+  /// The rows this memory SUMMARISES, when it is a condensation (R5).
+  condensedFrom MemorySource[] @relation("CondensationOf")
+  /// The summaries this memory is a source OF.
+  condensedInto MemorySource[] @relation("SourceOf")
+
+  /// The three retrieval reads, one index each -- `memoriesForRun` asks for all three scopes at
+  /// once and the Supervisor's world asks the first for a count alone.
+  @@index([workspaceId, status, type, createdAt])
+  @@index([slaveId, status, type, createdAt])
+  @@index([companyId, status, type, createdAt])
+  @@index([taskId])
+}
+
+/// M49 R5: which memories one condensation summarises. A join and not an array column, so the
+/// sources cannot outlive their rows and "what is this a summary of" is one query either way.
+model MemorySource {
+  memoryId       String
+  sourceMemoryId String
+
+  memory       Memory @relation("CondensationOf", fields: [memoryId], references: [id], onDelete: Cascade)
+  sourceMemory Memory @relation("SourceOf", fields: [sourceMemoryId], references: [id], onDelete: Cascade)
+
+  @@id([memoryId, sourceMemoryId])
+  @@index([sourceMemoryId])
+}
+
+enum MemoryType {
+  fact
+  decision
+  procedure
+  lesson
+  observation
+  hypothesis
+}
+
+enum MemoryScope {
+  company
+  workspace
+  worker
+}
+
+enum MemoryStatus {
+  candidate
+  verified
+  superseded
+  removed
+}
+
+enum MemorySourceKind {
+  run_output
+  verification
+  review
+  decision
+  goal
+  human
+  condensation
 }
 
 /// M38 section 2: one Supervisor decision -- the situation it was made on, the catalogue the rules
@@ -872,6 +989,8 @@ enum SupervisorSituationKind {
   /// the role-only fallback for a task that declared no capabilities.
   capability_unstaffed
   done_not_integrated_stale
+  /// M49 R2: unverified observation candidates are piling up on this project.
+  memory_candidates_piling
   workspace_halted
 }
 
@@ -1109,6 +1228,11 @@ enum EventType {
   /// M48 R5: a runbook was adopted for this workspace, or the adopted one was cleared. The
   /// payload names the runbook either way.
   workspace_runbook_adopted   @map("workspace.runbook_adopted")
+  /// M49 R4: a memory was written (`memory.recorded`, whose payload says what kind and whether it
+  /// is knowledge or still a claim) or changed state (`memory.changed` -- verified, superseded or
+  /// removed). Nothing is ever deleted, so these two are the whole life of a memory.
+  memory_recorded             @map("memory.recorded")
+  memory_changed              @map("memory.changed")
 }
 
 model ExecutionEvent {

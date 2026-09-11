@@ -362,6 +362,19 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
       break
     }
 
+    case 'memory_candidates_piling':
+      // ONE offer, and a proposal (`tierOf`): withdrawing what workers reported is a person's call.
+      // `escalate_to_human` follows it automatically below, which is R2's "then escalate".
+      offers.push(
+        candidate(
+          { kind: 'discard_stale_candidates', workspaceId: world.workspaceId, count: world.staleMemoryCandidates },
+          world,
+          situation.kind,
+          `Withdrawing the ${String(world.staleMemoryCandidates)} unverified report(s) keeps this project's knowledge to what something actually checked; nothing is deleted, and each row keeps the reason it was withdrawn.`,
+        ),
+      )
+      break
+
     case 'done_not_integrated_stale':
     case 'workspace_halted':
       // Neither has a safe automatic exit: a merge is a human's call, and a halt is a guardrail's

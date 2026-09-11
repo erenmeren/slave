@@ -544,3 +544,16 @@ describe('task_failed carries the stage escalation (M48 R6)', () => {
     expect(observe(w).find((s) => s.kind === 'task_failed')?.summary).toBe('Task "Add the thing" failed and 2 task(s) depend on it.')
   })
 })
+
+describe('memory_candidates_piling (M49 R2)', () => {
+  it('M49 R2: five stale candidates are one situation about the project', () => {
+    const got = observe(world({ staleMemoryCandidates: 5 }))
+    expect(got.map((one) => one.kind)).toEqual(['memory_candidates_piling'])
+    expect(got[0]?.subjectId).toBe('ws-1')
+    expect(got[0]?.facts).toEqual({ candidates: 5, olderThanHours: 24 })
+  })
+
+  it('M49 R2: four is one task nobody finished, and no situation at all', () => {
+    expect(observe(world({ staleMemoryCandidates: 4 }))).toEqual([])
+  })
+})

@@ -111,6 +111,18 @@ export function sectionLine(source: SectionSource): SectionLine {
       }
     case 'handoff_protocol':
       return { kind: source.kind, detail: 'how to write a handoff, with no runbook adopted', missing: [] }
+    // M49 R3: how many memories this run was given, and whether the list was capped. The COUNT,
+    // not the ids -- the manifest carries every one of them, and the `memories` group in the task
+    // drawer is where a person reads which. The plural is spelled out rather than left to
+    // `plural` above, which would print "1 memorys".
+    case 'memory': {
+      const count = source.memoryIds.length
+      return {
+        kind: source.kind,
+        detail: `${String(count)} ${count === 1 ? 'memory' : 'memories'} from what this organisation knows${source.capped ? ' (capped)' : ''}`,
+        missing: [],
+      }
+    }
     // M40 t1, minimal: a re-plan run's own section. Task 4 gives it the diff a human reads.
     case 'replan':
       return {

@@ -1,5 +1,14 @@
 import type { ReactElement, ReactNode } from 'react'
 import type { DomainEventType } from '@slave-of-ai/db'
+import {
+  MEMORY_SOURCE_KIND_LABEL,
+  MEMORY_STATUS_LABEL,
+  MEMORY_TYPE_LABEL,
+  type MemoryScope,
+  type MemorySourceKind,
+  type MemoryStatus,
+  type MemoryType,
+} from '@slave-of-ai/domain'
 import { plural } from '../../lib/plural'
 import { ActivityCard, type ActivityCardProps } from './ActivityCard'
 
@@ -998,6 +1007,45 @@ function SupervisorFailedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+/** M49 R4: knowledge was written down. The TYPE and the STATUS in words (`docs/ia.md` rule 3), with
+ *  the id one hover away -- a candidate is a claim and a verified memory is knowledge, and the tone
+ *  is what says which. */
+function MemoryRecordedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    memoryId: string
+    type: MemoryType
+    scope: MemoryScope
+    status: MemoryStatus
+    sourceKind: MemorySourceKind
+  }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone={payload.status === 'verified' ? 'idle' : 'working'} label="memory recorded">
+        <span data-testid="memory-type" title={payload.type}>{MEMORY_TYPE_LABEL[payload.type]}</span>
+        {' · '}
+        <span data-testid="memory-status" title={payload.status}>{MEMORY_STATUS_LABEL[payload.status]}</span>
+        {' · '}
+        <span data-testid="memory-source" title={payload.sourceKind}>{MEMORY_SOURCE_KIND_LABEL[payload.sourceKind]}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+/** M49 R4: a memory moved -- verified, superseded, or withdrawn with a reason. Nothing was deleted. */
+function MemoryChangedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { memoryId: string; from: MemoryStatus; to: MemoryStatus; reason?: string }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone={payload.to === 'removed' ? 'warn' : 'idle'} label="memory changed">
+        <span data-testid="memory-from" title={payload.from}>{MEMORY_STATUS_LABEL[payload.from]}</span>
+        {' → '}
+        <span data-testid="memory-status" title={payload.to}>{MEMORY_STATUS_LABEL[payload.to]}</span>
+        {payload.reason !== undefined && <span data-testid="memory-reason">{` · ${payload.reason}`}</span>}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 /**
  * One card component per `DomainEventType`. `satisfies` (not a type annotation) is load-bearing:
  * it keeps each entry's own component type while still failing the build the moment a type is
@@ -1055,4 +1103,6 @@ export const ACTIVITY_CARDS = {
   'supervisor.resolved': SupervisorResolvedCard,
   'supervisor.failed': SupervisorFailedCard,
   'workspace.runbook_adopted': WorkspaceRunbookAdoptedCard,
+  'memory.recorded': MemoryRecordedCard,
+  'memory.changed': MemoryChangedCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>

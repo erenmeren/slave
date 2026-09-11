@@ -622,3 +622,15 @@ describe('runbook_recommended offers (M48 R5)', () => {
     expect((offers[0]?.action as { rationale: string }).rationale).toContain('Application security')
   })
 })
+
+describe('memory_candidates_piling offers (M49 R2)', () => {
+  it('M49 R2: the one offer is a proposal to withdraw them, then the escalation', () => {
+    const got = candidates(
+      { kind: 'memory_candidates_piling', subjectId: 'ws-1', summary: 's', facts: {} },
+      world({ staleMemoryCandidates: 7 }),
+    )
+    expect(got.map((one) => one.action.kind)).toEqual(['discard_stale_candidates', 'escalate_to_human', 'no_action'])
+    expect(got[0]?.tier).toBe('proposed')
+    expect(got[0]?.action).toEqual({ kind: 'discard_stale_candidates', workspaceId: 'ws-1', count: 7 })
+  })
+})

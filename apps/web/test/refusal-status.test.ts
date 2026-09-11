@@ -106,6 +106,7 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   runbook_not_found: true,
   invalid_runbook: true,
   runbook_already_adopted: true,
+  stale_candidate_discard_unavailable: true,
 }
 
 const ALL = Object.keys(ALL_KINDS) as ControlRefusal['kind'][]

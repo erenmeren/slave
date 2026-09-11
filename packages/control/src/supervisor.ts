@@ -456,6 +456,18 @@ async function carryOut(
       }
       return reached(await adoptRunbook(decision.workspaceId, action.key, { origin }, principal))
     }
+    case 'discard_stale_candidates':
+      // M49 t1: the action exists, the verb does not. A later task replaces this line with
+      // `reached(await discardStaleCandidates(action.workspaceId, ...))`. Unreachable today --
+      // nothing writes a `Memory` row yet, so `loadSupervisorWorld` counts zero stale candidates
+      // and `memory_candidates_piling` never fires -- and a REFUSAL rather than `ok('none')` by
+      // M48 t1's `adopt_runbook` precedent: "nothing happened" and "this succeeded and moved
+      // nothing" are different facts, and only the first is true here (spec §4).
+      return err({
+        kind: 'stale_candidate_discard_unavailable',
+        workspaceId: action.workspaceId,
+        count: action.count,
+      })
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

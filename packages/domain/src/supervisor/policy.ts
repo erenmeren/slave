@@ -84,6 +84,9 @@ export function tierOf(action: Action, world: SupervisorWorld, situationKind: Si
     // the halt short-circuit were removed (ruling R1): a cancellation is never automatic, whatever
     // the workspace is doing.
     case 'cancel_task':
+    // M49 R2: a worker's own report is evidence until somebody decides it is not, and a tick that
+    // withdrew five of them by itself would be the Supervisor editing the record.
+    case 'discard_stale_candidates':
       return 'proposed'
   }
 }

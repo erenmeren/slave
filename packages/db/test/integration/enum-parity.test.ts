@@ -1,6 +1,10 @@
 import {
   DECIDERS,
   DECISION_STATUSES,
+  MEMORY_SCOPES,
+  MEMORY_SOURCE_KINDS,
+  MEMORY_STATUSES,
+  MEMORY_TYPES,
   SITUATION_KINDS,
   TIERS,
   executionEventSchema,
@@ -58,6 +62,25 @@ describe('database enums match the domain unions', () => {
 
   it('SupervisorDecider matches DECIDERS, member for member', async () => {
     expect(await enumValues('SupervisorDecider')).toEqual([...DECIDERS].sort())
+  })
+
+  // M49 R1: the four memory enums. Same reason as the Supervisor's four -- nothing in TypeScript
+  // ties a Prisma enum to the domain union it mirrors, and a missing member fails at the first
+  // INSERT rather than at build.
+  it('MemoryType matches MEMORY_TYPES, member for member', async () => {
+    expect(await enumValues('MemoryType')).toEqual([...MEMORY_TYPES].sort())
+  })
+
+  it('MemoryScope matches MEMORY_SCOPES, member for member', async () => {
+    expect(await enumValues('MemoryScope')).toEqual([...MEMORY_SCOPES].sort())
+  })
+
+  it('MemoryStatus matches MEMORY_STATUSES, member for member', async () => {
+    expect(await enumValues('MemoryStatus')).toEqual([...MEMORY_STATUSES].sort())
+  })
+
+  it('MemorySourceKind matches MEMORY_SOURCE_KINDS, member for member', async () => {
+    expect(await enumValues('MemorySourceKind')).toEqual([...MEMORY_SOURCE_KINDS].sort())
   })
 
   // The test above pins the database enum to `EVENT_TYPE_BY_DOMAIN_TYPE`, a hand-maintained

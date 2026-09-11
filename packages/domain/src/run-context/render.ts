@@ -7,7 +7,10 @@ import type { Manifest, Section, SectionKind } from './sections.js'
  * renderRunContext} throws rather than dropping it.
  */
 export const SECTION_ORDER: Readonly<Record<Manifest['kind'], readonly SectionKind[]>> = {
-  implementation: ['profile', 'roster', 'skills', 'inbox', 'ask_protocol', 'task', 'handoff', 'rejection'],
+  // `memory` sits directly after the contract and BEFORE the rejection (M49 R3, plan decision D2):
+  // what the organisation knows is context for the work, and the last attempt's rejection is the
+  // instruction to act on -- so the rejection stays the last thing the worker reads.
+  implementation: ['profile', 'roster', 'skills', 'inbox', 'ask_protocol', 'task', 'handoff', 'memory', 'rejection'],
   review: ['profile', 'skills', 'task', 'handoff', 'review_diff'],
   // `replan` is present only when the goal CHANGED on a non-empty board (M40 §3). It comes last,
   // after the new goal it is about, so the prompt reads "here is the goal, here is what changed
@@ -20,7 +23,9 @@ export const SECTION_ORDER: Readonly<Record<Manifest['kind'], readonly SectionKi
   // other is "there is none"), and both sit after `capabilities` (M48 R4): the prompt reads goal,
   // then what changed, then the words you may use, then the process you are adapting, then the
   // request. A section whose text is empty is dropped from prompt and manifest alike.
-  planning: ['profile', 'planning_goal', 'replan', 'capabilities', 'runbook', 'handoff_protocol'],
+  // `memory` is LAST on planning (M49 R3): the prompt reads goal, what changed, the words you may
+  // use, the process, what this organisation already knows, then the request.
+  planning: ['profile', 'planning_goal', 'replan', 'capabilities', 'runbook', 'handoff_protocol', 'memory'],
 }
 
 // The markers and their defusing live in `./markers.js` (M48 t1) and are re-exported here, so

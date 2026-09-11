@@ -107,6 +107,11 @@ export const TYPES_BY_KIND = {
     'supervisor.applied',
     'supervisor.resolved',
     'supervisor.failed',
+    // M49 t1: knowledge written down or moved is something that happened TO this project's
+    // understanding of itself, the same chip `workspace.goal_set` sits under -- not a run outcome,
+    // and (for the ones a person makes) not a guardrail trip either.
+    'memory.recorded',
+    'memory.changed',
   ],
 } as const satisfies Record<ActivityKind, readonly DomainEventType[]>
 

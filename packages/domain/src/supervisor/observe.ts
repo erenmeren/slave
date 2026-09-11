@@ -5,8 +5,10 @@ import {
   COOLDOWN_MS,
   INTEGRATED_STALE_MS,
   MANAGER_ROLE,
+  MEMORY_CANDIDATE_STALE_MS,
   REVIEWER_ROLE,
   REVIEW_CAP_GUARDRAIL,
+  STALE_CANDIDATES_MIN,
   WAITING_STALE_MS,
 } from './constants.js'
 import { SITUATION_KINDS, type Situation, type SituationKind } from './situations.js'
@@ -295,6 +297,17 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
       subjectId: role,
       summary: `${waiting.length} startable task(s) need the "${role}" role and no slave holds it.`,
       facts: { role, readyTasks: waiting.length, firstTaskId: waiting[0]?.id ?? null },
+    })
+  }
+
+  // memory_candidates_piling: workers keep reporting and nothing keeps verifying. The subject is
+  // the WORKSPACE -- five stale candidates are one habit, not five situations.
+  if (world.staleMemoryCandidates >= STALE_CANDIDATES_MIN) {
+    add({
+      kind: 'memory_candidates_piling',
+      subjectId: world.workspaceId,
+      summary: `${String(world.staleMemoryCandidates)} thing(s) a worker reported have sat unverified for over a day, so none of them is knowledge anybody can be given.`,
+      facts: { candidates: world.staleMemoryCandidates, olderThanHours: MEMORY_CANDIDATE_STALE_MS / 3_600_000 },
     })
   }
 

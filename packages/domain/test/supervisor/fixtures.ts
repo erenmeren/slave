@@ -159,6 +159,9 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     // test that hands the world some runbooks to recommend.
     runbook: null,
     runbooks: [],
+    // M49: a project whose workers have reported nothing unverified, which is what every fixture
+    // in this file means unless it says otherwise.
+    staleMemoryCandidates: 0,
     ...overrides,
   }
 }

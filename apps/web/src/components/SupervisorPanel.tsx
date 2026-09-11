@@ -73,6 +73,10 @@ export function actionText(action: Action, taskTitles: Readonly<Record<string, s
       return `mark task ${action.taskId} failed: ${action.reason}`
     case 'cancel_task':
       return `cancel task ${taskTitles[action.taskId] ?? action.taskId}: ${action.reason}`
+    // M49 R2: the COUNT is the whole subject -- there is no one row to name, and "withdraw" is the
+    // word that says the rows stay (nothing here is ever deleted).
+    case 'discard_stale_candidates':
+      return `withdraw ${String(action.count)} unverified report(s) nothing ever checked`
     case 'escalate_to_human':
       return `escalate to a human: ${action.summary}`
     case 'no_action':

@@ -57,6 +57,16 @@ export const SITUATION_KINDS = [
   'capability_unstaffed',
   'ready_unstaffed',
   'done_not_integrated_stale',
+  /**
+   * M49 R2: unverified OBSERVATION candidates are piling up -- five or more older than
+   * {@link MEMORY_CANDIDATE_STALE_MS}. `subjectId` is the WORKSPACE id: this is about the project's
+   * knowledge, not about any one row in it.
+   *
+   * Last of the project-wide situations and directly before `workspace_halted`, because it is the
+   * least urgent thing on this list that is still worth a person's attention: nothing is stuck, and
+   * nothing a worker claimed has become knowledge.
+   */
+  'memory_candidates_piling',
   'workspace_halted',
 ] as const
 
@@ -99,9 +109,10 @@ export const situationSchema: z.ZodType<Situation> = z.object({
  * key rendered as prose is the leak M44 closes -- the Supervisor panel's recent-decision rows read
  * `no_reviewer · proposed · pending · by model`.
  *
- * `Record<SituationKind, string>` is load-bearing: a FOURTEENTH kind fails the build here rather
- * than turning up on the page as an identifier (thirteen as of M48's `runbook_recommended`). Each label says what is STUCK, in the words the report
- * already uses; the decision's own `situation.summary` carries the specifics beside it.
+ * `Record<SituationKind, string>` is load-bearing: a FIFTEENTH kind fails the build here rather
+ * than turning up on the page as an identifier (fourteen as of M49's `memory_candidates_piling`).
+ * Each label says what is STUCK, in the words the report already uses; the decision's own
+ * `situation.summary` carries the specifics beside it.
  */
 export const SITUATION_LABEL: Record<SituationKind, string> = {
   no_reviewer: 'No reviewer',
@@ -116,5 +127,6 @@ export const SITUATION_LABEL: Record<SituationKind, string> = {
   capability_unstaffed: 'Missing a capability',
   ready_unstaffed: 'Ready work, nobody to do it',
   done_not_integrated_stale: 'Finished, not integrated',
+  memory_candidates_piling: 'Unverified knowledge piling up',
   workspace_halted: 'Project halted',
 }

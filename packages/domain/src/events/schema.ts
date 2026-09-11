@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { err, ok, type Result } from '../result.js'
+import { MEMORY_SCOPES, MEMORY_SOURCE_KINDS, MEMORY_STATUSES, MEMORY_TYPES } from '../memory/types.js'
 import { ACTION_KINDS, DECIDERS, TIERS } from '../supervisor/actions.js'
 import { SITUATION_KINDS } from '../supervisor/situations.js'
 
@@ -511,6 +512,43 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       name: z.string().min(1),
       cleared: z.boolean().optional(),
     }),
+  }),
+  // M49 R4: a memory was written. The payload is what a reader needs WITHOUT loading the row --
+  // what kind of knowledge, whose, and whether it is already knowledge or still a claim. The task
+  // travels on the ENVELOPE (plan erratum E13), which is where `appendEvent` indexes it and where
+  // the Activity page's `?tasks=` filter reads it.
+  //
+  // Both payloads are `.strict()`, which no other arm in this file is: erratum E13's rule is that
+  // the task rides on the ENVELOPE, and zod's default STRIPS an unknown key rather than refusing
+  // it -- so a writer that put a `taskId` beside `memoryId` would parse clean and silently record
+  // a second, unindexed copy of the task nobody reads. There is no history of either type to be
+  // tolerant of (both are born here), which is the condition the rest of the file lacks.
+  z.object({
+    ...envelope,
+    type: z.literal('memory.recorded'),
+    payload: z
+      .object({
+        memoryId: z.string().min(1),
+        type: z.enum(MEMORY_TYPES),
+        scope: z.enum(MEMORY_SCOPES),
+        status: z.enum(MEMORY_STATUSES),
+        sourceKind: z.enum(MEMORY_SOURCE_KINDS),
+      })
+      .strict(),
+  }),
+  // M49 R4: a memory changed state -- verified, superseded, or removed. `reason` is the removing
+  // person's words and is absent for every other move.
+  z.object({
+    ...envelope,
+    type: z.literal('memory.changed'),
+    payload: z
+      .object({
+        memoryId: z.string().min(1),
+        from: z.enum(MEMORY_STATUSES),
+        to: z.enum(MEMORY_STATUSES),
+        reason: z.string().min(1).optional(),
+      })
+      .strict(),
   }),
 ])
 

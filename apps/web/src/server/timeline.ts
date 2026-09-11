@@ -4,9 +4,13 @@ import { listDecisions, type DecisionView } from '@slave-of-ai/control'
 import {
   LANE_BY_TYPE,
   LANE_LABEL,
+  MEMORY_STATUS_LABEL,
+  MEMORY_TYPE_LABEL,
   isResolvedDecision,
   laneFor,
   replanSentence,
+  type MemoryStatus,
+  type MemoryType,
   type TimelineLane,
   type TimelineSubject,
 } from '@slave-of-ai/domain'
@@ -123,14 +127,17 @@ export async function buildSupervisorTimeline(
 
   for (const row of rows) {
     const type = (DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? row.type) as DomainEventType
+    const payload = row.payload as Record<string, unknown>
     const subject: TimelineSubject = {
       source: 'event',
       type,
       actor: row.actor as 'human' | 'slave' | 'system',
+      // M49 R4 (plan erratum E5): the lane of a `memory.recorded` is its payload's status. Read
+      // for every row -- an `undefined` here is exactly what every other type means by it.
+      ...(typeof payload['status'] === 'string' ? { memoryStatus: payload['status'] as MemoryStatus } : {}),
     }
     const lane = laneFor(subject)
     if (lane === null) continue
-    const payload = row.payload as Record<string, unknown>
 
     if (type === 'slave.message_sent') {
       const key = row.taskId ?? 'no-task'
@@ -245,6 +252,23 @@ function titleFor(
       // The NAME, never the key: this line is read on the Overview's PLAN CHANGE lane.
       const what = typeof name === 'string' && name !== '' ? name : 'a runbook'
       return cleared ? `stopped following ${what}` : `adopted ${what} as the way this project works`
+    }
+    // M49 R4/R6: what was learnt, in words. The payload carries no `title` field, so without a
+    // case of its own this would read as its own type name on the VERIFIED lane.
+    case 'memory.recorded': {
+      const memoryType = payload['type']
+      const label = typeof memoryType === 'string' && memoryType in MEMORY_TYPE_LABEL
+        ? MEMORY_TYPE_LABEL[memoryType as MemoryType]
+        : 'Knowledge'
+      return `learnt: ${label.toLowerCase()}`
+    }
+    case 'memory.changed': {
+      const to = payload['to']
+      const label = typeof to === 'string' && to in MEMORY_STATUS_LABEL ? MEMORY_STATUS_LABEL[to as MemoryStatus] : 'changed'
+      const reason = payload['reason']
+      return typeof reason === 'string' && reason !== ''
+        ? `knowledge ${label.toLowerCase()}: ${reason}`
+        : `knowledge ${label.toLowerCase()}`
     }
     default: {
       const title = payload['title']

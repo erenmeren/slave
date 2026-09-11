@@ -54,6 +54,10 @@ export type Action =
    *  proposal ({@link tierOf}, ruling R1) -- the model asked for it inside a re-plan delta, and a
    *  wrong deletion costs real planned work while a wrong addition costs one backlog row. */
   | { readonly kind: 'cancel_task'; readonly taskId: string; readonly reason: string }
+  /** `discardStaleCandidates`: the OBSERVATION candidates nothing ever verified, marked `removed`
+   *  with a reason. NEVER a deletion (R1) and never automatic ({@link tierOf}): withdrawing a
+   *  worker's own report is a judgement, and the rows stay in the table either way. */
+  | { readonly kind: 'discard_stale_candidates'; readonly workspaceId: string; readonly count: number }
   /** No verb at all -- a row a human is asked to look at. The always-available last resort. */
   | { readonly kind: 'escalate_to_human'; readonly summary: string }
   /** Deliberately nothing: the situation is real but waiting is the right move. */
@@ -72,6 +76,7 @@ export const ACTION_KINDS = [
   'reassign_question',
   'mark_task_failed',
   'cancel_task',
+  'discard_stale_candidates',
   'escalate_to_human',
   'no_action',
 ] as const
@@ -125,6 +130,11 @@ export const actionSchema: z.ZodType<Action> = z.discriminatedUnion('kind', [
   }),
   z.object({ kind: z.literal('mark_task_failed'), taskId: z.string().min(1), reason: z.string().min(1) }),
   z.object({ kind: z.literal('cancel_task'), taskId: z.string().min(1), reason: z.string().min(1) }),
+  z.object({
+    kind: z.literal('discard_stale_candidates'),
+    workspaceId: z.string().min(1),
+    count: z.number().int().positive(),
+  }),
   z.object({ kind: z.literal('escalate_to_human'), summary: z.string().min(1) }),
   z.object({ kind: z.literal('no_action') }),
 ])

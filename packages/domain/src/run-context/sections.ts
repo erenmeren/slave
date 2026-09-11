@@ -38,6 +38,10 @@ export type SectionKind =
   /** M48 R4: the shorter request, for a workspace with NO runbook -- the contract alone, no
    *  stages. Occupies the same slot as `runbook`, and never appears beside it. */
   | 'handoff_protocol'
+  /** M49 R3: the verified knowledge this organisation holds that matches the run's scope and
+   *  references. A SECTION for `capabilities`' and `runbook`'s reason: the instruction constants
+   *  are pure, static and byte-pinned, and this is per-run data read out of a table. */
+  | 'memory'
 
 /**
  * One piece of a run's prompt, as the orchestrator hands it to {@link renderRunContext}: the
@@ -120,6 +124,11 @@ export type SectionSource =
   /** No runbook is adopted; the planner was asked for the contract alone. No fields: the section
    *  is static, and its presence IS the fact. */
   | { readonly kind: 'handoff_protocol' }
+  /** WHICH memories this run was given, and whether the list was capped at `MEMORIES_IN_PROMPT`.
+   *  The IDS, not the text: `RunContext.prompt` already carries the words once, and the ids are
+   *  what lets a reader ask "was this run ever told that?" months later -- and what the task
+   *  drawer's `memories` group reads to say what a run RECEIVED (M49 R6). */
+  | { readonly kind: 'memory'; readonly memoryIds: readonly string[]; readonly capped: boolean }
 
 /** The manifest stored (as `Json`) on `RunContext.sections` -- an ordered record of what produced
  *  the prompt, without the prompt text itself. */
@@ -204,6 +213,14 @@ const runbookSourceSchema = z.object({
 })
 const handoffProtocolSourceSchema = z.object({ kind: z.literal('handoff_protocol') })
 
+// M49 E3: REQUIRED fields, by the same rule -- the `memory` kind is new in M49, so there is no
+// history of rows written without them to be tolerant of.
+const memorySourceSchema = z.object({
+  kind: z.literal('memory'),
+  memoryIds: z.array(z.string()),
+  capped: z.boolean(),
+})
+
 const sectionSourceSchema = z.discriminatedUnion('kind', [
   profileSourceSchema,
   rosterSourceSchema,
@@ -220,6 +237,7 @@ const sectionSourceSchema = z.discriminatedUnion('kind', [
   handoffSourceSchema,
   runbookSourceSchema,
   handoffProtocolSourceSchema,
+  memorySourceSchema,
 ])
 
 /**

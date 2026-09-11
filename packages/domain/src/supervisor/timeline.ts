@@ -1,4 +1,5 @@
 import type { ExecutionEvent } from '../events/schema.js'
+import type { MemoryStatus } from '../memory/types.js'
 
 /**
  * The six lanes a person reads a project's history in (M45 R2).
@@ -73,6 +74,14 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   // shown as the pending `SupervisorDecision` row, and showing both would double every entry.
   'supervisor.applied': 'decision',
   'supervisor.resolved': 'decision',
+  // M49: knowledge the organisation actually verified. The DEFAULT is non-null deliberately (plan
+  // erratum E5): `apps/web/src/server/timeline.ts` only QUERIES types whose entry here is non-null,
+  // so a lane that exists only inside `laneFor` would never be fetched. `laneFor` narrows this to
+  // null for a candidate.
+  'memory.recorded': 'verified',
+  // A person verifying, correcting or withdrawing knowledge is a decision they took. `laneFor`
+  // narrows this to null when the system did it.
+  'memory.changed': 'decision',
   // VERIFIED RESULT
   'task.verify_passed': 'verified',
   'task.review_approved': 'verified',
@@ -125,6 +134,10 @@ export type TimelineSubject =
       readonly source: 'event'
       readonly type: ExecutionEvent['type']
       readonly actor: 'human' | 'slave' | 'system'
+      /** M49 R4 (plan erratum E5): `memory.recorded`'s lane depends on its PAYLOAD -- a candidate
+       *  is not a verified result. Optional, so every existing caller compiles unchanged, and read
+       *  only by the `memory.recorded` branch of {@link laneFor}. */
+      readonly memoryStatus?: MemoryStatus | undefined
     }
   | { readonly source: 'decision' }
   | { readonly source: 'question' }
@@ -135,6 +148,14 @@ export function laneFor(subject: TimelineSubject): TimelineLane | null {
   if (subject.source !== 'event') return 'decision'
   if (subject.type === 'task.created' || subject.type === 'task.cancelled') {
     return subject.actor === 'human' ? 'user_request' : 'plan_change'
+  }
+  // M49 R4: both depend on something `LANE_BY_TYPE` cannot see -- the payload's status for one,
+  // the envelope's actor for the other -- exactly as `task.created` depends on the actor above.
+  if (subject.type === 'memory.recorded') {
+    return subject.memoryStatus === 'verified' ? 'verified' : null
+  }
+  if (subject.type === 'memory.changed') {
+    return subject.actor === 'human' ? 'decision' : null
   }
   return LANE_BY_TYPE[subject.type]
 }
