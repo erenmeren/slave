@@ -57,6 +57,7 @@ import {
   readTemplateProfile,
   refusalText,
   rejectDecision,
+  releaseWorker,
   removeMemory,
   renameSlave,
   renameCompanyTeam,
@@ -82,6 +83,7 @@ import {
   stepSimulation,
   stopAutoRun,
   syncCapabilityTaxonomy,
+  setLifecycle,
   syncRunbooks,
   supersedeMemory,
   syncSkillCatalog,
@@ -100,6 +102,8 @@ import {
   MEMORY_STATUS_LABEL,
   MEMORY_TYPES,
   MEMORY_TYPE_LABEL,
+  SLAVE_LIFECYCLES,
+  SLAVE_LIFECYCLE_LABEL,
   SUPERVISOR_DEFAULT_MODEL,
   candidates,
   chooseByRules,
@@ -343,12 +347,29 @@ const USAGE = `usage: orchestrator <command> [options]
                                        the runtime roles they project to are ADDED, never removed
                                        -- use set-runtime-roles to take a role away.
                                        --capabilities '' clears them.
-  hire --workspace <id> --template <id> --why <text> [--capability <key>] [--temporary]
+  hire --workspace <id> --template <id> --why <text> [--capability <key>]
+       [--temporary --for-task <taskId>]
                                        put a specialist from the catalog on this project, carrying
                                        its template's capabilities and the roles those project to.
                                        Re-running for the same template REUSES the worker already
-                                       hired from it rather than hiring a second. --why is required:
-                                       it is the record of why this worker is here.
+                                       hired from it rather than hiring a second -- unless that
+                                       worker has been released, which is never reused. --why is
+                                       required: it is the record of why this worker is here.
+                                       --temporary hires for ONE assignment and needs --for-task:
+                                       the worker is ephemeral, and release-worker ends it.
+  release-worker --slave <id> --reason <text>
+                                       end an ephemeral worker's engagement: its runtime roles are
+                                       emptied so nothing dispatches it again and its finished
+                                       tasks' worktrees are removed. Nothing is deleted -- every
+                                       run, message and thing it learnt stays exactly where it is.
+                                       Refused for a worker that is not ephemeral, one already
+                                       released, and one with a live run.
+  set-lifecycle --slave <id> --lifecycle <permanent|project|ephemeral>
+                                       move a worker between lifecycles by hand. Nothing else ever
+                                       does: a worker is never promoted automatically. Leaving
+                                       ephemeral clears the engagement and the release with it, and
+                                       restores no runtime roles -- use set-runtime-roles for that.
+                                       permanent is refused for a worker on no company roster.
 
   supervise --workspace <id> [--dry-run]
                                        one pass of the Supervisor over this workspace: observes
@@ -486,6 +507,18 @@ type Flags = Readonly<Record<string, string | readonly string[] | undefined>>
 const REPEATABLE: ReadonlySet<string> = new Set(['verify', 'setup'])
 
 /**
+ * Flags that carry no value at all, so they may be written ANYWHERE in the command (M50 t3).
+ *
+ * The parser below takes whatever follows a flag as its value, even another `--flag` -- which is
+ * why every boolean this CLI already has (`--yes`, `--dry-run`, `--prompt`) is documented as going
+ * LAST. `--temporary` cannot live under that rule: it is meaningless without `--for-task`, the two
+ * are read as one phrase, and `hire ... --temporary --for-task <id>` would otherwise record
+ * `--for-task` as the VALUE of `--temporary` and swallow the task id entirely. Listing the flag
+ * here is the honest fix for the pair; the older booleans keep their documented rule.
+ */
+const VALUELESS: ReadonlySet<string> = new Set(['temporary'])
+
+/**
  * `--flag value`, `--flag=value`, and `--flag` on its own.
  *
  * The `=` form is supported rather than ignored: silently dropping `--workspace=<id>` means a
@@ -508,6 +541,11 @@ function parseArgs(argv: readonly string[]): Args {
     const equals = token.indexOf('=')
     if (equals > 2) {
       setFlag(token.slice(2, equals), token.slice(equals + 1))
+      continue
+    }
+
+    if (VALUELESS.has(token.slice(2))) {
+      flags[token.slice(2)] = undefined
       continue
     }
 
@@ -1860,15 +1898,26 @@ export async function main(argv: readonly string[]): Promise<number> {
     }
 
     case 'hire': {
+      // `'temporary' in flags`, not `flags['temporary'] !== undefined`: a valueless `--temporary`
+      // records `undefined` as its value, the same trap `delete-slave`'s `--yes` documents.
+      const temporary = 'temporary' in flags
+      // M50 R2 (plan decision D3): an assignment is not optional for a temporary hire. A worker
+      // brought in for nothing in particular is one `engagement_over` can never fire for, and a
+      // specialist nobody can release is exactly the promise this milestone exists to keep. An
+      // ordinary missing-flag error, not a refusal kind -- nothing has been written yet.
+      const forTask = temporary ? requireFlag(flags, 'for-task') : undefined
       const result = await hireFromTemplate(requireFlag(flags, 'workspace'), requireFlag(flags, 'template'), {
         rationale: requireFlag(flags, 'why'),
         ...(flagText(flags, 'capability') === undefined ? {} : { capabilities: [requireFlag(flags, 'capability')] }),
-        ...('temporary' in flags ? { temporary: true } : {}),
+        ...(forTask === undefined ? {} : { temporary: true, engagementTaskId: forTask }),
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(
         `${result.value.reused ? 'reused' : 'hired'} ${result.value.slaveId}: provides ${result.value.capabilities.join(', ')}, ` +
-          `dispatchable as ${result.value.runtimeRoles.join(', ')}\n`,
+          `dispatchable as ${result.value.runtimeRoles.join(', ')}` +
+          // A REUSED worker keeps the lifecycle the hire that created it wrote (erratum E13), so
+          // saying "for one assignment" over one would be a claim about a row nobody just changed.
+          `${forTask !== undefined && !result.value.reused ? `, for one assignment (${forTask})` : ''}\n`,
       )
       return 0
     }
@@ -2020,6 +2069,45 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await deleteSlave(slaveId)
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`slave ${slaveId} deleted; ${plural(result.value.runs, 'run')} went with it\n`)
+      return 0
+    }
+
+    // ---- M50 R4: the two verbs a person moves a worker's lifecycle with ------------------------
+    case 'release-worker': {
+      const slaveId = requireFlag(flags, 'slave')
+      // No `Principal`: the CLI has no session, the same as every verb above it. `origin` is left
+      // at its default `'human'` on purpose -- a person typed this line, and the `slave.released`
+      // event should not read as the machine's own housekeeping the way a tick's release does.
+      const result = await releaseWorker(slaveId, requireFlag(flags, 'reason'))
+      if (!result.ok) throw new Error(refusalText(result.error))
+      // The NAME, read back after the write: an operator who typed an id deserves to see who it
+      // was, and the row is still there to ask -- which is the whole ruling of R5.
+      const worker = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, select: { name: true } })
+      process.stdout.write(
+        `released ${worker.name} (${slaveId}): runtime roles cleared, ` +
+          `${plural(result.value.worktreesCollected, 'worktree')} collected; ` +
+          'every run, message and memory it produced is untouched\n',
+      )
+      return 0
+    }
+
+    case 'set-lifecycle': {
+      const slaveId = requireFlag(flags, 'slave')
+      // Checked here rather than in the verb: the verb's parameter is typed, and the honest error
+      // for a word an operator mistyped is the list of the three there are. `oneOfFlag` is the
+      // M49 helper that already words it that way for the memory vocabularies.
+      const wanted = oneOfFlag(flags, 'lifecycle', SLAVE_LIFECYCLES)
+      if (wanted === undefined) throw new Error('--lifecycle is required')
+      const result = await setLifecycle(slaveId, wanted)
+      if (!result.ok) throw new Error(refusalText(result.error))
+      // The LABEL on the way out, the key on the way in (`docs/ia.md` rule 3): an operator types
+      // `ephemeral` because that is the value the flag takes, and reads `Ephemeral` because that
+      // is what the thing is called.
+      process.stdout.write(
+        result.value.from === result.value.to
+          ? `${slaveId} was already ${SLAVE_LIFECYCLE_LABEL[result.value.to]}; nothing changed\n`
+          : `${slaveId} moved from ${SLAVE_LIFECYCLE_LABEL[result.value.from]} to ${SLAVE_LIFECYCLE_LABEL[result.value.to]}\n`,
+      )
       return 0
     }
 

@@ -1548,6 +1548,119 @@ describe('the orchestrator CLI', () => {
     }, 30_000)
   })
 
+  // M50 R4: the three command lines a person reaches a worker's lifecycle through. Real
+  // subprocesses, like everything else in this file -- the DB row after the child has exited is
+  // the only proof that the verb wrote what its sentence claimed.
+  describe('the worker lifecycle (M50 R4)', () => {
+    it('hires a temporary specialist for one task, and records the engagement on the column', async (): Promise<void> => {
+      const template = await prisma.slaveTemplate.create({
+        data: { name: `M50 CLI Security ${String(Date.now())}`, role: 'security', capabilityKeys: ['security.application'] },
+      })
+      const result = await runCli([
+        'hire',
+        '--workspace',
+        fixture.workspaceId,
+        '--template',
+        template.id,
+        '--why',
+        'the authentication path needs a security read',
+        '--temporary',
+        '--for-task',
+        fixture.taskId,
+      ])
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('hired ')
+      expect(result.stdout).toContain('for one assignment')
+
+      const worker = await prisma.slave.findFirstOrThrow({ where: { hiredFromTemplateId: template.id } })
+      expect(worker.lifecycle).toBe('ephemeral')
+      expect(worker.engagementTaskId).toBe(fixture.taskId)
+    }, 60_000)
+
+    it('refuses --temporary without --for-task: a specialist with no assignment can never be released', async (): Promise<void> => {
+      const template = await prisma.slaveTemplate.create({
+        data: { name: `M50 CLI Loose ${String(Date.now())}`, role: 'security', capabilityKeys: ['security.application'] },
+      })
+      const result = await runCli([
+        'hire',
+        '--workspace',
+        fixture.workspaceId,
+        '--template',
+        template.id,
+        '--why',
+        'no assignment',
+        '--temporary',
+      ])
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('--for-task')
+      expect(await prisma.slave.count({ where: { hiredFromTemplateId: template.id } })).toBe(0)
+    }, 60_000)
+
+    it('releases a worker and says what it collected', async (): Promise<void> => {
+      const worker = await prisma.slave.create({
+        data: {
+          teamId: fixture.teamId,
+          name: 'M50 CLI Robin',
+          role: 'Security Reviewer',
+          runtimeRoles: ['security'],
+          lifecycle: 'ephemeral',
+          engagementTaskId: fixture.taskId,
+        },
+      })
+      const result = await runCli(['release-worker', '--slave', worker.id, '--reason', 'the engagement is over'])
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('released M50 CLI Robin')
+      expect(result.stdout).toContain('0 worktrees collected')
+      // R5, in the sentence an operator reads: nothing was deleted.
+      expect(result.stdout).toContain('every run, message and memory it produced is untouched')
+      const after = await prisma.slave.findUniqueOrThrow({ where: { id: worker.id } })
+      expect(after.runtimeRoles).toEqual([])
+      expect(after.releasedAt).not.toBeNull()
+    }, 60_000)
+
+    it('refuses release-worker on a project worker, in the words the refusal wrote', async (): Promise<void> => {
+      const result = await runCli(['release-worker', '--slave', fixture.slaveId, '--reason', 'no'])
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('not a specialist brought in for one assignment')
+    }, 60_000)
+
+    it('moves a lifecycle by hand and prints both ends of the move', async (): Promise<void> => {
+      const worker = await prisma.slave.create({
+        data: {
+          teamId: fixture.teamId,
+          name: 'M50 CLI Sam',
+          role: 'Security Reviewer',
+          runtimeRoles: [],
+          lifecycle: 'ephemeral',
+          engagementTaskId: fixture.taskId,
+        },
+      })
+      const result = await runCli(['set-lifecycle', '--slave', worker.id, '--lifecycle', 'project'])
+      expect(result.code).toBe(0)
+      // The LABELS, never the enum members (`docs/ia.md` rule 3, and the `memories` verbs'
+      // precedent in this same file): the word an operator TYPES is the key, the word it reads
+      // back is the name.
+      expect(result.stdout).toContain('Ephemeral')
+      expect(result.stdout).toContain('Project')
+      const after = await prisma.slave.findUniqueOrThrow({ where: { id: worker.id } })
+      expect(after.lifecycle).toBe('project')
+      expect(after.engagementTaskId).toBeNull()
+    }, 60_000)
+
+    it('says so, and changes nothing, when the lifecycle asked for is the one already there', async (): Promise<void> => {
+      const result = await runCli(['set-lifecycle', '--slave', fixture.slaveId, '--lifecycle', 'project'])
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('was already Project')
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).lifecycle).toBe('project')
+    }, 60_000)
+
+    it('refuses a lifecycle that is not one of the three', async (): Promise<void> => {
+      const result = await runCli(['set-lifecycle', '--slave', fixture.slaveId, '--lifecycle', 'forever'])
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('permanent, project, ephemeral')
+    }, 60_000)
+  })
+
   // M48 R5/R6: the four runbook sub-verbs, adoption and the stage ladder. Real subprocesses, like
   // everything else in this file -- exit codes and argv parsing are what a command-line tool gets
   // wrong.
