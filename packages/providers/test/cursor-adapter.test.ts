@@ -182,6 +182,7 @@ describe('CursorAdapter', () => {
       canResumeSession: true,
       gate: 'all-tools',
       reportsCost: false,
+      reportsToolResults: true,
     })
   })
 

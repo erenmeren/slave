@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { isPreToolUseHookResponseLine, parseStreamLine } from '../src/claude/stream.js'
+import { isPreToolUseHookResponseLine, parseStreamLine, parseStreamUsage } from '../src/claude/stream.js'
+import { hashToolInput } from '../src/hash.js'
 import { PERMISSION_DENY_REASON_PREFIX } from '../src/gate.js'
 import type { RuntimeEvent } from '../src/types.js'
 
@@ -183,6 +184,7 @@ describe('parseStreamLine', () => {
       toolUseId: 'toolu_01RpRJ7bNVesaAwUAuf2UvxJ',
       toolName: 'Bash',
       summary: 'Bash echo hi',
+      argsHash: hashToolInput({ command: 'echo hi' }),
     })
   })
 
@@ -201,6 +203,7 @@ describe('parseStreamLine', () => {
       toolUseId: 'toolu_write1',
       toolName: 'Write',
       summary: 'Write /abs/note3.txt',
+      argsHash: hashToolInput({ file_path: '/abs/note3.txt', content: 'hi' }),
     })
   })
 
@@ -220,6 +223,9 @@ describe('parseStreamLine', () => {
       toolUseId: 'toolu_bash_long',
       toolName: 'Bash',
       summary: `Bash ${expectedArg}`,
+      // The SUMMARY is truncated at 80 characters; the HASH is not -- it caps each string at 512
+      // code points, which is the whole difference M51 R1 exists for.
+      argsHash: hashToolInput({ command }),
     })
   })
 
@@ -233,6 +239,7 @@ describe('parseStreamLine', () => {
       toolUseId: 'toolu_no_input',
       toolName: 'TodoWrite',
       summary: 'TodoWrite',
+      argsHash: hashToolInput(undefined),
     })
   })
 
@@ -251,6 +258,9 @@ describe('parseStreamLine', () => {
       toolUseId: 'toolu_bad_input',
       toolName: 'Read',
       summary: 'Read',
+      // The summary gives up on a non-string argument; the hash does not -- `{file_path: 42}` and
+      // `{file_path: 43}` are different calls even though both summarise as the bare tool name.
+      argsHash: hashToolInput({ file_path: 42, path: null, command: ['echo'] }),
     })
   })
 
@@ -267,6 +277,7 @@ describe('parseStreamLine', () => {
       toolUseId: 'toolu_malformed',
       toolName: 'Grep',
       summary: 'Grep',
+      argsHash: hashToolInput('not-an-object'),
     })
   })
 
@@ -306,6 +317,7 @@ describe('parseStreamLine', () => {
       toolUseId: 'toolu_multiblock1',
       toolName: 'Bash',
       summary: 'Bash echo hi',
+      argsHash: hashToolInput({ command: 'echo hi' }),
     })
   })
 
@@ -324,7 +336,13 @@ describe('parseStreamLine', () => {
     }
   })
 
-  it('ignores a tool_result line (type "user"), which carries no tool_use_id at the hook_response layer', () => {
+  it('reads a tool_result line (type "user") as a tool_result event -- `ignored` until M51 R1', () => {
+    // CHANGED DELIBERATELY (M51 R1). Until this milestone this line was recognised and acted on
+    // by nothing, on the reasoning that a stateless per-line parser had nothing to correlate its
+    // `tool_use_id` against. The behavioural breaker is that correlator: without this event a
+    // detector cannot tell a finished call from a running one, which is exactly the distinction
+    // that keeps a quiet twenty-minute build from reading as a loop. The result TEXT is still
+    // dropped -- only the id, the outcome and a class survive.
     const line = JSON.stringify({
       type: 'user',
       message: {
@@ -332,7 +350,13 @@ describe('parseStreamLine', () => {
         content: [{ type: 'tool_result', content: 'hook error', is_error: true, tool_use_id: 'toolu_1' }],
       },
     })
-    expect(parseStreamLine(line)).toEqual({ kind: 'ignored', line })
+    expect(parseStreamLine(line)).toEqual({
+      kind: 'tool_result',
+      toolUseId: 'toolu_1',
+      toolName: '',
+      outcome: 'error',
+      errorClass: 'other',
+    })
   })
 
   it('ignores a rate_limit_event line', () => {
@@ -625,5 +649,129 @@ describe('hook_id pairing (M21 C1, recorded)', () => {
   it('omits hookId when a hook_response line has no hook_id (older captures)', () => {
     const line = JSON.stringify({ type: 'system', subtype: 'hook_response', hook_name: 'PreToolUse:Bash', hook_event: 'PreToolUse', output: JSON.stringify({ hookSpecificOutput: { permissionDecision: 'deny', permissionDecisionReason: 'no' } }), exit_code: 0 })
     expect(parseStreamLine(line)).toEqual({ kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason: 'no' })
+  })
+})
+
+describe('tool_call carries an args hash (M51 R1)', () => {
+  const toolUse = (input: unknown): string =>
+    JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input }] },
+    })
+
+  it('hashes the tool_use block\u2019s own input', () => {
+    const event = parseStreamLine(toolUse({ command: 'npm test' }))
+    expect(event).toMatchObject({ kind: 'tool_call', toolUseId: 'toolu_1', toolName: 'Bash' })
+    expect((event as { argsHash: string }).argsHash).toBe(hashToolInput({ command: 'npm test' }))
+  })
+
+  it('gives two byte-identical calls one hash and two different calls two', () => {
+    const a = parseStreamLine(toolUse({ command: 'npm test' })) as { argsHash: string }
+    const b = parseStreamLine(toolUse({ command: 'npm test' })) as { argsHash: string }
+    const c = parseStreamLine(toolUse({ command: 'npm test -- --watch' })) as { argsHash: string }
+    expect(a.argsHash).toBe(b.argsHash)
+    expect(a.argsHash).not.toBe(c.argsHash)
+  })
+
+  it('still produces a hash for a tool_use with no input at all', () => {
+    expect(parseStreamLine(toolUse(undefined))).toMatchObject({ argsHash: hashToolInput(undefined) })
+  })
+})
+
+describe('the user/tool_result line (M51 R1)', () => {
+  const line = (over: Record<string, unknown>): string =>
+    JSON.stringify({
+      type: 'user',
+      message: { content: [{ tool_use_id: 'toolu_1', type: 'tool_result', content: 'ok', ...over }] },
+    })
+
+  it('is a tool_result event now, not `ignored`', () => {
+    expect(parseStreamLine(line({ is_error: false }))).toEqual({
+      kind: 'tool_result',
+      toolUseId: 'toolu_1',
+      toolName: '',
+      outcome: 'ok',
+      errorClass: null,
+    })
+  })
+
+  it('reads the runtime\u2019s own boolean for the outcome and classifies the text', () => {
+    expect(parseStreamLine(line({ is_error: true, content: 'API Error: 529' }))).toMatchObject({
+      outcome: 'error',
+      errorClass: 'api_error',
+    })
+  })
+
+  it('treats a missing is_error as OK -- an absent boolean is a degraded shape, not a failure', () => {
+    // MEASURED on `packages/providers/test/fixtures/complete.ndjson`: line 4's `tool_result` block
+    // carries NO `is_error` at all and line 8's carries `is_error: false`. Both are successful
+    // calls, so the absent boolean is exactly the degraded shape this rule is about -- and calling
+    // a degraded shape a failure would manufacture error storms out of the fixture this repo
+    // already ships.
+    expect(parseStreamLine(line({}))).toMatchObject({ outcome: 'ok' })
+  })
+
+  it('carries NO result text under any key', () => {
+    const event = parseStreamLine(line({ is_error: false, content: 'the whole file'.repeat(1000) }))
+    expect(JSON.stringify(event)).not.toContain('the whole file')
+  })
+
+  it('stays `ignored` for a user line that is the prompt echo rather than a tool result', () => {
+    expect(parseStreamLine(JSON.stringify({ type: 'user', message: { content: 'do the thing' } })).kind).toBe('ignored')
+  })
+})
+
+describe('parseStreamUsage (M51 R5)', () => {
+  it('reads an assistant line\u2019s per-turn usage under the same billed-input rule the result uses', () => {
+    const raw = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'text', text: 'hi' }],
+        usage: { input_tokens: 2, cache_creation_input_tokens: 100, cache_read_input_tokens: 900, output_tokens: 7 },
+      },
+    })
+    expect(parseStreamUsage(raw)).toEqual({ input: 1002, output: 7 })
+  })
+
+  it('is null for every line that is not an assistant line with usage on it', () => {
+    expect(parseStreamUsage(JSON.stringify({ type: 'result', usage: { input_tokens: 1, output_tokens: 1 } }))).toBeNull()
+    expect(parseStreamUsage(JSON.stringify({ type: 'assistant', message: { content: [] } }))).toBeNull()
+    expect(parseStreamUsage('{bad')).toBeNull()
+  })
+
+  it('is null when only half the pair is present -- a half figure is a lie a token sum believes', () => {
+    const raw = JSON.stringify({ type: 'assistant', message: { content: [], usage: { input_tokens: 5 } } })
+    expect(parseStreamUsage(raw)).toBeNull()
+  })
+
+  it('does NOT sum to the run\u2019s own result line, and that is a measured fact not a bug', () => {
+    // MEASURED against `fixtures/complete.ndjson`: the four assistant lines report 27 output tokens
+    // between them, the `result` line reports 741. The mid-run figure is a FLOOR, and this test is
+    // what stops a later reader believing it is the total.
+    const lines = readFileSync(new URL('./fixtures/complete.ndjson', import.meta.url), 'utf8')
+      .split('\n')
+      .filter((one) => one !== '')
+    let output = 0
+    let terminal = 0
+    for (const line of lines) {
+      const usage = parseStreamUsage(line)
+      if (usage !== null) output += usage.output
+      const event = parseStreamLine(line)
+      if (event.kind === 'terminated') terminal = event.outcome.tokens?.output ?? 0
+    }
+    expect(output).toBe(27)
+    expect(terminal).toBe(741)
+    expect(output).toBeLessThan(terminal)
+  })
+
+  it('never changes what parseStreamLine returns for the same line', () => {
+    const raw = JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'hi' }], usage: { input_tokens: 1, output_tokens: 1 } },
+    })
+    // One line, one `RuntimeEvent` -- the contract `parseStreamLine`'s exhaustiveness tests rest on.
+    // The usage rides a SECOND pure function the adapter calls beside it, which is exactly why this
+    // member did not have to change one parser's signature into an array.
+    expect(parseStreamLine(raw)).toEqual({ kind: 'text', text: 'hi' })
   })
 })

@@ -1,5 +1,7 @@
 import { z } from 'zod'
+import { hashToolInput } from '../hash.js'
 import { CURSOR_SUMMARY_ARG_KEYS, isRecord, summaryFor } from '../runtime/summary.js'
+import { classifyToolError } from '../tool-result.js'
 import type { RuntimeEvent } from '../types.js'
 
 /**
@@ -262,6 +264,15 @@ const toolCallEnvelopeSchema = z.object({
  * `durationMs` key is therefore to be expected, not guarded against -- hence
  * `toolKeyOf` below does not trust this list alone to identify the tool.
  */
+/**
+ * How much of a failed `completed` line's `result` object is serialised for {@link classifyToolError}
+ * to read (M51 R1/E3). Cursor's failure shapes are not measured -- only `success` and `rejected`
+ * are -- so the class is read off whatever the object happens to say, and this bound is what keeps
+ * an unmeasured, arbitrarily large result body from being stringified whole on every failed call.
+ * Nothing of the text survives past the classifier: only one of five tokens leaves this file.
+ */
+const CURSOR_RESULT_SCAN_CAP = 400
+
 const TOOL_CALL_ENVELOPE_KEYS = new Set(['toolCallId', 'hookAdditionalContexts', 'startedAtMs', 'completedAtMs'])
 
 /**
@@ -335,7 +346,30 @@ function parseToolCallLine(raw: unknown, line: string): RuntimeEvent {
         ...(reason === undefined ? {} : { reason }),
       }
     }
-    return { kind: 'ignored', line }
+    // M51 R1/E3: the completed half carries the call's RESULT, and `RuntimeEvent` now has a variant
+    // for exactly that. It is still ONE event about one call -- `tool_result`, not a second
+    // `tool_call` -- so nothing doubles, and the paragraph above about doubling still holds for the
+    // variant it was written against.
+    //
+    // The discriminator is `result.success`, because this line has no `is_error` (measured:
+    // `fixtures/cursor/cursor-run.ndjson` line 8 is `{"result":{"success":{...}}}`, and
+    // `fixtures/cursor/gate/run-2-flag-present.ndjson` is `{"result":{"rejected":{...}}}`). Anything
+    // that is not a `success` and not a `rejected` is a failure of some shape this parser has not
+    // been shown, classified rather than guessed at -- and a `completed` line with no readable
+    // result at all is `ignored`, because "the call finished" with no evidence either way must not
+    // count toward an error storm.
+    if (toolKey === undefined || !isRecord(result)) return { kind: 'ignored', line }
+    const ok = 'success' in result
+    return {
+      kind: 'tool_result',
+      toolUseId: data.call_id,
+      toolName: toolKey.endsWith('ToolCall') ? toolKey.slice(0, -'ToolCall'.length) : toolKey,
+      outcome: ok ? 'ok' : 'error',
+      // A BOUNDED serialisation, and only a CLASS is kept from it: `classifyToolError` returns one
+      // of five tokens and the text itself never reaches an event. The cap is what keeps a
+      // pathological result object from being stringified whole on every failed call.
+      errorClass: ok ? null : classifyToolError(JSON.stringify(result).slice(0, CURSOR_RESULT_SCAN_CAP)),
+    }
   }
 
   const toolKey = toolKeyOf(data.tool_call)
@@ -360,6 +394,9 @@ function parseToolCallLine(raw: unknown, line: string): RuntimeEvent {
     toolUseId: data.call_id,
     toolName,
     summary: summaryFor(toolName, args, CURSOR_SUMMARY_ARG_KEYS),
+    // M51 R1 / plan erratum E2: the started half is the only line that carries `args`, so this is
+    // the one moment the hash can be taken -- exactly as on the Claude side.
+    argsHash: hashToolInput(args),
   }
 }
 

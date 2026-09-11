@@ -1,5 +1,7 @@
 import { z } from 'zod'
+import { hashToolInput } from '../hash.js'
 import { CLAUDE_SUMMARY_ARG_KEYS, isRecord, summaryFor } from '../runtime/summary.js'
+import { classifyToolError } from '../tool-result.js'
 import type { RuntimeEvent } from '../types.js'
 
 /**
@@ -43,10 +45,11 @@ export function parseStreamLine(line: string): RuntimeEvent {
     case 'assistant':
       return parseAssistantLine(raw, line)
     case 'user':
-      // A `tool_result` echo. Recognized -- it is where a `tool_use_id`
-      // would be found to correlate against a preceding hook event -- but
-      // this parser is stateless and per-line, so it does not act on it.
-      return { kind: 'ignored', line }
+      // M51 R1: a `tool_result` echo, which is where a `tool_use_id` and the call's own success
+      // boolean live. Read now, where before this parser recognised the line and acted on nothing:
+      // a detector that cannot tell a finished call from a running one has no way to say that a
+      // quiet twenty-minute build is not a loop.
+      return parseUserLine(raw, line)
     case 'rate_limit_event':
       return { kind: 'ignored', line }
     default:
@@ -61,6 +64,10 @@ export function parseStreamLine(line: string): RuntimeEvent {
 
 function isToolUseBlock(value: unknown): value is Record<string, unknown> {
   return isRecord(value) && value.type === 'tool_use'
+}
+
+function isToolResultBlock(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && value.type === 'tool_result'
 }
 
 const envelopeSchema = z.object({ type: z.string() })
@@ -413,6 +420,10 @@ function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
       toolUseId: result.data.id,
       toolName: result.data.name,
       summary: summaryFor(result.data.name, result.data.input, CLAUDE_SUMMARY_ARG_KEYS),
+      // M51 R1 / plan erratum E2: computed HERE, at the one moment the input is still in hand --
+      // `summary` is derived from it just above and the input is then dropped, so the pump could
+      // never compute this itself.
+      argsHash: hashToolInput(result.data.input),
     }
   }
 
@@ -430,4 +441,105 @@ function parseAssistantLine(raw: unknown, line: string): RuntimeEvent {
   }
   // `thinking` blocks and any other content type: recognized, not acted on.
   return { kind: 'ignored', line }
+}
+
+const userEnvelopeSchema = z.object({
+  type: z.literal('user'),
+  message: z.object({
+    content: z.array(z.unknown()),
+  }),
+})
+
+const toolResultContentSchema = z.object({
+  type: z.literal('tool_result'),
+  tool_use_id: z.string(),
+  // `z.unknown()` and never read for its VALUE: the content is the result body, and the only thing
+  // taken from it is a CLASS, via `classifyToolError`. Typed loosely for `toolUseContentSchema`'s
+  // own reason -- a malformed body must not make the line unparsable.
+  content: z.unknown().optional(),
+  is_error: z.boolean().optional(),
+})
+
+/**
+ * One `user` line's `tool_result` block, as a `tool_result` event (M51 R1).
+ *
+ * A `user` line whose content is a bare prompt string (the echo, and the resumed conversation) is
+ * recognised and carries no decision, exactly as it always did -- `userEnvelopeSchema` requires an
+ * ARRAY, so a string body falls to `ignored` rather than to `unparsable`.
+ */
+function parseUserLine(raw: unknown, line: string): RuntimeEvent {
+  const envelope = userEnvelopeSchema.safeParse(raw)
+  if (!envelope.success) return { kind: 'ignored', line }
+  const block = envelope.data.message.content.find(isToolResultBlock)
+  if (block === undefined) return { kind: 'ignored', line }
+  const result = toolResultContentSchema.safeParse(block)
+  if (!result.success) return { kind: 'unparsable', line }
+  // The runtime's OWN boolean, never an inference from the text: a result whose body happens to
+  // contain the word "error" is not a failed call, and a storm built on that reading would trip on
+  // a worker grepping its own logs. Absent reads as OK -- MEASURED on `fixtures/complete.ndjson`,
+  // whose first `tool_result` block carries no `is_error` at all and whose second carries
+  // `is_error: false`, both of them successful calls. An absent boolean is a degraded shape, and
+  // calling a degraded shape a failure manufactures storms out of nothing.
+  const failed = result.data.is_error === true
+  return {
+    kind: 'tool_result',
+    toolUseId: result.data.tool_use_id,
+    // Claude's `tool_result` block names the id, not the tool. The pump has the pairing.
+    toolName: '',
+    outcome: failed ? 'error' : 'ok',
+    errorClass: failed ? classifyToolError(typeof result.data.content === 'string' ? result.data.content : null) : null,
+  }
+}
+
+const assistantUsageSchema = z.object({
+  type: z.literal('assistant'),
+  message: z.object({
+    usage: z
+      .object({
+        input_tokens: z.number().optional(),
+        output_tokens: z.number().optional(),
+        cache_creation_input_tokens: z.number().optional(),
+        cache_read_input_tokens: z.number().optional(),
+      })
+      .passthrough()
+      .optional(),
+  }),
+})
+
+/**
+ * One assistant line's token usage, or null (M51 R5).
+ *
+ * A SECOND pure function beside {@link parseStreamLine} rather than a second event out of it, and
+ * the reason is the contract: `parseStreamLine` returns exactly ONE `RuntimeEvent` per line, which
+ * is what its exhaustiveness tests and every caller rest on -- and a turn's `usage` rides the SAME
+ * assistant line as its `tool_use` block. Folding usage into that function would mean either
+ * dropping it on every tool-calling turn (the majority of them) or changing the signature to an
+ * array. The adapter calls both, in one pass over one line, and pushes whichever events came back
+ * into the same queue.
+ *
+ * The billed-input rule is `parseResultLine`'s, verbatim and for its reason: `input_tokens +
+ * cache_creation_input_tokens + cache_read_input_tokens`, each 0 when absent. Both halves or
+ * neither -- a `usage` carrying only one is a measurement that did not complete, and a fabricated
+ * zero would land in a token sum.
+ *
+ * What this figure is NOT: the run's total. MEASURED on `test/fixtures/complete.ndjson`, the four
+ * assistant lines sum to 27 output tokens against the `result` line's 741 (plan erratum E4). It is
+ * a FLOOR the pump may show while the run is live, and the terminal write replaces it.
+ */
+export function parseStreamUsage(line: string): { readonly input: number; readonly output: number } | null {
+  let raw: unknown
+  try {
+    raw = JSON.parse(line)
+  } catch {
+    return null
+  }
+  const parsed = assistantUsageSchema.safeParse(raw)
+  if (!parsed.success) return null
+  const usage = parsed.data.message.usage
+  if (usage === undefined) return null
+  if (typeof usage.input_tokens !== 'number' || typeof usage.output_tokens !== 'number') return null
+  return {
+    input: usage.input_tokens + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0),
+    output: usage.output_tokens,
+  }
 }

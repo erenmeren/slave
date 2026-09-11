@@ -1,4 +1,6 @@
 export * from './types.js'
+export * from './hash.js'
+export * from './tool-result.js'
 export * from './capabilities.js'
 export * from './models.js'
 export * from './gate.js'
@@ -11,7 +13,7 @@ export * from './runtime/pause-flag.js'
 // `preflightGate` is deliberately NOT re-exported: `claude/flags.js` already exports a
 // `preflightGate` (its thin, Claude-shaped wrapper), and the generic probe is
 // package-internal -- nothing outside `packages/providers` calls it.
-export { runGateScript, type AllowContract, type GateRunResult } from './runtime/gate-preflight.js'
+export { preflightTap, runGateScript, type AllowContract, type GateRunResult } from './runtime/gate-preflight.js'
 export * from './claude/stream.js'
 export * from './claude/flags.js'
 export * from './claude/settings.js'

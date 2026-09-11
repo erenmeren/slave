@@ -1,3 +1,5 @@
+import type { ToolErrorClass } from './tool-result.js'
+
 /**
  * Which runtime a run is on. A plain string union, not a re-export of the Postgres enum
  * (`packages/db`'s generated `ProviderKind`) -- `packages/providers` does not depend on
@@ -76,7 +78,60 @@ export interface RunOutcome {
  */
 export type RuntimeEvent =
   | { readonly kind: 'session_started'; readonly sessionId: string }
-  | { readonly kind: 'tool_call'; readonly toolUseId: string; readonly toolName: string; readonly summary: string }
+  | {
+      readonly kind: 'tool_call'
+      readonly toolUseId: string
+      readonly toolName: string
+      readonly summary: string
+      /**
+       * M51 R1: `hashToolInput` of the call's own arguments. On the EVENT and not only on the
+       * persisted row (plan erratum E2), because `apps/orchestrator/src/pump.ts` -- the one consumer
+       * of this stream -- has nothing else to build `run.tool_call` from.
+       *
+       * Not `summary`, which is a best-effort human string and collides: two `Bash` calls with
+       * different commands summarise identically when neither carries a known argument key.
+       * `summary` is what a person reads; this is what the detector compares.
+       */
+      readonly argsHash: string
+    }
+  /**
+   * M51 R1: what came BACK from one tool call. Vendor-neutral by construction and produced by BOTH
+   * runtimes -- Claude's `user`/`tool_result` lines (previously `ignored`) and Cursor's `completed`
+   * tool_call line (previously folded away for want of a variant, `cursor/stream.ts`). The fact that
+   * both could produce it is what earned it a place in this union at all (this file's own rule
+   * against widening for a narrow need), and moving `cursor-stream.test.ts`'s allow-list from six
+   * kinds to seven is the proof.
+   *
+   * FOUR fields and no fifth. There is no result text, no stdout, no diff and no stack trace: this
+   * event exists so a detector can count failures and tell a finished call from a running one, and
+   * everything beyond that would make the stream a transcript.
+   *
+   * `toolName` is the empty string when the line does not carry one -- Claude's `tool_result`
+   * blocks name the id, not the tool, and the pump pairs it back to the call it answers. Empty
+   * rather than optional so every producer and consumer reads one shape.
+   */
+  | {
+      readonly kind: 'tool_result'
+      readonly toolUseId: string
+      readonly toolName: string
+      readonly outcome: 'ok' | 'error'
+      readonly errorClass: ToolErrorClass | null
+    }
+  /**
+   * M51 R5: one turn's token usage, mid-run.
+   *
+   * `RunOutcome.tokens` is the run's CUMULATIVE figure and arrives only on the terminal `result`
+   * line, so a live runaway is invisible until it stops. This member is what makes it visible --
+   * and it is an explicit FLOOR, not a total: measured on `test/fixtures/complete.ndjson`, the
+   * assistant lines' own `output_tokens` sum to 27 against the result line's 741, because a
+   * streamed message's per-turn usage is not the whole of what the run was billed. The pump
+   * accumulates it while the run is live and the terminal write REPLACES it with the authoritative
+   * figure (plan erratum E4).
+   *
+   * Claude only: Cursor's stream carries no per-turn usage at all (`reportsCost: false`, and its
+   * `result` line's `usage` is the only figure it has).
+   */
+  | { readonly kind: 'usage'; readonly input: number; readonly output: number }
   | { readonly kind: 'text'; readonly text: string }
   /**
    * A `PreToolUse` hook began for the most recent `tool_use` (M21 C1). Emitted for `PreToolUse`

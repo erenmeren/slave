@@ -1,6 +1,7 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { MODEL_PRICES, PRICE_ALIASES, estimateCostUsd } from '@slave-of-ai/domain'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CLAUDE_CODE_MODELS, listClaudeCodeModels, listCursorModels, listProviderModels, parseCursorModels } from '../src/models.js'
 
@@ -73,5 +74,46 @@ describe('listProviderModels', () => {
   it('dispatches on the kind', async () => {
     expect((await listProviderModels('claude_code')).source).toBe('static')
     expect((await listProviderModels('cursor', { cursorCommand: '/nonexistent/cursor-agent' })).error).toBeTruthy()
+  })
+})
+
+/**
+ * The pin the T1 review asked for (M51 R5). `MODEL_PRICES` lives in `@slave-of-ai/domain` and
+ * `CLAUDE_CODE_MODELS` lives here, and nothing structural connects them: a model added to the
+ * roster with no row in the price table estimates `null` for every run that picks it, silently, and
+ * the brief's cost tile just shows one fewer figure. This test is the connection.
+ *
+ * A TEST-ONLY import of the domain, which is the one direction this package allows: `packages/
+ * providers` must not import `@slave-of-ai/db` at runtime and takes nothing from the domain's new
+ * modules in `src/` -- the parsers produce evidence and the domain judges it. Reading the domain's
+ * price table from a test asserts an agreement between two lists without creating a dependency
+ * between two modules.
+ */
+describe('every listed Claude model is priced (M51 R5)', () => {
+  it('has a MODEL_PRICES row for every CLAUDE_CODE_MODELS id but `default`', () => {
+    const unpriced = CLAUDE_CODE_MODELS.map((model) => model.id)
+      // `default` is deliberately unpriced: which model the CLI picks with no `--model` is the
+      // CLI's own current choice and is not knowable from inside this repository, so a confident
+      // guess here would put a wrong price on the majority of runs. See `PRICE_ALIASES`'s docstring.
+      .filter((id) => id !== 'default')
+      .filter((id) => estimateCostUsd(id, { input: 1_000_000, output: 1_000_000 }) === null)
+    expect(unpriced).toEqual([])
+  })
+
+  it('prices the aliases as the full ids they name, not as separate models', () => {
+    const million = { input: 1_000_000, output: 1_000_000 }
+    for (const [alias, full] of Object.entries(PRICE_ALIASES)) {
+      expect(estimateCostUsd(alias, million), alias).toBe(estimateCostUsd(full, million))
+    }
+  })
+
+  it('names no price for a model the roster does not offer', () => {
+    // The reverse direction, and it is a warning rather than a rule: a price for a retired model
+    // is harmless (old runs still carry its id on `SlaveRun.model`), so this asserts only that
+    // every PRICED id is either on the roster or reachable through an alias -- a price for a model
+    // nobody could ever have run is a typo.
+    const offered = new Set<string>(CLAUDE_CODE_MODELS.map((model) => model.id))
+    for (const alias of Object.values(PRICE_ALIASES)) offered.add(alias)
+    for (const id of Object.keys(MODEL_PRICES)) expect(offered, id).toContain(id)
   })
 })

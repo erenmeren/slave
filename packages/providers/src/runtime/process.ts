@@ -139,6 +139,19 @@ export function buildChildEnv(input: {
   readonly gitIdentity: { readonly name: string; readonly email: string }
   readonly pauseFlagPath: string
   readonly permissionsFilePath: string
+  /**
+   * `SLAVEOFAI_TOOL_RESULTS` (M51 R6), the third channel of this exact shape: the absolute path of
+   * the run's `tool-results.ndjson`, which `scripts/tool-result-tap.sh` appends one bounded line to
+   * per completed tool call.
+   *
+   * OPTIONAL where the two above are required, and the key is left ABSENT rather than set empty
+   * when it is missing. The tap reads "unset or empty" as "this run is not tapped" either way, but
+   * a variable that is there with nothing in it is a channel announced and not opened -- and the
+   * absence is what makes Cursor's spawn (which passes nothing) visibly untapped rather than
+   * accidentally so. Cursor's results come from its own stream (`reportsToolResults`), not from a
+   * hook.
+   */
+  readonly toolResultsPath?: string
 }): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -148,5 +161,17 @@ export function buildChildEnv(input: {
     GIT_COMMITTER_EMAIL: input.gitIdentity.email,
     SLAVEOFAI_PAUSE_FLAG: input.pauseFlagPath,
     SLAVEOFAI_PERMISSIONS_FILE: input.permissionsFilePath,
+    ...(input.toolResultsPath === undefined ? {} : { SLAVEOFAI_TOOL_RESULTS: input.toolResultsPath }),
   }
+}
+
+/**
+ * Where a run's tool-result tap writes, inside its own scratch directory (M51 R6). The ONE
+ * definition of the `'tool-results.ndjson'` filename, for `permissionsFilePathFor`'s reason above:
+ * the adapter sets the child's `SLAVEOFAI_TOOL_RESULTS` from it and its own tailer reads the same
+ * file back, and a one-character drift between those two would leave the tailer watching a file
+ * nothing ever writes -- which looks exactly like "the tap filled no gap".
+ */
+export function toolResultsPathFor(runDir: string): string {
+  return join(runDir, 'tool-results.ndjson')
 }

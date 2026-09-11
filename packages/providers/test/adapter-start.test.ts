@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -139,6 +139,7 @@ describe('ClaudeCodeAdapter', () => {
       canResumeSession: true,
       gate: 'all-tools',
       reportsCost: true,
+      reportsToolResults: true,
     })
   })
 
@@ -203,6 +204,156 @@ describe('ClaudeCodeAdapter', () => {
       process.removeListener('uncaughtException', onUncaughtException)
     }
     expect(uncaught).toBeUndefined()
+  })
+})
+
+describe('ClaudeCodeAdapter and the tool-result tap (M51 R6)', () => {
+  let worktreePath: string
+  let input: StartRunInput
+  let hookPath: string
+  const TAP = fileURLToPath(new URL('../../../scripts/tool-result-tap.sh', import.meta.url))
+  // The fixture's own two `tool_use` ids (`test/fixtures/complete.ndjson`), which the stream
+  // reports a `tool_result` for on its `user` lines.
+  const STREAM_ID = 'toolu_01M5xAnwBpu86mkKoXF5sYV3'
+
+  const tapLine = (toolUseId: string, toolName: string): string =>
+    `${JSON.stringify({ toolUseId, toolName, outcome: 'ok', errorClass: null })}\n`
+
+  beforeEach(() => {
+    worktreePath = mkdtempSync(path.join(tmpdir(), 'slaveofai-adapter-tap-'))
+    hookPath = copyGateInto(worktreePath, 'pause-gate.sh')
+    input = {
+      runId: runId('run-tap-1'),
+      prompt: 'do the thing',
+      worktreePath,
+      pauseFlagPath: path.join(worktreePath, 'pause.flag'),
+      runDir: worktreePath,
+      permissionsFilePath: path.join(worktreePath, 'permissions.json'),
+      gitIdentity: { name: 'Test Slave', email: 'slave@example.com' },
+    }
+  })
+
+  afterEach(() => {
+    rmSync(worktreePath, { recursive: true, force: true })
+  })
+
+  async function drain(adapter: ClaudeCodeAdapter, id: RunId): Promise<readonly RuntimeEvent[]> {
+    const events: RuntimeEvent[] = []
+    for await (const event of adapter.events(id)) events.push(event)
+    return events
+  }
+
+  it('tells the child where to write, and only when a tap is configured', async (): Promise<void> => {
+    const tapped = new ClaudeCodeAdapter({
+      command: 'node',
+      extraArgs: [FAKE, '--fixture', 'env-echo'],
+      hookPath,
+      tapPath: TAP,
+    })
+    await tapped.start(input)
+    const withTap = await collectEnvFrom(tapped, input.runId)
+    expect(withTap['SLAVEOFAI_TOOL_RESULTS']).toBe(path.join(worktreePath, 'tool-results.ndjson'))
+
+    const untapped = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'], hookPath })
+    const second: StartRunInput = { ...input, runId: runId('run-tap-2') }
+    await untapped.start(second)
+    const withoutTap = await collectEnvFrom(untapped, second.runId)
+    // Absent, not empty: an armed channel with no hook writing to it is a tailer watching a file
+    // nothing creates.
+    expect('SLAVEOFAI_TOOL_RESULTS' in withoutTap).toBe(false)
+  })
+
+  it('fills a gap the stream left -- a result only the tap reported still reaches the queue', async (): Promise<void> => {
+    const adapter = new ClaudeCodeAdapter({
+      command: 'node',
+      extraArgs: [FAKE, '--fixture', 'complete'],
+      hookPath,
+      tapPath: TAP,
+    })
+    await adapter.start(input)
+    // Written by hand rather than by the real hook: the fake CLI replays a recording and invokes
+    // no hooks at all, so this stands in for the PostToolUse invocation a real run would make.
+    // What is under test is the ADAPTER's half -- the tailer, the queue and the dedupe.
+    appendFileSync(path.join(worktreePath, 'tool-results.ndjson'), tapLine('toolu_gap', 'Bash'))
+
+    const results = (await drain(adapter, input.runId)).filter((event) => event.kind === 'tool_result')
+    expect(results.map((event) => event.toolUseId)).toContain('toolu_gap')
+    // With its tool NAME, which is the thing the stream's own `tool_result` line cannot say.
+    expect(results.find((event) => event.toolUseId === 'toolu_gap')?.toolName).toBe('Bash')
+  })
+
+  it('keeps the FIRST arrival for a contested id, so the pump sees exactly one result for it', async (): Promise<void> => {
+    // FIRST ARRIVAL, not producer priority -- and the difference is worth stating, because the race
+    // is genuine. The tap's line has to reach the filesystem and wait for the tailer's next poll,
+    // so in an unloaded run the stream is first; under load (the whole providers suite at once) the
+    // tap was MEASURED winning it. Either way the invariant this test exists for holds: one call,
+    // one event. Determinism here comes from writing the tap's line only once the stream's own has
+    // already been observed, rather than from betting on the race.
+    const adapter = new ClaudeCodeAdapter({
+      command: 'node',
+      extraArgs: [FAKE, '--fixture', 'complete'],
+      hookPath,
+      tapPath: TAP,
+    })
+    await adapter.start(input)
+
+    const events: RuntimeEvent[] = []
+    let written = false
+    for await (const event of adapter.events(input.runId)) {
+      events.push(event)
+      if (!written && event.kind === 'tool_result' && event.toolUseId === STREAM_ID) {
+        written = true
+        appendFileSync(path.join(worktreePath, 'tool-results.ndjson'), tapLine(STREAM_ID, 'Write'))
+      }
+    }
+    expect(written).toBe(true)
+
+    const contested = events.filter(
+      (event): event is Extract<RuntimeEvent, { kind: 'tool_result' }> =>
+        event.kind === 'tool_result' && event.toolUseId === STREAM_ID,
+    )
+    // ONE. Two producers, one queue, and `pump.ts` must never write two `run.tool_result` rows for
+    // one call.
+    expect(contested).toHaveLength(1)
+    // The stream's, because it got there first: Claude's `tool_result` block names the id, not the
+    // tool, so an empty `toolName` is the stream's signature and `Write` would have been the tap's.
+    expect(contested[0]?.toolName).toBe('')
+  })
+
+  it('records nothing extra for an untapped run -- every result is the stream’s', async (): Promise<void> => {
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath })
+    await adapter.start(input)
+    const results = (await drain(adapter, input.runId)).filter((event) => event.kind === 'tool_result')
+    expect(results).toHaveLength(2)
+    for (const event of results) expect(event.toolName).toBe('')
+    expect(existsSync(path.join(worktreePath, 'tool-results.ndjson'))).toBe(false)
+  })
+
+  it('refuses to spawn when the configured tap is broken', async (): Promise<void> => {
+    // A tap is only ever CONFIGURED by a deployment that wants it, and a configured-but-broken tap
+    // is the one state nothing downstream can tell from "the tap filled no gap".
+    const broken = path.join(worktreePath, 'broken-tap.sh')
+    writeFileSync(broken, '#!/usr/bin/env bash\ncat > /dev/null\nexit 0\n')
+    chmodSync(broken, 0o755)
+    const adapter = new ClaudeCodeAdapter({
+      command: 'node',
+      extraArgs: [FAKE, '--fixture', 'complete'],
+      hookPath,
+      tapPath: broken,
+    })
+    await expect(adapter.start(input)).rejects.toThrow(/tool-result tap preflight failed/u)
+  })
+
+  it('emits mid-run usage events, whose output sum is a FLOOR under the terminal figure', async (): Promise<void> => {
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath })
+    await adapter.start(input)
+    const events = await drain(adapter, input.runId)
+    const usage = events.filter((event) => event.kind === 'usage')
+    expect(usage).toHaveLength(4)
+    const output = usage.reduce((total, event) => total + event.output, 0)
+    const terminated = events.find((event) => event.kind === 'terminated')
+    expect(output).toBe(27)
+    expect(terminated?.outcome.tokens?.output).toBe(741)
   })
 })
 

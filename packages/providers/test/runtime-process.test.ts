@@ -91,3 +91,27 @@ describe('buildChildEnv (characterization)', () => {
     }
   })
 })
+
+describe('buildChildEnv and the tool-result tap (M51 R6)', () => {
+  it('sets SLAVEOFAI_TOOL_RESULTS when a path is given', () => {
+    const env = buildChildEnv({
+      gitIdentity: { name: 'AI Worker', email: 'worker@example.com' },
+      pauseFlagPath: '/tmp/x/pause.flag',
+      permissionsFilePath: '/tmp/x/permissions.json',
+      toolResultsPath: '/tmp/x/tool-results.ndjson',
+    })
+    expect(env['SLAVEOFAI_TOOL_RESULTS']).toBe('/tmp/x/tool-results.ndjson')
+  })
+
+  it('leaves the key ABSENT when none is given -- "this run is not tapped" is silence', () => {
+    const env = buildChildEnv({
+      gitIdentity: { name: 'AI Worker', email: 'worker@example.com' },
+      pauseFlagPath: '/tmp/x/pause.flag',
+      permissionsFilePath: '/tmp/x/permissions.json',
+    })
+    // Absent, not present-and-empty: the tap reads an empty value as "unset" too, but a key that
+    // is there with nothing in it would be a registration of nothing, exactly as an empty
+    // `PostToolUse` array would be in the settings file.
+    expect('SLAVEOFAI_TOOL_RESULTS' in env).toBe(false)
+  })
+})

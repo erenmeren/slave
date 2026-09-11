@@ -45,6 +45,11 @@ const CLAUDE_CODE_CAPABILITIES: ProviderCapabilities = {
   canResumeSession: true,
   gate: 'all-tools',
   reportsCost: true,
+  // M51 R6. PROVEN, not assumed: `claude/stream.ts`'s `parseUserLine` reads a `tool_result` event
+  // off the `user` lines of `test/fixtures/complete.ndjson` -- a recording of the real CLI -- and
+  // the PostToolUse tap fills any gap those lines leave. A capability in this table is only ever
+  // widened by proof (see the Cursor row below for the rule stated in full).
+  reportsToolResults: true,
 }
 
 /**
@@ -84,4 +89,10 @@ const CURSOR_CAPABILITIES: ProviderCapabilities = {
   canResumeSession: true,
   gate: 'all-tools',
   reportsCost: false,
+  // M51 R6, and WIDENED by proof exactly as the rule above requires: the `completed` half of a
+  // `tool_call` line carries the call's own result under `result.success` / `result.rejected`
+  // (`test/fixtures/cursor/cursor-run.ndjson` line 8, and `.../gate/run-2-flag-present.ndjson` for
+  // the other shape), and `cursor/stream.ts` reads it as a `tool_result`. Cost-blind is not
+  // result-blind: Cursor needs no tap, because its own stream already says what came back.
+  reportsToolResults: true,
 }

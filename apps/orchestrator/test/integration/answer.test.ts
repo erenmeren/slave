@@ -1,4 +1,5 @@
 import { execFileSync, spawn as spawnChild } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { answerQuestion, claimResume, listPendingQuestions, requestResume } from '@slave-of-ai/control'
@@ -24,6 +25,20 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { deliverAnswers } from '../../src/deliver.js'
 import { askProtocolSection, inboxSection, rosterSection } from '../../src/inbox.js'
 import { pumpRun } from '../../src/pump.js'
+
+/**
+ * A stand-in `argsHash` for a hand-built `tool_call` event (M51 R1).
+ *
+ * These tests construct `RuntimeEvent`s directly instead of parsing a stream, so there is no tool
+ * INPUT to hash -- `hashToolInput` takes the `tool_use` block's own arguments, and the parser is
+ * the only thing that ever holds them. The digest here is derived from the call's summary purely so
+ * that two different calls get two different hashes and two identical calls get one, which is the
+ * only property anything downstream reads.
+ */
+function testArgsHash(summary: string): string {
+  return createHash('sha256').update(summary).digest('hex')
+}
+
 
 /**
  * The message ids one slave's next run would carry, the way `RunContext`'s `inbox` section source
@@ -188,7 +203,7 @@ async function pumpEndingWith(runner: Runner, wsId: WorkspaceId, text: string): 
     spawn,
     events: fromArray([
       { kind: 'session_started', sessionId: `s-${runner.runId}` },
-      { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Read', summary: 'Read queue.ts' },
+      { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Read', summary: 'Read queue.ts', argsHash: testArgsHash('Read queue.ts') },
       { kind: 'text', text },
       { kind: 'terminated', outcome: okOutcome },
     ]),

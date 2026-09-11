@@ -1,18 +1,23 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { statSync } from 'node:fs'
+import { open } from 'node:fs/promises'
 import { dirname, isAbsolute, join } from 'node:path'
 import { createInterface } from 'node:readline'
+import { StringDecoder } from 'node:string_decoder'
 import type { RunId } from '@slave-of-ai/domain'
 import { capabilitiesOf } from '../capabilities.js'
 import { listClaudeCodeModels, type ModelListing } from '../models.js'
 import { AsyncEventQueue } from '../runtime/event-queue.js'
+import { preflightTap } from '../runtime/gate-preflight.js'
 import { clearAndVerifyPauseFlagAbsent } from '../runtime/pause-flag.js'
-import { buildChildEnv, permissionsFilePathFor, terminateChild } from '../runtime/process.js'
+import { buildChildEnv, permissionsFilePathFor, terminateChild, toolResultsPathFor } from '../runtime/process.js'
 import { isRecord } from '../runtime/summary.js'
+import { TOOL_ERROR_CLASSES, type ToolErrorClass } from '../tool-result.js'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
 import type { Checkpoint } from './checkpoint.js'
 import { claudeFlags, preflightGate } from './flags.js'
 import { writeSettingsFile } from './settings.js'
-import { parseStreamLine } from './stream.js'
+import { parseStreamLine, parseStreamUsage } from './stream.js'
 
 /**
  * What a runtime can promise. Every member has exactly one consumer in the system --
@@ -27,6 +32,16 @@ export interface ProviderCapabilities {
   readonly gate: 'all-tools' | 'shell-only' | 'none'
   /** Consumed by budget admission: does this runtime report spend in USD? */
   readonly reportsCost: boolean
+  /**
+   * Consumed by M51's behavioural breaker: does this runtime say what came BACK from a tool call?
+   *
+   * A detector that cannot tell a finished call from a running one has no way to say a quiet
+   * twenty-minute build is not a loop, so a runtime answering `false` here would have to be read
+   * with the error-storm arm suppressed entirely. Both rows answer `true` today, each by its own
+   * proof (`capabilities.ts`) -- this exists so a third runtime that cannot is refused an arm
+   * rather than silently mis-judged by it.
+   */
+  readonly reportsToolResults: boolean
 }
 
 /**
@@ -175,6 +190,16 @@ export interface ClaudeCodeAdapterOptions {
    * `runPreflightGate` before anything is spawned.
    */
   readonly hookPath: string
+  /**
+   * M51 R6: the `PostToolUse` tap script this adapter registers, and pre-flights on `start()`.
+   *
+   * `hookPath`'s exact shape and for its reason: a fact about this RUNTIME (the orchestrator's own
+   * `scripts/tool-result-tap.sh`), never something that varies run to run. OPTIONAL, unlike
+   * `hookPath`: a deployment that has not installed the tap runs perfectly well without it -- the
+   * stream carries the same facts and the tap only fills a gap -- and making it required would turn
+   * an optional measurement into a spawn failure.
+   */
+  readonly tapPath?: string
 }
 
 interface RunState {
@@ -197,6 +222,25 @@ interface RunState {
    * needs it kept, the same reasoning `rawResultPayload` is stored unconditionally for.
    */
   readonly startInput: StartRunInput
+  /**
+   * M51 R6: `toolUseId`s a `tool_result` has already been pushed for, whichever producer got
+   * there first.
+   *
+   * TWO producers feed one queue -- the stream parser and the PostToolUse tap's tailer -- and
+   * `pump.ts` must see exactly one result per call. **The stream wins**, not by priority but by
+   * arrival: whichever writes the id first owns it, and in practice that is the stream, because
+   * the tap's line has to reach the filesystem and be tailed back. The tap is therefore a GAP
+   * FILLER, which is what keeps this spike from changing any behaviour that already works.
+   *
+   * Bounded by the run's own tool-call count, like `hookBindings` in the pump, and dropped with
+   * the run.
+   */
+  readonly seenToolResults: Set<string>
+  /**
+   * Stops the tap's tailer after one last drain, or `undefined` for an untapped run. Torn down
+   * with the run, in the same place the child's listeners are.
+   */
+  readonly stopTap: (() => Promise<void>) | undefined
 }
 
 /**
@@ -217,6 +261,7 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
   private readonly extraArgs: readonly string[]
   private readonly killGraceMs: number
   private readonly hookPath: string
+  private readonly tapPath: string | undefined
   private readonly runs = new Map<RunId, RunState>()
 
   constructor(options: ClaudeCodeAdapterOptions) {
@@ -224,6 +269,7 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
     this.extraArgs = options.extraArgs ?? []
     this.killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS
     this.hookPath = options.hookPath
+    this.tapPath = options.tapPath
   }
 
   /**
@@ -258,9 +304,38 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
    */
   async start(input: StartRunInput): Promise<RunHandle> {
     await this.runPreflightGate(this.hookPath, input.runId)
+    await this.runPreflightTap(input.runId)
     const settingsPath = join(input.runDir, 'settings.json')
-    writeSettingsFile({ settingsPath, hookPath: this.hookPath })
+    writeSettingsFile({ settingsPath, hookPath: this.hookPath, ...this.tapSettings() })
     return this.spawnRun(input, settingsPath)
+  }
+
+  /** `{ tapPath }` or `{}` -- spread, so `exactOptionalPropertyTypes` sees an absent key, not one
+   *  present and undefined, which is the same distinction the settings file itself makes. */
+  private tapSettings(): { readonly tapPath?: string } {
+    return this.tapPath === undefined ? {} : { tapPath: this.tapPath }
+  }
+
+  /**
+   * The tap's pre-flight (M51 R6, plan erratum E11), beside `runPreflightGate` and on every spawn
+   * for its reason -- a tap that lost its exec bit between pause and resume records nothing, and
+   * silently.
+   *
+   * Fails the spawn, exactly as the gate's does. That looks severe for an optional mechanism, and
+   * it is the deliberate choice: a tap is only ever CONFIGURED by a deployment that wants it, and a
+   * configured-but-broken tap is the one state nothing downstream can distinguish from "the tap
+   * filled no gap" -- which is the spike's own question. A deployment that does not want the tap
+   * passes no `tapPath` and never reaches this line.
+   */
+  private async runPreflightTap(runId: RunId): Promise<void> {
+    const tapPath = this.tapPath
+    if (tapPath === undefined) return
+    try {
+      await preflightTap({ tapPath })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`ClaudeCodeAdapter: tool-result tap preflight failed for run ${runId}: ${message}`)
+    }
   }
 
   /**
@@ -302,6 +377,9 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         gitIdentity: input.gitIdentity,
         pauseFlagPath: input.pauseFlagPath,
         permissionsFilePath: input.permissionsFilePath,
+        // Only when this adapter actually registered a tap: the variable is the channel, and an
+        // armed channel with no hook writing to it is a tailer watching a file nothing creates.
+        ...(this.tapPath === undefined ? {} : { toolResultsPath: toolResultsPathFor(input.runDir) }),
       }),
       startInput: input,
       runFiles: { settingsPath, hookPath: this.hookPath },
@@ -333,11 +411,22 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
       })
 
       const queue = new AsyncEventQueue<RuntimeEvent>()
+      const seenToolResults = new Set<string>()
+      // The tap's own file lives in the run's scratch directory, which is exactly what the child
+      // was told (`SLAVEOFAI_TOOL_RESULTS`, set by `buildChildEnv` from the same helper) -- read
+      // back off the env rather than re-derived, so the writer and the tailer cannot disagree
+      // about which file this run is tapped into.
+      const resultsPath = spec.env['SLAVEOFAI_TOOL_RESULTS']
       const state: RunState = {
         child,
         queue,
         rawResultPayload: undefined,
         startInput: spec.startInput,
+        seenToolResults,
+        stopTap:
+          resultsPath === undefined || resultsPath === ''
+            ? undefined
+            : startTapTailer({ resultsPath, queue, seen: seenToolResults }),
       }
       let settled = false
 
@@ -403,9 +492,36 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         // line -- ADR 0001 records an async hook reporting late, as the
         // final line of a real capture. A reader that stops at `result`
         // loses it.
-        queue.push(event)
+        //
+        // M51 R6: the stream is one of TWO producers of `tool_result`, and it wins by arrival --
+        // check-and-add before pushing, exactly as the tailer does, so the pump sees one result per
+        // call whichever got there first.
+        if (event.kind === 'tool_result') {
+          if (!seenToolResults.has(event.toolUseId)) {
+            seenToolResults.add(event.toolUseId)
+            queue.push(event)
+          }
+        } else {
+          queue.push(event)
+        }
+        // M51 R5 / plan erratum E4: the SECOND pure function over the same line, called here rather
+        // than folded into `parseStreamLine` -- a turn's `usage` rides the same `assistant` line as
+        // its `tool_use` block, and that parser returns exactly one event per line. Pushed AFTER
+        // the line's own event: the meter reports on the turn that just happened.
+        const usage = parseStreamUsage(line)
+        if (usage !== null) queue.push({ kind: 'usage', input: usage.input, output: usage.output })
       })
-      lines.once('close', () => queue.close())
+      lines.once('close', () => {
+        // One last drain before the queue closes: the tap's final line may still be in flight
+        // between the hook's `>>` and the tailer's next poll, and closing the queue on top of it
+        // would drop the result of the run's last tool call.
+        const stop = state.stopTap
+        if (stop === undefined) {
+          queue.close()
+          return
+        }
+        void stop().finally(() => queue.close())
+      })
 
       settled = true
       resolve({ runId: spec.runId, pid: child.pid, runFiles: spec.runFiles })
@@ -468,7 +584,12 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
    */
   async resume(runId: RunId, checkpoint: Checkpoint, queuedInstruction: string | null): Promise<RunHandle> {
     await this.runPreflightGate(checkpoint.hookPath, runId)
-    writeSettingsFile({ settingsPath: checkpoint.settingsPath, hookPath: checkpoint.hookPath })
+    await this.runPreflightTap(runId)
+    writeSettingsFile({
+      settingsPath: checkpoint.settingsPath,
+      hookPath: checkpoint.hookPath,
+      ...this.tapSettings(),
+    })
 
     // Fix round 3, the coordinator's ruling, still true after the M5 reorder above: this order is
     // load-bearing for the live-child check just below, not merely convenient. Probed 200 times
@@ -505,6 +626,9 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
       // consumer already sitting in `for await` over the old queue would wait forever: `events()`
       // now hands out a different `AsyncEventQueue` object, so the old iteration can never be
       // woken by anything that happens to the new one.
+      // Its tailer with it: a poll timer left running against a finished run's file is a handle
+      // this map no longer holds, writing into a queue nobody can reach.
+      void existing.stopTap?.()
       existing.queue.close()
     }
 
@@ -573,6 +697,11 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         gitIdentity: resumedInput.gitIdentity,
         pauseFlagPath: resumedInput.pauseFlagPath,
         permissionsFilePath: resumedInput.permissionsFilePath,
+        // The resumed run's scratch directory is the ORIGINAL one (`resumedInput.runDir`, recovered
+        // from `checkpoint.settingsPath`), so a resumed run appends to the same file its first half
+        // wrote -- and the tailer starts from offset 0, which the dedupe set makes harmless: every
+        // id the stream already reported is replayed into a `has` check and dropped.
+        ...(this.tapPath === undefined ? {} : { toolResultsPath: toolResultsPathFor(resumedInput.runDir) }),
       }),
       startInput: resumedInput,
       runFiles: { settingsPath: checkpoint.settingsPath, hookPath: checkpoint.hookPath },
@@ -610,4 +739,131 @@ function captureRawResultPayload(state: RunState, line: string): void {
   if (isRecord(raw) && raw.type === 'result') {
     state.rawResultPayload = raw
   }
+}
+
+/**
+ * How often the tap's file is re-read while a run is live (M51 R6).
+ *
+ * Short enough that a result is not held back behind a poll a person would notice, long enough that
+ * a run making a tool call a second costs one `stat` per poll and nothing else. It is also the
+ * whole reason **the stream wins**: a stream line is read the instant the child writes it, while a
+ * tap line has to reach the filesystem and then wait for the next tick of this timer.
+ */
+const TAP_POLL_MS = 25
+
+/**
+ * Tails the tap's NDJSON file into the run's own queue, as a SECOND producer of `tool_result`
+ * (M51 R6) that `pump.ts` cannot tell from the first.
+ *
+ * Starts at the file's CURRENT size, never at zero. A resumed run appends to the same
+ * `tool-results.ndjson` its first half wrote (the scratch directory is the original one), and those
+ * lines were already reported by the previous pump's stream -- re-reading them would write a second
+ * `run.tool_result` row for every call the run made before it paused. Tailing means tailing.
+ *
+ * Every failure is silent and non-fatal, which is the tap's whole posture: a missing file is a run
+ * whose hook has not fired yet, an unreadable one is a gap the stream already fills, and neither is
+ * worth a word in a run's event log.
+ */
+function startTapTailer(spec: {
+  readonly resultsPath: string
+  readonly queue: AsyncEventQueue<RuntimeEvent>
+  readonly seen: Set<string>
+}): () => Promise<void> {
+  let offset = currentSizeOf(spec.resultsPath)
+  // A multi-byte character can straddle a read boundary, and so can a line: the decoder holds the
+  // half-character, `carry` holds the half-line.
+  const decoder = new StringDecoder('utf8')
+  let carry = ''
+  let draining = false
+
+  const drain = async (): Promise<void> => {
+    // Re-entrancy guard, not a lock: two overlapping drains would both read from the same `offset`
+    // and push every line twice -- which the dedupe set would then swallow, hiding the bug.
+    if (draining) return
+    draining = true
+    try {
+      let handle
+      try {
+        handle = await open(spec.resultsPath, 'r')
+      } catch {
+        return
+      }
+      try {
+        const stat = await handle.stat()
+        if (stat.size <= offset) return
+        const length = stat.size - offset
+        const buffer = Buffer.alloc(length)
+        const { bytesRead } = await handle.read(buffer, 0, length, offset)
+        offset += bytesRead
+        carry += decoder.write(buffer.subarray(0, bytesRead))
+      } finally {
+        await handle.close()
+      }
+      const parts = carry.split('\n')
+      // The last part is whatever came after the final newline -- an unfinished line, or the empty
+      // string. Held back rather than parsed: the tap writes atomically under PIPE_BUF, but a read
+      // can still land mid-line.
+      carry = parts.pop() ?? ''
+      for (const line of parts) {
+        const event = parseTapLine(line)
+        if (event === null) continue
+        if (spec.seen.has(event.toolUseId)) continue
+        spec.seen.add(event.toolUseId)
+        spec.queue.push(event)
+      }
+    } finally {
+      draining = false
+    }
+  }
+
+  const timer = setInterval(() => {
+    void drain()
+  }, TAP_POLL_MS)
+  // The tailer must never be the reason this process stays alive: it watches a file, and a file
+  // has nothing to say once the run that was writing it is over.
+  timer.unref()
+
+  return async () => {
+    clearInterval(timer)
+    await drain()
+  }
+}
+
+function currentSizeOf(path: string): number {
+  try {
+    return statSync(path).size
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * One line of `tool-results.ndjson` as a `tool_result` event, or `null` for anything this reader
+ * cannot make four good fields out of.
+ *
+ * Hand-rolled rather than a zod schema, and deliberately: this file is written by a shell script
+ * this repo owns and pre-flights (`preflightTap`), so the shape is not untrusted input so much as
+ * a contract already checked before the run started -- and a parser that DROPS a bad line is the
+ * only behaviour a tap may have, where a schema's job is usually to say loudly that something is
+ * wrong.
+ *
+ * An `errorClass` this version has never heard of reads as `other` rather than as a refusal: the
+ * closed union types the producers (plan erratum E17), and a class from a newer tap arriving in an
+ * older adapter is still evidence that the call failed.
+ */
+function parseTapLine(line: string): Extract<RuntimeEvent, { kind: 'tool_result' }> | null {
+  let raw: unknown
+  try {
+    raw = JSON.parse(line)
+  } catch {
+    return null
+  }
+  if (!isRecord(raw)) return null
+  const { toolUseId, toolName, outcome, errorClass } = raw
+  if (typeof toolUseId !== 'string' || toolUseId === '') return null
+  if (typeof toolName !== 'string') return null
+  if (outcome !== 'ok' && outcome !== 'error') return null
+  if (outcome === 'ok') return { kind: 'tool_result', toolUseId, toolName, outcome, errorClass: null }
+  const known = TOOL_ERROR_CLASSES.find((candidate): candidate is ToolErrorClass => candidate === errorClass)
+  return { kind: 'tool_result', toolUseId, toolName, outcome, errorClass: known ?? 'other' }
 }

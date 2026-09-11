@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 
 export interface GateRunResult {
   readonly stdout: string
@@ -138,4 +138,144 @@ export async function preflightGate(input: {
     // threw.
     await rm(dir, { recursive: true, force: true })
   }
+}
+
+/**
+ * The four fields one tap line must carry, and the only thing {@link preflightTap} reads back.
+ * Identical to `RuntimeEvent`'s `tool_result` arm by construction -- the tap is a second producer
+ * of exactly that event -- but written here as a shape check on a LINE rather than imported as a
+ * type, because what is being asserted is that a shell script's output parses, not that a value
+ * this process constructed has the right type.
+ */
+const TAP_LINE_FIELDS = ['toolUseId', 'toolName', 'outcome', 'errorClass'] as const
+
+/**
+ * The tap's own pre-flight (M51 R6, plan erratum E11).
+ *
+ * {@link preflightGate} cannot do this job: it arms and disarms a pause flag and asserts BOTH
+ * directions, and a tap has no directions -- it never denies, so the armed half fails by
+ * construction. What CAN be asserted about a tap is exactly three things, and all three are
+ * necessary conditions a broken install fails:
+ *
+ *   - **exit 0.** A PostToolUse hook that exits non-zero interferes with the run it is watching.
+ *   - **empty stdout.** The CLI parses a hook's stdout as a hook response. A tap that speaks can
+ *     change a run, which is the one thing a tap must never do.
+ *   - **exactly one parseable line, with the four fields.** A tap that records nothing is not
+ *     installed, and this is the half that a path typo, a missing `node` and a non-executable bit
+ *     all fail at.
+ *
+ * What this does NOT prove, said out loud the way {@link preflightGate}'s docstring says its own:
+ * that the CLI will actually invoke the script. A correct tap registered under a matcher that never
+ * matches passes this and records nothing. That is what R6's MEASUREMENT is for.
+ *
+ * The results file is minted inside a `mkdtemp` directory removed in a `finally`, and there is
+ * deliberately no path parameter -- `preflightGate`'s isolation discipline, for its reason: a
+ * caller-supplied path could be pointed, by accident, at a LIVE run's own `tool-results.ndjson`,
+ * and this check would then append a synthetic result to a real run's evidence.
+ */
+export async function preflightTap(input: { readonly tapPath: string }): Promise<void> {
+  const { tapPath } = input
+  if (!isAbsolute(tapPath)) {
+    throw new Error(`preflightTap: tapPath must be absolute, got ${JSON.stringify(tapPath)}`)
+  }
+  const dir = await mkdtemp(join(tmpdir(), 'slaveofai-tap-preflight-'))
+  const resultsPath = join(dir, 'tool-results.ndjson')
+  try {
+    const result = await runTapScript({ tapPath, resultsPath })
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `preflightTap: tap at ${tapPath} exited ${String(result.exitCode)} on a synthetic PostToolUse ` +
+          'payload. A PostToolUse hook that exits non-zero interferes with the run it is watching; ' +
+          'a tap must exit 0 on every path, including its own failures.',
+      )
+    }
+    if (result.stdout !== '') {
+      throw new Error(
+        `preflightTap: tap at ${tapPath} wrote ${JSON.stringify(result.stdout)} to stdout. The CLI ` +
+          'parses a hook\'s stdout as a hook response, so a tap that speaks can change a run -- ' +
+          'diagnostics belong on stderr.',
+      )
+    }
+    let written = ''
+    try {
+      written = await readFile(resultsPath, 'utf8')
+    } catch {
+      written = ''
+    }
+    const lines = written.split('\n').filter((line) => line !== '')
+    if (lines.length !== 1) {
+      throw new Error(
+        `preflightTap: tap at ${tapPath} wrote no line (or more than one: ${String(lines.length)}) for one ` +
+          'synthetic call. A tap that records nothing is not installed -- check the path, its exec ' +
+          'bit, and that `node` is on the PATH the runtime spawns hooks with.',
+      )
+    }
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(lines[0] ?? '')
+    } catch {
+      throw new Error(
+        `preflightTap: tap at ${tapPath} wrote a line that is not JSON. The adapter's tailer reads this ` +
+          'file line by line and would drop every result the run produced.',
+      )
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`preflightTap: tap at ${tapPath} wrote a line that is not a JSON object.`)
+    }
+    const missing = TAP_LINE_FIELDS.filter((field) => !(field in (parsed as Record<string, unknown>)))
+    if (missing.length > 0) {
+      throw new Error(
+        `preflightTap: tap at ${tapPath} wrote a line missing ${missing.join(', ')}. All four fields are ` +
+          'what a `tool_result` event is made of; a line short of one pairs with nothing.',
+      )
+    }
+  } finally {
+    // The whole temporary directory, for `preflightGate`'s reason: it is the only thing this check
+    // ever created, so removing it leaves nothing behind regardless of which branch above threw.
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Spawns the tap once with a synthetic PostToolUse payload on stdin and `SLAVEOFAI_TOOL_RESULTS`
+ * pointed at `resultsPath`. The sibling of {@link runGateScript}, and it ends stdin for the same
+ * reason: the tap reads its payload whole, and nothing else would ever close that pipe.
+ */
+function runTapScript(input: {
+  readonly tapPath: string
+  readonly resultsPath: string
+}): Promise<{ readonly stdout: string; readonly exitCode: number | null }> {
+  const payload = JSON.stringify({
+    tool_use_id: 'preflight',
+    tool_name: 'Preflight',
+    tool_response: { is_error: false },
+  })
+  return new Promise((resolve, reject) => {
+    const child = spawn(input.tapPath, [], {
+      env: { ...process.env, SLAVEOFAI_TOOL_RESULTS: input.resultsPath },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+
+    let stdout = ''
+    let settled = false
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString('utf8')
+    })
+    // Drained, not asserted on: a tap reports its own failures on stderr by design, and this probe's
+    // verdict is stdout shape, exit code, and the line it wrote.
+    child.stderr.resume()
+
+    child.once('error', (error: Error) => {
+      if (settled) return
+      settled = true
+      reject(error)
+    })
+    child.once('close', (exitCode: number | null) => {
+      if (settled) return
+      settled = true
+      resolve({ stdout, exitCode })
+    })
+
+    child.stdin.end(payload)
+  })
 }

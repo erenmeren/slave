@@ -1,4 +1,5 @@
 import { execFileSync, spawn as spawnChild } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
@@ -11,6 +12,20 @@ import { ASK_PAUSE_REASON } from '../../src/ask.js'
 import { pumpRun } from '../../src/pump.js'
 import { noteTickRan, reconcileOrphans, resetTickObservation, sweep } from '../../src/sweep.js'
 import { verifyConcludedRun } from '../../src/verify.js'
+
+/**
+ * A stand-in `argsHash` for a hand-built `tool_call` event (M51 R1).
+ *
+ * These tests construct `RuntimeEvent`s directly instead of parsing a stream, so there is no tool
+ * INPUT to hash -- `hashToolInput` takes the `tool_use` block's own arguments, and the parser is
+ * the only thing that ever holds them. The digest here is derived from the call's summary purely so
+ * that two different calls get two different hashes and two identical calls get one, which is the
+ * only property anything downstream reads.
+ */
+function testArgsHash(summary: string): string {
+  return createHash('sha256').update(summary).digest('hex')
+}
+
 
 /** The adapter hands the pump an async stream; an array is the same contract without a process. */
 async function* fromArray(events: readonly RuntimeEvent[]): AsyncIterable<RuntimeEvent> {
@@ -153,7 +168,7 @@ async function pumpEndingWith(ids: Ids, text: string, outcome: RunOutcome = okOu
     spawn,
     events: fromArray([
       { kind: 'session_started', sessionId: 's-1' },
-      { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Read', summary: 'Read queue.ts' },
+      { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Read', summary: 'Read queue.ts', argsHash: testArgsHash('Read queue.ts') },
       { kind: 'text', text },
       { kind: 'terminated', outcome },
     ]),
@@ -302,7 +317,7 @@ describe('a slave that asks, and waits', () => {
       resumed: true,
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
-        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Read', summary: 'Read retry.ts' },
+        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Read', summary: 'Read retry.ts', argsHash: testArgsHash('Read retry.ts') },
         { kind: 'text', text: ask('{"role":"answerer","question":"And how many times should it retry?"}') },
         { kind: 'terminated', outcome: okOutcome },
       ]),

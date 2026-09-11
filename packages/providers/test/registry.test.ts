@@ -59,14 +59,27 @@ describe('admitAdapter', () => {
       canResumeSession: false,
       gate: 'none',
       reportsCost: false,
+      reportsToolResults: false,
     })
 
     expect(() => admitAdapter('cursor', useless)).toThrow(/canPauseMidRun|canResumeSession/)
   })
 
   it('admits an adapter with either capability alone', () => {
-    const gateOnly = stubAdapter({ canPauseMidRun: true, canResumeSession: false, gate: 'all-tools', reportsCost: true })
-    const resumeOnly = stubAdapter({ canPauseMidRun: false, canResumeSession: true, gate: 'none', reportsCost: false })
+    const gateOnly = stubAdapter({
+      canPauseMidRun: true,
+      canResumeSession: false,
+      gate: 'all-tools',
+      reportsCost: true,
+      reportsToolResults: true,
+    })
+    const resumeOnly = stubAdapter({
+      canPauseMidRun: false,
+      canResumeSession: true,
+      gate: 'none',
+      reportsCost: false,
+      reportsToolResults: false,
+    })
 
     expect(admitAdapter('claude_code', gateOnly).id).toBe('stub')
     expect(admitAdapter('cursor', resumeOnly).id).toBe('stub')

@@ -1,8 +1,9 @@
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { runGateScript } from '../src/runtime/gate-preflight.js'
+import { fileURLToPath } from 'node:url'
+import { preflightTap, runGateScript } from '../src/runtime/gate-preflight.js'
 
 const createdDirs: string[] = []
 function tempDir(prefix: string): string {
@@ -80,5 +81,46 @@ describe('runGateScript (characterization)', () => {
     })
     expect(result.stdout).toBe('absent')
     expect(existsSync(flagPath)).toBe(false)
+  })
+})
+
+describe('preflightTap (M51 R6, plan erratum E11)', () => {
+  const REAL_TAP = join(fileURLToPath(new URL('../../../', import.meta.url)), 'scripts/tool-result-tap.sh')
+
+  const chatty = (): string =>
+    hookWith('cat > /dev/null\nprintf \'{"ok":true}\\n\'\nprintf \'%s\\n\' \'{"toolUseId":"preflight","toolName":"Preflight","outcome":"ok","errorClass":null}\' >> "$SLAVEOFAI_TOOL_RESULTS"\nexit 0')
+
+  const silent = (): string => hookWith('cat > /dev/null\nexit 0')
+
+  it('passes for a tap that writes one line and says nothing', async () => {
+    await expect(preflightTap({ tapPath: REAL_TAP })).resolves.toBeUndefined()
+  })
+
+  it('fails a tap that writes to stdout -- the CLI would read that as a hook response', async () => {
+    await expect(preflightTap({ tapPath: chatty() })).rejects.toThrow(/stdout/u)
+  })
+
+  it('fails a tap that writes no line -- a tap that records nothing is not installed', async () => {
+    await expect(preflightTap({ tapPath: silent() })).rejects.toThrow(/wrote no line/u)
+  })
+
+  it('fails a relative path before it spawns anything', async () => {
+    await expect(preflightTap({ tapPath: './x.sh' })).rejects.toThrow(/absolute/u)
+  })
+
+  it('fails a tap that exits non-zero, even when it wrote its line', async () => {
+    const angry = hookWith(
+      'cat > /dev/null\nprintf \'%s\\n\' \'{"toolUseId":"preflight","toolName":"Preflight","outcome":"ok","errorClass":null}\' >> "$SLAVEOFAI_TOOL_RESULTS"\nexit 1',
+    )
+    await expect(preflightTap({ tapPath: angry })).rejects.toThrow(/exit/u)
+  })
+
+  it('leaves nothing behind -- it mints and removes its own directory', async () => {
+    // `preflightGate`'s isolation discipline, for its reason: a caller-supplied path could point
+    // at a live run's own results file by accident, so there is no such parameter to point.
+    const before = readdirSync(tmpdir()).filter((entry) => entry.startsWith('slaveofai-tap-preflight-'))
+    await preflightTap({ tapPath: REAL_TAP })
+    const after = readdirSync(tmpdir()).filter((entry) => entry.startsWith('slaveofai-tap-preflight-'))
+    expect(after).toEqual(before)
   })
 })

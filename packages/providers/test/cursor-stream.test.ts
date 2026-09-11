@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parseCursorLine } from '../src/cursor/stream.js'
+import { hashToolInput } from '../src/hash.js'
 import type { RuntimeEvent } from '../src/types.js'
 
 /**
@@ -69,7 +70,7 @@ describe('parseCursorLine, against the recorded fixture', () => {
       'ignored', // thinking/completed
       'text', // assistant
       'tool_call', // tool_call/started
-      'ignored', // tool_call/completed -- the SAME call, not a second one
+      'tool_result', // tool_call/completed -- the SAME call's RESULT, not a second call (M51 R1/E3)
       'ignored',
       'ignored',
       'ignored',
@@ -104,6 +105,7 @@ describe('parseCursorLine, against the recorded fixture', () => {
       toolUseId: FIXTURE_CALL_ID,
       toolName: 'read',
       summary: `read ${FIXTURE_TOOL_PATH.slice(0, 80)}…`,
+      argsHash: hashToolInput({ path: FIXTURE_TOOL_PATH }),
     })
     // Explicitly, because "populated" is the assertion the brief asks for:
     expect(event).toMatchObject({ kind: 'tool_call' })
@@ -132,13 +134,22 @@ describe('parseCursorLine, against the recorded fixture', () => {
   it('does not emit a second tool_call for the completed half of the same call', () => {
     // Both halves are `type: "tool_call"` and carry the SAME `call_id`.
     // Emitting both would double every tool call in the feed and in any
-    // count taken over the stream.
+    // count taken over the stream. Since M51 R1 the completed half IS an event -- but a
+    // `tool_result`, one event about one call's OUTCOME, so the count of `tool_call`s is
+    // still exactly one per call, which is the property this test was written to protect.
     const started = JSON.parse(lines[6]!) as { call_id: string; subtype: string }
     const completed = JSON.parse(lines[7]!) as { call_id: string; subtype: string }
     expect(started.subtype).toBe('started')
     expect(completed.subtype).toBe('completed')
     expect(completed.call_id).toBe(started.call_id)
-    expect(parseCursorLine(lines[7]!)).toEqual({ kind: 'ignored', line: lines[7] })
+    expect(parseCursorLine(lines[7]!)).toEqual({
+      kind: 'tool_result',
+      toolUseId: started.call_id,
+      toolName: 'read',
+      outcome: 'ok',
+      errorClass: null,
+    })
+    expect(lines.map((line) => parseCursorLine(line).kind).filter((kind) => kind === 'tool_call')).toHaveLength(1)
   })
 
   it('reports an unknown cost and an unknown stop reason on the terminal line rather than zero', () => {
@@ -266,9 +277,11 @@ describe('parseCursorLine, a rejected completed half (M15)', () => {
     expect('reason' in event).toBe(false)
   })
 
-  it('still ignores an ordinary completed half', () => {
+  it('reports an ordinary completed half as a tool_result, not a permission_denied', () => {
     // `lines[7]` (`cursor-run.ndjson`): a real completed half whose result carries no rejection.
-    expect(parseCursorLine(lines[7]!).kind).toBe('ignored')
+    // It was `ignored` until M51 R1; what this test has always been about is that the `rejected`
+    // arm does not swallow an ordinary completion, and that still holds.
+    expect(parseCursorLine(lines[7]!).kind).toBe('tool_result')
   })
 })
 
@@ -531,6 +544,7 @@ describe('parseCursorLine, the tool_call summary', () => {
       toolUseId: 'c1',
       toolName: 'read',
       summary: 'read /abs/note.txt',
+      argsHash: hashToolInput({ path: '/abs/note.txt' }),
     })
   })
 
@@ -573,11 +587,17 @@ describe('parseCursorLine, the tool_call summary', () => {
     ]
     for (const [label, toolCall] of cases) {
       const line = JSON.stringify({ type: 'tool_call', subtype: 'started', call_id: 'c4', tool_call: toolCall })
+      const payload = (toolCall as Record<string, unknown>)['readToolCall']
       expect(parseCursorLine(line), label).toEqual({
         kind: 'tool_call',
         toolUseId: 'c4',
         toolName: 'read',
         summary: 'read',
+        // The summary gives up on all six of these; the hash does not. `{path: 42}` and
+        // `{path: '   '}` are different calls even though both read as the bare tool name.
+        argsHash: hashToolInput(
+          payload !== null && typeof payload === 'object' ? (payload as Record<string, unknown>)['args'] : undefined,
+        ),
       })
     }
   })
@@ -610,6 +630,7 @@ describe('parseCursorLine, the tool_call summary', () => {
       toolUseId: 'c6',
       toolName: 'read',
       summary: 'read /abs/x',
+      argsHash: hashToolInput({ path: '/abs/x' }),
     })
   })
 
@@ -629,7 +650,7 @@ describe('parseCursorLine, the tool_call summary', () => {
 })
 
 describe('parseCursorLine, exhaustiveness of RuntimeEvent', () => {
-  it('produces only the six kinds this parser is allowed to produce', () => {
+  it('produces only the seven kinds this parser is allowed to produce', () => {
     // The complement of R4, stated positively, so adding a branch that
     // returns a seventh kind fails here and not in Task 12's adapter.
     const produced = new Set<RuntimeEvent['kind']>()
@@ -637,7 +658,68 @@ describe('parseCursorLine, exhaustiveness of RuntimeEvent', () => {
       produced.add(parseCursorLine(line).kind)
     }
     for (const kind of produced) {
-      expect(['session_started', 'text', 'tool_call', 'terminated', 'ignored', 'unparsable']).toContain(kind)
+      expect(['session_started', 'text', 'tool_call', 'tool_result', 'terminated', 'ignored', 'unparsable']).toContain(
+        kind,
+      )
     }
+  })
+})
+
+describe('the completed tool_call line (M51 R1/E3)', () => {
+  it('is a tool_result now, not folded away', () => {
+    const line = JSON.stringify({
+      type: 'tool_call',
+      subtype: 'completed',
+      call_id: 'c1',
+      tool_call: { readToolCall: { args: { path: '/x' }, result: { success: { content: 'hi' } } } },
+    })
+    expect(parseCursorLine(line)).toEqual({
+      kind: 'tool_result',
+      toolUseId: 'c1',
+      toolName: 'read',
+      outcome: 'ok',
+      errorClass: null,
+    })
+  })
+
+  it('reads `result.success` as the OK discriminator -- there is no is_error on this line', () => {
+    const failed = JSON.stringify({
+      type: 'tool_call',
+      subtype: 'completed',
+      call_id: 'c2',
+      tool_call: { shellToolCall: { args: {}, result: { failure: { message: 'ENOENT' } } } },
+    })
+    expect(parseCursorLine(failed)).toMatchObject({ outcome: 'error', errorClass: 'not_found' })
+  })
+
+  it('still reports a REJECTED call as permission_denied -- that arm is checked first', () => {
+    const rejected = JSON.stringify({
+      type: 'tool_call',
+      subtype: 'completed',
+      call_id: 'c3',
+      tool_call: { shellToolCall: { args: {}, result: { rejected: { command: 'rm', reason: 'paused' } } } },
+    })
+    expect(parseCursorLine(rejected)).toMatchObject({ kind: 'permission_denied', toolUseId: 'c3' })
+  })
+
+  it('stays `ignored` for a completed line with no readable result at all', () => {
+    // "The call finished" with no evidence either way must not count toward an error storm (E3).
+    const blank = JSON.stringify({
+      type: 'tool_call',
+      subtype: 'completed',
+      call_id: 'c6',
+      tool_call: { shellToolCall: { args: {} } },
+    })
+    expect(parseCursorLine(blank).kind).toBe('ignored')
+  })
+
+  it('gives a started tool_call an args hash of its own args', () => {
+    const started = JSON.stringify({
+      type: 'tool_call',
+      subtype: 'started',
+      call_id: 'c4',
+      tool_call: { readToolCall: { args: { path: '/x' } } },
+    })
+    expect(parseCursorLine(started)).toMatchObject({ kind: 'tool_call', argsHash: hashToolInput({ path: '/x' }) })
   })
 })

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { isAlive } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
@@ -8,6 +9,20 @@ import { appendEvent } from '@slave-of-ai/events'
 import { PERMISSION_DENY_REASON_PREFIX, parseStreamLine, type RunOutcome, type RuntimeEvent } from '@slave-of-ai/providers'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OUTPUT_CAP, pumpRun } from '../../src/pump.js'
+
+/**
+ * A stand-in `argsHash` for a hand-built `tool_call` event (M51 R1).
+ *
+ * These tests construct `RuntimeEvent`s directly instead of parsing a stream, so there is no tool
+ * INPUT to hash -- `hashToolInput` takes the `tool_use` block's own arguments, and the parser is
+ * the only thing that ever holds them. The digest here is derived from the call's summary purely so
+ * that two different calls get two different hashes and two identical calls get one, which is the
+ * only property anything downstream reads.
+ */
+function testArgsHash(summary: string): string {
+  return createHash('sha256').update(summary).digest('hex')
+}
+
 
 /**
  * Reads one of `packages/providers/test/fixtures/*.ndjson` and runs every line through the real
@@ -321,8 +336,8 @@ describe('pumpRun', () => {
       ...ids,
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
-        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
-        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Edit', summary: 'Edit /tmp/notes.txt' },
+        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi', argsHash: testArgsHash('Bash echo hi') },
+        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Edit', summary: 'Edit /tmp/notes.txt', argsHash: testArgsHash('Edit /tmp/notes.txt') },
         { kind: 'terminated', outcome: okOutcome },
       ]),
     })
@@ -341,7 +356,7 @@ describe('pumpRun', () => {
       ...ids,
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
-        { kind: 'tool_call', toolUseId: 'toolu_01UCoRZm85rNxfupNQPToZXL', toolName: 'Write', summary: 'Write note3.txt' },
+        { kind: 'tool_call', toolUseId: 'toolu_01UCoRZm85rNxfupNQPToZXL', toolName: 'Write', summary: 'Write note3.txt', argsHash: testArgsHash('Write note3.txt') },
         { kind: 'terminated', outcome: okOutcome },
       ]),
     })
@@ -583,8 +598,8 @@ describe('pumpRun', () => {
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
         { kind: 'hook_failed_open', hookName: 'PreToolUse:Write', exitCode: 127, stderr: 'gone' },
-        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
-        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Write', summary: 'Write /tmp/beta.txt' },
+        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi', argsHash: testArgsHash('Bash echo hi') },
+        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Write', summary: 'Write /tmp/beta.txt', argsHash: testArgsHash('Write /tmp/beta.txt') },
         { kind: 'text', text: 'and then I did this' },
       ]),
     })
@@ -607,7 +622,7 @@ describe('pumpRun', () => {
       ...ids,
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
-        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
+        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi', argsHash: testArgsHash('Bash echo hi') },
         { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
       ]),
     })
@@ -646,7 +661,7 @@ describe('pumpRun', () => {
         },
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
-          { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
+          { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi', argsHash: testArgsHash('Bash echo hi') },
           { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
         ]),
       })
@@ -700,9 +715,9 @@ describe('pumpRun', () => {
         },
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
-          { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
+          { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi', argsHash: testArgsHash('Bash echo hi') },
           { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
-          { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Bash', summary: 'Bash echo again' },
+          { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Bash', summary: 'Bash echo again', argsHash: testArgsHash('Bash echo again') },
           { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
         ]),
       })
@@ -739,7 +754,7 @@ describe('pumpRun', () => {
       },
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
-        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
+        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi', argsHash: testArgsHash('Bash echo hi') },
         { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
       ]),
     })
@@ -804,7 +819,7 @@ describe('pumpRun', () => {
         },
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
-          { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
+          { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi', argsHash: testArgsHash('Bash echo hi') },
           { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
         ]),
       })
@@ -1033,9 +1048,9 @@ describe('pumpRun', () => {
       ...ids,
       events: fromArray([
         { kind: 'session_started', sessionId: 's-1' },
-        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
-        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Edit', summary: 'Edit /tmp/notes.txt' },
-        { kind: 'tool_call', toolUseId: 'tu_3', toolName: 'Bash', summary: 'Bash echo hi' },
+        { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi', argsHash: testArgsHash('Bash echo hi') },
+        { kind: 'tool_call', toolUseId: 'tu_2', toolName: 'Edit', summary: 'Edit /tmp/notes.txt', argsHash: testArgsHash('Edit /tmp/notes.txt') },
+        { kind: 'tool_call', toolUseId: 'tu_3', toolName: 'Bash', summary: 'Bash echo hi', argsHash: testArgsHash('Bash echo hi') },
         { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'pause' },
       ]),
     })
@@ -1048,7 +1063,7 @@ describe('pumpRun', () => {
       ...ids,
       events: fromArray([
         { kind: 'session_started', sessionId: 's-2' },
-        { kind: 'tool_call', toolUseId: 'tu_4', toolName: 'Bash', summary: 'Bash echo hi' },
+        { kind: 'tool_call', toolUseId: 'tu_4', toolName: 'Bash', summary: 'Bash echo hi', argsHash: testArgsHash('Bash echo hi') },
         { kind: 'terminated', outcome: okOutcome },
       ]),
     })
@@ -1134,7 +1149,7 @@ describe('pumpRun', () => {
       // measured in `packages/providers/test/fixtures/claude/skill-tool-use.ndjson` and asserted
       // in `stream.test.ts`. These fixtures must keep matching that shape or they are testing a
       // string the parser never produces.
-      summary: `Skill ${name}`,
+      summary: `Skill ${name}`, argsHash: testArgsHash(`Skill ${name}`),
     })
 
     it('tallies Skill tool calls and writes them when the run concludes cleanly', async (): Promise<void> => {
@@ -1143,7 +1158,7 @@ describe('pumpRun', () => {
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
           skillCall('t1', 'superpowers:writing-plans'),
-          { kind: 'tool_call', toolUseId: 't2', toolName: 'Write', summary: 'Write a.txt' },
+          { kind: 'tool_call', toolUseId: 't2', toolName: 'Write', summary: 'Write a.txt', argsHash: testArgsHash('Write a.txt') },
           skillCall('t3', 'superpowers:writing-plans'),
           skillCall('t4', 'superpowers:test-driven-development'),
           { kind: 'terminated', outcome: okOutcome },
@@ -1166,7 +1181,7 @@ describe('pumpRun', () => {
         ...ids,
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
-          { kind: 'tool_call', toolUseId: 't1', toolName: 'Write', summary: 'Write a.txt' },
+          { kind: 'tool_call', toolUseId: 't1', toolName: 'Write', summary: 'Write a.txt', argsHash: testArgsHash('Write a.txt') },
           { kind: 'terminated', outcome: okOutcome },
         ]),
       })
@@ -1187,7 +1202,7 @@ describe('pumpRun', () => {
         ...ids,
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
-          { kind: 'tool_call', toolUseId: 't1', toolName: 'Skill', summary: 'Skill' },
+          { kind: 'tool_call', toolUseId: 't1', toolName: 'Skill', summary: 'Skill', argsHash: testArgsHash('Skill') },
           skillCall('t2', 'superpowers:brainstorming'),
           { kind: 'terminated', outcome: okOutcome },
         ]),
@@ -1334,7 +1349,7 @@ describe('pumpRun', () => {
         },
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
-          { kind: 'tool_call', toolUseId: 't1', toolName: 'Write', summary: 'Write a.txt' },
+          { kind: 'tool_call', toolUseId: 't1', toolName: 'Write', summary: 'Write a.txt', argsHash: testArgsHash('Write a.txt') },
           { kind: 'terminated', outcome: okOutcome },
         ]),
       })
@@ -1636,7 +1651,7 @@ describe('pumpRun', () => {
           },
           events: fromArray([
             { kind: 'session_started', sessionId: 's-1' },
-            { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi' },
+            { kind: 'tool_call', toolUseId: 'tu_1', toolName: 'Bash', summary: 'Bash echo hi', argsHash: testArgsHash('Bash echo hi') },
             { kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason: malformedReason },
           ]),
         })
@@ -1800,7 +1815,7 @@ describe('pumpRun', () => {
         ...ids,
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
-          { kind: 'tool_call', toolUseId: 'toolu_r1', toolName: 'Read', summary: 'Read /tmp/notes.txt' },
+          { kind: 'tool_call', toolUseId: 'toolu_r1', toolName: 'Read', summary: 'Read /tmp/notes.txt', argsHash: testArgsHash('Read /tmp/notes.txt') },
           { kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason: matrixReason },
           { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['toolu_r1'] } },
         ]),
@@ -1839,9 +1854,9 @@ describe('pumpRun', () => {
         ...ids,
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
-          { kind: 'tool_call', toolUseId: 'toolu_bash', toolName: 'Bash', summary: 'Bash npm test' },
+          { kind: 'tool_call', toolUseId: 'toolu_bash', toolName: 'Bash', summary: 'Bash npm test', argsHash: testArgsHash('Bash npm test') },
           { kind: 'hook_started', hookId: 'hk-bash', hookName: 'PreToolUse:Bash' },
-          { kind: 'tool_call', toolUseId: 'toolu_read', toolName: 'Read', summary: 'Read notes.txt' },
+          { kind: 'tool_call', toolUseId: 'toolu_read', toolName: 'Read', summary: 'Read notes.txt', argsHash: testArgsHash('Read notes.txt') },
           { kind: 'hook_started', hookId: 'hk-read', hookName: 'PreToolUse:Read' },
           { kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason: matrixReason, hookId: 'hk-bash' },
           { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['toolu_bash'] } },
@@ -1872,7 +1887,7 @@ describe('pumpRun', () => {
         ...ids,
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
-          { kind: 'tool_call', toolUseId: 'toolu_read', toolName: 'Read', summary: 'Read notes.txt' },
+          { kind: 'tool_call', toolUseId: 'toolu_read', toolName: 'Read', summary: 'Read notes.txt', argsHash: testArgsHash('Read notes.txt') },
           { kind: 'hook_started', hookId: 'hk-x', hookName: 'PreToolUse:Bash' },
           { kind: 'hook_denied', hookName: 'PreToolUse:Bash', reason: matrixReason, hookId: 'hk-x' },
           { kind: 'terminated', outcome: { ...okOutcome, deniedToolUseIds: ['toolu_read'] } },
@@ -1902,7 +1917,7 @@ describe('pumpRun', () => {
         ...ids,
         events: fromArray([
           { kind: 'session_started', sessionId: 's-1' },
-          { kind: 'tool_call', toolUseId: 'toolu_bash', toolName: 'Bash', summary: 'Bash npm test' },
+          { kind: 'tool_call', toolUseId: 'toolu_bash', toolName: 'Bash', summary: 'Bash npm test', argsHash: testArgsHash('Bash npm test') },
           { kind: 'hook_started', hookId: 'hk-1', hookName: 'PreToolUse:Bash' },
           {
             kind: 'hook_denied',

@@ -2,13 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { capabilitiesOf, ClaudeCodeAdapter, type ProviderKind } from '../src/index.js'
 
 describe('ProviderCapabilities', () => {
-  it('exposes exactly the four members the system consumes', () => {
+  it('exposes exactly the five members the system consumes', () => {
     const caps = new ClaudeCodeAdapter({ command: 'claude', hookPath: '/opt/slaveofai/pause-gate.sh' }).getCapabilities()
     expect(Object.keys(caps).sort()).toEqual([
       'canPauseMidRun',
       'canResumeSession',
       'gate',
       'reportsCost',
+      'reportsToolResults',
     ])
   })
 
@@ -19,6 +20,7 @@ describe('ProviderCapabilities', () => {
       canResumeSession: true,
       gate: 'all-tools',
       reportsCost: true,
+      reportsToolResults: true,
     })
   })
 })
@@ -45,6 +47,11 @@ describe('capabilitiesOf', () => {
       canResumeSession: true,
       gate: 'all-tools',
       reportsCost: false,
+      // M51 R6: WIDENED by proof, which is the only direction this table moves. Cursor's
+      // `completed` tool_call line IS a measured tool result
+      // (`fixtures/cursor/cursor-run.ndjson` line 8, `{"result":{"success":{...}}}`), and
+      // `cursor/stream.ts` reads it as one -- cost-blind is not result-blind.
+      reportsToolResults: true,
     })
   })
 
@@ -56,7 +63,13 @@ describe('capabilitiesOf', () => {
     const kinds: readonly ProviderKind[] = ['claude_code', 'cursor']
     for (const kind of kinds) {
       expect(typeof capabilitiesOf(kind).reportsCost).toBe('boolean')
-      expect(Object.keys(capabilitiesOf(kind)).sort()).toEqual(['canPauseMidRun', 'canResumeSession', 'gate', 'reportsCost'])
+      expect(Object.keys(capabilitiesOf(kind)).sort()).toEqual([
+        'canPauseMidRun',
+        'canResumeSession',
+        'gate',
+        'reportsCost',
+        'reportsToolResults',
+      ])
     }
   })
 })
