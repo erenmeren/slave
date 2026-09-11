@@ -831,6 +831,38 @@ describe('the run.tool_result and run.breaker cards', () => {
     expect(screen.getByTestId('breaker-trip').textContent).toBe('Same call over and over')
     expect(screen.getByTestId('breaker-trip').getAttribute('data-breaker-trip')).toBe('repeated_call')
     expect(screen.getByTestId('breaker-count').textContent).toBe('8 times')
-    expect(screen.getByTestId('breaker-detail').getAttribute('data-breaker-level')).toBe('steered')
+    // Fix round 1, Minor 6: the rung rides the LEVEL's own element, not the one printing the
+    // identifier -- a reader (and `gate:m51-breaker`) looks for it where the rung is shown.
+    expect(screen.getByTestId('breaker-level').getAttribute('data-breaker-level')).toBe('steered')
+    expect(screen.getByTestId('breaker-level').textContent).toBe('Steered')
+  })
+
+  // Fix round 1, Important 2 + Minor 7. `detail` is an IDENTIFIER whose shape depends on the trip,
+  // and two of the three shapes are unreadable printed raw: an `error_storm`'s detail is a bare
+  // `ToolErrorClass` member (`docs/ia.md` rule 3), and a `repeated_call`'s is a tool name plus a
+  // 64-character digest. The raw value always stays on `title`.
+  it('prints an error storm\u2019s class as its LABEL, with the key on title', () => {
+    const Card = ACTIVITY_CARDS['run.breaker']
+    const event = baseEvent('run.breaker', { level: 'constrained', trip: 'error_storm', count: 5, detail: 'timeout' })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('breaker-detail').textContent).toBe('it timed out')
+    expect(screen.getByTestId('breaker-detail').getAttribute('title')).toBe('timeout')
+    expect(screen.getByTestId('breaker-level').textContent).toBe('Constrained')
+  })
+
+  it('shortens a repeated call\u2019s digest to eight characters, keeping the whole key on title', () => {
+    const Card = ACTIVITY_CARDS['run.breaker']
+    const key = `Bash:${'a'.repeat(64)}`
+    const event = baseEvent('run.breaker', { level: 'steered', trip: 'repeated_call', count: 8, detail: key })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('breaker-detail').textContent).toBe('Bash:aaaaaaaa')
+    expect(screen.getByTestId('breaker-detail').getAttribute('title')).toBe(key)
+  })
+
+  it('leaves a no_progress detail exactly as the detector wrote it', () => {
+    const Card = ACTIVITY_CARDS['run.breaker']
+    const event = baseEvent('run.breaker', { level: 'steered', trip: 'no_progress', count: 2, detail: '2 quiet beats' })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('breaker-detail').textContent).toBe('2 quiet beats')
   })
 })

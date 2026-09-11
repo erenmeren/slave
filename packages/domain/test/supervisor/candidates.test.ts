@@ -764,7 +764,15 @@ describe('actionSchema reads a stored action back', () => {
 })
 
 describe('the run_looping offer (M51 R3)', () => {
-  const looping = supervisorRun({ breakerLevel: 'steered', trip: 'repeated_call', detail: 'Bash:aaaa', count: 8 })
+  // `breakerTrips: 1` against the default `breakerSteers: 0` is the undelivered rung `observe`
+  // raises on (fix round 1, Important 3): one rung climbed, no sentence sent yet.
+  const looping = supervisorRun({
+    breakerLevel: 'steered',
+    breakerTrips: 1,
+    trip: 'repeated_call',
+    detail: 'Bash:aaaa',
+    count: 8,
+  })
   const w = world({ runs: [looping] })
   const situation = observe(w).find((s) => s.kind === 'run_looping')
 

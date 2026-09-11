@@ -686,6 +686,20 @@ describe('run_looping (M51 R3)', () => {
     expect(observe(world({ runs })).some((s) => s.kind === 'run_looping')).toBe(false)
   })
 
+  // Fix round 1, Important 3: the summary says "has not been told so yet", and until this clause
+  // nothing made that true. A steered run that resumes to `working` and does not de-escalate within
+  // `BREAKER_COOLDOWN_MS` (120 s, twice the beat) would be raised again on the same stale trip, and
+  // the second steer's sentence would claim something false.
+  it('never raises a run whose sentence has already been delivered for the trip it is on', () => {
+    const delivered = { ...looping, breakerTrips: 1, breakerSteers: 1 }
+    expect(observe(world({ runs: [delivered] })).some((s) => s.kind === 'run_looping')).toBe(false)
+  })
+
+  it('raises again on a NEW rung -- a second trip whose sentence nobody has delivered', () => {
+    const climbedAgain = { ...looping, breakerTrips: 2, breakerSteers: 1 }
+    expect(observe(world({ runs: [climbedAgain] })).some((s) => s.kind === 'run_looping')).toBe(true)
+  })
+
   it('never raises for a run that has already used its steers', () => {
     expect(observe(world({ runs: [{ ...looping, breakerSteers: 2 }] })).some((s) => s.kind === 'run_looping')).toBe(
       false,

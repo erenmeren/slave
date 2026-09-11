@@ -1,6 +1,6 @@
 /**
- * The activity timeline's filter vocabulary: the six user-facing "kinds" that group the 30
- * `DomainEventType`s, the `ActivityFilters` shape parsed from a URL's query params, and the
+ * The activity timeline's filter vocabulary: the six user-facing "kinds" that group every
+ * `DomainEventType`, the `ActivityFilters` shape parsed from a URL's query params, and the
  * predicate that decides whether one event matches those filters. Pure — no `prisma`, no React —
  * so it is importable from both server routes (`?slaves=`, `?tasks=`, `?types=`, `?kinds=` parsing)
  * and client hooks, exactly like `feedSummary` (ruling R3 precedent).

@@ -292,7 +292,7 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
   }
 
   // run_looping (M51 R3): a run the sweep has already STEERED, whose sentence somebody has to
-  // actually deliver. Four clauses, and each one is a way of being wrong about it:
+  // actually deliver. Five clauses, and each one is a way of being wrong about it:
   //   - level is exactly `steered`. `none` is healthy; `constrained` is a rung the system owns and
   //     the Supervisor is not consulted about.
   //   - the run is still `working`. A paused, stopping or terminal run cannot be steered, and the
@@ -301,12 +301,21 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
   //   - the trip is known. `trip`/`detail`/`count` come off the newest `run.breaker` row; a run
   //     whose event the log has lost has no sentence to send, and inventing one would be the
   //     Supervisor guessing.
+  //   - the sentence is UNDELIVERED (fix round 1, Important 3). `breakerTrips` counts every rung
+  //     this run has climbed and `breakerSteers` counts the sentences actually sent, so
+  //     `steers < trips` is exactly "a rung nobody has spoken to yet" -- the fact the summary two
+  //     lines below asserts in words. Without it a steered run that resumes to `working` and does
+  //     not de-escalate inside `BREAKER_COOLDOWN_MS` (120 s, twice the beat) is raised again on the
+  //     SAME stale trip, and the second steer says "has not been told so yet" about a run that was.
+  //     A column comparison rather than a cleared trip: the trip fields are a projection of the
+  //     newest `run.breaker` row, which is history and must not be erased to record a delivery.
   //   - the run has steers left. `STEERS_PER_RUN_MAX` is enforced HERE as well as in the detector,
   //     because a de-escalated run comes back round and the situation is what a person reads.
   for (const run of world.runs) {
     if (run.breakerLevel !== 'steered') continue
     if (run.status !== 'working') continue
     if (run.trip === null || run.detail === null || run.count === null) continue
+    if (run.breakerSteers >= run.breakerTrips) continue
     if (run.breakerSteers >= STEERS_PER_RUN_MAX) continue
     add({
       kind: 'run_looping',

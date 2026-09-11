@@ -158,6 +158,17 @@ describe('actionText', () => {
     )
   })
 
+  // M51 R3, fix round 1 (Minor 9). The SENTENCE is on the action and this function reads it back
+  // verbatim -- it runs in the browser and has no breaker constants to re-derive it from -- so a
+  // decision read months later says what was actually sent, in the quotes that mark it as a quote.
+  it('quotes the steer sentence the action carries, rather than re-deriving one', () => {
+    const text =
+      'You have made the same tool call 8 times with no new result. Stop, say in one paragraph what you are stuck on, and either change approach or report why you cannot.'
+    expect(actionText({ kind: 'steer_run', runId: 'run-1', slaveId: 's1', text })).toBe(
+      `tell that run to stop and rethink: \u201c${text}\u201d`,
+    )
+  })
+
   it('falls back to the id for a task the world no longer holds', () => {
     // Findable, rather than a name this function would have to invent.
     expect(actionText({ kind: 'cancel_task', taskId: 't-9', reason: 'no longer needed' }, {})).toBe(

@@ -198,6 +198,15 @@ model Team {
 /// M50 R1: why a worker exists -- the closed set `SLAVE_LIFECYCLES` in
 /// `packages/domain/src/lifecycle/types.ts` mirrors, pinned member-for-member by
 /// `packages/db/test/integration/enum-parity.test.ts`.
+enum SlaveLifecycle {
+  /// Materialised from a company roster row: this worker exists in the organisation.
+  permanent
+  /// Hired for this project.
+  project
+  /// Brought in for ONE assignment (`engagementTaskId`), and released when it is over.
+  ephemeral
+}
+
 /// M51 R2: how loudly the behavioural circuit breaker is currently speaking to one run. Mirrors
 /// `BREAKER_LEVELS` in `packages/domain/src/breaker/detect.ts`, member for member
 /// (`enum-parity.test.ts`). Three members and never a fourth: `stopped` is a `RunStatus`, and the
@@ -206,15 +215,6 @@ enum BreakerLevel {
   none
   steered
   constrained
-}
-
-enum SlaveLifecycle {
-  /// Materialised from a company roster row: this worker exists in the organisation.
-  permanent
-  /// Hired for this project.
-  project
-  /// Brought in for ONE assignment (`engagementTaskId`), and released when it is over.
-  ephemeral
 }
 
 model Slave {

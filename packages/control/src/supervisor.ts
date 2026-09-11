@@ -493,7 +493,14 @@ async function carryOut(
     // recorded. `'none'` rather than a throw for exactly that reason -- an unreachable arm must not
     // be able to take a tick down -- and rather than `'applied'`, which would write a
     // `supervisor.applied` event about a worker nobody spoke to.
+    //
+    // LOUD while it is a stub (fix round 1, Important 4), the `hire_from_catalog` downgrade
+    // precedent forty lines above: `'none'` also means no `supervisor.applied` event, so if Task 4
+    // wires the LOADER before the verb, every steer decision is recorded and no worker is told and
+    // the log says nothing at all. Task 4 deletes this whole arm.
     case 'steer_run':
+      console.warn('[supervisor] steer_run reached before Task 4 wired steerRun -- no message was delivered')
+      return ok('none')
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

@@ -32,14 +32,19 @@ const TRANSITION_COLOR = {
 } as const
 
 /** A status-coloured transition label — the recurring "<coloured word> — <detail>" shape shared
- *  by the run-lifecycle and task-lifecycle card bodies. */
+ *  by the run-lifecycle and task-lifecycle card bodies.
+ *
+ *  `label` is a `ReactNode` rather than a `string` since M51 (fix round 1, Minor 6): every caller
+ *  but one still passes a plain string, and `BreakerCard` passes a span so the rung it prints can
+ *  carry its own `data-breaker-level` instead of hanging it off the element that prints the
+ *  identifier. A widening, so no existing call site moved. */
 function Transition({
   tone,
   label,
   children,
 }: {
   readonly tone: keyof typeof TRANSITION_COLOR
-  readonly label: string
+  readonly label: ReactNode
   readonly children?: ReactNode
 }): ReactElement {
   return (
@@ -420,10 +425,36 @@ function ToolResultCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+/** How many characters of an `argsHash` a person needs to tell two keys apart in a feed. Eight hex
+ *  is 4.3 billion values -- far past the handful of distinct calls one run makes -- and the whole
+ *  digest stays on `title` for anyone matching it against the log. */
+const HASH_PREVIEW = 8
+
+/**
+ * A breaker trip's `detail` as a person reads it (fix round 1, Important 2 + Minor 7).
+ *
+ * `detail` is an IDENTIFIER, and which identifier depends on the trip (`breaker/detect.ts`):
+ * `error_storm` carries a bare `ToolErrorClass` member -- which `docs/ia.md` rule 3 forbids as
+ * visible text, and which `TOOL_ERROR_LABEL` above already has the words for -- `repeated_call`
+ * carries `toolName:<sha256>`, seventy characters of which sixty-four are a digest, and
+ * `no_progress` carries `N quiet beats`, which is already a sentence. The RAW value always rides
+ * `title`, so nothing is hidden from anyone who needs to match it.
+ */
+function breakerDetailText(trip: BreakerTripKind, detail: string): string {
+  if (trip === 'error_storm') return TOOL_ERROR_LABEL[detail] ?? detail
+  if (trip !== 'repeated_call') return detail
+  const cut = detail.lastIndexOf(':')
+  // A key the detector did not shape this way (no colon, or a short tail) prints whole rather than
+  // being sliced into something that looks like a different key.
+  if (cut === -1 || detail.length - cut - 1 <= HASH_PREVIEW) return detail
+  return `${detail.slice(0, cut + 1)}${detail.slice(cut + 1, cut + 1 + HASH_PREVIEW)}`
+}
+
 /** M51 R2: the breaker climbed a rung. `warn`, because something is going wrong and the system is
  *  handling it -- the STOP rung is a `guardrail.tripped` and wears that card's own warn instead.
- *  The trip and the level are both KEYS: the labels print, the raw values ride `data-` attributes,
- *  which is also what `gate:m51-breaker` reads. */
+ *  The trip, the level and the detail are all KEYS: the labels print, the raw values ride
+ *  `title`/`data-` attributes, which is also what `gate:m51-breaker` reads. The rung rides the
+ *  LEVEL's own element (fix round 1, Minor 6), not the one printing the identifier. */
 function BreakerCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
     level: 'steered' | 'constrained'
@@ -433,15 +464,22 @@ function BreakerCard(props: ActivityCardProps): ReactElement {
   }
   return (
     <ActivityCard {...props}>
-      <Transition tone="warn" label={BREAKER_LEVEL_LABEL[payload.level].toLowerCase()}>
+      <Transition
+        tone="warn"
+        label={
+          <span data-testid="breaker-level" data-breaker-level={payload.level}>
+            {BREAKER_LEVEL_LABEL[payload.level]}
+          </span>
+        }
+      >
         <span data-testid="breaker-trip" title={payload.trip} data-breaker-trip={payload.trip}>
           {BREAKER_TRIP_LABEL[payload.trip]}
         </span>
         {' \u00b7 '}
         <span data-testid="breaker-count">{plural(payload.count, 'time')}</span>
         {' \u00b7 '}
-        <span data-testid="breaker-detail" data-breaker-level={payload.level}>
-          {payload.detail}
+        <span data-testid="breaker-detail" title={payload.detail}>
+          {breakerDetailText(payload.trip, payload.detail)}
         </span>
       </Transition>
     </ActivityCard>
