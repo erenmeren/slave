@@ -4,7 +4,6 @@ import {
   candidates,
   parsePlanDelta,
   runContextManifestSchema,
-  stageOrder,
   type PlanDelta,
   type RunId,
   type Runbook,
@@ -12,7 +11,14 @@ import {
   type Situation,
   type TaskStatus,
 } from '@slave-of-ai/domain'
-import { listCapabilities, loadSupervisorWorld, recordDecision, refusalText, runbookForWorkspace } from '@slave-of-ai/control'
+import {
+  listCapabilities,
+  loadSupervisorWorld,
+  readRunbookById,
+  recordDecision,
+  refusalText,
+  runbookForWorkspace,
+} from '@slave-of-ai/control'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
 // The two derivation helpers live beside `concludePlanning`, their first consumer, and are shared
@@ -25,6 +31,7 @@ import { adherenceOf, normaliseCapabilitiesStrict, roleOfFirst } from './plannin
 /** The `replan` entry of a run's recorded manifest -- the only thing that tells a re-plan run from
  *  a first-plan run, since both are `kind: 'planning'` (spec erratum E2/E4). */
 type ReplanSection = Extract<SectionSource, { kind: 'replan' }>
+type RunbookSection = Extract<SectionSource, { kind: 'runbook' }>
 
 /** What `dispatchPlanning` needs to start a re-plan: which version this run is answering, and
  *  which one it is answering it FROM. */
@@ -296,6 +303,31 @@ export async function replanSectionOf(runId: RunId): Promise<ReplanSection | nul
 }
 
 /**
+ * The `runbook` section of a run's recorded manifest, or `null` when it has none (M48 final review,
+ * Important 3). {@link replanSectionOf}'s idiom, one question further on.
+ *
+ * THE VOCABULARY A RUN WAS ACTUALLY SHOWN, which is the only vocabulary its answer can be judged
+ * against. The adopted runbook is a column a person can move at any moment, and a planning run
+ * takes minutes: read at CONCLUDE time, a runbook swapped mid-run made `parsePlanGraph` refuse the
+ * whole model-authored graph -- every task in it named a stage of the runbook the prompt had
+ * listed, and not one of them was a stage of the runbook now adopted. The manifest is the record of
+ * what was sent, so it is the record of what may come back.
+ *
+ * `null` means "this run was shown no runbook" (the `handoff_protocol` section stands in its place,
+ * or the run predates M48): the caller then imposes NO stage vocabulary at all -- plan erratum E1's
+ * empty list -- and whatever stage a task carries lands on the board for `measureAdherence` to
+ * report as unknown. A manifest that will not parse is the same answer, for `replanSectionOf`'s
+ * reason: a record nothing can read is no evidence about what the run was given.
+ */
+export async function runbookSectionOf(runId: RunId): Promise<RunbookSection | null> {
+  const row = await prisma.runContext.findUnique({ where: { runId }, select: { sections: true } })
+  if (row === null) return null
+  const manifest = runContextManifestSchema.safeParse(row.sections)
+  if (!manifest.success) return null
+  return (manifest.data.sections.find((section) => section.kind === 'runbook') as RunbookSection | undefined) ?? null
+}
+
+/**
  * Conclude a succeeded RE-plan run: the delta the manager returned becomes new tasks at once, and
  * proposals for the rest (M40 §5).
  *
@@ -552,16 +584,21 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
       orderBy: { createdAt: 'asc' },
       select: { id: true, title: true, status: true, goalVersion: true },
     })
-    // R2, `concludePlanning`'s own read and for its own reasons: which stages an addition may name,
-    // what it may retry, and what this delta's adherence is measured against. Once for the delta.
+    // R2, `concludePlanning`'s own reads and for its own reasons (M48 final review, Important 3):
+    // which stages an addition may name and what it may retry come from THIS RUN'S manifest -- the
+    // runbook the prompt actually listed -- while what the delta's adherence is measured against is
+    // the runbook the project follows now. A runbook adopted while a re-plan was in flight used to
+    // make `parsePlanDelta` refuse every addition the manager had written against the old one.
+    const shown = await runbookSectionOf(runId)
+    const stageKeys = shown?.stageKeys ?? []
+    const shownRunbook = shown === null ? null : await readRunbookById(shown.runbookId)
+    const stageByKey = new Map((shownRunbook?.stages ?? []).map((stage) => [stage.key, stage] as const))
     const runbook = await runbookForWorkspace(workspaceId)
-    const stages = runbook === null ? [] : stageOrder(runbook.stages)
-    const stageByKey = new Map(stages.map((stage) => [stage.key, stage] as const))
 
     const parsed = parsePlanDelta(
       text,
       board.map((task) => task.id),
-      stages.map((stage) => stage.key),
+      stageKeys,
     )
     if (!parsed.ok) return { ok: false, reason: `planning run produced no valid re-plan delta: ${parsed.error}` }
 

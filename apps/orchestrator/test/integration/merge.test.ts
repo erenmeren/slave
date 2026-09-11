@@ -519,7 +519,10 @@ describe('runMergePass + loadWorld: integratedAt unblocks dependents', () => {
 
     it('merges a staged task whose gate passes', async (): Promise<void> => {
       const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: ['true'] })
-      await adoptGateRunbook(workspace.id, ['true'])
+      // A DIFFERENT command from the workspace's own, deliberately: a gate byte-equal to a verify
+      // command is dropped and run once (M48 final review, Minor 4), so `['true']` here would prove
+      // the gate ran when it had in fact been deduped away.
+      await adoptGateRunbook(workspace.id, ['echo staged'])
       const { taskId, taskKey } = await seedMergingTask(workspace, { stage: 'implement' })
 
       await runMergePass(brandWorkspaceId(workspace.id))
@@ -530,6 +533,18 @@ describe('runMergePass + loadWorld: integratedAt unblocks dependents', () => {
       expect(mergeCommitSubjects(workspace.repoPath).some((subject) => subject.includes(taskKey))).toBe(true)
       // Both commands ran: the workspace's own and the stage's gate.
       expect(await prisma.artifact.count({ where: { taskId } })).toBe(2)
+    })
+
+    // M48 final review, Minor 4, on the post-rebase pass: the same command in both lists is one run.
+    it('runs a gate the workspace already runs exactly once on the rebased tree', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: ['true'] })
+      await adoptGateRunbook(workspace.id, ['true'])
+      const { taskId } = await seedMergingTask(workspace, { stage: 'implement' })
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('done')
+      expect(await prisma.artifact.count({ where: { taskId } })).toBe(1)
     })
 
     it('leaves an UNSTAGED task exactly as it was: the workspace commands and nothing else', async (): Promise<void> => {

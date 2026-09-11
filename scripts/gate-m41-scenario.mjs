@@ -205,6 +205,17 @@ const WORKSPACE_NAME = 'M41 Scenario Project'
 const GOAL_V1 = 'Ship the scenario service: a core module, an API on top of it, and the polish around it.'
 const GOAL_V2 = 'Ship the scenario service and document the new endpoint for the people who will call it.'
 
+/**
+ * The runbook GOAL_V1's own words select (M48, final wave ruling 1).
+ *
+ * Derived, not decreed: `recommendRunbooks` matches seed keywords as WHOLE WORDS against the goal,
+ * and the only seed keyword anywhere in GOAL_V1 is `feature-delivery`'s "ship" -- `bug-fix` and
+ * `security-review` match nothing in it. So the first (and only) offer of the one
+ * `runbook_recommended` situation this story raises is this key, and act 7 prints the key the
+ * decision actually carries before asserting it.
+ */
+const RECOMMENDED_KEY = 'feature-delivery'
+
 /** What `fixtures/plan-graph-scenario.ndjson` returns, and therefore what the first plan must
  *  produce. `CORE_TITLE` is also where the `--ask-on-task` discriminator comes from (erratum E2). */
 const PLAN_TITLES = ['Write the feature core', 'Expose the API', 'Document and polish']
@@ -1243,18 +1254,36 @@ try {
   const decisionsOutput = runCli(['supervisor-decisions', '--workspace', workspaceId])
   console.log(`act 7 supervisor-decisions printed:\n${decisionsOutput}`)
   const decisions = JSON.parse(decisionsOutput)
-  if (decisions.length !== 2) await fail(`act 7's decision history has ${String(decisions.length)} rows, expected exactly two`)
+  // THREE rows since M48 (final wave ruling 1). The third is the one the product gained: the
+  // moment act 1 set a goal on an empty board, the Supervisor saw a way of working worth adopting
+  // and WROTE THE QUESTION DOWN -- proposed, never applied, because a process is a person's
+  // decision (R5). Nobody in this story answers it, so it is still waiting here, and that is the
+  // honest end state rather than a gap in the table.
+  if (decisions.length !== 3) await fail(`act 7's decision history has ${String(decisions.length)} rows, expected exactly three`)
   const byKind = Object.fromEntries(decisions.map((row) => [row.situationKind, row]))
   if (byKind.unanswerable_question?.status !== 'applied') await fail(`act 7's answer decision is ${String(byKind.unanswerable_question?.status)}, expected applied`)
   if (byKind.stale_task?.status !== 'approved') await fail(`act 7's cancellation decision is ${String(byKind.stale_task?.status)}, expected approved`)
+  const runbookDecision = byKind.runbook_recommended
+  console.log(`act 7 the runbook proposal: ${JSON.stringify(runbookDecision)}`)
+  if (runbookDecision === undefined) await fail("act 7's decision history holds no runbook_recommended row")
+  console.log(`act 7 the runbook the goal's words selected: ${JSON.stringify(runbookDecision.action?.key)}`)
+  if (runbookDecision.action?.kind !== 'adopt_runbook' || runbookDecision.action.key !== RECOMMENDED_KEY) {
+    await fail(`act 7's runbook decision chose ${JSON.stringify(runbookDecision.action)}, expected adopt_runbook on ${RECOMMENDED_KEY}`)
+  }
+  if (runbookDecision.tier !== 'proposed' || runbookDecision.status !== 'pending') {
+    await fail(`act 7's runbook decision is ${runbookDecision.tier}/${runbookDecision.status}, expected proposed/pending`)
+  }
   const pendingOutput = JSON.parse(runCli(['supervisor-decisions', '--workspace', workspaceId, '--pending']))
   console.log(`act 7 pending decisions: ${JSON.stringify(pendingOutput)}`)
-  if (pendingOutput.length !== 0) await fail(`act 7 leaves ${String(pendingOutput.length)} decision(s) waiting on a human`)
+  if (pendingOutput.length !== 1 || pendingOutput[0].id !== runbookDecision.id) {
+    await fail(`act 7's pending list is ${JSON.stringify(pendingOutput)}, expected only the runbook proposal`)
+  }
   // Erratum E6: `applied` counts the ONE the Supervisor carried out itself; the approved one is
-  // `approved`, and neither is an escalation or a failure.
+  // `approved`; the runbook proposal is `pending`. None of the three is an escalation or a failure
+  // -- a recommendation is a question with a ready answer, so it is proposed rather than escalated.
   console.log(`act 7 report.supervisor: ${JSON.stringify(finalReport.supervisor)}`)
-  if (finalReport.supervisor.applied !== 1 || finalReport.supervisor.pending !== 0 || finalReport.supervisor.escalated !== 0 || finalReport.supervisor.failed !== 0) {
-    await fail(`act 7's report.supervisor is ${JSON.stringify(finalReport.supervisor)}, expected one applied and nothing pending, escalated or failed`)
+  if (finalReport.supervisor.applied !== 1 || finalReport.supervisor.pending !== 1 || finalReport.supervisor.escalated !== 0 || finalReport.supervisor.failed !== 0) {
+    await fail(`act 7's report.supervisor is ${JSON.stringify(finalReport.supervisor)}, expected one applied, one pending and nothing escalated or failed`)
   }
   // The other half of `buildSupervisorView` (ruling R6): the CLI and the panel read one list.
   const viaControl = await listDecisions(workspaceId)
@@ -1289,6 +1318,7 @@ try {
     ...partialTable,
     { kind: 'planning run (the re-plan)', count: 1, unitUsd: fixtureCostUsd('replan-delta') },
     { kind: 'supervisor decision: the cancellation proposal (the re-plan run already paid; no model here)', count: 1, unitUsd: 0 },
+    { kind: 'supervisor decision: the runbook proposal (act 1\'s hand tick decides by the rules alone)', count: 1, unitUsd: 0 },
   ]
   const fullTotal = printTable("act 7 the whole story's spend", fullTable)
   const runsByKind = await prisma.slaveRun.groupBy({ by: ['kind'], where: { slave: { team: { workspaceId } } }, _count: { _all: true } })
@@ -1335,10 +1365,12 @@ try {
     run_resumed: 1,
     run_failed: 0,
     // Erratum E5: the Supervisor's events are `supervisor.decided`/`proposed`/`applied`/`resolved`/
-    // `failed`. Two decisions were recorded; one of them was a proposal; one was applied by the
-    // machine and one by a person's approval; one was resolved by that person.
-    supervisor_decided: 2,
-    supervisor_proposed: 1,
+    // `failed`. Three decisions were recorded; two of them were proposals (the cancellation and
+    // M48's runbook recommendation); one was applied by the machine and one by a person's
+    // approval; one was resolved by that person -- the runbook proposal is still waiting, so
+    // nothing resolved it.
+    supervisor_decided: 3,
+    supervisor_proposed: 2,
     supervisor_applied: 2,
     supervisor_resolved: 1,
     supervisor_failed: 0,

@@ -782,6 +782,39 @@ describe('stage gates (M48 R6)', () => {
     expect(event.payload).not.toHaveProperty('stage')
   })
 
+  // M48 final review, Minor 4: the same command in both lists is ONE run, and it belongs to the
+  // workspace. Two runs of one command against one tree cost a whole extra test suite per task and
+  // can only ever agree; and a failure attributed to the stage would send an operator looking
+  // through the runbook for a command that is in their own verify list.
+  it('drops a stage gate the workspace already runs: once, attributed to the workspace', async (): Promise<void> => {
+    const fixture = await seedRunningTask({ stage: 'implement', verifyCommands: ['exit 7'] })
+    await adoptGateRunbook(fixture.workspaceId, ['exit 7'])
+
+    await verifyConcludedRun(brandRunId(fixture.runId))
+
+    // ONE artifact: the command ran once, not twice.
+    expect(await prisma.artifact.count({ where: { taskId: fixture.taskId } })).toBe(1)
+    const event = await prisma.executionEvent.findFirstOrThrow({
+      where: { taskId: fixture.taskId, type: 'task_verify_failed' },
+    })
+    expect(event.payload).toMatchObject({ command: 'exit 7', exitCode: 7 })
+    expect(event.payload).not.toHaveProperty('stage')
+  })
+
+  it('keeps the gates the workspace does NOT run when one of them is a duplicate', async (): Promise<void> => {
+    const fixture = await seedRunningTask({ stage: 'implement', verifyCommands: ['true'] })
+    await adoptGateRunbook(fixture.workspaceId, ['true', 'false'])
+
+    await verifyConcludedRun(brandRunId(fixture.runId))
+
+    // The workspace's `true` and the stage's own `false`: two commands, not three.
+    expect(await prisma.artifact.count({ where: { taskId: fixture.taskId } })).toBe(2)
+    const event = await prisma.executionEvent.findFirstOrThrow({
+      where: { taskId: fixture.taskId, type: 'task_verify_failed' },
+    })
+    expect(event.payload).toMatchObject({ command: 'false', stage: 'implement' })
+  })
+
   it('runs the workspace commands alone for a stage the adopted runbook does not have', async (): Promise<void> => {
     const fixture = await seedRunningTask({ stage: 'a-stage-nobody-has' })
     await adoptGateRunbook(fixture.workspaceId, ['false'])

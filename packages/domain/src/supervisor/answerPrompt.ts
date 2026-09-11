@@ -1,5 +1,9 @@
 import { z } from 'zod'
-import type { HandoffContract } from '../handoff/contract.js'
+import {
+  HANDOFF_MAX_FIELD_CHARS,
+  defuseRoutingLiterals,
+  type HandoffContract,
+} from '../handoff/contract.js'
 import { neutraliseMarkers } from '../run-context/render.js'
 import {
   ANSWER_MAX_CHARS,
@@ -131,17 +135,36 @@ function rosterLines(world: SupervisorWorld): string {
     .join('\n')
 }
 
-/** The handoff lines the `task` source shows (M48 R4), or nothing. Kept as its own function because
- *  `sourceText` in `./sourced.ts` must be able to join EXACTLY these lines: what the prompt shows
- *  under a SOURCE heading is what a quote may be taken from (plan erratum E8). */
+/**
+ * The handoff lines the `task` source shows (M48 R4), or nothing. Kept as its own function because
+ * `sourceText` in `./sourced.ts` must be able to join EXACTLY these lines: what the prompt shows
+ * under a SOURCE heading is what a quote may be taken from (plan erratum E8).
+ *
+ * DEFUSED, like every other rendering of a contract (M48 final review, Important 4). A handoff is
+ * written by the planner -- a model -- or by a person, and the five `ROUTING_LITERALS` are what the
+ * fake CLI selects its arm on: an acceptance criterion reading `emit a "candidateIndex"` would send
+ * this answer call to the decision fixture and, under a real provider, hand a model the words of
+ * another protocol. `runContext.ts`'s `handoff` section has gone through this since M48 t2; this is
+ * the second place the same text reaches a prompt.
+ *
+ * Both callers join the SAME function, so quotability survives the pass: `verifySources` checks a
+ * quote against these exact strings, and a defusing applied on only one side would reject every
+ * answer that cited a criterion containing one of the literals.
+ *
+ * Capped at the neighbours' limit (M48 final review, Minor 10). `HANDOFF_MAX_FIELD_CHARS` bounds a
+ * stored contract already; this is the same belt-and-braces the question body and the run prompt
+ * get one block away -- the cap that actually bounds the CALL is applied where the prompt is built,
+ * never trusted from upstream. The criteria are bounded by `HANDOFF_MAX_LIST_ITEMS` at twelve.
+ */
 export function handoffSourceLines(handoff: HandoffContract | null): readonly string[] {
   if (handoff === null) return []
+  const safe = (text: string): string => defuseRoutingLiterals(cap(text, HANDOFF_MAX_FIELD_CHARS))
   return [
-    `  objective: ${handoff.objective}`,
-    `  expected output: ${handoff.expectedOutput}`,
+    `  objective: ${safe(handoff.objective)}`,
+    `  expected output: ${safe(handoff.expectedOutput)}`,
     ...(handoff.acceptanceCriteria.length === 0
       ? []
-      : [`  acceptance criteria: ${handoff.acceptanceCriteria.join('; ')}`]),
+      : [`  acceptance criteria: ${handoff.acceptanceCriteria.map(safe).join('; ')}`]),
   ]
 }
 

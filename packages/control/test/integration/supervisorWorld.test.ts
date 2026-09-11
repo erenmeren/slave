@@ -1113,6 +1113,37 @@ describe('loadSupervisorWorld -- the runbook fields (M48 R5, E6, E8)', () => {
     expect(handMade?.stageEscalation).toBeNull()
   })
 
+  // M48 final review, Important 1: the taxonomy is loaded whenever RUNBOOKS matter, not only when
+  // the board asks for a capability. Both readings of a runbook's capabilities -- the Overview's
+  // stage chips and the recommendation's own rationale -- print LABELS, and an empty taxonomy makes
+  // them print raw keys. The two states below are exactly the ones a runbook lives in: an adopted
+  // runbook with nothing else going on, and a project about to be recommended one.
+  it('carries the taxonomy for an adopted runbook on an empty board, where no situation asks for it', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship the checkout endpoint' })
+    await adoptRunbook(fixture.workspaceId, 'feature-delivery')
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+
+    // No task names a capability -- there are no tasks at all -- so this is the M47 gate saying no
+    // and the M48 one saying yes.
+    expect(world.tasks).toEqual([])
+    expect(world.taxonomy.find((row) => row.key === 'security.application')?.label).toBe('Application security')
+    // The staffing reads stay behind their own gate: nothing here asks who could be hired.
+    expect(world.company).toEqual([])
+    expect(world.catalog).toEqual([])
+  })
+
+  it('carries the taxonomy while a recommendation could still be made, and drops it once neither holds', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship the checkout endpoint' })
+    expect((await loadSupervisorWorld(fixture.workspaceId, NOW)).world.taxonomy.length).toBeGreaterThan(0)
+
+    // A board and no runbook: nothing on this project reads a capability by name any more.
+    await makeTask(fixture, { title: 'Already planned', status: 'ready' })
+    const planned = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(planned.world.runbooks).toEqual([])
+    expect(planned.world.taxonomy).toEqual([])
+  })
+
   it('offers the catalogue only when a recommendation could actually be made', async (): Promise<void> => {
     const fixture = await seed({ goal: 'Ship the checkout endpoint' })
 

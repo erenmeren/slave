@@ -127,10 +127,14 @@ function validateStructure(graph: PlanGraph, stageKeys: readonly string[]): Resu
         return err(`task "${task.key}" has a handoff that is not a contract: ${contract.error.message}`)
       }
     }
-    // Plan erratum E1: the workspace's adopted runbook decides which stages exist, and this module
-    // is pure. An EMPTY list is "no runbook is adopted", under which any stage stands -- a plan
-    // written against a runbook that was cleared while the run was in flight is not a plan to
-    // throw away.
+    // Plan erratum E1: the stage vocabulary is decided by the caller, and this module is pure.
+    //
+    // The caller reads it off THE RUN'S OWN recorded manifest (M48 final review, Important 3) --
+    // the runbook the planner was actually shown -- never off the workspace at conclude time: a
+    // runbook adopted while the run was in flight would otherwise make every stage in a perfectly
+    // good graph unknown, and this check would throw the whole plan away. An EMPTY list is "this
+    // run was shown no runbook", under which any stage stands; such a stage lands on the board as
+    // written and `measureAdherence` reports it against whatever the project follows now.
     if (task.stage != null && stageKeys.length > 0 && !stageKeys.includes(task.stage)) {
       return err(`task "${task.key}" names stage "${task.stage}", which this runbook does not have`)
     }

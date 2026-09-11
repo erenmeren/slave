@@ -224,12 +224,27 @@ export async function runVerify(input: RunVerifyInput): Promise<VerifyResult> {
 export async function stageGatesFor(
   workspaceId: string,
   stage: string | null,
+  workspaceCommands: readonly string[],
 ): Promise<{ readonly key: string; readonly gates: readonly string[] } | null> {
   if (stage === null) return null
   const runbook = await runbookForWorkspace(workspaceId)
   if (runbook === null) return null
   const found = runbook.stages.find((entry) => entry.key === stage)
-  return found === undefined ? null : { key: found.key, gates: found.gates }
+  if (found === undefined) return null
+  // A gate the workspace ALREADY runs is dropped here (M48 final review, Minor 4). Both callers
+  // concatenate `[...workspaceCommands, ...gates]`, so a runbook whose verify stage gates `npm
+  // test` on a project whose verify list is `npm test` ran it twice -- the same command, the same
+  // tree, the same answer, at the cost of a second full test run on every task of that stage. Once
+  // is enough, and the surviving copy is the WORKSPACE's: `runVerify` attributes a failure by
+  // asking whether the command is in `stage.gates`, so leaving it in both lists would report the
+  // project's own verify command failing as a stage gate and send an operator looking for it in
+  // the runbook. Byte-equality, deliberately: "the same command" is not a judgement this can make
+  // about `npm test` versus `npm test --silent`.
+  //
+  // The workspace's list is a PARAMETER rather than a second read of the row: both call sites hold
+  // the workspace already, and a required argument is what stops a third one from silently
+  // reintroducing the duplicate.
+  return { key: found.key, gates: found.gates.filter((gate) => !workspaceCommands.includes(gate)) }
 }
 
 /**
@@ -361,7 +376,7 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   // M48 R6: the stage's gates, after the workspace's own. A stage gate is a project's answer to
   // "what does this phase have to prove", and it runs LAST for `runVerify`'s own reason -- later
   // commands routinely depend on earlier ones, and a stage's gate is the most specific thing here.
-  const stage = await stageGatesFor(task.workspaceId, task.stage)
+  const stage = await stageGatesFor(task.workspaceId, task.stage, task.workspace.verifyCommands)
 
   const result = await runVerify({
     taskId: brandTaskId(task.id),

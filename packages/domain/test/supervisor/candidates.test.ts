@@ -604,4 +604,21 @@ describe('runbook_recommended offers (M48 R5)', () => {
     expect(offers[0]?.action).toMatchObject({ kind: 'adopt_runbook', key: 'bug-fix', name: 'Bug fix' })
     expect(offers[0]?.why).toContain('The goal says "ship".')
   })
+
+  // M48 final review, Important 1: the offer's `why` is the sentence stored on the decision row and
+  // shown on the Overview, so the capabilities in it are LABELS -- which is only true if the world
+  // carries the taxonomy. The loader now reads it whenever runbooks matter.
+  it('names a missing capability in the taxonomy\'s words when the world carries one', () => {
+    const runbooks = [
+      runbook({ key: 'feature-delivery', name: 'Feature delivery', keywords: ['ship'], requiredCapabilities: ['security.application'] }),
+    ]
+    const w = world({ goal: 'Ship the endpoint', tasks: [], runbooks, taxonomy: TAXONOMY })
+    const situation = observe(w).find((s) => s.kind === 'runbook_recommended')
+    expect(situation).toBeDefined()
+    if (situation === undefined) return
+    const offers = candidates(situation, w)
+    expect(offers[0]?.why).toContain('Application security')
+    expect(offers[0]?.why).not.toContain('security.application')
+    expect((offers[0]?.action as { rationale: string }).rationale).toContain('Application security')
+  })
 })

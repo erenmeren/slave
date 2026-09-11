@@ -570,8 +570,11 @@ function HandoffList({ label, items }: { readonly label: string; readonly items:
     <div data-testid="handoff-field" data-field={label} className="flex flex-col gap-0.5">
       <SectionLabel>{label}</SectionLabel>
       <ul className="flex list-disc flex-col gap-0.5 pl-4">
-        {items.map((item) => (
-          <li key={item} className="text-xs text-text-2">
+        {/* Keyed on the POSITION as well as the text (M48 final review, Minor 5): a handoff list is
+          * a planner's prose, and nothing stops two acceptance criteria reading the same. React
+          * drops the duplicate and warns; the list is static, so the index is stable. */}
+        {items.map((item, index) => (
+          <li key={`${String(index)}-${item}`} className="text-xs text-text-2">
             {item}
           </li>
         ))}

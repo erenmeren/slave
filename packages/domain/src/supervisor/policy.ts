@@ -206,12 +206,30 @@ export function answerTier(input: { sourced: boolean; critical: boolean; halted:
  * routine actions competing is precisely the case rules cannot settle -- ranking them here would
  * be the Supervisor guessing, which is what the escalation exists to avoid. `escalate_to_human` is
  * always in the list ({@link candidates} guarantees it), so this always has an answer.
+ *
+ * The situation kind is an argument for {@link tierOf}'s reason, one situation further on: ONE kind
+ * has an answer the rules already hold, and a chooser that only saw the catalogue could not tell it
+ * from the ordinary case (see the branch below).
  */
-export function chooseByRules(cands: readonly Candidate[]): number {
+export function chooseByRules(cands: readonly Candidate[], situationKind: SituationKind): number {
   if (cands.length === 0) {
     // A caller bug, not a state the world can be in: `candidates` never returns an empty list.
     // Loud, like `renderRunContext`'s own out-of-order throw, rather than a fabricated index 0.
     throw new RangeError('chooseByRules: the candidate list is empty')
+  }
+  // The ONE narrow exception (M48 final wave, ruling 1). Every `adopt_runbook` offer is `proposed`
+  // -- a way of working is a person's decision (R5) -- so the routine scan below finds nothing here
+  // and the escalation would win. That is the wrong answer three ways over: a recommendation is a
+  // question the rules have ALREADY answered (`recommendRunbooks` ranked the offers and the first
+  // is its best fit), an escalation about it is noise in the one place an operator reads for real
+  // trouble, and the Overview's Adopt button approves a PROPOSAL -- with an escalation recorded
+  // instead there is nothing for it to approve. The tier is untouched: this chooses WHICH offer is
+  // written down, never whether a person still has to say yes.
+  if (situationKind === 'runbook_recommended') {
+    const offered = cands.findIndex((candidate) => candidate.action.kind === 'adopt_runbook')
+    // Falls through when the world offered none -- a goal whose runbooks vanished between `observe`
+    // and `candidates` escalates like anything else the rules cannot settle.
+    if (offered !== -1) return offered
   }
   const routine = cands.flatMap((candidate, index) =>
     candidate.tier === 'applied' &&

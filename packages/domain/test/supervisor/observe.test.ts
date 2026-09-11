@@ -498,13 +498,27 @@ describe('observe -- capability_unstaffed (M47 R4)', () => {
   })
 })
 
-
 describe('runbook_recommended (M48 R5)', () => {
   it('fires on a goal, no runbook and an empty board, with the workspace as its subject', () => {
     const w = world({ goal: 'Ship the endpoint', tasks: [], runbooks: [runbook({ key: 'feature-delivery', keywords: ['ship'] })] })
     const found = observe(w).find((s) => s.kind === 'runbook_recommended')
     expect(found?.subjectId).toBe(w.workspaceId)
     expect(found?.facts).toMatchObject({ runbook: 'feature-delivery' })
+  })
+
+  // M48 final review, Important 1: the rationale a person reads names capabilities in the TAXONOMY'S
+  // WORDS (`docs/ia.md` rule 3), and the words are only there if the loader read the table. This is
+  // the pure half of that fix -- the world it is given has one.
+  it('writes the rationale in the taxonomy\'s words, never in capability keys', () => {
+    const w = world({
+      goal: 'Ship the endpoint',
+      tasks: [],
+      taxonomy: TAXONOMY,
+      runbooks: [runbook({ key: 'feature-delivery', keywords: ['ship'], requiredCapabilities: ['security.application'] })],
+    })
+    const found = observe(w).find((s) => s.kind === 'runbook_recommended')
+    expect(found?.summary).toContain('Application security')
+    expect(found?.summary).not.toContain('security.application')
   })
 
   it('is silent when a runbook is already adopted, when the board is not empty, and when no keyword hits', () => {

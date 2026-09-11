@@ -200,6 +200,12 @@ async function deleteGateTemplates(label) {
   console.log(`${label}: removing ${String(rows.length)} gate template(s): ${JSON.stringify(rows.map((r) => r.name))}`)
   const ids = rows.map((r) => r.id)
   await prisma.companySlave.deleteMany({ where: { templateId: { in: ids } } }).catch(() => {})
+  // M48: an import also writes a `RunbookTemplate` per persona workflow, and `sourceTemplateId` is
+  // SetNull -- so a runbook whose template goes first can never be found again, and every run of
+  // this gate left one more behind. Removed BEFORE the templates, in both the preflight and the
+  // teardown (this function is what both call). A project that had adopted one keeps working: its
+  // `Workspace.runbookId` is SetNull too.
+  await prisma.runbookTemplate.deleteMany({ where: { sourceTemplateId: { in: ids } } }).catch(() => {})
   await prisma.slaveTemplate.deleteMany({ where: { id: { in: ids } } }).catch(() => {})
 }
 

@@ -35,12 +35,27 @@ describe('measureAdherence', () => {
   })
 
   it('is the LAST stage once every task is terminal -- the work is finished, not unstarted', () => {
+    const out = measureAdherence(STAGES, [
+      { id: 't1', stage: 'design', status: 'done' },
+      { id: 't2', stage: 'implement', status: 'cancelled' },
+    ])
+    expect(out.currentStage).toBe('verify')
+    // The branch, said out loud (M48 final review, Minor 2): `currentStage` here is "the last one",
+    // not "the one the team is on", and only this flag tells the two apart.
+    expect(out.finished).toBe(true)
+  })
+
+  it('is not finished while one staged task is still live, nor on a board with nothing staged', () => {
     expect(
       measureAdherence(STAGES, [
         { id: 't1', stage: 'design', status: 'done' },
-        { id: 't2', stage: 'implement', status: 'cancelled' },
-      ]).currentStage,
-    ).toBe('verify')
+        { id: 't2', stage: 'implement', status: 'running' },
+      ]).finished,
+    ).toBe(false)
+    // Vacuously terminal over zero staged tasks is UNSTARTED, not finished -- the same distinction
+    // `currentStage` draws by pointing at the first stage rather than the last.
+    expect(measureAdherence(STAGES, []).finished).toBe(false)
+    expect(measureAdherence(STAGES, [{ id: 't1', stage: null, status: 'done' }]).finished).toBe(false)
   })
 
   // Plan erratum E7: "every task is terminal" is vacuously true over zero tasks.

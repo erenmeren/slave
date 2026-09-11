@@ -1152,7 +1152,11 @@ try {
   )
   console.log(`stage 6 -- current stage ${JSON.stringify(currentStage)}; states ${JSON.stringify([...stageStates])}`)
   if (stageStates.size !== 5) await fail(`stage 6: runbook-status printed ${String(stageStates.size)} stages, expected 5`)
-  for (const [key, expected] of [['design', 'done'], [GATED_STAGE, 'done'], ['verify', 'done'], ['review', 'missing'], ['release', 'active']]) {
+  // M48 final review, Minor 2: with every staged task terminal there is no ACTIVE stage at all --
+  // nothing is running and nothing will be. `release` is the current stage by `measureAdherence`'s
+  // E7 rule ("the work is finished, so point at the last one"), and it reads `missing` for the same
+  // reason `review` does: no task ever carried it.
+  for (const [key, expected] of [['design', 'done'], [GATED_STAGE, 'done'], ['verify', 'done'], ['review', 'missing'], ['release', 'missing']]) {
     if (stageStates.get(key) !== expected) {
       await fail(`stage 6: stage ${key} reads ${JSON.stringify(stageStates.get(key))}, expected ${expected}`)
     }

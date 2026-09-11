@@ -195,7 +195,7 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
   // only ever ran before the rebase would be a check this pass could silently invalidate. It does
   // mean a gate runs twice for a clean merge, once at verify and once here; that is the cost of
   // judging the tree that actually lands.
-  const stage = await stageGatesFor(workspaceId, task.stage)
+  const stage = await stageGatesFor(workspaceId, task.stage, workspace.verifyCommands)
   const result = await runVerify({
     taskId: brandTaskId(task.id),
     worktreePath,

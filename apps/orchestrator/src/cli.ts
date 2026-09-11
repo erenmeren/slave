@@ -1729,7 +1729,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         const situations = filterFresh(observe(world), world)
         const preview = situations.map((situation) => {
           const situationCandidates = candidates(situation, world)
-          return { situation, candidates: situationCandidates, ruleChoice: chooseByRules(situationCandidates) }
+          return { situation, candidates: situationCandidates, ruleChoice: chooseByRules(situationCandidates, situation.kind) }
         })
         process.stdout.write(`${JSON.stringify(preview, null, 2)}\n`)
         return 0

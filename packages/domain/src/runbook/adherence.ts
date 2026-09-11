@@ -21,6 +21,17 @@ export interface Adherence {
   readonly unknownStages: readonly string[]
   /** Where the work IS (R6): the first stage in order with any non-terminal task. */
   readonly currentStage: string | null
+  /**
+   * Every staged task is terminal AND there is at least one (erratum E7's second branch): the work
+   * this runbook can see is over.
+   *
+   * Published rather than left to be re-derived, for the reason `runbookStatus` states about
+   * terminality: {@link currentStage} means two different things on this branch and the live one --
+   * "the stage the team is on" and "the last stage, because there is no team on any stage" -- and a
+   * reader that re-asked the task statuses to tell them apart would be the second opinion that
+   * drifts. False over a board with nothing staged, which is UNSTARTED rather than finished.
+   */
+  readonly finished: boolean
 }
 
 /**
@@ -74,5 +85,6 @@ export function measureAdherence(
     stagesMissing,
     unknownStages: [...unknown].toSorted((a, b) => a.localeCompare(b)),
     currentStage,
+    finished: staged > 0 && active === undefined,
   }
 }

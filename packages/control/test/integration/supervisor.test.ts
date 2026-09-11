@@ -1719,6 +1719,61 @@ describe('applyDecision -- the M48 runbook action', () => {
     expect(adopted[0]?.actor).toBe('human')
   })
 
+  // M48 final wave, Task 4 ruling: a proposal waits a day, and in that day the project can be given
+  // a way of working by somebody else. The approval must not silently swap it back.
+  it('records a failed decision, naming both keys, when the project already follows another runbook', async () => {
+    const recorded = await record(
+      f,
+      {
+        kind: 'adopt_runbook',
+        runbookId: featureId,
+        key: 'feature-delivery',
+        name: 'Feature delivery',
+        rationale: 'The goal says "ship".',
+      },
+      'proposed',
+      { subjectId: f.workspaceId, situation: runbookSituation(f.workspaceId) },
+    )
+    // The column moved WITHOUT this decision: written directly rather than through `adoptRunbook`,
+    // because a by-hand adoption resolves the proposal (the ruling's other half) and there would
+    // then be nothing pending left to approve. This arm is the second lock, for every other way the
+    // column can move while a proposal waits.
+    const bugFix = await prisma.runbookTemplate.findUniqueOrThrow({ where: { key: 'bug-fix' } })
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { runbookId: bugFix.id } })
+
+    const approved = await approveDecision(recorded.id, { userId: f.userId })
+    expect(approved.ok).toBe(false)
+    if (approved.ok) return
+    expect(approved.error.kind).toBe('runbook_already_adopted')
+    const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: recorded.id } })
+    expect(row.status).toBe('failed')
+    expect(row.failureReason).toContain('bug-fix')
+    expect(row.failureReason).toContain('feature-delivery')
+    // The project keeps the runbook the person chose, and nothing was logged as an adoption.
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).runbookId).toBe(bugFix.id)
+    expect(await eventsOfType('workspace_runbook_adopted')).toHaveLength(0)
+    expect(await eventsOfType('supervisor_failed')).toHaveLength(1)
+  })
+
+  it('carries out a proposal the project has ALREADY adopted rather than refusing it', async () => {
+    const recorded = await record(
+      f,
+      {
+        kind: 'adopt_runbook',
+        runbookId: featureId,
+        key: 'feature-delivery',
+        name: 'Feature delivery',
+        rationale: 'The goal says "ship".',
+      },
+      'proposed',
+      { subjectId: f.workspaceId, situation: runbookSituation(f.workspaceId) },
+    )
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { runbookId: featureId } })
+
+    expect((await approveDecision(recorded.id, { userId: f.userId })).ok).toBe(true)
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: recorded.id } })).status).toBe('approved')
+  })
+
   it('records a failed decision rather than throwing when the runbook has since been deleted', async () => {
     const recorded = await record(
       f,

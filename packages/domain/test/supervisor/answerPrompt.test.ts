@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { buildAnswerPrompt, draftSchema, parseAnswer, sourceSchema } from '../../src/supervisor/answerPrompt.js'
+import {
+  buildAnswerPrompt,
+  draftSchema,
+  handoffSourceLines,
+  parseAnswer,
+  sourceSchema,
+} from '../../src/supervisor/answerPrompt.js'
 import {
   ANSWER_MAX_CHARS,
   RUN_PROMPT_MAX_CHARS,
@@ -8,6 +14,7 @@ import {
   THREAD_BODY_MAX_CHARS,
   THREAD_MESSAGES_MAX,
 } from '../../src/supervisor/constants.js'
+import { HANDOFF_MAX_FIELD_CHARS } from '../../src/handoff/contract.js'
 import { PROFILE_HEADING } from '../../src/supervisor/prompt.js'
 import { question, slave, threadMessage, world } from './fixtures.js'
 
@@ -44,6 +51,69 @@ describe('buildAnswerPrompt', () => {
     expect(prompt).toContain('  objective: Add an authentication path to the orders endpoint.')
     expect(prompt).toContain('  expected output: Every orders route requires a signed session.')
     expect(prompt).toContain('  acceptance criteria: Anonymous requests get 401')
+  })
+
+  // M48 final review, Important 4: the five literals the fake CLI routes on never reach this prompt
+  // with their ASCII quotes on. A planner's own acceptance criterion is somebody else's text.
+  it('defuses a routing literal a contract carries, on every line of the block', () => {
+    const prompt = buildAnswerPrompt({
+      question: question({
+        taskTitle: 'Wire the decider',
+        taskDescription: 'plain',
+        taskHandoff: {
+          objective: 'Answer with a "candidateIndex".',
+          expectedOutput: 'A "verdict" line the reviewer reads.',
+          acceptanceCriteria: ['No "sources" key on a decision reply', 'A "replan" carries a "task graph"'],
+          knownConstraints: [],
+          evidenceRequired: [],
+          contextReferences: [],
+        },
+      }),
+      world: world({}),
+      profile: null,
+    })
+    // Asserted over the handoff BLOCK, not the whole prompt: this prompt teaches `"sources"` on
+    // purpose -- it is the key `parseAnswer` reads back and the literal the fake CLI's answer arm
+    // keys on (erratum E3). What must not happen is a contract SMUGGLING one of the five in.
+    const lines = handoffSourceLines({
+      objective: 'Answer with a "candidateIndex".',
+      expectedOutput: 'A "verdict" line the reviewer reads.',
+      acceptanceCriteria: ['No "sources" key on a decision reply', 'A "replan" carries a "task graph"'],
+      knownConstraints: [],
+      evidenceRequired: [],
+      contextReferences: [],
+    })
+    for (const literal of ['"candidateIndex"', '"verdict"', '"sources"', '"replan"', '"task graph"']) {
+      expect(lines.join('\n')).not.toContain(literal)
+      expect(prompt).toContain(lines.find((line) => line.includes(literal.replaceAll('"', ''))) ?? 'never')
+    }
+    // Reversible for a person, inert for the matcher -- the words are all still there.
+    expect(prompt).toContain('Answer with a \u201CcandidateIndex\u201D.')
+    expect(prompt).toContain('A \u201Creplan\u201D carries a \u201Ctask graph\u201D')
+  })
+
+  // M48 final review, Minor 10: the block is bounded where the prompt is built, like the question
+  // body and the run prompt beside it.
+  it('caps the objective and the expected output at the handoff field limit', () => {
+    const long = 'x'.repeat(HANDOFF_MAX_FIELD_CHARS + 200)
+    const prompt = buildAnswerPrompt({
+      question: question({
+        taskTitle: 'T',
+        taskDescription: 'D',
+        taskHandoff: {
+          objective: long,
+          expectedOutput: long,
+          acceptanceCriteria: [],
+          knownConstraints: [],
+          evidenceRequired: [],
+          contextReferences: [],
+        },
+      }),
+      world: world({}),
+      profile: null,
+    })
+    expect(prompt).toContain(`  objective: ${'x'.repeat(HANDOFF_MAX_FIELD_CHARS)}\n`)
+    expect(prompt).not.toContain('x'.repeat(HANDOFF_MAX_FIELD_CHARS + 1))
   })
 
   it('says nothing about a handoff a task does not have', () => {

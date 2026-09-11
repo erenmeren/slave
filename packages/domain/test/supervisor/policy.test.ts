@@ -305,7 +305,46 @@ describe('chooseByRules', () => {
       candidate(ACTIONS.escalate_to_human, 'escalated'),
       candidate(ACTIONS.no_action, 'noop'),
     ]
-    expect(chooseByRules(cands)).toBe(0)
+    expect(chooseByRules(cands, 'review_cap_blocked')).toBe(0)
+  })
+
+  // M48 final wave, ruling 1: the ONE situation whose answer the rules already have.
+  describe('runbook_recommended', () => {
+    const offer = (key: string): Action => ({
+      kind: 'adopt_runbook',
+      runbookId: `rb-${key}`,
+      key,
+      name: key,
+      rationale: `The goal says "${key}".`,
+    })
+
+    it('takes the FIRST adopt_runbook offer rather than escalating a recommendation', () => {
+      const cands = [
+        candidate(offer('feature-delivery'), 'proposed'),
+        candidate(offer('bug-fix'), 'proposed'),
+        candidate(ACTIONS.escalate_to_human, 'escalated'),
+        candidate(ACTIONS.no_action, 'noop'),
+      ]
+      expect(chooseByRules(cands, 'runbook_recommended')).toBe(0)
+      // The tier is untouched: the row this index produces is a PROPOSAL a person answers, never
+      // an adoption the machine made.
+      expect(cands[chooseByRules(cands, 'runbook_recommended')]?.tier).toBe('proposed')
+    })
+
+    it('still escalates when the situation offers no runbook at all', () => {
+      const cands = [candidate(ACTIONS.escalate_to_human, 'escalated'), candidate(ACTIONS.no_action, 'noop')]
+      expect(chooseByRules(cands, 'runbook_recommended')).toBe(0)
+      expect(cands[0]?.action.kind).toBe('escalate_to_human')
+    })
+
+    it('leaves every OTHER situation alone -- an adopt_runbook offer elsewhere is not chosen', () => {
+      const cands = [
+        candidate(offer('feature-delivery'), 'proposed'),
+        candidate(ACTIONS.escalate_to_human, 'escalated'),
+        candidate(ACTIONS.no_action, 'noop'),
+      ]
+      expect(chooseByRules(cands, 'task_blocked_human')).toBe(1)
+    })
   })
 
   it('escalates when two routine actions compete -- the rules do not rank them', () => {
@@ -315,7 +354,7 @@ describe('chooseByRules', () => {
       candidate(ACTIONS.escalate_to_human, 'escalated'),
       candidate(ACTIONS.no_action, 'noop'),
     ]
-    expect(chooseByRules(cands)).toBe(2)
+    expect(chooseByRules(cands, 'waiting_stale')).toBe(2)
   })
 
   it('escalates when no routine action is on offer', () => {
@@ -324,11 +363,13 @@ describe('chooseByRules', () => {
       candidate(ACTIONS.escalate_to_human, 'escalated'),
       candidate(ACTIONS.no_action, 'noop'),
     ]
-    expect(chooseByRules(cands)).toBe(1)
+    expect(chooseByRules(cands, 'capability_unstaffed')).toBe(1)
   })
 
   it('does not mistake the escalation or the no-op for a routine action', () => {
-    expect(chooseByRules([candidate(ACTIONS.escalate_to_human, 'escalated'), candidate(ACTIONS.no_action, 'noop')])).toBe(0)
+    expect(
+      chooseByRules([candidate(ACTIONS.escalate_to_human, 'escalated'), candidate(ACTIONS.no_action, 'noop')], 'task_blocked_human'),
+    ).toBe(0)
   })
 
   it('escalates rather than applying a routine action a halt has downgraded', () => {
@@ -338,10 +379,10 @@ describe('chooseByRules', () => {
       candidate(ACTIONS.escalate_to_human, 'escalated'),
       candidate(ACTIONS.no_action, 'noop'),
     ]
-    expect(chooseByRules(cands)).toBe(1)
+    expect(chooseByRules(cands, 'review_cap_blocked')).toBe(1)
   })
 
   it('refuses an empty list rather than inventing an index', () => {
-    expect(() => chooseByRules([])).toThrow()
+    expect(() => chooseByRules([], 'review_cap_blocked')).toThrow()
   })
 })

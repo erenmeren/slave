@@ -41,8 +41,11 @@ const importOne = async (
 
 describe('importCatalog', () => {
   beforeEach(async (): Promise<void> => {
+    // `SlaveTemplate` truncated CASCADE reaches `RunbookTemplate` (M48's `sourceTemplateId`) and
+    // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than left
+    // to the cascade, so the reach is documented rather than accidental (M48 final review, I2).
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -445,7 +448,10 @@ describe('importCatalog', () => {
 
 describe('listCatalogImports', () => {
   beforeEach(async (): Promise<void> => {
-    await prisma.$executeRawUnsafe('TRUNCATE TABLE "CatalogImport", "SlaveTemplate" RESTART IDENTITY CASCADE')
+    // `SlaveTemplate` truncated CASCADE reaches `RunbookTemplate` (M48's `sourceTemplateId`) and
+    // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than left
+    // to the cascade, so the reach is documented rather than accidental (M48 final review, I2).
+    await prisma.$executeRawUnsafe('TRUNCATE TABLE "CatalogImport", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE')
   })
 
   it('returns the most recent runs first, and no more than the limit', async (): Promise<void> => {
@@ -474,8 +480,11 @@ describe('listCatalogImports', () => {
 
 describe('importCatalog and the structured profile (M46)', () => {
   beforeEach(async (): Promise<void> => {
+    // `SlaveTemplate` truncated CASCADE reaches `RunbookTemplate` (M48's `sourceTemplateId`) and
+    // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than left
+    // to the cascade, so the reach is documented rather than accidental (M48 final review, I2).
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -763,8 +772,11 @@ describe('importCatalog and the structured profile (M46)', () => {
 
 describe('listWorkforceCatalog', () => {
   beforeEach(async (): Promise<void> => {
+    // `SlaveTemplate` truncated CASCADE reaches `RunbookTemplate` (M48's `sourceTemplateId`) and
+    // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than left
+    // to the cascade, so the reach is documented rather than accidental (M48 final review, I2).
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -938,8 +950,11 @@ describe('listWorkforceCatalog', () => {
 
 describe('readTemplateProfile', () => {
   beforeEach(async (): Promise<void> => {
+    // `SlaveTemplate` truncated CASCADE reaches `RunbookTemplate` (M48's `sourceTemplateId`) and
+    // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than left
+    // to the cascade, so the reach is documented rather than accidental (M48 final review, I2).
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -1057,12 +1072,18 @@ describe('persona runbooks (M48 R3)', () => {
     ].join('\n'),
   }
 
-  // The same reset the file's other blocks use. `SlaveTemplate` is truncated CASCADE, which reaches
-  // `RunbookTemplate` through `sourceTemplateId` -- so each case below starts with no persona
-  // runbooks at all and the counts below mean what they say.
+  // The same reset the file's other blocks use, and the same reach (M48 final review, I2). Truncating
+  // `SlaveTemplate` CASCADE does not stop at `RunbookTemplate` (M48's `sourceTemplateId`): from there
+  // it reaches `Workspace` (`runbookId`) and everything hanging off it -- every table in this
+  // database with a path to a template. Both are named in the list so that is documented rather than
+  // accidental. Each case below therefore starts with no persona runbooks at all, which is what makes
+  // the counts mean what they say.
   beforeEach(async (): Promise<void> => {
+    // `SlaveTemplate` truncated CASCADE reaches `RunbookTemplate` (M48's `sourceTemplateId`) and
+    // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than left
+    // to the cascade, so the reach is documented rather than accidental (M48 final review, I2).
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
     await prisma.runbookTemplate.deleteMany({ where: { source: 'persona' } })
   })

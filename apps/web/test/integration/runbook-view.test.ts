@@ -47,6 +47,14 @@ describe('buildRunbookPanel', () => {
     expect(view.recommendations[0]?.why).toContain('The goal says')
     expect(view.recommendations[0]?.stageCount).toBe(5)
     expect(view.all.length).toBeGreaterThanOrEqual(3)
+    // M48 final review, Important 1: the sentence the panel prints under `runbook-why` is the one
+    // the Supervisor stores on its decision row, and it names capabilities in WORDS. Before the
+    // loader read the taxonomy for a runbook-shaped world, this project -- which has no tasks at
+    // all, let alone one asking for a capability -- printed `planning.decomposition` here.
+    const why = view.recommendations.find((recommendation) => recommendation.key === 'feature-delivery')?.why ?? ''
+    expect(why).toContain('Work decomposition')
+    expect(why).toContain('Code review')
+    expect(why).not.toContain('planning.decomposition')
   })
 
   it('after adoption shows the current stage, each stage state and the capability chips marked covered', async () => {
@@ -106,6 +114,56 @@ describe('buildRunbookPanel', () => {
 
     await prisma.supervisorDecision.delete({ where: { id: decision.id } })
     expect((await buildRunbookPanel(workspaceId))?.pendingDecision).toBeNull()
+  })
+
+  // M48 final review, Important 1 and Minor 1: two states this panel is read in that no other case
+  // covers -- an adopted runbook with nothing on the board, and a board with no runbook at all.
+  describe('a project of its own', () => {
+    let otherId = ''
+
+    beforeAll(async () => {
+      const workspace = await prisma.workspace.create({
+        data: {
+          name: 'M48 Panel States',
+          repoPath: '/tmp/m48ps',
+          verifyCommands: ['true'],
+          setupCommands: [],
+          goal: 'Ship the endpoint feature',
+        },
+      })
+      otherId = workspace.id
+    })
+
+    afterAll(async () => {
+      await prisma.task.deleteMany({ where: { workspaceId: otherId } })
+      await prisma.executionEvent.deleteMany({ where: { workspaceId: otherId } })
+      await prisma.workspace.deleteMany({ where: { id: otherId } })
+    })
+
+    it('labels the stage chips of an adopted runbook on an EMPTY board, where no task asks for a capability', async () => {
+      await adoptRunbook(otherId, 'feature-delivery')
+      const view = await buildRunbookPanel(otherId)
+      expect(view?.adopted?.key).toBe('feature-delivery')
+      expect(view?.stages.every((stage) => stage.taskCount === 0)).toBe(true)
+      const design = view?.stages.find((stage) => stage.key === 'design')
+      expect(design?.capabilities.map((capability) => capability.label)).toContain('Work decomposition')
+      expect(design?.capabilities.map((capability) => capability.label)).not.toContain('planning.decomposition')
+    })
+
+    it('recommends nothing once the board has tasks, and leaves the picker its whole list', async () => {
+      expect((await adoptRunbook(otherId, null)).ok).toBe(true)
+      await prisma.task.create({
+        data: { workspaceId: otherId, title: 'Planned already', description: 'x', status: 'ready', maxAttempts: 3 },
+      })
+
+      const view = await buildRunbookPanel(otherId)
+      expect(view?.adopted).toBeNull()
+      // The Supervisor would raise no `runbook_recommended` situation here, so neither does the
+      // panel: adopting one now re-plans nothing and every stage the plan skipped is reported
+      // missing the moment it lands.
+      expect(view?.recommendations).toEqual([])
+      expect(view?.all.map((option) => option.key)).toContain('feature-delivery')
+    })
   })
 
   it('is null for a workspace that does not exist, which is what the route turns into a 404', async () => {

@@ -3,7 +3,14 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { adoptRunbook, refusalText, setGoal, syncCapabilityTaxonomy, syncRunbooks } from '@slave-of-ai/control'
+import {
+  adoptRunbook,
+  refusalText,
+  runbookStatus,
+  setGoal,
+  syncCapabilityTaxonomy,
+  syncRunbooks,
+} from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
@@ -550,12 +557,41 @@ describe('concludePlanning', () => {
    * arrives in Task 5. What is under test is `concludePlanning`, and this is the same shape case
    * (d) above already uses to feed it a graph.
    */
-  async function concludeGraph(fixture: Fixture, graph: unknown): Promise<string> {
+  /**
+   * A succeeded planning run with its output, and -- when the case names one -- the `runbook`
+   * section its recorded manifest would carry.
+   *
+   * The manifest is what `concludePlanning` reads the stage vocabulary off since M48's final review
+   * (Important 3): a run that was SHOWN a runbook is the only run whose graph may be judged against
+   * one. `shownRunbook` is therefore the same key the case adopts, spelt separately because the two
+   * are separately true -- the point of the ruling is that they can differ.
+   */
+  async function concludeGraph(
+    fixture: Fixture,
+    graph: unknown,
+    options: { readonly shownRunbook?: string } = {},
+  ): Promise<string> {
     const managerId = await addManager(fixture.teamId)
     const now = new Date()
     const run = await prisma.slaveRun.create({
       data: { slaveId: managerId, kind: 'planning', status: 'succeeded', startedAt: now, terminalAt: now, endedAt: now },
     })
+    if (options.shownRunbook !== undefined) {
+      const shown = await prisma.runbookTemplate.findUniqueOrThrow({ where: { key: options.shownRunbook } })
+      const stages = shown.stages as { key: string }[]
+      await prisma.runContext.create({
+        data: {
+          runId: run.id,
+          prompt: 'the planning prompt this run was sent',
+          sections: {
+            kind: 'planning',
+            sections: [
+              { kind: 'runbook', runbookId: shown.id, key: shown.key, stageKeys: stages.map((stage) => stage.key) },
+            ],
+          },
+        },
+      })
+    }
     await prisma.executionEvent.create({
       data: {
         type: 'run_output',
@@ -758,7 +794,7 @@ describe('concludePlanning', () => {
           },
           { key: 'build', title: 'Build it', description: 'd', role: 'backend', stage: 'verify', dependsOn: ['design'] },
         ],
-      })
+      }, { shownRunbook: 'feature-delivery' })
 
       const tasks = await prisma.task.findMany({ where: { workspaceId: fixture.workspaceId }, orderBy: { createdAt: 'asc' } })
       expect(tasks[0]?.stage).toBe('design')
@@ -781,9 +817,11 @@ describe('concludePlanning', () => {
       repos.push(fixture.repoPath)
       await adopt(fixture.workspaceId, 'feature-delivery')
 
-      const runId = await concludeGraph(fixture, {
-        tasks: [{ key: 'k', title: 'T', description: 'd', role: 'backend', stage: 'polish' }],
-      })
+      const runId = await concludeGraph(
+        fixture,
+        { tasks: [{ key: 'k', title: 'T', description: 'd', role: 'backend', stage: 'polish' }] },
+        { shownRunbook: 'feature-delivery' },
+      )
 
       expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
       const failure = await prisma.executionEvent.findFirstOrThrow({ where: { runId, type: 'run_failed' } })
@@ -804,6 +842,79 @@ describe('concludePlanning', () => {
       expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
       const failure = await prisma.executionEvent.findFirstOrThrow({ where: { runId, type: 'run_failed' } })
       expect((failure.payload as { reason: string }).reason).toContain('handoff that is not a contract')
+    })
+
+    /**
+     * M48 final review, Important 3. The runbook moved WHILE the run was in flight.
+     *
+     * The planner was shown Feature delivery and wrote its stages down; by the time its graph came
+     * back the project had adopted Bug fix. Reading the vocabulary at conclude time refused the
+     * whole model-authored graph -- "names stage \"design\", which this runbook does not have" --
+     * and burnt a planning attempt over a column somebody moved. The run's own manifest is the
+     * record of what was asked for, so the graph lands; the MEASUREMENT is against what the project
+     * follows now, and it says plainly that none of those stages is one of its own.
+     */
+    it('judges the graph by the runbook the RUN was shown, and measures it against the one adopted now', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      await adopt(fixture.workspaceId, 'feature-delivery')
+
+      // ...the prompt went out against `feature-delivery` (the manifest below), and only then does
+      // somebody choose a different way of working.
+      await adopt(fixture.workspaceId, 'bug-fix')
+
+      const runId = await concludeGraph(
+        fixture,
+        {
+          tasks: [
+            { key: 'a', title: 'Decide the shape', description: 'd', role: 'backend', stage: 'design' },
+            { key: 'b', title: 'Prove it', description: 'd', role: 'backend', stage: 'verify', dependsOn: ['a'] },
+          ],
+        },
+        { shownRunbook: 'feature-delivery' },
+      )
+
+      // The run SUCCEEDED and the board carries the stages the planner was actually asked for.
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })).status).toBe('succeeded')
+      const tasks = await prisma.task.findMany({ where: { workspaceId: fixture.workspaceId }, orderBy: { createdAt: 'asc' } })
+      expect(tasks.map((task) => task.stage)).toEqual(['design', 'verify'])
+      // The retry cap comes from the runbook the run was shown, too: `verify` sets one, and the
+      // runbook adopted now has a `verify` of its own with the same cap -- so this asserts the
+      // stage was found at all rather than silently falling back to the workspace's 3.
+      expect(tasks[1]?.maxAttempts).toBe(2)
+
+      // And the measurement is honest: against `bug-fix`, `design` is a stage it does not have and
+      // every one of its own stages is missing.
+      const event = await prisma.executionEvent.findFirstOrThrow({
+        where: { workspaceId: fixture.workspaceId, type: 'workspace_plan_created' },
+      })
+      expect(event.payload).toMatchObject({
+        runbook: { key: 'bug-fix', stagesCovered: ['verify'], stagesMissing: ['reproduce', 'fix', 'review'] },
+      })
+      const status = await runbookStatus(fixture.workspaceId)
+      expect(status.ok).toBe(true)
+      if (!status.ok) return
+      expect(status.value.unknownStages).toEqual(['design'])
+      expect(status.value.stagesMissing).toEqual(['reproduce', 'fix', 'review'])
+    })
+
+    // E1's empty list, reached the way it is actually reached: a run whose manifest records no
+    // runbook section at all -- a project that had adopted none when the prompt went out, or a run
+    // from before this milestone. Whatever stage the planner wrote is stored and measured later.
+    it('imposes no stage vocabulary on a run that was shown no runbook, even with one adopted now', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      await adopt(fixture.workspaceId, 'feature-delivery')
+
+      await concludeGraph(fixture, {
+        tasks: [{ key: 'k', title: 'T', description: 'd', role: 'backend', stage: 'a-stage-nobody-has' }],
+      })
+
+      const task = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+      expect(task.stage).toBe('a-stage-nobody-has')
+      expect(task.maxAttempts).toBe(3)
+      const status = await runbookStatus(fixture.workspaceId)
+      expect(status.ok && status.value.unknownStages).toEqual(['a-stage-nobody-has'])
     })
 
     it('carries no runbook block on the event when no runbook is adopted', async (): Promise<void> => {
@@ -1203,12 +1314,20 @@ describe('a re-plan', () => {
     fixture: Fixture,
     delta: string,
     boardTaskIds: readonly string[],
+    options: { readonly shownRunbook?: string } = {},
   ): Promise<string> {
     const manager = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: fixture.workspaceId } } })
     const now = new Date()
     const run = await prisma.slaveRun.create({
       data: { slaveId: manager.id, kind: 'planning', status: 'succeeded', startedAt: now, terminalAt: now, endedAt: now },
     })
+    // The `runbook` section, when the case says this run was shown one: `applyDelta` reads the
+    // stage vocabulary off the manifest since M48's final review (Important 3), exactly as
+    // `concludePlanning` does, and for the same reason.
+    const shown =
+      options.shownRunbook === undefined
+        ? null
+        : await prisma.runbookTemplate.findUniqueOrThrow({ where: { key: options.shownRunbook } })
     await prisma.runContext.create({
       data: {
         runId: run.id,
@@ -1224,6 +1343,16 @@ describe('a re-plan', () => {
               sha256: 'current-hash',
               boardTaskIds: [...boardTaskIds],
             },
+            ...(shown === null
+              ? []
+              : [
+                  {
+                    kind: 'runbook',
+                    runbookId: shown.id,
+                    key: shown.key,
+                    stageKeys: (shown.stages as { key: string }[]).map((stage) => stage.key),
+                  },
+                ]),
           ],
         },
       },
@@ -1300,6 +1429,7 @@ describe('a re-plan', () => {
         keep: [existing.id],
       }),
       [existing.id],
+      { shownRunbook: 'feature-delivery' },
     )
 
     await concludePlanning(brandRunId(runId))
@@ -1339,6 +1469,7 @@ describe('a re-plan', () => {
         keep: [existing.id],
       }),
       [existing.id],
+      { shownRunbook: 'feature-delivery' },
     )
 
     await concludePlanning(brandRunId(runId))
@@ -1346,6 +1477,46 @@ describe('a re-plan', () => {
     expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(1)
     const failure = await prisma.executionEvent.findFirstOrThrow({ where: { runId, type: 'run_failed' } })
     expect((failure.payload as { reason: string }).reason).toContain('names stage "polish"')
+  })
+
+  // M48 final review, Important 3, on the delta path: the same swap, the same answer. A re-plan
+  // takes minutes too, and a delta refused wholesale over a column somebody moved costs the
+  // additions AND the cancellations the manager had worked out.
+  it('judges the delta by the runbook the RUN was shown, not the one adopted while it was thinking', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    await syncRunbooks()
+    expect((await adoptRunbook(fixture.workspaceId, 'feature-delivery')).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+
+    const runId = await seedConcludedReplan(
+      fixture,
+      JSON.stringify({
+        add: [{ key: 'prove', title: 'Prove the new endpoint', description: 'd', role: 'backend', stage: 'verify', dependsOn: [] }],
+        cancel: [],
+        keep: [existing.id],
+      }),
+      [existing.id],
+      { shownRunbook: 'feature-delivery' },
+    )
+    // ...and only now does somebody choose a different way of working.
+    expect((await adoptRunbook(fixture.workspaceId, 'security-review')).ok).toBe(true)
+
+    await concludePlanning(brandRunId(runId))
+
+    const added = await prisma.task.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, title: 'Prove the new endpoint' },
+    })
+    expect(added.stage).toBe('verify')
+    // The measurement is against `security-review`, the runbook this project follows NOW: its own
+    // three other stages are reported missing, and nothing here pretends the delta was written
+    // against it.
+    const replanned = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' },
+    })
+    expect(replanned.payload).toMatchObject({
+      runbook: { key: 'security-review', stagesMissing: ['threat-model', 'review', 'remediate'] },
+    })
   })
 
   it('carries no runbook block on workspace.replanned when no runbook is adopted', async (): Promise<void> => {

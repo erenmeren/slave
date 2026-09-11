@@ -39,6 +39,36 @@ describe('verifySources -- what verifies', () => {
     expect(checked.rejected).toHaveLength(0)
   })
 
+  // M48 final review, Important 4: the contract is DEFUSED on its way into the prompt, and this
+  // check joins the same function -- so a criterion carrying a routing literal is still quotable.
+  // Defusing one side only would reject every answer that cited such a criterion.
+  it('verifies a quote from a criterion containing a routing literal, defused on both sides', () => {
+    const q = question({
+      taskTitle: 'Wire the decider',
+      taskDescription: 'The decision call answers with one JSON object.',
+      taskHandoff: {
+        objective: 'The reply must carry a "candidateIndex" and nothing else.',
+        expectedOutput: 'One JSON object.',
+        acceptanceCriteria: ['The parser refuses a reply with no "candidateIndex"'],
+        knownConstraints: [],
+        evidenceRequired: [],
+        contextReferences: [],
+      },
+    })
+    // Quoted as a model reading the PROMPT would quote it: the prompt shows the typographic quotes,
+    // so that is what comes back.
+    const checked = verifySources(
+      [
+        { kind: 'task', ref: null, quote: 'The parser refuses a reply with no \u201CcandidateIndex\u201D' },
+        { kind: 'task', ref: null, quote: 'The reply must carry a \u201CcandidateIndex\u201D' },
+      ],
+      q,
+      world({}),
+    )
+    expect(checked.rejected).toEqual([])
+    expect(checked.verified).toHaveLength(2)
+  })
+
   it('accepts a quote from the task title and from the task description', () => {
     const sources = [source({ quote: 'Wire the reader' }), source({ quote: 'PostgreSQL on port 5433' })]
     const result = verifySources(sources, QUESTION, WORLD)

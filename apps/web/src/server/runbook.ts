@@ -71,7 +71,9 @@ export interface RunbookPanelView {
  * above a row saying Design had been skipped (M48 t2 fix round 1).
  */
 export async function buildRunbookPanel(workspaceId: string): Promise<RunbookPanelView | null> {
-  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true, goal: true } })
+  // Only to tell "no such project" from "a project with nothing to say": every other fact this
+  // builder needs comes off the world snapshot below.
+  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } })
   // The one null this builder has, decided HERE: the world loader below opens a transaction whose
   // `findUniqueOrThrow` raises for a missing workspace (right for a tick, wrong for a route, which
   // owes its caller a 404) -- `buildOrganization`'s own rule.
@@ -93,10 +95,25 @@ export async function buildRunbookPanel(workspaceId: string): Promise<RunbookPan
   if (!status.ok) return null
 
   const rosterCapabilities = [...new Set(world.slaves.flatMap((slave) => slave.capabilities))]
+  // THE SAME STATE, FROM THE SAME LIST, THE SUPERVISOR RECOMMENDS FROM (M48 final review, Minor 1;
+  // D10 refined).
+  //
+  // `world.runbooks` is EMPTY unless the loader judged that `runbook_recommended` could fire for
+  // this project at all -- a goal, no adopted runbook, AND AN EMPTY BOARD, which is the one moment
+  // at which choosing a way of working changes what the next run is asked for. Read off that field
+  // rather than re-spelt here, so the panel cannot come to recommend in a state the Supervisor is
+  // silent in: it used to offer the same list over a board mid-flight, where adopting a runbook
+  // re-plans nothing and every stage the plan already skipped is reported missing the instant it
+  // lands. A project with tasks and no runbook gets the picker alone -- switching is still a thing
+  // a person may do, the product simply stops suggesting it.
+  //
+  // It is also the list the OFFERS are built from (the loader drops a runbook whose stages nothing
+  // can read, and bounds the scan), so the rows here are the rows a `runbook_recommended` decision
+  // would carry, in the same order.
   const recommendations =
-    status.value.runbook !== null || workspace.goal === null || workspace.goal === ''
+    world.goal === null || world.runbooks.length === 0
       ? []
-      : recommendRunbooks(workspace.goal, all, rosterCapabilities, world.taxonomy).map((recommendation) =>
+      : recommendRunbooks(world.goal, world.runbooks, rosterCapabilities, world.taxonomy).map((recommendation) =>
           option(recommendation.runbook, recommendation.rationale),
         )
 
@@ -109,6 +126,14 @@ export async function buildRunbookPanel(workspaceId: string): Promise<RunbookPan
 
   // ONE index for the whole render (the M47 carry): `capabilityLabel` builds a fresh Map out of the
   // taxonomy per call, and this view labels a capability per stage of a runbook with up to twelve.
+  //
+  // THE WORLD'S taxonomy, not a `listCapabilities()` of this builder's own (M48 final review,
+  // Important 1): the loader now reads the table whenever runbooks matter -- an adopted runbook or
+  // a recommendation that could be made -- so the list is already in the snapshot this page is
+  // built from, and a second query would be a second reading of one table that can only disagree
+  // with the first. It is also the SAME taxonomy the Supervisor wrote its rationale with, which is
+  // what keeps the sentence on the timeline and the chips on this panel naming one capability the
+  // same way.
   const label = labeller(world.taxonomy)
 
   const stageByKey = new Map((status.value.runbook?.stages ?? []).map((stage) => [stage.key, stage] as const))

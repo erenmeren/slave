@@ -64,8 +64,11 @@ async function coreBuilderId(): Promise<string> {
 
 describe('the workforce catalog read model', () => {
   beforeEach(async (): Promise<void> => {
+    // `SlaveTemplate` truncated CASCADE reaches `RunbookTemplate` (M48's `sourceTemplateId`) and
+    // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than left
+    // to the cascade, so the reach is documented rather than accidental (M48 final review, I2).
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
     await importCatalog(
       {

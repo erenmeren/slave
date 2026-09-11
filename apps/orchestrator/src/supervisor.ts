@@ -31,6 +31,7 @@ import {
   type Decider,
   type Draft,
   type Situation,
+  type SituationKind,
   type SupervisorWorld,
   type Tier,
 } from '@slave-of-ai/domain'
@@ -240,7 +241,7 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
     // Every road that is not a usable model answer ends here: no decider, no model, budget gone,
     // halted, over the per-tick cap, a call that failed or breached, an answer that would not
     // parse or pointed outside the catalogue. The cost of a call that DID happen still rides along.
-    let decision = choice ?? { ...byTheRules(catalogue), modelCostUsd: null, modelCalled: false }
+    let decision = choice ?? { ...byTheRules(catalogue, situation.kind), modelCostUsd: null, modelCalled: false }
 
     // The SECOND call (M39 §5). An `answer_question` offer is not a decision yet -- it is a
     // promise to go and find the answer -- so before the row is written the pass drafts one,
@@ -536,18 +537,18 @@ async function askTheModel(input: {
     console.warn(
       `[supervise] the model call for ${input.situation.kind} threw: ${error instanceof Error ? error.message : String(error)}`,
     )
-    return { ...byTheRules(input.catalogue), modelCostUsd: null, modelCalled: true }
+    return { ...byTheRules(input.catalogue, input.situation.kind), modelCostUsd: null, modelCalled: true }
   }
 
   if (outcome.kind !== 'answer') {
     const why = outcome.kind === 'failed' ? outcome.reason : `isolation breach (${outcome.tools.join(', ')})`
-    return { ...byTheRules(input.catalogue, why), modelCostUsd: outcome.costUsd, modelCalled: true }
+    return { ...byTheRules(input.catalogue, input.situation.kind, why), modelCostUsd: outcome.costUsd, modelCalled: true }
   }
 
   const answer = parseDecisionAnswer(outcome.text, input.catalogue.length)
   if (answer === null) {
     return {
-      ...byTheRules(input.catalogue, 'the answer was not a usable candidate index'),
+      ...byTheRules(input.catalogue, input.situation.kind, 'the answer was not a usable candidate index'),
       modelCostUsd: outcome.costUsd,
       modelCalled: true,
     }
@@ -570,9 +571,10 @@ async function askTheModel(input: {
  */
 function byTheRules(
   catalogue: readonly Candidate[],
+  situationKind: SituationKind,
   fallbackFrom?: string,
 ): Omit<Choice, 'modelCostUsd' | 'modelCalled'> {
-  const chosenIndex = chooseByRules(catalogue)
+  const chosenIndex = chooseByRules(catalogue, situationKind)
   const why = catalogue[chosenIndex]?.why ?? 'the rules chose this action.'
   return {
     chosenIndex,

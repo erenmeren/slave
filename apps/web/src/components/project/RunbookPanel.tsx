@@ -46,8 +46,10 @@ const STATE_TONE: Record<RunbookStageView['state'], StatusTone> = {
  * is on, every stage's state in words, and each stage's required capabilities marked covered or
  * not by the people actually on this project.
  *
- * Nothing at all when there is neither -- a project nobody has an opinion about gets no panel,
- * which is R5's "silence beats noise" one surface further out.
+ * Nothing at all when there is none of it -- no runbook, nothing recommended and nothing to pick --
+ * which is R5's "silence beats noise" one surface further out. A project with tasks and no runbook
+ * is recommended nothing (M48 final review, Minor 1) and gets the picker alone: switching is still
+ * a thing a person may do, but the product does not suggest it once a plan exists.
  *
  * The Adopt button goes through the pending DECISION when the Supervisor has already made one:
  * approving is what the person is being asked for, and adopting behind the proposal's back would
@@ -67,7 +69,16 @@ export function RunbookPanel({
   const [error, setError] = useState<string | null>(null)
   const [picked, setPicked] = useState('')
 
-  if (view === null || (view.adopted === null && view.recommendations.length === 0)) return null
+  if (view === null) return null
+  // Nothing to say, no panel. Since M48's final review (Minor 1) the middle case is real: a project
+  // with tasks and no runbook gets NO recommendations from the builder -- the Supervisor only
+  // recommends on an empty board -- and what is left for it is the picker. So the silence is now
+  // "there is no runbook, nothing to recommend AND nothing to pick", which is a database with no
+  // runbooks in it at all.
+  //
+  // What the picker may offer: everything but the runbook this project already follows.
+  const choosable = view.all.filter((runbook) => runbook.key !== view.adopted?.key)
+  if (view.adopted === null && view.recommendations.length === 0 && choosable.length === 0) return null
 
   const proposed = view.pendingDecision
 
@@ -80,8 +91,10 @@ export function RunbookPanel({
    * chosen -- the round-1 version sent every click to the approve route, so with a proposal for
    * `security-review` on screen, clicking "Bug fix" adopted the security review.
    *
-   * A by-hand adoption leaves the proposal standing on purpose: it is still a question somebody
-   * asked, and the note below says where to answer it.
+   * A by-hand adoption ANSWERS the proposal rather than racing it (M48 final wave, Task 4 ruling):
+   * `adoptRunbook` resolves this project's pending `runbook_recommended` decisions, so the refresh
+   * below comes back with the note gone. The note is still said up front, because it is true at the
+   * moment a person is choosing: the question is open until they click.
    */
   const adopt = async (key: string | null): Promise<void> => {
     setPending(key ?? 'clear')
@@ -105,9 +118,6 @@ export function RunbookPanel({
     router.refresh()
   }
 
-  // What the picker may offer: everything but the runbook this project already follows.
-  const choosable = view.all.filter((runbook) => runbook.key !== view.adopted?.key)
-
   const currentTitle =
     view.currentStage === null
       ? null
@@ -122,19 +132,21 @@ export function RunbookPanel({
           </Alert>
         )}
 
-        {/* A proposal is a question somebody asked, and adopting something else by hand does not
-          * answer it -- so it is said UP FRONT, not in reaction to what is selected: a person
-          * about to pick another runbook should know the question is waiting before they click,
-          * and where it can be answered. Silent once the proposed runbook IS the adopted one,
-          * which is a proposal with nothing left to decide. The name, never the key
-          * (`docs/ia.md` rule 3). */}
+        {/* A proposal is a question somebody asked, said UP FRONT rather than in reaction to what
+          * is selected: a person about to pick a runbook should know the question is waiting
+          * before they click, and where else it can be answered. Silent once the proposed runbook
+          * IS the adopted one, which is a proposal with nothing left to decide. The name, never
+          * the key (`docs/ia.md` rule 3). */}
         {proposed !== null && proposed.key !== view.adopted?.key && (
           <span data-testid="runbook-pending-note" className="text-[11px] text-tone-waiting">
             The Supervisor proposed {proposed.name}; answer it on the timeline or adopt another below.
           </span>
         )}
 
-        {view.adopted === null ? (
+        {/* The recommendation list, and nothing at all when there is none to make: a project with
+          * tasks and no runbook drops straight to the picker (M48 final review, Minor 1), and a
+          * heading over an empty list reads as a recommendation that failed to load. */}
+        {view.adopted === null && view.recommendations.length > 0 && (
           <>
             <SectionLabel>recommended for this goal</SectionLabel>
             {/* A `<ul>` because it is a list of offers, and each row is one offer a person can
@@ -175,7 +187,9 @@ export function RunbookPanel({
               ))}
             </ul>
           </>
-        ) : (
+        )}
+
+        {view.adopted !== null && (
           <>
             <div className="flex flex-wrap items-baseline gap-2">
               <span data-testid="runbook-name" className="text-sm text-text-1">
@@ -235,38 +249,48 @@ export function RunbookPanel({
           </>
         )}
 
-        {choosable.length > 0 && (
+        {/* One row for both controls, shown when EITHER has something to do (M48 final review,
+          * Minor 9). They are independent: the picker needs a runbook to switch to, while "stop
+          * following it" needs only an adopted one -- and a project following the sole runbook in
+          * the database had no way to stop, because the empty picker took the button with it. */}
+        {(choosable.length > 0 || view.adopted !== null) && (
           <div className="flex flex-wrap items-center gap-2">
-            <SectionLabel>{view.adopted === null ? 'or pick one' : 'follow a different one'}</SectionLabel>
-            {/* The NAMES, with the key on each option's value where only the machine reads it. The
-              * runbook this project ALREADY follows is not in the list (fix round 1, minor 7): a
-              * picker offers what you could switch to, and adopting the one you have is a write
-              * that changes nothing. */}
-            <select
-              data-testid="runbook-picker"
-              aria-label="Pick a runbook"
-              value={picked}
-              onChange={(event) => setPicked(event.target.value)}
-              className="rounded border border-line bg-bg-0 px-2 py-1 text-xs text-text-1"
-            >
-              <option value="">choose…</option>
-              {choosable.map((runbook) => (
-                <option key={runbook.key} value={runbook.key}>
-                  {runbook.name}
-                </option>
-              ))}
-            </select>
-            <Button
-              variant="ghost"
-              size="sm"
-              // Its OWN name (fix round 1, minor 3): two elements answering to `runbook-adopt` made
-              // "the Adopt button" ambiguous to a gate that has to click one of them on purpose.
-              data-testid="runbook-picker-adopt"
-              disabled={picked === '' || pending !== null}
-              onClick={() => void adopt(picked)}
-            >
-              {pending === picked ? 'adopting…' : 'adopt'}
-            </Button>
+            {choosable.length > 0 && (
+              <>
+                <SectionLabel>
+                  {view.adopted !== null ? 'follow a different one' : view.recommendations.length > 0 ? 'or pick one' : 'pick one'}
+                </SectionLabel>
+                {/* The NAMES, with the key on each option's value where only the machine reads it.
+                  * The runbook this project ALREADY follows is not in the list (fix round 1, minor
+                  * 7): a picker offers what you could switch to, and adopting the one you have is
+                  * a write that changes nothing. */}
+                <select
+                  data-testid="runbook-picker"
+                  aria-label="Pick a runbook"
+                  value={picked}
+                  onChange={(event) => setPicked(event.target.value)}
+                  className="rounded border border-line bg-bg-0 px-2 py-1 text-xs text-text-1"
+                >
+                  <option value="">choose…</option>
+                  {choosable.map((runbook) => (
+                    <option key={runbook.key} value={runbook.key}>
+                      {runbook.name}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  // Its OWN name (fix round 1, minor 3): two elements answering to `runbook-adopt`
+                  // made "the Adopt button" ambiguous to a gate that has to click one on purpose.
+                  data-testid="runbook-picker-adopt"
+                  disabled={picked === '' || pending !== null}
+                  onClick={() => void adopt(picked)}
+                >
+                  {pending === picked ? 'adopting…' : 'adopt'}
+                </Button>
+              </>
+            )}
             {view.adopted !== null && (
               <Button
                 variant="ghost"

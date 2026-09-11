@@ -13,8 +13,11 @@ afterAll(() => rmSync(repoPath, { recursive: true, force: true }))
 
 describe('catalog and company CRUD', () => {
   beforeEach(async (): Promise<void> => {
+    // `SlaveTemplate` truncated CASCADE reaches `RunbookTemplate` (M48's `sourceTemplateId`) and
+    // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than left
+    // to the cascade, so the reach is documented rather than accidental (M48 final review, I2).
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 

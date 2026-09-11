@@ -5,7 +5,6 @@ import {
   capabilityIndex,
   measureAdherence,
   parsePlanGraph,
-  stageOrder,
   type CapabilityRecord,
   type RunId,
   type Runbook,
@@ -13,6 +12,7 @@ import {
 import {
   admitProvider,
   listCapabilities,
+  readRunbookById,
   refusalText,
   resolveDenyList,
   runbookForWorkspace,
@@ -25,7 +25,7 @@ import type { SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
-import { concludeReplan, replanIntent, replanSectionOf, type ReplanIntent } from './replan.js'
+import { concludeReplan, replanIntent, replanSectionOf, runbookSectionOf, type ReplanIntent } from './replan.js'
 import { buildRunContext } from './runContext.js'
 import { createRunUnlessArchived } from './runs.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
@@ -73,16 +73,34 @@ export async function concludePlanning(runId: RunId): Promise<void> {
   })
   const text = rows.map((row) => (row.payload as { text: string }).text).join('\n')
 
-  // R2: the adopted runbook decides which stages a plan may name, what a stage's tasks are allowed
-  // to retry, and what adherence is measured against. ONE read for the whole graph.
-  const runbook = await runbookForWorkspace(workspaceId)
-  const stages = runbook === null ? [] : stageOrder(runbook.stages)
-  const stageByKey = new Map(stages.map((stage) => [stage.key, stage] as const))
+  // R2, read off THE RUN'S OWN MANIFEST and not off the workspace (M48 final review, Important 3).
+  //
+  // Which stages this graph may name, and what a stage's tasks may retry, are facts about the
+  // prompt that was SENT -- the run was shown one runbook's stage list and asked to write against
+  // it. The adopted runbook is a column any person may move, and a planning run takes minutes: read
+  // here, a runbook adopted mid-run made `parsePlanGraph` refuse the entire model-authored graph
+  // (every stage in it belonged to the runbook the planner had been shown) and the whole planning
+  // attempt was thrown away against the retry cap.
+  //
+  // No `runbook` section means no stage vocabulary at all (plan erratum E1's empty list): whatever
+  // stage a task carries is written to the board, and `measureAdherence` reports it as unknown
+  // against whatever this project follows now. That is the honest record -- the stage IS what the
+  // planner was asked for -- and the measurement below, which is against the CURRENTLY adopted
+  // runbook, is where the mismatch becomes visible.
+  const shown = await runbookSectionOf(runId)
+  const stageKeys = shown?.stageKeys ?? []
+  // The stage OBJECTS come from the same runbook the keys did, by id, for `retry.maxAttempts`
+  // alone. A runbook deleted since the prompt leaves this empty and every task takes the
+  // workspace's own ceiling, which is what a task with no stage has always taken.
+  const shownRunbook = shown === null ? null : await readRunbookById(shown.runbookId)
+  const stageByKey = new Map((shownRunbook?.stages ?? []).map((stage) => [stage.key, stage] as const))
 
-  const parsed = parsePlanGraph(
-    text,
-    stages.map((stage) => stage.key),
-  )
+  // What ADHERENCE is measured against is a different question with a different answer: the runbook
+  // this project follows NOW. A plan written against one and measured against another reports its
+  // stages as unknown or missing, which is the truth a person needs to see.
+  const runbook = await runbookForWorkspace(workspaceId)
+
+  const parsed = parsePlanGraph(text, stageKeys)
 
   if (!parsed.ok) {
     await failPlanningRun(run, workspaceId, `planning run produced no valid task graph: ${parsed.error}`)

@@ -432,12 +432,30 @@ async function carryOut(
       // automatic. `cancelTask` re-checks the status under its own row lock, so a task the pipeline
       // picked up while the proposal waited is refused rather than cancelled out from under a run.
       return reached(await cancelTask(action.taskId, action.reason, origin, principal))
-    case 'adopt_runbook':
+    case 'adopt_runbook': {
       // `tierOf` pins this to `proposed` on every branch (R5), so the only way here is a human
       // approving the proposal -- which is the whole ruling: the Supervisor recommends, a person
       // adopts. Addressed by KEY rather than by id, so a decision that waited a day through a
       // re-seed still names the runbook a person read the name of.
+      //
+      // A DIFFERENT runbook already adopted is a refusal, not an overwrite (M48 final wave, Task 4
+      // ruling). A proposal may wait a day, and in that day somebody can choose a way of working
+      // for this project; `adoptRunbook` would cheerfully replace it, so a stale Approve would undo
+      // a person's own decision with no record of what it displaced. Refused, which
+      // {@link applyDecision} turns into `status: 'failed'` with both keys in `failureReason` and a
+      // `supervisor.failed` event -- the outcome a reader can act on. Re-adopting the SAME key is
+      // not refused: that is the proposal being carried out, and `adoptRunbook` answers
+      // `changed: false` for it.
+      const current = await prisma.workspace.findUnique({
+        where: { id: decision.workspaceId },
+        select: { runbook: { select: { key: true } } },
+      })
+      const adopted = current?.runbook?.key ?? null
+      if (adopted !== null && adopted !== action.key) {
+        return err({ kind: 'runbook_already_adopted', adopted, proposed: action.key })
+      }
       return reached(await adoptRunbook(decision.workspaceId, action.key, { origin }, principal))
+    }
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')
@@ -719,6 +737,58 @@ async function claimPending(
     return err({ kind: 'decision_not_pending', decisionId, status: current.status })
   }
   return ok({ workspaceId: row.workspaceId })
+}
+
+/**
+ * Retires every OPEN decision about one situation kind because a person has settled the question
+ * somewhere else (M48 final wave, Task 4 ruling).
+ *
+ * A proposal waits `PENDING_TTL_MS` -- a whole day -- and in that day the thing it asks about can
+ * be decided by hand. `adoptRunbook` is the case this exists for: the Supervisor proposes "follow
+ * Feature delivery", the operator adopts Bug fix from the CLI or the Overview picker, and without
+ * this the proposal sits there for another twenty-three hours with an Approve button that would
+ * silently swap the project's way of working out from under the choice a person just made.
+ *
+ * `rejected`, not `approved`, and the wording of the reason is what makes that honest: the action
+ * on the row was never carried out -- {@link applyDecision} was not called, and whatever happened
+ * to the world happened through the verb a person used directly. "The proposal was not taken up"
+ * is exactly what `rejected` means here, and `reason` says who took the question away from it.
+ *
+ * Claimed conditionally per row, {@link claimPending}'s rule: a human approving in the same instant
+ * wins the row and is not counted here. Returns how many were retired, for a caller that reports it.
+ */
+export async function resolveSettledDecisions(input: {
+  readonly workspaceId: string
+  readonly situationKind: SituationKind
+  readonly reason: string
+  readonly principal?: Principal
+}): Promise<number> {
+  const open = await prisma.supervisorDecision.findMany({
+    where: { workspaceId: input.workspaceId, situationKind: input.situationKind, status: 'pending' },
+    orderBy: { createdAt: 'asc' },
+    select: { id: true },
+  })
+
+  let resolved = 0
+  for (const row of open) {
+    const claimed = await prisma.supervisorDecision.updateMany({
+      where: { id: row.id, status: 'pending' },
+      data: { status: 'rejected', resolvedAt: new Date(), resolvedByUserId: input.principal?.userId ?? null },
+    })
+    if (claimed.count === 0) continue
+    resolved += 1
+    await appendEvent({
+      type: 'supervisor.resolved',
+      workspaceId: input.workspaceId,
+      // A PERSON's act, exactly as an approval or a rejection is (see {@link approveDecision} for
+      // why this one event departs from the `system` actor): they answered the question by doing
+      // the thing, and the log should say a human closed it.
+      actor: 'human',
+      payload: { decisionId: row.id, outcome: 'rejected', reason: input.reason },
+      userId: input.principal?.userId ?? null,
+    })
+  }
+  return resolved
 }
 
 /**

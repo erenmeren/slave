@@ -17,6 +17,11 @@ import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
 import { isUniqueConstraintViolation } from './prisma-errors.js'
 import type { ControlRefusal } from './refusal.js'
+// The one import cycle in this package (`supervisor.ts` imports {@link adoptRunbook} for its
+// `adopt_runbook` arm), and the same shape `apps/orchestrator`'s `planning.ts`/`replan.ts` pair
+// already has: both sides export hoisted functions and neither calls the other while its module is
+// still evaluating, so the bindings are live by the time anything runs.
+import { resolveSettledDecisions } from './supervisor.js'
 
 /** A runbook as every surface reads it: the domain shape plus the one fact only the database has. */
 export interface RunbookView extends Runbook {
@@ -313,6 +318,30 @@ export async function adoptRunbook(
       userId: principal?.userId ?? null,
     })
   }
+  // A PERSON has just answered the question a pending recommendation asks (M48 final wave, Task 4
+  // ruling), so the proposal stops waiting. Without this it sits for the rest of its 24-hour TTL
+  // with an Approve button that would adopt a DIFFERENT runbook over the choice just made -- and
+  // the Overview would go on saying "the Supervisor proposed Feature delivery" beside the Bug fix
+  // this project now follows.
+  //
+  // `origin: 'system'` is excluded because that is `applyDecision` carrying out a decision a human
+  // already approved: `approveDecision` claimed the row before the verb ran, so there is nothing
+  // pending left, and reaching back here would be a second resolution path over the same rows.
+  // A clear counts too -- "no runbook" is an answer to "which runbook", not an absence of one.
+  //
+  // After the write and its event, never inside the transaction: these are separate rows with
+  // their own events, and a refusal cannot reach this line (every one of them returns above).
+  if (opts.origin !== 'system') {
+    const cleared = decided.value.outcome.adopted === null
+    await resolveSettledDecisions({
+      workspaceId,
+      situationKind: 'runbook_recommended',
+      reason: cleared
+        ? 'cleared by hand: this project was told to follow no runbook'
+        : `adopted by hand: this project now follows "${decided.value.outcome.adopted?.key ?? ''}"`,
+      ...(principal === undefined ? {} : { principal }),
+    })
+  }
   return ok(decided.value.outcome)
 }
 
@@ -325,6 +354,26 @@ export async function runbookForWorkspace(workspaceId: string): Promise<Runbook 
     select: { runbook: { include: { _count: { select: { workspaces: true } } } } },
   })
   const row = workspace?.runbook ?? null
+  return row === null ? null : viewOf(row, row._count.workspaces)
+}
+
+/**
+ * The runbook a RUN was shown, addressed by the id its manifest recorded (M48 final review,
+ * Important 3).
+ *
+ * By ID and not by key, unlike every operator-facing read: the manifest records both, and the id is
+ * the one that cannot be re-pointed. A `syncRunbooks()` between the prompt and its conclusion can
+ * rewrite what a seed KEY holds; the row the planner was actually shown is the row this finds.
+ *
+ * `null` for a runbook that has since been deleted, which is a fact rather than a refusal: the
+ * caller falls back to no stage vocabulary at all, exactly as it does for a run that was shown no
+ * runbook.
+ */
+export async function readRunbookById(id: string): Promise<Runbook | null> {
+  const row = await prisma.runbookTemplate.findUnique({
+    where: { id },
+    include: { _count: { select: { workspaces: true } } },
+  })
   return row === null ? null : viewOf(row, row._count.workspaces)
 }
 
@@ -348,9 +397,11 @@ export interface RunbookStatusView {
  *
  * The four stage states are the four things a person can be told, read AGAINST the current stage
  * rather than off the task counts alone (fix round 1, Important 1):
- * - `active` -- it IS the current stage, whether or not any task has reached it yet. Checked first,
- *   because the alternative is a panel saying "current stage: Design" over a row saying design was
- *   skipped, which is what a board on the day a runbook is adopted looks like.
+ * - `active` -- it IS the current stage, whether or not any task has reached it yet, AND the board
+ *   still holds live work. Checked first, because the alternative is a panel saying "current stage:
+ *   Design" over a row saying design was skipped, which is what a board on the day a runbook is
+ *   adopted looks like. On a FINISHED board there is no active stage at all: see the comment on the
+ *   ladder itself.
  * - `done` -- it is BEFORE the current stage and has tasks. Every one of them is terminal by
  *   construction: the current stage is the first with a live task.
  * - `missing` -- it is BEFORE the current stage and has none. This is the only honest reading of
@@ -399,14 +450,16 @@ export async function runbookStatus(workspaceId: string): Promise<Result<Runbook
     unknownStages: adherence.unknownStages,
     stages: ordered.map((stage, index) => {
       const taskCount = countByStage.get(stage.key) ?? 0
-      const state =
-        index === currentIndex
-          ? 'active'
-          : currentIndex !== -1 && index < currentIndex
-            ? taskCount === 0
-              ? 'missing'
-              : 'done'
-            : 'pending'
+      // A stage is judged by its task count once the work has gone PAST it -- and with the board
+      // finished (`measureAdherence().finished`, erratum E7's all-terminal branch) the work has
+      // gone past all of them (M48 final review, Minor 2). `currentStage` is then "the last stage"
+      // rather than "the stage the team is on", and calling it `active` put "happening now" beside
+      // a project where nothing is running and nothing will: the panel printed the working word
+      // over a finished release. The count ladder is not relaxed for it, though -- a last stage no
+      // task ever carried is `missing`, exactly as it is listed in `stagesMissing`, because "done"
+      // about a stage with no work in it would be the same contradiction one row further down.
+      const past = adherence.finished || (currentIndex !== -1 && index < currentIndex)
+      const state = past ? (taskCount === 0 ? 'missing' : 'done') : index === currentIndex ? 'active' : 'pending'
       return { key: stage.key, title: stage.title, taskCount, state }
     }),
   })

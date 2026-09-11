@@ -2806,7 +2806,11 @@ describe('the orchestrator CLI', () => {
     }
 
     beforeEach(async (): Promise<void> => {
-      await prisma.$executeRawUnsafe('TRUNCATE TABLE "CatalogImport", "SlaveTemplate" RESTART IDENTITY CASCADE')
+      // `SlaveTemplate` truncated CASCADE reaches `RunbookTemplate` (M48's `sourceTemplateId`) and
+      // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than
+      // left to the cascade, so the reach is documented rather than accidental (M48 final review,
+      // I2).
+      await prisma.$executeRawUnsafe('TRUNCATE TABLE "CatalogImport", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE')
     })
 
     afterAll(() => {

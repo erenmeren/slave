@@ -121,6 +121,10 @@ export type ControlRefusal =
   /** M48 R5: the file `runbooks add --file` was handed is not a runbook -- a bad key, a missing
    *  name, or a stage list `parseRunbookStages` refused, whose own sentence is the detail. */
   | { readonly kind: 'invalid_runbook'; readonly detail: string }
+  /** M48 final wave (Task 4 ruling): an approved `adopt_runbook` proposal reached a project that
+   *  already follows a DIFFERENT runbook. Both keys, because the only useful sentence names what
+   *  was proposed and what the project actually follows. */
+  | { readonly kind: 'runbook_already_adopted'; readonly adopted: string; readonly proposed: string }
   /** M46 R2: `profileOverrides` are a partial of `profileSpec`, and there is no spec on this row to
    *  be partial OF -- a hand-made template, or one whose catalog has not been imported since M46.
    *  Refused rather than invented: writing overrides against an empty spec would re-render the
@@ -411,6 +415,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `there is no runbook "${refusal.key}": \`runbooks list\` shows the ones there are`
     case 'invalid_runbook':
       return `that runbook cannot be written: ${refusal.detail}`
+    case 'runbook_already_adopted':
+      return `this project already follows "${refusal.adopted}", so the proposal to adopt "${refusal.proposed}" was not carried out`
     case 'company_not_found':
       return `no company with id ${refusal.companyId}`
     case 'company_team_not_found':

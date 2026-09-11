@@ -1,6 +1,7 @@
 import { RUNBOOK_SEED } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import type { Situation } from '@slave-of-ai/domain'
 import {
   addRunbook,
   adoptRunbook,
@@ -10,6 +11,7 @@ import {
   runbookStatus,
   syncRunbooks,
 } from '../../src/runbook.js'
+import { recordDecision } from '../../src/supervisor.js'
 
 const WORKSPACE = 'M48 Runbook Control'
 let workspaceId = ''
@@ -184,6 +186,89 @@ describe('adoptRunbook', () => {
   })
 })
 
+// M48 final wave, Task 4 ruling: a by-hand adoption ANSWERS the Supervisor's pending recommendation.
+describe('adoptRunbook and the pending recommendation', () => {
+  const situation = (): Situation => ({
+    kind: 'runbook_recommended',
+    subjectId: workspaceId,
+    summary: 'A way of working to adopt',
+    facts: { runbook: 'feature-delivery' },
+  })
+
+  /** The proposal `observe`/`candidates` produce for this project, recorded the way a tick does. */
+  const propose = async (): Promise<string> => {
+    const recorded = await recordDecision({
+      workspaceId,
+      situation: situation(),
+      candidates: [
+        {
+          action: {
+            kind: 'adopt_runbook',
+            runbookId: (await prisma.runbookTemplate.findUniqueOrThrow({ where: { key: 'feature-delivery' } })).id,
+            key: 'feature-delivery',
+            name: 'Feature delivery',
+            rationale: 'The goal says "ship".',
+          },
+          tier: 'proposed',
+          why: 'The goal says "ship".',
+        },
+      ],
+      chosenIndex: 0,
+      rationale: 'The goal says "ship".',
+      decidedBy: 'rules',
+      modelCostUsd: null,
+    })
+    if (!recorded.ok) throw new Error(`recordDecision refused: ${recorded.error.kind}`)
+    expect(recorded.value.status).toBe('pending')
+    return recorded.value.id
+  }
+
+  beforeEach(async () => {
+    // The decisions AND the events about them: this file shares one project across its blocks, and
+    // each case below counts `supervisor.resolved` rows rather than diffing a running total.
+    await prisma.supervisorDecision.deleteMany({ where: { workspaceId } })
+    await prisma.executionEvent.deleteMany({ where: { workspaceId, type: 'supervisor_resolved' } })
+    await adoptRunbook(workspaceId, null)
+  })
+
+  it('resolves the waiting proposal when a person adopts a DIFFERENT runbook by hand', async () => {
+    const decisionId = await propose()
+    expect((await adoptRunbook(workspaceId, 'bug-fix', { origin: 'human' })).ok).toBe(true)
+
+    const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })
+    expect(row.status).toBe('rejected')
+    expect(row.resolvedAt).not.toBeNull()
+    const resolved = await prisma.executionEvent.findMany({ where: { workspaceId, type: 'supervisor_resolved' } })
+    expect(resolved).toHaveLength(1)
+    expect(resolved[0]?.actor).toBe('human')
+    expect(resolved[0]?.payload).toMatchObject({ decisionId, outcome: 'rejected' })
+    expect(String((resolved[0]?.payload as { reason: string }).reason)).toContain('adopted by hand')
+  })
+
+  it('resolves it on a CLEAR too -- "no runbook" is an answer to "which runbook"', async () => {
+    await adoptRunbook(workspaceId, 'bug-fix', { origin: 'human' })
+    await prisma.supervisorDecision.deleteMany({ where: { workspaceId } })
+    const decisionId = await propose()
+
+    expect((await adoptRunbook(workspaceId, null, { origin: 'human' })).ok).toBe(true)
+    const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })
+    expect(row.status).toBe('rejected')
+    const resolved = await prisma.executionEvent.findMany({ where: { workspaceId, type: 'supervisor_resolved' } })
+    expect(resolved).toHaveLength(1)
+    expect(String((resolved[0]?.payload as { reason: string }).reason)).toContain('cleared by hand')
+  })
+
+  it('leaves the proposal alone when the TICK carries one out -- that row was claimed already', async () => {
+    const decisionId = await propose()
+    // `origin: 'system'` is `applyDecision` acting on a decision a human approved: the claim
+    // happened in `approveDecision`, and a second resolution here would be a second path over rows
+    // somebody else owns.
+    expect((await adoptRunbook(workspaceId, 'feature-delivery', { origin: 'system' })).ok).toBe(true)
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })).status).toBe('pending')
+    expect(await prisma.executionEvent.count({ where: { workspaceId, type: 'supervisor_resolved' } })).toBe(0)
+  })
+})
+
 describe('runbookStatus', () => {
   /** The stage ladder, as the panel reads it: key then state, in `stageOrder`. */
   const ladder = async (): Promise<readonly (readonly [string, string])[]> => {
@@ -241,7 +326,11 @@ describe('runbookStatus', () => {
   // Fix round 1, Important 1(b): with every staged task terminal the current stage is the LAST one
   // (`measureAdherence`'s E7 rule), and the old ladder then said current = Release AND Release
   // missing in the same breath.
-  it('with every staged task terminal, the last stage is active and the skipped ones are missing', async () => {
+  //
+  // M48 final review, Minor 2: nor is it `active`. Nothing is running and nothing will be -- the
+  // work is over -- so every stage is judged by its own task count, and a release stage no task
+  // ever carried reads `missing`, which is what `stagesMissing` says about it one field away.
+  it('with every staged task terminal, no stage is active and the skipped ones are missing', async () => {
     await prisma.task.create({
       data: { workspaceId, title: 'A', description: 'a', status: 'done', maxAttempts: 3, stage: 'design' },
     })
@@ -249,7 +338,48 @@ describe('runbookStatus', () => {
     expect(status.ok).toBe(true)
     if (!status.ok) return
     expect(status.value.currentStage).toBe('release')
+    expect(status.value.stagesMissing).toContain('release')
     expect(status.value.stages.map((stage) => [stage.key, stage.state])).toEqual([
+      ['design', 'done'],
+      ['implement', 'missing'],
+      ['verify', 'missing'],
+      ['review', 'missing'],
+      ['release', 'missing'],
+    ])
+  })
+
+  // The case Minor 2 is actually about: a project that ran its runbook to the end. The last stage
+  // HAS work in it and every bit of that work is finished, so the word beside it is `done`.
+  it('calls the finished last stage done, never happening-now, when work reached it', async () => {
+    await prisma.task.createMany({
+      data: [
+        { workspaceId, title: 'A', description: 'a', status: 'done', maxAttempts: 3, stage: 'design' },
+        { workspaceId, title: 'B', description: 'b', status: 'done', maxAttempts: 3, stage: 'release' },
+      ],
+    })
+    const status = await runbookStatus(workspaceId)
+    expect(status.ok).toBe(true)
+    if (!status.ok) return
+    expect(status.value.currentStage).toBe('release')
+    expect(status.value.stages.map((stage) => [stage.key, stage.state])).toEqual([
+      ['design', 'done'],
+      ['implement', 'missing'],
+      ['verify', 'missing'],
+      ['review', 'missing'],
+      ['release', 'done'],
+    ])
+  })
+
+  // And the other side of the same rule: one live task anywhere and the ladder is back to a team
+  // standing on a stage.
+  it('still calls the stage with live work active', async () => {
+    await prisma.task.createMany({
+      data: [
+        { workspaceId, title: 'A', description: 'a', status: 'done', maxAttempts: 3, stage: 'design' },
+        { workspaceId, title: 'B', description: 'b', status: 'ready', maxAttempts: 3, stage: 'release' },
+      ],
+    })
+    expect(await ladder()).toEqual([
       ['design', 'done'],
       ['implement', 'missing'],
       ['verify', 'missing'],

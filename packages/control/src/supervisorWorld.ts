@@ -605,9 +605,6 @@ export async function loadSupervisorWorld(
       const asksForCapabilities = taskRows.some(
         (row) => isStaffableTask(row) && row.requiredCapabilities.length > 0,
       )
-      const taxonomy = asksForCapabilities ? await loadTaxonomy(tx) : []
-      const companyRows = asksForCapabilities ? await loadCompanyRoster(tx, workspaceId) : []
-      const catalogRows = asksForCapabilities ? await loadCatalogEntries(tx, slaveRows) : []
 
       // M48 R5. The ADOPTED runbook is read whenever the column is set -- `observe`'s escalation
       // sentence, the panel and `verify` all read the same row. The CATALOGUE is read only when a
@@ -620,6 +617,22 @@ export async function loadSupervisorWorld(
       const adopted = adoptedRow === null ? null : runbookOf(adoptedRow)
       const canRecommend =
         workspace.goal !== null && workspace.goal !== '' && workspace.runbookId === null && taskRows.length === 0
+
+      // THE TAXONOMY IS LOADED WHENEVER RUNBOOKS MATTER, not only when the board asks for a
+      // capability (M48 final review, Important 1). A runbook names capabilities of its own -- per
+      // stage, and in `requiredCapabilities` -- and every surface that shows one shows the LABEL
+      // (`docs/ia.md` rule 3): the recommendation's rationale sentence, which is stored on the
+      // decision row a person reads months later, and the Overview panel's stage chips. With an
+      // empty taxonomy `capabilityLabel` falls back to the raw key, so the fact that goes in front
+      // of a person is `operations.deployment` rather than "Deployment" -- and on a project whose
+      // board asks for no capabilities at all (a plan written in plain roles, or no plan yet, which
+      // is EXACTLY the state a recommendation is made in) that was the only reading there was. The
+      // company roster and the catalog still wait for `asksForCapabilities`: they answer a staffing
+      // question nobody here asked.
+      const taxonomy = asksForCapabilities || workspace.runbookId !== null || canRecommend ? await loadTaxonomy(tx) : []
+      const companyRows = asksForCapabilities ? await loadCompanyRoster(tx, workspaceId) : []
+      const catalogRows = asksForCapabilities ? await loadCatalogEntries(tx, slaveRows) : []
+
       const runbooks = canRecommend ? await loadRunbooks(tx) : []
 
       // On `tx`, like everything else: this is the `senderRunId` set the pending-question filter

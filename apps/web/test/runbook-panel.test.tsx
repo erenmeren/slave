@@ -186,9 +186,43 @@ describe('RunbookPanel', () => {
     expect((screen.getByTestId('runbook-picker') as HTMLSelectElement).value).toBe('')
   })
 
-  it('renders nothing at all when there is no runbook and nothing to recommend', () => {
+  it('renders nothing at all when there is no runbook, nothing to recommend and nothing to pick', () => {
     const { container } = render(<RunbookPanel workspaceId="w1" view={view({})} />)
     expect(container.querySelector('[data-testid="runbook-panel"]')).toBeNull()
+  })
+
+  // M48 final review, Minor 1: the builder recommends only on an empty board, so this is the shape
+  // a project with tasks and no runbook arrives in -- the picker, and no suggestion.
+  it('shows the picker alone when there is nothing to recommend but runbooks to choose from', () => {
+    render(
+      <RunbookPanel workspaceId="w1" view={view({ recommendations: [], all: [option('bug-fix', 'Bug fix')] })} />,
+    )
+    expect(screen.queryAllByTestId('runbook-recommendation')).toHaveLength(0)
+    expect(screen.getByTestId('runbook-panel').textContent).not.toContain('recommended for this goal')
+    const options = [...screen.getByTestId('runbook-picker').querySelectorAll('option')].map((node) => node.getAttribute('value'))
+    expect(options).toEqual(['', 'bug-fix'])
+    // Nothing is adopted, so there is nothing to stop following.
+    expect(screen.queryByTestId('runbook-clear')).toBeNull()
+  })
+
+  // M48 final review, Minor 9: the two controls are independent.
+  it('offers Clear whenever a runbook is adopted, even with nothing else to switch to', async () => {
+    const { urls } = stubFetch()
+    render(
+      <RunbookPanel
+        workspaceId="w1"
+        view={view({
+          adopted: { ...option('feature-delivery', 'Feature delivery'), why: null },
+          // The ONLY runbook in the database is the adopted one, so the picker has no rows at all.
+          all: [option('feature-delivery', 'Feature delivery')],
+        })}
+      />,
+    )
+    expect(screen.queryByTestId('runbook-picker')).toBeNull()
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('runbook-clear'))
+    })
+    expect(urls).toEqual(['/api/w/w1/runbook'])
   })
 
   it('renders nothing when the snapshot has no panel at all -- a workspace read between two states', () => {
