@@ -414,6 +414,14 @@ async function carryOut(
         await materialiseCompanySlave(decision.workspaceId, action.companySlaveId, { rationale: action.rationale }),
       )
     case 'hire_from_catalog':
+      // M50 R2, fix round 1 (Minor 8). `actionOf` never produces this pair, so a temporary hire
+      // with no assignment is a decision recorded by an older build or edited by hand. It is
+      // carried out as an ORDINARY hire rather than refused -- the capability gap is real either
+      // way -- and the downgrade says so out loud, because the worker it makes is one
+      // `engagement_over` can never raise.
+      if (action.temporary && action.engagementTaskId === null) {
+        console.warn('[supervisor] temporary hire without an engagement -- hired as a project worker')
+      }
       return reached(
         await hireFromTemplate(decision.workspaceId, action.templateId, {
           capabilities: [action.capability],
@@ -477,7 +485,7 @@ async function carryOut(
       // M50 R3, the routine the milestone is named for. `tierOf` makes this `applied` on an
       // unhalted project, so this arm runs inside a TICK -- which is exactly why `releaseWorker`
       // skips and counts a worktree it could not remove instead of throwing.
-      return reached(await releaseWorker(action.slaveId, action.reason, principal))
+      return reached(await releaseWorker(action.slaveId, action.reason, principal, origin))
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

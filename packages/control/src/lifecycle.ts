@@ -12,6 +12,12 @@ import { liveRunCount } from './workspace.js'
  *  so this is a cap, not a validation (plan decision D4). */
 const RELEASE_REASON_MAX = 500
 
+/** What a release is recorded with when the caller's sentence is blank. NOT a refusal (D4 stands):
+ *  the release itself is the fact, and `slave.released`'s payload schema is `z.string().min(1)` --
+ *  a blank reason committed to the column would leave the write done and the EVENT refused, which
+ *  is the one outcome this verb must never produce (fix round 1, Important 1). */
+const RELEASE_REASON_FALLBACK = 'released'
+
 /**
  * The end of one worker's engagement (M50 R3). NEVER a deletion.
  *
@@ -32,13 +38,23 @@ const RELEASE_REASON_MAX = 500
  * verb is carried out by a TICK -- `tierOf` makes `release_worker` `applied` -- so a tree `git`
  * refused to remove must be a line in the log and a number in the payload, never an exception out
  * of the Supervisor's apply path.
+ *
+ * `origin` is the event ENVELOPE actor, the same closed pair `setRuntimeRoles` takes
+ * (`profile.ts:201`) and for the same reason: `principal` says WHICH person, when one can be named,
+ * and is a different fact from whether a person is behind the change at all. `carryOut` passes the
+ * decision's own origin -- `system` on a tick, `human` only when somebody approved a proposal a
+ * halt had demoted -- and the CLI and the route take the default.
  */
 export async function releaseWorker(
   slaveId: string,
   reason: string,
   principal?: Principal,
+  origin: 'human' | 'system' = 'human',
 ): Promise<Result<{ readonly worktreesCollected: number }, ControlRefusal>> {
-  const recorded = reason.slice(0, RELEASE_REASON_MAX)
+  // Normalised BEFORE the transaction, so the column and the event carry the SAME text and neither
+  // can be written without the other (fix round 1, Important 1).
+  const trimmed = reason.trim()
+  const recorded = (trimmed === '' ? RELEASE_REASON_FALLBACK : trimmed).slice(0, RELEASE_REASON_MAX)
 
   const plan = await prisma.$transaction(async (tx) => {
     const slave = await lockSlave(tx, slaveId)
@@ -91,9 +107,7 @@ export async function releaseWorker(
     type: 'slave.released',
     workspaceId: plan.workspaceId,
     slaveId,
-    // A person released this only when a person asked. The Supervisor's routine apply passes no
-    // principal, and `system` is what the timeline should say about it.
-    actor: principal === undefined ? 'system' : 'human',
+    actor: origin,
     payload: { slaveId, name: plan.name, reason: recorded, worktreesCollected },
     userId: principal?.userId ?? null,
   })
@@ -113,6 +127,10 @@ export async function releaseWorker(
  * temporary has no one assignment to be over, and a `releasedAt` left behind would keep it off every
  * roster while its lifecycle said it belonged there. Nothing is restored -- the runtime roles are a
  * person's own call through `set-runtime-roles`, which is exactly what R4 says.
+ *
+ * Moving INTO `ephemeral` writes no engagement, deliberately (fix round 1, Minor 4): such a worker
+ * never raises `engagement_over` -- the rule needs a terminal engagement task -- and the person who
+ * labelled it releases it themselves with `release-worker`, which asks for no engagement.
  */
 export async function setLifecycle(
   slaveId: string,
@@ -126,13 +144,16 @@ export async function setLifecycle(
     if (live > 0) {
       return { refusal: { kind: 'live_runs', entity: 'slave', id: slaveId, runs: live } as ControlRefusal }
     }
+    // The no-move BEFORE the roster check (fix round 1, Minor 1): `companySlaveId` is `SetNull`, so
+    // a permanent worker whose roster row was deleted is still permanent -- and asking for the
+    // lifecycle it already has must be the no-op it is, never a refusal about a change nobody made.
+    const from = slave.lifecycle
+    if (from === lifecycle) return { workspaceId: slave.team.workspaceId, from, changed: false as const }
     // `permanent` is not a label somebody may apply: it MEANS "this worker exists in the company
     // roster", and the roster link is the only thing that can say so.
     if (lifecycle === 'permanent' && slave.companySlaveId === null) {
       return { refusal: { kind: 'not_in_roster', slaveId } as ControlRefusal }
     }
-    const from = slave.lifecycle
-    if (from === lifecycle) return { workspaceId: slave.team.workspaceId, from, changed: false as const }
     await tx.slave.update({
       where: { id: slaveId },
       data: {
