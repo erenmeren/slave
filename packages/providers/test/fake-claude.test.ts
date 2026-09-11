@@ -199,6 +199,26 @@ describe('fake-claude', () => {
       expect(result?.result).toContain('"key":"auth"')
     })
 
+    it('answers it from the M48 runbook graph, whose first task carries a stage and a contract', async (): Promise<void> => {
+      const { stdout } = await run('node', [
+        FAKE,
+        '--fixture',
+        'm8-flow',
+        '--plan-fixture',
+        'plan-graph-runbook',
+        '-p',
+        PROMPT,
+      ])
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"key":"shape"')
+      expect(result?.result).toContain('"stage":"design"')
+      expect(result?.result).toContain('"objective":"Decide the interface the authentication work is written against."')
+      // The plan deliberately names no `review` and no `release` task, so the stages it skipped are
+      // a measurement `workspace.plan_created.runbook.stagesMissing` can make.
+      expect(result?.result).not.toContain('"stage":"review"')
+      expect(result?.result).not.toContain('"stage":"release"')
+    })
+
     it('ignores a --plan-fixture whose value is another flag', async (): Promise<void> => {
       const { stdout } = await run('node', [FAKE, '--fixture', 'm8-flow', '--plan-fixture', '--verbose', '-p', PROMPT])
       const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined

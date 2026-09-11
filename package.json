@@ -57,7 +57,8 @@
     "gate:m44-ux-foundation": "tsc --build && node --env-file=.env scripts/gate-m44-ux-foundation.mjs",
     "gate:m45-project-experience": "tsc --build && node --env-file=.env scripts/gate-m45-project-experience.mjs",
     "gate:m46-workforce-catalog": "tsc --build && node --env-file=.env scripts/gate-m46-workforce-catalog.mjs",
-    "gate:m47-team-formation": "tsc --build && node --env-file=.env scripts/gate-m47-team-formation.mjs"
+    "gate:m47-team-formation": "tsc --build && node --env-file=.env scripts/gate-m47-team-formation.mjs",
+    "gate:m48-runbooks": "tsc --build && node --env-file=.env scripts/gate-m48-runbooks.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",

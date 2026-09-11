@@ -470,6 +470,61 @@ become advisory relationships — shown on the profile and on the Organization t
 tie between two equally capable candidates, and never, under any circumstance, allowed to decide
 who does the work.
 
+## Runbooks
+
+A runbook is the way a project works, written down: an ordered list of stages, each with an
+objective, the capabilities it asks for, what it leaves behind, and — optionally — its own verify
+gates, its own retry cap and the sentence to say when those run out. Three ship with the product
+(`bug-fix`, `feature-delivery`, `security-review`); they are rows in a table, not code.
+
+```bash
+npm run orchestrator -- runbooks sync            # write the checked-in list into the table
+npm run orchestrator -- runbooks list
+npm run orchestrator -- runbooks show feature-delivery
+npm run orchestrator -- runbooks add --file ./my-runbook.json   # your own; a sync never rewrites it
+npm run orchestrator -- adopt-runbook --workspace <id> --runbook feature-delivery
+npm run orchestrator -- runbook-status --workspace <id>
+```
+
+**Run `runbooks sync` once.** Nothing writes the table by itself: until you do, Workforce → Runbooks
+is empty and no project is offered one. A runbook you add is recorded as `human` and is the one kind
+a sync will never touch.
+
+An imported persona brings its own. A profile with a `## Workflow Process` of two steps or more
+becomes a runbook nobody typed — `persona-<the specialist's name>`, one stage per step, in the
+persona's own words — and the Workforce tab says which specialist it was translated from. A persona
+with no process becomes no runbook; one step is not a process.
+
+Before the first plan, the Supervisor reads the goal and offers the runbooks whose keywords are in
+it, best first, with the sentence that chose each one. It never adopts one itself: a way of working
+is a person's decision, so the offer waits as a proposal until somebody answers it — on the
+timeline, or with the Adopt button on the project's Overview. Adopting re-plans nothing; the next
+planning run is what adapts it.
+
+The plan written afterwards carries the runbook through. Every task comes back with a `stage` naming
+one of the runbook's keys and a typed handoff — objective, expected output, acceptance criteria,
+known constraints, evidence required, context references — and a task in a stage with its own retry
+cap gets that cap instead of the project's, fixed when the task is created. Skipping a stage is
+allowed and is simply reported: the `workspace.plan_created` event names the stages the plan covered
+and the stages it missed, and the Overview marks a stage the work went past without a task as *not
+in the plan*.
+
+The contract then travels with the work. It is a `HANDOFF` section in the prompt the worker is
+given and in the prompt its reviewer is given — read either back with
+`show-context --run <id> --prompt` — so the diff is judged against the criteria the task was
+created with rather than against a paragraph somebody remembers.
+
+A stage's gates are real shell commands, run in the worktree after the project's own verify
+commands, and a failure says which stage it belongs to — in the log, in the task's rejection reason
+and on the `task.verify_failed` event. **A stage gate runs twice for a task that merges cleanly**:
+once when the run is verified, and once on the post-rebase re-verify, because what a gate proves
+about the tree the reviewer read is worth proving again about the tree that actually lands. Write
+gates that can be run twice.
+
+`runbook-status` and the Overview's panel answer the same question from the same derivation — which
+stage the work is on, and what each stage's state is: done, happening now, planned, or not in the
+plan.
+
 ## The whole story
 
 Every section above describes one seam. `npm run gate:m41-scenario` runs them in sequence, once,
@@ -718,7 +773,7 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m35-pipeline-honesty`, `gate:m36-messaging`, `gate:m37-run-context`, `gate:m38-supervisor`,
 `gate:m39-supervisor-mailbox`, `gate:m40-requirement-versioning`, `gate:m41-scenario`,
 `gate:m42-catalog-import`, `gate:m44-ux-foundation`, `gate:m45-project-experience`,
-`gate:m46-workforce-catalog` and `gate:m47-team-formation` on every push — `m36` stops the orchestrator and starts it again
+`gate:m46-workforce-catalog`, `gate:m47-team-formation` and `gate:m48-runbooks` on every push — `m36` stops the orchestrator and starts it again
 mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was
 given the persona and the skills it was assigned, `m38` drives a real daemon until the Supervisor
 proposes the staffing a reviewer-less project needs, waits for a human to approve it, unblocks a
@@ -763,7 +818,15 @@ event; the Supervisor raises the gap by capability and proposes a hire that wait
 approving it puts a specialist on the project with the sentence that chose it, and the very next
 tick dispatches the authentication task to that specialist by ROLE; a capability an idle worker
 already provides is granted routinely instead, without asking anybody; and the Organization tab
-shows who is here, what they can do and why. That is 22 gates. Tests and gates share one Postgres --
+shows who is here, what they can do and why,
+and `m48` proves that work is handed over with a contract rather than a paragraph: a persona's own
+three-step process becomes a runbook nobody typed, the Supervisor recommends one for a goal and
+waits for a person to adopt it, the plan that follows carries a stage and a typed handoff on every
+task -- with the verify stage's own retry cap, and the two stages it skipped named on the plan
+event -- the contract turns up in the real prompt the worker was given and in the reviewer's, a
+stage's own gate runs after the project's verify commands and its failure says which stage it was,
+and the Overview shows which stage the work is on and which stages the plan never covered. That is
+23 gates. Tests and gates share one Postgres --
 run one at a time.
 
 ## Learn more

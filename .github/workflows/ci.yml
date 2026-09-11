@@ -73,3 +73,4 @@ jobs:
       - run: npm run gate:m45-project-experience
       - run: npm run gate:m46-workforce-catalog
       - run: npm run gate:m47-team-formation
+      - run: npm run gate:m48-runbooks

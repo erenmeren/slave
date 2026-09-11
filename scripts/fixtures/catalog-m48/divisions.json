@@ -1,0 +1,7 @@
+{
+  "_note": "M48's own catalog. Two divisions, two personas: one with a three-step Workflow Process (which becomes a persona runbook) and one with none (which does not). Separate from catalog-m46 and catalog-m47, whose own gates assert exact counts over them, and its persona names are distinct from every other fixture catalog's because SlaveTemplate.name is globally unique.",
+  "divisions": {
+    "engineering": { "label": "Engineering" },
+    "security": { "label": "Security" }
+  }
+}
