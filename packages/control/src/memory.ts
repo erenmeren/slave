@@ -1,5 +1,6 @@
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
+  MEMORIES_IN_PROMPT,
   MEMORIES_LOADED_MAX,
   MEMORY_BODY_MAX,
   MEMORY_CANDIDATE_STALE_MS,
@@ -530,14 +531,34 @@ export interface MemoriesForRunInput {
 }
 
 /**
+ * What {@link memoriesForRun} answers: the twelve a prompt may carry, and how many QUALIFIED.
+ *
+ * Two numbers rather than one because they are two different facts (fix round 1, item 3):
+ * `memories.length` is twelve both when twelve qualified and when six hundred did, and a caller
+ * writing "there was more to say" on the run's manifest can only be honest about it with
+ * `eligible`.
+ */
+export interface MemoriesForRun {
+  readonly memories: readonly MemoryView[]
+  /** Every memory that passed the three eligibility rules and the summary-source drop, before the
+   *  twelve were taken off the top. Never less than `memories.length`. */
+  readonly eligible: number
+}
+
+/**
  * The knowledge one run is given (M49 R3).
  *
  * ONE bounded query for all three scopes, then the pure ranking. Bounded at
  * `MEMORIES_LOADED_MAX` and ordered `createdAt desc, id asc` so the set handed to the ranking is
  * itself deterministic -- a workspace with six hundred memories must give the same twelve every
  * time, and "the newest five hundred" is a rule a reader can state.
+ *
+ * `retrieveMemories` is asked for the WHOLE ranked list (`limit: MEMORIES_LOADED_MAX`, the bound
+ * the query itself already applied) and the twelve are taken here, so the count that says whether
+ * anything was left out comes from the same rule that decided what to leave out. The ranking is
+ * pure and total, so this costs one `slice` and no second pass.
  */
-export async function memoriesForRun(input: MemoriesForRunInput): Promise<readonly MemoryView[]> {
+export async function memoriesForRun(input: MemoriesForRunInput): Promise<MemoriesForRun> {
   const [workspace, task] = await Promise.all([
     prisma.workspace.findUnique({ where: { id: input.workspaceId }, select: { companyId: true, goalVersion: true } }),
     input.taskId === null
@@ -547,7 +568,7 @@ export async function memoriesForRun(input: MemoriesForRunInput): Promise<readon
           select: { requiredCapabilities: true, goalVersion: true },
         }),
   ])
-  if (workspace === null) return []
+  if (workspace === null) return { memories: [], eligible: 0 }
 
   const scopes: Prisma.MemoryWhereInput[] = [{ workspaceId: input.workspaceId }]
   if (workspace.companyId !== null) scopes.push({ companyId: workspace.companyId })
@@ -560,7 +581,7 @@ export async function memoriesForRun(input: MemoriesForRunInput): Promise<readon
     take: MEMORIES_LOADED_MAX,
   })
 
-  return retrieveMemories({
+  const ranked = retrieveMemories({
     memories: rows.map(viewOf),
     scopes: { companyId: workspace.companyId, workspaceId: input.workspaceId, slaveId: input.slaveId },
     refs: {
@@ -569,7 +590,9 @@ export async function memoriesForRun(input: MemoriesForRunInput): Promise<readon
       goalVersion: task?.goalVersion ?? workspace.goalVersion,
     },
     kind: input.kind,
+    limit: MEMORIES_LOADED_MAX,
   })
+  return { memories: ranked.slice(0, MEMORIES_IN_PROMPT), eligible: ranked.length }
 }
 
 /** How many OBSERVATION candidates have sat unverified for over a day (M49 R2, plan erratum E11).

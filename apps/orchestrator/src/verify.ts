@@ -419,15 +419,12 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   const remembered = await prisma.memory.count({
     where: { taskId: task.id, runId: run.id, type: 'observation' },
   })
-  const lastOutput =
-    remembered > 0
-      ? null
-      : await prisma.executionEvent.findFirst({
-          where: { runId: run.id, type: 'run_output' },
-          orderBy: { seq: 'desc' },
-          select: { seq: true, payload: true },
-        })
   if (remembered === 0) {
+    const lastOutput = await prisma.executionEvent.findFirst({
+      where: { runId: run.id, type: 'run_output' },
+      orderBy: { seq: 'desc' },
+      select: { seq: true, payload: true },
+    })
     await promote({
       kind: 'run_succeeded',
       workspaceId: task.workspaceId,

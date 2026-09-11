@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { MEMORY_CANDIDATE_STALE_MS } from '@slave-of-ai/domain'
+import { MEMORIES_IN_PROMPT, MEMORY_CANDIDATE_STALE_MS } from '@slave-of-ai/domain'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   addMemory,
@@ -488,7 +488,44 @@ describe('listMemories and memoriesForRun', () => {
       }),
     )
     const given = await memoriesForRun({ workspaceId, slaveId, taskId, kind: 'implementation' })
-    expect(given.map((one) => one.title)).toEqual(['mine', 'project fact', 'company fact'])
+    expect(given.memories.map((one) => one.title)).toEqual(['mine', 'project fact', 'company fact'])
+    // Nothing was left out, so nothing was capped (fix round 1, item 3).
+    expect(given.eligible).toBe(3)
+  })
+
+  // Fix round 1, item 3: `capped` has to mean "there was more to say", and the only honest source
+  // for that is how many rows QUALIFIED -- not how many came back, which is twelve both when
+  // twelve qualified and when six hundred did.
+  it('counts every memory that qualified, not only the twelve it hands over', async () => {
+    for (let index = 0; index < MEMORIES_IN_PROMPT; index += 1) {
+      const written = await recordMemory(
+        draft({
+          type: 'fact',
+          status: 'verified',
+          confidence: 'sourced',
+          verifiedBy: 'verification',
+          title: `fact ${String(index)}`,
+        }),
+      )
+      expect(written.ok).toBe(true)
+    }
+    const exactly = await memoriesForRun({ workspaceId, slaveId, taskId, kind: 'implementation' })
+    expect(exactly.memories).toHaveLength(MEMORIES_IN_PROMPT)
+    expect(exactly.eligible).toBe(MEMORIES_IN_PROMPT)
+
+    const extra = await recordMemory(
+      draft({
+        type: 'fact',
+        status: 'verified',
+        confidence: 'sourced',
+        verifiedBy: 'verification',
+        title: 'one more',
+      }),
+    )
+    expect(extra.ok).toBe(true)
+    const over = await memoriesForRun({ workspaceId, slaveId, taskId, kind: 'implementation' })
+    expect(over.memories).toHaveLength(MEMORIES_IN_PROMPT)
+    expect(over.eligible).toBe(MEMORIES_IN_PROMPT + 1)
   })
 
   // R3's first eligibility rule, enforced in the QUERY and not only in the ranking: a candidate is
@@ -496,12 +533,18 @@ describe('listMemories and memoriesForRun', () => {
   it('never loads an unverified candidate, however well it matches the task', async () => {
     const claim = await recordMemory(draft({ title: 'a claim nobody checked' }))
     expect(claim.ok).toBe(true)
-    expect(await memoriesForRun({ workspaceId, slaveId, taskId, kind: 'implementation' })).toEqual([])
+    expect(await memoriesForRun({ workspaceId, slaveId, taskId, kind: 'implementation' })).toEqual({
+      memories: [],
+      eligible: 0,
+    })
   })
 
   it('answers an unknown project with nothing at all rather than throwing', async () => {
     expect(await listMemories({ workspaceId: 'nope' })).toEqual([])
-    expect(await memoriesForRun({ workspaceId: 'nope', slaveId: null, taskId: null, kind: 'planning' })).toEqual([])
+    expect(await memoriesForRun({ workspaceId: 'nope', slaveId: null, taskId: null, kind: 'planning' })).toEqual({
+      memories: [],
+      eligible: 0,
+    })
   })
 })
 
