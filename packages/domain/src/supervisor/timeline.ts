@@ -68,6 +68,10 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   'task.review_started': 'work',
   'run.paused': 'work',
   'run.resumed': 'work',
+  // M51 R2: a rung the system climbed about one run's behaviour. The WORK lane, beside
+  // `run.paused`/`run.resumed`: it is a thing that happened TO a run, and it is exactly what a
+  // person reading "what happened here" needs between a run starting and a run failing.
+  'run.breaker': 'work',
   'slave.message_sent': 'work',
   // M50 R3: the end of one worker's engagement is part of the work story, beside the messages and
   // the pauses -- who was here, and until when. Not `decision`: the Supervisor applies this
@@ -103,6 +107,10 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   'task.worktree_collected': null,
   'run.started': null,
   'run.tool_call': null,
+  // M51 R1: beside `run.tool_call` above, for its reason -- the per-call stream belongs to the
+  // activity feed, and one timeline line per tool result would be the Supervisor's report drowned
+  // in its own workers' typing.
+  'run.tool_result': null,
   'run.tool_denied': null,
   'run.output': null,
   'run.pause_requested': null,

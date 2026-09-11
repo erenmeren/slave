@@ -75,6 +75,19 @@ export function tierOf(action: Action, world: SupervisorWorld, situationKind: Si
     // `halted` still demotes it above, like everything else.
     case 'release_worker':
       return 'applied'
+    // ROUTINE (M51 R3), and it is the ONE exception to the sentence above about a model's words --
+    // which is why that sentence says "a MODEL's words". `steer_run.text` is `steerTextFor(trip)`:
+    // a constant in `../breaker/constants.ts` with one integer interpolated into it, from a source
+    // file no model has seen and no prompt can reach. Nobody is being asked to approve a draft,
+    // because there is no draft; the only judgement in the whole path is `detectBehaviour`'s, which
+    // is a pure function over rows a person can read.
+    //
+    // What a human WOULD be approving, if this were `proposed`, is the ladder stalling: the steer
+    // rung is the gentlest one, and a proposal that waits for somebody to click is a loop that
+    // keeps spending until it hits the constrain rung anyway. `halted` still demotes it above,
+    // exactly like everything else.
+    case 'steer_run':
+      return 'applied'
     // Both bring a WORKER onto a project. Never automatic: a roster is a person's decision, and
     // a hire is a commitment the Supervisor may propose and may not make.
     case 'materialise_company_worker':

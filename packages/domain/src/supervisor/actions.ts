@@ -43,6 +43,17 @@ export type Action =
    *  spent. `name` is carried for the same reason `capabilityLabel` is -- `actionText` runs in the
    *  browser and has no roster to look a slave id up in. */
   | { readonly kind: 'release_worker'; readonly slaveId: string; readonly name: string; readonly reason: string }
+  /**
+   * M51 R3: put ONE fixed, system-authored sentence in front of a running worker that is going in
+   * circles, through the pause -> `queuedMessage` -> resume round trip that already exists.
+   *
+   * `text` is on the ACTION, not re-derived at apply time, for the reason every other action's
+   * fields are: a decision a human reads months later has to say what was actually sent. It is
+   * filled by `candidates.ts` from `steerTextFor(trip)` -- a constant interpolated with one integer
+   * -- and `carryOut` sends exactly it. **No model ever produces this string**, which is the whole
+   * of why `tierOf` may stamp it `applied`.
+   */
+  | { readonly kind: 'steer_run'; readonly runId: string; readonly slaveId: string; readonly text: string }
   /** `adoptRunbook`: the workspace adopts a way of working. Never automatic ({@link tierOf}) -- a
    *  process is a person's decision, exactly as a hire is, and the next plan is written against it.
    *  `name` and `rationale` are carried on the action rather than resolved by whoever renders it,
@@ -87,6 +98,7 @@ export const ACTION_KINDS = [
   'cancel_task',
   'discard_stale_candidates',
   'release_worker',
+  'steer_run',
   'escalate_to_human',
   'no_action',
 ] as const
@@ -139,6 +151,14 @@ export const actionSchema: z.ZodType<Action, z.ZodTypeDef, unknown> = z.discrimi
     slaveId: z.string().min(1),
     name: z.string().min(1),
     reason: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal('steer_run'),
+    runId: z.string().min(1),
+    slaveId: z.string().min(1),
+    // Capped where the action is VALIDATED as well as where it is built: a stored row is read back
+    // by `applyDecision` and sent verbatim, so the bound belongs on the boundary too.
+    text: z.string().min(1).max(1000),
   }),
   z.object({
     kind: z.literal('adopt_runbook'),

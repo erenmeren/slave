@@ -49,6 +49,7 @@ const ACTIONS: Readonly<Record<Action['kind'], Action>> = {
   cancel_task: { kind: 'cancel_task', taskId: 't1', reason: 'the new goal no longer needs it' },
   discard_stale_candidates: { kind: 'discard_stale_candidates', workspaceId: 'ws-1', count: 9 },
   release_worker: { kind: 'release_worker', slaveId: 's9', name: 'Robin', reason: 'the engagement is over' },
+  steer_run: { kind: 'steer_run', runId: 'run-1', slaveId: 's1', text: 'Stop and say what you are stuck on.' },
   escalate_to_human: { kind: 'escalate_to_human', summary: 'a human must look' },
   no_action: { kind: 'no_action' },
 }
@@ -88,6 +89,9 @@ describe('tierOf', () => {
     // the situation this action is actually offered for; the row is here so the table stays the
     // exhaustive list of `ACTION_KINDS` it reads as.
     ['release_worker', 'applied', 'proposed'],
+    // M51 R3. Routine because the text is a CONSTANT, not a model's draft -- there is nothing for a
+    // person to approve -- and demoted by the halt like everything else.
+    ['steer_run', 'applied', 'proposed'],
     ['escalate_to_human', 'escalated', 'escalated'],
     ['no_action', 'noop', 'noop'],
   ]

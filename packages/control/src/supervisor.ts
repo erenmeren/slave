@@ -486,6 +486,14 @@ async function carryOut(
       // unhalted project, so this arm runs inside a TICK -- which is exactly why `releaseWorker`
       // skips and counts a worktree it could not remove instead of throwing.
       return reached(await releaseWorker(action.slaveId, action.reason, principal, origin))
+    // M51 R3: declared in Task 2 with the action it carries out, and given its verb in Task 4 --
+    // `steerRun` (`packages/control/src/breaker.ts`), the pause -> `queuedMessage` -> resume round
+    // trip. Nothing can reach this arm in the meantime: `loadSupervisorWorld` hands the world
+    // `runs: []`, so `observe` never raises `run_looping` and no `steer_run` decision is ever
+    // recorded. `'none'` rather than a throw for exactly that reason -- an unreachable arm must not
+    // be able to take a tick down -- and rather than `'applied'`, which would write a
+    // `supervisor.applied` event about a worker nobody spoke to.
+    case 'steer_run':
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

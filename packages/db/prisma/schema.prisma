@@ -198,6 +198,16 @@ model Team {
 /// M50 R1: why a worker exists -- the closed set `SLAVE_LIFECYCLES` in
 /// `packages/domain/src/lifecycle/types.ts` mirrors, pinned member-for-member by
 /// `packages/db/test/integration/enum-parity.test.ts`.
+/// M51 R2: how loudly the behavioural circuit breaker is currently speaking to one run. Mirrors
+/// `BREAKER_LEVELS` in `packages/domain/src/breaker/detect.ts`, member for member
+/// (`enum-parity.test.ts`). Three members and never a fourth: `stopped` is a `RunStatus`, and the
+/// ladder's top rung is an ACT (cancel + `guardrail.tripped`), not a state a row sits in.
+enum BreakerLevel {
+  none
+  steered
+  constrained
+}
+
 enum SlaveLifecycle {
   /// Materialised from a company roster row: this worker exists in the organisation.
   permanent
@@ -755,6 +765,39 @@ model SlaveRun {
   ///                          that runtime cannot report skill use at all, and an empty object
   ///                          there would claim a measurement nobody made.
   skillCalls        Json?
+  /// M51 R2: the breaker's current rung for this run. `none` for every run recorded before M51 and
+  /// for every run that is behaving.
+  breakerLevel      BreakerLevel  @default(none)
+  /// Every rung this run has ever climbed, up and never down. Bookkeeping a person reads; no rule
+  /// keys on it.
+  breakerTrips      Int           @default(0)
+  /// How many times this run has been STEERED. Deliberately NOT reset when the ladder
+  /// de-escalates: a run that trips, recovers and trips again is back at level `none` with a fresh
+  /// rung available, and without a counter the ladder does not reset it, `STEERS_PER_RUN_MAX` would
+  /// be a cap on nothing.
+  breakerSteers     Int           @default(0)
+  /// When the breaker last EVALUATED this run (plan erratum E5). The daemon ticks about once a
+  /// second and the ladder moves at most once per `BREAKER_BEAT_MS`, so the beat needs a clock --
+  /// and `SlaveRun` has no `updatedAt` to borrow. Null means "never evaluated", which beats on the
+  /// first tick that sees the run.
+  breakerBeatAt     DateTime?
+  /// Consecutive beats on which every progress clock read false (plan erratum E5). `no_progress`
+  /// is a DEBOUNCE over beats and `detectBehaviour` is pure, so the memory has to live on the row.
+  /// Reset to 0 by any beat with progress on it.
+  breakerQuietBeats Int           @default(0)
+  /// M51 R3: this run's OWN tool-call ceiling, written by a CONSTRAIN rung as
+  /// `toolCalls + CONSTRAIN_GRACE_CALLS`. Null means "use the workspace's `maxToolCallsPerRun`",
+  /// which is every run that has not been constrained. The sweep's existing ceiling check reads
+  /// `run.toolCallCap ?? workspace.maxToolCallsPerRun` -- one comparison, and the breach that then
+  /// fires is the existing `tool_call_ceiling`, not a new name for the same fact.
+  toolCallCap       Int?
+  /// M51 R5: the MODEL half of the pair `resolveRuntime` dispatched this run with, written in the
+  /// same statement as `provider` and for the same M12 Task 6 reason -- the profile chain can
+  /// change under a live run, so the pair the run actually started with has to be recorded rather
+  /// than re-resolved. Null on every run recorded before M51, and on any run whose chain named no
+  /// model. It is what `estimateCostUsd` is keyed on; an unpriced or null model estimates `null`,
+  /// never a guess.
+  model             String?
   /// Which runtime produced this run (M12 Task 6). Nullable: this task only adds the column --
   /// Tasks 7/8 resolve and write it, so every run recorded before them reads back null.
   provider          ProviderKind?
@@ -1031,6 +1074,9 @@ enum SupervisorSituationKind {
   /// `ready_unstaffed` for the task that raised it (plan erratum E8); `ready_unstaffed` remains
   /// the role-only fallback for a task that declared no capabilities.
   capability_unstaffed
+  /// M51 R3: a run the behavioural breaker has STEERED, whose sentence the Supervisor is being
+  /// asked to deliver. The subject is the RUN -- the first kind whose subject is a run.
+  run_looping
   done_not_integrated_stale
   /// M50 R3: a worker brought in for one assignment, whose assignment is over. The subject is the
   /// SLAVE.
@@ -1283,6 +1329,12 @@ enum EventType {
   /// and everything it produced left where it is. Never a deletion: `org.changed { field:
   /// 'deleted' }` is that, and this is not it.
   slave_released              @map("slave.released")
+  /// M51 R1: what came back from one tool call -- `ok`/`error`, a normalised class, and nothing
+  /// else. Never the result text.
+  run_tool_result             @map("run.tool_result")
+  /// M51 R2: the behavioural breaker climbed a rung (steered, then constrained). The top rung is a
+  /// `guardrail.tripped { guardrail: 'behavioural_loop' }` instead -- one rung, one event.
+  run_breaker                 @map("run.breaker")
 }
 
 model ExecutionEvent {

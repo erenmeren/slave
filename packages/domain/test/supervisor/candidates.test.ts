@@ -5,7 +5,8 @@ import { WAITING_STALE_MS } from '../../src/supervisor/constants.js'
 import { observe } from '../../src/supervisor/observe.js'
 import type { Situation } from '../../src/supervisor/situations.js'
 import type { SupervisorWorld } from '../../src/supervisor/world.js'
-import { NOW, TAXONOMY, question, runbook, slave, task, world } from './fixtures.js'
+import { steerTextFor } from '../../src/breaker/constants.js'
+import { NOW, TAXONOMY, question, runbook, slave, supervisorRun, task, world } from './fixtures.js'
 
 /** The one situation `w` produces, with the candidates the rules offer for it. */
 function offered(w: SupervisorWorld): readonly Candidate[] {
@@ -759,5 +760,44 @@ describe('actionSchema reads a stored action back', () => {
     const parsed = candidateSchema.safeParse(stored)
     expect(parsed.success).toBe(true)
     if (parsed.success) expect(parsed.data.action).toEqual(stored.action)
+  })
+})
+
+describe('the run_looping offer (M51 R3)', () => {
+  const looping = supervisorRun({ breakerLevel: 'steered', trip: 'repeated_call', detail: 'Bash:aaaa', count: 8 })
+  const w = world({ runs: [looping] })
+  const situation = observe(w).find((s) => s.kind === 'run_looping')
+
+  it('offers exactly one thing: steer this run, with the SYSTEM\u2019s own sentence', () => {
+    const offers = candidates(situation!, w)
+    // "Exactly one" means one BEFORE the two last resorts every list ends with (the invariant at
+    // the top of this file) -- not a list of three staffing choices, and not a second wording.
+    expect(kinds(offers)).toEqual(['steer_run', 'escalate_to_human', 'no_action'])
+    expect(offers[0]?.action).toEqual({
+      kind: 'steer_run',
+      runId: 'run-1',
+      slaveId: 'slave-1',
+      text: steerTextFor({ kind: 'repeated_call', count: 8, detail: 'Bash:aaaa' }),
+    })
+  })
+
+  it('is ROUTINE -- the text is a constant, so nobody is being asked to approve a model\u2019s words', () => {
+    expect(candidates(situation!, w)[0]?.tier).toBe('applied')
+  })
+
+  it('is PROPOSED under a halt, like everything else', () => {
+    const halted = world({ runs: [looping], halted: { reason: 'budget_exhausted' } })
+    const s = observe(halted).find((one) => one.kind === 'run_looping')
+    expect(candidates(s!, halted)[0]?.tier).toBe('proposed')
+  })
+
+  it('never carries the trip\u2019s detail into the worker\u2019s prompt', () => {
+    expect(candidates(situation!, w)[0]?.action).not.toMatchObject({ text: expect.stringContaining('Bash:aaaa') })
+  })
+
+  it('falls back to the last resorts when the run concluded between observe and here', () => {
+    // The same shape every other arm uses when its subject has vanished: no offer against a row
+    // that is gone, and the list still ends the way the invariant says it does.
+    expect(kinds(candidates(situation!, world()))).toEqual(['escalate_to_human', 'no_action'])
   })
 })

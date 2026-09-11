@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { err, ok, type Result } from '../result.js'
+import { BREAKER_TRIP_KINDS } from '../breaker/detect.js'
 import { MEMORY_SCOPES, MEMORY_SOURCE_KINDS, MEMORY_STATUSES, MEMORY_TYPES } from '../memory/types.js'
 import { ACTION_KINDS, DECIDERS, TIERS } from '../supervisor/actions.js'
 import { SITUATION_KINDS } from '../supervisor/situations.js'
@@ -55,7 +56,28 @@ export const executionEventSchema = z.discriminatedUnion('type', [
   z.object({
     ...envelope,
     type: z.literal('run.tool_call'),
-    payload: z.object({ name: z.string(), summary: z.string() }),
+    payload: z.object({
+      name: z.string(),
+      summary: z.string(),
+      // M51 R1: the two fields the behavioural detector reads, and the whole of what it reads.
+      //
+      // OPTIONAL ON READ, REQUIRED ON WRITE -- the `run.tool_denied.toolUseId` precedent four lines
+      // below, for its exact reason: `packages/events/src/read.ts:23-26` throws on a row this schema
+      // cannot parse, and every `run.tool_call` written before this milestone has neither field.
+      // `apps/orchestrator/src/pump.ts` always sets both as of M51.
+      //
+      // `argsHash` is `sha256(canonical(input))` -- `packages/providers/src/hash.ts`. **The
+      // arguments themselves are never persisted**: the event log is not a transcript, and
+      // `RunContext.prompt` remains the only place a prompt is stored. `summary` stays because it
+      // is what a person reads; it is not what the detector compares, because two `Bash` calls with
+      // different commands summarise identically (the collision that constrained a working slave in
+      // the harness this finding comes from).
+      toolUseId: z.string().min(1).optional(),
+      argsHash: z
+        .string()
+        .regex(/^[0-9a-f]{64}$/u)
+        .optional(),
+    }),
   }),
   z.object({
     ...envelope,
@@ -569,6 +591,46 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       reason: z.string().min(1),
       worktreesCollected: z.number().int().nonnegative(),
     }),
+  }),
+  // M51 R1: what came BACK from one tool call -- `ok` or `error`, a normalised class, and nothing
+  // else. Bounded by construction: no result text, no stdout, no stack trace, no arguments. This is
+  // the row that makes "a tool call with no result yet is never a trip" decidable from the log, and
+  // it is the row that makes an api-error storm visible at all.
+  //
+  // `errorClass` is a STRING, not an enum, for `guardrail.tripped`'s own reason (M51 R4): the closed
+  // list lives in `packages/providers/src/tool-result.ts` where a mistake is a build error, and the
+  // log stays able to read a class a later version invents. `.strict()` because the payload is
+  // newborn and nothing has ever written another key into it -- and because the ONE thing that must
+  // never reach this row is the result body, which a permissive object would happily carry.
+  z.object({
+    ...envelope,
+    type: z.literal('run.tool_result'),
+    payload: z
+      .object({
+        toolUseId: z.string().min(1),
+        toolName: z.string().min(1),
+        outcome: z.enum(['ok', 'error']),
+        errorClass: z.string().min(1).max(40).nullable(),
+      })
+      .strict(),
+  }),
+  // M51 R2: the breaker climbed a rung. ONE event per escalation and no event for anything else --
+  // a de-escalation is silent, and the top rung announces itself as `guardrail.tripped
+  // { guardrail: 'behavioural_loop' }` alone, because one rung gets one name.
+  //
+  // `level` is therefore `steered | constrained` and never `none` or `stop`: those are not rungs
+  // this event can describe.
+  z.object({
+    ...envelope,
+    type: z.literal('run.breaker'),
+    payload: z
+      .object({
+        level: z.enum(['steered', 'constrained']),
+        trip: z.enum(BREAKER_TRIP_KINDS),
+        count: z.number().int().positive(),
+        detail: z.string().min(1).max(200),
+      })
+      .strict(),
   }),
 ])
 

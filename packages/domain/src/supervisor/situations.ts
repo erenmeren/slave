@@ -55,6 +55,21 @@ export const SITUATION_KINDS = [
    * test forces.
    */
   'capability_unstaffed',
+  /**
+   * M51 R3: a RUN the behavioural breaker has steered, whose trip the Supervisor is being asked to
+   * put words in front of. `subjectId` is the RUN id -- the first kind whose subject is a run, the
+   * way `engagement_over` was the first whose subject is a worker.
+   *
+   * It sits among the "what is stuck" group rather than the housekeeping one at the foot, and
+   * directly after `capability_unstaffed`, because it is the most URGENT thing on this list: every
+   * other situation is something that has stopped, and this one is something that is still
+   * spending money while it goes nowhere.
+   *
+   * Raised only for a run at level `steered` -- the rung the sweep already climbed. CONSTRAIN and
+   * STOP are the system's own rungs and the Supervisor is never asked about them: three actors,
+   * three packages, and this is the Supervisor's one.
+   */
+  'run_looping',
   'ready_unstaffed',
   'done_not_integrated_stale',
   /**
@@ -93,8 +108,9 @@ export type SituationKind = (typeof SITUATION_KINDS)[number]
  * situation, not ten), the CAPABILITY KEY for `capability_unstaffed` (M47 R4, same rule one level
  * more specific), the WORKSPACE id for `runbook_recommended` -- which is about the project rather
  * than about any row in it -- the SLAVE id for `engagement_over` (M50 R3, the first kind whose
- * subject is a worker: one situation per person, however many rows their runs left behind) -- and
- * the workspace id for `workspace_halted`.
+ * subject is a worker: one situation per person, however many rows their runs left behind), the
+ * RUN id for `run_looping` (M51 R3, the first kind whose subject is a run) -- and the workspace id
+ * for `workspace_halted`.
  *
  * `summary` is for a human and for the model prompt; `facts` is the evidence the predicate fired
  * on, kept as flat scalars so the whole thing survives a round trip through `SupervisorDecision.
@@ -122,8 +138,8 @@ export const situationSchema: z.ZodType<Situation> = z.object({
  * key rendered as prose is the leak M44 closes -- the Supervisor panel's recent-decision rows read
  * `no_reviewer · proposed · pending · by model`.
  *
- * `Record<SituationKind, string>` is load-bearing: a SIXTEENTH kind fails the build here rather
- * than turning up on the page as an identifier (fifteen as of M50's `engagement_over`).
+ * `Record<SituationKind, string>` is load-bearing: a SEVENTEENTH kind fails the build here rather
+ * than turning up on the page as an identifier (sixteen as of M51's `run_looping`).
  * Each label says what is STUCK, in the words the report already uses; the decision's own
  * `situation.summary` carries the specifics beside it.
  */
@@ -138,6 +154,9 @@ export const SITUATION_LABEL: Record<SituationKind, string> = {
   waiting_stale: 'Waiting too long',
   unanswerable_question: 'Question nobody can answer',
   capability_unstaffed: 'Missing a capability',
+  // M51 R3: the same words `GUARDRAIL_LABEL.behavioural_loop` uses. One phenomenon, one phrase,
+  // wherever a person meets it -- the run card, the guardrail card and this report all say it.
+  run_looping: 'Going in circles',
   ready_unstaffed: 'Ready work, nobody to do it',
   done_not_integrated_stale: 'Finished, not integrated',
   engagement_over: 'Engagement over',

@@ -21,10 +21,30 @@ describe('parseActivityFilters', () => {
     expect(result.filters.slaves).toEqual(['a1', 'a2'])
     expect([...result.filters.types].sort()).toEqual(['guardrail.tripped', 'run.output'])
   })
-  it('expands kinds=tool_calls to run.tool_call, run.output and run.tool_denied', () => {
+  // M51 R1 widened this chip with `run.tool_result` -- the answer to a call sits beside the call.
+  it('expands kinds=tool_calls to run.tool_call, run.output, run.tool_denied and run.tool_result', () => {
     const result = parseActivityFilters(new URLSearchParams('kinds=tool_calls'))
     if (!result.ok) throw new Error(result.error)
-    expect([...result.filters.types].sort()).toEqual(['run.output', 'run.tool_call', 'run.tool_denied'])
+    expect([...result.filters.types].sort()).toEqual([
+      'run.output',
+      'run.tool_call',
+      'run.tool_denied',
+      'run.tool_result',
+    ])
+  })
+
+  // M51 R2: the breaker's two quieter rungs are run lifecycle, not guardrail trips.
+  it('expands kinds=runs to the five lifecycle types and the breaker rung', () => {
+    const result = parseActivityFilters(new URLSearchParams('kinds=runs'))
+    if (!result.ok) throw new Error(result.error)
+    expect([...result.filters.types].sort()).toEqual([
+      'run.breaker',
+      'run.failed',
+      'run.paused',
+      'run.resumed',
+      'run.started',
+      'run.succeeded',
+    ])
   })
   // M27 §3.2 widened this chip with the project archive/restore lifecycle events; M37 t3 widened
   // it again with the two roster writes (a persona rewritten, a runtime role set replaced); M38 t1

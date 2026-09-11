@@ -15,8 +15,15 @@ describe('LANE_BY_TYPE', () => {
     expect(Object.keys(LANE_BY_TYPE).sort()).toEqual(Object.keys(EVENT_TYPE_BY_DOMAIN_TYPE).sort())
   })
 
-  it('carries the 53 members the schema has today -- a fifty-fourth is a deliberate decision', () => {
-    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(53)
+  it('carries the 55 members the schema has today -- a fifty-sixth is a deliberate decision', () => {
+    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(55)
+  })
+
+  it('puts a breaker rung on the WORK lane and a tool result on none', () => {
+    expect(LANE_BY_TYPE['run.breaker']).toBe('work')
+    // Beside `run.tool_call`, for its reason: the per-call stream is the activity feed's business,
+    // not the Supervisor's timeline, which would otherwise be one line per tool call.
+    expect(LANE_BY_TYPE['run.tool_result']).toBeNull()
   })
 
   it('every value is a lane this file names, or null', () => {

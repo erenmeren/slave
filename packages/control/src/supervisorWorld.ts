@@ -785,6 +785,13 @@ export async function loadSupervisorWorld(
           snapshot.limits.budgetUsd !== null && snapshot.stats.spentUsd >= snapshot.limits.budgetUsd,
         tasks,
         slaves,
+        // M51 R3 / plan erratum E9: the world gained `runs` in Task 2, and Task 4 gives it its
+        // loader -- one `findMany` over the workspace's non-terminal runs, plus the newest
+        // `run.breaker` per run only when some run is above level `none`. EMPTY until then, which
+        // is a real and quiet state: `observe`'s `run_looping` predicate iterates this list, so an
+        // empty one raises nothing and every board reads exactly as it did before this milestone.
+        // The M47 `capability_unstaffed` precedent -- declared before it is emitted.
+        runs: [],
         questions: questionRows.map((row): SupervisorQuestion => {
           const task = row.taskId === null ? undefined : questionTasks.get(row.taskId)
           return {

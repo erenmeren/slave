@@ -1,7 +1,9 @@
+import type { BreakerLevel, BreakerTripKind } from '../breaker/detect.js'
 import type { CapabilityRecord } from '../capability/taxonomy.js'
 import type { HandoffContract } from '../handoff/contract.js'
 import type { SlaveLifecycle } from '../lifecycle/types.js'
 import type { Runbook } from '../runbook/spec.js'
+import type { RunStatus } from '../run/state.js'
 import type { TaskStatus } from '../task/state.js'
 import type { ActionKind, DecisionStatus, Tier } from './actions.js'
 import { THREAD_MESSAGES_MAX } from './constants.js'
@@ -263,6 +265,35 @@ export interface SupervisorDecisionRecord {
 }
 
 /**
+ * One LIVE run, as the Supervisor sees it (M51 R3, plan erratum E9).
+ *
+ * Until this milestone the world held no runs at all: `SupervisorSlave.busy` was
+ * `row.runs.length > 0` and was the only run-derived fact anywhere in it. `run_looping` is about a
+ * run, so the run has to be in the world -- and the alternative, deriving it in `apps/orchestrator`
+ * and passing a situation in, is exactly the shape `stale_task` is the one deliberate exception to.
+ *
+ * `trip`/`detail`/`count` are the newest `run.breaker` row's, loaded only when some run is at a
+ * level above `none` (the loader pays for nothing a healthy board does not need). All three are
+ * null together or non-null together; the predicate checks all three anyway, because a log the
+ * loader could not read is a real state and a half-read trip is not a sentence.
+ */
+export interface SupervisorRun {
+  readonly id: string
+  readonly taskId: string | null
+  readonly slaveId: string
+  readonly status: RunStatus
+  readonly toolCalls: number
+  /** `SlaveRun.toolCallCap` -- null until a CONSTRAIN rung wrote one. */
+  readonly toolCallCap: number | null
+  readonly breakerLevel: BreakerLevel
+  readonly breakerTrips: number
+  readonly breakerSteers: number
+  readonly trip: BreakerTripKind | null
+  readonly detail: string | null
+  readonly count: number | null
+}
+
+/**
  * Everything the Supervisor is allowed to know about a workspace at one instant (M38 §3), built
  * by `packages/control/src/supervisorWorld.ts` from Prisma (spec E2) and handed to the pure
  * functions here. No Prisma types, no `Date` objects (epoch ms throughout, so a fixture is a
@@ -313,6 +344,9 @@ export interface SupervisorWorld {
    * and one `count` over the index costs a tick nothing and returns no rows.
    */
   readonly staleMemoryCandidates: number
+  /** Non-terminal runs of this workspace (M51 R3). Bounded by the concurrency guardrail: a
+   *  workspace may have `maxConcurrentRuns` of them, three by default. */
+  readonly runs: readonly SupervisorRun[]
 }
 
 /**

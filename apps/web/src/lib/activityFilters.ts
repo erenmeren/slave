@@ -19,10 +19,18 @@ export type ActivityKind = (typeof ACTIVITY_KINDS)[number]
  * so the completeness test above is what actually proves exhaustiveness at runtime.
  */
 export const TYPES_BY_KIND = {
-  runs: ['run.started', 'run.succeeded', 'run.failed', 'run.paused', 'run.resumed'],
+  // M51 R2: a breaker rung is something that happened to the RUN, beside `run.paused`/`run.resumed`
+  // -- the chip somebody filters to when asking "what happened to this run". Deliberately not
+  // `guardrails`: that chip is `guardrail.tripped` alone, which is where the STOP rung announces
+  // itself, and a person filtering for "what stopped work" must not also receive the two quieter
+  // rungs that did not stop anything.
+  runs: ['run.started', 'run.succeeded', 'run.failed', 'run.paused', 'run.resumed', 'run.breaker'],
   // `run.tool_denied` sits beside `run.tool_call`, not under `runs`: it is a per-call refusal
   // (M18 §2) an operator filtering to individual tool activity needs, not a run lifecycle event.
-  tool_calls: ['run.tool_call', 'run.output', 'run.tool_denied'],
+  // M51 R1: a tool RESULT sits beside the call it answers, under the same chip an operator filters
+  // to when they want per-call activity. Not under `runs`: it is not a run lifecycle event, and one
+  // per call would swamp that chip.
+  tool_calls: ['run.tool_call', 'run.output', 'run.tool_denied', 'run.tool_result'],
   tasks: [
     'task.created',
     'task.started',

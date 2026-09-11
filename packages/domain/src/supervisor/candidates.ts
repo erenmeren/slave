@@ -1,3 +1,4 @@
+import { steerTextFor } from '../breaker/constants.js'
 import { capabilityLabel as capabilityLabelIn, projectRoles } from '../capability/taxonomy.js'
 import { formTeam, type TeamPlan, type TeamProposal } from '../capability/team.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
@@ -409,6 +410,33 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
             world,
             situation.kind,
             `${worker.name} was brought in for one assignment and that assignment is over. Releasing them empties their runtime roles so nothing dispatches them again and collects the worktrees their runs left behind; every run, message and thing they learnt stays exactly where it is.`,
+          ),
+        )
+      }
+      break
+    }
+
+    case 'run_looping': {
+      // `subjectId` IS the run id. The world moved between `observe` and here (the run concluded,
+      // another tick stopped it, the breaker row went unread) -- no offer against a row that is
+      // gone, and the last resorts below are then the whole catalogue, which is the shape every
+      // other arm uses when its subject has vanished.
+      const run = world.runs.find((one) => one.id === situation.subjectId)
+      if (run !== undefined && run.trip !== null && run.count !== null && run.detail !== null) {
+        offers.push(
+          candidate(
+            {
+              kind: 'steer_run',
+              runId: run.id,
+              slaveId: run.slaveId,
+              // `steerTextFor` interpolates the trip's COUNT and nothing else: `detail` is an
+              // identifier (a `toolName:argsHash`, an error class), and a hash in a worker's prompt
+              // is `docs/ia.md` rule 3 broken in the one place nobody would look for it.
+              text: steerTextFor({ kind: run.trip, count: run.count, detail: run.detail }),
+            },
+            world,
+            situation.kind,
+            'Tell it, once, in the system\u2019s own words, that it is repeating itself -- the next rung takes its remaining tool budget away.',
           ),
         )
       }

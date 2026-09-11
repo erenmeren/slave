@@ -1036,3 +1036,132 @@ describe('M50 events', () => {
     expect(parsed.ok).toBe(true)
   })
 })
+
+describe('run.tool_call after M51 R1', () => {
+  const base = {
+    type: 'run.tool_call' as const,
+    workspaceId: 'w1',
+    taskId: 't1',
+    slaveId: 's1',
+    runId: 'r1',
+    actor: 'slave' as const,
+    ts: new Date().toISOString(),
+    seq: 1,
+  }
+
+  it('accepts the two new fields', () => {
+    const parsed = parseExecutionEvent({
+      ...base,
+      payload: { name: 'Bash', summary: 'Bash npm test', toolUseId: 'toolu_1', argsHash: 'a'.repeat(64) },
+    })
+    expect(parsed.ok).toBe(true)
+  })
+
+  it('still accepts a pre-M51 row that has neither -- the run.tool_denied.toolUseId precedent', () => {
+    // `packages/events/src/read.ts` THROWS on a row the domain cannot parse, so a required field
+    // here would make every tool call written before this milestone unreadable and take the whole
+    // activity stream down with it.
+    expect(parseExecutionEvent({ ...base, payload: { name: 'Bash', summary: 'Bash npm test' } }).ok).toBe(true)
+  })
+
+  it('refuses an argsHash that is not a sha256 hex digest', () => {
+    expect(
+      parseExecutionEvent({ ...base, payload: { name: 'Bash', summary: 's', toolUseId: 'x', argsHash: 'nope' } }).ok,
+    ).toBe(false)
+  })
+})
+
+describe('run.tool_result (the 54th type)', () => {
+  const base = {
+    type: 'run.tool_result' as const,
+    workspaceId: 'w1',
+    taskId: 't1',
+    slaveId: 's1',
+    runId: 'r1',
+    actor: 'slave' as const,
+    ts: new Date().toISOString(),
+    seq: 1,
+  }
+
+  it('carries the four bounded fields and nothing else', () => {
+    expect(
+      parseExecutionEvent({
+        ...base,
+        payload: { toolUseId: 'toolu_1', toolName: 'Bash', outcome: 'error', errorClass: 'timeout' },
+      }).ok,
+    ).toBe(true)
+  })
+
+  it('carries a null errorClass for a call that worked', () => {
+    expect(
+      parseExecutionEvent({
+        ...base,
+        payload: { toolUseId: 'toolu_1', toolName: 'Bash', outcome: 'ok', errorClass: null },
+      }).ok,
+    ).toBe(true)
+  })
+
+  it('is strict -- the result TEXT must never find a way in', () => {
+    expect(
+      parseExecutionEvent({
+        ...base,
+        payload: { toolUseId: 't', toolName: 'Bash', outcome: 'ok', errorClass: null, content: 'the whole file' },
+      }).ok,
+    ).toBe(false)
+  })
+
+  it('caps errorClass at forty characters and refuses an unknown outcome', () => {
+    const payload = { toolUseId: 't', toolName: 'Bash', outcome: 'error' as const, errorClass: 'x'.repeat(41) }
+    expect(parseExecutionEvent({ ...base, payload }).ok).toBe(false)
+    expect(parseExecutionEvent({ ...base, payload: { ...payload, outcome: 'maybe', errorClass: null } }).ok).toBe(false)
+  })
+
+  it('takes a class this version has never heard of -- the union types WRITERS, not the log', () => {
+    expect(
+      parseExecutionEvent({
+        ...base,
+        payload: { toolUseId: 't', toolName: 'Bash', outcome: 'error', errorClass: 'quota_exhausted' },
+      }).ok,
+    ).toBe(true)
+  })
+})
+
+describe('run.breaker (the 55th type)', () => {
+  const base = {
+    type: 'run.breaker' as const,
+    workspaceId: 'w1',
+    taskId: 't1',
+    slaveId: 's1',
+    runId: 'r1',
+    actor: 'system' as const,
+    ts: new Date().toISOString(),
+    seq: 1,
+  }
+
+  it('announces an escalation with its rung, its trip and the integer it fired on', () => {
+    expect(
+      parseExecutionEvent({
+        ...base,
+        payload: { level: 'steered', trip: 'repeated_call', count: 8, detail: 'Bash:aaaa' },
+      }).ok,
+    ).toBe(true)
+  })
+
+  it('never announces the top rung -- a STOP is a guardrail.tripped and nothing else', () => {
+    expect(
+      parseExecutionEvent({ ...base, payload: { level: 'stop', trip: 'repeated_call', count: 8, detail: 'x' } }).ok,
+    ).toBe(false)
+  })
+
+  it('never announces a de-escalation -- stepping back down is silent', () => {
+    expect(
+      parseExecutionEvent({ ...base, payload: { level: 'none', trip: 'repeated_call', count: 8, detail: 'x' } }).ok,
+    ).toBe(false)
+  })
+
+  it('refuses a trip kind the detector cannot produce', () => {
+    expect(
+      parseExecutionEvent({ ...base, payload: { level: 'steered', trip: 'vibes', count: 8, detail: 'x' } }).ok,
+    ).toBe(false)
+  })
+})

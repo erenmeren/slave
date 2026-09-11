@@ -1,9 +1,12 @@
+import { STEERS_PER_RUN_MAX } from '../breaker/constants.js'
+import { BREAKER_TRIP_LABEL } from '../breaker/detect.js'
 import { capabilityIndex, projectRoles } from '../capability/taxonomy.js'
 import { isReleasable } from '../lifecycle/release.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
 import { TERMINAL } from '../task/state.js'
 import { isStaffableTask } from './candidates.js'
 import {
+  COOLDOWN_BY_KIND,
   COOLDOWN_MS,
   INTEGRATED_STALE_MS,
   MANAGER_ROLE,
@@ -288,6 +291,42 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
     })
   }
 
+  // run_looping (M51 R3): a run the sweep has already STEERED, whose sentence somebody has to
+  // actually deliver. Four clauses, and each one is a way of being wrong about it:
+  //   - level is exactly `steered`. `none` is healthy; `constrained` is a rung the system owns and
+  //     the Supervisor is not consulted about.
+  //   - the run is still `working`. A paused, stopping or terminal run cannot be steered, and the
+  //     control verb would refuse it -- which would be a `failed` decision row for a race nobody
+  //     can act on.
+  //   - the trip is known. `trip`/`detail`/`count` come off the newest `run.breaker` row; a run
+  //     whose event the log has lost has no sentence to send, and inventing one would be the
+  //     Supervisor guessing.
+  //   - the run has steers left. `STEERS_PER_RUN_MAX` is enforced HERE as well as in the detector,
+  //     because a de-escalated run comes back round and the situation is what a person reads.
+  for (const run of world.runs) {
+    if (run.breakerLevel !== 'steered') continue
+    if (run.status !== 'working') continue
+    if (run.trip === null || run.detail === null || run.count === null) continue
+    if (run.breakerSteers >= STEERS_PER_RUN_MAX) continue
+    add({
+      kind: 'run_looping',
+      subjectId: run.id,
+      summary:
+        `This run has been going in circles (${BREAKER_TRIP_LABEL[run.trip].toLowerCase()}, ` +
+        `${String(run.count)}x) and has not been told so yet.`,
+      facts: {
+        runId: run.id,
+        slaveId: run.slaveId,
+        taskId: run.taskId,
+        trip: run.trip,
+        detail: run.detail,
+        count: run.count,
+        level: run.breakerLevel,
+        steers: run.breakerSteers,
+      },
+    })
+  }
+
   // ready_unstaffed: keyed by the missing ROLE, so N startable tasks blocked on one absent role
   // are one situation with one decision -- not N proposals a human has to approve N times.
   const unstaffedRoles = new Map<string, SupervisorTask[]>()
@@ -377,7 +416,8 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
 /**
  * The situations that are actually free to be decided now (M38 section 3, "idempotent and quiet"):
  * drops a key that already has an OPEN (`pending`) decision -- a human is looking at it -- and one
- * whose last decision stopped being open less than `COOLDOWN_MS` ago.
+ * whose last decision stopped being open less than its cooldown ago: `COOLDOWN_MS`, unless
+ * {@link COOLDOWN_BY_KIND} names a shorter one for that kind (M51 R3).
  *
  * The cooldown anchor is `resolvedAt ?? createdAt`: an auto-`applied` (or `failed`) decision is
  * terminal from birth and never gets a `resolvedAt`, so without the `createdAt` fallback the
@@ -389,7 +429,12 @@ export function filterFresh(situations: readonly Situation[], world: SupervisorW
   const blocked = new Set<string>()
   for (const decision of world.decisions) {
     const anchor = decision.resolvedAt ?? decision.createdAt
-    const cooling = decision.status === 'pending' || world.now - anchor <= COOLDOWN_MS
+    // M51 R3: the per-kind override, defaulting to the standing fifteen minutes. The `pending`
+    // clause is unchanged and is checked first: an OPEN decision blocks its key however long it has
+    // been open, whatever the cooldown says, because a second proposal about a question a human is
+    // still looking at is the thing the cooldown exists to stop.
+    const cooldownMs = COOLDOWN_BY_KIND[decision.situationKind] ?? COOLDOWN_MS
+    const cooling = decision.status === 'pending' || world.now - anchor <= cooldownMs
     if (cooling) blocked.add(key(decision.situationKind, decision.subjectId))
   }
   return situations.filter((situation) => !blocked.has(key(situation.kind, situation.subjectId)))

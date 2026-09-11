@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  ACTION_KINDS,
   DECIDERS,
   DECIDER_LABEL,
   DECISION_STATUSES,
@@ -24,6 +25,21 @@ describe('every union a person reads has a label (M44 R5)', () => {
   // `engagement_over: 'engagement over'`, and rule 3 is about what a person reads.
   it('names the fifteenth situation the way a person says it', () => {
     expect(SITUATION_LABEL.engagement_over).toBe('Engagement over')
+  })
+
+  // M51 R3: the sixteenth kind, asserted BY NAME for `engagement_over`'s own reason -- and it is
+  // deliberately the words `GUARDRAIL_LABEL.behavioural_loop` uses, because one phenomenon gets one
+  // phrase wherever a person meets it.
+  it('names the sixteenth situation the way a person says it', () => {
+    expect(SITUATION_LABEL.run_looping).toBe('Going in circles')
+  })
+
+  // M51 R3: the sixteenth action. `ACTION_KINDS` has no Postgres enum of its own (an `Action` lives
+  // inside a JSONB column), so this count is the only thing that notices a kind added to the union
+  // and forgotten in the list the event payloads validate against.
+  it('carries the sixteen action kinds, `steer_run` among them', () => {
+    expect(ACTION_KINDS).toHaveLength(16)
+    expect(ACTION_KINDS).toContain('steer_run')
   })
 
   it('covers every tier, decision status and decider', () => {

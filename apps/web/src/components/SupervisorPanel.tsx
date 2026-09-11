@@ -81,6 +81,10 @@ export function actionText(action: Action, taskTitles: Readonly<Record<string, s
     // look a slave id up in, exactly as it has no taxonomy for `capabilityLabel` above.
     case 'release_worker':
       return `release ${action.name}: their one assignment is over`
+    // M51 R3: the SENTENCE is on the action, so this reads what was actually sent rather than
+    // re-deriving it -- this function runs in the browser and has no breaker constants to consult.
+    case 'steer_run':
+      return `tell that run to stop and rethink: \u201c${action.text}\u201d`
     case 'escalate_to_human':
       return `escalate to a human: ${action.summary}`
     case 'no_action':

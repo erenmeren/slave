@@ -1,3 +1,6 @@
+import { BREAKER_COOLDOWN_MS } from '../breaker/constants.js'
+import type { SituationKind } from './situations.js'
+
 /**
  * The Supervisor's thresholds and caps (M38 §2, plan Global Constraints). Domain constants, not
  * workspace settings: M38 §8 puts "thresholds as workspace settings" out of scope deliberately --
@@ -18,6 +21,18 @@ export const INTEGRATED_STALE_MS = 6 * 3_600_000
  * that a decision which did not work is retried within the same working hour.
  */
 export const COOLDOWN_MS = 15 * 60_000
+
+/**
+ * Situations whose cooldown is NOT {@link COOLDOWN_MS} (M51 R3).
+ *
+ * Fifteen minutes is the right silence for "nobody can review this project" and the wrong silence
+ * for a run burning five dollars in three minutes. A table rather than a branch inside
+ * `filterFresh`, so the exception is data a reader can enumerate and a seventeenth kind inherits the
+ * default by saying nothing.
+ */
+export const COOLDOWN_BY_KIND: Partial<Record<SituationKind, number>> = {
+  run_looping: BREAKER_COOLDOWN_MS,
+}
 
 /** How long a `pending` proposal waits for a human before `expirePendingDecisions` retires it. */
 export const PENDING_TTL_MS = 24 * 3_600_000

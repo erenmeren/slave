@@ -1,9 +1,12 @@
 import type { ReactElement, ReactNode } from 'react'
 import type { DomainEventType } from '@slave-of-ai/db'
 import {
+  BREAKER_LEVEL_LABEL,
+  BREAKER_TRIP_LABEL,
   MEMORY_SOURCE_KIND_LABEL,
   MEMORY_STATUS_LABEL,
   MEMORY_TYPE_LABEL,
+  type BreakerTripKind,
   type MemoryScope,
   type MemorySourceKind,
   type MemoryStatus,
@@ -367,6 +370,79 @@ function RunToolDeniedCard(props: ActivityCardProps): ReactElement {
     <ActivityCard {...props}>
       <Transition tone="warn" label="tool denied">
         <span data-testid="tool-denied-text">{`${payload.tool} denied — ${payload.capability}`}</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+// ---- run.tool_result / run.breaker (schema.ts, M51 R1/R2) ---------------------------------------
+
+/**
+ * What a tool error is CALLED, for a person (`docs/ia.md` rule 3). A `Record<string, string>` and
+ * deliberately not `Record<ToolErrorClass, string>`: the wire type is a forgiving string (plan
+ * erratum E17), because the closed list types the WRITERS and the log must stay able to carry a
+ * class a later version invents. Such a class prints itself rather than crashing the card.
+ */
+const TOOL_ERROR_LABEL: Readonly<Record<string, string>> = {
+  api_error: 'the API errored',
+  timeout: 'it timed out',
+  not_found: 'not found',
+  permission: 'not permitted',
+  other: 'something else',
+}
+
+/** M51 R1: what one tool call came back with. `idle` tone for an ok and `warn` for an error -- an
+ *  error here is one call failing, not a run in trouble, and red would make an ordinary retry look
+ *  like an outage. The class is a KEY, so it rides `title`/`data-error-class` and the LABEL is what
+ *  is printed (`docs/ia.md` rule 3). No result text exists to show: the payload does not carry any. */
+function ToolResultCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    toolUseId: string
+    toolName: string
+    outcome: 'ok' | 'error'
+    errorClass: string | null
+  }
+  const failed = payload.outcome === 'error'
+  return (
+    <ActivityCard {...props}>
+      <Transition tone={failed ? 'warn' : 'idle'} label={failed ? 'failed' : 'ok'}>
+        <span data-testid="tool-result-name">{payload.toolName}</span>
+        {payload.errorClass !== null && (
+          <>
+            {' \u00b7 '}
+            <span data-testid="tool-result-class" title={payload.errorClass} data-error-class={payload.errorClass}>
+              {TOOL_ERROR_LABEL[payload.errorClass] ?? payload.errorClass}
+            </span>
+          </>
+        )}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+/** M51 R2: the breaker climbed a rung. `warn`, because something is going wrong and the system is
+ *  handling it -- the STOP rung is a `guardrail.tripped` and wears that card's own warn instead.
+ *  The trip and the level are both KEYS: the labels print, the raw values ride `data-` attributes,
+ *  which is also what `gate:m51-breaker` reads. */
+function BreakerCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    level: 'steered' | 'constrained'
+    trip: BreakerTripKind
+    count: number
+    detail: string
+  }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="warn" label={BREAKER_LEVEL_LABEL[payload.level].toLowerCase()}>
+        <span data-testid="breaker-trip" title={payload.trip} data-breaker-trip={payload.trip}>
+          {BREAKER_TRIP_LABEL[payload.trip]}
+        </span>
+        {' \u00b7 '}
+        <span data-testid="breaker-count">{plural(payload.count, 'time')}</span>
+        {' \u00b7 '}
+        <span data-testid="breaker-detail" data-breaker-level={payload.level}>
+          {payload.detail}
+        </span>
       </Transition>
     </ActivityCard>
   )
@@ -1132,4 +1208,6 @@ export const ACTIVITY_CARDS = {
   'memory.recorded': MemoryRecordedCard,
   'memory.changed': MemoryChangedCard,
   'slave.released': SlaveReleasedCard,
+  'run.tool_result': ToolResultCard,
+  'run.breaker': BreakerCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>

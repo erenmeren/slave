@@ -11,6 +11,7 @@ import type { Runbook } from '../../src/runbook/spec.js'
 import type {
   SupervisorDecisionRecord,
   SupervisorQuestion,
+  SupervisorRun,
   SupervisorSlave,
   SupervisorTask,
   SupervisorWorld,
@@ -99,6 +100,29 @@ export function slave(overrides: Partial<SupervisorSlave> = {}): SupervisorSlave
   }
 }
 
+/**
+ * One live run (M51 R3). The default is a HEALTHY busy run: level `none`, no trip, no cap -- so a
+ * world handed `runs: [supervisorRun()]` raises nothing, and a test that wants `run_looping` has to
+ * say which rung and which trip it is about.
+ */
+export function supervisorRun(over: Partial<SupervisorRun> = {}): SupervisorRun {
+  return {
+    id: 'run-1',
+    taskId: 'task-1',
+    slaveId: 'slave-1',
+    status: 'working',
+    toolCalls: 12,
+    toolCallCap: null,
+    breakerLevel: 'none',
+    breakerTrips: 0,
+    breakerSteers: 0,
+    trip: null,
+    detail: null,
+    count: null,
+    ...over,
+  }
+}
+
 export function threadMessage(overrides: Partial<ThreadMessage> = {}): ThreadMessage {
   return { messageId: 'm1', kind: 'question', senderSlaveId: 's1', body: 'Which port?', createdAt: NOW, ...overrides }
 }
@@ -170,6 +194,10 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     // M49: a project whose workers have reported nothing unverified, which is what every fixture
     // in this file means unless it says otherwise.
     staleMemoryCandidates: 0,
+    // M51 R3: no run in flight, so `run_looping` only ever fires in a test that hands the world a
+    // run and says which rung it is on. Defaulted here for the M49/M50 fixture rule -- every
+    // existing case in this directory keeps meaning exactly what it meant.
+    runs: [],
     ...overrides,
   }
 }

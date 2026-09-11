@@ -155,6 +155,8 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   },
   'memory.changed': { memoryId: 'mem-0123456789', from: 'candidate', to: 'superseded' },
   'slave.released': { slaveId: 'ag-9', name: 'Robin', reason: 'the engagement is over', worktreesCollected: 1 },
+  'run.tool_result': { toolUseId: 'toolu_1', toolName: 'Bash', outcome: 'error', errorClass: 'timeout' },
+  'run.breaker': { level: 'steered', trip: 'repeated_call', count: 8, detail: 'Bash:aaaa' },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {
@@ -810,5 +812,25 @@ describe('the slave.released card', () => {
     expect(screen.getByTestId('released-name').textContent).toBe('Robin')
     expect(screen.getByTestId('released-reason').textContent).toBe('the engagement is over')
     expect(screen.getByTestId('released-worktrees').textContent).toBe('1 worktree collected')
+  })
+})
+
+/** M51 R1/R2: the two newest cards, and the one rule they share -- the LABEL is printed and the
+ *  KEY rides a `data-` attribute (`docs/ia.md` rule 3). */
+describe('the run.tool_result and run.breaker cards', () => {
+  it('prints the tool error\u2019s LABEL and keeps the key on the element', () => {
+    const Card = ACTIVITY_CARDS['run.tool_result']
+    render(<Card event={fixtureFor('run.tool_result')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('tool-result-class').textContent).toBe('it timed out')
+    expect(screen.getByTestId('tool-result-class').getAttribute('data-error-class')).toBe('timeout')
+  })
+
+  it('prints the breaker trip\u2019s LABEL, its count and the rung as a data attribute', () => {
+    const Card = ACTIVITY_CARDS['run.breaker']
+    render(<Card event={fixtureFor('run.breaker')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('breaker-trip').textContent).toBe('Same call over and over')
+    expect(screen.getByTestId('breaker-trip').getAttribute('data-breaker-trip')).toBe('repeated_call')
+    expect(screen.getByTestId('breaker-count').textContent).toBe('8 times')
+    expect(screen.getByTestId('breaker-detail').getAttribute('data-breaker-level')).toBe('steered')
   })
 })

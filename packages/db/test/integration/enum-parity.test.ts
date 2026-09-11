@@ -1,4 +1,5 @@
 import {
+  BREAKER_LEVELS,
   DECIDERS,
   DECISION_STATUSES,
   MEMORY_SCOPES,
@@ -89,6 +90,13 @@ describe('database enums match the domain unions', () => {
   // first INSERT rather than at build.
   it('SlaveLifecycle matches SLAVE_LIFECYCLES, member for member', async () => {
     expect(await enumValues('SlaveLifecycle')).toEqual([...SLAVE_LIFECYCLES].sort())
+  })
+
+  // M51 R2: the breaker's own enum. Same reason as the Supervisor's four and the memory four --
+  // nothing in TypeScript ties a Prisma enum to the domain union it mirrors, and a missing member
+  // fails at the first `slaveRun.update` rather than at build.
+  it('BreakerLevel matches BREAKER_LEVELS, member for member', async () => {
+    expect(await enumValues('BreakerLevel')).toEqual([...BREAKER_LEVELS].sort())
   })
 
   // The test above pins the database enum to `EVENT_TYPE_BY_DOMAIN_TYPE`, a hand-maintained

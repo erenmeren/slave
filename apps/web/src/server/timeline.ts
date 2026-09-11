@@ -2,6 +2,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, EVENT_TYPE_BY_DOMAIN_TYPE, type DomainEventType } from '@slave-of-ai/db'
 import { listDecisions, type DecisionView } from '@slave-of-ai/control'
 import {
+  BREAKER_TRIP_LABEL,
   LANE_BY_TYPE,
   LANE_LABEL,
   MEMORY_STATUSES,
@@ -10,6 +11,7 @@ import {
   isResolvedDecision,
   laneFor,
   replanSentence,
+  type BreakerTripKind,
   type MemoryStatus,
   type MemoryType,
   type TimelineLane,
@@ -290,6 +292,18 @@ function titleFor(
       return typeof reason === 'string' && reason !== ''
         ? `knowledge ${label.toLowerCase()}: ${reason}`
         : `knowledge ${label.toLowerCase()}`
+    }
+    // M51 R2: the payload carries no `title`, so without a case of its own this would read as its
+    // own type name on the WORK lane.
+    case 'run.breaker': {
+      const level = payload['level']
+      const trip = payload['trip']
+      const word = level === 'constrained' ? 'took its remaining tool budget away' : 'told it to stop and rethink'
+      const because =
+        typeof trip === 'string' && trip in BREAKER_TRIP_LABEL
+          ? BREAKER_TRIP_LABEL[trip as BreakerTripKind].toLowerCase()
+          : 'going in circles'
+      return `${word} (${because})`
     }
     // M50 R3: a temporary specialist's engagement ended. The payload carries no `title`, so without
     // a case of its own this would read as its own type name on the WORK lane.

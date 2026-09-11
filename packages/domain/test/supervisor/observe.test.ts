@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { COOLDOWN_MS, INTEGRATED_STALE_MS, WAITING_STALE_MS } from '../../src/supervisor/constants.js'
 import { filterFresh, observe, staffableSlaves } from '../../src/supervisor/observe.js'
-import { SITUATION_KINDS, situationSchema } from '../../src/supervisor/situations.js'
-import { NOW, TAXONOMY, decision, keys, question, runbook, slave, task, world } from './fixtures.js'
+import { SITUATION_KINDS, situationSchema, type SituationKind } from '../../src/supervisor/situations.js'
+import type { SupervisorDecisionRecord } from '../../src/supervisor/world.js'
+import { NOW, TAXONOMY, decision, keys, question, runbook, slave, supervisorRun, task, world } from './fixtures.js'
 
 describe('observe -- no_reviewer', () => {
   it('reports it when a task is reviewing and no slave holds reviewer', () => {
@@ -636,5 +637,91 @@ describe('staffableSlaves', () => {
   it('never offers a role to a released worker', () => {
     const released = slave({ id: 's9', lifecycle: 'ephemeral', released: true, runtimeRoles: [] })
     expect(staffableSlaves(world({ slaves: [released] }), 'reviewer')).toEqual([])
+  })
+})
+
+describe('run_looping (M51 R3)', () => {
+  const looping = supervisorRun({
+    breakerLevel: 'steered',
+    breakerTrips: 1,
+    trip: 'repeated_call',
+    detail: 'Bash:aaaa',
+    count: 8,
+  })
+
+  it('raises one situation per LOOPING RUN, subject = the run id', () => {
+    const situations = observe(world({ runs: [looping] }))
+    const found = situations.filter((s) => s.kind === 'run_looping')
+    expect(found).toHaveLength(1)
+    expect(found[0]?.subjectId).toBe('run-1')
+  })
+
+  it('carries the trip, the identifier and the integers as flat facts', () => {
+    const [found] = observe(world({ runs: [looping] })).filter((s) => s.kind === 'run_looping')
+    expect(found?.facts).toEqual({
+      runId: 'run-1',
+      slaveId: 'slave-1',
+      taskId: 'task-1',
+      trip: 'repeated_call',
+      detail: 'Bash:aaaa',
+      count: 8,
+      level: 'steered',
+      steers: 0,
+    })
+  })
+
+  it('never raises for a healthy run, however busy it is', () => {
+    expect(observe(world({ runs: [supervisorRun({ toolCalls: 199 })] })).some((s) => s.kind === 'run_looping')).toBe(
+      false,
+    )
+  })
+
+  it('never raises for a CONSTRAINED run -- that rung is the system\u2019s, not the Supervisor\u2019s', () => {
+    const runs = [supervisorRun({ breakerLevel: 'constrained', trip: 'repeated_call', detail: 'x', count: 8 })]
+    expect(observe(world({ runs })).some((s) => s.kind === 'run_looping')).toBe(false)
+  })
+
+  it('never raises for a run whose level says steered but whose trip the log has lost', () => {
+    const runs = [supervisorRun({ breakerLevel: 'steered', trip: null })]
+    expect(observe(world({ runs })).some((s) => s.kind === 'run_looping')).toBe(false)
+  })
+
+  it('never raises for a run that has already used its steers', () => {
+    expect(observe(world({ runs: [{ ...looping, breakerSteers: 2 }] })).some((s) => s.kind === 'run_looping')).toBe(
+      false,
+    )
+  })
+
+  it('never raises for a run that is no longer working', () => {
+    for (const status of ['paused', 'pause_requested', 'stopping', 'failed'] as const) {
+      expect(observe(world({ runs: [{ ...looping, status }] })).some((s) => s.kind === 'run_looping'), status).toBe(
+        false,
+      )
+    }
+  })
+})
+
+describe('filterFresh with a per-kind cooldown (M51 R3)', () => {
+  const decisionAt = (kind: SituationKind, subjectId: string, agoMs: number): SupervisorDecisionRecord =>
+    decision({ situationKind: kind, subjectId, status: 'applied', createdAt: NOW - agoMs, resolvedAt: NOW - agoMs })
+
+  it('lets a looping run be raised again after two minutes, not fifteen', () => {
+    const situations = [{ kind: 'run_looping' as const, subjectId: 'run-1', summary: 's', facts: {} }]
+    const recent = world({ decisions: [decisionAt('run_looping', 'run-1', 3 * 60_000)] })
+    expect(filterFresh(situations, recent)).toHaveLength(1)
+    const fresher = world({ decisions: [decisionAt('run_looping', 'run-1', 60_000)] })
+    expect(filterFresh(situations, fresher)).toHaveLength(0)
+  })
+
+  it('leaves every other kind on the standing fifteen minutes', () => {
+    const situations = [{ kind: 'waiting_stale' as const, subjectId: 'task-1', summary: 's', facts: {} }]
+    const w = world({ decisions: [decisionAt('waiting_stale', 'task-1', 3 * 60_000)] })
+    expect(filterFresh(situations, w)).toHaveLength(0)
+  })
+
+  it('still blocks a PENDING decision whatever the cooldown says', () => {
+    const situations = [{ kind: 'run_looping' as const, subjectId: 'run-1', summary: 's', facts: {} }]
+    const w = world({ decisions: [{ ...decisionAt('run_looping', 'run-1', 99 * 60_000), status: 'pending' }] })
+    expect(filterFresh(situations, w)).toHaveLength(0)
   })
 })
