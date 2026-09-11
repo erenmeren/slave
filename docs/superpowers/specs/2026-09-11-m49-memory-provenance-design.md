@@ -27,3 +27,6 @@ Embeddings or any semantic retrieval; model-written summaries; workers editing m
 
 ## 5. Carried backlog (M46 §5, M47 and M48 deferred lists; not M49 scope unless a task touches the file)
 Organization page + RunbookPanel each load a Supervisor world per Overview render; `tierOf` busy at draft time; `CATALOG_ENTRIES_MAX` by id; pre-M47 templates keep `capabilityKeys: []`; gates m8/m10/m13 outside CI; m11 flake; m14 PNG nondeterminism; mapper M6/M7/E23; WorkforceClient bare `<details>`; `q` undebounced; drawer `rawOverride` spec-scoped; `sourceRepository` asymmetry; `GET /api/org/catalog` principal harmonisation; M48: `unknownStages` not on the panel, persona runbook keys collide by name, `gate:m48` writes to a seed row, `runbooks show` prints keys, `addRunbook` `by` discarded, `stageTitle` vs swapped runbooks, a stage gate runs twice on a clean merge (intended).
+
+Found while writing the plan (2026-09-11, before Task 1); each is baked into `docs/superpowers/plans/2026-09-11-m49-memory.md`. Reasoning with file citations is in the plan's companion notes (session scratchpad); summarised here.
+
