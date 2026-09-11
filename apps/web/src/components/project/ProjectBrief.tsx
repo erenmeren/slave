@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { SUPERVISOR_PER_CALL_CAP_USD, USER_CARD_LABEL, type UserCardState } from '@slave-of-ai/domain'
+import { SLAVE_LIFECYCLE_LABEL, SUPERVISOR_PER_CALL_CAP_USD, USER_CARD_LABEL, type UserCardState } from '@slave-of-ai/domain'
 import type { ProjectBrief as ProjectBriefFacts } from '../../server/brief'
 import type { NeedsYouItem } from '../../server/needsYou'
 import { CARD_STATE_TONE } from '../../lib/tones'
@@ -275,9 +275,15 @@ export function ProjectBrief({
                   <span className="shrink-0 text-xs text-text-1">{member.name}</span>
                   <span className="shrink-0 text-[11px] text-text-3">{member.roleLabel}</span>
                   <span className={`shrink-0 font-mono text-[9.5px] uppercase ${TONE_TEXT[tone]}`}>{member.status}</span>
-                  {member.company && (
-                    <span data-testid="team-company" className="shrink-0 rounded-chip border border-line px-1.5 text-[9.5px] text-text-3">
-                      company
+                  {member.lifecycle !== 'project' && (
+                    // The WORD, raw value in `title` (`docs/ia.md` rule 3). `project` is the
+                    // ordinary case and prints nothing -- a marker every row carries marks nothing.
+                    <span
+                      data-testid="team-lifecycle"
+                      title={member.lifecycle}
+                      className="shrink-0 rounded-chip border border-line px-1.5 text-[9.5px] text-text-3"
+                    >
+                      {SLAVE_LIFECYCLE_LABEL[member.lifecycle]}
                     </span>
                   )}
                   <span className="min-w-0 flex-1 truncate text-[11px] text-text-2">{member.taskTitle ?? '—'}</span>
@@ -286,15 +292,20 @@ export function ProjectBrief({
               return (
                 <li key={member.slaveId}>
                   {onOpenSlave === undefined ? (
-                    <div data-testid="team-row" className="flex w-full items-center gap-2 text-left">
+                    <div
+                      data-testid="team-row"
+                      data-released={member.released === null ? undefined : 'true'}
+                      className={`flex w-full items-center gap-2 text-left${member.released === null ? '' : ' opacity-60'}`}
+                    >
                       {body}
                     </div>
                   ) : (
                     <button
                       type="button"
                       data-testid="team-row"
+                      data-released={member.released === null ? undefined : 'true'}
                       onClick={() => onOpenSlave(member.slaveId)}
-                      className="flex w-full items-center gap-2 rounded-nav text-left hover:bg-white/[0.045]"
+                      className={`flex w-full items-center gap-2 rounded-nav text-left hover:bg-white/[0.045]${member.released === null ? '' : ' opacity-60'}`}
                     >
                       {body}
                     </button>

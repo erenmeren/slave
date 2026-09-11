@@ -50,7 +50,8 @@ const view: OrganizationView = {
       slaveId: 's1',
       name: 'Alex',
       roleLabel: 'engineering',
-      kind: 'company',
+      lifecycle: 'permanent',
+      released: null,
       capabilities: [{ key: 'security.application', label: 'Application security' }],
       why: 'Assigned from M47 Co',
       runtimeRoles: ['engineering'],
@@ -60,7 +61,8 @@ const view: OrganizationView = {
       slaveId: 's2',
       name: 'Rae',
       roleLabel: 'backend',
-      kind: 'project',
+      lifecycle: 'project',
+      released: null,
       capabilities: [{ key: 'backend.api-design', label: 'API design' }],
       why: 'Seeded',
       runtimeRoles: ['backend'],
@@ -70,7 +72,22 @@ const view: OrganizationView = {
       slaveId: 's3',
       name: 'Security Reviewer',
       roleLabel: 'security',
-      kind: 'project',
+      lifecycle: 'ephemeral',
+      released: null,
+      capabilities: [],
+      why: 'Hired for security.application because the board needs it',
+      runtimeRoles: ['reviewer'],
+      doing: null,
+    },
+    // Aaron sorts FIRST by name and is rendered LAST: `buildOrganization` hands this component its
+    // rows already partitioned (D7), and the integration test is where that sort is pinned. What
+    // this fixture pins here is that the component renders the order it is given and hides nobody.
+    {
+      slaveId: 's4',
+      name: 'Aaron',
+      roleLabel: 'security',
+      lifecycle: 'ephemeral',
+      released: { at: '2026-09-12T10:00:00.000Z', reason: 'the engagement is over' },
       capabilities: [],
       why: 'Hired for security.application because the board needs it',
       runtimeRoles: ['reviewer'],
@@ -129,16 +146,38 @@ beforeEach(() => {
 })
 
 describe('OrganizationClient', () => {
-  it('renders one row per worker with kind, capabilities, why and what they are doing', () => {
+  it('renders one row per worker with capabilities, why and what they are doing', () => {
     render(<OrganizationClient workspaceId="w1" initial={view} />)
-    expect(within(screen.getByTestId('organization-rows')).getAllByTestId('data-table-row').length).toBe(3)
+    expect(within(screen.getByTestId('organization-rows')).getAllByTestId('data-table-row').length).toBe(4)
     expect(screen.getByTestId('organization-row-s3')).toBeTruthy()
-    expect(screen.getByTestId('organization-kind-s3').textContent).toBe('project')
     expect(screen.getByTestId('organization-why-s3').textContent).toBe(
       'Hired for security.application because the board needs it',
     )
     expect(screen.getByTestId('organization-doing-s1').textContent).toBe('Working')
     expect(screen.getByTestId('organization-doing-s2').textContent).toBe('Idle')
+  })
+
+  // M50 R6, `docs/ia.md` rule 3: the column says WHY a worker is here, in the word a person reads.
+  it('prints the lifecycle as a word, with the raw value one hover away', () => {
+    render(<OrganizationClient workspaceId="w1" initial={view} />)
+    const chip = screen.getByTestId('organization-lifecycle-s3')
+    expect(chip.textContent).toBe('Ephemeral')
+    expect(chip.querySelector('[data-testid="chip"]')?.getAttribute('title')).toBe('ephemeral')
+    expect(screen.getByTestId('organization-lifecycle-s1').textContent).toBe('Permanent')
+  })
+
+  // D7: a released worker keeps their row -- greyed, with the date, and never hidden.
+  it('says when a released worker was released, and keeps them on the page', () => {
+    render(<OrganizationClient workspaceId="w1" initial={view} />)
+    const released = screen.getByTestId('organization-released-s4')
+    expect(released.textContent).toContain('Released 2026-09-12')
+    expect(released.getAttribute('title')).toBe('the engagement is over')
+    // "Idle" would be a lie about a worker that is not waiting for anything.
+    expect(screen.queryByTestId('organization-doing-s4')).toBeNull()
+    const rows = screen.getAllByTestId(/^organization-row-/)
+    expect(rows[rows.length - 1]?.getAttribute('data-testid')).toBe('organization-row-s4')
+    expect(rows[rows.length - 1]?.getAttribute('data-released')).toBe('true')
+    expect(screen.getByTestId('organization-row-s1').getAttribute('data-released')).toBeNull()
   })
 
   // `docs/ia.md` rule 3: a surface may print a label, and the raw value stays reachable.

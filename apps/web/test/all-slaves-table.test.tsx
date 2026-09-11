@@ -33,6 +33,10 @@ function row(over: Partial<AllSlaveRow> = {}): AllSlaveRow {
     // M37 t4 fix round 1: the dispatch set. The default is the parked one, so the cases below
     // that care state their own.
     runtimeRoles: [],
+    // M50 R1/R3: why the worker is here, and whether the engagement is over. `project` is the
+    // ordinary hire, which is what most of this file's rows are.
+    lifecycle: 'project',
+    released: null,
     ...over,
   }
 }
@@ -62,6 +66,8 @@ function polledWorker(over: Partial<{
   costUsd: number
   unmeasuredRuns: number
   runtimeRoles: readonly string[]
+  lifecycle: AllSlaveRow['lifecycle']
+  released: AllSlaveRow['released']
 }> = {}) {
   return {
     slaveId: 'a1',
@@ -78,6 +84,8 @@ function polledWorker(over: Partial<{
     costUsd: 0,
     unmeasuredRuns: 0,
     runtimeRoles: [],
+    lifecycle: 'project' as const,
+    released: null,
     ...over,
   }
 }
@@ -203,6 +211,42 @@ describe('AllSlavesTable', () => {
     })
   })
 
+  // M50 R6/D6: the column that says who is temporary, and the poll that keeps it honest.
+  describe('the lifecycle column', () => {
+    it('prints the word, keeps the key in title, and greys a released row', () => {
+      render(
+        <AllSlavesTable
+          initial={page([
+            row({ slaveId: 'a1', name: 'Ada' }),
+            row({
+              slaveId: 'a2',
+              name: 'Robin',
+              lifecycle: 'ephemeral',
+              released: { at: '2026-09-12T10:00:00.000Z', reason: 'the engagement is over' },
+            }),
+          ])}
+          onOpen={() => {}}
+        />,
+      )
+      const cells = screen.getAllByTestId('worker-lifecycle')
+      expect(cells.map((cell) => cell.textContent)).toEqual(['Project', 'Ephemeral'])
+      expect(cells[1]?.getAttribute('title')).toBe('ephemeral')
+      // Greyed, never hidden (D7) -- the row is still here and still openable.
+      expect(screen.getAllByTestId('slave-row').map((one) => one.getAttribute('data-released'))).toEqual([null, 'true'])
+      expect(screen.getAllByTestId('data-table-row')).toHaveLength(2)
+    })
+
+    it('names a catalog member Permanent: a roster member IS somebody the organisation has', () => {
+      render(
+        <AllSlavesTable
+          initial={page([row({ slaveId: null, companySlaveId: 'ca1', name: 'Nova', projectName: null, workspaceId: null, lifecycle: 'permanent' })])}
+          onOpen={() => {}}
+        />,
+      )
+      expect(screen.getByTestId('worker-lifecycle').textContent).toBe('Permanent')
+    })
+  })
+
   describe('polling', () => {
     let fetchMock: ReturnType<typeof vi.fn>
 
@@ -293,6 +337,38 @@ describe('AllSlavesTable', () => {
       // The catalog row survives an add exactly as it does a drop -- a poll never touches one.
       expect(screen.getByText('Nova')).toBeTruthy()
       expect(screen.getAllByTestId('data-table-row')).toHaveLength(3)
+    })
+
+    // M50 D6: an approved hire and a release both land between reloads. A table that showed a
+    // released worker as an ordinary project one for five minutes would be the one surface
+    // disagreeing with the roster.
+    it('carries a release and a lifecycle move onto an already-rendered row', async () => {
+      fetchMock = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              workers: [
+                polledWorker({
+                  slaveId: 'a1',
+                  lifecycle: 'ephemeral',
+                  released: { at: '2026-09-12T10:00:00.000Z', reason: 'the engagement is over' },
+                }),
+              ],
+            }),
+            { status: 200 },
+          ),
+      )
+      vi.stubGlobal('fetch', fetchMock)
+
+      render(<AllSlavesTable initial={page([row({ slaveId: 'a1', name: 'Alex' })])} onOpen={() => {}} />)
+      expect(screen.getByTestId('worker-lifecycle').textContent).toBe('Project')
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+
+      expect(screen.getByTestId('worker-lifecycle').textContent).toBe('Ephemeral')
+      expect(screen.getByTestId('slave-row').getAttribute('data-released')).toBe('true')
     })
 
     it('drops a project row whose slaveId is missing from the payload, leaving a catalog row alone', async () => {

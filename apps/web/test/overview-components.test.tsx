@@ -52,6 +52,10 @@ const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
   // `runtimeRoles` per case; this default is the parked worker.
   profile: null,
   runtimeRoles: [],
+  // M50 R1/R3: why this worker is here, and whether the engagement is over. `project` is the
+  // ordinary hire and prints no chip at all, so the cases that want one state their own.
+  lifecycle: 'project',
+  released: null,
   ...over,
 })
 
@@ -505,6 +509,31 @@ describe('SlaveCard — the handoff anatomy', () => {
     expect(screen.getByTestId('card-skill-chip').textContent).toBe('—')
     expect(screen.getByTestId('card-queue-chip').textContent).toBe('—')
     expect(screen.getByTestId('provider-chip').textContent).toBe('—')
+  })
+
+  // M50 R6, `docs/ia.md` rule 3: the word, with the raw value one hover away. `project` is the
+  // ordinary case and prints nothing -- a chip every card carries marks nothing.
+  it('marks a temporary specialist, and greys the card of one whose engagement is over', () => {
+    const { rerender } = render(<SlaveCard slave={slave({})} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    expect(screen.queryByTestId('card-lifecycle-chip')).toBeNull()
+    expect(screen.getByTestId('slave-card').getAttribute('data-released')).toBeNull()
+
+    rerender(<SlaveCard slave={slave({ lifecycle: 'ephemeral' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    const chip = screen.getByTestId('card-lifecycle-chip')
+    expect(chip.textContent).toBe('Ephemeral')
+    expect(chip.closest('[data-testid="chip"]')?.getAttribute('title')).toBe('ephemeral')
+
+    rerender(
+      <SlaveCard
+        slave={slave({ lifecycle: 'ephemeral', released: { at: '2026-09-12T10:00:00.000Z', reason: 'over' } })}
+        liveActionLine={null}
+        workspaceId="w1"
+        onOpen={() => {}}
+      />,
+    )
+    const card = screen.getByTestId('slave-card')
+    expect(card.getAttribute('data-released')).toBe('true')
+    expect(card.className).toContain('opacity-50')
   })
 
   it('POSTs pause to the run route the panel already uses', async (): Promise<void> => {

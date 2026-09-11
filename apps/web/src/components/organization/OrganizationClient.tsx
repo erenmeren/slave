@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { SLAVE_LIFECYCLE_LABEL } from '@slave-of-ai/domain'
 // Type-only, so nothing from `server/organization.ts` -- and nothing under it, control and the
 // Prisma client -- reaches the client bundle. The rule `SupervisorPanel.tsx` states for
 // `SupervisorView`.
@@ -21,7 +22,7 @@ import { CapabilityChips } from './CapabilityChips'
 /** `gate:m11-shell` and four M46 tests read `data-table-row` on tables built this way; the columns
  *  are free to move, the primitive is not (`WorkforceCatalog`'s own note). */
 const COLUMNS = '1fr 90px 1.6fr 1.8fr 90px'
-const HEADER = ['Worker', 'Kind', 'Provides', 'Why they are here', 'Doing'] as const
+const HEADER = ['Worker', 'Lifecycle', 'Provides', 'Why they are here', 'Doing'] as const
 
 /** How many advisory edges stand open. Five is what fits under the roster without turning the page
  *  into a list of suggestions; past it the group is folded and says how to open it. */
@@ -110,7 +111,14 @@ export function OrganizationClient({
                 {view.workers.map((worker, index) => (
                   // The wrapper carries the row's own identity, so the `data-table-row` handle
                   // four gates read stays exactly where it is (`WorkforceCatalog`'s idiom).
-                  <div key={worker.slaveId} data-testid={`organization-row-${worker.slaveId}`}>
+                  // A released worker's row is greyed and carries the state a stylesheet and a
+                  // gate can both read -- it is still here, and still findable (D7).
+                  <div
+                    key={worker.slaveId}
+                    data-testid={`organization-row-${worker.slaveId}`}
+                    data-released={worker.released === null ? undefined : 'true'}
+                    className={worker.released === null ? undefined : 'opacity-60'}
+                  >
                     {/* `last` because this `Row` is the only child of its wrapper, so its own
                       * `:last-child` selector would match every row and draw no separator. */}
                     <Row columns={COLUMNS} last={index === view.workers.length - 1}>
@@ -125,8 +133,14 @@ export function OrganizationClient({
                           {worker.roleLabel}
                         </span>
                       </span>
-                      <span data-testid={`organization-kind-${worker.slaveId}`}>
-                        <Chip>{worker.kind}</Chip>
+                      <span data-testid={`organization-lifecycle-${worker.slaveId}`}>
+                        {/* The WORD, with the raw value in `title` (`docs/ia.md` rule 3). An
+                          * ephemeral worker gets the `waiting` tone -- the one tone in the palette
+                          * that already means "this is temporary and somebody will have to act" --
+                          * so a temporary specialist is visible in a glance down the column. */}
+                        <Chip {...(worker.lifecycle === 'ephemeral' ? { tone: 'waiting' as const } : {})} title={worker.lifecycle}>
+                          {SLAVE_LIFECYCLE_LABEL[worker.lifecycle]}
+                        </Chip>
                       </span>
                       <CapabilityChips capabilities={worker.capabilities} />
                       {/* Another party's sentence -- a MODEL may have written this one -- as JSX
@@ -134,12 +148,25 @@ export function OrganizationClient({
                       <span data-testid={`organization-why-${worker.slaveId}`} className="text-xs text-text-2">
                         {worker.why}
                       </span>
-                      <span
-                        data-testid={`organization-doing-${worker.slaveId}`}
-                        className={`text-xs ${worker.doing === null ? 'text-text-3' : 'text-tone-working'}`}
-                      >
-                        {worker.doing ?? 'Idle'}
-                      </span>
+                      {worker.released === null ? (
+                        <span
+                          data-testid={`organization-doing-${worker.slaveId}`}
+                          className={`text-xs ${worker.doing === null ? 'text-text-3' : 'text-tone-working'}`}
+                        >
+                          {worker.doing ?? 'Idle'}
+                        </span>
+                      ) : (
+                        // The engagement ended, so "Idle" would be a lie about a worker that is not
+                        // waiting for anything. The DATE, with the sentence the release was recorded
+                        // with one hover away.
+                        <span
+                          data-testid={`organization-released-${worker.slaveId}`}
+                          title={worker.released.reason}
+                          className="text-xs text-text-3"
+                        >
+                          Released {worker.released.at.slice(0, 10)}
+                        </span>
+                      )}
                     </Row>
                   </div>
                 ))}

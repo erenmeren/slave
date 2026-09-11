@@ -65,6 +65,9 @@ function slaveRow(over: Partial<AllSlaveRow> = {}): AllSlaveRow {
     unmeasuredRuns: 0,
     runCount: 0,
     runtimeRoles: ['backend'],
+    // M50 R1/R3: why this worker is here, and whether the engagement is over.
+    lifecycle: 'project',
+    released: null,
     ...over,
   }
 }

@@ -10,6 +10,7 @@ import {
   isStaffableTask,
   teamPlanOf,
   type CapabilityRecord,
+  type SlaveLifecycle,
   type SupervisorWorld,
 } from '@slave-of-ai/domain'
 
@@ -19,10 +20,13 @@ export interface OrganizationRow {
   readonly slaveId: string
   readonly name: string
   readonly roleLabel: string
-  /** `company` when the worker came off a company roster, `project` otherwise. The PERMANENT /
-   *  PROJECT / TEMPORARY lifecycle is M50's; this is the only distinction the schema can honestly
-   *  make today, and it is the same one `ProjectBrief.team[].company` makes. */
-  readonly kind: 'company' | 'project'
+  /** M50 R1: WHY this worker is here, off `Slave.lifecycle`. Replaces the `company | project`
+   *  derivation this row carried until M50 -- which could not say "temporary" because no column
+   *  held the fact. */
+  readonly lifecycle: SlaveLifecycle
+  /** M50 R3: the engagement is over. `at` is an ISO string (this crosses a server/client boundary)
+   *  and `reason` is the sentence the release was recorded with. Null for everybody still here. */
+  readonly released: { readonly at: string; readonly reason: string } | null
   readonly capabilities: readonly { readonly key: string; readonly label: string }[]
   /** WHY this worker is on this project, in one sentence -- the milestone's "why selected". The
    *  stored `selectionRationale` when there is one, else the fact the row can support. */
@@ -143,20 +147,23 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
   const shown = new Set(needs.map((need) => need.capability))
 
   return {
-    workers: org.value.workers.map((worker) => ({
-      slaveId: worker.slaveId,
-      name: worker.name,
-      roleLabel: worker.role,
-      // M50 R6/E9: `OrganizationWorker.kind` is gone -- the control view carries `lifecycle` and
-      // `released` now. This row keeps the old two-way word for one more task, derived from the
-      // company name the way `whyHere` below reads it; Task 4 replaces the field itself, and the
-      // chip that prints it, with the lifecycle label.
-      kind: worker.companyName === null ? 'project' : 'company',
-      capabilities: worker.capabilities.map((key) => ({ key, label: label(key) })),
-      why: whyHere(worker),
-      runtimeRoles: worker.runtimeRoles,
-      doing: doingNow(worker.slaveId, world),
-    })),
+    workers: org.value.workers
+      .map((worker) => ({
+        slaveId: worker.slaveId,
+        name: worker.name,
+        roleLabel: worker.role,
+        lifecycle: worker.lifecycle,
+        released: worker.released,
+        capabilities: worker.capabilities.map((key) => ({ key, label: label(key) })),
+        why: whyHere(worker),
+        runtimeRoles: worker.runtimeRoles,
+        doing: doingNow(worker.slaveId, world),
+      }))
+      // M50 R6: released workers LAST, and never hidden (`docs/ia.md` rule 2 -- nothing is removed,
+      // only moved). Somebody looking for the specialist who did the security pass has to find
+      // them, with the date they left beside their name. `listOrganization` already returned the
+      // rows name-ascending, so this is a stable partition rather than a second sort.
+      .toSorted((a, b) => (a.released === null ? 0 : 1) - (b.released === null ? 0 : 1)),
     needs,
     covered: plan.covered.map((one) => ({ capability: one.capability, label: label(one.capability), by: one.by })),
     unfillable: plan.unfillable.map((capability) => ({ capability, label: label(capability) })),

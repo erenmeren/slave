@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+import { SLAVE_LIFECYCLE_LABEL } from '@slave-of-ai/domain'
 import { postControl } from '../lib/postControl'
 import { providerLabel } from '../lib/providerLabel'
 import { CARD_STATE_TONE, cardStateFor } from '../lib/tones'
@@ -134,12 +135,15 @@ export function SlaveCard({
       data-testid="slave-card"
       data-status={slave.status}
       data-card-state={state}
+      // M50 R3/D7: a released worker's card is still a card and still opens its panel -- it just
+      // reads as finished. Greyed rather than removed (`docs/ia.md` rule 2).
+      data-released={slave.released === null ? undefined : 'true'}
       // `TONE_BORDER` is `StatusPill`'s own `3d`-alpha border map, imported rather than restated:
       // the card's border and the pill's border are the SAME recipe in the handoff, and a second
       // literal copy of eight class strings is the duplication Decision 2 forbids.
       className={`relative flex flex-col gap-[9px] overflow-hidden rounded-card border bg-bg-2 px-[13px] py-[12px] transition-colors hover:border-line-hover ${
         TONE_BORDER[tone]
-      } ${flashing ? 'motion-safe:animate-[border-flash_800ms_ease-out]' : ''}`}
+      } ${flashing ? 'motion-safe:animate-[border-flash_800ms_ease-out]' : ''}${slave.released === null ? '' : ' opacity-50'}`}
       style={flashing ? ({ '--flash-color': FLASH_COLOR[slave.status] } as React.CSSProperties) : undefined}
     >
       {/* The activity sweep (design README "Motion"): a 2.2s cubic-bezier(.4,0,.2,1) gradient
@@ -220,6 +224,15 @@ export function SlaveCard({
           </span>
         </Chip>
         <ShellOnlyMark gate={slave.gate} />
+        {slave.lifecycle !== 'project' && (
+          // The WORD, raw value in `title` (`docs/ia.md` rule 3). `project` is the ordinary hire
+          // and prints nothing -- a chip every card carries marks nothing. `ephemeral` takes the
+          // `waiting` tone, the one tone that already means "temporary, and somebody will have to
+          // act", so a specialist stands out in a grid of cards.
+          <Chip {...(slave.lifecycle === 'ephemeral' ? { tone: 'waiting' as const } : {})} title={slave.lifecycle}>
+            <span data-testid="card-lifecycle-chip">{SLAVE_LIFECYCLE_LABEL[slave.lifecycle]}</span>
+          </Chip>
+        )}
       </div>
 
       {waitingFor !== null && (

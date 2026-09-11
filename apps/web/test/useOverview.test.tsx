@@ -39,6 +39,9 @@ const SNAPSHOT: OverviewSnapshot = {
       waitingFor: null,
       profile: null,
       runtimeRoles: [],
+      // M50 R1/R3: why this worker is here, and whether the engagement is over.
+      lifecycle: 'project' as const,
+      released: null,
     },
   ],
   tasks: { active: 1, ready: 0, blocked: 0, done: 0, failed: 0 },

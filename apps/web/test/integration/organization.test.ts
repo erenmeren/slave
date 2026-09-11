@@ -74,7 +74,13 @@ describe('buildOrganization', () => {
       data: { companyTeamId: companyTeam.id, templateId: platform.id, name: 'Alex' },
     })
     await prisma.workspace.update({ where: { id: workspaceId }, data: { companyId: company.id } })
-    await prisma.slave.update({ where: { id: fixture.slaveId }, data: { companySlaveId: rosterRow.id } })
+    // `lifecycle: 'permanent'` beside the roster link (M50 R1): a worker materialised from a
+    // company roster IS somebody the organisation has, which is exactly what the migration's one
+    // data statement writes for every pre-M50 roster-linked worker.
+    await prisma.slave.update({
+      where: { id: fixture.slaveId },
+      data: { companySlaveId: rosterRow.id, lifecycle: 'permanent' },
+    })
 
     // Rae predates all of this: no rationale, no roster row, and the `backend` role that makes
     // `backend.api-design` a covered capability rather than a gap.
@@ -101,6 +107,23 @@ describe('buildOrganization', () => {
         capabilities: ['security.application'],
         hiredFromTemplateId: security.id,
         selectionRationale: 'Hired for security.application because the board needs it',
+      },
+    })
+    // A temporary specialist whose engagement is over (M50 R3/D7). The name sorts FIRST of the
+    // four, so the row landing LAST is a statement about the sort and not about the alphabet.
+    await prisma.slave.create({
+      data: {
+        teamId: fixture.teamId,
+        name: 'Aaron',
+        role: 'security',
+        // Nothing to dispatch and nothing to cover: this row is about the SORT and the released
+        // marker, and a capability on it would quietly move the coverage the cases below pin.
+        runtimeRoles: [],
+        capabilities: [],
+        lifecycle: 'ephemeral',
+        releasedAt: new Date('2026-09-12T10:00:00.000Z'),
+        releaseReason: 'the engagement is over',
+        selectionRationale: 'Brought in for the security pass',
       },
     })
 
@@ -169,12 +192,27 @@ describe('buildOrganization', () => {
     const view = await buildOrganization(workspaceId)
     expect(view).not.toBeNull()
     if (view === null) return
-    expect(view.workers.map((worker) => [worker.name, worker.kind, worker.why])).toEqual([
-      ['Alex', 'company', 'Assigned from M47 Co'],
+    expect(view.workers.map((worker) => [worker.name, worker.lifecycle, worker.why])).toEqual([
+      ['Alex', 'permanent', 'Assigned from M47 Co'],
       ['Rae', 'project', 'Seeded'],
       ['Security Reviewer', 'project', 'Hired for security.application because the board needs it'],
+      // Released LAST, though 'Aaron' sorts first by name (M50 D7): the roster is partitioned, and
+      // nobody is ever removed from it.
+      ['Aaron', 'ephemeral', 'Brought in for the security pass'],
     ])
     expect(view.workers[2]?.capabilities).toEqual([{ key: 'security.application', label: 'Application security' }])
+  })
+
+  // M50 R3: the engagement ended, and the row says when, in the sentence it ended with.
+  it('carries the date and the reason a released worker was released', async () => {
+    const view = await buildOrganization(workspaceId)
+    expect(view).not.toBeNull()
+    if (view === null) return
+    expect(view.workers.filter((worker) => worker.released !== null).map((worker) => worker.name)).toEqual(['Aaron'])
+    expect(view.workers.at(-1)?.released).toEqual({
+      at: '2026-09-12T10:00:00.000Z',
+      reason: 'the engagement is over',
+    })
   })
 
   it('shows what the board needs, the proposals waiting on a person, and what nobody can do', async () => {
@@ -357,7 +395,7 @@ describe('buildOrganization', () => {
     })
     expect(answer.status).toBe(200)
     const body = (await answer.json()) as OrganizationView
-    expect(body.workers.map((worker) => worker.name)).toEqual(['Alex', 'Rae', 'Security Reviewer'])
+    expect(body.workers.map((worker) => worker.name)).toEqual(['Alex', 'Rae', 'Security Reviewer', 'Aaron'])
     expect(body.needs.map((need) => need.capability)).toEqual(['security.application'])
 
     const missing = await organizationGET(new Request('http://test/organization'), {

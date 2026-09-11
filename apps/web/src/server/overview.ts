@@ -7,6 +7,7 @@ import {
   mergeQueueOrder,
   sumSpend,
   NON_TERMINAL_RUN_STATUSES,
+  type SlaveLifecycle,
   type SlaveStatus,
   type TaskStatus,
 } from '@slave-of-ai/domain'
@@ -74,6 +75,12 @@ export interface SlaveCardData {
    * absent chip row.
    */
   readonly runtimeRoles: readonly string[]
+  /** M50 R1: WHY this worker is here, off `Slave.lifecycle`. A column, never a derivation -- the
+   *  card can finally say "temporary", which `companySlaveId !== null` never could. */
+  readonly lifecycle: SlaveLifecycle
+  /** M50 R3: the engagement is over. `at` is an ISO string (this crosses a server/client boundary)
+   *  and `reason` is the sentence the release was recorded with. Null for everybody still here. */
+  readonly released: { readonly at: string; readonly reason: string } | null
   readonly status: SlaveStatus
   readonly taskTitle: string | null
   /** The live run's task id — the card renders `TASK-<first 8 chars>` from it (the handoff's mono
@@ -630,6 +637,12 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         // `buildRunContext` makes, so what the panel shows is what the next dispatch will send.
         profile: effectiveProfile(slave),
         runtimeRoles: slave.runtimeRoles,
+        // Straight off the row the `include` above already loads in full -- no `select` to widen.
+        lifecycle: slave.lifecycle,
+        released:
+          slave.releasedAt === null
+            ? null
+            : { at: slave.releasedAt.toISOString(), reason: slave.releaseReason ?? 'released' },
         // The run's own column, not a constant (M12 Task 9, ruling R10). `SlaveRun.provider` has
         // been written by every dispatch since Task 8, so the surface finally has real data where
         // it used to have `'claude-code' as const` -- which was not even the `ProviderKind`

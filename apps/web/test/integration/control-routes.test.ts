@@ -36,6 +36,8 @@ import { POST as goalRequestPOST } from '../../src/app/api/w/[workspaceId]/goal/
 import { POST as unblockPOST } from '../../src/app/api/w/[workspaceId]/tasks/[taskId]/unblock/route.js'
 import { PATCH as profilePATCH } from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/profile/route.js'
 import { PATCH as runtimeRolesPATCH } from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/runtime-roles/route.js'
+import { POST as releasePOST } from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/release/route.js'
+import { POST as lifecyclePOST } from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/lifecycle/route.js'
 import { GET as runContextGET } from '../../src/app/api/w/[workspaceId]/runs/[runId]/context/route.js'
 import { GET as supervisorGET } from '../../src/app/api/w/[workspaceId]/supervisor/route.js'
 import { POST as approvePOST } from '../../src/app/api/w/[workspaceId]/supervisor/decisions/[decisionId]/approve/route.js'
@@ -433,6 +435,135 @@ describe('the control routes', () => {
       expect(response.status).toBe(409)
       expect((await response.json()).error).toContain('named twice')
       expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([])
+    })
+  })
+
+  // M50 R3/R4, plan erratum E8: the two lifecycle routes, in the `slaves/[slaveId]` space their
+  // `profile` and `runtime-roles` siblings already occupy. Both are pure translation -- 400 for a
+  // body the route cannot read, `slaveControlResponse` for the scope, `refusalStatus` for the rest
+  // -- so every rule about who may be released lives in the verb and is only reported here.
+  describe('lifecycle and release', () => {
+    const release = (workspaceId: string, slaveId: string, body: unknown): Promise<Response> =>
+      releasePOST(
+        new Request('http://x', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId, slaveId }) },
+      )
+    const setLifecycle = (workspaceId: string, slaveId: string, body: unknown): Promise<Response> =>
+      lifecyclePOST(
+        new Request('http://x', { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId, slaveId }) },
+      )
+
+    /** The fixture's slave holds a `working` run, and both verbs refuse a worker with a live one.
+     *  Finishing it is what lets the ordinary cases below be about the lifecycle. */
+    const settleTheRun = (): Promise<unknown> =>
+      prisma.slaveRun.update({ where: { id: fixture.run.id }, data: { status: 'succeeded' } })
+
+    it('moves a lifecycle and records one org.changed event naming the field', async (): Promise<void> => {
+      await settleTheRun()
+
+      const response = await setLifecycle(fixture.workspace.id, fixture.slave.id, { lifecycle: 'ephemeral' })
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ ok: true })
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).lifecycle).toBe('ephemeral')
+      const events = await prisma.executionEvent.findMany({ where: { type: 'org_changed' } })
+      expect(events).toHaveLength(1)
+      expect(events[0]?.payload).toMatchObject({ field: 'lifecycle', from: 'project', to: 'ephemeral' })
+    })
+
+    it('is idempotent: asking for the lifecycle a worker already has writes no second event', async (): Promise<void> => {
+      await settleTheRun()
+      await setLifecycle(fixture.workspace.id, fixture.slave.id, { lifecycle: 'ephemeral' })
+
+      const again = await setLifecycle(fixture.workspace.id, fixture.slave.id, { lifecycle: 'ephemeral' })
+
+      expect(again.status).toBe(200)
+      expect(await prisma.executionEvent.count({ where: { type: 'org_changed' } })).toBe(1)
+    })
+
+    it('409s `permanent` for a worker on no company roster, with the verb\'s own reason', async (): Promise<void> => {
+      await settleTheRun()
+
+      const response = await setLifecycle(fixture.workspace.id, fixture.slave.id, { lifecycle: 'permanent' })
+
+      expect(response.status).toBe(409)
+      expect(((await response.json()) as { error: string }).error).toContain('roster')
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).lifecycle).toBe('project')
+    })
+
+    it('400s a lifecycle this product does not have, and unparseable JSON', async (): Promise<void> => {
+      expect((await setLifecycle(fixture.workspace.id, fixture.slave.id, { lifecycle: 'temporary' })).status).toBe(400)
+      expect((await setLifecycle(fixture.workspace.id, fixture.slave.id, {})).status).toBe(400)
+
+      const malformed = await lifecyclePOST(
+        new Request('http://x', { method: 'POST', body: 'not json', headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId: fixture.workspace.id, slaveId: fixture.slave.id }) },
+      )
+      expect(malformed.status).toBe(400)
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).lifecycle).toBe('project')
+    })
+
+    it('ends an engagement: the date, the sentence, an empty dispatch set and one slave.released event', async (): Promise<void> => {
+      await settleTheRun()
+      await prisma.slave.update({
+        where: { id: fixture.slave.id },
+        data: { lifecycle: 'ephemeral', runtimeRoles: ['backend'] },
+      })
+
+      const response = await release(fixture.workspace.id, fixture.slave.id, { reason: 'the security pass is done' })
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ ok: true })
+      const slave = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })
+      expect(slave.releasedAt).not.toBeNull()
+      expect(slave.releaseReason).toBe('the security pass is done')
+      // The empty set is the WHOLE of how a released worker stops being dispatched (spec R3).
+      expect(slave.runtimeRoles).toEqual([])
+      expect(await prisma.executionEvent.count({ where: { type: 'slave_released' } })).toBe(1)
+    })
+
+    it('409s a worker who is not ephemeral, one already released, and one with a live run', async (): Promise<void> => {
+      const notEphemeral = await release(fixture.workspace.id, fixture.slave.id, { reason: 'over' })
+      expect(notEphemeral.status).toBe(409)
+
+      await prisma.slave.update({ where: { id: fixture.slave.id }, data: { lifecycle: 'ephemeral' } })
+      const liveRun = await release(fixture.workspace.id, fixture.slave.id, { reason: 'over' })
+      expect(liveRun.status).toBe(409)
+
+      await settleTheRun()
+      expect((await release(fixture.workspace.id, fixture.slave.id, { reason: 'over' })).status).toBe(200)
+      const already = await release(fixture.workspace.id, fixture.slave.id, { reason: 'over again' })
+      expect(already.status).toBe(409)
+      // One release, one event: the three refusals above each wrote nothing.
+      expect(await prisma.executionEvent.count({ where: { type: 'slave_released' } })).toBe(1)
+    })
+
+    it('404s a slave in another workspace and an unknown slave, releasing nobody', async (): Promise<void> => {
+      await settleTheRun()
+      await prisma.slave.update({ where: { id: fixture.slave.id }, data: { lifecycle: 'ephemeral' } })
+
+      expect((await release(fixture.otherWorkspace.id, fixture.slave.id, { reason: 'not yours' })).status).toBe(404)
+      expect((await release(fixture.workspace.id, '00000000-0000-4000-8000-000000000000', { reason: 'nobody' })).status).toBe(404)
+      expect((await setLifecycle(fixture.otherWorkspace.id, fixture.slave.id, { lifecycle: 'project' })).status).toBe(404)
+
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).releasedAt).toBeNull()
+      expect(await prisma.executionEvent.count({ where: { type: 'slave_released' } })).toBe(0)
+    })
+
+    it('400s a release with no reason and a blank one: the sentence is what makes the row explainable', async (): Promise<void> => {
+      await settleTheRun()
+      await prisma.slave.update({ where: { id: fixture.slave.id }, data: { lifecycle: 'ephemeral' } })
+
+      expect((await release(fixture.workspace.id, fixture.slave.id, {})).status).toBe(400)
+      expect((await release(fixture.workspace.id, fixture.slave.id, { reason: '' })).status).toBe(400)
+
+      const malformed = await releasePOST(
+        new Request('http://x', { method: 'POST', body: 'not json', headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId: fixture.workspace.id, slaveId: fixture.slave.id }) },
+      )
+      expect(malformed.status).toBe(400)
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).releasedAt).toBeNull()
     })
   })
 

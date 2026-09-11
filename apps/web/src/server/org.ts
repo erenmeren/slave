@@ -24,6 +24,7 @@ import {
   SUPERVISOR_PER_CALL_CAP_USD,
   type CapabilityRecord,
   type Result,
+  type SlaveLifecycle,
   type SlaveStatus,
   type SpendGroup,
   type TaskStatus,
@@ -597,6 +598,11 @@ export interface WorkerRow {
    */
   readonly provider: ProviderKind | null
   readonly gate: WorkerGate | null
+  /** M50 R1: WHY this worker is here, off `Slave.lifecycle`. A column, never a derivation. */
+  readonly lifecycle: SlaveLifecycle
+  /** M50 R3: the engagement is over. `at` is an ISO string -- this row is serialised straight into
+   *  `GET /api/org/workers`' poll payload -- and `reason` is the sentence it ended with. */
+  readonly released: { readonly at: string; readonly reason: string } | null
   /** `tokensIn + tokensOut` summed over this worker's runs that reported them; `null` when none
    *  did (M14 Decision 4 -- Cursor reports none, and `0` would be a claim). */
   readonly tokens: number | null
@@ -701,6 +707,11 @@ export async function listWorkers(options?: { readonly includeArchived?: boolean
       name: slave.name,
       role: slave.role,
       runtimeRoles: slave.runtimeRoles,
+      lifecycle: slave.lifecycle,
+      released:
+        slave.releasedAt === null
+          ? null
+          : { at: slave.releasedAt.toISOString(), reason: slave.releaseReason ?? 'released' },
       workspaceId: slave.team.workspaceId,
       projectName: slave.team.workspace.name,
       status: info?.status ?? 'idle',
@@ -741,6 +752,13 @@ export interface AllSlaveRow {
   /** The row's department name -- a project row's `Team.name`, or a catalog row's
    *  `CompanyTeam.name` (M25 Task 6: was `teamName`, renamed once the Slaves table's department
    *  column became a `<select>` that reads/writes the department, not just names it). */
+  /** M50 R1: WHY this row is here. A project row carries its worker's own `Slave.lifecycle`; a
+   *  catalog row is `permanent`, because a roster member IS somebody the organisation has -- and
+   *  that is the one honest value for a row with no `Slave` at all. */
+  readonly lifecycle: SlaveLifecycle
+  /** M50 R3: the engagement is over, with the date and the sentence it ended with. Always `null`
+   *  on a catalog row: a member no project has materialised has no engagement to end. */
+  readonly released: { readonly at: string; readonly reason: string } | null
   readonly departmentName: string
   readonly projectName: string | null
   readonly workspaceId: string | null
@@ -844,6 +862,8 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
     name: w.name,
     role: w.role,
     runtimeRoles: w.runtimeRoles,
+    lifecycle: w.lifecycle,
+    released: w.released,
     departmentName: w.department,
     projectName: w.projectName,
     workspaceId: w.workspaceId,
@@ -876,6 +896,9 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
     // A catalog member is not a worker yet, so it has no dispatch set of its own -- see the field's
     // own docstring for why that is `[]` rather than `null`.
     runtimeRoles: [],
+    // A roster member IS somebody the organisation has (M50 R1), which is exactly what `permanent`
+    // means -- and the only honest value for a row that has no `Slave` row to read a column off.
+    lifecycle: 'permanent', released: null,
     departmentName: team.teamName, projectName: null, workspaceId: null,
     teamId: null, companyId: company.companyId, companyTeamId: team.companyTeamId,
     status: 'idle', currentTask: null,

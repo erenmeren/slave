@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { userSlaveStatus } from '@slave-of-ai/domain'
+import { SLAVE_LIFECYCLE_LABEL, userSlaveStatus } from '@slave-of-ai/domain'
 import type { AllSlaveRow, AllSlavesPage } from '../server/org'
 import { sendControl } from '../lib/postControl'
 import { providerLabel } from '../lib/providerLabel'
@@ -16,12 +16,12 @@ import { DataTable, Row } from './ui/DataTable'
 import { ProgressBar } from './ui/ProgressBar'
 import { StatusPill } from './ui/StatusPill'
 
-/** M24 §5.3's one Slaves table: slave · role · department · project · status · current task ·
- *  provider · cost · actions. Built from the old flat self-polling table's skeleton (M24 Task 7).
- *  The department column widened from 130px to 150px in M25 Task 6, when its bare team-name
- *  `<span>` became a `<select>`. */
-const COLUMNS = '200px 110px 150px 120px 110px 1fr 90px 90px 160px'
-const HEADER = ['Slave', 'Role', 'Department', 'Project', 'Status', 'Current task', 'Provider', 'Cost', ''] as const
+/** M24 §5.3's one Slaves table: slave · role · department · project · lifecycle · status · current
+ *  task · provider · cost · actions. Built from the old flat self-polling table's skeleton (M24
+ *  Task 7). The department column widened from 130px to 150px in M25 Task 6, when its bare
+ *  team-name `<span>` became a `<select>`; the lifecycle column is M50 R6. */
+const COLUMNS = '200px 110px 150px 120px 100px 110px 1fr 90px 90px 160px'
+const HEADER = ['Slave', 'Role', 'Department', 'Project', 'Lifecycle', 'Status', 'Current task', 'Provider', 'Cost', ''] as const
 
 /** The shape `GET /api/org/workers` returns -- a full `WorkerRow` per slave, project-wide, not
  *  scoped to the rows this table already knows about (M24 final review, Important 4). A poll
@@ -47,6 +47,11 @@ interface PolledWorker {
   /** M37 t4 fix round 1: the dispatch set, merged on every tick like `status` -- a `set-runtime-
    *  roles` from the CLI or another operator's panel must reach this table without a reload. */
   readonly runtimeRoles: readonly string[]
+  /** M50 R1/R3: polled like `status` and unlike `model` -- an approved hire and a release both land
+   *  between reloads, and a table that showed a released worker as dispatchable for five minutes
+   *  would be the one surface disagreeing with the roster. */
+  readonly lifecycle: AllSlaveRow['lifecycle']
+  readonly released: AllSlaveRow['released']
 }
 
 /**
@@ -125,6 +130,8 @@ export function AllSlavesTable({
               costUsd: w.costUsd,
               unmeasuredRuns: w.unmeasuredRuns,
               runtimeRoles: w.runtimeRoles,
+              lifecycle: w.lifecycle,
+              released: w.released,
             })
           }
           // A payload worker this table has never rendered becomes a new project row.
@@ -152,6 +159,8 @@ export function AllSlavesTable({
               costUsd: w.costUsd,
               unmeasuredRuns: w.unmeasuredRuns,
               runtimeRoles: w.runtimeRoles,
+              lifecycle: w.lifecycle,
+              released: w.released,
               // Not in the poll payload, same as `model` above -- unknown until the next full
               // reload (`AllSlaveRow.runCount`'s own docstring).
               runCount: 0,
@@ -175,7 +184,7 @@ export function AllSlavesTable({
 
   return (
     <DataTable columns={COLUMNS} header={[...HEADER]}>
-      {rows.map((row) => {
+      {rows.map((row, index) => {
         const tone = toneForStatus(row.status)
         // R5 leak 1: this pill printed `row.status` -- "pausing" where the Overview card said
         // PAUSING. Both words come from the same projection now, and the raw value stays one hover
@@ -187,86 +196,102 @@ export function AllSlavesTable({
         // captured variable across the `onClick` closure below, but not a captured property.
         const { slaveId, workspaceId } = row
         return (
-          <Row key={slaveId ?? `catalog-${row.companySlaveId ?? row.name}`} columns={COLUMNS}>
-            {slaveId !== null && workspaceId !== null ? (
-              <button
-                type="button"
-                data-testid="worker-row-button"
-                onClick={() => onOpen({ slaveId, workspaceId })}
-                className="flex min-w-0 items-center gap-[9px] text-left"
-              >
-                <AvatarTile name={row.name} tone={tone} />
-                <span className="block min-w-0 truncate text-[12.5px] font-semibold text-text-1">{row.name}</span>
-              </button>
-            ) : (
-              <span className="truncate text-[12.5px] font-semibold text-text-1">{row.name}</span>
-            )}
-            <div className="flex min-w-0 flex-col gap-[3px]">
-              {/* The TITLE (M37 §5) -- unchanged, and still the column's own text. The testid is
-                * new: `SlaveRowActions`' re-role control renders the same text in the actions
-                * column, so a test asserting the title needs to name which of the two it means. */}
-              <span data-testid="worker-role" className="truncate text-[11.5px] text-text-2">{row.role}</span>
-              {/* The dispatch set beside it. Only a project row has one: a catalog member has no
-                * `Slave` row yet, so "cannot be dispatched" would be a warning about a worker that
-                * does not exist rather than about one nothing can pick. */}
-              {row.slaveId !== null && (
-                <div className="flex flex-wrap items-center gap-[4px]">
-                  <RuntimeRoleChips roles={row.runtimeRoles} />
-                </div>
-              )}
-            </div>
-            <DepartmentCell row={row} page={initial} />
-            {row.projectName === null ? (
-              <span data-testid="slave-project" aria-label="project —" className="text-xs text-text-3">
-                —
-              </span>
-            ) : (
-              <span data-testid="slave-project" className="truncate text-[11.5px] text-text-2">
-                {row.projectName}
-              </span>
-            )}
-            <StatusPill tone={tone} label={word} title={row.status} />
-            <div data-testid="worker-task" className="min-w-0 pr-[14px]">
-              {row.currentTask === null ? (
-                <span className="text-xs text-text-3">—</span>
+          // The wrapper carries the released state a stylesheet and a gate can both read, so the
+          // `data-table-row` handle four gates read stays exactly where it is (`OrganizationClient`'s
+          // idiom). Wrapping is also why `last` has to be passed: `Row`'s own `:last-child` rule
+          // cannot see position once every row is the only child of its own wrapper.
+          <div
+            key={slaveId ?? `catalog-${row.companySlaveId ?? row.name}`}
+            data-testid="slave-row"
+            data-released={row.released === null ? undefined : 'true'}
+            className={row.released === null ? undefined : 'opacity-60'}
+          >
+            <Row columns={COLUMNS} last={index === rows.length - 1}>
+              {slaveId !== null && workspaceId !== null ? (
+                <button
+                  type="button"
+                  data-testid="worker-row-button"
+                  onClick={() => onOpen({ slaveId, workspaceId })}
+                  className="flex min-w-0 items-center gap-[9px] text-left"
+                >
+                  <AvatarTile name={row.name} tone={tone} />
+                  <span className="block min-w-0 truncate text-[12.5px] font-semibold text-text-1">{row.name}</span>
+                </button>
               ) : (
-                <>
-                  <span className="block truncate text-[11.5px] text-text-body">{row.currentTask.title}</span>
-                  <ProgressBar pct={row.currentTask.pct} tone={tone} />
-                </>
+                <span className="truncate text-[12.5px] font-semibold text-text-1">{row.name}</span>
               )}
-            </div>
-            <span className="flex items-center gap-1 font-mono text-[11px] text-text-2">
-              {/* The runtime's WORD, raw kind in `title` (M44 R4, final review item I3). */}
-              <span data-testid="worker-provider" title={row.provider ?? undefined}>
-                {providerLabel(row.provider)}
-              </span>
-              <ShellOnlyMark gate={row.gate} />
-            </span>
-            {/* The KPI tile's own idiom (M14 fix wave, review I1 / Decision 4: "a sum over
-              * unknowns says how many were unknown"), unchanged from the old worker list. */}
-            <span data-testid="worker-cost" className="font-mono text-[11px] text-text-1">
-              ${row.costUsd.toFixed(2)}
-              {row.unmeasuredRuns > 0 && (
-                <span data-testid={`worker-unmeasured-${slaveId ?? row.companySlaveId ?? ''}`} className="text-text-3">
-                  {' '}
-                  · {row.unmeasuredRuns} unmeasured
+              <div className="flex min-w-0 flex-col gap-[3px]">
+                {/* The TITLE (M37 §5) -- unchanged, and still the column's own text. The testid is
+                  * new: `SlaveRowActions`' re-role control renders the same text in the actions
+                  * column, so a test asserting the title needs to name which of the two it means. */}
+                <span data-testid="worker-role" className="truncate text-[11.5px] text-text-2">{row.role}</span>
+                {/* The dispatch set beside it. Only a project row has one: a catalog member has no
+                  * `Slave` row yet, so "cannot be dispatched" would be a warning about a worker that
+                  * does not exist rather than about one nothing can pick. */}
+                {row.slaveId !== null && (
+                  <div className="flex flex-wrap items-center gap-[4px]">
+                    <RuntimeRoleChips roles={row.runtimeRoles} />
+                  </div>
+                )}
+              </div>
+              <DepartmentCell row={row} page={initial} />
+              {row.projectName === null ? (
+                <span data-testid="slave-project" aria-label="project —" className="text-xs text-text-3">
+                  —
+                </span>
+              ) : (
+                <span data-testid="slave-project" className="truncate text-[11.5px] text-text-2">
+                  {row.projectName}
                 </span>
               )}
-            </span>
-            <div className="flex flex-wrap items-center gap-1">
-              {slaveId !== null ? (
-                <>
-                  <ModelOverrideEditor slaveId={slaveId} model={row.model} provider={row.provider} />
-                  <SlaveRowActions slaveId={slaveId} name={row.name} role={row.role} runCount={row.runCount} />
-                </>
-              ) : (
-                row.companySlaveId !== null && (
-                  <SlaveRowActions name={row.name} role={row.role} catalog={{ companySlaveId: row.companySlaveId }} />
-                )
-              )}
-            </div>
-          </Row>
+              {/* The WORD, raw value in `title` (`docs/ia.md` rule 3) -- the same contract the status
+                * pill beside it has kept since M44 R5. */}
+              <span data-testid="worker-lifecycle" title={row.lifecycle} className="truncate text-[11.5px] text-text-2">
+                {SLAVE_LIFECYCLE_LABEL[row.lifecycle]}
+              </span>
+              <StatusPill tone={tone} label={word} title={row.status} />
+              <div data-testid="worker-task" className="min-w-0 pr-[14px]">
+                {row.currentTask === null ? (
+                  <span className="text-xs text-text-3">—</span>
+                ) : (
+                  <>
+                    <span className="block truncate text-[11.5px] text-text-body">{row.currentTask.title}</span>
+                    <ProgressBar pct={row.currentTask.pct} tone={tone} />
+                  </>
+                )}
+              </div>
+              <span className="flex items-center gap-1 font-mono text-[11px] text-text-2">
+                {/* The runtime's WORD, raw kind in `title` (M44 R4, final review item I3). */}
+                <span data-testid="worker-provider" title={row.provider ?? undefined}>
+                  {providerLabel(row.provider)}
+                </span>
+                <ShellOnlyMark gate={row.gate} />
+              </span>
+              {/* The KPI tile's own idiom (M14 fix wave, review I1 / Decision 4: "a sum over
+                * unknowns says how many were unknown"), unchanged from the old worker list. */}
+              <span data-testid="worker-cost" className="font-mono text-[11px] text-text-1">
+                ${row.costUsd.toFixed(2)}
+                {row.unmeasuredRuns > 0 && (
+                  <span data-testid={`worker-unmeasured-${slaveId ?? row.companySlaveId ?? ''}`} className="text-text-3">
+                    {' '}
+                    · {row.unmeasuredRuns} unmeasured
+                  </span>
+                )}
+              </span>
+              <div className="flex flex-wrap items-center gap-1">
+                {slaveId !== null ? (
+                  <>
+                    <ModelOverrideEditor slaveId={slaveId} model={row.model} provider={row.provider} />
+                    <SlaveRowActions slaveId={slaveId} name={row.name} role={row.role} runCount={row.runCount} />
+                  </>
+                ) : (
+                  row.companySlaveId !== null && (
+                    <SlaveRowActions name={row.name} role={row.role} catalog={{ companySlaveId: row.companySlaveId }} />
+                  )
+                )}
+              </div>
+            </Row>
+          </div>
         )
       })}
     </DataTable>

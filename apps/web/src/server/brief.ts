@@ -14,6 +14,7 @@ import {
   userSlaveStatus,
   userSupervisorStatus,
   userTaskStatus,
+  type SlaveLifecycle,
   type SpendRow,
   type TaskStatus,
   type UserSupervisorState,
@@ -96,9 +97,11 @@ export interface ProjectBrief {
     readonly roleLabel: string
     readonly status: string
     readonly taskTitle: string | null
-    /** A worker materialised from a company roster row. The PERMANENT/PROJECT lifecycle itself is
-     *  M50; this is the only honest marker the schema carries today (`Slave.companySlaveId`). */
-    readonly company: boolean
+    /** M50 R1: why this worker is here. Replaces `company: boolean`, which was the only marker the
+     *  schema carried before the column existed. */
+    readonly lifecycle: SlaveLifecycle
+    /** M50 R3: the engagement is over; the row is greyed and the date is one hover away. */
+    readonly released: { readonly at: string; readonly reason: string } | null
   }[]
   readonly needsYou: readonly NeedsYouItem[]
   readonly latestVerified: {
@@ -188,7 +191,12 @@ export async function buildProjectBrief(
           id: true,
           name: true,
           role: true,
-          companySlaveId: true,
+          // `companySlaveId` is gone from this select (M50 R1): it was here to compute
+          // `company: boolean`, and the column below answers the question that flag was
+          // approximating. Nothing else in this builder read the roster link.
+          lifecycle: true,
+          releasedAt: true,
+          releaseReason: true,
           // The LIVE run, the same predicate AND the same ordering `server/overview.ts` uses for
           // its slave cards: a worker's task is the one its run is on, because nothing in the
           // pipeline writes `Task.assigneeId`. Newest first, so a worker that somehow holds two
@@ -273,7 +281,11 @@ export async function buildProjectBrief(
         // value reaches the page on the `SlaveCard` below, which keeps it in `title`.
         status: userSlaveStatus(deriveSlaveStatus(run === null ? null : toRunState(run))).label,
         taskTitle: run?.taskId === null || run === null ? null : (titleById.get(run.taskId) ?? null),
-        company: slave.companySlaveId !== null,
+        lifecycle: slave.lifecycle,
+        released:
+          slave.releasedAt === null
+            ? null
+            : { at: slave.releasedAt.toISOString(), reason: slave.releaseReason ?? 'released' },
       }
     }),
     needsYou: needsYouItems,

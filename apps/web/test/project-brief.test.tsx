@@ -16,9 +16,13 @@ const BRIEF = {
   objective: { text: 'Ship the checkout flow', version: 3 },
   supervisor: { state: 'decisions' as const, label: '2 DECISIONS WAITING', needsYou: true },
   work: { working: 2, verifying: 1, review: 0, waiting: 1, done: 4 },
+  // M50 R6: one member per lifecycle -- a permanent worker off the roster, a temporary specialist
+  // still here, and one whose engagement is over.
   team: [
-    { slaveId: 's1', name: 'Ada', roleLabel: 'developer', status: 'WORKING', taskTitle: 'Add Apple Pay', company: true },
-    { slaveId: 's2', name: 'Bo', roleLabel: 'reviewer', status: 'IDLE', taskTitle: null, company: false },
+    { slaveId: 's1', name: 'Ada', roleLabel: 'developer', status: 'WORKING', taskTitle: 'Add Apple Pay', lifecycle: 'permanent' as const, released: null },
+    { slaveId: 's2', name: 'Bo', roleLabel: 'reviewer', status: 'IDLE', taskTitle: null, lifecycle: 'project' as const, released: null },
+    { slaveId: 's3', name: 'Cass', roleLabel: 'security', status: 'IDLE', taskTitle: null, lifecycle: 'ephemeral' as const, released: null },
+    { slaveId: 's4', name: 'Dara', roleLabel: 'security', status: 'IDLE', taskTitle: null, lifecycle: 'ephemeral' as const, released: { at: '2026-09-12T10:00:00.000Z', reason: 'the engagement is over' } },
   ],
   needsYou: [
     { kind: 'blocked_task' as const, id: 't1', title: 'Wire the webhook — no credentials', href: '/w/w1/tasks?task=t1', since: '2026-09-09T08:00:00.000Z', taskId: 't1', decisionId: null, messageId: null },
@@ -167,7 +171,8 @@ describe('ProjectBrief', () => {
       roleLabel: 'developer',
       status: 'WORKING',
       taskTitle: null,
-      company: false,
+      lifecycle: 'project' as const,
+      released: null,
     }))
     render(<ProjectBrief workspaceId="w1" brief={{ ...BRIEF, team: many }} />)
     expect(screen.getAllByTestId('team-row')).toHaveLength(5)
@@ -200,15 +205,24 @@ describe('ProjectBrief', () => {
     expect(tile.textContent).toContain('integrated into the base branch')
   })
 
-  it('marks a company worker and shows what each one is on', () => {
+  it('shows what each worker is on', () => {
     render(<ProjectBrief workspaceId="w1" brief={BRIEF} />)
     const tile = tileFor('team')
     expect(tile.textContent).toContain('Ada')
     expect(tile.textContent).toContain('Add Apple Pay')
-    expect(within(tile).getAllByTestId('team-company')).toHaveLength(1)
-    expect(within(tile).getByTestId('team-company').textContent).toBe('company')
     // A worker on nothing says so, rather than leaving the column blank.
     expect(screen.getAllByTestId('team-row')[1]?.textContent).toContain('—')
+  })
+
+  // M50 R6, `docs/ia.md` rule 3: the word, with the raw value one hover away. `project` is the
+  // ordinary case and prints nothing -- a marker every row carries marks nothing.
+  it('marks a temporary specialist and greys one whose engagement is over', () => {
+    render(<ProjectBrief workspaceId="w1" brief={BRIEF} />)
+    const chips = screen.getAllByTestId('team-lifecycle')
+    expect(chips.map((chip) => chip.textContent)).toEqual(['Permanent', 'Ephemeral', 'Ephemeral'])
+    expect(chips[1]?.getAttribute('title')).toBe('ephemeral')
+    const rows = screen.getAllByTestId('team-row')
+    expect(rows.filter((row) => row.getAttribute('data-released') === 'true')).toHaveLength(1)
   })
 
   // The component test passes no handler, and that is the case being pinned: a brief with nowhere

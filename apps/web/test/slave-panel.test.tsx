@@ -38,6 +38,10 @@ const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
   // own M37 block below is what exercises them, so the default here is the empty pair.
   profile: null,
   runtimeRoles: [],
+  // M50 R1/R3: why this worker is here, and whether the engagement is over. The panel shows
+  // neither; the default is the ordinary project hire.
+  lifecycle: 'project' as const,
+  released: null,
   ...over,
 })
 
