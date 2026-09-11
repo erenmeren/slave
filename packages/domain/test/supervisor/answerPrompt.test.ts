@@ -23,6 +23,34 @@ function answerJson(overrides: Record<string, unknown> = {}): string {
 }
 
 describe('buildAnswerPrompt', () => {
+  it('shows the handoff under the task source, after the title and the description (M48 R4)', () => {
+    const prompt = buildAnswerPrompt({
+      question: question({
+        taskTitle: 'Add authentication',
+        taskDescription: 'The endpoint needs a session check.',
+        taskHandoff: {
+          objective: 'Add an authentication path to the orders endpoint.',
+          expectedOutput: 'Every orders route requires a signed session.',
+          acceptanceCriteria: ['Anonymous requests get 401'],
+          knownConstraints: [],
+          evidenceRequired: [],
+          contextReferences: [],
+        },
+      }),
+      world: world({}),
+      profile: null,
+    })
+    expect(prompt).toContain('  title: Add authentication')
+    expect(prompt).toContain('  objective: Add an authentication path to the orders endpoint.')
+    expect(prompt).toContain('  expected output: Every orders route requires a signed session.')
+    expect(prompt).toContain('  acceptance criteria: Anonymous requests get 401')
+  })
+
+  it('says nothing about a handoff a task does not have', () => {
+    const prompt = buildAnswerPrompt({ question: question({ taskTitle: 'T', taskDescription: 'D' }), world: world({}), profile: null })
+    expect(prompt).not.toContain('objective:')
+  })
+
   it('carries the question, the task, the goal, the thread and the recorded run prompt', () => {
     const prompt = buildAnswerPrompt({
       question: question({

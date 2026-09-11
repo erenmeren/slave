@@ -1,4 +1,4 @@
-import type { Source } from './answerPrompt.js'
+import { handoffSourceLines, type Source } from './answerPrompt.js'
 import type { SupervisorQuestion, SupervisorWorld } from './world.js'
 
 /**
@@ -44,7 +44,14 @@ function sourceText(source: Source, question: SupervisorQuestion, world: Supervi
     case 'task': {
       // Nulls as empty strings, joined by the newline the prompt showed them across -- so a quote
       // that runs from the title into the description still verifies once whitespace collapses.
-      const text = `${question.taskTitle ?? ''}\n${question.taskDescription ?? ''}`
+      // The handoff lines are HERE for plan erratum E8: `buildAnswerPrompt` prints them under this
+      // very SOURCE heading, and a check that refused a quote from them would hold back every
+      // answer that cited an acceptance criterion.
+      const text = [
+        question.taskTitle ?? '',
+        question.taskDescription ?? '',
+        ...handoffSourceLines(question.taskHandoff),
+      ].join('\n')
       return normalise(text) === '' ? null : text
     }
     case 'goal':

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { HandoffContract } from '../handoff/contract.js'
 import { neutraliseMarkers } from '../run-context/render.js'
 import {
   ANSWER_MAX_CHARS,
@@ -130,6 +131,20 @@ function rosterLines(world: SupervisorWorld): string {
     .join('\n')
 }
 
+/** The handoff lines the `task` source shows (M48 R4), or nothing. Kept as its own function because
+ *  `sourceText` in `./sourced.ts` must be able to join EXACTLY these lines: what the prompt shows
+ *  under a SOURCE heading is what a quote may be taken from (plan erratum E8). */
+export function handoffSourceLines(handoff: HandoffContract | null): readonly string[] {
+  if (handoff === null) return []
+  return [
+    `  objective: ${handoff.objective}`,
+    `  expected output: ${handoff.expectedOutput}`,
+    ...(handoff.acceptanceCriteria.length === 0
+      ? []
+      : [`  acceptance criteria: ${handoff.acceptanceCriteria.join('; ')}`]),
+  ]
+}
+
 /**
  * The SECOND model call of a supervised question (M39 §3): not "which action", but "what is the
  * answer, and where in the record did you find it".
@@ -174,6 +189,7 @@ export function buildAnswerPrompt(input: {
     'SOURCE "task" -- the task the asker is working on',
     `  title: ${question.taskTitle ?? NONE}`,
     `  description: ${question.taskDescription ?? NONE}`,
+    ...handoffSourceLines(question.taskHandoff),
     '',
     'SOURCE "goal" -- the workspace goal',
     `  ${world.goal ?? NONE}`,

@@ -19,6 +19,7 @@ import { syncCapabilityTaxonomy } from '../../src/capability.js'
 import { sendMessage } from '../../src/messaging.js'
 import { workspaceSpend } from '../../src/spend.js'
 import { refusalText } from '../../src/refusal.js'
+import { syncRunbooks } from '../../src/runbook.js'
 import {
   applyDecision,
   approveDecision,
@@ -1666,6 +1667,80 @@ describe('applyDecision -- the M47 capability actions', () => {
     const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: recorded.id } })
     expect(row.status).toBe('failed')
     expect(row.failureReason).not.toBeNull()
+    expect(await eventsOfType('supervisor_failed')).toHaveLength(1)
+  })
+})
+
+describe('applyDecision -- the M48 runbook action', () => {
+  let f: Fixture
+  let featureId = ''
+
+  /** The situation `observe` raises for a project with a goal, no runbook and an empty board --
+   *  keyed on the WORKSPACE, which is what `adopt_runbook` acts on. */
+  const runbookSituation = (workspaceId: string): Situation => ({
+    kind: 'runbook_recommended',
+    subjectId: workspaceId,
+    summary: 'A way of working to adopt',
+    facts: {},
+  })
+
+  beforeEach(async () => {
+    await reset()
+    // `reset()` truncates `SlaveTemplate` CASCADE, which reaches `RunbookTemplate`, so the table is
+    // reconciled here rather than once for the file.
+    await syncRunbooks()
+    featureId = (await prisma.runbookTemplate.findUniqueOrThrow({ where: { key: 'feature-delivery' } })).id
+    f = await seed()
+  })
+
+  it('carries out adopt_runbook by setting the column and logging the adoption (M48 R5)', async () => {
+    const recorded = await record(
+      f,
+      {
+        kind: 'adopt_runbook',
+        runbookId: featureId,
+        key: 'feature-delivery',
+        name: 'Feature delivery',
+        rationale: 'The goal says "ship".',
+      },
+      'proposed',
+      { subjectId: f.workspaceId, situation: runbookSituation(f.workspaceId) },
+    )
+    // `tierOf` pins this to `proposed`, so the decision waits for a person rather than applying.
+    expect(recorded.status).toBe('pending')
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).runbookId).toBeNull()
+
+    const applied = await applyDecision(recorded.id, 'human')
+    expect(applied.ok).toBe(true)
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).runbookId).toBe(featureId)
+    const adopted = await eventsOfType('workspace_runbook_adopted')
+    expect(adopted).toHaveLength(1)
+    expect(adopted[0]?.payload).toMatchObject({ key: 'feature-delivery', name: 'Feature delivery' })
+    expect(adopted[0]?.actor).toBe('human')
+  })
+
+  it('records a failed decision rather than throwing when the runbook has since been deleted', async () => {
+    const recorded = await record(
+      f,
+      {
+        kind: 'adopt_runbook',
+        runbookId: featureId,
+        key: 'feature-delivery',
+        name: 'Feature delivery',
+        rationale: 'The goal says "ship".',
+      },
+      'proposed',
+      { subjectId: f.workspaceId, situation: runbookSituation(f.workspaceId) },
+    )
+    await prisma.runbookTemplate.delete({ where: { id: featureId } })
+
+    const approved = await approveDecision(recorded.id, { userId: f.userId })
+    expect(approved.ok).toBe(false)
+    if (approved.ok) return
+    expect(approved.error.kind).toBe('runbook_not_found')
+    const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: recorded.id } })
+    expect(row.status).toBe('failed')
+    expect(row.failureReason).toContain('feature-delivery')
     expect(await eventsOfType('supervisor_failed')).toHaveLength(1)
   })
 })

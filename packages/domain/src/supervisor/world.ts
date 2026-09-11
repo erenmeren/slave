@@ -1,4 +1,5 @@
 import type { CapabilityRecord } from '../capability/taxonomy.js'
+import type { HandoffContract } from '../handoff/contract.js'
 import type { Runbook } from '../runbook/spec.js'
 import type { TaskStatus } from '../task/state.js'
 import type { ActionKind, DecisionStatus, Tier } from './actions.js'
@@ -164,6 +165,12 @@ export interface SupervisorQuestion {
   readonly taskId: string | null
   readonly taskTitle: string | null
   readonly taskDescription: string | null
+  /** M48 R4: the asking task's typed handoff, when it has one. The Supervisor answers from the same
+   *  row the worker reads, and everything shown here is QUOTABLE (plan erratum E8).
+   *
+   *  LOADER CONTRACT: `null` for a task with no contract AND for one whose stored contract will not
+   *  parse -- a malformed handoff must not take the mailbox down. */
+  readonly taskHandoff: HandoffContract | null
   /** The asker's run, whose recorded `RunContext.prompt` is the `run_context` source. */
   readonly senderRunId: string | null
   readonly threadId: string

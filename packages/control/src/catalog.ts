@@ -15,6 +15,7 @@ import {
   profileOverridesSchema,
   profileSpecSchema,
   renderProfileSpec,
+  runbookFromProfileSpec,
   type CapabilityRecord,
   type MappingQuality,
   type ProfileOverridableField,
@@ -217,6 +218,15 @@ export async function importCatalog(
   // that is imported later in the same run still finds it. Per template it is a replace, under
   // `@@unique([templateId, text])`, so a re-import can never double an edge.
   await writeCollaborationHints(
+    [...created, ...updated, ...unchanged].flatMap((outcome) => (outcome.templateId === null ? [] : [outcome.templateId])),
+    taxonomy,
+  )
+
+  // R3: a persona's own process becomes a runbook. AFTER the row loop for `writeCollaborationHints`'
+  // own reason -- the draft is derived from the stored `profileSpec` and the template id, and both
+  // exist only once the row is written. One query per translated persona, never one per stage.
+  // Nothing here touches a `SlaveTemplate` row, so the per-row counts M42/M46/M47 pin are untouched.
+  await writePersonaRunbooks(
     [...created, ...updated, ...unchanged].flatMap((outcome) => (outcome.templateId === null ? [] : [outcome.templateId])),
     taxonomy,
   )
@@ -545,6 +555,51 @@ async function writeCollaborationHints(
         skipDuplicates: true,
       }),
     ])
+  }
+}
+
+/**
+ * The persona-to-runbook pass (M48 R3).
+ *
+ * Keyed on `RunbookTemplate.key` (plan erratum E15): there is no unique index over
+ * `(source, sourceTemplateId)` and one over a nullable column could not hold across the seed rows,
+ * so `runbookFromProfileSpec` derives `persona-<slug of the template name>` and this upserts on it.
+ *
+ * A row an operator owns WINS, which is `importCatalog`'s own rule for a template name: a `human`
+ * runbook under the same key is left exactly as it is, and nothing about the import says otherwise.
+ * A persona whose workflow is shorter than two lines produces no runbook at all -- one step is not
+ * a process -- and an existing persona runbook for it is left standing rather than deleted, because
+ * a file that lost its Workflow heading has not asked for a project's adopted runbook to vanish.
+ */
+async function writePersonaRunbooks(
+  templateIds: readonly string[],
+  taxonomy: readonly CapabilityRecord[],
+): Promise<void> {
+  if (templateIds.length === 0) return
+  const rows = await prisma.slaveTemplate.findMany({
+    where: { id: { in: [...templateIds] } },
+    select: { id: true, name: true, capabilityKeys: true, profileSpec: true },
+    orderBy: { id: 'asc' },
+  })
+  for (const row of rows) {
+    const spec = profileSpecSchema.safeParse(row.profileSpec)
+    if (!spec.success) continue
+    const draft = runbookFromProfileSpec(spec.data, { id: row.id, name: row.name, capabilityKeys: row.capabilityKeys }, taxonomy)
+    if (draft === null) continue
+    const existing = await prisma.runbookTemplate.findUnique({ where: { key: draft.key }, select: { id: true, source: true } })
+    if (existing !== null && existing.source === 'human') continue
+    const data = {
+      name: draft.name,
+      description: draft.description,
+      keywords: [...draft.keywords],
+      requiredCapabilities: [...draft.requiredCapabilities],
+      optionalCapabilities: [...draft.optionalCapabilities],
+      stages: draft.stages as unknown as Prisma.InputJsonValue,
+      source: 'persona',
+      sourceTemplateId: draft.sourceTemplateId,
+    }
+    if (existing === null) await prisma.runbookTemplate.create({ data: { key: draft.key, ...data } })
+    else await prisma.runbookTemplate.update({ where: { key: draft.key }, data })
   }
 }
 

@@ -8,9 +8,14 @@ import {
   boundThread,
   evaluateGuardrails,
   isStaffableTask,
+  parseHandoffContract,
+  parseRunbookStages,
   type ActionKind,
   type CapabilityRecord,
   type DecisionStatus,
+  type HandoffContract,
+  type Runbook,
+  type RunbookSource,
   type SituationKind,
   type SupervisorCatalogEntry,
   type SupervisorCompanyWorker,
@@ -174,6 +179,9 @@ interface TaskRow {
   /** M40 §1: the goal version the plan that produced this task derived from; null for a hand-made
    *  one. Read straight through -- the domain's `summarise` compares it with `world.goalVersion`. */
   readonly goalVersion: number | null
+  /** M48 R2: the runbook stage the plan stamped on this task, or null -- which is what every task
+   *  planned before this milestone, and every hand-made one, carries. */
+  readonly stage: string | null
 }
 
 /**
@@ -203,6 +211,7 @@ async function loadTaskRows(tx: Prisma.TransactionClient, workspaceId: string): 
       t."integratedAt",
       t."createdAt",
       t."goalVersion",
+      t.stage,
       (SELECT COUNT(*)::int FROM "TaskDependency" td WHERE td."dependsOnTaskId" = t.id) AS dependents,
       NOT EXISTS (
         SELECT 1
@@ -364,13 +373,84 @@ async function loadQuestionTasks(
   tx: Prisma.TransactionClient,
   workspaceId: string,
   taskIds: readonly string[],
-): Promise<ReadonlyMap<string, { readonly title: string; readonly description: string; readonly requiredRole: string | null }>> {
+): Promise<
+  ReadonlyMap<
+    string,
+    {
+      readonly title: string
+      readonly description: string
+      readonly requiredRole: string | null
+      readonly handoff: HandoffContract | null
+    }
+  >
+> {
   if (taskIds.length === 0) return new Map()
   const rows = await tx.task.findMany({
     where: { workspaceId, id: { in: [...taskIds] } },
-    select: { id: true, title: true, description: true, requiredRole: true },
+    select: { id: true, title: true, description: true, requiredRole: true, handoff: true },
   })
-  return new Map(rows.map((row) => [row.id, { title: row.title, description: row.description, requiredRole: row.requiredRole }]))
+  return new Map(
+    rows.map((row) => [
+      row.id,
+      { title: row.title, description: row.description, requiredRole: row.requiredRole, handoff: handoffOf(row.handoff) },
+    ]),
+  )
+}
+
+/** M48 R4: a stored `Task.handoff` as a contract, or null. A row that will not parse is `null` --
+ *  a malformed handoff must not take the Supervisor's mailbox down, and `null` is already the
+ *  ordinary answer for every task planned before this milestone. */
+function handoffOf(value: unknown): HandoffContract | null {
+  const parsed = parseHandoffContract(value)
+  return parsed.ok ? parsed.value : null
+}
+
+/**
+ * A `RunbookTemplate` row as the domain's {@link Runbook} (M48 R5).
+ *
+ * A row whose `stages` will not parse comes back with NO stages rather than throwing, the same
+ * ruling `control/src/runbook.ts`'s `viewOf` makes: the project HAS adopted this runbook, and
+ * hiding the adoption would make the panel lie about what it is following. The CATALOGUE is the
+ * other way round -- see {@link loadRunbooks}.
+ */
+function runbookOf(row: {
+  readonly id: string
+  readonly key: string
+  readonly name: string
+  readonly description: string
+  readonly keywords: string[]
+  readonly requiredCapabilities: string[]
+  readonly optionalCapabilities: string[]
+  readonly stages: Prisma.JsonValue
+  readonly source: string
+  readonly sourceTemplateId: string | null
+}): Runbook {
+  const stages = parseRunbookStages(row.stages)
+  return {
+    id: row.id,
+    key: row.key,
+    name: row.name,
+    description: row.description,
+    keywords: row.keywords,
+    requiredCapabilities: row.requiredCapabilities,
+    optionalCapabilities: row.optionalCapabilities,
+    stages: stages.ok ? stages.value : [],
+    source: row.source as RunbookSource,
+    sourceTemplateId: row.sourceTemplateId,
+  }
+}
+
+/** M48 R5: the runbooks this project could adopt. Read ONLY when `runbook_recommended` could fire
+ *  -- a goal, no adopted runbook, and an empty board. A project that has already chosen, or one
+ *  with a board, pays for no scan at all. */
+async function loadRunbooks(tx: Prisma.TransactionClient): Promise<readonly Runbook[]> {
+  const rows = await tx.runbookTemplate.findMany({ orderBy: { key: 'asc' } })
+  return rows.flatMap((row) => {
+    const runbook = runbookOf(row)
+    // A row nothing can read recommends nothing: it would score on keywords and then offer an
+    // empty process. Dropped rather than offered.
+    return runbook.stages.length === 0 ? [] : [runbook]
+  })
 }
 
 /**
@@ -475,7 +555,14 @@ export async function loadSupervisorWorld(
         where: { id: workspaceId },
         // The halt, the limits and the spend come from `workspaceStats` below (erratum E7), so
         // this read is narrowed to what only the Supervisor cares about.
-        select: { id: true, goal: true, goalVersion: true, supervisorEnabled: true, supervisorProfile: true },
+        select: {
+          id: true,
+          goal: true,
+          goalVersion: true,
+          supervisorEnabled: true,
+          supervisorProfile: true,
+          runbookId: true,
+        },
       })
 
       const taskRows = await loadTaskRows(tx, workspaceId)
@@ -516,6 +603,19 @@ export async function loadSupervisorWorld(
       const taxonomy = asksForCapabilities ? await loadTaxonomy(tx) : []
       const companyRows = asksForCapabilities ? await loadCompanyRoster(tx, workspaceId) : []
       const catalogRows = asksForCapabilities ? await loadCatalogEntries(tx, slaveRows) : []
+
+      // M48 R5. The ADOPTED runbook is read whenever the column is set -- `observe`'s escalation
+      // sentence, the panel and `verify` all read the same row. The CATALOGUE is read only when a
+      // recommendation could actually be made, the same "do not pay for a query nobody's plan
+      // needs" rule the company roster and the catalog follow.
+      const adoptedRow =
+        workspace.runbookId === null
+          ? null
+          : await tx.runbookTemplate.findUnique({ where: { id: workspace.runbookId } })
+      const adopted = adoptedRow === null ? null : runbookOf(adoptedRow)
+      const canRecommend =
+        workspace.goal !== null && workspace.goal !== '' && workspace.runbookId === null && taskRows.length === 0
+      const runbooks = canRecommend ? await loadRunbooks(tx) : []
 
       // On `tx`, like everything else: this is the `senderRunId` set the pending-question filter
       // is built from, so reading it outside the snapshot would let a run stop waiting between the
@@ -573,6 +673,11 @@ export async function loadSupervisorWorld(
       // `decide()` acted on this tick, not a second one taken after the pass moved work.
       const snapshot = opts.stats ?? (await workspaceStats(workspaceId, tx))
 
+      // Plan erratum E6: the stage escalations, resolved ONCE for the board rather than per task.
+      const escalationByStage = new Map(
+        (adopted?.stages ?? []).map((stage) => [stage.key, stage.escalation] as const),
+      )
+
       const tasks: SupervisorTask[] = []
       for (const row of taskRows) {
         // The loader contract `SupervisorTask.requiredRole` states: a task with NO required role is
@@ -594,12 +699,11 @@ export async function loadSupervisorWorld(
           latestGuardrail: guardrails.get(row.id) ?? null,
           goalVersion: row.goalVersion,
           requiredCapabilities: row.requiredCapabilities,
-          // M48 t1: the column exists and the loader does not read it yet -- Task 3 selects
-          // `stage` and resolves its `escalation` through `Workspace.runbookId`. Null is the
-          // truthful reading until then, and it is also what every task planned before this
-          // milestone really carries.
-          stage: null,
-          stageEscalation: null,
+          stage: row.stage,
+          // Plan erratum E6: resolved HERE, so `observe` can append the sentence without knowing
+          // what a runbook is. Null whenever the task has no stage, the workspace has no runbook,
+          // or that stage sets no escalation -- all three are ordinary.
+          stageEscalation: row.stage === null ? null : (escalationByStage.get(row.stage) ?? null),
         })
       }
 
@@ -654,6 +758,10 @@ export async function loadSupervisorWorld(
             // what keeps the question present even when it has fallen out of that window.
             thread: boundThread(threads.get(row.threadId) ?? [], row.id),
             askerRunPrompt: row.senderRunId === null ? null : runPrompts.get(row.senderRunId) ?? null,
+            // M48 R4: the contract behind the asking task, so the answer prompt can show what the
+            // asker was actually asked for. A row that will not parse is `null` -- a malformed
+            // handoff must not take the Supervisor's mailbox down.
+            taskHandoff: task?.handoff ?? null,
             holders: holdersOf(row, task?.requiredRole ?? null, slaves),
           }
         }),
@@ -669,14 +777,8 @@ export async function loadSupervisorWorld(
         taxonomy,
         company: companyRows,
         catalog: catalogRows,
-        // M48 t1: the columns and the table exist; the loader reads neither yet. Task 3 loads the
-        // adopted runbook through `Workspace.runbookId` and, only when `runbook_recommended` could
-        // fire, the `RunbookTemplate` rows it could be chosen from. Both empty here is the state
-        // R5 describes as "this project has not chosen a way of working", which is true of every
-        // project until somebody adopts one -- and it keeps `observe` silent about runbooks rather
-        // than proposing one it has no list to propose from.
-        runbook: null,
-        runbooks: [],
+        runbook: adopted,
+        runbooks,
       }
 
       return {

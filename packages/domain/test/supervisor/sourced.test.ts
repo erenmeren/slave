@@ -20,6 +20,25 @@ const QUESTION = question({
 const source = (overrides: Partial<Source> = {}): Source => ({ kind: 'task', ref: null, quote: 'x', ...overrides })
 
 describe('verifySources -- what verifies', () => {
+  // Plan erratum E8: showing text under a SOURCE heading and then refusing quotes from it is a trap.
+  it('verifies a quote taken from the handoff the prompt printed', () => {
+    const q = question({
+      taskTitle: 'Add authentication',
+      taskDescription: 'The endpoint needs a session check.',
+      taskHandoff: {
+        objective: 'Anonymous requests must be refused.',
+        expectedOutput: 'A signed session reaches the handler.',
+        acceptanceCriteria: ['401 for an anonymous caller'],
+        knownConstraints: [],
+        evidenceRequired: [],
+        contextReferences: [],
+      },
+    })
+    const checked = verifySources([{ kind: 'task', ref: null, quote: '401 for an anonymous caller' }], q, world({}))
+    expect(checked.verified).toHaveLength(1)
+    expect(checked.rejected).toHaveLength(0)
+  })
+
   it('accepts a quote from the task title and from the task description', () => {
     const sources = [source({ quote: 'Wire the reader' }), source({ quote: 'PostgreSQL on port 5433' })]
     const result = verifySources(sources, QUESTION, WORLD)

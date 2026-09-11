@@ -30,6 +30,7 @@ import { answerQuestion, reassignQuestion } from './messaging.js'
 import { setRuntimeRoles } from './profile.js'
 import type { Principal } from './principal.js'
 import { refusalText, type ControlRefusal } from './refusal.js'
+import { adoptRunbook } from './runbook.js'
 import { cancelTask, failTask } from './task.js'
 import { unblockTask } from './unblock.js'
 
@@ -432,12 +433,11 @@ async function carryOut(
       // picked up while the proposal waited is refused rather than cancelled out from under a run.
       return reached(await cancelTask(action.taskId, action.reason, origin, principal))
     case 'adopt_runbook':
-      // M48 t1: the action exists, the verb does not. Task 2 replaces this line with
-      // `reached(await adoptRunbook(decision.workspaceId, action.runbookId, ...))`. Unreachable
-      // today -- `loadSupervisorWorld` offers no runbooks, so `runbook_recommended` never fires --
-      // and a REFUSAL rather than `ok('none')` because "nothing happened" and "this succeeded and
-      // moved nothing" are different facts, and only the first is true here (spec §4).
-      return err({ kind: 'runbook_adoption_unavailable', runbookId: action.runbookId })
+      // `tierOf` pins this to `proposed` on every branch (R5), so the only way here is a human
+      // approving the proposal -- which is the whole ruling: the Supervisor recommends, a person
+      // adopts. Addressed by KEY rather than by id, so a decision that waited a day through a
+      // re-seed still names the runbook a person read the name of.
+      return reached(await adoptRunbook(decision.workspaceId, action.key, { origin }, principal))
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

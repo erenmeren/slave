@@ -1,4 +1,4 @@
-import { prisma } from '@slave-of-ai/db/client'
+import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   RUN_PROMPT_MAX_CHARS,
   SUPERVISOR_PER_CALL_CAP_USD,
@@ -6,6 +6,7 @@ import {
   THREAD_MESSAGES_MAX,
 } from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { adoptRunbook, syncRunbooks } from '../../src/runbook.js'
 import { workspaceSpend } from '../../src/spend.js'
 import { workspaceStats } from '../../src/stats.js'
 import { loadSupervisorWorld } from '../../src/supervisorWorld.js'
@@ -61,6 +62,8 @@ async function makeTask(
     readonly createdAt?: Date
     readonly goalVersion?: number | null
     readonly requiredCapabilities?: readonly string[]
+    readonly stage?: string
+    readonly handoff?: Prisma.InputJsonValue
   },
 ): Promise<string> {
   const task = await prisma.task.create({
@@ -76,6 +79,8 @@ async function makeTask(
       ...(data.createdAt === undefined ? {} : { createdAt: data.createdAt }),
       ...(data.goalVersion === undefined ? {} : { goalVersion: data.goalVersion }),
       ...(data.requiredCapabilities === undefined ? {} : { requiredCapabilities: [...data.requiredCapabilities] }),
+      ...(data.stage === undefined ? {} : { stage: data.stage }),
+      ...(data.handoff === undefined ? {} : { handoff: data.handoff }),
     },
   })
   return task.id
@@ -1074,5 +1079,102 @@ describe('loadSupervisorWorld -- the capability facts (M47 R4)', () => {
     const { world } = await loadSupervisorWorld(f.workspaceId, NOW)
     expect(world.catalog.find((entry) => entry.templateId === target.id)?.recommended).toBe(true)
     expect(world.catalog.find((entry) => entry.templateId === source.id)?.recommended).toBe(false)
+  })
+})
+
+describe('loadSupervisorWorld -- the runbook fields (M48 R5, E6, E8)', () => {
+  beforeEach(async (): Promise<void> => {
+    await reset()
+    // `reset()` truncates `SlaveTemplate` CASCADE, which reaches `RunbookTemplate` through
+    // `sourceTemplateId`, so the table is reconciled per case rather than once for the file.
+    await syncRunbooks()
+  })
+
+  it('loads the adopted runbook, the stage escalation and the handoff behind a pending question (M48)', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship the checkout endpoint' })
+    await adoptRunbook(fixture.workspaceId, 'feature-delivery')
+    await makeTask(fixture, { title: 'Prove it', status: 'blocked', stage: 'verify' })
+    await makeTask(fixture, { title: 'Build it', status: 'running', stage: 'implement' })
+    await makeTask(fixture, { title: 'Typed in by a person', status: 'ready' })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+
+    expect(world.runbook?.key).toBe('feature-delivery')
+    expect(world.runbook?.stages.map((stage) => stage.key)).toEqual(['design', 'implement', 'verify', 'review', 'release'])
+    // A runbook is adopted, so the catalogue is not paid for.
+    expect(world.runbooks).toEqual([])
+    const verify = world.tasks.find((task) => task.stage === 'verify')
+    expect(verify?.stageEscalation).toContain('acceptance criteria')
+    // Plan erratum E6: null is the ordinary answer for a stage that sets no escalation, and for a
+    // task that carries no stage at all.
+    expect(world.tasks.find((task) => task.stage === 'implement')?.stageEscalation).toBeNull()
+    const handMade = world.tasks.find((task) => task.title === 'Typed in by a person')
+    expect(handMade?.stage).toBeNull()
+    expect(handMade?.stageEscalation).toBeNull()
+  })
+
+  it('offers the catalogue only when a recommendation could actually be made', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship the checkout endpoint' })
+
+    const offered = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(offered.world.runbook).toBeNull()
+    expect(offered.world.runbooks.map((runbook) => runbook.key)).toEqual(['bug-fix', 'feature-delivery', 'security-review'])
+
+    // A board is enough to stop the scan: this project has already been planned.
+    await makeTask(fixture, { title: 'Already planned', status: 'ready' })
+    expect((await loadSupervisorWorld(fixture.workspaceId, NOW)).world.runbooks).toEqual([])
+  })
+
+  it('offers nothing to a project with no goal to match a runbook against', async (): Promise<void> => {
+    const fixture = await seed()
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.runbooks).toEqual([])
+    expect(world.runbook).toBeNull()
+  })
+
+  it('carries the asking task\'s handoff behind a pending question, and null for one that will not parse', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'ship checkout' })
+    const asker = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
+    })
+    await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer'] },
+    })
+    const contract = {
+      objective: 'Add an authentication path to the orders endpoint.',
+      expectedOutput: 'Every orders route requires a signed session.',
+      acceptanceCriteria: ['Anonymous requests get 401'],
+      knownConstraints: [],
+      evidenceRequired: [],
+      contextReferences: [],
+    }
+    const goodTask = await makeTask(fixture, { title: 'Add authentication', status: 'running', handoff: contract })
+    const badTask = await makeTask(fixture, { title: 'Nobody can read this', status: 'running', handoff: { objective: 42 } })
+
+    for (const [index, taskId] of [goodTask, badTask].entries()) {
+      const run = await prisma.slaveRun.create({
+        data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation', taskId },
+      })
+      await prisma.slaveMessage.create({
+        data: {
+          slaveId: asker.id,
+          workspaceId: fixture.workspaceId,
+          taskId,
+          senderRunId: run.id,
+          recipientRole: 'reviewer',
+          threadId: `thread-${String(index)}`,
+          kind: 'question',
+          body: 'Which session store?',
+          actor: 'slave',
+          expectsReply: true,
+        },
+      })
+    }
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.questions).toHaveLength(2)
+    expect(world.questions.find((question) => question.taskId === goodTask)?.taskHandoff).toEqual(contract)
+    // A malformed handoff must not take the Supervisor's mailbox down.
+    expect(world.questions.find((question) => question.taskId === badTask)?.taskHandoff).toBeNull()
   })
 })

@@ -111,6 +111,7 @@ export function question(overrides: Partial<SupervisorQuestion> = {}): Superviso
     taskId: 't1',
     taskTitle: 'Add the thing',
     taskDescription: 'Connect to PostgreSQL on port 5433.',
+    taskHandoff: null,
     senderRunId: 'run-1',
     threadId: 'th-1',
     thread: [],

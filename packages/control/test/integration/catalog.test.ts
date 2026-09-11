@@ -1003,3 +1003,105 @@ describe('readTemplateProfile', () => {
     expect(result.value.markdown).toBeNull()
   })
 })
+
+describe('persona runbooks (M48 R3)', () => {
+  const M48_CATALOG = 'catalog-m48-test'
+
+  /** A persona with a Workflow section of three steps -- `personaToProfileSpec` lifts them into
+   *  `ProfileSpec.workflow`, and `runbookFromProfileSpec` turns that into three linear stages. */
+  const withWorkflow = {
+    sourceId: `${M48_CATALOG}/engineering/flow-reviewer`,
+    division: 'engineering',
+    slug: 'flow-reviewer',
+    path: '/tmp/engineering/flow-reviewer.md',
+    text: [
+      '---',
+      'name: M48 Flow Reviewer',
+      'description: M48 Flow Reviewer reads a change before it ships.',
+      'vibe: Reads twice, approves once.',
+      '---',
+      '',
+      '# M48 Flow Reviewer',
+      '',
+      'Reads a change against what it claimed to do.',
+      '',
+      '## 🔄 Your Workflow Process',
+      '- Step 1: read the change against the request',
+      '- Step 2: run the verify the branch claims is green',
+      '- Step 3: write the approval, or the criterion it failed',
+      '',
+    ].join('\n'),
+  }
+
+  /** The same shape with NO workflow at all: R3's "one step is not a process" -- and no section for
+   *  the mapper to lift, so `ProfileSpec.workflow` is empty and no runbook is written. */
+  const withoutWorkflow = {
+    sourceId: `${M48_CATALOG}/engineering/no-flow`,
+    division: 'engineering',
+    slug: 'no-flow',
+    path: '/tmp/engineering/no-flow.md',
+    text: [
+      '---',
+      'name: M48 No Flow',
+      'description: M48 No Flow does one thing and writes nothing down.',
+      'vibe: No process, just the work.',
+      '---',
+      '',
+      '# M48 No Flow',
+      '',
+      'Does the work; keeps no process of its own.',
+      '',
+    ].join('\n'),
+  }
+
+  // The same reset the file's other blocks use. `SlaveTemplate` is truncated CASCADE, which reaches
+  // `RunbookTemplate` through `sourceTemplateId` -- so each case below starts with no persona
+  // runbooks at all and the counts below mean what they say.
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    )
+    await prisma.runbookTemplate.deleteMany({ where: { source: 'persona' } })
+  })
+
+  it('writes one runbook for a persona with a multi-step workflow and none for a persona without', async (): Promise<void> => {
+    const report = await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow, withoutWorkflow] })
+    expect(report.ok).toBe(true)
+    const rows = await prisma.runbookTemplate.findMany({ where: { source: 'persona' }, orderBy: { key: 'asc' } })
+    expect(rows.map((row) => row.key)).toEqual(['persona-m48-flow-reviewer'])
+    expect(rows[0]?.sourceTemplateId).not.toBeNull()
+  })
+
+  it('re-importing the same persona updates its runbook rather than adding a second', async (): Promise<void> => {
+    await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow] })
+    await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow] })
+    expect(await prisma.runbookTemplate.count({ where: { source: 'persona' } })).toBe(1)
+  })
+
+  // Plan erratum E15: the upsert keys on `key`, and an operator's row wins.
+  it('never overwrites a human runbook that happens to hold the key', async (): Promise<void> => {
+    await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow] })
+    await prisma.runbookTemplate.update({ where: { key: 'persona-m48-flow-reviewer' }, data: { source: 'human', name: 'Mine' } })
+    await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow] })
+    expect((await prisma.runbookTemplate.findUniqueOrThrow({ where: { key: 'persona-m48-flow-reviewer' } })).name).toBe('Mine')
+    await prisma.runbookTemplate.deleteMany({ where: { key: 'persona-m48-flow-reviewer' } })
+  })
+
+  // M42/M46/M47 all pin these counts, and the runbook pass must not move one of them: it runs
+  // AFTER the row loop, like M47's hint pass, and touches no `SlaveTemplate` row.
+  it('leaves the per-row counts exactly as they were', async (): Promise<void> => {
+    const first = await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow, withoutWorkflow] })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    expect(first.value.created).toHaveLength(2)
+    expect(first.value.updated).toEqual([])
+    expect(first.value.unchanged).toEqual([])
+    expect(first.value.skipped).toEqual([])
+
+    const again = await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow, withoutWorkflow] })
+    expect(again.ok).toBe(true)
+    if (!again.ok) return
+    expect(again.value.created).toEqual([])
+    expect(again.value.unchanged).toHaveLength(2)
+  })
+})
