@@ -98,6 +98,19 @@ export function sectionLine(source: SectionSource): SectionLine {
         detail: `${plural(source.keys.length, 'capability key')} it could ask for${source.capped ? ' (capped)' : ''}`,
         missing: [],
       }
+    // M48 R4: the contract this run was handed, and the hash of it. The COUNT of criteria is not
+    // here -- the manifest carries the hash, not the contract, and a line that claimed a number it
+    // had not read would be an assertion the row does not support.
+    case 'handoff':
+      return { kind: source.kind, detail: `the contract for TASK-${short(source.taskId)} (sha ${short(source.sha256)})`, missing: [] }
+    case 'runbook':
+      return {
+        kind: source.kind,
+        detail: `the "${source.key}" runbook, ${plural(source.stageKeys.length, 'stage')}`,
+        missing: [],
+      }
+    case 'handoff_protocol':
+      return { kind: source.kind, detail: 'how to write a handoff, with no runbook adopted', missing: [] }
     // M40 t1, minimal: a re-plan run's own section. Task 4 gives it the diff a human reads.
     case 'replan':
       return {

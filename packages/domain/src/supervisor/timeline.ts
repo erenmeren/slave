@@ -58,6 +58,9 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   'task.created': 'plan_change',
   'task.cancelled': 'plan_change',
   'workspace.plan_created': 'plan_change',
+  // M48: how the work will be done changed. Not `user_request` even when a person adopted it --
+  // what changed is the plan's shape, and `laneFor`'s actor override exists only for task creation.
+  'workspace.runbook_adopted': 'plan_change',
   // WORK IN PROGRESS
   'task.started': 'work',
   'task.verifying': 'work',

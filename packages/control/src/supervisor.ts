@@ -431,6 +431,13 @@ async function carryOut(
       // automatic. `cancelTask` re-checks the status under its own row lock, so a task the pipeline
       // picked up while the proposal waited is refused rather than cancelled out from under a run.
       return reached(await cancelTask(action.taskId, action.reason, origin, principal))
+    case 'adopt_runbook':
+      // M48 t1: the action exists, the verb does not. Task 2 replaces this line with
+      // `reached(await adoptRunbook(decision.workspaceId, action.runbookId, ...))`. Unreachable
+      // today -- `loadSupervisorWorld` offers no runbooks, so `runbook_recommended` never fires --
+      // and a REFUSAL rather than `ok('none')` because "nothing happened" and "this succeeded and
+      // moved nothing" are different facts, and only the first is true here (spec §4).
+      return err({ kind: 'runbook_adoption_unavailable', runbookId: action.runbookId })
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

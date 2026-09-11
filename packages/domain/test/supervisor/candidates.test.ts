@@ -5,7 +5,7 @@ import { WAITING_STALE_MS } from '../../src/supervisor/constants.js'
 import { observe } from '../../src/supervisor/observe.js'
 import type { Situation } from '../../src/supervisor/situations.js'
 import type { SupervisorWorld } from '../../src/supervisor/world.js'
-import { NOW, TAXONOMY, question, slave, task, world } from './fixtures.js'
+import { NOW, TAXONOMY, question, runbook, slave, task, world } from './fixtures.js'
 
 /** The one situation `w` produces, with the candidates the rules offer for it. */
 function offered(w: SupervisorWorld): readonly Candidate[] {
@@ -584,5 +584,24 @@ describe('teamPlanOf (M47 R4)', () => {
         role: key === 'security.application' ? 'security' : 'backend',
       })
     }
+  })
+})
+
+
+describe('runbook_recommended offers (M48 R5)', () => {
+  it('offers adopt_runbook for each recommendation, proposed, before the two last resorts', () => {
+    const runbooks = [
+      runbook({ key: 'feature-delivery', name: 'Feature delivery', keywords: ['ship'] }),
+      runbook({ key: 'bug-fix', name: 'Bug fix', keywords: ['ship'] }),
+    ]
+    const w = world({ goal: 'Ship the endpoint', tasks: [], runbooks })
+    const situation = observe(w).find((s) => s.kind === 'runbook_recommended')
+    expect(situation).toBeDefined()
+    if (situation === undefined) return
+    const offers = candidates(situation, w)
+    expect(offers.map((o) => o.action.kind)).toEqual(['adopt_runbook', 'adopt_runbook', 'escalate_to_human', 'no_action'])
+    expect(offers[0]?.tier).toBe('proposed')
+    expect(offers[0]?.action).toMatchObject({ kind: 'adopt_runbook', key: 'bug-fix', name: 'Bug fix' })
+    expect(offers[0]?.why).toContain('The goal says "ship".')
   })
 })

@@ -1,7 +1,8 @@
 import { capabilityLabel as capabilityLabelIn, projectRoles } from '../capability/taxonomy.js'
 import { formTeam, type TeamPlan, type TeamProposal } from '../capability/team.js'
+import { recommendRunbooks } from '../runbook/recommend.js'
 import type { Action, Candidate } from './actions.js'
-import { staffableSlaves } from './observe.js'
+import { rosterCapabilities, staffableSlaves } from './observe.js'
 import { mayAnswer, tierOf } from './policy.js'
 import type { Situation, SituationKind } from './situations.js'
 import type { SupervisorQuestion, SupervisorSlave, SupervisorTask, SupervisorWorld } from './world.js'
@@ -292,6 +293,30 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
       for (const proposal of teamPlanOf(world).proposals.filter((one) => one.covers.includes(situation.subjectId))) {
         const action = actionOf(proposal, situation.subjectId, world)
         if (action !== null) offers.push(candidate(action, world, situation.kind, proposal.rationale))
+      }
+      break
+    }
+
+    case 'runbook_recommended': {
+      // `subjectId` is the WORKSPACE. The offers are `recommendRunbooks`' own top three, in its own
+      // order -- score descending, ties on key ascending -- so the index a model picks means the
+      // same thing on two runs over the same world.
+      if (world.goal === null) break
+      for (const recommendation of recommendRunbooks(world.goal, world.runbooks, rosterCapabilities(world), world.taxonomy)) {
+        offers.push(
+          candidate(
+            {
+              kind: 'adopt_runbook',
+              runbookId: recommendation.runbook.id,
+              key: recommendation.runbook.key,
+              name: recommendation.runbook.name,
+              rationale: recommendation.rationale,
+            },
+            world,
+            situation.kind,
+            recommendation.rationale,
+          ),
+        )
       }
       break
     }

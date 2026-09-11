@@ -145,6 +145,7 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     action: { kind: 'mark_task_failed' },
     reason: 'task_not_failable',
   },
+  'workspace.runbook_adopted': { runbookId: 'rb-0123456789', key: 'feature-delivery', name: 'Feature delivery' },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {

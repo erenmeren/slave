@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { CAPABILITY_KEY_PATTERN } from '../capability/taxonomy.js'
+import { handoffContractSchema, type HandoffContract } from '../handoff/contract.js'
 import { jsonObjectsLastToFirst } from '../json/last-object.js'
 import { err, ok, type Result } from '../result.js'
 
@@ -24,6 +25,21 @@ export interface PlanTask {
    *  planner's own role, which is exactly what it meant. Validated against the TABLE later, by
    *  `concludePlanning`: this module is pure and has no taxonomy to check against. */
   readonly capabilities: readonly string[]
+  /**
+   * M48 R1/R2: the typed handoff for this task. Optional at the shape (`.optional()`), because
+   * every plan written before this milestone carries none and an old fixture must still parse --
+   * the same back-compat rule `capabilities` follows.
+   *
+   * A LOOSE `z.record` at the shape and the real schema in {@link validateStructure} (plan erratum
+   * E16's sibling reason): `parsePlanGraph` falls back to an earlier candidate object on a SHAPE
+   * failure, so a contract with a missing `expectedOutput` would otherwise have an already-revised
+   * draft executed on its behalf. It is a structural rule, refused by name.
+   */
+  readonly handoff?: HandoffContract | undefined
+  /** M48 R2: the runbook stage this task belongs to, when the workspace has adopted a runbook.
+   *  Checked against the adopted runbook's stage keys in {@link validateStructure}, which takes
+   *  them as an argument (plan erratum E1). */
+  readonly stage?: string | undefined
   readonly dependsOn: readonly string[]
 }
 
@@ -44,6 +60,11 @@ const planTaskSchema = z.object({
   // behalf, over a spelling. Both are structural rules, checked in {@link validateStructure} with
   // named errors, exactly as the duplicate-key and cycle rules are.
   capabilities: z.array(z.string().min(1)).default([]),
+  // Loose on purpose, exactly like `capabilities` above: a shape violation here would make
+  // `parsePlanGraph` fall back to an EARLIER draft, and a handoff that is merely incomplete is a
+  // named structural refusal instead.
+  handoff: z.record(z.string(), z.unknown()).optional(),
+  stage: z.string().min(1).optional(),
 })
 
 /** How many capabilities one task may ask for. A task naming eleven has not been decomposed --
@@ -63,15 +84,15 @@ export const planGraphSchema = z.object({ tasks: z.array(planTaskSchema).min(1).
  * than falling back to an earlier candidate — the planner's final graph is what was wrong, and
  * silently executing an earlier draft nobody signed off on would be worse than failing loudly.
  */
-export function parsePlanGraph(text: string): Result<PlanGraph, string> {
+export function parsePlanGraph(text: string, stageKeys: readonly string[] = []): Result<PlanGraph, string> {
   for (const candidate of jsonObjectsLastToFirst(text)) {
     const parsed = planGraphSchema.safeParse(candidate)
-    if (parsed.success) return validateStructure(parsed.data)
+    if (parsed.success) return validateStructure(parsed.data as PlanGraph, stageKeys)
   }
   return err('no JSON object with { "tasks": [...] } found in the planning output')
 }
 
-function validateStructure(graph: PlanGraph): Result<PlanGraph, string> {
+function validateStructure(graph: PlanGraph, stageKeys: readonly string[]): Result<PlanGraph, string> {
   for (const task of graph.tasks) {
     // E2: a task nobody can staff is not a plan. `requiredRole` is what the scheduler matches and
     // `requiredCapabilities` is what it is derived from; with neither, `concludePlanning` would
@@ -92,6 +113,19 @@ function validateStructure(graph: PlanGraph): Result<PlanGraph, string> {
     if (malformed !== undefined) {
       return err(`task "${task.key}" asks for "${malformed}", which is not a capability key`)
     }
+    if (task.handoff !== undefined) {
+      const contract = handoffContractSchema.safeParse(task.handoff)
+      if (!contract.success) {
+        return err(`task "${task.key}" has a handoff that is not a contract: ${contract.error.message}`)
+      }
+    }
+    // Plan erratum E1: the workspace's adopted runbook decides which stages exist, and this module
+    // is pure. An EMPTY list is "no runbook is adopted", under which any stage stands -- a plan
+    // written against a runbook that was cleared while the run was in flight is not a plan to
+    // throw away.
+    if (task.stage !== undefined && stageKeys.length > 0 && !stageKeys.includes(task.stage)) {
+      return err(`task "${task.key}" names stage "${task.stage}", which this runbook does not have`)
+    }
   }
 
   const keys = new Set<string>()
@@ -110,7 +144,15 @@ function validateStructure(graph: PlanGraph): Result<PlanGraph, string> {
   const cycle = findCycle(graph.tasks)
   if (cycle !== null) return err(`the task graph has a dependency cycle through: ${cycle.join(', ')}`)
 
-  return ok(graph)
+  // The contract is re-read out of the strict schema and put back on the task, so every caller gets
+  // `HandoffContract` rather than the loose record the shape let through. One parse, at the
+  // boundary -- `concludePlanning` never re-validates.
+  const tasks = graph.tasks.map((task) =>
+    task.handoff === undefined
+      ? task
+      : { ...task, handoff: handoffContractSchema.parse(task.handoff) },
+  )
+  return ok({ tasks })
 }
 
 /**

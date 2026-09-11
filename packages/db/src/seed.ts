@@ -1,7 +1,8 @@
 import { CAPABILITY_SEED } from './capabilities.js'
 import { CHECKOUT_PLATFORM_COMPANY_NAME, CHECKOUT_PLATFORM_ROSTER, CHECKOUT_PLATFORM_TEAMS, checkoutPlatformTemplateName } from './checkout-platform.js'
-import { prisma } from './client.js'
+import { Prisma, prisma } from './client.js'
 import { TASK_STATUSES } from './enums.js'
+import { RUNBOOK_SEED } from './runbooks.js'
 import { SEED_WORKSPACE_ID } from './seed-workspace-id.js'
 
 export { SEED_WORKSPACE_ID }
@@ -41,7 +42,7 @@ const ROSTER: readonly { name: string; template: string }[] = [
  */
 export async function seed(): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "CatalogImport", "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "CollaborationHint", "Capability", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "CatalogImport", "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "CollaborationHint", "RunbookTemplate", "Capability", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
 
   // M47 R1: the taxonomy is DATA, and a seeded database has it. Written straight through Prisma
@@ -55,6 +56,21 @@ export async function seed(): Promise<void> {
       role: record.role,
       synonyms: [...record.synonyms],
       createdBy: 'seed',
+    })),
+  })
+
+  // M48 R3: the checked-in runbooks. `stages` is a `Json` column, so the cast Prisma wants for a
+  // readonly structure is the one `appendEvent` uses for a payload.
+  await prisma.runbookTemplate.createMany({
+    data: RUNBOOK_SEED.map((runbook) => ({
+      key: runbook.key,
+      name: runbook.name,
+      description: runbook.description,
+      keywords: [...runbook.keywords],
+      requiredCapabilities: [...runbook.requiredCapabilities],
+      optionalCapabilities: [...runbook.optionalCapabilities],
+      stages: runbook.stages as unknown as Prisma.InputJsonValue,
+      source: 'seed',
     })),
   })
 

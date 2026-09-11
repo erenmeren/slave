@@ -97,6 +97,11 @@ export const TYPES_BY_KIND = {
     // pipeline, not a run outcome, and none of the five carries a runId. Not `guardrails` either
     // -- the Supervisor is what an operator reaches for AFTER a guardrail trip, and a user
     // filtering to trips must not have the decisions about them mixed in.
+    // M48 t1: adopting (or clearing) a runbook is a change to HOW this project will work -- the
+    // same chip `workspace.goal_set` and `workspace.plan_created` sit under, for their reason: it
+    // carries no taskId and no runId, and an operator asking "what changed about this project"
+    // is who reads it.
+    'workspace.runbook_adopted',
     'supervisor.decided',
     'supervisor.proposed',
     'supervisor.applied',

@@ -288,3 +288,29 @@ describe('parsePlanDelta -- the capability cap is STRUCTURAL (fix round 1)', () 
     expect(out.error).toBe('added task "docs" asks for "Application security", which is not a capability key')
   })
 })
+
+describe('handoff and stage on an addition (M48 R2)', () => {
+  const delta = (task: Record<string, unknown>): string =>
+    JSON.stringify({ add: [{ key: 'k', title: 't', description: 'd', role: 'backend', ...task }], cancel: [], keep: [] })
+
+  it('parses a handoff on an added task', () => {
+    const parsed = parsePlanDelta(delta({ handoff: { objective: 'Do it', expectedOutput: 'It, done' } }), [])
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.add[0]?.handoff?.objective).toBe('Do it')
+  })
+
+  it('refuses a stage the adopted runbook does not have, by name', () => {
+    expect(parsePlanDelta(delta({ stage: 'polish' }), [], ['design'])).toEqual({
+      ok: false,
+      error: 'added task "k" names stage "polish", which this runbook does not have',
+    })
+  })
+
+  it('refuses a malformed handoff on an addition', () => {
+    const parsed = parsePlanDelta(delta({ handoff: { objective: 'a' } }), [])
+    expect(parsed.ok).toBe(false)
+    if (parsed.ok) return
+    expect(parsed.error).toContain('added task "k" has a handoff that is not a contract')
+  })
+})

@@ -25,6 +25,19 @@ export type SectionKind =
    *  that constant is pure, static, pinned byte-for-byte by a test, and is what the fake CLI
    *  selects its planning arm on — and a per-workspace key list is none of those things. */
   | 'capabilities'
+  /** M48 R4: the typed handoff for the task this run is about -- the contract the worker and the
+   *  reviewer both read. Rendered directly after `task`, and on BOTH the implementation and the
+   *  review order: a reviewer judging a diff against a paragraph is the thing this milestone
+   *  exists to end. */
+  | 'handoff'
+  /** M48 R4: the stages of the runbook this workspace has adopted, and the JSON shape a plan must
+   *  emit to follow it. A planning-order section for `capabilities`' own reason (M47 plan erratum
+   *  E3): `PLANNING_GRAPH_INSTRUCTIONS` is pure, static and byte-pinned, and a runbook is
+   *  per-workspace data. */
+  | 'runbook'
+  /** M48 R4: the shorter request, for a workspace with NO runbook -- the contract alone, no
+   *  stages. Occupies the same slot as `runbook`, and never appears beside it. */
+  | 'handoff_protocol'
 
 /**
  * One piece of a run's prompt, as the orchestrator hands it to {@link renderRunContext}: the
@@ -94,6 +107,19 @@ export type SectionSource =
    *  a reader asking "could this plan have named `security.application`?" wants the vocabulary the
    *  run was actually given. */
   | { readonly kind: 'capabilities'; readonly keys: readonly string[]; readonly capped: boolean }
+  /**
+   * M48 R4. Its OWN `sha256`, deliberately not folded into `task.sha256`: that hash is
+   * `title + '\n' + description` and M37/M41 both pin it, so widening it would change the recorded
+   * hash of every historical task. This one is over the contract's canonical JSON
+   * (`handoffCanonicalJson`), which is stable under field reordering.
+   */
+  | { readonly kind: 'handoff'; readonly taskId: string; readonly sha256: string }
+  /** Which runbook the planner was shown, and which stage keys -- the vocabulary a plan's `stage`
+   *  field was allowed to use, so a reader can ask "could this plan have said `release`?". */
+  | { readonly kind: 'runbook'; readonly runbookId: string; readonly key: string; readonly stageKeys: readonly string[] }
+  /** No runbook is adopted; the planner was asked for the contract alone. No fields: the section
+   *  is static, and its presence IS the fact. */
+  | { readonly kind: 'handoff_protocol' }
 
 /** The manifest stored (as `Json`) on `RunContext.sections` -- an ordered record of what produced
  *  the prompt, without the prompt text itself. */
@@ -167,6 +193,17 @@ const capabilitiesSourceSchema = z.object({
   capped: z.boolean(),
 })
 
+// M48 E3: all REQUIRED-field, by the `replan`/`capabilities` rule -- these three source kinds are
+// new in M48, so there is no history of rows written without them to be tolerant of.
+const handoffSourceSchema = z.object({ kind: z.literal('handoff'), taskId: z.string(), sha256: z.string() })
+const runbookSourceSchema = z.object({
+  kind: z.literal('runbook'),
+  runbookId: z.string(),
+  key: z.string(),
+  stageKeys: z.array(z.string()),
+})
+const handoffProtocolSourceSchema = z.object({ kind: z.literal('handoff_protocol') })
+
 const sectionSourceSchema = z.discriminatedUnion('kind', [
   profileSourceSchema,
   rosterSourceSchema,
@@ -180,6 +217,9 @@ const sectionSourceSchema = z.discriminatedUnion('kind', [
   planningGoalSourceSchema,
   replanSourceSchema,
   capabilitiesSourceSchema,
+  handoffSourceSchema,
+  runbookSourceSchema,
+  handoffProtocolSourceSchema,
 ])
 
 /**

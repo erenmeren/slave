@@ -7,6 +7,7 @@
  * fixture can never pass by accident through a second situation it did not mean to create.
  */
 import type { CapabilityRecord } from '../../src/capability/taxonomy.js'
+import type { Runbook } from '../../src/runbook/spec.js'
 import type {
   SupervisorDecisionRecord,
   SupervisorQuestion,
@@ -48,6 +49,30 @@ export function task(overrides: Partial<SupervisorTask> = {}): SupervisorTask {
     // M47: a task planned before capabilities existed asks for none, which is what every fixture
     // in this file means unless it says otherwise.
     requiredCapabilities: [],
+    // M48: a task planned before runbooks existed belongs to no stage, which is what every fixture
+    // in this file means unless it says otherwise -- and a task with no stage carries no
+    // escalation sentence either.
+    stage: null,
+    stageEscalation: null,
+    ...overrides,
+  }
+}
+
+/** A runbook the workspace could adopt (M48 R5). One stage and one keyword: enough to be a real
+ *  runbook, small enough that a test says which fact it is about. */
+export function runbook(overrides: Partial<Runbook> & { key: string }): Runbook {
+  return {
+    id: `rb-${overrides.key}`,
+    name: overrides.key,
+    description: 'a runbook',
+    keywords: ['ship'],
+    requiredCapabilities: [],
+    optionalCapabilities: [],
+    stages: [
+      { key: 'design', title: 'Design', objective: 'Decide', capabilities: [], dependsOn: [], expectedOutputs: [], gates: [], retry: null, escalation: null },
+    ],
+    source: 'seed',
+    sourceTemplateId: null,
     ...overrides,
   }
 }
@@ -129,6 +154,10 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     company: [],
     catalog: [],
     taxonomy: [],
+    // M48: no runbook adopted and none on offer, so `runbook_recommended` only ever fires in a
+    // test that hands the world some runbooks to recommend.
+    runbook: null,
+    runbooks: [],
     ...overrides,
   }
 }

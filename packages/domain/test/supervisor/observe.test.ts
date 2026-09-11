@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { COOLDOWN_MS, INTEGRATED_STALE_MS, WAITING_STALE_MS } from '../../src/supervisor/constants.js'
 import { filterFresh, observe } from '../../src/supervisor/observe.js'
 import { SITUATION_KINDS, situationSchema } from '../../src/supervisor/situations.js'
-import { NOW, TAXONOMY, decision, keys, question, slave, task, world } from './fixtures.js'
+import { NOW, TAXONOMY, decision, keys, question, runbook, slave, task, world } from './fixtures.js'
 
 describe('observe -- no_reviewer', () => {
   it('reports it when a task is reviewing and no slave holds reviewer', () => {
@@ -495,5 +495,38 @@ describe('observe -- capability_unstaffed (M47 R4)', () => {
       tasks: [task({ status: 'ready', requiredRole: 'security', requiredCapabilities: ['security.application'] })],
     })
     for (const situation of observe(w)) expect(situationSchema.safeParse(situation).success).toBe(true)
+  })
+})
+
+
+describe('runbook_recommended (M48 R5)', () => {
+  it('fires on a goal, no runbook and an empty board, with the workspace as its subject', () => {
+    const w = world({ goal: 'Ship the endpoint', tasks: [], runbooks: [runbook({ key: 'feature-delivery', keywords: ['ship'] })] })
+    const found = observe(w).find((s) => s.kind === 'runbook_recommended')
+    expect(found?.subjectId).toBe(w.workspaceId)
+    expect(found?.facts).toMatchObject({ runbook: 'feature-delivery' })
+  })
+
+  it('is silent when a runbook is already adopted, when the board is not empty, and when no keyword hits', () => {
+    const runbooks = [runbook({ key: 'feature-delivery', keywords: ['ship'] })]
+    const adopted = world({ goal: 'Ship the endpoint', tasks: [], runbooks, runbook: runbooks[0] ?? null })
+    expect(observe(adopted).some((s) => s.kind === 'runbook_recommended')).toBe(false)
+    expect(observe(world({ goal: 'Ship the endpoint', tasks: [task({ id: 't1' })], runbooks })).some((s) => s.kind === 'runbook_recommended')).toBe(false)
+    expect(observe(world({ goal: 'Rewrite the docs', tasks: [], runbooks })).some((s) => s.kind === 'runbook_recommended')).toBe(false)
+  })
+})
+
+// Plan erratum E6: the situation is DERIVED, so the escalation sentence is appended here.
+describe('task_failed carries the stage escalation (M48 R6)', () => {
+  it('appends the stage sentence to the summary when the failed task has one', () => {
+    const w = world({ tasks: [task({ id: 't1', status: 'failed', dependents: 2, stage: 'verify', stageEscalation: 'Page the release steward.' })] })
+    const found = observe(w).find((s) => s.kind === 'task_failed')
+    expect(found?.summary).toBe('Task "Add the thing" failed and 2 task(s) depend on it. Page the release steward.')
+    expect(found?.facts).toMatchObject({ stage: 'verify' })
+  })
+
+  it('says exactly what it always said when the task has no stage', () => {
+    const w = world({ tasks: [task({ id: 't1', status: 'failed', dependents: 2 })] })
+    expect(observe(w).find((s) => s.kind === 'task_failed')?.summary).toBe('Task "Add the thing" failed and 2 task(s) depend on it.')
   })
 })

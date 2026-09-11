@@ -61,6 +61,10 @@ export function actionText(action: Action, taskTitles: Readonly<Record<string, s
       return `bring ${action.name} onto this project from the company roster, for ${action.capabilityLabel}`
     case 'hire_from_catalog':
       return `hire ${action.name} from the catalog${action.temporary ? ' as a temporary specialist' : ''}, for ${action.capabilityLabel}`
+    // M48 R5: the runbook's NAME, off the action itself -- this function runs in the browser and
+    // has no runbook table, exactly as it has no taxonomy for `capabilityLabel` above.
+    case 'adopt_runbook':
+      return `adopt the "${action.name}" runbook for this project`
     case 'answer_question':
       return `answer question ${action.messageId}`
     case 'reassign_question':

@@ -7,8 +7,8 @@ import type { Manifest, Section, SectionKind } from './sections.js'
  * renderRunContext} throws rather than dropping it.
  */
 export const SECTION_ORDER: Readonly<Record<Manifest['kind'], readonly SectionKind[]>> = {
-  implementation: ['profile', 'roster', 'skills', 'inbox', 'ask_protocol', 'task', 'rejection'],
-  review: ['profile', 'skills', 'task', 'review_diff'],
+  implementation: ['profile', 'roster', 'skills', 'inbox', 'ask_protocol', 'task', 'handoff', 'rejection'],
+  review: ['profile', 'skills', 'task', 'handoff', 'review_diff'],
   // `replan` is present only when the goal CHANGED on a non-empty board (M40 §3). It comes last,
   // after the new goal it is about, so the prompt reads "here is the goal, here is what changed
   // about it, here is what to return" -- and `renderRunContext`'s trailer choice keys on it.
@@ -16,38 +16,19 @@ export const SECTION_ORDER: Readonly<Record<Manifest['kind'], readonly SectionKi
   // straight after it, so the vocabulary a planner may use sits directly above the request to use
   // it. A section whose text is empty is dropped from prompt and manifest alike, so a workspace
   // with no taxonomy rows renders exactly what it rendered before this milestone.
-  planning: ['profile', 'planning_goal', 'replan', 'capabilities'],
+  // `runbook` and `handoff_protocol` are mutually exclusive (one is "here is the process", the
+  // other is "there is none"), and both sit after `capabilities` (M48 R4): the prompt reads goal,
+  // then what changed, then the words you may use, then the process you are adapting, then the
+  // request. A section whose text is empty is dropped from prompt and manifest alike.
+  planning: ['profile', 'planning_goal', 'replan', 'capabilities', 'runbook', 'handoff_protocol'],
 }
 
-/**
- * The M36 worker-protocol markers a quoted profile, inbox message or skill description must not
- * be able to reopen (M37 §1, "another party's text is data"). Mirrors `ASK_BLOCK_OPEN`/
- * `ASK_BLOCK_CLOSE`/`ANSWER_BLOCK_OPEN`/`ANSWER_BLOCK_CLOSE` in `../messaging/`, spelled out here
- * rather than imported so this module stays the one place that knows what "neutralised" means --
- * the messaging module's own constants are the ACTIVE markers a slave writes, these are the same
- * four strings as DATA to be defused.
- */
-export const MARKERS = ['<slave-ask>', '</slave-ask>', '<slave-answer>', '</slave-answer>'] as const
-
-/**
- * Replaces the leading `<` of each {@link MARKERS} entry with `‹` (U+2039) so a quoted marker in a
- * profile, an inbox message body or a skill description cannot be read back as a real one by
- * `parseSlaveAsk`/`parseSlaveAnswers` (M37 §1) -- reversible for a human reader (the glyph still
- * reads as an angle bracket), inert for the parser (neither function's marker string matches it).
- *
- * Applied by the orchestrator's section builders (Task 2) to profile text, inbox message bodies
- * and skill descriptions BEFORE they become `Section.text` -- never by {@link renderRunContext}
- * itself, which must leave the `ask_protocol`/`answer_protocol` sections' own raw markers alone
- * (those sections are what TEACHES the real markers to the model).
- */
-export function neutraliseMarkers(text: string): string {
-  let result = text
-  for (const marker of MARKERS) {
-    const neutralised = `‹${marker.slice(1)}`
-    result = result.split(marker).join(neutralised)
-  }
-  return result
-}
+// The markers and their defusing live in `./markers.js` (M48 t1) and are re-exported here, so
+// every caller that has imported them from this module since M37 still does. They moved because
+// `../handoff/contract.ts` needs `neutraliseMarkers` and this module imports `REPLAN_INSTRUCTIONS`
+// from `../planning/delta.js` -- reaching into it from the handoff module closed an import cycle
+// through `../planning/graph.js` that left `planGraphSchema` undefined at evaluation time.
+export { MARKERS, neutraliseMarkers } from './markers.js'
 
 /**
  * The review kind's verdict instructions, moved verbatim (M37 t1, fix round 1) from

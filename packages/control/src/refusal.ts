@@ -116,6 +116,17 @@ export type ControlRefusal =
   /** M47 R1: a key, label or role that cannot become a taxonomy row (a malformed key, a blank
    *  label, a role that is not a role, a key that already exists). */
   | { readonly kind: 'invalid_capability'; readonly detail: string }
+  /**
+   * M48 t1: an approved `adopt_runbook` decision reached `carryOut` and there is no verb behind it
+   * yet -- Task 2 writes `adoptRunbook`, and this arm's body becomes a call to it.
+   *
+   * TEMPORARY, and unreachable today: `loadSupervisorWorld` fills `runbooks` with the empty list,
+   * so `observe` never raises `runbook_recommended`, so no `adopt_runbook` decision can exist to be
+   * approved. It is here because `carryOut`'s switch is exhaustive over `Action` and spec §4 says a
+   * Supervisor action that cannot be carried out is RECORDED (as `supervisor.failed`), never thrown
+   * and never reported as applied.
+   */
+  | { readonly kind: 'runbook_adoption_unavailable'; readonly runbookId: string }
   /** M46 R2: `profileOverrides` are a partial of `profileSpec`, and there is no spec on this row to
    *  be partial OF -- a hand-made template, or one whose catalog has not been imported since M46.
    *  Refused rather than invented: writing overrides against an empty spec would re-render the
@@ -402,6 +413,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `there is no capability "${refusal.key}" in the taxonomy: add it with \`capabilities add\` first`
     case 'invalid_capability':
       return `that capability cannot be added: ${refusal.detail}`
+    case 'runbook_adoption_unavailable':
+      return `runbook ${refusal.runbookId} cannot be adopted yet: nothing in the control layer adopts a runbook`
     case 'company_not_found':
       return `no company with id ${refusal.companyId}`
     case 'company_team_not_found':

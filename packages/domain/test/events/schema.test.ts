@@ -904,3 +904,56 @@ describe('parseExecutionEvent -- dropped capabilities (M47 R3, E14)', () => {
     }
   })
 })
+
+describe('M48 events', () => {
+  const envelope = { seq: 1, ts: '2026-09-11T00:00:00.000Z', workspaceId: 'w1', actor: 'slave' as const }
+
+  it('accepts the runbook adherence block on a plan and on a re-plan, and accepts its absence', () => {
+    const runbook = { id: 'rb1', key: 'feature-delivery', stagesCovered: ['design'], stagesMissing: ['release'] }
+    expect(
+      parseExecutionEvent({
+        ...envelope,
+        type: 'workspace.plan_created',
+        payload: { goal: 'g', tasks: [{ id: 't1', title: 'T', role: 'backend' }], runbook },
+      }).ok,
+    ).toBe(true)
+    expect(
+      parseExecutionEvent({
+        ...envelope,
+        type: 'workspace.replanned',
+        payload: { version: 2, runId: 'r1', added: [], proposedCancellations: [], droppedCancellations: [], runbook },
+      }).ok,
+    ).toBe(true)
+    expect(
+      parseExecutionEvent({
+        ...envelope,
+        type: 'workspace.plan_created',
+        payload: { goal: 'g', tasks: [{ id: 't1', title: 'T', role: 'backend' }] },
+      }).ok,
+    ).toBe(true)
+  })
+
+  it('is the fiftieth type: workspace.runbook_adopted, with an optional cleared flag', () => {
+    expect(
+      parseExecutionEvent({
+        ...envelope,
+        actor: 'human',
+        type: 'workspace.runbook_adopted',
+        payload: { runbookId: 'rb1', key: 'feature-delivery', name: 'Feature delivery' },
+      }).ok,
+    ).toBe(true)
+    expect(
+      parseExecutionEvent({
+        ...envelope,
+        actor: 'human',
+        type: 'workspace.runbook_adopted',
+        payload: { runbookId: 'rb1', key: 'feature-delivery', name: 'Feature delivery', cleared: true },
+      }).ok,
+    ).toBe(true)
+  })
+
+  it('accepts a stage on task.verify_failed, and still accepts a row without one', () => {
+    expect(parseExecutionEvent({ ...envelope, actor: 'system', type: 'task.verify_failed', payload: { command: 'npm test', exitCode: 1, stage: 'verify' } }).ok).toBe(true)
+    expect(parseExecutionEvent({ ...envelope, actor: 'system', type: 'task.verify_failed', payload: { command: 'npm test', exitCode: 1 } }).ok).toBe(true)
+  })
+})

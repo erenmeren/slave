@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { CAPABILITY_KEY_PATTERN } from '../capability/taxonomy.js'
+import { handoffContractSchema } from '../handoff/contract.js'
 import { jsonObjectsLastToFirst } from '../json/last-object.js'
 import { err, ok, type Result } from '../result.js'
 import type { TaskStatus } from '../task/state.js'
@@ -51,10 +52,14 @@ const planDeltaSchema = z.object({
  * different from `parsePlanGraph`'s: a new task's `dependsOn` may name either a plan-local key or
  * an EXISTING task id (spec §1), and `cancel`/`keep` may name only existing ids.
  */
-export function parsePlanDelta(text: string, existingTaskIds: readonly string[]): Result<PlanDelta, string> {
+export function parsePlanDelta(
+  text: string,
+  existingTaskIds: readonly string[],
+  stageKeys: readonly string[] = [],
+): Result<PlanDelta, string> {
   for (const candidate of jsonObjectsLastToFirst(text)) {
     const parsed = planDeltaSchema.safeParse(candidate)
-    if (parsed.success) return validateDelta(parsed.data, existingTaskIds)
+    if (parsed.success) return validateDelta(parsed.data as PlanDelta, existingTaskIds, stageKeys)
   }
   return err('no JSON object with { "add": [...], "cancel": [...], "keep": [...] } found in the re-plan output')
 }
@@ -69,7 +74,11 @@ export function parsePlanDelta(text: string, existingTaskIds: readonly string[])
  * `dependsOn.length` and an entry pointing at an existing task id would never be decremented and
  * would read as a cycle that is not there.
  */
-function validateDelta(delta: PlanDelta, existingTaskIds: readonly string[]): Result<PlanDelta, string> {
+function validateDelta(
+  delta: PlanDelta,
+  existingTaskIds: readonly string[],
+  stageKeys: readonly string[],
+): Result<PlanDelta, string> {
   const existing = new Set(existingTaskIds)
 
   for (const task of delta.add) {
@@ -88,6 +97,19 @@ function validateDelta(delta: PlanDelta, existingTaskIds: readonly string[]): Re
     const malformed = task.capabilities.find((key) => !CAPABILITY_KEY_PATTERN.test(key))
     if (malformed !== undefined) {
       return err(`added task "${task.key}" asks for "${malformed}", which is not a capability key`)
+    }
+    // M48 R2, the two rules `validateStructure` applies to a first plan, with this module's own
+    // `added task` wording: a malformed handoff is a NAMED refusal rather than a shape failure, and
+    // an empty `stageKeys` is "no runbook is adopted", under which any stage stands (plan erratum
+    // E1).
+    if (task.handoff !== undefined) {
+      const contract = handoffContractSchema.safeParse(task.handoff)
+      if (!contract.success) {
+        return err(`added task "${task.key}" has a handoff that is not a contract: ${contract.error.message}`)
+      }
+    }
+    if (task.stage !== undefined && stageKeys.length > 0 && !stageKeys.includes(task.stage)) {
+      return err(`added task "${task.key}" names stage "${task.stage}", which this runbook does not have`)
     }
   }
 
@@ -126,7 +148,13 @@ function validateDelta(delta: PlanDelta, existingTaskIds: readonly string[]): Re
     if (cancelled.has(taskId)) return err(`task "${taskId}" is both cancelled and kept`)
   }
 
-  return ok(delta)
+  // The contracts re-read out of the strict schema and put back, exactly as `validateStructure`
+  // does for a first plan: every caller gets `HandoffContract`, never the loose record the shape
+  // let through.
+  const add = delta.add.map((task) =>
+    task.handoff === undefined ? task : { ...task, handoff: handoffContractSchema.parse(task.handoff) },
+  )
+  return ok({ ...delta, add })
 }
 
 /**

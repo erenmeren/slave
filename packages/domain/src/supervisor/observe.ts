@@ -1,4 +1,5 @@
 import { capabilityIndex, projectRoles } from '../capability/taxonomy.js'
+import { recommendRunbooks } from '../runbook/recommend.js'
 import { isStaffableTask } from './candidates.js'
 import {
   COOLDOWN_MS,
@@ -27,6 +28,13 @@ import type { SupervisorQuestion, SupervisorSlave, SupervisorTask, SupervisorWor
  */
 function roleHasHolder(world: SupervisorWorld, role: string, exceptSlaveId?: string): boolean {
   return world.slaves.some((slave) => slave.id !== exceptSlaveId && slave.runtimeRoles.includes(role))
+}
+
+/** Every capability the roster PROVIDES, deduplicated -- what a recommendation's coverage half is
+ *  measured against. Not `projectRoles`: a runbook asks for capabilities, and a worker who has one
+ *  without its runtime role still covers it (the `assign_capability` case). */
+export function rosterCapabilities(world: SupervisorWorld): readonly string[] {
+  return [...new Set(world.slaves.flatMap((slave) => slave.capabilities))]
 }
 
 /**
@@ -130,6 +138,23 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
     })
   }
 
+  // runbook_recommended: before the first plan, and only then. A goal exists, no runbook has been
+  // adopted, and the board is empty -- the one moment at which adopting a way of working changes
+  // what the next run is asked for. `recommendRunbooks` returns nothing when no keyword is in the
+  // goal, and then there is no situation at all: silence beats a proposal about a goal the rules
+  // have no opinion on (R5).
+  if (world.goal !== null && world.runbook === null && world.tasks.length === 0) {
+    const top = recommendRunbooks(world.goal, world.runbooks, rosterCapabilities(world), world.taxonomy)[0]
+    if (top !== undefined) {
+      add({
+        kind: 'runbook_recommended',
+        subjectId: world.workspaceId,
+        summary: `This project has a goal, no tasks yet, and no way of working chosen. "${top.runbook.name}" fits it: ${top.rationale}`,
+        facts: { runbook: top.runbook.key, score: top.score, matched: top.matchedKeywords.join(', '), stages: top.runbook.stages.length },
+      })
+    }
+  }
+
   for (const task of world.tasks) {
     // review_cap_blocked vs task_blocked_human: both are `blocked`, and the split is the whole
     // point -- the review cap is a park the Supervisor knows a routine exit from, anything else is
@@ -158,8 +183,13 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
       add({
         kind: 'task_failed',
         subjectId: task.id,
-        summary: `Task "${task.title}" failed and ${task.dependents} task(s) depend on it.`,
-        facts: taskFacts(task),
+        // Plan erratum E6: the runbook stage's escalation sentence, appended here because a
+        // `task_failed` situation is DERIVED on every tick -- `rejectTask` has nowhere to write it,
+        // and `candidates` already builds `escalate_to_human` out of this summary.
+        summary:
+          `Task "${task.title}" failed and ${task.dependents} task(s) depend on it.` +
+          (task.stageEscalation === null ? '' : ` ${task.stageEscalation}`),
+        facts: { ...taskFacts(task), ...(task.stage === null ? {} : { stage: task.stage }) },
       })
     }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parseSlaveAnswers } from '../../src/messaging/answer.js'
 import { parseSlaveAsk } from '../../src/messaging/ask.js'
-import type { Section } from '../../src/run-context/sections.js'
+import type { Section, SectionKind, SectionSource } from '../../src/run-context/sections.js'
 import { REPLAN_INSTRUCTIONS } from '../../src/planning/delta.js'
 import {
   MARKERS,
@@ -29,9 +29,9 @@ function section(kind: Section['kind'], text: string, source: Section['source'])
 describe('SECTION_ORDER', () => {
   it('lists the fixed order for each run kind', () => {
     expect(SECTION_ORDER).toEqual({
-      implementation: ['profile', 'roster', 'skills', 'inbox', 'ask_protocol', 'task', 'rejection'],
-      review: ['profile', 'skills', 'task', 'review_diff'],
-      planning: ['profile', 'planning_goal', 'replan', 'capabilities'],
+      implementation: ['profile', 'roster', 'skills', 'inbox', 'ask_protocol', 'task', 'handoff', 'rejection'],
+      review: ['profile', 'skills', 'task', 'handoff', 'review_diff'],
+      planning: ['profile', 'planning_goal', 'replan', 'capabilities', 'runbook', 'handoff_protocol'],
     })
   })
 })
@@ -277,5 +277,64 @@ describe('renderRunContext -- the capabilities section (M47 E3)', () => {
     expect(prompt.indexOf('GOAL: ship it')).toBeLessThan(prompt.indexOf('CAPABILITIES'))
     expect(prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
     expect(manifest.sections.map((s) => s.kind)).toEqual(['planning_goal', 'capabilities'])
+  })
+})
+
+
+describe('M48 section order', () => {
+  /** The minimal VALID source for each kind this block renders -- just enough to satisfy
+   *  `SectionSource`, since these cases are about ORDER and nothing reads the fields. */
+  const sourceFor = (kind: SectionKind): SectionSource => {
+    switch (kind) {
+      case 'handoff':
+        return { kind: 'handoff', taskId: 't1', sha256: 'e'.repeat(64) }
+      case 'runbook':
+        return { kind: 'runbook', runbookId: 'rb1', key: 'feature-delivery', stageKeys: ['design'] }
+      case 'handoff_protocol':
+        return { kind: 'handoff_protocol' }
+      case 'task':
+        return { kind: 'task', taskId: 't1', sha256: TASK_SHA }
+      case 'rejection':
+        return { kind: 'rejection', taskId: 't1' }
+      case 'review_diff':
+        return { kind: 'review_diff', base: 'main', head: 'task/t1', capped: false }
+      case 'planning_goal':
+        return { kind: 'planning_goal', sha256: GOAL_SHA, version: 1 }
+      case 'capabilities':
+        return { kind: 'capabilities', keys: ['backend.api-design'], capped: false }
+      default:
+        throw new Error(`no minimal source for ${kind}`)
+    }
+  }
+
+  const m48section = (kind: SectionKind, text: string): Section => ({ kind, text, source: sourceFor(kind) })
+
+  it('puts handoff directly after task on an implementation run, before rejection', () => {
+    const { manifest } = renderRunContext('implementation', [
+      m48section('rejection', 'R'),
+      m48section('handoff', 'H'),
+      m48section('task', 'T'),
+    ])
+    expect(manifest.sections.map((s) => s.kind)).toEqual(['task', 'handoff', 'rejection'])
+  })
+
+  it('puts handoff directly after task on a review run, before the diff', () => {
+    const { manifest } = renderRunContext('review', [
+      m48section('review_diff', 'D'),
+      m48section('handoff', 'H'),
+      m48section('task', 'T'),
+    ])
+    expect(manifest.sections.map((s) => s.kind)).toEqual(['task', 'handoff', 'review_diff'])
+  })
+
+  it('puts runbook and handoff_protocol after capabilities, above the trailer', () => {
+    const { prompt, manifest } = renderRunContext('planning', [
+      m48section('runbook', 'RB'),
+      m48section('capabilities', 'C'),
+      m48section('planning_goal', 'G'),
+    ])
+    expect(manifest.sections.map((s) => s.kind)).toEqual(['planning_goal', 'capabilities', 'runbook'])
+    expect(prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
+    expect(prompt.indexOf('RB')).toBeGreaterThan(prompt.indexOf('C'))
   })
 })

@@ -103,6 +103,7 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   unknown_profile_field: true,
   capability_not_found: true,
   invalid_capability: true,
+  runbook_adoption_unavailable: true,
 }
 
 const ALL = Object.keys(ALL_KINDS) as ControlRefusal['kind'][]

@@ -594,6 +594,12 @@ export async function loadSupervisorWorld(
           latestGuardrail: guardrails.get(row.id) ?? null,
           goalVersion: row.goalVersion,
           requiredCapabilities: row.requiredCapabilities,
+          // M48 t1: the column exists and the loader does not read it yet -- Task 3 selects
+          // `stage` and resolves its `escalation` through `Workspace.runbookId`. Null is the
+          // truthful reading until then, and it is also what every task planned before this
+          // milestone really carries.
+          stage: null,
+          stageEscalation: null,
         })
       }
 
@@ -663,6 +669,14 @@ export async function loadSupervisorWorld(
         taxonomy,
         company: companyRows,
         catalog: catalogRows,
+        // M48 t1: the columns and the table exist; the loader reads neither yet. Task 3 loads the
+        // adopted runbook through `Workspace.runbookId` and, only when `runbook_recommended` could
+        // fire, the `RunbookTemplate` rows it could be chosen from. Both empty here is the state
+        // R5 describes as "this project has not chosen a way of working", which is true of every
+        // project until somebody adopts one -- and it keeps `observe` silent about runbooks rather
+        // than proposing one it has no list to propose from.
+        runbook: null,
+        runbooks: [],
       }
 
       return {

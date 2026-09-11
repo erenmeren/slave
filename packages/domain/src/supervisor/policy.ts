@@ -72,6 +72,10 @@ export function tierOf(action: Action, world: SupervisorWorld, situationKind: Si
     // a hire is a commitment the Supervisor may propose and may not make.
     case 'materialise_company_worker':
     case 'hire_from_catalog':
+    // A way of working is a person's decision. There is no evidence on any row that says this
+    // project should follow this process, which is exactly what makes it a proposal rather than a
+    // routine apply (M48 R5).
+    case 'adopt_runbook':
       return 'proposed'
     case 'raise_max_attempts':
     case 'set_runtime_roles':

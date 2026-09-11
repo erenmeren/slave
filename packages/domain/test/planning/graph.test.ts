@@ -201,3 +201,53 @@ describe('parsePlanGraph -- the capability cap is STRUCTURAL (fix round 1)', () 
     expect(out.error).toBe('task "a" asks for "Application security", which is not a capability key')
   })
 })
+
+describe('handoff and stage (M48 R2)', () => {
+  const graph = (task: Record<string, unknown>): string =>
+    JSON.stringify({ tasks: [{ key: 'k', title: 't', description: 'd', role: 'backend', ...task }] })
+
+  it('parses a handoff into the contract shape with its lists defaulted', () => {
+    const parsed = parsePlanGraph(graph({ handoff: { objective: 'Do it', expectedOutput: 'It, done' } }))
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.tasks[0]?.handoff).toEqual({
+      objective: 'Do it',
+      expectedOutput: 'It, done',
+      acceptanceCriteria: [],
+      knownConstraints: [],
+      evidenceRequired: [],
+      contextReferences: [],
+    })
+  })
+
+  it('leaves the handoff undefined when the planner wrote none -- every pre-M48 fixture still parses', () => {
+    const parsed = parsePlanGraph(graph({}))
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.tasks[0]?.handoff).toBeUndefined()
+    expect(parsed.value.tasks[0]?.stage).toBeUndefined()
+  })
+
+  // E1: the stage keys are an ARGUMENT, the way `parsePlanDelta` takes the board it validates against.
+  it('refuses a stage the adopted runbook does not have, by name', () => {
+    expect(parsePlanGraph(graph({ stage: 'polish' }), ['design', 'implement'])).toEqual({
+      ok: false,
+      error: 'task "k" names stage "polish", which this runbook does not have',
+    })
+  })
+
+  it('accepts a stage the runbook has, and accepts ANY stage when no runbook is adopted', () => {
+    expect(parsePlanGraph(graph({ stage: 'design' }), ['design']).ok).toBe(true)
+    expect(parsePlanGraph(graph({ stage: 'anything' })).ok).toBe(true)
+  })
+
+  // The shape stays loose for `capabilities`' own reason: a bad handoff must not make the parser
+  // fall back to an EARLIER draft object in the same message.
+  it('refuses a malformed handoff outright rather than falling back to an earlier candidate', () => {
+    const text = `${graph({})}\n${graph({ handoff: { objective: 'a' } })}`
+    const parsed = parsePlanGraph(text)
+    expect(parsed.ok).toBe(false)
+    if (parsed.ok) return
+    expect(parsed.error).toContain('task "k" has a handoff that is not a contract')
+  })
+})

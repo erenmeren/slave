@@ -16,6 +16,20 @@ const envelope = {
   userId: z.string().min(1).nullable().optional(),
 }
 
+/**
+ * M48 R2: how well the plan this event describes follows the workspace's adopted runbook.
+ *
+ * SOFT, and the field names say so: `stagesMissing` is a measurement, never a refusal -- a plan
+ * that skips a stage lands exactly as it was written, and the gap is what an operator reads.
+ * Optional on both events, because a workspace with no runbook adopted produces neither.
+ */
+const runbookAdherence = z.object({
+  id: z.string().min(1),
+  key: z.string().min(1),
+  stagesCovered: z.array(z.string().min(1)),
+  stagesMissing: z.array(z.string().min(1)),
+})
+
 /** One member per event type. The payload shape is bound to the type by construction. */
 export const executionEventSchema = z.discriminatedUnion('type', [
   // M40 t1: `goalVersion` is the plan version the task was derived from, `null` for a hand-made
@@ -153,7 +167,13 @@ export const executionEventSchema = z.discriminatedUnion('type', [
   z.object({
     ...envelope,
     type: z.literal('task.verify_failed'),
-    payload: z.object({ command: z.string(), exitCode: z.number().int() }),
+    payload: z.object({
+      command: z.string(),
+      exitCode: z.number().int(),
+      // M48 R6/plan erratum E11: which runbook stage's gate failed, when a stage gate is what
+      // failed. Absent for a workspace verify command and for every row written before M48.
+      stage: z.string().min(1).optional(),
+    }),
   }),
   z.object({ ...envelope, type: z.literal('task.failed'), payload: z.object({ reason: z.string() }) }),
   z.object({ ...envelope, type: z.literal('run.output'), payload: z.object({ text: z.string() }) }),
@@ -237,6 +257,9 @@ export const executionEventSchema = z.discriminatedUnion('type', [
        *  silently ignored vocabulary is how an operator concludes the feature does not work.
        *  Optional: every event written before M47 has none. */
       droppedCapabilities: z.array(z.string().min(1)).optional(),
+      /** M48 R2: the adopted runbook and how far this plan covers it. Absent when no runbook is
+       *  adopted, and on every event written before M48. */
+      runbook: runbookAdherence.optional(),
     }),
   }),
   // M40 §2: a re-plan run started, because the goal moved on a board that already had tasks. The
@@ -275,6 +298,9 @@ export const executionEventSchema = z.discriminatedUnion('type', [
        *  silently ignored vocabulary is how an operator concludes the feature does not work.
        *  Optional: every event written before M47 has none. */
       droppedCapabilities: z.array(z.string().min(1)).optional(),
+      /** M48 R2: the same adherence block `workspace.plan_created` carries, measured over the board
+       *  the delta left behind. */
+      runbook: runbookAdherence.optional(),
     }),
   }),
   // M40 §4: `cancelTask` took a task off the board -- an operator's own call, or an approved
@@ -468,6 +494,20 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       decisionId: z.string().min(1),
       action: z.object({ kind: z.enum(ACTION_KINDS) }),
       reason: z.string().min(1),
+    }),
+  }),
+  // M48 R5: a runbook was adopted for this workspace -- by a human through `adopt-runbook` or the
+  // Overview, or by a human approving the Supervisor's `adopt_runbook` proposal. `cleared` is the
+  // one that took a runbook away, naming the runbook it removed (plan erratum E9); absent means
+  // false, which is every adoption.
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.runbook_adopted'),
+    payload: z.object({
+      runbookId: z.string().min(1),
+      key: z.string().min(1),
+      name: z.string().min(1),
+      cleared: z.boolean().optional(),
     }),
   }),
 ])

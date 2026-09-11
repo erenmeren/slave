@@ -1,4 +1,5 @@
 import type { CapabilityRecord } from '../capability/taxonomy.js'
+import type { Runbook } from '../runbook/spec.js'
 import type { TaskStatus } from '../task/state.js'
 import type { ActionKind, DecisionStatus, Tier } from './actions.js'
 import { THREAD_MESSAGES_MAX } from './constants.js'
@@ -65,6 +66,13 @@ export interface SupervisorTask {
    * than something a loader should silently filter.
    */
   readonly requiredCapabilities: readonly string[]
+  /** M48 R2: the runbook stage this task belongs to, or null for a task planned without one.
+   *  A LABEL, never a scheduler input -- `decide()` has never seen it. */
+  readonly stage: string | null
+  /** M48 R6, plan erratum E6: the `escalation` sentence of {@link stage}, resolved by the loader
+   *  through `Workspace.runbookId`, so `observe` can append it to a `task_failed` summary without
+   *  knowing what a runbook is. */
+  readonly stageEscalation: string | null
 }
 
 export interface SupervisorSlave {
@@ -263,6 +271,12 @@ export interface SupervisorWorld {
   /** The catalog templates that provide something, bounded by the loader (R4). Empty under the
    *  same condition as {@link company}. */
   readonly catalog: readonly SupervisorCatalogEntry[]
+  /** The runbook this workspace has adopted (R5), or null. Loaded whenever `Workspace.runbookId`
+   *  is set -- the Overview, verify and the escalation sentence all read the same row. */
+  readonly runbook: Runbook | null
+  /** The runbooks this workspace COULD adopt (R5). EMPTY unless `runbook_recommended` could fire
+   *  -- the loader does not pay for a table scan on a project that has already chosen. */
+  readonly runbooks: readonly Runbook[]
 }
 
 /**

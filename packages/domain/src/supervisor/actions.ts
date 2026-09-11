@@ -34,6 +34,12 @@ export type Action =
    *  "why selected", months later. `temporary` is M50's lifecycle, recorded as a claim on the
    *  decision and in the rationale until there is something that can release a worker. */
   | { readonly kind: 'hire_from_catalog'; readonly templateId: string; readonly capability: string; readonly capabilityLabel: string; readonly name: string; readonly rationale: string; readonly temporary: boolean }
+  /** `adoptRunbook`: the workspace adopts a way of working. Never automatic ({@link tierOf}) -- a
+   *  process is a person's decision, exactly as a hire is, and the next plan is written against it.
+   *  `name` and `rationale` are carried on the action rather than resolved by whoever renders it,
+   *  for `assign_capability`'s own reason: a panel has no runbook table, and a row read a year
+   *  later must still say what it was about. */
+  | { readonly kind: 'adopt_runbook'; readonly runbookId: string; readonly key: string; readonly name: string; readonly rationale: string }
   /** `answerQuestion` with `answeredBy: 'supervisor'`: the Supervisor answers a slave's question
    *  itself, in a body a SECOND model call drafted and `verifySources` checked. This is the one
    *  action whose stored tier is not the last word: the catalogue stamps it `proposed` and
@@ -61,6 +67,7 @@ export const ACTION_KINDS = [
   'assign_capability',
   'materialise_company_worker',
   'hire_from_catalog',
+  'adopt_runbook',
   'answer_question',
   'reassign_question',
   'mark_task_failed',
@@ -102,6 +109,13 @@ export const actionSchema: z.ZodType<Action> = z.discriminatedUnion('kind', [
     name: z.string().min(1),
     rationale: z.string().min(1),
     temporary: z.boolean(),
+  }),
+  z.object({
+    kind: z.literal('adopt_runbook'),
+    runbookId: z.string().min(1),
+    key: z.string().min(1),
+    name: z.string().min(1),
+    rationale: z.string().min(1),
   }),
   z.object({ kind: z.literal('answer_question'), messageId: z.string().min(1) }),
   z.object({

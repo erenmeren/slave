@@ -13,6 +13,16 @@ import { z } from 'zod'
 export const SITUATION_KINDS = [
   'no_reviewer',
   'no_planner',
+  /**
+   * M48 R5: a goal exists, the board is empty and no way of working has been chosen -- the one
+   * moment at which adopting a runbook changes what the next run is asked for. `subjectId` is the
+   * WORKSPACE id, so a project has one of these rather than one per candidate runbook.
+   *
+   * Directly after `no_planner` (plan decision D3) because that is how the pair reads: "nobody can
+   * plan it", and then "and here is how it could be planned". It fires only when
+   * `recommendRunbooks` has an opinion -- no keyword hit anywhere, no situation at all.
+   */
+  'runbook_recommended',
   'review_cap_blocked',
   'task_failed',
   'task_blocked_human',
@@ -60,7 +70,8 @@ export type SituationKind = (typeof SITUATION_KINDS)[number]
  * situations, the ROLE NAME
  * for `no_reviewer`/`no_planner`/`ready_unstaffed` (so ten ready tasks missing one role are one
  * situation, not ten), the CAPABILITY KEY for `capability_unstaffed` (M47 R4, same rule one level
- * more specific), and the workspace id for `workspace_halted`.
+ * more specific), the WORKSPACE id for `runbook_recommended` -- which is about the project rather
+ * than about any row in it -- and the workspace id for `workspace_halted`.
  *
  * `summary` is for a human and for the model prompt; `facts` is the evidence the predicate fired
  * on, kept as flat scalars so the whole thing survives a round trip through `SupervisorDecision.
@@ -95,6 +106,7 @@ export const situationSchema: z.ZodType<Situation> = z.object({
 export const SITUATION_LABEL: Record<SituationKind, string> = {
   no_reviewer: 'No reviewer',
   no_planner: 'No planner',
+  runbook_recommended: 'A way of working to adopt',
   review_cap_blocked: 'Review attempts used up',
   task_failed: 'Task failed',
   task_blocked_human: 'Blocked, needs a person',

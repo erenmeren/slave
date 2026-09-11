@@ -35,6 +35,13 @@ const ACTIONS: Readonly<Record<Action['kind'], Action>> = {
     rationale: 'nobody here provides Application security',
     temporary: false,
   },
+  adopt_runbook: {
+    kind: 'adopt_runbook',
+    runbookId: 'rb1',
+    key: 'feature-delivery',
+    name: 'Feature delivery',
+    rationale: 'The goal says "ship".',
+  },
   answer_question: { kind: 'answer_question', messageId: 'm1' },
   reassign_question: { kind: 'reassign_question', messageId: 'm1', toSlaveId: 's2' },
   mark_task_failed: { kind: 'mark_task_failed', taskId: 't1', reason: 'dead end' },
@@ -66,6 +73,8 @@ describe('tierOf', () => {
     // A roster is a person's decision and a hire is a commitment -- never automatic.
     ['materialise_company_worker', 'proposed', 'proposed'],
     ['hire_from_catalog', 'proposed', 'proposed'],
+    // M48 R5: a way of working is a person's decision, exactly as a hire is.
+    ['adopt_runbook', 'proposed', 'proposed'],
     ['mark_task_failed', 'proposed', 'proposed'],
     // M40 ruling R1: a cancellation is never automatic -- a wrong deletion costs real planned work.
     ['cancel_task', 'proposed', 'proposed'],
@@ -107,6 +116,16 @@ describe('tierOf', () => {
       expect(tierOf(ACTIONS.assign_capability, HALTED, kind)).toBe('proposed')
       expect(tierOf(ACTIONS.materialise_company_worker, HALTED, kind)).toBe('proposed')
       expect(tierOf(ACTIONS.hire_from_catalog, HALTED, kind)).toBe('proposed')
+    }
+  })
+
+  // M48 R5: nothing about the situation it was offered for, and nothing about a halt, can make
+  // adopting a way of working automatic -- there is no evidence on any row that says this project
+  // should follow this process.
+  it('tiers adopt_runbook as a PROPOSAL for every situation kind, running or halted', () => {
+    for (const kind of SITUATION_KINDS) {
+      expect(tierOf(ACTIONS.adopt_runbook, RUNNING, kind)).toBe('proposed')
+      expect(tierOf(ACTIONS.adopt_runbook, HALTED, kind)).toBe('proposed')
     }
   })
 

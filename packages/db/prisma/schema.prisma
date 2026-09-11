@@ -102,6 +102,9 @@ model Workspace {
   /// and same limits as M37's profiles: `PROFILE_MAX_CHARS` on write and `neutraliseMarkers` on
   /// render. Null is the ordinary state -- the rules decide perfectly well without one.
   supervisorProfile String?
+  /// M48 R5: the runbook this project has adopted, or null. SetNull: deleting a runbook must not
+  /// destroy a project. Adopting after tasks exist is allowed -- the next re-plan sees it.
+  runbookId String?
 
   maxConcurrentRuns       Int    @default(3)
   /// The spend ceiling this workspace's budget guardrail enforces (spec §9.2). Nullable as of
@@ -127,6 +130,7 @@ model Workspace {
   company               Company?       @relation(fields: [companyId], references: [id])
   goalSetByUser         User?          @relation(fields: [goalSetByUserId], references: [id], onDelete: SetNull)
   adoptedFromSimulation SimulationRun? @relation("SimulationAdoption", fields: [adoptedFromSimulationId], references: [id], onDelete: SetNull)
+  runbook               RunbookTemplate? @relation(fields: [runbookId], references: [id], onDelete: SetNull)
 
   teams                  Team[]
   providerConfigurations ProviderConfiguration[]
@@ -321,6 +325,44 @@ model SlaveTemplate {
   collaborationHints CollaborationHint[] @relation("CollaborationHintOwner")
   advisedBy          CollaborationHint[] @relation("CollaborationHintTarget")
   hiredWorkers       Slave[]             @relation("HiredWorkers")
+  runbooks           RunbookTemplate[]   @relation("RunbookFromTemplate")
+}
+
+/// M48 R3: a reusable STAGE PLAN -- design -> implement -> verify -> review -> release, or a
+/// persona's own workflow. Data, not code: `db:seed` and `syncRunbooks()` write the checked-in
+/// list, `importCatalog` translates a persona's workflow into one, and `runbooks add --file` is
+/// how an operator writes their own. A runbook SUGGESTS a roster (its capabilities feed team
+/// formation); it never creates a team.
+model RunbookTemplate {
+  id                   String   @id @default(uuid())
+  /// The identity everything addresses: a lower-case dash-separated slug, unique, and what the
+  /// CLI, the routes and the Overview picker all name a runbook by.
+  key                  String   @unique
+  name                 String
+  description          String
+  /// Whole-word goal matching (R5). Never substrings -- see `recommendRunbooks`.
+  keywords             String[] @default([])
+  requiredCapabilities String[] @default([])
+  optionalCapabilities String[] @default([])
+  /// A validated `RunbookStage[]` (`runbookStagesSchema`). Json rather than a table: a stage has no
+  /// identity outside its runbook, is never referenced by a foreign key, and is always read whole.
+  stages               Json
+  /// `seed` | `persona` | `human`. A sync rewrites `seed` rows and never touches the other two; an
+  /// import writes `persona` rows and never overwrites a `human` one.
+  source               String   @default("seed")
+  /// The template a `persona` runbook was translated from. SetNull: a runbook with a workspace
+  /// pointing at it must survive its persona's deletion.
+  sourceTemplateId     String?
+  createdAt            DateTime @default(now())
+  /// The schema's first `@updatedAt` (plan erratum E14), and deliberately: `syncRunbooks()`
+  /// rewrites a seed row's stages, and "when did this row last change" is the one question a
+  /// reconciled table cannot answer from `createdAt`.
+  updatedAt            DateTime @updatedAt
+
+  sourceTemplate SlaveTemplate? @relation("RunbookFromTemplate", fields: [sourceTemplateId], references: [id], onDelete: SetNull)
+  workspaces     Workspace[]
+
+  @@index([source])
 }
 
 /// M47 R1: the capability taxonomy, as DATA. Nothing matches on a key that is not a row here --
@@ -540,6 +582,13 @@ model Task {
   /// STAFFING key. `requiredRole` above stays the DISPATCH key and is derived from this list when
   /// the planner did not name one, so the scheduler keeps exactly one matching rule.
   requiredCapabilities String[] @default([])
+  /// M48 R1: the typed handoff -- a validated `HandoffContract`. NULL means hand-made or planned
+  /// before this milestone, and is never backfilled: inventing a contract for work nobody wrote one
+  /// for would be worse than the paragraph it replaces.
+  handoff             Json?
+  /// M48 R2: the runbook stage this task belongs to. A LABEL: `decide()` has never read it, and a
+  /// stage is not a dependency -- `TaskDependency` still decides what may start.
+  stage               String?
   assigneeId          String?
   activeRunId         String?    @unique
   attempt             Int        @default(0)
@@ -806,6 +855,9 @@ model SupervisorDecision {
 enum SupervisorSituationKind {
   no_reviewer
   no_planner
+  /// M48 R5: a goal exists, the board is empty and no way of working has been chosen. The subject
+  /// is the WORKSPACE, not a row in it.
+  runbook_recommended
   review_cap_blocked
   task_failed
   task_blocked_human
@@ -1054,6 +1106,9 @@ enum EventType {
   supervisor_applied          @map("supervisor.applied")
   supervisor_resolved         @map("supervisor.resolved")
   supervisor_failed           @map("supervisor.failed")
+  /// M48 R5: a runbook was adopted for this workspace, or the adopted one was cleared. The
+  /// payload names the runbook either way.
+  workspace_runbook_adopted   @map("workspace.runbook_adopted")
 }
 
 model ExecutionEvent {
