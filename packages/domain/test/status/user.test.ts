@@ -184,6 +184,37 @@ describe('userRunStatus and userSlaveStatus', () => {
     expect(userSlaveStatus('stopping').state).toBe('waiting')
     expect(userSlaveStatus('idle').state).toBe('idle')
   })
+
+  // M51 R7 / decision D6, for the WORKER projection as well as the run's (fix round 1, review
+  // Important 3): the rule "the breaker speaks only over `working`" is stated once, here, and the
+  // two web surfaces that show a worker's word read it rather than restating it.
+  describe('the breaker’s word over a worker (M51 R7)', () => {
+    it('replaces a working worker’s word with the rung the breaker is on', () => {
+      expect(userSlaveStatus('working', { breakerLevel: 'steered' }).state).toBe('steered')
+      expect(userSlaveStatus('working', { breakerLevel: 'steered' }).label).toBe('STEERED')
+      expect(userSlaveStatus('working', { breakerLevel: 'constrained' }).state).toBe('constrained')
+      expect(userSlaveStatus('working', { breakerLevel: 'constrained' }).label).toBe('CONSTRAINED')
+    })
+
+    it('says nothing at level none, with no facts, or with a facts object that carries none', () => {
+      expect(userSlaveStatus('working').state).toBe('working')
+      expect(userSlaveStatus('working', {}).state).toBe('working')
+      expect(userSlaveStatus('working', { breakerLevel: 'none' }).state).toBe('working')
+    })
+
+    it('never speaks over a word somebody else produced', () => {
+      // The same clause `userRunStatus` applies, over the seven `SlaveStatus` members: a paused or
+      // stopping worker has a word somebody (or something) acted to produce, and CONSTRAINED there
+      // would describe a tool budget nobody is spending.
+      for (const status of slaveStatuses.filter((member) => member !== 'working')) {
+        expect(userSlaveStatus(status, { breakerLevel: 'constrained' }).state).toBe(userSlaveStatus(status).state)
+      }
+    })
+
+    it('needs nobody, exactly as every other card word does', () => {
+      expect(userSlaveStatus('working', { breakerLevel: 'constrained' }).needsYou).toBe(false)
+    })
+  })
 })
 
 describe('userWorkspaceStatus', () => {

@@ -26,6 +26,16 @@ describe('formatUsd', () => {
     expect(formatUsd(Number.POSITIVE_INFINITY)).toBe('—')
   })
 
+  it('is an em dash for a negative figure -- no money surface can spend backwards', () => {
+    // Nothing in the tree can produce one today, and that is exactly why `$-2.00` must never
+    // render: a minus sign on a bill reads as a refund, and a figure nobody can explain is not a
+    // figure. `-0` included -- `(-0).toFixed(2)` is the string `"0.00"`, so the sign would vanish
+    // and the nonsense would print as a believable zero.
+    expect(formatUsd(-2)).toBe('—')
+    expect(formatUsd(-0.001)).toBe('—')
+    expect(formatUsd(-0)).toBe('$0.00')
+  })
+
   it('rounds a real figure the way every money surface already did', () => {
     expect(formatUsd(0.005)).toBe('$0.01')
     expect(formatUsd(12.345)).toBe('$12.35')

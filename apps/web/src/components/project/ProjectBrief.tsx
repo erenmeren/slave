@@ -207,16 +207,21 @@ export function ProjectBrief({
           * a page showing two totals for one project teaches its reader to trust neither, and a
           * page showing three LABELLED answers to three questions teaches them which to ask.
           * Both extra lines are CONDITIONAL (decision D19), so a project where everything reported
-          * shows exactly the lines it showed before M51, with `measured` renamed `actual`. */}
+          * shows exactly the lines it showed before M51, with `measured` renamed `actual`. The
+          * condition compares the RENDERED strings, not the raw floats (fix round 1, Important 1):
+          * `actualUsd` is a Postgres `SUM()` and `estimatedUsd` a JS reduce over rows in
+          * unspecified order, so two figures that are mathematically equal need not be bit-equal --
+          * and `actual $3.50` above `estimated $3.50` is the repeated number D19 exists to
+          * suppress, on exactly the projects whose tile height `gate:m45` measures. */}
         <span data-testid="brief-cost-actual" className="text-[11px] text-text-2">
           actual {formatUsd(cost.actualUsd)}
         </span>
-        {cost.estimatedUsd !== cost.actualUsd && (
+        {formatUsd(cost.estimatedUsd) !== formatUsd(cost.actualUsd) && (
           <span data-testid="brief-cost-estimated" className="text-[11px] text-text-2">
             estimated {formatUsd(cost.estimatedUsd)}
           </span>
         )}
-        {cost.upperBoundUsd !== cost.spentUsd && (
+        {formatUsd(cost.upperBoundUsd) !== formatUsd(cost.spentUsd) && (
           <span data-testid="brief-cost-upper-bound" className="text-[11px] text-tone-waiting">
             upper bound {formatUsd(cost.upperBoundUsd)}
           </span>

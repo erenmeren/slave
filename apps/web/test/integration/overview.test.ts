@@ -535,6 +535,35 @@ describe('buildOverviewSnapshot', () => {
     expect(snapshot?.slaves[0]?.stepLabel).toBe('5/20')
   })
 
+  /**
+   * M51 R7 / decision D16, through the real read model (fix round 1, review Important 2): the
+   * breaker's cap STANDS until the run ends, even after its WORD de-escalates, so the bar and the
+   * pair must both measure against `SlaveRun.toolCallCap` -- the same expression `sweep.ts`'s
+   * over-cap arm compares. Against the workspace ceiling this run would read 17% of 20; against
+   * the ceiling that will actually stop it, it is most of the way through.
+   */
+  it('measures a CONSTRAINED run against its own ceiling, not the workspace’s', async (): Promise<void> => {
+    await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { maxToolCallsPerRun: 20 } })
+    await prisma.slaveRun.create({
+      data: {
+        slaveId: fixture.slaveId, taskId: fixture.taskId, status: 'working', toolCalls: 34,
+        toolCallCap: 40, breakerLevel: 'steered', provider: 'claude_code',
+      },
+    })
+
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.slaves[0]?.stepLabel).toBe('34/40')
+    expect(snapshot?.slaves[0]?.progressPct).toBe(85)
+    // The rung reaches the card, so the word can be STEERED rather than WORKING -- and it is the
+    // run's own column, never a derivation.
+    expect(snapshot?.slaves[0]?.breakerLevel).toBe('steered')
+  })
+
+  it('reports the healthy rung for a slave with no live run', async (): Promise<void> => {
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    expect(snapshot?.slaves[0]?.breakerLevel).toBe('none')
+  })
+
   it('reports zero progress and no step label for a slave with no live run', async (): Promise<void> => {
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
     expect(snapshot?.slaves[0]?.progressPct).toBe(0)

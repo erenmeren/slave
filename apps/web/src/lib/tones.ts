@@ -66,26 +66,12 @@ export function cardStateForRun(status: RunStatus | null, facts?: UserCardFacts)
   return userRunStatus(status, facts).state
 }
 
-/**
- * The breaker's word over a state that was going to read WORKING (M51 R7, decision D6).
- *
- * The domain states this rule in `userRunStatus` for a `RunStatus`; this is the same clause for the
- * two SLAVE-side projections below, which start from `deriveSlaveStatus`'s output and a task status
- * rather than from a run's own column. One clause, in one place, so the three projections cannot
- * disagree about when the breaker is allowed to speak.
- *
- * Only over `working`: every other word on a card is one somebody (or something) acted to produce,
- * and overwriting a PAUSED with CONSTRAINED would describe a tool budget nobody is spending.
- */
-function withBreaker(state: CardState, facts?: UserCardFacts): CardState {
-  if (state !== 'working') return state
-  return facts?.breakerLevel === undefined || facts.breakerLevel === 'none' ? state : facts.breakerLevel
-}
-
-/** `deriveSlaveStatus`'s output, through the domain. `facts` is M51 R7's optional second argument:
- *  a worker whose live run the breaker has spoken to says STEERED/CONSTRAINED instead of WORKING. */
+/** `deriveSlaveStatus`'s output, through the domain. `facts` is M51 R7's optional second argument,
+ *  passed straight through: a worker whose live run the breaker has spoken to says
+ *  STEERED/CONSTRAINED instead of WORKING, and decision D6's "only over `working`" clause lives in
+ *  `packages/domain/src/status/user.ts` beside the labels, not here (fix round 1, Important 3). */
 export function cardStateForSlave(status: SlaveStatus, facts?: UserCardFacts): CardState {
-  return withBreaker(userSlaveStatus(status).state, facts)
+  return userSlaveStatus(status, facts).state
 }
 
 /**

@@ -312,6 +312,21 @@ describe('the cost tile after M51 R7', () => {
     expect(screen.queryByTestId('brief-cost-estimated')).toBeNull()
   })
 
+  // D19 compares what is RENDERED, not the raw floats: `actualUsd` comes from Postgres' `SUM()` and
+  // `estimatedUsd` from a JS reduce over rows in unspecified order, so two figures that are
+  // mathematically equal need not be bit-equal -- and a tile printing `actual $3.50` above
+  // `estimated $3.50` is the repeated number D19 exists to suppress.
+  it('hides a line whose float noise is invisible once it is money', () => {
+    render(<ProjectBrief workspaceId="w1" brief={briefWith({ estimatedUsd: 3.5000000001 })} />)
+    expect(screen.queryByTestId('brief-cost-estimated')).toBeNull()
+    expect(screen.getByTestId('brief-cost-actual').textContent).toBe('actual $3.50')
+  })
+
+  it('hides the upper bound whose float noise is invisible once it is money', () => {
+    render(<ProjectBrief workspaceId="w1" brief={briefWith({ upperBoundUsd: 4.5000000001 })} />)
+    expect(screen.queryByTestId('brief-cost-upper-bound')).toBeNull()
+  })
+
   // The other half of decision D19, and the one `gate:m45`'s fold check depends on: a project where
   // every concluded run reported shows exactly the lines it showed before M51.
   it('hides the upper bound when nothing unmeasured moves it off the total', () => {

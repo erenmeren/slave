@@ -1,7 +1,13 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { costProvenanceOf, estimateCostUsd, type CostProvenance, type Manifest } from '@slave-of-ai/domain'
+import {
+  NON_TERMINAL_RUN_STATUSES,
+  costProvenanceOf,
+  estimateCostUsd,
+  type CostProvenance,
+  type Manifest,
+} from '@slave-of-ai/domain'
 import { onUnauthorized } from '../lib/onUnauthorized'
 import { errorMessage, sendControl } from '../lib/postControl'
 import { sectionLine } from '../lib/runContextSummary'
@@ -43,6 +49,22 @@ const COST_PROVENANCE_WORD: Record<CostProvenance, string> = {
   reported: 'reported',
   estimated: 'estimated',
   unmeasured: 'unmeasured',
+}
+
+/**
+ * The provenance word for ONE run, with the floor named while the run is still going (plan erratum
+ * E4, fix round 1, review minor 3).
+ *
+ * A live run's tokens are what its stream has reported SO FAR -- the pump writes them on every
+ * `usage` event and the terminal write replaces them -- so its estimate can only grow. `estimated
+ * so far` says that in the one place the understatement is visible beside a total; a concluded run's
+ * reading is final and says `estimated`. Nothing else moves: a reported figure is terminal-only by
+ * construction, and an unmeasured run has no figure to be a floor of.
+ */
+function provenanceWordFor(run: TaskRunSummary): string {
+  const provenance = costProvenanceOf(run)
+  const live = (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status)
+  return provenance === 'estimated' && live ? 'estimated so far' : COST_PROVENANCE_WORD[provenance]
 }
 
 /**
@@ -124,7 +146,16 @@ export function TaskDetailPanel({
   // answer a different question. There is no `SlaveRun.attempt` column and M51 adds none (decision
   // D20): the ordinal IS the order this list is already in.
   const implRuns = task.runs.filter((run) => run.kind === 'implementation')
-  const retriedUsd = implRuns.slice(1).reduce((sum, run) => sum + (costOf(run) ?? 0), 0)
+  // NULL-PRESERVING, exactly as `run-total-cost` above is (fix round 1, review Critical 1): a task
+  // whose earlier attempts all ran on a runtime that reports no cost and no tokens -- every retried
+  // Cursor task, and every task whose runs predate M51 -- must not be told its retries cost
+  // `$0.00`. That is the measurement this milestone exists to abolish, and the line's own rule (it
+  // is hidden on a first attempt so a zero cannot read as one) would be broken one rung down.
+  const retriedCosts = implRuns.slice(1).map(costOf)
+  const retriedUsd = retriedCosts.every((cost) => cost === null)
+    ? null
+    : retriedCosts.reduce((sum: number, cost) => sum + (cost ?? 0), 0)
+  const retriedUnmeasured = retriedCosts.filter((cost) => cost === null).length
   const why = whyOf(task)
 
   const collect = async (): Promise<void> => {
@@ -625,7 +656,7 @@ export function TaskDetailPanel({
                   * which is which invites a reader to add them up as if they were the same. */}
                 <span className="flex items-baseline gap-1.5">
                   <span data-testid="run-cost-provenance" className="text-[9.5px] uppercase text-text-3">
-                    {COST_PROVENANCE_WORD[costProvenanceOf(run)]}
+                    {provenanceWordFor(run)}
                   </span>
                   <span>{formatUsd(costOf(run))}</span>
                 </span>
@@ -639,6 +670,10 @@ export function TaskDetailPanel({
         {implRuns.length > 1 && (
           <p data-testid="task-cost-retried" className="text-xs text-tone-waiting">
             retried work {formatUsd(retriedUsd)}
+            {/* The hole, counted apart rather than folded in as zeros -- `run-total-cost`'s own
+              * idiom, for the same reason. Absent when nothing is priceable, because the em dash
+              * on the left has already said it. */}
+            {retriedUsd !== null && retriedUnmeasured > 0 && ` · ${retriedUnmeasured} unmeasured`}
           </p>
         )}
       </DetailsGroup>

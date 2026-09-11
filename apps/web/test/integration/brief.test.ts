@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-ai/domain'
+import { RUN_UNMEASURED_CAP_USD, SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildProjectBrief } from '../../src/server/brief.js'
@@ -159,6 +159,57 @@ describe('buildProjectBrief', () => {
     expect(withCall.cost.measuredUsd).toBe(2)
     // Charged at `SUPERVISOR_PER_CALL_CAP_USD`, so the total moved by the cap and by nothing else.
     expect(withCall.cost.spentUsd - 2).toBeCloseTo(SUPERVISOR_PER_CALL_CAP_USD, 10)
+
+    // M51 R5, through the real read model (fix round 1, review Important 2). `actual` is the same
+    // sum `measured` is; the bound charges the one unmeasured RUN at its cap and nothing else.
+    expect(withCall.cost.actualUsd).toBe(withCall.cost.measuredUsd)
+    expect(withCall.cost.upperBoundUsd - withCall.cost.spentUsd).toBeCloseTo(RUN_UNMEASURED_CAP_USD, 10)
+    // Nothing is priceable yet, so the estimate is the total with no hole filled in.
+    expect(withCall.cost.estimatedUsd).toBeCloseTo(withCall.cost.spentUsd, 10)
+  })
+
+  /**
+   * M51 R5's ESTIMATE, over the three columns the widened select reads (plan erratum E14), and the
+   * three rules that make it honest: a reported figure is never replaced by its estimate, a run
+   * nobody can price contributes nothing rather than a zero somebody would believe, and neither
+   * `spentUsd` nor `actualUsd` moves by a cent.
+   */
+  it('prices the runs that reported nothing, and leaves the guardrail’s number where it was', async (): Promise<void> => {
+    const { workspaceId, slaveId } = await seedWorkspace({ budgetUsd: 25 })
+    // REPORTED, and carrying tokens that would price at $10.00 if the estimate ever spoke over it.
+    await prisma.slaveRun.create({
+      data: {
+        slaveId, status: 'succeeded', costUsd: 2, provider: 'claude_code', model: 'claude-opus-5',
+        tokensIn: 2_000_000, tokensOut: 0, terminalAt: new Date(), endedAt: new Date(),
+      },
+    })
+    // ESTIMATED: nothing reported, a priced model, one megatoken of input = $5.00.
+    await prisma.slaveRun.create({
+      data: {
+        slaveId, status: 'succeeded', costUsd: null, provider: 'claude_code', model: 'claude-opus-5',
+        tokensIn: 1_000_000, tokensOut: 0, terminalAt: new Date(), endedAt: new Date(),
+      },
+    })
+    // UNMEASURED: spawned, concluded, no figure and nothing to price it with.
+    await prisma.slaveRun.create({
+      data: { slaveId, status: 'failed', costUsd: null, provider: 'claude_code', terminalAt: new Date(), endedAt: new Date() },
+    })
+
+    const brief = await buildProjectBrief(workspaceId)
+    expect(brief).not.toBeNull()
+    if (brief === null) return
+
+    // The guardrail's number and the reported sum: the two measured runs' $2.00, untouched.
+    expect(brief.cost.spentUsd).toBe(2)
+    expect(brief.cost.actualUsd).toBe(2)
+    expect(brief.cost.measuredUsd).toBe(2)
+    // $2.00 reported + $5.00 priced + $0 for the run nobody can price. The reported run contributes
+    // its REPORTED figure, not the $10.00 its tokens would have estimated.
+    expect(brief.cost.estimatedUsd).toBeCloseTo(7, 10)
+    // One concluded run nobody measured, at its display cap -- and the run that was ESTIMATED is
+    // not one of them, because `sumSpend` counts a null `costUsd`, not a null estimate.
+    expect(brief.cost.unmeasuredRuns).toBe(2)
+    expect(brief.cost.upperBoundUsd).toBeCloseTo(2 + 2 * RUN_UNMEASURED_CAP_USD, 10)
   })
 
   it('answers null for a project that does not exist', async (): Promise<void> => {

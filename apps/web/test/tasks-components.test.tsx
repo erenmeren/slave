@@ -1211,6 +1211,30 @@ describe('the Cost group after M51 R7', () => {
     expect(figures[1]).toContain('$2.00')
   })
 
+  // Plan erratum E4: the mid-run token figure is a FLOOR -- the pump writes what the stream has
+  // reported so far, and a live run's estimate can only grow. The word says so while the run is in
+  // flight, and stops saying it once the run has concluded and the reading is final.
+  it('calls a LIVE run’s estimate an estimate SO FAR, and a concluded one just an estimate', () => {
+    const live = run({ id: 'rl', status: 'working', tokensIn: 1_000_000, tokensOut: 0, model: 'claude-opus-5' })
+    const { unmount } = render(
+      <TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: [live] })} onClose={() => {}} />,
+    )
+    openGroup('cost')
+    expect(screen.getByTestId('run-cost-provenance').textContent).toBe('estimated so far')
+    unmount()
+
+    render(
+      <TaskDetailPanel
+        workspaceGoalVersion={0}
+        workspaceId="w1"
+        task={task({ runs: [{ ...live, status: 'succeeded' as const }] })}
+        onClose={() => {}}
+      />,
+    )
+    openGroup('cost')
+    expect(screen.getByTestId('run-cost-provenance').textContent).toBe('estimated')
+  })
+
   it('says a run nobody can price at all is unmeasured, and prints no figure for it', () => {
     render(
       <TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: [run({ id: 'rx' })] })} onClose={() => {}} />,
@@ -1227,6 +1251,26 @@ describe('the Cost group after M51 R7', () => {
     )
     openGroup('cost')
     expect(screen.getByTestId('task-cost-retried').textContent).toBe('retried work $3.50')
+  })
+
+  it('never claims the retried work cost NOTHING -- an em dash when nobody can price any of it', () => {
+    // Every retried Cursor task is this case (`reportsCost: false`, no tokens at all), as is every
+    // task whose runs predate M51. `$0.00` here would be the measurement this milestone exists to
+    // abolish, one rung below the line that already refuses to print it.
+    const unpriceable = [run({ id: 'c3' }), run({ id: 'c2' }), run({ id: 'c1' })]
+    render(
+      <TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: unpriceable })} onClose={() => {}} />,
+    )
+    openGroup('cost')
+    expect(screen.getByTestId('task-cost-retried').textContent).toBe('retried work —')
+  })
+
+  it('counts the earlier runs nobody could price apart, rather than folding them in as zeros', () => {
+    // `run-total-cost`'s own idiom: the money that was measured, and the size of the hole beside it.
+    const mixed = [run({ id: 'm3' }), run({ id: 'm2', costUsd: 2 }), run({ id: 'm1' })]
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: mixed })} onClose={() => {}} />)
+    openGroup('cost')
+    expect(screen.getByTestId('task-cost-retried').textContent).toBe('retried work $2.00 · 1 unmeasured')
   })
 
   it('says nothing about retried work on a task that has only ever had one run', () => {

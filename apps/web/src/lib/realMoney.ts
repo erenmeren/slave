@@ -13,13 +13,17 @@
  * not print as money that was not.
  *
  * A non-finite figure reads as `—` for the same reason a null does -- `$NaN` on a money surface
- * looks like a fault in the bill rather than a gap in the measurement.
+ * looks like a fault in the bill rather than a gap in the measurement. So does a NEGATIVE one
+ * (fix round 1, review minor 4): nothing in this tree can spend backwards, so a minus sign here is
+ * a fault upstream, and both readings of it are worse than saying nothing -- `$-2.00` reads as a
+ * refund, and `-0.001` would print `$-0.00`, a believable zero wearing a sign. `-0` is a measured
+ * zero and prints as one.
  *
  * SIMULATED money never comes here (decision D21): `lib/money.ts` and `components/sim/` keep the
  * boundary M29 drew, and this milestone does not move it.
  */
 export function formatUsd(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return '—'
+  if (value === null || !Number.isFinite(value) || value < 0) return '—'
   if (value > 0 && value < 0.005) return '<$0.01'
   return `$${value.toFixed(2)}`
 }

@@ -242,14 +242,29 @@ function runCardState(status: RunStatus | null, facts: UserCardFacts): UserCardS
   }
 }
 
-/** `deriveSlaveStatus`'s output. Exhaustive over all seven members -- an eighth is a build error
- *  here, not a silent fall-through to `idle` at render time. */
-export function userSlaveStatus(status: SlaveStatus): UserStatus<UserCardState> {
-  const state = slaveCardState(status)
+/**
+ * `deriveSlaveStatus`'s output. Exhaustive over all seven members -- an eighth is a build error
+ * here, not a silent fall-through to `idle` at render time.
+ *
+ * Takes the same optional {@link UserCardFacts} {@link userRunStatus} does, and applies decision D6
+ * identically: the breaker's word speaks ONLY over `working`. Both arguments matter, because the
+ * two web surfaces that show a WORKER's word (`SlaveCard`, `AllSlavesTable`) start from
+ * `deriveSlaveStatus`'s output rather than from a `RunStatus` -- so without this the rule would
+ * have to be restated in `apps/web`, where a later change to which states the breaker may speak
+ * over would silently not be followed (fix round 1, review Important 3).
+ */
+export function userSlaveStatus(status: SlaveStatus, facts: UserCardFacts = {}): UserStatus<UserCardState> {
+  const state = slaveCardState(status, facts)
   return { state, label: USER_CARD_LABEL[state], needsYou: false }
 }
 
-function slaveCardState(status: SlaveStatus): UserCardState {
+function slaveCardState(status: SlaveStatus, facts: UserCardFacts): UserCardState {
+  // The same clause `runCardState` applies, for the same reason: every other word a card can say is
+  // one somebody (or something) acted to produce, and overwriting a PAUSED with CONSTRAINED would
+  // describe a tool budget nobody is spending.
+  if (status === 'working' && facts.breakerLevel !== undefined && facts.breakerLevel !== 'none') {
+    return facts.breakerLevel
+  }
   switch (status) {
     case 'idle':
       return 'idle'
