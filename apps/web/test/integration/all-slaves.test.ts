@@ -143,6 +143,43 @@ describe('listAllSlaves', () => {
     expect(rows.find((r) => r.companySlaveId === member.id)?.runtimeRoles).toEqual([])
   })
 
+  // M50 R1/R6: the Slaves table's Lifecycle column. A project row reads its worker's own column;
+  // a catalog row has no `Slave` at all, and `permanent` is the one honest answer for a member the
+  // organisation HAS -- with no engagement that could ever be over.
+  it('reads a project row\'s lifecycle off the column, and calls a catalog member permanent', async (): Promise<void> => {
+    const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
+    const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
+    const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+    const member = await prisma.companySlave.create({
+      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Nova' },
+    })
+    const ordinary = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name: 'Alex', role: 'Senior Engineer' },
+    })
+    const released = await prisma.slave.create({
+      data: {
+        teamId: fixture.teamId,
+        name: 'Robin',
+        role: 'Security',
+        lifecycle: 'ephemeral',
+        releasedAt: new Date('2026-09-12T10:00:00.000Z'),
+        releaseReason: 'the engagement is over',
+      },
+    })
+
+    const { rows } = await listAllSlaves()
+
+    const catalogRow = rows.find((r) => r.companySlaveId === member.id && r.slaveId === null)
+    expect(catalogRow?.lifecycle).toBe('permanent')
+    expect(catalogRow?.released).toBeNull()
+    expect(rows.find((r) => r.slaveId === ordinary.id)?.lifecycle).toBe('project')
+    expect(rows.find((r) => r.slaveId === ordinary.id)?.released).toBeNull()
+    const releasedRow = rows.find((r) => r.slaveId === released.id)
+    expect(releasedRow?.lifecycle).toBe('ephemeral')
+    // An ISO string, not a `Date`: this row is serialised straight into the poll payload.
+    expect(releasedRow?.released).toEqual({ at: '2026-09-12T10:00:00.000Z', reason: 'the engagement is over' })
+  })
+
   it('hides an archived project\'s rows unless includeArchived is set', async (): Promise<void> => {
     await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Blair', role: 'frontend' } })
     await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { archivedAt: new Date() } })

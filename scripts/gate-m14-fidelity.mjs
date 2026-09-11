@@ -993,14 +993,15 @@ try {
   await assertComputed('project-settings', '[data-testid="runtime-timeout"]', 'font-size', '10.5px')
   console.log('stage 2a: the project Settings tab carries perm-caption and a 10.5px mono runtime-timeout figure')
 
-  // The Slaves table's nine columns (M24 §5.3: one table, slave/role/team/project/status/current
-  // task/provider/cost/actions). Asserted TWICE and deliberately: `getComputedStyle` resolves
-  // `grid-template-columns` to USED track sizes, so the `1fr` comes back as a pixel width and a
-  // literal string comparison against the README's template could never pass. The computed read is
-  // what proves the eight fixed tracks really are 200/110/150/120/110/90/90/160 in the browser's
-  // own reckoning and that the flexible track actually took the remaining space; the authored
-  // inline value is what proves the template is the README's string and not eight coincidences.
-  const SLAVES_COLUMNS = '200px 110px 150px 120px 110px 1fr 90px 90px 160px'
+  // The Slaves table's ten columns (M24 §5.3: one table, slave/role/team/project/status/current
+  // task/provider/cost/actions -- plus the LIFECYCLE column M50 R6 puts between project and
+  // status). Asserted TWICE and deliberately: `getComputedStyle` resolves `grid-template-columns`
+  // to USED track sizes, so the `1fr` comes back as a pixel width and a literal string comparison
+  // against the README's template could never pass. The computed read is what proves the nine
+  // fixed tracks really are 200/110/150/120/100/110/90/90/160 in the browser's own reckoning and
+  // that the flexible track actually took the remaining space; the authored inline value is what
+  // proves the template is the README's string and not nine coincidences.
+  const SLAVES_COLUMNS = '200px 110px 150px 120px 100px 110px 1fr 90px 90px 160px'
   await gotoReliably(`${baseUrl}/workforce`)
   // The Slaves page opens on the one table now (M24 Task 7): Roster and Workers were two names for
   // the same list of slaves and are gone, folded into `workforce-tab-slaves` (default) beside
@@ -1011,7 +1012,7 @@ try {
   // Keyed on the TABLE, not on its rows. `listAllSlaves()` renders every project slave AND every
   // catalog member no project has materialized yet, so a seeded development database does render
   // rows here -- but a database with no slaves at all still renders the header alone, which is the
-  // same nine-column grid this stage measures, and waiting for a row would hang on a page that is
+  // same ten-column grid this stage measures, and waiting for a row would hang on a page that is
   // rendering correctly.
   await clickUntil(
     page.getByTestId('workforce-tab-slaves'),
@@ -1022,16 +1023,16 @@ try {
     'the Workforce page\'s Slaves tab',
   )
   const workerHeaderCells = await page.getByTestId('data-table-header-cell').count()
-  if (workerHeaderCells !== 9) {
-    await fail(`stage 2 (workforce): the Slaves table has ${String(workerHeaderCells)} header cell(s), expected 9`)
+  if (workerHeaderCells !== 10) {
+    await fail(`stage 2 (workforce): the Slaves table has ${String(workerHeaderCells)} header cell(s), expected 10`)
   }
   const slavesComputed = normalize((await computed('[data-testid="data-table-header"]', 'grid-template-columns')) ?? '')
-  const slavesUsed = /^200px 110px 150px 120px 110px (\d+(?:\.\d+)?)px 90px 90px 160px$/.exec(slavesComputed)
+  const slavesUsed = /^200px 110px 150px 120px 100px 110px (\d+(?:\.\d+)?)px 90px 90px 160px$/.exec(slavesComputed)
   if (slavesUsed === null) {
     await fail(
       `stage 2 (workforce): [data-testid="data-table-header"] grid-template-columns is ${JSON.stringify(slavesComputed)}, ` +
         `expected the used form of ${JSON.stringify(SLAVES_COLUMNS)} -- ` +
-        '`200px 110px 150px 120px 110px <the 1fr track>px 90px 90px 160px`',
+        '`200px 110px 150px 120px 100px 110px <the 1fr track>px 90px 90px 160px`',
     )
   }
   if (Number(slavesUsed[1]) <= 0) {

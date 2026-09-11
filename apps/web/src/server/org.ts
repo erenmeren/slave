@@ -749,16 +749,21 @@ export interface AllSlaveRow {
    * of saying it is a second thing to keep in step.
    */
   readonly runtimeRoles: readonly string[]
+  /** M50 R1: WHY this row is here -- the Slaves table's own Lifecycle column. A project row
+   *  carries its worker's own `Slave.lifecycle`; a catalog row is always `permanent`, because a
+   *  roster member IS somebody the organisation has, and that is the one honest value for a row
+   *  with no `Slave` to read a column off. Merged on every poll tick like `status`, not fixed at
+   *  load (plan decision D6): an approved hire lands between reloads. */
+  readonly lifecycle: SlaveLifecycle
+  /** M50 R3: the engagement is over -- `at` is an ISO string (this row is serialised into the
+   *  poll payload) and `reason` is the sentence the release was recorded with. `null` for
+   *  everybody still here, and ALWAYS `null` on a catalog row: a member no project has
+   *  materialised has no engagement that could end. The table greys such a row rather than
+   *  dropping it (D7). */
+  readonly released: { readonly at: string; readonly reason: string } | null
   /** The row's department name -- a project row's `Team.name`, or a catalog row's
    *  `CompanyTeam.name` (M25 Task 6: was `teamName`, renamed once the Slaves table's department
    *  column became a `<select>` that reads/writes the department, not just names it). */
-  /** M50 R1: WHY this row is here. A project row carries its worker's own `Slave.lifecycle`; a
-   *  catalog row is `permanent`, because a roster member IS somebody the organisation has -- and
-   *  that is the one honest value for a row with no `Slave` at all. */
-  readonly lifecycle: SlaveLifecycle
-  /** M50 R3: the engagement is over, with the date and the sentence it ended with. Always `null`
-   *  on a catalog row: a member no project has materialised has no engagement to end. */
-  readonly released: { readonly at: string; readonly reason: string } | null
   readonly departmentName: string
   readonly projectName: string | null
   readonly workspaceId: string | null
