@@ -480,7 +480,11 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     const breaches: string[] = []
     if (timedOutNow) breaches.push(`it has been running longer than the workspace's ${workspace.runTimeoutMs}ms limit`)
     if (overCapNow) {
-      breaches.push(`it has made ${run.toolCalls} tool calls, past the ceiling of ${workspace.maxToolCallsPerRun}`)
+      // The SAME expression the comparison used (fix round 1, Minor 7). A constrained run has a
+      // ceiling of its own, and a sentence naming the workspace's instead told an operator the run
+      // was 160 calls short of a limit it had just crossed.
+      const ceiling = run.toolCallCap ?? workspace.maxToolCallsPerRun
+      breaches.push(`it has made ${run.toolCalls} tool calls, past the ceiling of ${ceiling}`)
     }
 
     // Claim the run before cancelling it, exactly as the tick claims a task. `cancel` awaits the
@@ -619,13 +623,14 @@ async function deliverBreakerSteers(deps: SweepDeps): Promise<number> {
  *    stop in three seconds, which is a kill with two extra events rather than a ladder.
  * 2. **The window**, one indexed read of this run's last {@link BREAKER_WINDOW} call/result/output
  *    rows (`ExecutionEvent`'s own `(runId, seq)` index).
- * 3. **The worktree clock**, and only when the beat is otherwise QUIET: a subprocess per run per
- *    minute is cheap, a subprocess per run per tick is not, and a run that produced output or a
- *    differently-keyed call since its last beat has already answered the only question the probe
- *    could answer. It is not skipped on the FIRST quiet beat, because `quiet` is the conjunction of
- *    all three clocks -- a beat cannot be recorded quiet without knowing what the worktree did, and
- *    guessing either way would either never accumulate a quiet beat or count one on a run that was
- *    committing.
+ * 3. **The worktree clock**, on every beat -- which is once per run per minute, and that is the
+ *    cost the design signed up for (a subprocess per run per TICK is what it refuses). Its answer
+ *    is only consulted when nothing else already says the run moved, but the probe still RUNS,
+ *    because it is what keeps the previous-beat fingerprint current: a skipped beat leaves a stale
+ *    reading behind and costs the next quiet beat its comparison. It is also not skipped on the
+ *    FIRST quiet beat, because `quiet` is the conjunction of all three clocks -- a beat cannot be
+ *    recorded quiet without knowing what the worktree did, and guessing either way would either
+ *    never accumulate a quiet beat or count one on a run that was committing.
  * 4. **The verdict**, from `detectBehaviour`, which is pure.
  * 5. **The act**, and exactly one of them.
  *
@@ -647,6 +652,7 @@ async function beatBreaker(
     readonly id: string
     readonly taskId: string | null
     readonly slaveId: string
+    readonly status: RunStatus
     readonly provider: string | null
     readonly worktreePath: string | null
     readonly startedAt: Date
@@ -657,6 +663,16 @@ async function beatBreaker(
     readonly breakerQuietBeats: number
   },
 ): Promise<BreakerMove | null> {
+  // `working` and nothing else (fix round 1, Critical 2). `SWEEPABLE` also holds `starting`,
+  // `pause_requested` and `resuming`, and a run in any of them is not producing evidence about
+  // anything -- but the one that MATTERS is `pause_requested`, which is where `steerRun` has just
+  // put a run whose sentence is queued and whose pump has not reached the gate yet. One ordinary
+  // beat there carries `trip === null`, and the level write below would de-escalate `steered` to
+  // `none` -- after which `deliverBreakerSteer` refuses the run and its queued sentence is stranded
+  // on a paused run that nothing will ever resume. A beat costs nothing to skip; a hung run costs a
+  // human noticing.
+  if (run.status !== 'working') return null
+
   const now = new Date()
   if (run.breakerBeatAt !== null && now.getTime() - run.breakerBeatAt.getTime() < BREAKER_BEAT_MS) return null
 
@@ -669,8 +685,16 @@ async function beatBreaker(
   const distinctKey = sinceRows.some((row) => row.row.kind === 'call' && row.key !== trailingKey)
   const output = sinceRows.some((row) => row.row.kind === 'output')
 
-  // Step 3: measured only when nothing else already says the run moved.
-  const worktreeChanged = distinctKey || output ? true : await worktreeMoved(deps, run)
+  // Step 3: the probe runs on EVERY beat, and its answer is only CONSULTED when nothing else
+  // already says the run moved (fix round 1, Minor 8). The two halves used to be one: skipping the
+  // probe on a busy beat also skipped recording that beat's fingerprint, so the first quiet beat
+  // after a busy one compared against a reading two or more beats old, read "changed", and could
+  // not start the `no_progress` count -- one extra beat of latency per busy-to-quiet transition,
+  // in the safe direction but for no reason anybody had written down. `worktreeMoved` is what
+  // refreshes the memory, so it is called either way and its answer discarded when the beat is
+  // already known not to be quiet.
+  const moved = await worktreeMoved(deps, run)
+  const worktreeChanged = distinctKey || output ? true : moved
 
   const verdict = detectBehaviour({
     level: run.breakerLevel,
@@ -692,10 +716,18 @@ async function beatBreaker(
       breakerBeatAt: now,
       ...quietBeatsWrite(verdict, run.breakerQuietBeats),
       // The de-escalation, written here because it is not an ACT: it is what the beat measured, it
-      // announces nothing (D: de-escalation is silent), and the three arms below all write the
-      // level themselves. `verdict.level` is a real `BreakerLevel` on this branch -- `'stop'` is
-      // only ever returned with a trip.
-      ...(verdict.trip === null ? { breakerLevel: verdict.level as 'none' | 'steered' | 'constrained' } : {}),
+      // announces nothing (de-escalation is silent), and the three arms below all write the level
+      // themselves. `verdict.level` is a real `BreakerLevel` on this branch -- `'stop'` is only ever
+      // returned with a trip.
+      //
+      // NOT on a `suppressed` beat (fix round 1, Important 3). The rung is left exactly as it was
+      // found, for the same reason `breakerQuietBeats` is: a beat that ran inside a long tool call
+      // measured nothing, and R2's step down is what a HEALTHY beat earns. Without this clause a
+      // wedged run that happens to be inside one call at each beat walks constrained -> steered ->
+      // none while measuring nothing at all.
+      ...(verdict.trip === null && !verdict.suppressed
+        ? { breakerLevel: verdict.level as 'none' | 'steered' | 'constrained' }
+        : {}),
     },
   })
 
@@ -722,6 +754,14 @@ async function beatBreaker(
     // never told why would simply hit the ceiling in silence (spec R3).
     const constrained = await constrainRun(run.id, CONSTRAIN_GRACE_CALLS, steerTextFor(trip))
     if (!constrained.ok) return null
+    if (!constrained.value.capSet) {
+      // A RELAPSE: this run already carries a cap from an earlier rung and D16 forbids a second
+      // grace. The rung is still climbed and still announced -- what would be wrong is letting an
+      // operator read "constrained" as thirty fresh calls when the ceiling has not moved.
+      console.warn(
+        `[sweep] run ${run.id} was constrained again; its existing tool-call cap stands (no further grace)`,
+      )
+    }
     await db.slaveRun.updateMany({ where: { id: run.id, endedAt: null }, data: { breakerTrips: { increment: 1 } } })
     await appendBreakerEvent(deps, run, 'constrained', trip)
     return 'breakerConstrained'

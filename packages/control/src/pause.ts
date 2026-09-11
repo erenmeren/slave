@@ -175,7 +175,13 @@ export async function pauseActiveRuns(
     // log is thereby a complete account of every run it did NOT pause, which for an emergency stop
     // is the only account worth having.
     try {
-      const result = await requestPause(run.id, requestedBy, category)
+      // M51 T4 fix round 1, Minor 11: a GUARDRAIL fan-out is the SYSTEM's. `tick.ts`'s budget
+      // pass is the one caller nobody pressed anything for, and recording it as a human
+      // intervention put it in the web's own "interventions" filter under a person who was never
+      // there -- the same reasoning `requestResume`'s `actor` parameter carries. An
+      // `emergency_stop` stays `'human'`, deliberately: the CATEGORY says what the halt was, and
+      // somebody engaged it.
+      const result = await requestPause(run.id, requestedBy, category, undefined, category === 'guardrail' ? 'system' : 'human')
       if (result.ok) {
         requested.push(run.id)
       } else {

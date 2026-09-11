@@ -665,6 +665,52 @@ describe('applyDecision', () => {
   })
 
   /**
+   * Fix round 1, Important 6. `steerRun` -> `requestPause` -> `runFilePaths` THROWS when the
+   * workspace's repo path cannot be stat'd or a run directory cannot be made under it -- a
+   * permissions change, an unmounted volume, a path an operator moved. `applyDecision` has no
+   * `try` of its own and neither does the orchestrator's call site, so that throw took the whole
+   * Supervisor pass down and left the decision row reading `applied` with no `supervisor.applied`
+   * event to match. The sweep wrapped its own breaker call for exactly this; `carryOut` is the
+   * other caller.
+   */
+  it('records a failed decision, not a thrown tick, when the run’s repo path cannot be read', async () => {
+    await prisma.workspace.update({
+      where: { id: f.workspaceId },
+      data: { repoPath: '/nonexistent/slaveofai-m51-t4-no-such-path' },
+    })
+    const run = await prisma.slaveRun.create({
+      data: { slaveId: f.slaveId, taskId: f.taskId, status: 'working', kind: 'implementation' },
+    })
+    const decision = await record(f, { kind: 'steer_run', runId: run.id, slaveId: f.slaveId, text: 'stop' }, 'applied', {
+      subjectId: run.id,
+      situation: {
+        kind: 'run_looping',
+        subjectId: run.id,
+        summary: 'This run has been going in circles (same call over and over, 8x) and has not been told so yet.',
+        facts: {
+          runId: run.id,
+          slaveId: f.slaveId,
+          taskId: f.taskId,
+          trip: 'repeated_call',
+          detail: 'Bash:abc',
+          count: 8,
+          level: 'steered',
+          steers: 0,
+        },
+      },
+    })
+
+    const result = await applyDecision(decision.id, 'system')
+    expect(result.ok).toBe(false)
+    const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })
+    expect(row.status).toBe('failed')
+    // The error's own message, so a reader can act on it rather than guess.
+    expect(row.failureReason).toContain('cannot stat repo path')
+    // And nothing was said to the worker.
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).queuedMessage).toBeNull()
+  })
+
+  /**
    * The refusal half, and the reason `steerRun` returns one instead of throwing: this arm runs
    * inside a tick, and a run that concluded while the decision was waiting is a race the pass must
    * lose as a readable `failed` row rather than as a crashed tick.

@@ -625,7 +625,8 @@ export async function loadSupervisorWorld(
       // M51 R3 / plan erratum E9: the workspace's NON-TERMINAL runs, the first run-derived rows the
       // world has ever carried. `slave -> team -> workspaceId`, not `task`, because a `planning` run
       // (M8b) has no `Task` row and is exactly the kind of run that can go in circles while
-      // spending money. Eleven columns and no relation: `observe`'s predicate reads nothing else.
+      // spending money. Nine columns and no relation: `observe`'s predicate reads nothing else, and
+      // the three trip fields are projected from the event log below rather than selected here.
       const runRows = await tx.slaveRun.findMany({
         where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, slave: { team: { workspaceId } } },
         select: {

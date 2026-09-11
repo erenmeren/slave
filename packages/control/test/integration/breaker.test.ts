@@ -246,6 +246,31 @@ describe('constrainRun (M51 R3)', () => {
     expect((await constrainRun(run.id)).ok).toBe(false)
   })
 
+  it('says whether THIS call wrote the cap, so a re-constrain is not announced as a fresh grace', async (): Promise<void> => {
+    const run = await workingRun({ toolCalls: 10 })
+    const first = await constrainRun(run.id)
+    expect(first.ok ? first.value : null).toEqual({ capSet: true })
+    const second = await constrainRun(run.id)
+    expect(second.ok ? second.value : null).toEqual({ capSet: false })
+  })
+
+  it('writes the LEVEL even when the cap already stands -- a relapse is still constrained', async (): Promise<void> => {
+    // Fix round 1, Critical 1. The level used to ride inside the cap statement, under its
+    // `toolCallCap IS NULL` guard, so the FIRST relapse after a recovery (constrained -> a healthy
+    // beat -> steered -> a trip) updated nothing at all: the row stayed `steered`, the ladder
+    // re-entered this same rung on every beat forever, and `escalate` never reached `'stop'`.
+    const run = await workingRun({ toolCalls: 10 })
+    await constrainRun(run.id)
+    const capped = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
+    // The de-escalation a healthy beat writes: the WORD steps down, the cap stands (D16).
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { breakerLevel: 'steered' } })
+
+    expect((await constrainRun(run.id)).ok).toBe(true)
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.breakerLevel).toBe('constrained')
+    expect(after.toolCallCap).toBe(capped.toolCallCap)
+  })
+
   it('re-delivers the sentence when the caller supplies one, and caps either way', async (): Promise<void> => {
     // Spec R3: "constrainRun ... re-delivers the steer text through the same pause/resume round
     // trip" -- a constrained worker that was never told why would simply hit the ceiling in

@@ -174,6 +174,34 @@ describe('pauseActiveRuns', () => {
     expect(after.pauseReason).toBe('guardrail')
   })
 
+  it('records a GUARDRAIL fan-out as the system’s, and a person’s halt as a person’s', async () => {
+    // M51 T4 fix round 1, Minor 11. `tick.ts`'s budget fan-out is the one system-driven pause in
+    // the tree, and it attributed itself to a person -- putting it in the web's "interventions"
+    // filter under somebody who was never there. An EMERGENCY STOP stays `human`: somebody pressed
+    // that, and the category is what the halt was, not who asked for it.
+    const { workspace, task, run } = fixture
+    const { slaveId } = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id }, select: { slaveId: true } })
+
+    await pauseActiveRuns(workspace.id, 'budget guardrail', 'guardrail')
+    const [guardrail] = await prisma.executionEvent.findMany({
+      where: { runId: run.id, type: 'run_pause_requested' },
+      orderBy: { seq: 'desc' },
+      take: 1,
+    })
+    expect(guardrail?.actor).toBe('system')
+
+    // A second, still-working run, because the first is now `pause_requested` and the fan-out below
+    // would refuse it rather than record anything about it.
+    const stopped = await prisma.slaveRun.create({ data: { taskId: task.id, slaveId, status: 'working' } })
+    await pauseActiveRuns(workspace.id, 'meren', 'emergency_stop')
+    const [halt] = await prisma.executionEvent.findMany({
+      where: { runId: stopped.id, type: 'run_pause_requested' },
+      orderBy: { seq: 'desc' },
+      take: 1,
+    })
+    expect(halt?.actor).toBe('human')
+  })
+
   /**
    * A planning run (Task 6) has no `Task` row -- its only linkage to a workspace is
    * `slave -> team -> workspace`. Emergency stop fans out through `pauseActiveRuns`, so a

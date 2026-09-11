@@ -497,7 +497,24 @@ async function carryOut(
       // constant with one integer in it, and it is stored on the decision so a reader months later
       // can see what was actually said. Nothing re-derives it here -- re-deriving would mean a row
       // could claim one sentence and the worker receive another.
-      return reached(await steerRun(action.runId, action.text, principal))
+      //
+      // The `try` (fix round 1, Important 6) is the same promise the sweep makes around its own
+      // breaker call, made at the other caller: `steerRun` -> `requestPause` -> `runFilePaths`
+      // THROWS when the workspace's repo path cannot be stat'd or a run directory cannot be created
+      // under it, and neither `applyDecision` nor the orchestrator's call site has a `try`. An
+      // escape here takes the whole Supervisor pass down and leaves this decision reading `applied`
+      // with no `supervisor.applied` event to match it. `pause_unsignalled` is the honest kind: the
+      // pause is exactly what could not be performed, and its `refusalText` carries the error's own
+      // message onto `failureReason`, where a person can act on it.
+      try {
+        return reached(await steerRun(action.runId, action.text, principal))
+      } catch (error) {
+        return err({
+          kind: 'pause_unsignalled',
+          runId: action.runId,
+          reason: error instanceof Error ? error.message : String(error),
+        })
+      }
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

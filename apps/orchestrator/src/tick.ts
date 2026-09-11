@@ -708,11 +708,12 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
         pid: handle.pid,
         worktreePath: worktree.path,
         provider: resolved.provider,
-      // `model` (M51 R5 / plan erratum E10): the other half of the runtime pair, written in the same
-      // statement for the same reason -- `resolveRuntime` is consulted at dispatch and the chain can
-      // move under a live run, so the run's own row has to say which model it was actually spawned
-      // with. `?? null` because `ResolvedRuntime.model` is `undefined` when nothing in the chain
-      // named one, and the column's null means exactly that: unpriced, and honestly so.
+        // `model` (M51 R5 / plan erratum E10): the other half of the runtime pair, written in the
+        // same statement for the same reason -- `resolveRuntime` is consulted at dispatch and the
+        // chain can move under a live run, so the run's own row has to say which model it was
+        // actually spawned with. `?? null` because `ResolvedRuntime.model` is `undefined` when
+        // nothing in the chain named one, and the column's null means exactly that: unpriced, and
+        // honestly so.
         model: resolved.model ?? null,
       },
     })

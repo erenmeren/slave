@@ -141,6 +141,16 @@ export async function deliverBreakerSteer(runId: string): Promise<Result<void, C
  * keeps the cap it was given, so a de-escalation followed by a re-escalation cannot hand a wedged
  * run thirty more calls every minute.
  *
+ * ## Two statements, because the cap and the WORD have different rules
+ *
+ * The level is written UNCONDITIONALLY and the cap is not (fix round 1, Critical 1). They rode in
+ * one statement, under the cap's own `IS NULL` guard, and the first relapse after a recovery --
+ * `constrained`, one healthy beat, `steered`, a trip, which is the DESIGNED path and not an edge --
+ * then updated nothing: the row stayed `steered` while the log said `constrained`, the sweep
+ * re-entered this rung on every beat for the life of the run, and `escalate` never reached `'stop'`
+ * because the stored level never became `constrained`. The rung is a fact about where the run is;
+ * the cap is a grace that is handed out once.
+ *
  * ## The cap STANDS when the level steps back down
  *
  * Nothing here or anywhere else clears `toolCallCap`. A constrained run that has one healthy beat
@@ -161,7 +171,7 @@ export async function constrainRun(
   runId: string,
   grace = CONSTRAIN_GRACE_CALLS,
   text: string | null = null,
-): Promise<Result<void, ControlRefusal>> {
+): Promise<Result<ConstrainOutcome, ControlRefusal>> {
   const run = await prisma.slaveRun.findUnique({ where: { id: runId }, select: { id: true, status: true } })
   if (run === null) return err({ kind: 'run_not_found', runId })
   if (run.status !== 'working') return err({ kind: 'run_not_steerable', runId, status: run.status })
@@ -170,10 +180,27 @@ export async function constrainRun(
   // this rung's job -- taking the budget away -- must happen either way.
   if (text !== null) await steerRun(run.id, text)
 
-  await prisma.$executeRaw`
+  const capped = await prisma.$executeRaw`
     UPDATE "SlaveRun" AS r
-    SET "toolCallCap" = prev."toolCalls" + ${grace}, "breakerLevel" = 'constrained'::"BreakerLevel"
+    SET "toolCallCap" = prev."toolCalls" + ${grace}
     FROM (SELECT id, "toolCalls" FROM "SlaveRun" WHERE id = ${run.id} FOR UPDATE) AS prev
     WHERE r.id = prev.id AND r."endedAt" IS NULL AND r."toolCallCap" IS NULL`
-  return ok(undefined)
+
+  // The rung, unconditionally. `endedAt: null` is the only guard: a run that concluded under this
+  // verb keeps its conclusion, and its level with it.
+  await prisma.slaveRun.updateMany({ where: { id: run.id, endedAt: null }, data: { breakerLevel: 'constrained' } })
+  return ok({ capSet: capped > 0 })
+}
+
+/** What {@link constrainRun} did, beyond raising the rung it always raises. */
+export interface ConstrainOutcome {
+  /**
+   * Whether THIS call wrote the cap.
+   *
+   * `false` on a re-constrain: the run already carries a standing `toolCallCap` from an earlier
+   * rung, and D16 forbids handing it another thirty calls. The caller needs to know because
+   * "constrained" then means two different things to an operator -- a fresh grace, or a ceiling that
+   * has been in place since the last time.
+   */
+  readonly capSet: boolean
 }

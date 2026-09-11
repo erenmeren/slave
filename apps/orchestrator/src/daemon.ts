@@ -195,11 +195,20 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
       // surprise. Until M9 wired this line, `sweep()` had no production caller at all and the
       // runTimeoutMs / maxToolCallsPerRun limits were enforced by nothing.
       const swept = await sweep({ workspaceId: deps.workspaceId, registry: deps.registry, livePumpRunIds: activePumpRunIds })
+      // M51 R2 (fix round 1, Important 5): the three breaker rungs are printed by the SAME
+      // condition. Without them a tick whose only action was climbing the ladder wrote no line at
+      // all -- an operator watching the daemon saw no sign of a run being steered, constrained or
+      // stopped for going in circles, and the milestone gate had no stdout to assert a rung on. The
+      // rung names are the `SweepReport` keys, so one line names both what happened and to which
+      // runs.
       if (
         swept.timedOut.length > 0 ||
         swept.overToolCap.length > 0 ||
         swept.deadPids.length > 0 ||
-        swept.strandedClaims.length > 0
+        swept.strandedClaims.length > 0 ||
+        swept.breakerSteered.length > 0 ||
+        swept.breakerConstrained.length > 0 ||
+        swept.breakerStopped.length > 0
       ) {
         process.stdout.write(`${JSON.stringify({ sweep: swept })}\n`)
       }

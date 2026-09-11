@@ -1,4 +1,4 @@
-import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -416,19 +416,43 @@ describe('ClaudeCodeAdapter and the tool-result tap (M51 R6)', () => {
     expect(results.map((event) => event.errorClass)).toEqual([null, 'not_found', null])
   })
 
-  it('refuses to spawn when the configured tap is broken', async (): Promise<void> => {
-    // A tap is only ever CONFIGURED by a deployment that wants it, and a configured-but-broken tap
-    // is the one state nothing downstream can tell from "the tap filled no gap".
+  it('DOWNGRADES to no tap when the configured one is broken, rather than failing the spawn', async (): Promise<void> => {
+    // M51 T4 fix round 1, Important 4. This used to reject the spawn. It must not: the tap fills a
+    // gap only in a DEGRADED Claude stream, `reportsToolResults` is true on the stream alone, and a
+    // present-but-broken script -- the likely shape after an edit, a shell change or a partial
+    // deploy -- would otherwise stop the whole fleet over a mechanism the spike measured as not
+    // load-bearing. The pause gate is the opposite case and still fails the spawn, because a slave
+    // running with no gate cannot be stopped.
     const broken = path.join(worktreePath, 'broken-tap.sh')
-    writeFileSync(broken, '#!/usr/bin/env bash\ncat > /dev/null\nexit 0\n')
+    writeFileSync(broken, '#!/usr/bin/env bash\ncat > /dev/null\nexit 1\n')
     chmodSync(broken, 0o755)
-    const adapter = new ClaudeCodeAdapter({
-      command: 'node',
-      extraArgs: [FAKE, '--fixture', 'complete'],
-      hookPath,
-      tapPath: broken,
+    const warnings: string[] = []
+    const warn = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => {
+      warnings.push(args.map((arg) => String(arg)).join(' '))
     })
-    await expect(adapter.start(input)).rejects.toThrow(/tool-result tap preflight failed/u)
+    try {
+      const adapter = new ClaudeCodeAdapter({
+        command: 'node',
+        extraArgs: [FAKE, '--fixture', 'env-echo'],
+        hookPath,
+        tapPath: broken,
+      })
+
+      // The run STARTS.
+      await expect(adapter.start(input)).resolves.toBeDefined()
+      // And it starts untapped: no channel on the child, so no tailer and nothing writing to one.
+      const env = await collectEnvFrom(adapter, input.runId)
+      expect('SLAVEOFAI_TOOL_RESULTS' in env).toBe(false)
+      // The settings file the child was given registers no PostToolUse hook either.
+      const settings = JSON.parse(readFileSync(path.join(worktreePath, 'settings.json'), 'utf8')) as {
+        hooks: Record<string, unknown>
+      }
+      expect('PostToolUse' in settings.hooks).toBe(false)
+      // Said out loud, once: a broken tap is a standing condition an operator has to hear about.
+      expect(warnings.filter((line) => line.includes('tool-result tap'))).toHaveLength(1)
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('emits mid-run usage events, whose output sum is a FLOOR under the terminal figure', async (): Promise<void> => {

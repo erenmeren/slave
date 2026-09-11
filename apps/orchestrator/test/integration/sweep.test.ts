@@ -930,6 +930,19 @@ describe('the breaker beat (M51 R2)', () => {
     })
   }
 
+  /**
+   * The run, back at work after a steer landed: the pump parked it, `deliverBreakerSteers` asked for
+   * the resume, the tick claimed it and the child was respawned with the sentence. The CONSTRAIN
+   * rung sends a sentence too (spec R3), so the ladder only climbs past it once the run is working
+   * again -- a run on its way into a pause is never beaten (fix round 1, Critical 2).
+   */
+  const asIfSteerDelivered = async (id: string): Promise<void> => {
+    await prisma.slaveRun.update({
+      where: { id },
+      data: { status: 'working', pauseReason: null, queuedMessage: null, resumeRequestedAt: null },
+    })
+  }
+
   /** Something changed: a call with a different key, so the trailing repeat run is broken. */
   const makeItBehave = async (id: string): Promise<void> => {
     await call(id, { tool: 'Write', args: 'src/fix.ts' }, 'toolu_new')
@@ -993,6 +1006,10 @@ describe('the breaker beat (M51 R2)', () => {
     const constrained = await reload(run)
     expect(constrained.breakerLevel).toBe('constrained')
     expect(constrained.toolCallCap).toBe(constrained.toolCalls + CONSTRAIN_GRACE_CALLS)
+    // The constrain rung told the worker why, which pauses it. The stop rung is reached on a beat
+    // after that sentence has been delivered and the run is working again.
+    expect(constrained.status).toBe('pause_requested')
+    await asIfSteerDelivered(run.id)
     await ageTheBeat(run.id)
     const report = await sweep(deps)
     expect(report.breakerStopped).toEqual([run.id])
@@ -1008,6 +1025,7 @@ describe('the breaker beat (M51 R2)', () => {
     const breaker = await eventsOfType(run.id, 'run_breaker')
     expect(breaker.map((row) => (row.payload as { level: string }).level)).toEqual(['steered', 'constrained'])
     expect((breaker[0]?.payload as { trip: string }).trip).toBe('repeated_call')
+    await asIfSteerDelivered(run.id)
     await ageTheBeat(run.id)
     await sweep(deps)
     // One rung, one name: the STOP rung writes `guardrail.tripped` and no third `run.breaker`.
@@ -1023,6 +1041,7 @@ describe('the breaker beat (M51 R2)', () => {
     await sweep(deps)
     await ageTheBeat(run.id)
     await sweep(deps)
+    await asIfSteerDelivered(run.id)
     await ageTheBeat(run.id)
     await sweep(deps)
     const after = await reload(run)
@@ -1051,6 +1070,7 @@ describe('the breaker beat (M51 R2)', () => {
     await sweep(deps)
     const cap = (await reload(run)).toolCallCap
     expect(cap).not.toBeNull()
+    await asIfSteerDelivered(run.id)
     await ageTheBeat(run.id)
     await makeItBehave(run.id)
     await sweep(deps)
@@ -1114,6 +1134,109 @@ describe('the breaker beat (M51 R2)', () => {
     expect(after.breakerLevel).toBe('steered')
     const [breaker] = await eventsOfType(run.id, 'run_breaker')
     expect((breaker?.payload as { trip: string }).trip).toBe('no_progress')
+  })
+
+  it('reaches the STOP rung after a relapse, because a re-constrain still writes the rung', async (): Promise<void> => {
+    // Fix round 1, Critical 1, through the sweep. The designed path: a run trips, is steered,
+    // recovers for one beat, relapses. The second constrain hands out no second grace (D16) and the
+    // ladder must still arrive at `stop` rather than re-announcing `constrained` once a minute
+    // forever.
+    const run = await loopingRun()
+    await sweep(deps)
+    await ageTheBeat(run.id)
+    await sweep(deps)
+    const cap = (await reload(run)).toolCallCap
+    await asIfSteerDelivered(run.id)
+
+    // One healthy beat: the word steps down to `steered`, the cap stands.
+    await ageTheBeat(run.id)
+    await makeItBehave(run.id)
+    await sweep(deps)
+    expect((await reload(run)).breakerLevel).toBe('steered')
+
+    // The relapse: the same key again, trailing.
+    for (let i = 0; i < REPEAT_TRIP_COUNT; i += 1) {
+      await call(run.id, { tool: 'Bash', args: 'npm test' }, `toolu_relapse_${String(i)}`)
+      await result(run.id, `toolu_relapse_${String(i)}`, 'ok')
+    }
+    await ageTheBeat(run.id)
+    await sweep(deps)
+    const relapsed = await reload(run)
+    expect(relapsed.breakerLevel).toBe('constrained')
+    // No second grace: the cap is the one the FIRST constrain wrote.
+    expect(relapsed.toolCallCap).toBe(cap)
+
+    await asIfSteerDelivered(run.id)
+    await ageTheBeat(run.id)
+    const report = await sweep(deps)
+    expect(report.breakerStopped).toEqual([run.id])
+    // One `run.breaker` per escalation and never one per beat: steered, constrained, constrained.
+    expect(await eventsOfType(run.id, 'run_breaker')).toHaveLength(3)
+  })
+
+  it('never beats a run that is not working, so a steer on its way to the gate survives', async (): Promise<void> => {
+    // Fix round 1, Critical 2. `pause_requested` is in SWEEPABLE, so the run `steerRun` just moved
+    // there was still beaten -- and one ordinary beat with no trip wrote `deEscalate('steered') =
+    // 'none'`, after which `deliverBreakerSteer` refuses it and the queued sentence is stranded on a
+    // paused run forever.
+    const run = await givenBreakerRun({
+      status: 'pause_requested',
+      breakerLevel: 'steered',
+      breakerTrips: 1,
+      breakerSteers: 1,
+      pauseReason: 'guardrail',
+      queuedMessage: 'stop and rethink',
+    })
+    await output(run.id, 'still thinking about it')
+
+    await sweep(deps)
+    const beaten = await reload(run)
+    expect(beaten.breakerLevel).toBe('steered')
+    expect(beaten.breakerBeatAt).toBeNull()
+
+    // And the delivery pass still finds it once the pump parks it.
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { status: 'paused', pid: null } })
+    await prisma.checkpoint.create({
+      data: {
+        runId: run.id,
+        sessionId: 's-1',
+        worktreePath: repoPath,
+        pauseFlagPath: join(repoPath, 'pause.flag'),
+        settingsPath: join(repoPath, 'settings.json'),
+        hookPath: join(repoPath, 'pause-gate.sh'),
+        gitAuthorName: 'Alex',
+        gitAuthorEmail: 'alex@slaveofai.local',
+        headCommit: 'abc123',
+      },
+    })
+    await sweep(deps)
+    expect((await reload(run)).resumeRequestedAt).not.toBeNull()
+  })
+
+  it('leaves the level exactly as it found it on a SUPPRESSED beat', async (): Promise<void> => {
+    // Fix round 1, Important 3. A beat inside a long tool call measures nothing, and the argument
+    // that keeps `breakerQuietBeats` still applies verbatim to the rung: a wedged run that happens
+    // to be inside one call at each beat would otherwise walk constrained -> steered -> none while
+    // measuring nothing at all.
+    const run = await givenBreakerRun({ breakerLevel: 'steered', breakerTrips: 1, breakerSteers: 1, worktreePath: repoPath })
+    await call(run.id, { tool: 'Bash', args: 'npm run build' }, 'toolu_build')
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { breakerQuietBeats: 1 } })
+
+    await sweep({ ...deps, worktreeProbe: probeReturning('same') })
+    const after = await reload(run)
+    expect(after.breakerLevel).toBe('steered')
+    // The beat clock still advances, and the quiet count is left alone.
+    expect(after.breakerBeatAt).not.toBeNull()
+    expect(after.breakerQuietBeats).toBe(1)
+  })
+
+  it('names the run’s OWN cap in the ceiling breach, not the workspace’s', async (): Promise<void> => {
+    // Fix round 1, Minor 7: the comparison used one number and the sentence printed another, so a
+    // constrained run read "past the ceiling of 200" while its real ceiling was 30.
+    const run = await liveRun({ toolCalls: 40, toolCallCap: 30 })
+    await sweep(deps)
+    const [tripped] = await eventsOfType(run.id, 'guardrail_tripped')
+    expect((tripped?.payload as { detail: string }).detail).toContain('past the ceiling of 30')
   })
 
   it('delivers a steer on the tick that finds the run actually paused', async (): Promise<void> => {

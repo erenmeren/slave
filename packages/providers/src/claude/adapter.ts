@@ -267,6 +267,8 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
   private readonly killGraceMs: number
   private readonly hookPath: string
   private readonly tapPath: string | undefined
+  /** Whether {@link ClaudeCodeAdapter.runPreflightTap}'s downgrade has already been announced. */
+  private tapWarned = false
   private readonly runs = new Map<RunId, RunState>()
 
   constructor(options: ClaudeCodeAdapterOptions) {
@@ -309,16 +311,10 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
    */
   async start(input: StartRunInput): Promise<RunHandle> {
     await this.runPreflightGate(this.hookPath, input.runId)
-    await this.runPreflightTap(input.runId)
+    const tapPath = await this.runPreflightTap(input.runId)
     const settingsPath = join(input.runDir, 'settings.json')
-    writeSettingsFile({ settingsPath, hookPath: this.hookPath, ...this.tapSettings() })
-    return this.spawnRun(input, settingsPath)
-  }
-
-  /** `{ tapPath }` or `{}` -- spread, so `exactOptionalPropertyTypes` sees an absent key, not one
-   *  present and undefined, which is the same distinction the settings file itself makes. */
-  private tapSettings(): { readonly tapPath?: string } {
-    return this.tapPath === undefined ? {} : { tapPath: this.tapPath }
+    writeSettingsFile({ settingsPath, hookPath: this.hookPath, ...tapSettings(tapPath) })
+    return this.spawnRun(input, settingsPath, tapPath)
   }
 
   /**
@@ -326,20 +322,35 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
    * for its reason -- a tap that lost its exec bit between pause and resume records nothing, and
    * silently.
    *
-   * Fails the spawn, exactly as the gate's does. That looks severe for an optional mechanism, and
-   * it is the deliberate choice: a tap is only ever CONFIGURED by a deployment that wants it, and a
-   * configured-but-broken tap is the one state nothing downstream can distinguish from "the tap
-   * filled no gap" -- which is the spike's own question. A deployment that does not want the tap
-   * passes no `tapPath` and never reaches this line.
+   * **Returns the tap path this spawn should actually use, and a failure DOWNGRADES the spawn to no
+   * tap rather than failing it** (M51 Task 4 fix round 1, Important 4). This is the opposite of
+   * `runPreflightGate` below, deliberately: a slave running with no gate cannot be stopped, so a
+   * broken gate must stop the spawn -- while the tap fills a gap only in a DEGRADED Claude stream
+   * (`reportsToolResults` is true on the stream alone, and the R6 spike measured the tap filling no
+   * gap at all on a healthy one). A present-but-broken script -- the likely shape after an edit, a
+   * shell change or a partial deploy -- would otherwise stop a whole fleet over a mechanism nothing
+   * downstream depends on.
+   *
+   * Warned ONCE per adapter rather than once per spawn: a broken tap is a standing condition, and a
+   * line printed on every run of every workspace buries whatever the operator was reading. Same
+   * reasoning as the tailer's own `warned` flag.
    */
-  private async runPreflightTap(runId: RunId): Promise<void> {
+  private async runPreflightTap(runId: RunId): Promise<string | undefined> {
     const tapPath = this.tapPath
-    if (tapPath === undefined) return
+    if (tapPath === undefined) return undefined
     try {
       await preflightTap({ tapPath })
+      return tapPath
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      throw new Error(`ClaudeCodeAdapter: tool-result tap preflight failed for run ${runId}: ${message}`)
+      if (!this.tapWarned) {
+        this.tapWarned = true
+        console.warn(
+          `ClaudeCodeAdapter: tool-result tap preflight failed for run ${runId}: ${message} -- ` +
+            'continuing WITHOUT the tap; tool results will come from the stream alone',
+        )
+      }
+      return undefined
     }
   }
 
@@ -364,7 +375,7 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
     }
   }
 
-  private spawnRun(input: StartRunInput, settingsPath: string): Promise<RunHandle> {
+  private spawnRun(input: StartRunInput, settingsPath: string, tapPath: string | undefined): Promise<RunHandle> {
     const args = [
       ...this.extraArgs,
       ...claudeFlags({ settingsPath }),
@@ -382,9 +393,11 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         gitIdentity: input.gitIdentity,
         pauseFlagPath: input.pauseFlagPath,
         permissionsFilePath: input.permissionsFilePath,
-        // Only when this adapter actually registered a tap: the variable is the channel, and an
-        // armed channel with no hook writing to it is a tailer watching a file nothing creates.
-        ...(this.tapPath === undefined ? {} : { toolResultsPath: toolResultsPathFor(input.runDir) }),
+        // Only when THIS SPAWN actually registered a tap: the variable is the channel, and an armed
+        // channel with no hook writing to it is a tailer watching a file nothing creates. The path
+        // is the pre-flight's answer, not the adapter's field, so a spawn that was downgraded to no
+        // tap (fix round 1, Important 4) arms nothing.
+        ...(tapPath === undefined ? {} : { toolResultsPath: toolResultsPathFor(input.runDir) }),
       }),
       startInput: input,
       runFiles: { settingsPath, hookPath: this.hookPath },
@@ -609,11 +622,11 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
    */
   async resume(runId: RunId, checkpoint: Checkpoint, queuedInstruction: string | null): Promise<RunHandle> {
     await this.runPreflightGate(checkpoint.hookPath, runId)
-    await this.runPreflightTap(runId)
+    const tapPath = await this.runPreflightTap(runId)
     writeSettingsFile({
       settingsPath: checkpoint.settingsPath,
       hookPath: checkpoint.hookPath,
-      ...this.tapSettings(),
+      ...tapSettings(tapPath),
     })
 
     // Fix round 3, the coordinator's ruling, still true after the M5 reorder above: this order is
@@ -730,7 +743,7 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         // already delivered to the previous pump by the run segment that wrote them; replaying them
         // into a set that has never seen them would write a second `run.tool_result` row for every
         // call the run made before it paused.
-        ...(this.tapPath === undefined ? {} : { toolResultsPath: toolResultsPathFor(resumedInput.runDir) }),
+        ...(tapPath === undefined ? {} : { toolResultsPath: toolResultsPathFor(resumedInput.runDir) }),
       }),
       startInput: resumedInput,
       runFiles: { settingsPath: checkpoint.settingsPath, hookPath: checkpoint.hookPath },
@@ -793,6 +806,14 @@ const TAP_POLL_MS = 25
  * whose hook has not fired yet, an unreadable one is a gap the stream already fills, and neither is
  * worth a word in a run's event log.
  */
+/** `{ tapPath }` or `{}` -- spread, so `exactOptionalPropertyTypes` sees an absent key, not one
+ *  present and undefined, which is the same distinction the settings file itself makes. Takes the
+ *  path THIS SPAWN resolved rather than reading the adapter's field, so a downgraded spawn writes a
+ *  settings file with no `PostToolUse` registration in it at all. */
+function tapSettings(tapPath: string | undefined): { readonly tapPath?: string } {
+  return tapPath === undefined ? {} : { tapPath }
+}
+
 function startTapTailer(spec: {
   readonly resultsPath: string
   readonly queue: AsyncEventQueue<RuntimeEvent>
