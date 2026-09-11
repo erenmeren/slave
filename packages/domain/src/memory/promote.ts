@@ -124,6 +124,8 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
         capabilities: capabilitiesOf(input.requiredCapabilities),
         verifiedBy: null,
         supersedesTaskCandidates: false,
+        supersedesGoalDecisions: false,
+        supersedesTaskFacts: false,
         provenance: {
           sourceKind: 'run_output',
           sourceRef: input.lastOutputSeq === null ? null : String(input.lastOutputSeq),
@@ -155,6 +157,10 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
         verifiedBy: 'verification',
         // R2(b): the observation this task's run left behind is now answered by something better.
         supersedesTaskCandidates: true,
+        supersedesGoalDecisions: false,
+        // Final review, Important 3: a task that came back from review and passed a SECOND time
+        // wrote a second fact with the same words as the first. This one retires them.
+        supersedesTaskFacts: true,
         provenance: {
           sourceKind: 'verification',
           sourceRef: input.runId,
@@ -184,6 +190,8 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
         capabilities: [],
         verifiedBy: 'human',
         supersedesTaskCandidates: false,
+        supersedesGoalDecisions: false,
+        supersedesTaskFacts: false,
         provenance: {
           sourceKind: 'decision',
           sourceRef: input.decisionId,
@@ -214,6 +222,11 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
         capabilities: [],
         verifiedBy: 'human',
         supersedesTaskCandidates: false,
+        // Final review, Important 1: the NEWEST goal is the goal. Every version used to stay
+        // verified for ever, and a project on v14 handed a run fourteen decisions of the
+        // highest-ranking type with nothing else fitting beside them.
+        supersedesGoalDecisions: true,
+        supersedesTaskFacts: false,
         provenance: {
           sourceKind: 'goal',
           sourceRef: String(input.version),
@@ -244,6 +257,8 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
         capabilities: capabilitiesOf(input.requiredCapabilities),
         verifiedBy: input.by,
         supersedesTaskCandidates: false,
+        supersedesGoalDecisions: false,
+        supersedesTaskFacts: false,
         provenance: {
           sourceKind: input.by,
           sourceRef: input.sourceRef,

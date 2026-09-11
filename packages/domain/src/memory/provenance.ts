@@ -103,6 +103,26 @@ export interface MemoryDraft {
    * would be a second place the promotion policy lived.
    */
   readonly supersedesTaskCandidates: boolean
+  /**
+   * Final review, Important 1, carried the same way: this DECISION retires the workspace's earlier
+   * goal decisions -- the rows whose `provenance.sourceKind` is `goal`. True only on the decision a
+   * goal CHANGE produces.
+   *
+   * Every version of the goal used to stay verified for ever, so a project on v14 offered a run
+   * fourteen decisions of the highest-ranking type and its facts never reached the prompt. The
+   * newest goal is the goal; the ones before it are history, and history is what `superseded` is.
+   */
+  readonly supersedesGoalDecisions: boolean
+  /**
+   * Final review, Important 3: this FACT retires the earlier VERIFICATION facts of
+   * `provenance.taskId`. True only on the fact a passed verification produces.
+   *
+   * A task that came back from review and passed a second time wrote a second fact with the same
+   * words as the first, and a run was then given the same sentence twice. The chain is preserved
+   * rather than deduplicated: what the first verification proved is still readable, and still
+   * points at what replaced it.
+   */
+  readonly supersedesTaskFacts: boolean
   readonly provenance: MemoryProvenance
 }
 
@@ -185,6 +205,8 @@ export const memoryDraftSchema: z.ZodType<MemoryDraft, z.ZodTypeDef, unknown> = 
     capabilities,
     verifiedBy: z.enum(MEMORY_VERIFIERS).nullable(),
     supersedesTaskCandidates: z.boolean(),
+    supersedesGoalDecisions: z.boolean(),
+    supersedesTaskFacts: z.boolean(),
     provenance: provenanceSchema,
   })
   .strict()

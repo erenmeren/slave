@@ -681,6 +681,12 @@ export async function loadSupervisorWorld(
       // Through `staleCandidateCount` (M49 t2) so the predicate behind "stale" is written once --
       // the verb that WITHDRAWS them has to agree with the count that raised the situation, or the
       // Supervisor proposes five and a person gets four.
+      //
+      // The cost, stated where a reader meets it (final review, Minor 7 / plan erratum E11): ONE
+      // indexed count per world load, and a world is loaded by every Supervisor tick AND by each
+      // Overview render that asks for one. It buys back nothing and no gate stands in front of it;
+      // the backlog carries "one count per Overview world load" as the thing to revisit if the
+      // Overview's read budget ever matters.
       const staleMemoryCandidates = await staleCandidateCount(workspaceId, now, tx)
 
       const decisionRows = await tx.supervisorDecision.findMany({

@@ -104,6 +104,8 @@ const candidateDraft = (workspaceId: string, title: string): Record<string, unkn
   capabilities: [],
   verifiedBy: null,
   supersedesTaskCandidates: false,
+  supersedesGoalDecisions: false,
+  supersedesTaskFacts: false,
   provenance: {
     sourceKind: 'run_output',
     sourceRef: '1',

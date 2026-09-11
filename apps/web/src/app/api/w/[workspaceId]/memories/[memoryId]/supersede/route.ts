@@ -23,7 +23,8 @@ export async function POST(
   return memoryControlResponse(
     workspaceId,
     memoryId,
-    async (principal) => supersedeMemory(memoryId, parsed.data, principal),
+    // The workspace is the event's home, never the row's scope (final review, Important 2).
+    async (principal) => supersedeMemory(memoryId, parsed.data, principal, workspaceId),
     (value) => ({ id: value.created.id, replaced: value.superseded.id }),
   )
 }

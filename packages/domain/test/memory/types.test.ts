@@ -99,6 +99,8 @@ describe('parseMemoryDraft', () => {
     capabilities: [],
     verifiedBy: 'verification',
     supersedesTaskCandidates: false,
+    supersedesGoalDecisions: false,
+    supersedesTaskFacts: false,
     provenance: {
       sourceKind: 'verification',
       sourceRef: null,

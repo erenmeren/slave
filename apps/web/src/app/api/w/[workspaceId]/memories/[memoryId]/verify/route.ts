@@ -13,7 +13,10 @@ export async function POST(
   return memoryControlResponse(
     workspaceId,
     memoryId,
-    async (principal) => verifyMemory(memoryId, principal),
+    // The project whose page the person is on is where this move belongs on the timeline (final
+    // review, Important 2): a worker's lesson has no workspace of its own, and without this the
+    // verification reached no stream at all.
+    async (principal) => verifyMemory(memoryId, principal, workspaceId),
     (memory) => ({ id: memory.id }),
   )
 }

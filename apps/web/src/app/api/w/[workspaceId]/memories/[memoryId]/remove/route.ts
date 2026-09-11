@@ -23,7 +23,8 @@ export async function POST(
   return memoryControlResponse(
     workspaceId,
     memoryId,
-    async (principal) => removeMemory(memoryId, parsed.data.reason, principal),
+    // The workspace is the event's home, never the row's scope (final review, Important 2).
+    async (principal) => removeMemory(memoryId, parsed.data.reason, principal, workspaceId),
     (memory) => ({ id: memory.id }),
   )
 }

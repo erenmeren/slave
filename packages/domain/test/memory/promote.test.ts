@@ -33,6 +33,8 @@ describe('promotionFor: a finished implementation run (R2a)', () => {
       capabilities: ['backend.api-design'],
       verifiedBy: null,
       supersedesTaskCandidates: false,
+      supersedesGoalDecisions: false,
+      supersedesTaskFacts: false,
       provenance: {
         sourceKind: 'run_output',
         sourceRef: '412',
@@ -82,6 +84,10 @@ describe('promotionFor: a passed verification (R2b)', () => {
     expect(draft?.verifiedBy).toBe('verification')
     expect(draft?.body).toBe('Every orders route requires a signed session.')
     expect(draft?.supersedesTaskCandidates).toBe(true)
+    // Final review, Important 3: a rework and a second passed verify wrote a SECOND identical fact
+    // about the same task. The newest one retires the ones before it.
+    expect(draft?.supersedesTaskFacts).toBe(true)
+    expect(draft?.supersedesGoalDecisions).toBe(false)
     expect(draft?.provenance.sourceKind).toBe('verification')
   })
 
@@ -122,6 +128,8 @@ describe('promotionFor: a person resolving a decision, and a goal that moved (R2
       goalVersion: 2,
     })
     expect(draft?.body).toBe('Approved: Adopting the feature-delivery runbook fits this goal.')
+    // A person's approval is not the goal moving: it retires nothing.
+    expect(draft?.supersedesGoalDecisions).toBe(false)
   })
 
   it('keeps the rejecting person’s own words when there are any', () => {
@@ -158,6 +166,10 @@ describe('promotionFor: a person resolving a decision, and a goal that moved (R2
     expect(draft?.body).toBe('Add an authentication path.')
     expect(draft?.provenance.sourceKind).toBe('goal')
     expect(draft?.provenance.sourceRef).toBe('3')
+    // Final review, Important 1: every version of the goal stayed verified for ever, and a project
+    // on v14 handed a run fourteen decisions. The newest goal is the goal.
+    expect(draft?.supersedesGoalDecisions).toBe(true)
+    expect(draft?.supersedesTaskFacts).toBe(false)
   })
 })
 

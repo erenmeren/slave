@@ -69,7 +69,20 @@ export function TasksClient({
           </div>
         </PageShell>
       </div>
-      {selectedTask !== null && <TaskDetailPanel task={selectedTask} workspaceId={workspaceId} workspaceGoalVersion={view.workspace.goalVersion} onClose={() => setSelectedId(null)} />}
+      {/* KEYED on the task (final review, Minor 5): the panel keeps its three on-demand reads --
+        * the knowledge, the artifact preview, the recorded run context -- in its own state, and
+        * none of them is keyed to the task. Without this, React re-uses the one instance when the
+        * selection moves and one task's knowledge stays on the screen under another task's title.
+        * A new key is a new instance, so every such read starts closed and empty. */}
+      {selectedTask !== null && (
+        <TaskDetailPanel
+          key={selectedTask.id}
+          task={selectedTask}
+          workspaceId={workspaceId}
+          workspaceGoalVersion={view.workspace.goalVersion}
+          onClose={() => setSelectedId(null)}
+        />
+      )}
     </>
   )
 }

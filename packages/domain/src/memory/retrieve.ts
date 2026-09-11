@@ -9,6 +9,20 @@ import type { MemoryType } from './types.js'
 export const MEMORIES_IN_PROMPT = 12
 
 /**
+ * How many memories of ONE type the first pass over the ranked list may take (final review,
+ * Important 1).
+ *
+ * Scope and type were an absolute precedence, so a worker with fourteen lessons -- or a project on
+ * its fourteenth goal -- owned all twelve slots and not one FACT this organisation had proved ever
+ * reached a run. Four is a third of the prompt: enough that a type with something to say is heard,
+ * small enough that three other types still fit beside it.
+ *
+ * A QUOTA, not a cap: once every type has had its four, the rest of the prompt is filled from the
+ * ranked remainder, so a project whose only knowledge is facts is still given twelve facts.
+ */
+export const MEMORIES_PER_TYPE_MAX = 4
+
+/**
  * The RANKING order of the six types (R3) -- deliberately not `MEMORY_TYPES`' declaration order.
  *
  * What was DECIDED outranks what is known, which outranks how things are done, which outranks what
@@ -36,9 +50,17 @@ export interface RetrieveInput {
   readonly refs: {
     readonly taskId: string | null
     readonly requiredCapabilities: readonly string[]
-    readonly goalVersion: number | null
   }
-  readonly kind: 'implementation' | 'planning'
+  /**
+   * The bound on what comes BACK, not on what is read: the caller decides how many rows to load.
+   * Defaults to {@link MEMORIES_IN_PROMPT}.
+   *
+   * There is no `kind` and no `goalVersion` here (final review, Minor 4). Neither was ever read:
+   * an implementation run and a planning run are given the same knowledge by the same rule -- what
+   * DIFFERS between them is the sentence the section is introduced with, and that lives on
+   * `MemorySectionInput.kind` where the sentence is written. A field a pure rule takes and ignores
+   * reads as a rule that considers it.
+   */
   readonly limit?: number
 }
 
@@ -66,7 +88,8 @@ function specificity(memory: MemoryView): number {
  * showing both spends the prompt twice on one thing.
  *
  * Ranking is five comparators and ends on the id, so two runs over the same rows produce the same
- * prompt byte for byte.
+ * prompt byte for byte. What the ranking then hands out is bounded by
+ * {@link MEMORIES_PER_TYPE_MAX} in a first pass, so one crowded type cannot own the whole prompt.
  */
 export function retrieveMemories(input: RetrieveInput): readonly MemoryView[] {
   const { companyId, workspaceId, slaveId } = input.scopes
@@ -105,5 +128,22 @@ export function retrieveMemories(input: RetrieveInput): readonly MemoryView[] {
     return a.id.localeCompare(b.id)
   })
 
-  return ranked.slice(0, input.limit ?? MEMORIES_IN_PROMPT)
+  // The per-type quota (final review, Important 1). ONE pass over the ranked list, taking at most
+  // MEMORIES_PER_TYPE_MAX of any type, and everything it held back kept in the ranked order it
+  // already had; the prompt is then the first pass followed by that remainder. Deterministic by
+  // construction: both lists are built by walking one deterministic list once.
+  const quota = new Map<MemoryType, number>()
+  const first: MemoryView[] = []
+  const remainder: MemoryView[] = []
+  for (const memory of ranked) {
+    const taken = quota.get(memory.type) ?? 0
+    if (taken < MEMORIES_PER_TYPE_MAX) {
+      quota.set(memory.type, taken + 1)
+      first.push(memory)
+    } else {
+      remainder.push(memory)
+    }
+  }
+
+  return [...first, ...remainder].slice(0, input.limit ?? MEMORIES_IN_PROMPT)
 }

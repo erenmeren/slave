@@ -36,6 +36,8 @@ const draft = (overrides: Record<string, unknown> = {}): Record<string, unknown>
   capabilities: ['backend.api-design'],
   verifiedBy: null,
   supersedesTaskCandidates: false,
+  supersedesGoalDecisions: false,
+  supersedesTaskFacts: false,
   provenance: {
     sourceKind: 'run_output',
     sourceRef: '412',
@@ -247,6 +249,172 @@ describe('recordMemory', () => {
   })
 })
 
+// Final review, Important 1 and 3: two more supersession rules, carried the same way the first one
+// is -- a flag on the draft, acted on inside the same transaction as the insert.
+describe('recordMemory retires what the new row replaces', () => {
+  const goalDraft = (version: number, overrides: Record<string, unknown> = {}): Record<string, unknown> =>
+    draft({
+      type: 'decision',
+      status: 'verified',
+      confidence: 'sourced',
+      verifiedBy: 'human',
+      capabilities: [],
+      supersedesGoalDecisions: true,
+      title: `Goal v${String(version)}`,
+      body: `The goal as a person typed it for v${String(version)}.`,
+      provenance: {
+        sourceKind: 'goal',
+        sourceRef: String(version),
+        createdBy: 'human',
+        createdByUserId: null,
+        taskId: null,
+        runId: null,
+        goalVersion: version,
+      },
+      ...overrides,
+    })
+
+  it('retires the earlier GOAL decisions when the goal moves, and nothing else', async () => {
+    const v2 = await recordMemory(goalDraft(2))
+    // A decision a person took on a proposal is not the goal: it outlives every goal change.
+    const approval = await recordMemory(
+      draft({
+        type: 'decision',
+        status: 'verified',
+        confidence: 'sourced',
+        verifiedBy: 'human',
+        capabilities: [],
+        title: 'Approved: adopt the feature-delivery runbook',
+        body: 'Approved: adopt the feature-delivery runbook',
+        provenance: {
+          sourceKind: 'decision',
+          sourceRef: 'sd-goal-1',
+          createdBy: 'human',
+          createdByUserId: null,
+          taskId: null,
+          runId: null,
+          goalVersion: 2,
+        },
+      }),
+    )
+    expect(v2.ok && approval.ok).toBe(true)
+    if (!v2.ok || !approval.ok) return
+
+    const v3 = await recordMemory(goalDraft(3))
+    expect(v3.ok).toBe(true)
+    if (!v3.ok) return
+
+    const retired = await prisma.memory.findUniqueOrThrow({ where: { id: v2.value.id } })
+    expect({ status: retired.status, supersededById: retired.supersededById }).toEqual({
+      status: 'superseded',
+      supersededById: v3.value.id,
+    })
+    // The old words are still there to read: nothing is deleted.
+    expect(retired.body).toBe('The goal as a person typed it for v2.')
+    expect((await prisma.memory.findUniqueOrThrow({ where: { id: approval.value.id } })).status).toBe('verified')
+    expect((await prisma.memory.findUniqueOrThrow({ where: { id: v3.value.id } })).status).toBe('verified')
+    // And a person can read the move on the timeline.
+    const changed = await prisma.executionEvent.findFirst({
+      where: { workspaceId, type: 'memory_changed' },
+      orderBy: { seq: 'desc' },
+    })
+    expect(changed?.payload).toEqual({ memoryId: v2.value.id, from: 'verified', to: 'superseded' })
+  })
+
+  it('leaves another project’s goal decisions alone', async () => {
+    const otherWorkspace = await prisma.workspace.create({
+      data: {
+        name: `M49 Other Goal Project ${String(Date.now())}`,
+        repoPath: '/tmp/m49-other-goal',
+        goal: 'Something else entirely.',
+        verifyCommands: ['true'],
+        setupCommands: [],
+      },
+    })
+    const theirs = await recordMemory(goalDraft(2, { workspaceId: otherWorkspace.id }))
+    expect(theirs.ok).toBe(true)
+    if (!theirs.ok) return
+    const mine = await recordMemory(goalDraft(9))
+    expect(mine.ok).toBe(true)
+    expect((await prisma.memory.findUniqueOrThrow({ where: { id: theirs.value.id } })).status).toBe('verified')
+    // This file's own cleanup is scoped to its project, its company and its two workers, and the
+    // row above belongs to none of the three.
+    await prisma.memory.deleteMany({ where: { workspaceId: otherWorkspace.id } })
+    await prisma.executionEvent.deleteMany({ where: { workspaceId: otherWorkspace.id } })
+    await prisma.workspace.delete({ where: { id: otherWorkspace.id } })
+  })
+
+  // The duplicate the final review found: a task that passed, came back from review and passed
+  // again wrote a second fact with the same words, and the run after it read the sentence twice.
+  it('retires the task’s earlier VERIFICATION facts, keeping the chain', async () => {
+    const verificationFact = (body: string, overrides: Record<string, unknown> = {}): Record<string, unknown> =>
+      draft({
+        type: 'fact',
+        status: 'verified',
+        confidence: 'sourced',
+        verifiedBy: 'verification',
+        supersedesTaskCandidates: true,
+        supersedesTaskFacts: true,
+        title: 'Task: Ship the checkout API',
+        body,
+        provenance: {
+          sourceKind: 'verification',
+          sourceRef: null,
+          createdBy: 'system',
+          createdByUserId: null,
+          taskId,
+          runId: null,
+          goalVersion: 2,
+        },
+        ...overrides,
+      })
+
+    const first = await recordMemory(verificationFact('Every orders route requires a signed session.'))
+    // A person's own fact about the same task is knowledge on somebody's authority and survives.
+    const typed = await recordMemory(
+      draft({
+        type: 'fact',
+        status: 'verified',
+        confidence: 'sourced',
+        verifiedBy: 'human',
+        title: 'The checkout API runs behind the edge cache',
+        body: 'A person wrote this down; no verification produced it.',
+        provenance: {
+          sourceKind: 'human',
+          sourceRef: null,
+          createdBy: 'human',
+          createdByUserId: null,
+          taskId,
+          runId: null,
+          goalVersion: 2,
+        },
+      }),
+    )
+    expect(first.ok && typed.ok).toBe(true)
+    if (!first.ok || !typed.ok) return
+
+    // The rework, then the second passed verify.
+    const second = await recordMemory(verificationFact('Every orders route requires a signed session.'))
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+
+    const retired = await prisma.memory.findUniqueOrThrow({ where: { id: first.value.id } })
+    expect({ status: retired.status, supersededById: retired.supersededById }).toEqual({
+      status: 'superseded',
+      supersededById: second.value.id,
+    })
+    expect((await prisma.memory.findUniqueOrThrow({ where: { id: typed.value.id } })).status).toBe('verified')
+    const live = await prisma.memory.count({
+      where: { taskId, type: 'fact', sourceKind: 'verification', status: 'verified' },
+    })
+    expect(live).toBe(1)
+    // And the run after the rework is given ONE of them.
+    const given = await memoriesForRun({ workspaceId, slaveId, taskId })
+    expect(given.memories.filter((one) => one.id === first.value.id)).toEqual([])
+    expect(given.memories.some((one) => one.id === second.value.id)).toBe(true)
+  })
+})
+
 describe('the verbs a person uses', () => {
   it('adds, verifies, supersedes and removes -- and nothing is ever deleted', async () => {
     const added = await addMemory(
@@ -426,6 +594,93 @@ describe('the verbs a person uses', () => {
   })
 })
 
+// Final review, Important 2: all three verbs passed the ROW's own `workspaceId` as the event home,
+// so a person verifying, correcting or withdrawing a worker's lesson or a company's fact moved
+// knowledge with nothing on any timeline. The caller that knows which project the person was
+// looking at passes it, exactly as `recordMemory` already took it.
+describe('a human verb on a row with no project of its own still reaches a timeline', () => {
+  const lesson = (body: string): Record<string, unknown> =>
+    draft({
+      type: 'lesson',
+      scope: 'worker',
+      workspaceId: null,
+      slaveId,
+      status: 'candidate',
+      confidence: 'sourced',
+      verifiedBy: null,
+      title: 'Rework on Ship the checkout API',
+      body,
+      provenance: {
+        sourceKind: 'review',
+        sourceRef: 'r-review-9',
+        createdBy: 'system',
+        createdByUserId: null,
+        taskId,
+        runId: null,
+        goalVersion: 2,
+      },
+    })
+
+  const changedIn = async (): Promise<readonly Record<string, unknown>[]> => {
+    const rows = await prisma.executionEvent.findMany({
+      where: { workspaceId, type: 'memory_changed' },
+      orderBy: { seq: 'asc' },
+      select: { payload: true },
+    })
+    return rows.map((row) => row.payload as Record<string, unknown>)
+  }
+
+  it('verifies a worker-scoped memory and files memory.changed in the project the caller names', async () => {
+    const written = await recordMemory(lesson('The empty-input case was not handled.'), undefined, workspaceId)
+    expect(written.ok).toBe(true)
+    if (!written.ok) return
+    const verified = await verifyMemory(written.value.id, undefined, workspaceId)
+    expect(verified.ok).toBe(true)
+    expect(await changedIn()).toEqual([{ memoryId: written.value.id, from: 'candidate', to: 'verified' }])
+  })
+
+  it('corrects one and files both its events there', async () => {
+    const written = await recordMemory(lesson('The empty-input case was not handled.'), undefined, workspaceId)
+    expect(written.ok).toBe(true)
+    if (!written.ok) return
+    const corrected = await supersedeMemory(
+      written.value.id,
+      { title: 'Rework on Ship the checkout API', body: 'The empty-input case needs its own test.' },
+      undefined,
+      workspaceId,
+    )
+    expect(corrected.ok).toBe(true)
+    if (!corrected.ok) return
+    // The ROW is still the worker's: only the event was given a project to be read in.
+    expect(corrected.value.created.workspaceId).toBeNull()
+    expect(corrected.value.created.slaveId).toBe(slaveId)
+    expect(await changedIn()).toEqual([{ memoryId: written.value.id, from: 'candidate', to: 'superseded' }])
+    expect(
+      await prisma.executionEvent.count({ where: { workspaceId, type: 'memory_recorded' } }),
+    ).toBe(2)
+  })
+
+  it('withdraws one and files the reason there', async () => {
+    const written = await recordMemory(lesson('The empty-input case was not handled.'), undefined, workspaceId)
+    expect(written.ok).toBe(true)
+    if (!written.ok) return
+    const removed = await removeMemory(written.value.id, 'the review was wrong', undefined, workspaceId)
+    expect(removed.ok).toBe(true)
+    expect(await changedIn()).toEqual([
+      { memoryId: written.value.id, from: 'candidate', to: 'removed', reason: 'the review was wrong' },
+    ])
+  })
+
+  it('still writes no event when nobody names a project', async () => {
+    const written = await recordMemory(lesson('Nobody said which project.'))
+    expect(written.ok).toBe(true)
+    if (!written.ok) return
+    const verified = await verifyMemory(written.value.id)
+    expect(verified.ok).toBe(true)
+    expect(await changedIn()).toEqual([])
+  })
+})
+
 describe('listMemories and memoriesForRun', () => {
   it('filters by status, type and task, with a key-stable order', async () => {
     const first = await recordMemory(draft({ title: 'A' }))
@@ -511,7 +766,7 @@ describe('listMemories and memoriesForRun', () => {
         title: 'company fact',
       }),
     )
-    const given = await memoriesForRun({ workspaceId, slaveId, taskId, kind: 'implementation' })
+    const given = await memoriesForRun({ workspaceId, slaveId, taskId })
     expect(given.memories.map((one) => one.title)).toEqual(['mine', 'project fact', 'company fact'])
     // Nothing was left out, so nothing was capped (fix round 1, item 3).
     expect(given.eligible).toBe(3)
@@ -533,7 +788,7 @@ describe('listMemories and memoriesForRun', () => {
       )
       expect(written.ok).toBe(true)
     }
-    const exactly = await memoriesForRun({ workspaceId, slaveId, taskId, kind: 'implementation' })
+    const exactly = await memoriesForRun({ workspaceId, slaveId, taskId })
     expect(exactly.memories).toHaveLength(MEMORIES_IN_PROMPT)
     expect(exactly.eligible).toBe(MEMORIES_IN_PROMPT)
 
@@ -547,7 +802,7 @@ describe('listMemories and memoriesForRun', () => {
       }),
     )
     expect(extra.ok).toBe(true)
-    const over = await memoriesForRun({ workspaceId, slaveId, taskId, kind: 'implementation' })
+    const over = await memoriesForRun({ workspaceId, slaveId, taskId })
     expect(over.memories).toHaveLength(MEMORIES_IN_PROMPT)
     expect(over.eligible).toBe(MEMORIES_IN_PROMPT + 1)
   })
@@ -557,7 +812,7 @@ describe('listMemories and memoriesForRun', () => {
   it('never loads an unverified candidate, however well it matches the task', async () => {
     const claim = await recordMemory(draft({ title: 'a claim nobody checked' }))
     expect(claim.ok).toBe(true)
-    expect(await memoriesForRun({ workspaceId, slaveId, taskId, kind: 'implementation' })).toEqual({
+    expect(await memoriesForRun({ workspaceId, slaveId, taskId })).toEqual({
       memories: [],
       eligible: 0,
     })
@@ -565,7 +820,7 @@ describe('listMemories and memoriesForRun', () => {
 
   it('answers an unknown project with nothing at all rather than throwing', async () => {
     expect(await listMemories({ workspaceId: 'nope' })).toEqual([])
-    expect(await memoriesForRun({ workspaceId: 'nope', slaveId: null, taskId: null, kind: 'planning' })).toEqual({
+    expect(await memoriesForRun({ workspaceId: 'nope', slaveId: null, taskId: null })).toEqual({
       memories: [],
       eligible: 0,
     })
@@ -813,7 +1068,7 @@ describe('condenseWorkspaceMemories (R5)', () => {
 
     // Plan erratum E4, through the database: the summary is what a run is given, and its twenty
     // sources are not given again beside it.
-    const given = await memoriesForRun({ workspaceId, slaveId, taskId, kind: 'implementation' })
+    const given = await memoriesForRun({ workspaceId, slaveId, taskId })
     expect(given.memories.map((one) => one.id)).toEqual([memoryId])
     expect(given.eligible).toBe(1)
 

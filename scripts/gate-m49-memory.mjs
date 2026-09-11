@@ -70,7 +70,7 @@ import { loopbackChildEnv } from './lib/child-env.mjs'
 import { findRealDaemonPids } from './lib/daemon-process.mjs'
 import { prisma } from '../packages/db/dist/client.js'
 import { isAlive } from '../packages/control/dist/index.js'
-import { CONDENSE_THRESHOLD } from '../packages/domain/dist/index.js'
+import { CONDENSE_THRESHOLD, MEMORIES_IN_PROMPT, MEMORIES_PER_TYPE_MAX } from '../packages/domain/dist/index.js'
 
 const ACTION_TIMEOUT_MS = 30_000
 const NEXT_READY_TIMEOUT_MS = 180_000
@@ -894,6 +894,16 @@ try {
 
   // ============================================================================================
   // Stage 4: the next run is given exactly the right knowledge, and nothing else.
+  //
+  // Four memories, by name, and no fifth (final review, Minor 8): the two DECISIONS stage 3 left
+  // (the changed goal and the person's approval), the FACT stage 1's passed verification wrote out
+  // of the SHAPE task's contract, and a fourth this stage adds itself -- the POISON fact, a memory
+  // a person types here whose body quotes two of the routing literals the fake CLI dispatches on
+  // (`"verdict"`, `"task graph"`). It is knowledge like any other and reaches the very next run's
+  // prompt; what this stage measures is that it arrives DEFUSED (plan decision D10), so a body
+  // another party wrote cannot steer the run that reads it. The set is asserted whole, so a fifth
+  // memory reaching a run -- from a retired candidate, another project or a worker -- fails here
+  // rather than hiding inside an ordering check.
   // ============================================================================================
 
   // Knowledge a person typed, whose BODY quotes two routing literals. It reaches the very next
@@ -909,6 +919,8 @@ try {
   if (!poisonLine.endsWith('added: Fact, verified by a person')) {
     await fail(`stage 4: \`memories add\` printed ${JSON.stringify(poisonLine)}`)
   }
+  const poisonId = poisonLine.split(' ')[0]
+  if (poisonId === undefined || poisonId === '') await fail('stage 4: `memories add` printed no id to hold on to')
 
   /**
    * Waits until nothing on the first project is moving by itself.
@@ -982,9 +994,15 @@ try {
   }
 
   /** The ids of every VERIFIED memory this project owns, in `retrieveMemories`' order -- decisions
-   *  before facts (`MEMORY_TYPE_ORDER`), then newest first, then by id. Every tie below this is a
-   *  tie in the rule too: nothing here is company-scoped, no probe task asks for a capability, and
-   *  none of these memories came out of the task being dispatched. */
+   *  before facts (`MEMORY_TYPE_ORDER`), then newest first, then by id, then through the per-type
+   *  quota. Every tie below this is a tie in the rule too: nothing here is company-scoped, no probe
+   *  task asks for a capability, and none of these memories came out of the task being dispatched.
+   *
+   *  The quota is recomputed here from the same rule rather than imported as an answer (final
+   *  review, Important 1 / Minor 8): at most `MEMORIES_PER_TYPE_MAX` of one type in a first pass
+   *  over the ranked list, then the remainder in the order it already had, cut at
+   *  `MEMORIES_IN_PROMPT`. With this project's two decisions and two facts it changes nothing --
+   *  which is the point of writing it out: the oracle has to keep agreeing when it would. */
   const expectedForRun = async (recordedAt) => {
     // Cut at the moment the context under measurement was RECORDED: a memory written after it --
     // the probe's own candidate when its run concludes, its own fact when the verify passes --
@@ -994,14 +1012,25 @@ try {
       where: { workspaceId, status: 'verified', createdAt: { lte: recordedAt } },
     })
     const rank = { decision: 0, fact: 1, procedure: 2, lesson: 3, observation: 4, hypothesis: 5 }
-    return [...rows]
-      .sort(
-        (a, b) =>
-          rank[a.type] - rank[b.type] ||
-          b.createdAt.getTime() - a.createdAt.getTime() ||
-          a.id.localeCompare(b.id),
-      )
-      .map((row) => row.id)
+    const ranked = [...rows].sort(
+      (a, b) =>
+        rank[a.type] - rank[b.type] ||
+        b.createdAt.getTime() - a.createdAt.getTime() ||
+        a.id.localeCompare(b.id),
+    )
+    const taken = new Map()
+    const firstPass = []
+    const remainder = []
+    for (const row of ranked) {
+      const used = taken.get(row.type) ?? 0
+      if (used < MEMORIES_PER_TYPE_MAX) {
+        taken.set(row.type, used + 1)
+        firstPass.push(row)
+      } else {
+        remainder.push(row)
+      }
+    }
+    return [...firstPass, ...remainder].slice(0, MEMORIES_IN_PROMPT).map((row) => row.id)
   }
 
   const given = await nextRunContext(
@@ -1014,6 +1043,14 @@ try {
   console.log(`stage 4 -- every memory this project owns:\n  ${everyMemory.map(describeMemory).join('\n  ')}`)
   await assertEqual(given.memorySource.memoryIds, expectedIds, "stage 4: the run was given this project's verified knowledge, in order")
   await assertEqual(given.memorySource.capped, false, 'stage 4: and the list was not capped')
+  // The set, by NAME (final review, Minor 8). The oracle above is computed from the same table the
+  // manifest was built from, so on its own it could agree with a run that was given a fifth memory
+  // nobody meant it to have. These four are the four this gate put there on purpose.
+  await assertEqual(
+    [...given.memorySource.memoryIds].sort(),
+    [goalMemory.id, approvalMemory.id, fact.id, poisonId].sort(),
+    'stage 4: the run was given exactly the changed goal, the approval, the verification fact and the poison fact',
+  )
   // Decisions outrank facts (R3), so the two a person took come first.
   await assertEqual(
     given.memorySource.memoryIds.slice(0, 2),
@@ -1113,9 +1150,6 @@ try {
   console.log(`stage 5 -- \`memories show <old>\` printed:\n${shownOld}`)
   if (!shownNew.includes(`  replaced: ${fact.id} `)) {
     await fail('stage 5: `memories show` on the correction does not name what it replaced')
-  }
-  if (!shownNew.includes(SHAPE_EXPECTED_OUTPUT.slice(0, 30)) && !shownNew.includes(`replaced: ${fact.id}`)) {
-    await fail('stage 5: neither end of the chain is readable from the correction')
   }
   if (!shownOld.includes(`  replaced by: ${correctionId} ${CORRECTION_TITLE}`)) {
     await fail('stage 5: `memories show` on the old row does not name what replaced it')

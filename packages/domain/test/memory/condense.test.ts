@@ -251,8 +251,7 @@ describe('condenseMemories', () => {
     const given = retrieveMemories({
       memories: [...twenty, summary],
       scopes: { companyId: null, workspaceId: 'w1', slaveId: 'ag-1' },
-      refs: { taskId: null, requiredCapabilities: [], goalVersion: null },
-      kind: 'implementation',
+      refs: { taskId: null, requiredCapabilities: [] },
     })
     expect(given.map((one) => one.id)).toEqual(['summary'])
   })

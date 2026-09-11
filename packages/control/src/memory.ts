@@ -174,6 +174,18 @@ const dataOf = (draft: MemoryDraft): Prisma.MemoryUncheckedCreateInput => ({
  * both states a reader could not explain. The events are appended AFTER the commit, the way every
  * other verb in this package does it.
  *
+ * Two more flags ride the same rail (final review, Important 1 and 3), each one a rule the pure
+ * `promotionFor` decided and only a transaction can carry out:
+ *   - `supersedesGoalDecisions`: the goal moved, so this project's earlier goal DECISIONS are
+ *     history. Without it every version stayed verified and a project on v14 offered a run
+ *     fourteen decisions of the highest-ranking type.
+ *   - `supersedesTaskFacts`: a task that came back from review and passed a SECOND time wrote a
+ *     second fact with the same words as the first. This one retires the earlier VERIFICATION
+ *     facts of the same task; a fact a person typed about that task is somebody's own knowledge
+ *     and is left alone.
+ * Both retire only `verified` rows -- a row somebody already withdrew or corrected is not moved
+ * twice -- and both keep the chain, pointing each retired row at the one that replaced it.
+ *
  * `eventWorkspaceId` is the project the EVENT is read in, for a memory that has no workspace of
  * its own (M49 t3): a worker's lesson is `worker`-scoped by construction, so `memory.recorded` for
  * it had no stream to reach and the Activity page never saw a rejection being learnt from. The
@@ -192,14 +204,23 @@ export async function recordMemory(
 
   const written = await prisma.$transaction(async (tx) => {
     const created = await tx.memory.create({ data: dataOf(value), include: withSources })
-    if (!value.supersedesTaskCandidates || value.provenance.taskId === null) {
-      return { created, retired: [] as MemoryRow[] }
+    // The three predicates this draft asks to retire, each `id: { not: created.id }` because the
+    // insert above is already in this transaction: a row that matches its own predicate would
+    // otherwise be written as superseded by itself.
+    const predicates: Prisma.MemoryWhereInput[] = []
+    if (value.supersedesTaskCandidates && value.provenance.taskId !== null) {
+      predicates.push({ taskId: value.provenance.taskId, type: 'observation', status: 'candidate' })
     }
+    if (value.supersedesGoalDecisions && value.workspaceId !== null) {
+      predicates.push({ workspaceId: value.workspaceId, type: 'decision', sourceKind: 'goal', status: 'verified' })
+    }
+    if (value.supersedesTaskFacts && value.provenance.taskId !== null) {
+      predicates.push({ taskId: value.provenance.taskId, type: 'fact', sourceKind: 'verification', status: 'verified' })
+    }
+    if (predicates.length === 0) return { created, retired: [] as MemoryRow[] }
+
     const open = await tx.memory.findMany({
-      // `id: { not: created.id }` because the insert above is already in this transaction: a
-      // candidate observation that asked to retire its task's candidates would otherwise match
-      // itself and be written as superseded by itself.
-      where: { taskId: value.provenance.taskId, type: 'observation', status: 'candidate', id: { not: created.id } },
+      where: { id: { not: created.id }, OR: predicates },
       include: withSources,
       orderBy: { createdAt: 'asc' },
     })
@@ -215,7 +236,9 @@ export async function recordMemory(
   const home = value.workspaceId ?? eventWorkspaceId ?? null
   await announceRecorded(written.created, home, principal)
   for (const row of written.retired) {
-    await announceChanged(row, 'candidate', 'superseded', 'system', row.workspaceId ?? home)
+    // The status it moved FROM is the status its own predicate matched on, so the event says what
+    // really happened: a candidate was answered, or knowledge was replaced by newer knowledge.
+    await announceChanged(row, row.status === 'candidate' ? 'candidate' : 'verified', 'superseded', 'system', row.workspaceId ?? home)
   }
   return ok(viewOf(written.created))
 }
@@ -250,6 +273,10 @@ export async function addMemory(input: unknown, principal?: Principal): Promise<
     capabilities: shape.capabilities ?? [],
     verifiedBy: 'human',
     supersedesTaskCandidates: false,
+    // A person's own words retire nothing by themselves: a correction stamps the row it replaces
+    // through this verb's own transaction, and a typed memory replaces nothing at all.
+    supersedesGoalDecisions: false,
+    supersedesTaskFacts: false,
     provenance: {
       sourceKind: 'human',
       sourceRef: null,
@@ -274,8 +301,20 @@ async function editable(id: string): Promise<Result<MemoryRow, ControlRefusal>> 
   return ok(row)
 }
 
-/** A person says a candidate is true (M49 R4). */
-export async function verifyMemory(id: string, principal?: Principal): Promise<Result<MemoryView, ControlRefusal>> {
+/**
+ * A person says a candidate is true (M49 R4).
+ *
+ * `eventWorkspaceId` is {@link recordMemory}'s own parameter, for the same reason and with the same
+ * meaning (final review, Important 2): a worker's lesson and a company's fact have no workspace of
+ * their own, and this verb used to hand `announceChanged` the row's own null -- so a person
+ * verifying a lesson moved knowledge with nothing on any timeline. The caller knows which project's
+ * page or command the person was working in, and passes it. It changes NOTHING about the row.
+ */
+export async function verifyMemory(
+  id: string,
+  principal?: Principal,
+  eventWorkspaceId?: string | null,
+): Promise<Result<MemoryView, ControlRefusal>> {
   const found = await editable(id)
   if (!found.ok) return found
   const was = found.value.status
@@ -290,7 +329,7 @@ export async function verifyMemory(id: string, principal?: Principal): Promise<R
   })
   if (claimed.count !== 1) return raced(id)
   const updated = await prisma.memory.findUniqueOrThrow({ where: { id }, include: withSources })
-  await announceChanged(updated, was, 'verified', 'human', updated.workspaceId, undefined, principal)
+  await announceChanged(updated, was, 'verified', 'human', updated.workspaceId ?? eventWorkspaceId ?? null, undefined, principal)
   return ok(viewOf(updated))
 }
 
@@ -319,11 +358,15 @@ class MemoryRaceError extends Error {
  * The old row's provenance is copied rather than re-derived, with `sourceRef` set to the id it
  * replaced: the correction's own history is "a person rewrote THAT", and losing which task and run
  * the knowledge came from would make a corrected memory less traceable than the one it fixed.
+ *
+ * `eventWorkspaceId` is {@link verifyMemory}'s, for the same reason: a correction to a row with no
+ * project of its own has a project it was made FROM, and that is where both its events belong.
  */
 export async function supersedeMemory(
   id: string,
   next: { readonly title: string; readonly body: string },
   principal?: Principal,
+  eventWorkspaceId?: string | null,
 ): Promise<Result<{ readonly superseded: MemoryView; readonly created: MemoryView }, ControlRefusal>> {
   const found = await editable(id)
   if (!found.ok) return found
@@ -341,6 +384,10 @@ export async function supersedeMemory(
     capabilities: old.capabilities,
     verifiedBy: 'human',
     supersedesTaskCandidates: false,
+    // A person's own words retire nothing by themselves: a correction stamps the row it replaces
+    // through this verb's own transaction, and a typed memory replaces nothing at all.
+    supersedesGoalDecisions: false,
+    supersedesTaskFacts: false,
     provenance: {
       // A person wrote these words, whatever produced the memory they replace.
       sourceKind: 'human',
@@ -386,24 +433,30 @@ export async function supersedeMemory(
     throw error
   }
 
-  await announceRecorded(written.created, written.created.workspaceId, principal)
+  // Both events, through the same home: a correction to a worker's lesson writes a `memory.recorded`
+  // for the new row and a `memory.changed` for the old, and either one going missing would leave a
+  // reader half the move (final review, Important 2).
+  const home = written.created.workspaceId ?? eventWorkspaceId ?? null
+  await announceRecorded(written.created, home, principal)
   await announceChanged(
     written.superseded,
     old.status,
     'superseded',
     'human',
-    written.superseded.workspaceId,
+    written.superseded.workspaceId ?? eventWorkspaceId ?? null,
     undefined,
     principal,
   )
   return ok({ superseded: viewOf(written.superseded), created: viewOf(written.created) })
 }
 
-/** Withdrawn, with a reason, and still in the table (M49 R1/R4). */
+/** Withdrawn, with a reason, and still in the table (M49 R1/R4). `eventWorkspaceId` is
+ *  {@link verifyMemory}'s: without it, withdrawing a worker's lesson reached no timeline. */
 export async function removeMemory(
   id: string,
   reason: string,
   principal?: Principal,
+  eventWorkspaceId?: string | null,
 ): Promise<Result<MemoryView, ControlRefusal>> {
   const trimmed = reason.trim()
   if (trimmed === '') return err({ kind: 'invalid_memory', detail: 'a removal needs a reason' })
@@ -420,7 +473,7 @@ export async function removeMemory(
   })
   if (claimed.count !== 1) return raced(id)
   const updated = await prisma.memory.findUniqueOrThrow({ where: { id }, include: withSources })
-  await announceChanged(updated, was, 'removed', 'human', updated.workspaceId, capped, principal)
+  await announceChanged(updated, was, 'removed', 'human', updated.workspaceId ?? eventWorkspaceId ?? null, capped, principal)
   return ok(viewOf(updated))
 }
 
@@ -555,7 +608,6 @@ export interface MemoriesForRunInput {
   /** Null only for the re-plan preview, which picks no persona (plan erratum E14). */
   readonly slaveId: string | null
   readonly taskId: string | null
-  readonly kind: 'implementation' | 'planning'
 }
 
 /**
@@ -588,13 +640,13 @@ export interface MemoriesForRun {
  */
 export async function memoriesForRun(input: MemoriesForRunInput): Promise<MemoriesForRun> {
   const [workspace, task] = await Promise.all([
-    prisma.workspace.findUnique({ where: { id: input.workspaceId }, select: { companyId: true, goalVersion: true } }),
+    // The company and the capability keys, and NOTHING else (final review, Minor 4): both reads
+    // used to fetch a `goalVersion` for a field `retrieveMemories` never looked at, and a column
+    // read for a rule that does not exist reads as a rule that does.
+    prisma.workspace.findUnique({ where: { id: input.workspaceId }, select: { companyId: true } }),
     input.taskId === null
       ? Promise.resolve(null)
-      : prisma.task.findUnique({
-          where: { id: input.taskId },
-          select: { requiredCapabilities: true, goalVersion: true },
-        }),
+      : prisma.task.findUnique({ where: { id: input.taskId }, select: { requiredCapabilities: true } }),
   ])
   if (workspace === null) return { memories: [], eligible: 0 }
 
@@ -612,12 +664,7 @@ export async function memoriesForRun(input: MemoriesForRunInput): Promise<Memori
   const ranked = retrieveMemories({
     memories: rows.map(viewOf),
     scopes: { companyId: workspace.companyId, workspaceId: input.workspaceId, slaveId: input.slaveId },
-    refs: {
-      taskId: input.taskId,
-      requiredCapabilities: task?.requiredCapabilities ?? [],
-      goalVersion: task?.goalVersion ?? workspace.goalVersion,
-    },
-    kind: input.kind,
+    refs: { taskId: input.taskId, requiredCapabilities: task?.requiredCapabilities ?? [] },
     limit: MEMORIES_LOADED_MAX,
   })
   return { memories: ranked.slice(0, MEMORIES_IN_PROMPT), eligible: ranked.length }
@@ -657,7 +704,9 @@ export interface DiscardOptions {
  * the Supervisor's `discard_stale_candidates` arm carries out.
  *
  * Nothing is deleted: each row keeps its words, its provenance and the reason it was withdrawn,
- * and each move is a `memory.changed` a person can read on the timeline.
+ * and each move is a `memory.changed` a person can read on the timeline -- true of every move this
+ * file makes as of the final review's Important 2, which gave the three human verbs the
+ * `eventWorkspaceId` this one has always passed.
  *
  * Paged, and each page's write is conditional on the row still being a candidate observation (fix
  * round 1): a candidate somebody verified between this page's read and its write is knowledge, and

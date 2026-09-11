@@ -468,6 +468,10 @@ export function TaskDetailPanel({
         </button>
         {memories !== null && (
           <div className="flex flex-col gap-2">
+            {/* Two lists, one under the other, each with its own caption (final review, Minor 5):
+              * without them a reader cannot tell the knowledge a run was GIVEN from the knowledge
+              * this task PRODUCED, and the two mean opposite things about the same task. */}
+            <SectionLabel testId="task-memory-received-label">Received by its runs</SectionLabel>
             <ul data-testid="task-memory-received" className="flex flex-col gap-0.5">
               {memories.received.length === 0 ? (
                 <li className="text-[10.5px] text-text-3">no run of this task was given anything yet</li>
@@ -481,6 +485,7 @@ export function TaskDetailPanel({
                 ))
               )}
             </ul>
+            <SectionLabel testId="task-memory-produced-label">Produced by this task</SectionLabel>
             <ul data-testid="task-memory-produced" className="flex flex-col gap-0.5">
               {memories.produced.length === 0 ? (
                 <li className="text-[10.5px] text-text-3">this task has not taught anybody anything yet</li>

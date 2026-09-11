@@ -313,11 +313,16 @@ const USAGE = `usage: orchestrator <command> [options]
   memories add --workspace <id> --type <t> --title <t> --body <b> [--capabilities a,b]
                                        write one down yourself. It is verified the moment you do,
                                        because a person said it.
-  memories verify <id>                 a worker's unverified report becomes knowledge a run is
+  memories verify <id> [--workspace <id>]
+                                       a worker's unverified report becomes knowledge a run is
                                        given.
-  memories supersede <id> --title <t> --body <b>
+  memories supersede <id> --title <t> --body <b> [--workspace <id>]
                                        correct one: the old row is kept and pointed at the new.
-  memories remove <id> --reason <why>  withdraw one. Nothing is deleted; the reason is stored.
+  memories remove <id> --reason <why> [--workspace <id>]
+                                       withdraw one. Nothing is deleted; the reason is stored.
+                                       --workspace on these three names the project the move is
+                                       filed under on the timeline, for a memory that belongs to a
+                                       worker or a company rather than to a project.
   memories condense --workspace <id> [--type <t>]
                                        twenty verified memories of one kind become one summary that
                                        links every one of them. Nothing is replaced, and running it
@@ -679,6 +684,24 @@ async function resolveWorkspace(flags: Flags): Promise<WorkspaceId> {
     `--workspace is required when there is more than one project. Available:\n` +
       all.map((w) => `  ${w.id}  ${w.name}`).join('\n'),
   )
+}
+
+/**
+ * The project a verb that takes an ID rather than a project should FILE ITS EVENT in, or null
+ * (M49, final review Important 2).
+ *
+ * `memories verify|supersede|remove` address one memory by id, and a worker's lesson or a company's
+ * fact has no project of its own -- so without a project named here the move reaches no timeline at
+ * all. `--workspace` when the operator typed one, the single project when there is only one, and
+ * NULL rather than a throw when there are several: these three verbs have never needed a project to
+ * do their work, and refusing to withdraw a memory because the machine holds two projects would be
+ * a new refusal in exchange for an event.
+ */
+async function eventWorkspace(flags: Flags): Promise<string | null> {
+  const given = flagText(flags, 'workspace')
+  if (given !== undefined) return given
+  const all = await prisma.workspace.findMany({ where: { archivedAt: null }, select: { id: true } })
+  return all.length === 1 && all[0] !== undefined ? all[0].id : null
 }
 
 /**
@@ -1729,7 +1752,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (sub === 'verify') {
         const id = argv[2]
         if (id === undefined) throw new Error('memories verify needs an id')
-        const result = await verifyMemory(id)
+        const result = await verifyMemory(id, undefined, await eventWorkspace(flags))
         if (!result.ok) throw new Error(refusalText(result.error))
         process.stdout.write(`${result.value.id} is now ${MEMORY_STATUS_LABEL[result.value.status]}\n`)
         return 0
@@ -1737,7 +1760,12 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (sub === 'supersede') {
         const id = argv[2]
         if (id === undefined) throw new Error('memories supersede needs an id')
-        const result = await supersedeMemory(id, { title: requireFlag(flags, 'title'), body: requireFlag(flags, 'body') })
+        const result = await supersedeMemory(
+          id,
+          { title: requireFlag(flags, 'title'), body: requireFlag(flags, 'body') },
+          undefined,
+          await eventWorkspace(flags),
+        )
         if (!result.ok) throw new Error(refusalText(result.error))
         process.stdout.write(`${result.value.created.id} replaces ${result.value.superseded.id}\n`)
         return 0
@@ -1745,7 +1773,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (sub === 'remove') {
         const id = argv[2]
         if (id === undefined) throw new Error('memories remove needs an id')
-        const result = await removeMemory(id, requireFlag(flags, 'reason'))
+        const result = await removeMemory(id, requireFlag(flags, 'reason'), undefined, await eventWorkspace(flags))
         if (!result.ok) throw new Error(refusalText(result.error))
         process.stdout.write(`${result.value.id} withdrawn: ${result.value.removedReason ?? ''}\n`)
         return 0

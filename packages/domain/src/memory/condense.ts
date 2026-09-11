@@ -143,6 +143,14 @@ export function condenseMemories(input: CondenseInput): Condensation | null {
   // the list. `… and N more` names a TAIL, and a reader who follows a summary to its sources
   // expects the ones it printed to be the ones it got to -- a short title jumping the queue over
   // the long one that stopped the list would make the sentence false about which N are missing.
+  //
+  // `line.length` counts UTF-16 UNITS while `MEMORY_BODY_MAX` is a cap in CODE POINTS (the unit
+  // `capCodePoints` and `memoryDraftSchema` both count). The two disagree only one way -- an astral
+  // character is two units and one code point -- so measuring in units can only OVERcount, and this
+  // loop therefore stops at or before the cap and never past it. Deliberately conservative rather
+  // than exact: a title of emoji costs this summary a bullet or two, and the alternative is
+  // spreading the code-point count through a hot loop to buy back text a reader can follow to its
+  // sources anyway. The `capCodePoints` on the body below is the cap that actually holds.
   const bullets: string[] = []
   let used = 0
   for (const source of sources) {
@@ -172,6 +180,10 @@ export function condenseMemories(input: CondenseInput): Condensation | null {
       // every source was verified by somebody, not because a person read this one.
       verifiedBy: 'human',
       supersedesTaskCandidates: false,
+      // A summary retires nothing on its own: the rows it covers stay verified and are dropped
+      // from a prompt by `retrieveMemories`' source rule, not by a status.
+      supersedesGoalDecisions: false,
+      supersedesTaskFacts: false,
       provenance: {
         sourceKind: 'condensation',
         sourceRef: null,

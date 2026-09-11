@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { addRunbook, adoptRunbook } from '@slave-of-ai/control'
+import { addRunbook, adoptRunbook, memoriesForRun } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, taskId as brandTaskId } from '@slave-of-ai/domain'
@@ -34,6 +34,7 @@ interface Fixture {
   readonly workspaceId: string
   readonly taskId: string
   readonly runId: string
+  readonly slaveId: string
 }
 
 const repos: string[] = []
@@ -83,6 +84,7 @@ async function seed(): Promise<Fixture> {
     workspaceId: workspace.id,
     taskId: task.id,
     runId: run.id,
+    slaveId: slave.id,
   }
 }
 
@@ -177,6 +179,46 @@ describe('verify and advance', () => {
     const types = await eventTypesFor(fixture.workspaceId)
     expect(types).toContain('task.verify_passed')
     expect(types).not.toContain('task.done')
+  })
+
+  // Final review, Important 3: a task that came back from review and passed a SECOND time wrote a
+  // second FACT with the same words as the first, and the run after it read the sentence twice.
+  it('leaves ONE live fact when a task passes verify twice, with the first pointing at the second', async (): Promise<void> => {
+    await advance({
+      taskId: base.taskId,
+      result: await runVerify({ ...base, commands: ['true'] }),
+      branch: 'slaveofai/TASK-001-x',
+    })
+    const first = await prisma.memory.findFirstOrThrow({
+      where: { taskId: fixture.taskId, type: 'fact', sourceKind: 'verification' },
+    })
+
+    // The rework: review turned it down, the worker fixed it, and the commands agree again.
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'running' } })
+    await advance({
+      taskId: base.taskId,
+      result: await runVerify({ ...base, commands: ['true'] }),
+      branch: 'slaveofai/TASK-001-x',
+    })
+
+    const facts = await prisma.memory.findMany({
+      where: { taskId: fixture.taskId, type: 'fact', sourceKind: 'verification' },
+      orderBy: { createdAt: 'asc' },
+    })
+    expect(facts).toHaveLength(2)
+    const [older, newer] = facts
+    expect(older?.id).toBe(first.id)
+    // Nothing is deleted: the first verification is still readable and says what replaced it.
+    expect({ status: older?.status, supersededById: older?.supersededById }).toEqual({
+      status: 'superseded',
+      supersededById: newer?.id,
+    })
+    expect(newer?.status).toBe('verified')
+    // And the run after the rework is given one of them, not two.
+    const given = await memoriesForRun({ workspaceId: fixture.workspaceId, slaveId: fixture.slaveId, taskId: fixture.taskId })
+    expect(given.memories.filter((one) => one.provenance.sourceKind === 'verification').map((one) => one.id)).toEqual([
+      newer?.id,
+    ])
   })
 
   it('moves the task to failed on the attempt that reaches the cap, not one after', async (): Promise<void> => {

@@ -1488,6 +1488,8 @@ describe('applyDecision -- discard_stale_candidates (M49 R2, E12)', () => {
     capabilities: [],
     verifiedBy: null,
     supersedesTaskCandidates: false,
+    supersedesGoalDecisions: false,
+    supersedesTaskFacts: false,
     provenance: {
       sourceKind: 'run_output',
       sourceRef: '1',

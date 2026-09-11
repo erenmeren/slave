@@ -1746,6 +1746,46 @@ describe('the orchestrator CLI', () => {
       }
     }, 60_000)
 
+    // Final review, Important 2: a worker's lesson has no project of its own, so `verifyMemory`
+    // handed `announceChanged` a null and the move reached no timeline at all. `--workspace` names
+    // the project the operator is working in, and the event is filed there. The ROW is untouched.
+    it('files the move on a worker-scoped memory under the project --workspace names', async (): Promise<void> => {
+      const lesson = await prisma.memory.create({
+        data: {
+          type: 'lesson',
+          scope: 'worker',
+          slaveId: fixture.slaveId,
+          taskId: fixture.taskId,
+          title: 'Rework on Add the thing',
+          body: 'The empty-input case was not handled.',
+          status: 'candidate',
+          confidence: 'sourced',
+          sourceKind: 'review',
+          createdBy: 'system',
+        },
+      })
+      try {
+        const verified = await runCli(['memories', 'verify', lesson.id, '--workspace', fixture.workspaceId])
+        expect(verified.code).toBe(0)
+        expect(verified.stdout).toBe(`${lesson.id} is now Verified\n`)
+        const events = await prisma.executionEvent.findMany({
+          where: { workspaceId: fixture.workspaceId, type: 'memory_changed' },
+          orderBy: { seq: 'desc' },
+          take: 1,
+        })
+        expect(events[0]?.payload).toEqual({ memoryId: lesson.id, from: 'candidate', to: 'verified' })
+        // The row still belongs to the worker: only the event was given a project to be read in.
+        const row = await prisma.memory.findUniqueOrThrow({ where: { id: lesson.id } })
+        expect({ scope: row.scope, workspaceId: row.workspaceId, slaveId: row.slaveId }).toEqual({
+          scope: 'worker',
+          workspaceId: null,
+          slaveId: fixture.slaveId,
+        })
+      } finally {
+        await prisma.memory.deleteMany({ where: { id: lesson.id } })
+      }
+    }, 60_000)
+
     it('refuses a frozen memory by name, and says what a bad sub-verb or type may be', async (): Promise<void> => {
       const added = await runCli([
         'memories',
