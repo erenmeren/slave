@@ -147,7 +147,11 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
       slaveId: worker.slaveId,
       name: worker.name,
       roleLabel: worker.role,
-      kind: worker.kind,
+      // M50 R6/E9: `OrganizationWorker.kind` is gone -- the control view carries `lifecycle` and
+      // `released` now. This row keeps the old two-way word for one more task, derived from the
+      // company name the way `whyHere` below reads it; Task 4 replaces the field itself, and the
+      // chip that prints it, with the lifecycle label.
+      kind: worker.companyName === null ? 'project' : 'company',
       capabilities: worker.capabilities.map((key) => ({ key, label: label(key) })),
       why: whyHere(worker),
       runtimeRoles: worker.runtimeRoles,
@@ -188,11 +192,14 @@ function labeller(taxonomy: readonly CapabilityRecord[]): (key: string) => strin
  *  a worker that predates all of this. Never a guess. */
 function whyHere(worker: {
   readonly selectionRationale: string | null
-  readonly kind: 'company' | 'project'
   readonly companyName: string | null
 }): string {
   if (worker.selectionRationale !== null && worker.selectionRationale !== '') return worker.selectionRationale
-  if (worker.kind === 'company' && worker.companyName !== null) return `Assigned from ${worker.companyName}`
+  // M50 E9: the company NAME alone, not the deleted `kind` beside it. `companySlaveId` is
+  // `SetNull`, so a permanent worker whose roster row was deleted has a lifecycle and no company
+  // name -- and the sentence this branch writes is about the name, which is the only half of the
+  // pair that was ever load-bearing.
+  if (worker.companyName !== null) return `Assigned from ${worker.companyName}`
   return 'Seeded'
 }
 

@@ -389,6 +389,11 @@ describe('assignCompany', () => {
       expect(slave?.companySlaveId).toBe(worker.companySlaveId)
     }
 
+    // M50 R1: a whole roster materialises as PERMANENT workers -- they exist in the organisation,
+    // which is what the word means. The column default would call every one of them a project hire.
+    expect(slaves.length).toBeGreaterThan(0)
+    expect(slaves.every((slave) => slave.lifecycle === 'permanent')).toBe(true)
+
     const events = await prisma.executionEvent.findMany({
       where: { workspaceId: workspace.id, type: 'workspace_company_assigned' },
     })

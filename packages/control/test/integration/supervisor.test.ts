@@ -78,6 +78,28 @@ const reset = async (): Promise<void> => {
   )
 }
 
+/** M50 R3: an ephemeral specialist hired for `f.taskId`, idle, its assignment finished -- the shape
+ *  `engagement_over` raises and `release_worker` is carried out against. */
+async function seedReleasableWorker(fixture: Fixture): Promise<{ slaveId: string }> {
+  const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+  const template = await prisma.slaveTemplate.create({
+    data: { name: `M50 Security ${String(Date.now())}`, role: 'security', capabilityKeys: [] },
+  })
+  const slave = await prisma.slave.create({
+    data: {
+      teamId: team.id,
+      name: 'Robin',
+      role: 'Security Reviewer',
+      runtimeRoles: ['security'],
+      hiredFromTemplateId: template.id,
+      lifecycle: 'ephemeral',
+      engagementTaskId: fixture.taskId,
+      selectionRationale: 'brought in for the authentication path',
+    },
+  })
+  return { slaveId: slave.id }
+}
+
 const situationFor = (subjectId: string, kind: Situation['kind'] = 'review_cap_blocked'): Situation => ({
   kind,
   subjectId,
@@ -559,6 +581,32 @@ describe('applyDecision', () => {
     const [applied] = await eventsOfType('supervisor_applied')
     expect(applied?.actor).toBe('system')
     expect(applied?.payload).toEqual({ decisionId: decision.id, action: { kind: 'unblock_task' } })
+  })
+
+  // M50 R3. The fifteenth arm, and the one the milestone is named for: `tierOf` makes it `applied`,
+  // so this is what a TICK does with it -- no person, no approval.
+  it('carries out release_worker: the worker is released and the decision is applied', async () => {
+    const { slaveId } = await seedReleasableWorker(f)
+    const decision = await record(f, { kind: 'release_worker', slaveId, name: 'Robin', reason: 'the engagement is over' }, 'applied', {
+      subjectId: slaveId,
+      situation: {
+        kind: 'engagement_over',
+        subjectId: slaveId,
+        summary: 'the engagement is over',
+        facts: { slaveId, name: 'Robin', engagementTaskId: f.taskId, engagementTaskStatus: 'done' },
+      },
+    })
+    expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
+
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('applied')
+    const worker = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })
+    expect(worker.runtimeRoles).toEqual([])
+    expect(worker.releasedAt).not.toBeNull()
+    expect(worker.releaseReason).toBe('the engagement is over')
+    // A tick released this, so the timeline says `system` -- `carryOut` passes no principal.
+    const [released] = await eventsOfType('slave_released')
+    expect(released?.actor).toBe('system')
+    expect(released?.payload).toMatchObject({ slaveId, name: 'Robin', worktreesCollected: 0 })
   })
 
   it('raise_max_attempts unblocks a task at its ceiling, raising maxAttempts to attempt + 1', async () => {

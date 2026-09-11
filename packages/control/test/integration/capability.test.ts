@@ -11,6 +11,7 @@ import {
   setSlaveCapabilities,
   syncCapabilityTaxonomy,
 } from '../../src/capability.js'
+import { releaseWorker } from '../../src/lifecycle.js'
 import { setRuntimeRoles } from '../../src/profile.js'
 
 /**
@@ -50,6 +51,21 @@ const capabilityEvents = async (slaveId: string): Promise<{ from: string | null;
 
 /** A role set one under the cap, so adding exactly one more crosses it. */
 const ROLES_AT_CAP = Array.from({ length: 20 }, (_, index) => `role-${String(index)}`)
+
+/** M50 R2: the ONE assignment a temporary hire names. A real row, because `Slave.engagementTaskId`
+ *  is a foreign key and a made-up id is refused by the database rather than by the verb. */
+async function engagement(workspaceId: string): Promise<{ id: string }> {
+  return prisma.task.create({
+    data: {
+      workspaceId,
+      title: 'Add authentication',
+      description: 'the one assignment',
+      status: 'ready',
+      maxAttempts: 3,
+      requiredRole: 'security',
+    },
+  })
+}
 
 async function workspace(): Promise<{ workspaceId: string; teamId: string }> {
   const ws = await prisma.workspace.create({
@@ -475,6 +491,105 @@ describe('hireFromTemplate', () => {
     expect(row.runtimeRoles).toEqual(ROLES_AT_CAP)
     expect(row.capabilities).toEqual(['security.application'])
   })
+
+  it('writes lifecycle project for an ordinary hire, and no engagement', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const result = await hireFromTemplate(workspaceId, template.id, { rationale: 'needed here' })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const worker = await prisma.slave.findUniqueOrThrow({ where: { id: result.value.slaveId } })
+    expect(worker.lifecycle).toBe('project')
+    expect(worker.engagementTaskId).toBeNull()
+    // M50 R1: the rationale is the SENTENCE, and nothing else. The column is the record now.
+    expect(worker.selectionRationale).toBe('needed here')
+  })
+
+  it('writes lifecycle ephemeral and the engagement for a temporary hire', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const task = await engagement(workspaceId)
+    const result = await hireFromTemplate(workspaceId, template.id, {
+      rationale: 'one assignment',
+      temporary: true,
+      engagementTaskId: task.id,
+    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const worker = await prisma.slave.findUniqueOrThrow({ where: { id: result.value.slaveId } })
+    expect(worker.lifecycle).toBe('ephemeral')
+    expect(worker.engagementTaskId).toBe(task.id)
+    // The suffix is gone (R1): a column holds the fact, so the sentence stays the sentence.
+    expect(worker.selectionRationale).toBe('one assignment')
+  })
+
+  it('refuses a temporary hire whose assignment is not a task of this project', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const result = await hireFromTemplate(workspaceId, template.id, {
+      rationale: 'one assignment',
+      temporary: true,
+      engagementTaskId: '00000000-0000-0000-0000-000000000000',
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.kind).toBe('task_not_found')
+    // Refused BEFORE the first write: no worker, and no `org.changed { field: 'created' }`.
+    expect(await prisma.slave.count({ where: { team: { workspaceId } } })).toBe(0)
+  })
+
+  it('reuses an unreleased hire and never rewrites its lifecycle', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const task = await engagement(workspaceId)
+    const first = await hireFromTemplate(workspaceId, template.id, { rationale: 'needed here' })
+    const second = await hireFromTemplate(workspaceId, template.id, {
+      rationale: 'one assignment',
+      temporary: true,
+      engagementTaskId: task.id,
+    })
+    expect(first.ok && second.ok).toBe(true)
+    if (!first.ok || !second.ok) return
+    expect(second.value.reused).toBe(true)
+    expect(second.value.slaveId).toBe(first.value.slaveId)
+    const worker = await prisma.slave.findUniqueOrThrow({ where: { id: first.value.slaveId } })
+    // E13: R4 is absolute -- only `setLifecycle` moves a lifecycle.
+    expect(worker.lifecycle).toBe('project')
+    expect(worker.engagementTaskId).toBeNull()
+  })
+
+  it('never reuses a RELEASED worker -- the new hire is a new worker with the next name', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const task = await engagement(workspaceId)
+    const first = await hireFromTemplate(workspaceId, template.id, {
+      rationale: 'one assignment',
+      temporary: true,
+      engagementTaskId: task.id,
+    })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    const firstName = (await prisma.slave.findUniqueOrThrow({ where: { id: first.value.slaveId } })).name
+    expect((await releaseWorker(first.value.slaveId, 'over')).ok).toBe(true)
+
+    const second = await hireFromTemplate(workspaceId, template.id, { rationale: 'again' })
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    expect(second.value.reused).toBe(false)
+    expect(second.value.slaveId).not.toBe(first.value.slaveId)
+    const secondName = (await prisma.slave.findUniqueOrThrow({ where: { id: second.value.slaveId } })).name
+    expect(secondName).toBe(`${firstName} 2`)
+  })
 })
 
 /**
@@ -595,6 +710,25 @@ describe('materialiseCompanySlave', () => {
     const again = await materialiseCompanySlave(workspaceId, rosterRow.id, {})
     expect(again.ok && again.value.created).toBe(false)
   })
+
+  it('materialises a roster worker as permanent', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Roster Security', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const company = await prisma.company.create({ data: { name: 'M50 Co' } })
+    const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Security' } })
+    const rosterRow = await prisma.companySlave.create({
+      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Sam' },
+    })
+    const result = await materialiseCompanySlave(workspaceId, rosterRow.id, { rationale: 'from the roster' })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const worker = await prisma.slave.findUniqueOrThrow({ where: { id: result.value.slaveId } })
+    // M50 R1: a roster worker EXISTS in the organisation, which is what `permanent` means -- never
+    // the column default, which would call every one of them a project hire.
+    expect(worker.lifecycle).toBe('permanent')
+  })
 })
 
 // Fix round 1, minor 4: the department step is `assignCompanyTx`'s own, shared rather than
@@ -649,7 +783,10 @@ describe('listOrganization', () => {
     if (!view.ok) return
     expect(view.value.workers.map((worker) => worker.name)).toEqual(['Ada', 'Security Reviewer'])
     const worker = view.value.workers[1]
-    expect(worker?.kind).toBe('project')
+    // M50 R6: the column, not the `companySlaveId === null` derivation this view used to make --
+    // which could not tell a project hire from a specialist brought in for one assignment.
+    expect(worker?.lifecycle).toBe('project')
+    expect(worker?.released).toBeNull()
     expect(worker?.capabilities).toEqual(['security.application'])
     expect(worker?.hiredFromTemplateName).toBe('Security Reviewer')
     expect(worker?.selectionRationale).toBe('the board needs application security')

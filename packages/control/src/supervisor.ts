@@ -27,6 +27,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { hireFromTemplate, materialiseCompanySlave, mergeRuntimeRoles } from './capability.js'
+import { releaseWorker } from './lifecycle.js'
 import { discardStaleCandidates, recordMemory } from './memory.js'
 import { answerQuestion, reassignQuestion } from './messaging.js'
 import { setRuntimeRoles } from './profile.js'
@@ -417,7 +418,11 @@ async function carryOut(
         await hireFromTemplate(decision.workspaceId, action.templateId, {
           capabilities: [action.capability],
           rationale: action.rationale,
-          ...(action.temporary ? { temporary: true } : {}),
+          // M50 R2: both together or neither. A temporary hire without its assignment is a worker
+          // nothing can release, which is the promise this milestone exists to keep.
+          ...(action.temporary && action.engagementTaskId !== null
+            ? { temporary: true, engagementTaskId: action.engagementTaskId }
+            : {}),
         }),
       )
     case 'mark_task_failed':
@@ -468,12 +473,11 @@ async function carryOut(
       // on: the verb withdraws whatever is stale at the moment it runs, which after a day's wait
       // is the honest set.
       return reached(ok(await discardStaleCandidates(action.workspaceId, new Date(), principal)))
-    // M50 R3: `releaseWorker` is Task 2's verb, and this arm is DECLARED here only because the
-    // switch is exhaustive over `Action` and the fifteenth kind arrived with the vocabulary. It is
-    // unreachable until Task 2: `supervisorWorld.ts` hands the rules no ephemeral worker yet, so
-    // `engagement_over` never fires, no `release_worker` candidate is ever offered and no decision
-    // can carry one. Task 2 replaces the body with the verb.
     case 'release_worker':
+      // M50 R3, the routine the milestone is named for. `tierOf` makes this `applied` on an
+      // unhalted project, so this arm runs inside a TICK -- which is exactly why `releaseWorker`
+      // skips and counts a worktree it could not remove instead of throwing.
+      return reached(await releaseWorker(action.slaveId, action.reason, principal))
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

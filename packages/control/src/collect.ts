@@ -33,7 +33,10 @@ export async function terminalTimestamp(taskId: string): Promise<Date | null> {
 }
 
 /**
- * Spec §3 B2. One implementation for both the aged pass and the operator's button.
+ * Spec §3 B2. One implementation for the aged pass, the operator's button, and -- since M50 R3 --
+ * `releaseWorker`, which calls it once per terminal task an ending engagement still holds a tree
+ * for. That third caller is the reason the actor is read off `operator` rather than off `aged`
+ * (erratum E6): a release is carried out by a tick, and nobody pressed anything.
  *
  * The row lock (`FOR UPDATE`) has to outlive the git call and the `worktreePath` write, not just
  * the read (M23 B2 fix round 1, Important 1): the aged pass and the operator button are exactly
@@ -51,7 +54,7 @@ export async function terminalTimestamp(taskId: string): Promise<Date | null> {
  */
 export async function collectTaskWorktree(
   taskId: string,
-  reason: 'aged' | 'operator',
+  reason: 'aged' | 'operator' | 'released',
   principal?: Principal,
 ): Promise<Result<{ path: string }, ControlRefusal>> {
   const plan = await prisma.$transaction(
@@ -99,7 +102,10 @@ export async function collectTaskWorktree(
     type: 'task.worktree_collected',
     workspaceId: task.workspace.id,
     taskId,
-    actor: reason === 'aged' ? 'system' : 'human',
+    // M50 R3/E6: `operator` is the only one a PERSON causes. `aged` is the daemon's sweep and
+    // `released` is a Supervisor apply -- reading the reason the other way round would record
+    // every release-time collection as somebody's button press.
+    actor: reason === 'operator' ? 'human' : 'system',
     payload: { path, reason, branch: task.branch },
     userId: principal?.userId ?? null,
   })

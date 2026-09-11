@@ -10,6 +10,7 @@ import {
   projectRoles,
   type CapabilityRecord,
   type Result,
+  type SlaveLifecycle,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { AssignmentRefused, departmentFor } from './department.js'
@@ -352,6 +353,8 @@ export async function materialiseCompanySlave(
           runtimeRoles,
           capabilities: [...capabilities],
           companySlaveId,
+          // M50 R1: the single-worker sibling of `assignCompanyTx`, and the same answer.
+          lifecycle: 'permanent',
           ...(opts.rationale === undefined ? {} : { selectionRationale: opts.rationale }),
         },
       })
@@ -387,13 +390,32 @@ export async function materialiseCompanySlave(
  * worker gains whatever capabilities and roles the second hire would have brought, and keeps the
  * rationale of the hire that actually created it -- that sentence is why it is here.
  *
- * `temporary` is recorded in the rationale and nowhere else until M50 owns the lifecycle: a column
- * nothing releases would be a promise the system cannot keep.
+ * A RELEASED worker is never reused (M50 R2): its engagement is over, its runtime roles are empty
+ * on purpose, and merging a new hire into it would quietly un-retire somebody. The reuse read
+ * therefore requires `releasedAt: null`, and a hire that finds only released copies creates a new
+ * worker -- which `uniqueSlaveName` names `<Name> 2`, because the released one still holds `<Name>`
+ * and nothing deleted it.
+ *
+ * A reuse NEVER rewrites `lifecycle` or `engagementTaskId` (M50 R4, plan erratum E13). Only
+ * `setLifecycle` moves a lifecycle after creation, so a temporary hire landing on a worker created
+ * `project` merges capabilities and roles and leaves the worker what it was. The claim stays true
+ * of the decision; the worker keeps what it was created as.
  */
 export async function hireFromTemplate(
   workspaceId: string,
   templateId: string,
-  opts: { readonly capabilities?: readonly string[]; readonly rationale: string; readonly temporary?: boolean },
+  opts: {
+    readonly capabilities?: readonly string[]
+    readonly rationale: string
+    /** M50 R2: this hire is for ONE assignment. The worker is created `ephemeral` and
+     *  {@link engagementTaskId} is what `engagement_over` later measures the end against. */
+    readonly temporary?: boolean
+    /** M50 R2: the assignment. REQUIRED when `temporary` is true -- a temporary worker with no
+     *  engagement is one nothing can ever release (plan decision D3) -- and validated against this
+     *  workspace's own tasks, because the column is a foreign key and a dangling one would throw a
+     *  P2003 out of a `Promise<Result<…>>` with nowhere to put it. */
+    readonly engagementTaskId?: string | null
+  },
 ): Promise<
   Result<
     {
@@ -417,7 +439,21 @@ export async function hireFromTemplate(
   }
   const capabilities = [...new Set([...template.capabilityKeys, ...asked])].toSorted()
   const runtimeRoles = [...new Set([template.role, ...projectRoles(capabilities, taxonomy)])]
-  const rationale = opts.temporary === true ? `${opts.rationale} (asked for as a temporary specialist)` : opts.rationale
+  // M50 R1: the rationale is the SENTENCE now and nothing else. It used to carry
+  // `(asked for as a temporary specialist)` because a column nothing released would have been a
+  // promise the system could not keep; the column exists, so the promise is the record.
+  const rationale = opts.rationale
+  const temporary = opts.temporary === true
+  const engagementTaskId = temporary ? (opts.engagementTaskId ?? null) : null
+  if (temporary) {
+    // Reported as "no such task" from this caller's side of the boundary -- `decision_not_found`'s
+    // rule: a task in another project must read back exactly like one that never existed.
+    const engagement =
+      engagementTaskId === null
+        ? null
+        : await prisma.task.findFirst({ where: { id: engagementTaskId, workspaceId }, select: { id: true } })
+    if (engagement === null) return err({ kind: 'task_not_found', taskId: engagementTaskId ?? '' })
+  }
 
   // The reuse decision and the write it implies happen under ONE workspace row lock (fix round 1,
   // minor 2). There is no unique index on `hiredFromTemplateId`, so without it two approvals of the
@@ -426,7 +462,8 @@ export async function hireFromTemplate(
   const outcome = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
     const existing = await tx.slave.findFirst({
-      where: { hiredFromTemplateId: templateId, team: { workspaceId } },
+      // `releasedAt: null` (M50 R2): a released worker's engagement is over and nothing re-hires it.
+      where: { hiredFromTemplateId: templateId, team: { workspaceId }, releasedAt: null },
       orderBy: { id: 'asc' },
     })
     if (existing !== null) {
@@ -483,6 +520,10 @@ export async function hireFromTemplate(
         capabilities,
         hiredFromTemplateId: templateId,
         selectionRationale: rationale,
+        // M50 R1/R2: WHY this worker exists, written at the creation site. `engagementTaskId` is
+        // null for an ordinary hire and is the validated task for a temporary one.
+        lifecycle: temporary ? 'ephemeral' : 'project',
+        engagementTaskId,
       },
     })
     return { kind: 'created' as const, slaveId: worker.id, name: worker.name }
@@ -642,7 +683,13 @@ export interface OrganizationWorker {
   readonly role: string
   readonly runtimeRoles: readonly string[]
   readonly capabilities: readonly string[]
-  readonly kind: 'company' | 'project'
+  /** M50 R1: WHY this worker is here, off the column. Replaces the `companySlaveId === null ?
+   *  'project' : 'company'` derivation this interface carried until M50 -- one of three readings of
+   *  one question, none of which could say "temporary". */
+  readonly lifecycle: SlaveLifecycle
+  /** M50 R3: the engagement is over. `at` is an ISO string, never a `Date` -- this view crosses a
+   *  server/client boundary. Null for every worker still here. */
+  readonly released: { readonly at: string; readonly reason: string } | null
   readonly companyName: string | null
   readonly hiredFromTemplateId: string | null
   readonly hiredFromTemplateName: string | null
@@ -703,7 +750,11 @@ export async function listOrganization(workspaceId: string): Promise<Result<Orga
       role: row.role,
       runtimeRoles: row.runtimeRoles,
       capabilities: row.capabilities,
-      kind: row.companySlaveId === null ? 'project' : 'company',
+      lifecycle: row.lifecycle,
+      released:
+        row.releasedAt === null
+          ? null
+          : { at: row.releasedAt.toISOString(), reason: row.releaseReason ?? 'released' },
       companyName: row.companySlave?.companyTeam.company.name ?? null,
       hiredFromTemplateId: row.hiredFromTemplate?.id ?? null,
       hiredFromTemplateName: row.hiredFromTemplate?.name ?? null,

@@ -163,6 +163,18 @@ export type ControlRefusal =
   | { readonly kind: 'unmeasurable_budget'; readonly workspaceId: string; readonly provider: string }
   | { readonly kind: 'company_already_assigned'; readonly workspaceId: string; readonly companyName: string }
   | { readonly kind: 'slave_not_found'; readonly slaveId: string }
+  /** `releaseWorker` (M50 R3): the worker is not `ephemeral`, and only a specialist brought in for
+   *  ONE assignment is released. A project worker leaves by `deleteSlave` (M23) and a roster worker
+   *  by leaving the roster; neither is this verb's business. 409, not 404: the worker is right
+   *  there and the answer is about what it IS. */
+  | { readonly kind: 'not_ephemeral'; readonly slaveId: string; readonly lifecycle: string }
+  /** `releaseWorker` (M50 R3): this engagement is already over. Nothing is released twice -- the row
+   *  keeps the timestamp and the sentence the first release wrote. */
+  | { readonly kind: 'already_released'; readonly slaveId: string; readonly at: string }
+  /** `setLifecycle` (M50 R4): `permanent` MEANS "exists in the company roster", and this worker has
+   *  no roster row to exist in. A label a person could apply anyway would make the word a
+   *  decoration. */
+  | { readonly kind: 'not_in_roster'; readonly slaveId: string }
   /** A role was set (or re-set) to blank text (M23 D1). */
   | { readonly kind: 'invalid_role' }
   /**
@@ -453,6 +465,12 @@ export function refusalText(refusal: ControlRefusal): string {
       return `this workspace is already run by ${refusal.companyName}`
     case 'slave_not_found':
       return `no slave with id ${refusal.slaveId}`
+    case 'not_ephemeral':
+      return `slave ${refusal.slaveId} is a ${refusal.lifecycle} worker, not a specialist brought in for one assignment; only an ephemeral worker is released`
+    case 'already_released':
+      return `slave ${refusal.slaveId} was already released at ${refusal.at}`
+    case 'not_in_roster':
+      return `slave ${refusal.slaveId} is on no company roster, so it cannot be made permanent; assign it from a company first`
     case 'invalid_role':
       return 'a role must be a non-empty text'
     case 'slave_run_active':

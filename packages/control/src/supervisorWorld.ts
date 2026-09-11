@@ -173,6 +173,9 @@ interface TaskRow {
   /** M47 R2/R3: the taxonomy keys this task asked for, verbatim -- `String[]` and never null
    *  (`@default([])`), so a pre-M47 row reads back as "asked for none". */
   readonly requiredCapabilities: readonly string[]
+  /** M50 R3 (plan erratum E4): who this task is assigned to, verbatim. `engagement_over` counts a
+   *  worker's non-terminal assigned tasks off it -- an ephemeral worker holding one is not done. */
+  readonly assigneeId: string | null
   readonly integratedAt: Date | null
   readonly createdAt: Date
   readonly dependents: number
@@ -209,6 +212,7 @@ async function loadTaskRows(tx: Prisma.TransactionClient, workspaceId: string): 
       t."maxAttempts",
       t."requiredRole",
       t."requiredCapabilities",
+      t."assigneeId",
       t."integratedAt",
       t."createdAt",
       t."goalVersion",
@@ -586,6 +590,12 @@ export async function loadSupervisorWorld(
           // M47 R4: what the worker PROVIDES, which is what `assign_capability` is offered off --
           // a worker that already provides the missing capability and was never given its role.
           capabilities: true,
+          // M50 R3: the three facts `engagement_over` is decided from. `lifecycle` says whether the
+          // question applies at all, `engagementTaskId` names the assignment, and `releasedAt` is
+          // what keeps a released worker out of `formTeam`'s roster and out of `staffableSlaves`.
+          lifecycle: true,
+          engagementTaskId: true,
+          releasedAt: true,
           // "Busy" is "holds a run that can still leave a non-terminal status", the same predicate
           // `world.ts` gives the scheduler -- not "has ever held one". `take: 1` answers "any?".
           runs: { where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } }, select: { id: true }, take: 1 },
@@ -736,11 +746,7 @@ export async function loadSupervisorWorld(
           latestGuardrail: guardrails.get(row.id) ?? null,
           goalVersion: row.goalVersion,
           requiredCapabilities: row.requiredCapabilities,
-          // M50 R3 (plan erratum E4), DECLARED HERE and filled by Task 2, which widens the raw
-          // SELECT this row comes from. Null is the honest placeholder and not a shortcut: nothing
-          // in the pipeline writes `Task.assigneeId`, and `engagement_over` -- the one predicate
-          // that reads it -- cannot fire at all while the slave rows below say nobody is ephemeral.
-          assigneeId: null,
+          assigneeId: row.assigneeId,
           stage: row.stage,
           // Plan erratum E6: resolved HERE, so `observe` can append the sentence without knowing
           // what a runbook is. Null whenever the task has no stage, the workspace has no runbook,
@@ -756,15 +762,12 @@ export async function loadSupervisorWorld(
         runtimeRoles: row.runtimeRoles,
         capabilities: row.capabilities,
         busy: row.runs.length > 0,
-        // M50 R1/R3 (plan erratum E4): the three lifecycle facts, DECLARED here in Task 1 and read
-        // off the columns by Task 2, which widens this query's `select` and wires `releaseWorker`
-        // behind the action. Until then every worker this loader hands the rules is an ordinary
-        // unreleased project worker -- which is what the pre-M50 world said and what every row in
-        // the database is until a temporary hire lands -- so `engagement_over` raises nothing and
-        // the `release_worker` arm of `carryOut` is unreachable.
-        lifecycle: 'project',
-        engagementTaskId: null,
-        released: false,
+        // M50 R1/R3 (plan erratum E4): the three lifecycle facts, straight off the columns.
+        // `released` is `releasedAt !== null` -- the world carries the ANSWER, not the timestamp,
+        // because that is the whole of what the rules ask of it.
+        lifecycle: row.lifecycle,
+        engagementTaskId: row.engagementTaskId,
+        released: row.releasedAt !== null,
       }))
 
       const world: SupervisorWorld = {

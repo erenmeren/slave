@@ -449,6 +449,10 @@ export async function assignCompanyTx(
           ],
           capabilities: [...capabilities],
           companySlaveId: companySlave.id,
+          // M50 R1: a roster worker EXISTS in the organisation, which is what `permanent` means.
+          // Written here rather than left to the column default, which would call every one of
+          // them a project hire.
+          lifecycle: 'permanent',
         },
       })
       createdWorkers.push({ companySlaveId: companySlave.id, name: worker.name, role: worker.role })
