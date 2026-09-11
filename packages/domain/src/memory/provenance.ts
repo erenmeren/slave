@@ -118,8 +118,25 @@ const provenanceSchema = z
   })
   .strict()
 
-const title = z.string().trim().min(1).max(MEMORY_TITLE_MAX)
-const body = z.string().trim().min(1).max(MEMORY_BODY_MAX)
+/**
+ * A length check in CODE POINTS, which is the unit R1's caps are stated in and the unit
+ * {@link capCodePoints} counts (M49 t1 fix round 1).
+ *
+ * Zod's own `.max()` counts UTF-16 UNITS, and the two disagree on exactly the text this system
+ * produces most: a body `capCodePoints` has just trimmed to `MEMORY_BODY_MAX` code points is
+ * `MEMORY_BODY_MAX + 1` units long whenever the cap lands on an astral character, so `.max()`
+ * refused a draft `promotionFor` had built to the cap -- and a refused draft is a promotion that
+ * silently never happens. One rule, one unit, both ends.
+ */
+const withinCodePoints = (max: number): z.ZodEffects<z.ZodString, string, string> =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .refine((value) => [...value].length <= max, { message: `at most ${String(max)} code points` })
+
+const title = withinCodePoints(MEMORY_TITLE_MAX)
+const body = withinCodePoints(MEMORY_BODY_MAX)
 const capabilities = z.array(z.string().min(1)).max(MEMORY_CAPABILITIES_MAX)
 
 /**

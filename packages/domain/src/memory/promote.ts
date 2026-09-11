@@ -1,4 +1,4 @@
-import { capCodePoints, MEMORY_BODY_MAX, MEMORY_TITLE_MAX } from './types.js'
+import { capCodePoints, MEMORY_BODY_MAX, MEMORY_CAPABILITIES_MAX, MEMORY_TITLE_MAX } from './types.js'
 import type { MemoryDraft } from './provenance.js'
 
 /**
@@ -82,6 +82,17 @@ const titleOf = (text: string): string => capCodePoints(text.trim(), MEMORY_TITL
 const bodyOf = (text: string): string => capCodePoints(text.trim(), MEMORY_BODY_MAX)
 
 /**
+ * The task's capability keys, bounded by the same cap the schema enforces (M49 t1 fix round 1).
+ *
+ * A task may ask for more than {@link MEMORY_CAPABILITIES_MAX} keys, and copying the list whole
+ * built a draft `memoryDraftSchema` then refused -- the same class of bug as a cap counted in two
+ * different units. The FIRST twenty in the task's own order, so two runs over one task promote
+ * the same keys; truncation is honest here because these are retrieval references, and a memory
+ * that matches on nineteen of a task's keys is found by every read that would have wanted it.
+ */
+const capabilitiesOf = (keys: readonly string[]): string[] => keys.slice(0, MEMORY_CAPABILITIES_MAX)
+
+/**
  * What this outcome should be remembered as, or `null` for "nothing worth keeping" (M49 R2).
  *
  * PROCEDURE and HYPOTHESIS are never produced here: a procedure is written by a person or
@@ -110,7 +121,7 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
         // thing being done. Only a passed verification promotes this to knowledge a run is given.
         status: 'candidate',
         confidence: 'interpretation',
-        capabilities: [...input.requiredCapabilities],
+        capabilities: capabilitiesOf(input.requiredCapabilities),
         verifiedBy: null,
         supersedesTaskCandidates: false,
         provenance: {
@@ -140,7 +151,7 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
         body,
         status: 'verified',
         confidence: 'sourced',
-        capabilities: [...input.requiredCapabilities],
+        capabilities: capabilitiesOf(input.requiredCapabilities),
         verifiedBy: 'verification',
         // R2(b): the observation this task's run left behind is now answered by something better.
         supersedesTaskCandidates: true,
@@ -230,7 +241,7 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
         body,
         status: 'verified',
         confidence: 'sourced',
-        capabilities: [...input.requiredCapabilities],
+        capabilities: capabilitiesOf(input.requiredCapabilities),
         verifiedBy: input.by,
         supersedesTaskCandidates: false,
         provenance: {

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MEMORIES_LOADED_MAX,
   MEMORY_BODY_MAX,
+  MEMORY_CAPABILITIES_MAX,
   MEMORY_SCOPES,
   MEMORY_SOURCE_KINDS,
   MEMORY_SOURCE_KIND_LABEL,
@@ -64,6 +66,13 @@ describe('the memory vocabulary', () => {
     // identifier if anything printed the key (plan erratum E10).
     expect(MEMORY_SOURCE_KIND_LABEL.run_output).toBe('a worker’s own report')
   })
+
+  // Fix round 1, item 4: Task 2's loader reads this bound, so it lives beside the caps it belongs
+  // with rather than being spelled again where the rows are fetched.
+  it('names how many rows one retrieval may load', () => {
+    expect(MEMORIES_LOADED_MAX).toBe(500)
+    expect(MEMORIES_LOADED_MAX).toBeGreaterThan(MEMORY_CAPABILITIES_MAX)
+  })
 })
 
 describe('capCodePoints', () => {
@@ -126,6 +135,30 @@ describe('parseMemoryDraft', () => {
   it('refuses a target that does not match the scope', () => {
     expect(parseMemoryDraft({ ...draft, scope: 'worker' }).ok).toBe(false)
     expect(parseMemoryDraft({ ...draft, scope: 'company' }).ok).toBe(false)
+  })
+
+  /**
+   * Fix round 1, item 1. The cap is stated in CODE POINTS -- that is what `capCodePoints` counts
+   * and what the constants' own comments say -- so the schema has to count them too. Zod's `.max()`
+   * counts UTF-16 units, which made a body `capCodePoints` had just produced one unit too long
+   * whenever the cap landed on an astral character: `promotionFor` returned a draft
+   * `parseMemoryDraft` then refused.
+   */
+  it('measures the caps in code points, so a body the capper produced always parses', () => {
+    const atCap = 'a'.repeat(MEMORY_BODY_MAX - 1) + '🎉'
+    expect([...atCap].length).toBe(MEMORY_BODY_MAX)
+    expect(atCap.length).toBe(MEMORY_BODY_MAX + 1)
+    expect(parseMemoryDraft({ ...draft, body: atCap }).ok).toBe(true)
+    expect(parseMemoryDraft({ ...draft, body: 'a'.repeat(MEMORY_BODY_MAX) + '🎉' }).ok).toBe(false)
+
+    const titleAtCap = 'a'.repeat(MEMORY_TITLE_MAX - 1) + '🎉'
+    expect(parseMemoryDraft({ ...draft, title: titleAtCap }).ok).toBe(true)
+    expect(parseMemoryDraft({ ...draft, title: 'a'.repeat(MEMORY_TITLE_MAX) + '🎉' }).ok).toBe(false)
+  })
+
+  it('caps the capability list too, and the same rule reads a stored row back', () => {
+    expect(parseMemoryDraft({ ...draft, capabilities: Array.from({ length: MEMORY_CAPABILITIES_MAX }, (_, i) => `k${String(i)}`) }).ok).toBe(true)
+    expect(parseMemoryDraft({ ...draft, capabilities: Array.from({ length: MEMORY_CAPABILITIES_MAX + 1 }, (_, i) => `k${String(i)}`) }).ok).toBe(false)
   })
 })
 

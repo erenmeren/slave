@@ -57,6 +57,16 @@ export const MEMORY_BODY_MAX = 2000
 /** How many retrieval references one memory may carry. */
 export const MEMORY_CAPABILITIES_MAX = 20
 
+/**
+ * How many rows ONE retrieval may load before {@link retrieveMemories} ranks them (M49 R3).
+ *
+ * The bound on the read, as `MEMORIES_IN_PROMPT` is the bound on the prompt: the ranking rule is
+ * pure and will happily sort whatever it is handed, so the only thing standing between a project
+ * with ten thousand memories and a tick that loads all of them is this number at the `findMany`.
+ * Five hundred is far more than twelve can ever need and small enough to be one indexed page.
+ */
+export const MEMORIES_LOADED_MAX = 500
+
 export const MEMORY_TYPE_LABEL: Record<MemoryType, string> = {
   fact: 'Fact',
   decision: 'Decision',

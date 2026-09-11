@@ -5,6 +5,7 @@ import {
   TIMELINE_LIMIT_DEFAULT,
   TIMELINE_LIMIT_MAX,
   buildSupervisorTimeline,
+  memoryStatusOf,
 } from '../../src/server/timeline.js'
 import {
   seedPendingDecision,
@@ -287,5 +288,29 @@ describe('buildSupervisorTimeline', () => {
 
   it('answers an empty list for a project that does not exist', async (): Promise<void> => {
     expect(await buildSupervisorTimeline('00000000-0000-0000-0000-000000000000')).toEqual([])
+  })
+})
+
+/**
+ * M49 t1 fix round 1, item 3. `TimelineSubject.memoryStatus` exists for ONE event type (plan
+ * erratum E5), and this builder used to stamp it from any payload carrying a string `status`. Pure,
+ * so the narrowing is provable without a row: it is a reading of the payload, not of the database.
+ */
+describe('memoryStatusOf', () => {
+  it('reads the status of a memory.recorded and of nothing else', () => {
+    expect(memoryStatusOf('memory.recorded', { status: 'verified' })).toBe('verified')
+    expect(memoryStatusOf('memory.recorded', { status: 'candidate' })).toBe('candidate')
+  })
+
+  it('answers null for another type that happens to carry a status', () => {
+    // A run event's subject carries no memory status, however its payload is shaped.
+    expect(memoryStatusOf('run.output', { status: 'verified' })).toBeNull()
+    expect(memoryStatusOf('task.done', { status: 'verified' })).toBeNull()
+  })
+
+  it('answers null for a memory.recorded whose status is not one', () => {
+    expect(memoryStatusOf('memory.recorded', { status: 'nonsense' })).toBeNull()
+    expect(memoryStatusOf('memory.recorded', {})).toBeNull()
+    expect(memoryStatusOf('memory.recorded', { status: 3 })).toBeNull()
   })
 })

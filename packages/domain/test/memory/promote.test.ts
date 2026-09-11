@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { MEMORY_BODY_MAX } from '../../src/memory/types.js'
+import { MEMORY_BODY_MAX, MEMORY_CAPABILITIES_MAX } from '../../src/memory/types.js'
 import { promotionFor } from '../../src/memory/promote.js'
+import { parseMemoryDraft } from '../../src/memory/provenance.js'
 
 describe('promotionFor: a finished implementation run (R2a)', () => {
   const input = {
@@ -198,5 +199,75 @@ describe('promotionFor: work that came back (R2d)', () => {
   it('is nothing when no worker can be named, and nothing when nothing was said', () => {
     expect(promotionFor({ ...input, slaveId: null })).toBeNull()
     expect(promotionFor({ ...input, reason: '' })).toBeNull()
+  })
+})
+
+/**
+ * Fix round 1. Every draft this rule produces is written through `recordMemory`, which parses it
+ * first -- so a draft the schema refuses is a promotion that silently never happens. These two
+ * cases are the ways the rule could build one: a cap measured in different units on either side,
+ * and a list the schema bounds that the rule copied whole.
+ */
+describe('promotionFor produces drafts the schema accepts', () => {
+  const input = {
+    kind: 'run_succeeded' as const,
+    workspaceId: 'w1',
+    taskId: 't1',
+    taskTitle: 'Ship the checkout API',
+    runId: 'r1',
+    slaveId: 'ag-1',
+    finalText: 'Both files are created in the worktree.',
+    lastOutputSeq: 412,
+    requiredCapabilities: ['backend.api-design'],
+    goalVersion: 2,
+  }
+
+  it('caps a final text whose cap lands on an astral character, and the draft still parses', () => {
+    // The cap falls exactly on the emoji, so the capped body is `MEMORY_BODY_MAX` code points and
+    // `MEMORY_BODY_MAX + 1` UTF-16 units -- the case a `.max()` check refused.
+    const draft = promotionFor({
+      ...input,
+      finalText: 'a'.repeat(MEMORY_BODY_MAX - 1) + '🎉' + 'b'.repeat(500),
+    })
+    expect(draft).not.toBeNull()
+    expect([...(draft?.body ?? '')].length).toBe(MEMORY_BODY_MAX)
+    expect(draft?.body.endsWith('🎉')).toBe(true)
+    expect(parseMemoryDraft(draft).ok).toBe(true)
+  })
+
+  it('keeps the first twenty capabilities of a task that asks for more', () => {
+    const many = Array.from({ length: 25 }, (_, index) => `cap.${String(index).padStart(2, '0')}`)
+    const draft = promotionFor({ ...input, requiredCapabilities: many })
+    expect(draft?.capabilities).toEqual(many.slice(0, MEMORY_CAPABILITIES_MAX))
+    expect(parseMemoryDraft(draft).ok).toBe(true)
+    // The same rule on the other two arms that carry a task's capabilities.
+    expect(
+      promotionFor({
+        kind: 'verify_passed',
+        workspaceId: 'w1',
+        taskId: 't1',
+        taskTitle: 'Ship the checkout API',
+        runId: 'r1',
+        expectedOutput: 'Every orders route requires a signed session.',
+        commands: [],
+        requiredCapabilities: many,
+        goalVersion: 2,
+      })?.capabilities,
+    ).toHaveLength(MEMORY_CAPABILITIES_MAX)
+    expect(
+      promotionFor({
+        kind: 'work_rejected',
+        workspaceId: 'w1',
+        taskId: 't1',
+        taskTitle: 'Ship the checkout API',
+        slaveId: 'ag-1',
+        runId: 'r1',
+        reason: 'The diff does not handle the empty-input case.',
+        by: 'review',
+        sourceRef: 'r-review-9',
+        requiredCapabilities: many,
+        goalVersion: 2,
+      })?.capabilities,
+    ).toHaveLength(MEMORY_CAPABILITIES_MAX)
   })
 })

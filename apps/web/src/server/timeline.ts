@@ -4,6 +4,7 @@ import { listDecisions, type DecisionView } from '@slave-of-ai/control'
 import {
   LANE_BY_TYPE,
   LANE_LABEL,
+  MEMORY_STATUSES,
   MEMORY_STATUS_LABEL,
   MEMORY_TYPE_LABEL,
   isResolvedDecision,
@@ -128,13 +129,13 @@ export async function buildSupervisorTimeline(
   for (const row of rows) {
     const type = (DOMAIN_EVENT_TYPE_BY_DB_VALUE[row.type] ?? row.type) as DomainEventType
     const payload = row.payload as Record<string, unknown>
+    const memoryStatus = memoryStatusOf(type, payload)
     const subject: TimelineSubject = {
       source: 'event',
       type,
       actor: row.actor as 'human' | 'slave' | 'system',
-      // M49 R4 (plan erratum E5): the lane of a `memory.recorded` is its payload's status. Read
-      // for every row -- an `undefined` here is exactly what every other type means by it.
-      ...(typeof payload['status'] === 'string' ? { memoryStatus: payload['status'] as MemoryStatus } : {}),
+      // M49 R4 (plan erratum E5): the lane of a `memory.recorded` is its payload's status.
+      ...(memoryStatus === null ? {} : { memoryStatus }),
     }
     const lane = laneFor(subject)
     if (lane === null) continue
@@ -199,6 +200,26 @@ export async function buildSupervisorTimeline(
   }
 
   return entries.sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+}
+
+/**
+ * The memory status this row's subject carries, or `null` for every row that carries none (M49 R4,
+ * plan erratum E5).
+ *
+ * Narrowed to the ONE type the field exists for (fix round 1): this used to stamp `memoryStatus`
+ * from any payload with a string `status`, so an unrelated event type that grew such a field would
+ * silently start feeding `laneFor`'s `memory.recorded` branch a status from somewhere else. The
+ * value is checked against the vocabulary too -- a hand-edited row saying `status: 'shipped'` is
+ * not a memory status, and `null` (no lane) is the honest reading of it.
+ *
+ * Exported because it is PURE: the narrowing is a reading of a payload, provable without a row.
+ */
+export function memoryStatusOf(type: DomainEventType, payload: Record<string, unknown>): MemoryStatus | null {
+  if (type !== 'memory.recorded') return null
+  const status = payload['status']
+  return typeof status === 'string' && (MEMORY_STATUSES as readonly string[]).includes(status)
+    ? (status as MemoryStatus)
+    : null
 }
 
 /**
