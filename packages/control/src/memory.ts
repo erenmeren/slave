@@ -480,6 +480,32 @@ export async function listMemories(filter: MemoryFilter): Promise<readonly Memor
   return rows.map(viewOf)
 }
 
+/**
+ * The memories with these ids, in ONE query (M49 t4 fix round 1, minor 2).
+ *
+ * For a reader that already knows exactly which rows it wants -- the task drawer's "what this run
+ * was GIVEN" list, whose ids come off a recorded manifest (plan erratum E7). `readMemory` per id
+ * would be one point read plus three chain reads EACH, four queries for a row whose chain nobody
+ * asked for.
+ *
+ * NO status filter: a memory a run was handed and that somebody has since withdrawn is still what
+ * that run was handed, and a "received" list that quietly dropped it would be a false record of
+ * what happened. An id nothing answers to is simply absent -- the row may be from another
+ * installation's manifest, and a missing memory is not a refusal.
+ *
+ * Ordered `createdAt asc, id asc`, `readMemory`'s own chain ordering, so a panel renders the same
+ * list in the same order between two reads of one unchanged table.
+ */
+export async function listMemoriesByIds(ids: readonly string[]): Promise<readonly MemoryView[]> {
+  if (ids.length === 0) return []
+  const rows = await prisma.memory.findMany({
+    where: { id: { in: [...ids] } },
+    include: withSources,
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  })
+  return rows.map(viewOf)
+}
+
 export interface MemoryChain {
   readonly memory: MemoryView
   /** Every row this one replaced, oldest first. A list and not one row (fix round 1, minor 5): a

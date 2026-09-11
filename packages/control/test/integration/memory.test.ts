@@ -5,6 +5,7 @@ import {
   addMemory,
   discardStaleCandidates,
   listMemories,
+  listMemoriesByIds,
   memoriesForRun,
   readMemory,
   recordMemory,
@@ -439,6 +440,28 @@ describe('listMemories and memoriesForRun', () => {
     expect((await listMemories({ workspaceId, q: 'b' })).map((one) => one.title)).toEqual(['B'])
     expect((await listMemories({ workspaceId, capability: 'backend.api-design' })).length).toBe(2)
     expect((await listMemories({ workspaceId, capability: 'frontend.forms' })).length).toBe(0)
+  })
+
+  /**
+   * M49 t4 fix round 1, minor 2: the task drawer's "what this run was GIVEN" list has ids off a
+   * recorded manifest and no interest in any of their chains, so it asks for the rows and nothing
+   * else.
+   */
+  it('reads a set of ids in one query, at every status, skipping an id nothing answers to', async () => {
+    const first = await recordMemory(draft({ title: 'A' }))
+    const second = await recordMemory(
+      draft({ title: 'B', type: 'fact', status: 'verified', confidence: 'sourced', verifiedBy: 'verification' }),
+    )
+    expect(first.ok && second.ok).toBe(true)
+    if (!first.ok || !second.ok) return
+    await removeMemory(first.value.id, 'it turned out to be wrong')
+
+    const rows = await listMemoriesByIds([second.value.id, first.value.id, 'no-such-memory'])
+    // Oldest first, `readMemory`'s own chain ordering -- not the order the caller asked in.
+    expect(rows.map((one) => one.title)).toEqual(['A', 'B'])
+    // A WITHDRAWN row is still what a run was handed, so it comes back with its status intact.
+    expect(rows[0]?.status).toBe('removed')
+    expect(await listMemoriesByIds([])).toEqual([])
   })
 
   it('hands a run the three scopes in one read and nothing another worker owns', async () => {

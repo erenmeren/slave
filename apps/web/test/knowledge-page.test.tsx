@@ -1,8 +1,27 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { KnowledgeClient } from '../src/components/knowledge/KnowledgeClient'
 import type { KnowledgeRow, KnowledgeView } from '../src/server/memory'
+
+/** The URL the page was opened with. The filter bar is seeded from it and writes itself back to
+ *  it (`useKnowledgeFilters`), so every case says which link it is standing on. */
+let search = ''
+vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams(search) }))
+
+beforeEach(() => {
+  search = ''
+  window.history.replaceState(null, '', '/w/w1/knowledge')
+})
+
+/** Drains every pending microtask AND lets React apply what they set. A `await Promise.resolve()`
+ *  or two is not enough for a `fetch().then(json).then(set)` chain, and a case about a LATE answer
+ *  that never arrives in the test is a case that passes for the wrong reason. */
+const flush = async (): Promise<void> => {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+}
 
 /**
  * The Knowledge tab, rendered from a hand-built view (M49 R6).
@@ -199,6 +218,95 @@ describe('KnowledgeClient', () => {
     expect(options.map((one) => one.getAttribute('value'))).toContain('workspace')
     expect(options.map((one) => one.textContent)).toContain('This project')
     expect(options.map((one) => one.textContent)).not.toContain('workspace')
+  })
+
+  it('says the two counts in the same words the Overview’s line does', () => {
+    render(<KnowledgeClient workspaceId="w1" initial={VIEW} />)
+    expect(screen.getByTestId('knowledge-counts').textContent).toBe('2 verified · 1 candidates')
+  })
+
+  it('is seeded from the link it was opened with, and asks for nothing on arrival', () => {
+    search = 'status=removed&type=fact'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const removed: KnowledgeRow = {
+      ...VERIFIED,
+      memory: memory({ id: 'm7', status: 'removed', removedReason: 'it was wrong', title: 'A withdrawn claim' }),
+      statusLabel: 'Removed',
+      supersedesIds: [],
+    }
+    render(<KnowledgeClient workspaceId="w1" initial={{ ...VIEW, rows: [removed] }} />)
+    // The server render already selected these rows: asking again on arrival would be the same
+    // query twice for one page load.
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(screen.getByTestId('knowledge-row').getAttribute('data-memory-status')).toBe('removed')
+    // And the bar says what it is showing, rather than claiming the default.
+    expect((screen.getByTestId('knowledge-filter-status') as HTMLSelectElement).value).toBe('removed')
+    expect((screen.getByTestId('knowledge-filter-type') as HTMLSelectElement).value).toBe('fact')
+    vi.unstubAllGlobals()
+  })
+
+  it('never claims one status when the link carries several', () => {
+    search = 'status=removed&status=superseded'
+    render(<KnowledgeClient workspaceId="w1" initial={VIEW} />)
+    const select = screen.getByTestId('knowledge-filter-status') as HTMLSelectElement
+    expect(select.value).toBe('__several')
+    expect(select.selectedOptions[0]?.textContent).toContain('Several')
+  })
+
+  it('writes the filters it was given into the address bar, so the link can be shared', () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => VIEW }))
+    render(<KnowledgeClient workspaceId="w1" initial={VIEW} />)
+    fireEvent.change(screen.getByTestId('knowledge-filter-type'), { target: { value: 'fact' } })
+    expect(window.location.search).toBe('?type=fact')
+    fireEvent.change(screen.getByTestId('knowledge-filter-type'), { target: { value: '' } })
+    expect(window.location.search).toBe('')
+    vi.unstubAllGlobals()
+  })
+
+  /**
+   * Fix round 1, Important 1: one request per keystroke means `?q=check` and `?q=checkout` are in
+   * flight together as a matter of course, and without a sequence the SLOWER answer wins whichever
+   * query it belongs to -- a list nobody asked for under a filter bar that says something else.
+   */
+  it('shows the latest request’s answer, never merely the last one to arrive', async () => {
+    const settle: ((value: unknown) => void)[] = []
+    const answer = (rows: readonly KnowledgeRow[]): Promise<unknown> =>
+      new Promise((resolve) => settle.push(() => resolve({ ok: true, json: async () => ({ ...VIEW, rows }) })))
+    const fetchMock = vi.fn().mockReturnValueOnce(answer([VERIFIED])).mockReturnValueOnce(answer([CANDIDATE]))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<KnowledgeClient workspaceId="w1" initial={VIEW} />)
+
+    fireEvent.change(screen.getByTestId('knowledge-filter-type'), { target: { value: 'fact' } })
+    fireEvent.change(screen.getByTestId('knowledge-filter-type'), { target: { value: 'observation' } })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    // The SECOND request answers first, then the first one arrives late.
+    settle[1]?.(undefined)
+    await vi.waitFor(() => expect(screen.getAllByTestId('knowledge-row')).toHaveLength(1))
+    expect(screen.getByTestId('knowledge-row').getAttribute('data-memory-id')).toBe('m2')
+    settle[0]?.(undefined)
+    await flush()
+    expect(screen.getByTestId('knowledge-row').getAttribute('data-memory-id')).toBe('m2')
+    vi.unstubAllGlobals()
+  })
+
+  it('says nothing at all when a SUPERSEDED request fails -- the newer one is the answer', async () => {
+    const settle: ((value: unknown) => void)[] = []
+    const fetchMock = vi
+      .fn()
+      .mockReturnValueOnce(new Promise((resolve) => settle.push(() => resolve({ ok: false, status: 500, json: async () => ({}) }))))
+      .mockReturnValueOnce(new Promise((resolve) => settle.push(() => resolve({ ok: true, json: async () => VIEW }))))
+    vi.stubGlobal('fetch', fetchMock)
+    render(<KnowledgeClient workspaceId="w1" initial={VIEW} />)
+    fireEvent.change(screen.getByTestId('knowledge-filter-q'), { target: { value: 'che' } })
+    fireEvent.change(screen.getByTestId('knowledge-filter-q'), { target: { value: 'checkout' } })
+    settle[1]?.(undefined)
+    await vi.waitFor(() => expect(screen.getAllByTestId('knowledge-row')).toHaveLength(2))
+    settle[0]?.(undefined)
+    await flush()
+    expect(screen.queryByTestId('knowledge-stale')).toBeNull()
+    vi.unstubAllGlobals()
   })
 
   it('says what an empty project knows, which is nothing yet', () => {

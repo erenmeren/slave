@@ -120,6 +120,23 @@ const EVENT_PREFIX_WORDS = ['Tasks', 'Runs', 'Messages', 'Guardrails', 'Project'
  * `failed`, `blocked`, `merging`, `idle`, `model`, `rules`) is the product's own vocabulary and is
  * NOT forbidden -- forbidding it would forbid the very labels R4 projects.
  */
+/**
+ * M49 R6 (plan erratum E10): the four memory unions, named as their own array rather than spread
+ * inline.
+ *
+ * Every member today is a bare English word except `run_output`, so they contribute exactly one
+ * token to the blocklist -- and that is the point: the line is here so the FIRST member with an
+ * underscore or a dot that a later milestone adds to any of the four joins the blocklist with no
+ * edit at all, exactly as `DECISION_STATUSES` and `TIERS` are enumerated for a fifth tier nobody
+ * has written yet.
+ *
+ * Named, because the one token they supply is ALSO supplied by `EVENT_TYPE_BY_DOMAIN_TYPE` (the DB
+ * value of `run.output`): an assertion that `RAW_TOKENS` contains `run_output` passes with all four
+ * spreads deleted, which is an assertion that cannot fail. The preflight below checks THIS array
+ * instead, and checks that its contribution actually reached `RAW_TOKENS` by counting.
+ */
+const MEMORY_UNIONS = [...MEMORY_TYPES, ...MEMORY_SCOPES, ...MEMORY_STATUSES, ...MEMORY_SOURCE_KINDS]
+
 const RAW_TOKENS = [
   ...TASK_STATUSES,
   ...RUN_STATUSES,
@@ -146,15 +163,7 @@ const RAW_TOKENS = [
   ...CAPABILITY_SEED.map((record) => record.key),
   ...Object.values(EVENT_TYPE_BY_DOMAIN_TYPE),
   ...Object.keys(EVENT_TYPE_BY_DOMAIN_TYPE),
-  // M49 R6 (plan erratum E10): the four memory unions. Every member today is a bare English word
-  // except `run_output`, so this contributes exactly one token -- and that is the point. The line
-  // is here so the FIRST member with an underscore or a dot that a later milestone adds to any of
-  // the four joins the blocklist with no edit at all, exactly as `DECISION_STATUSES` and `TIERS`
-  // above are enumerated for a fifth tier nobody has written yet.
-  ...MEMORY_TYPES,
-  ...MEMORY_SCOPES,
-  ...MEMORY_STATUSES,
-  ...MEMORY_SOURCE_KINDS,
+  ...MEMORY_UNIONS,
 ].filter((token) => token.includes('_') || token.includes('.'))
 
 /**
@@ -331,7 +340,14 @@ try {
   assert(RAW_TOKENS.includes('no_reviewer'), 'the derived blocklist lost the SituationKind members')
   assert(RAW_TOKENS.includes('backend.api-design'), 'the derived blocklist lost the capability keys (M47)')
   assert(RAW_TOKENS.includes('run.tool_call') && RAW_TOKENS.includes('run_tool_call'), 'the derived blocklist lost the event types')
-  assert(RAW_TOKENS.includes('run_output'), 'the derived blocklist lost the memory source kinds (M49)')
+  // Both halves, and both bite: the first fails if `MEMORY_SOURCE_KINDS` stops being spread into
+  // `MEMORY_UNIONS`, the second if `MEMORY_UNIONS` stops being spread into `RAW_TOKENS` -- the
+  // event types supply a `run_output` of their own, so only the COUNT can tell the two apart.
+  assert(MEMORY_UNIONS.includes('run_output'), 'the memory unions lost MEMORY_SOURCE_KINDS (M49)')
+  assert(
+    RAW_TOKENS.filter((token) => token === 'run_output').length >= 2,
+    'the derived blocklist lost the memory unions (M49) -- `run_output` must reach it twice, once from the event types and once from MEMORY_SOURCE_KINDS',
+  )
 
   await preflightCleanup()
 

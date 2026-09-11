@@ -1,4 +1,4 @@
-import { listCapabilities, listMemories, readMemory } from '@slave-of-ai/control'
+import { listCapabilities, listMemories, listMemoriesByIds } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   MEMORY_CONFIDENCE_LABEL,
@@ -10,11 +10,15 @@ import {
   provenanceLine,
   runContextManifestSchema,
   type CapabilityRecord,
-  type MemoryScope,
   type MemoryStatus,
-  type MemoryType,
   type MemoryView,
 } from '@slave-of-ai/domain'
+import type { KnowledgeFilters } from '../lib/knowledgeFilters'
+
+/** The filter shape lives in `lib/knowledgeFilters.ts` with the parse and the serialisation that
+ *  keep the URL, the route and the client hook saying one thing (t4 fix round 1, minor 4); it is
+ *  re-exported here because this module is where a reader of the read models looks for it. */
+export type { KnowledgeFilters }
 
 /**
  * One row of the Knowledge tab (M49 R6).
@@ -67,13 +71,6 @@ export interface KnowledgeView {
    * reader learns to trust neither.
    */
   readonly counts: { readonly verified: number; readonly candidates: number }
-}
-
-export interface KnowledgeFilters {
-  readonly scope?: MemoryScope
-  readonly type?: MemoryType
-  readonly statuses?: readonly MemoryStatus[]
-  readonly q?: string
 }
 
 /** R6/plan decision D11: verified knowledge and the claims waiting on a person. Superseded and
@@ -215,10 +212,16 @@ export async function buildTaskMemories(workspaceId: string, taskId: string): Pr
   const task = await prisma.task.findUnique({ where: { id: taskId }, select: { id: true, workspaceId: true } })
   if (task === null || task.workspaceId !== workspaceId) return null
 
+  // BOUNDED, newest first (t4 fix round 1, minor 3). A task at its attempt ceiling has a handful
+  // of runs, but nothing in the schema says so: a re-planned, resumed, re-run task accumulates
+  // them, and this panel is only affordable because it is small. Fifty is far more runs than any
+  // task the pipeline drives has ever had and still one indexed page -- the same shape of bound
+  // `MEMORIES_LOADED_MAX` puts on the retrieval read.
   const contexts = await prisma.runContext.findMany({
     where: { run: { taskId } },
     select: { sections: true },
-    orderBy: { createdAt: 'asc' },
+    orderBy: { createdAt: 'desc' },
+    take: RUN_CONTEXTS_READ_MAX,
   })
   const receivedIds: string[] = []
   for (const context of contexts) {
@@ -231,7 +234,10 @@ export async function buildTaskMemories(workspaceId: string, taskId: string): Pr
 
   const unique = [...new Set(receivedIds)]
   const [receivedRows, producedRows] = await Promise.all([
-    unique.length === 0 ? Promise.resolve<readonly MemoryView[]>([]) : loadByIds(unique),
+    // ONE query for however many ids the manifests named (t4 fix round 1, minor 2), and NO status
+    // filter: a memory a run was handed and that somebody has since withdrawn is still what that
+    // run was handed.
+    listMemoriesByIds(unique),
     // Every status: this group is a record of what happened to this task's knowledge, and hiding
     // the superseded candidate would hide the whole point of R2(b).
     listMemories({ workspaceId, taskId, statuses: MEMORY_STATUSES }),
@@ -252,9 +258,5 @@ export async function buildTaskMemories(workspaceId: string, taskId: string): Pr
   return { received: pick(receivedRows), produced: pick(producedRows) }
 }
 
-/** The given memories themselves, by id -- through `readMemory` so a row and its chain are read by
- *  the one verb that knows how, and in id order so the group is stable between renders. */
-async function loadByIds(ids: readonly string[]): Promise<readonly MemoryView[]> {
-  const found = await Promise.all([...ids].sort().map(async (id) => readMemory(id)))
-  return found.flatMap((one) => (one.ok ? [one.value.memory] : []))
-}
+/** How many of a task's run contexts the drawer's `received` list reads. See the `findMany` above. */
+const RUN_CONTEXTS_READ_MAX = 50

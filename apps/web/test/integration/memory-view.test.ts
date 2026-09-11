@@ -7,6 +7,7 @@ import { POST as verifyPOST } from '../../src/app/api/w/[workspaceId]/memories/[
 import { POST as supersedePOST } from '../../src/app/api/w/[workspaceId]/memories/[memoryId]/supersede/route'
 import { POST as removePOST } from '../../src/app/api/w/[workspaceId]/memories/[memoryId]/remove/route'
 import { GET as taskMemoriesGET } from '../../src/app/api/w/[workspaceId]/tasks/[taskId]/memories/route'
+import KnowledgePage from '../../src/app/w/[workspaceId]/knowledge/page'
 import { seedTask, seedWorkspace, truncateAll } from './projectFixture'
 
 /** The one `next/headers` mock the route cases need (`organization.test.ts`'s idiom). Inert without
@@ -186,7 +187,11 @@ describe('buildKnowledge', () => {
 })
 
 describe('buildTaskMemories (plan erratum E7)', () => {
-  async function seedRunWithManifest(memoryIds: readonly string[], sections?: unknown): Promise<void> {
+  async function seedRunWithManifest(
+    memoryIds: readonly string[],
+    sections?: unknown,
+    createdAt?: Date,
+  ): Promise<void> {
     const run = await prisma.slaveRun.create({ data: { slaveId, taskId, kind: 'implementation', status: 'succeeded' } })
     await prisma.runContext.create({
       data: {
@@ -196,6 +201,7 @@ describe('buildTaskMemories (plan erratum E7)', () => {
           kind: 'implementation',
           sections: [{ kind: 'memory', memoryIds: [...memoryIds], capped: false }],
         }) as never,
+        ...(createdAt === undefined ? {} : { createdAt }),
       },
     })
   }
@@ -219,6 +225,72 @@ describe('buildTaskMemories (plan erratum E7)', () => {
     await seedRunWithManifest([given.id])
     const view = await buildTaskMemories(workspaceId, taskId)
     expect(view?.received.map((row) => row.memory.title)).toEqual(['Given to the good run'])
+  })
+
+  /**
+   * Plan erratum E7, the whole point of reading the MANIFEST: "received" is a record of what a run
+   * was handed, and a memory somebody has since withdrawn is still what that run was handed. A
+   * list that quietly dropped it would be a false record of what happened.
+   */
+  it('keeps a memory the run was given and somebody later withdrew', async () => {
+    const given = await seedMemory({ title: 'What the run was told', taskId: null })
+    await seedRunWithManifest([given.id])
+    await prisma.memory.update({
+      where: { id: given.id },
+      data: { status: 'removed', removedReason: 'it turned out to be wrong' },
+    })
+    const view = await buildTaskMemories(workspaceId, taskId)
+    expect(view?.received.map((row) => row.memory.title)).toEqual(['What the run was told'])
+    expect(view?.received[0]?.statusLabel).toBe('Removed')
+  })
+
+  /**
+   * Fix round 1, minor 2: `readMemory` per id is one point read plus three chain reads EACH -- four
+   * queries for every memory in a list whose chain nobody asked for. `listMemoriesByIds` is one.
+   *
+   * The delegate method is reassigned to a counting wrapper and restored in a `finally` rather than
+   * spied on: `vi.spyOn` on a Prisma delegate captures `undefined` through the client's Proxy and
+   * breaks every later test in the file (the repo's own escape hatch, `skill-graph.test.ts`).
+   */
+  it('reads the memories a run was given in ONE query, however many there are', async () => {
+    const ids: string[] = []
+    for (const title of ['One', 'Two', 'Three', 'Four']) {
+      ids.push((await seedMemory({ title, taskId: null })).id)
+    }
+    await seedRunWithManifest(ids)
+
+    const delegate = prisma.memory as unknown as { findMany: (...args: never[]) => unknown }
+    const real = delegate.findMany.bind(prisma.memory)
+    let calls = 0
+    delegate.findMany = ((...args: never[]) => {
+      calls += 1
+      return real(...args)
+    }) as never
+    try {
+      const view = await buildTaskMemories(workspaceId, taskId)
+      expect(view?.received).toHaveLength(4)
+      // ONE for the four received ids; the rest belong to `decorate` and to `listMemories`, and
+      // none of them grows with the number of ids.
+      expect(calls).toBeLessThanOrEqual(5)
+    } finally {
+      delegate.findMany = real as never
+    }
+  })
+
+  /**
+   * Fix round 1, minor 3: the read is bounded. A task at its attempt ceiling has a handful of runs,
+   * but nothing in the schema says so -- a resumed, re-planned, re-run task can accumulate them,
+   * and this panel opens on a click rather than on a poll only because it is cheap.
+   */
+  it('reads at most the newest 50 run contexts', async () => {
+    const old = await seedMemory({ title: 'Given to the oldest run', taskId: null })
+    await seedRunWithManifest([old.id], undefined, new Date('2020-01-01T00:00:00.000Z'))
+    const recent = await seedMemory({ title: 'Given to a recent run', taskId: null })
+    for (let index = 0; index < 50; index += 1) {
+      await seedRunWithManifest([recent.id], undefined, new Date(`2026-09-11T00:${String(index).padStart(2, '0')}:00.000Z`))
+    }
+    const view = await buildTaskMemories(workspaceId, taskId)
+    expect(view?.received.map((row) => row.memory.title)).toEqual(['Given to a recent run'])
   })
 
   it('shows what the task PRODUCED at every status, superseded candidates included', async () => {
@@ -354,6 +426,20 @@ describe('the five routes', () => {
     )
     expect(refused.status).toBe(409)
     expect(((await refused.json()) as { kind: string }).kind).toBe('memory_not_editable')
+  })
+
+  /** Fix round 1, minor 4: the filters are in the URL, and the SERVER render is given them -- so a
+   *  shared `?status=removed` link paints the withdrawn rows rather than the default ones and then
+   *  replacing them a request later. */
+  it('seeds the page’s first paint from the link it was opened with', async () => {
+    await seedMemory({ title: 'A verified fact' })
+    await seedMemory({ title: 'A withdrawn claim', status: 'removed', removedReason: 'wrong' })
+    const element = await KnowledgePage({
+      params: Promise.resolve({ workspaceId }),
+      searchParams: Promise.resolve({ status: 'removed' }),
+    })
+    const props = (element as { props: { initial: { rows: { memory: { title: string } }[] } } }).props
+    expect(props.initial.rows.map((row) => row.memory.title)).toEqual(['A withdrawn claim'])
   })
 
   it('answers the task drawer’s two lists, and 404s a task on another project', async () => {

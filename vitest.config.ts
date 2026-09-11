@@ -25,6 +25,13 @@ export default defineConfig({
         },
       },
       {
+        // The `unit` project gets its JSX transform from `plugins: [react()]`; this one has no
+        // plugins and would compile a `.tsx` with esbuild's CLASSIC runtime, which needs a `React`
+        // in scope that nothing imports. One integration suite reads a server component's output
+        // directly (`apps/web/test/integration/memory-view.test.ts`, the Knowledge page seeded from
+        // its URL), so the automatic runtime is set here rather than a `React` global faked in a
+        // test file.
+        esbuild: { jsx: 'automatic' },
         test: {
           name: 'integration',
           include: ['packages/**/test/integration/**/*.test.ts', 'apps/**/test/integration/**/*.test.ts'],

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import {
   MEMORY_SCOPES,
   MEMORY_SCOPE_LABEL,
@@ -8,11 +8,15 @@ import {
   MEMORY_STATUS_LABEL,
   MEMORY_TYPES,
   MEMORY_TYPE_LABEL,
+  type MemoryScope,
   type MemoryStatus,
+  type MemoryType,
 } from '@slave-of-ai/domain'
 // Type-only, so nothing from `server/memory.ts` -- and nothing under it, control and the Prisma
 // client -- reaches the client bundle. The rule `OrganizationClient` states for `OrganizationView`.
 import type { KnowledgeRow, KnowledgeView } from '../../server/memory'
+import { useKnowledgeFilters } from '../../hooks/useKnowledgeFilters'
+import { knowledgeFilterParams, type KnowledgeFilters } from '../../lib/knowledgeFilters'
 import { postControl } from '../../lib/postControl'
 import { CapabilityChips } from '../organization/CapabilityChips'
 import { Alert } from '../ui/Alert'
@@ -22,7 +26,7 @@ import { DangerConfirm } from '../ui/DangerConfirm'
 import { DetailsGroup } from '../ui/DetailsGroup'
 import { Drawer } from '../ui/Drawer'
 import { EmptyState } from '../ui/EmptyState'
-import { FieldLabel, INPUT_SHELL } from '../ui/FormControls'
+import { FieldLabel, INPUT_SHELL, SelectField } from '../ui/FormControls'
 import { PageShell } from '../ui/PageShell'
 import { Panel } from '../ui/Panel'
 import { SectionLabel } from '../ui/SectionLabel'
@@ -44,25 +48,22 @@ const STATUS_TONE: Readonly<Record<MemoryStatus, StatusTone>> = {
  *  `supersedeMemory` and `removeMemory` both refuse a row that has already moved. */
 const LIVE: readonly MemoryStatus[] = ['verified', 'candidate']
 
-interface Filters {
-  readonly scope: string
-  readonly type: string
-  readonly status: string
-  readonly q: string
-}
+/**
+ * What the status select shows when the LINK carries more than one status.
+ *
+ * A single select cannot say "removed and superseded", and showing the default option while the
+ * page renders two statuses would be the filter bar lying about its own list -- the same failure
+ * as a stale response winning. Picking any real option below replaces the list with that one
+ * status, so this value is never something a person can choose, only something the bar can report.
+ */
+const SEVERAL = '__several'
 
-const NO_FILTERS: Filters = { scope: '', type: '', status: '', q: '' }
-
-/** The query string the route reads, built from the four controls. An empty control sends NOTHING
- *  rather than an empty value -- `status` absent is what asks the route for its own default (the
- *  verified rows plus the candidates waiting on a person). */
-function toQuery(filters: Filters): string {
-  const params = new URLSearchParams()
-  if (filters.scope !== '') params.set('scope', filters.scope)
-  if (filters.type !== '') params.set('type', filters.type)
-  if (filters.status !== '') params.set('status', filters.status)
-  if (filters.q.trim() !== '') params.set('q', filters.q.trim())
-  return params.toString()
+/** The one value the status select shows for the list the page is actually filtered by. */
+function statusValue(statuses: readonly MemoryStatus[] | undefined): string {
+  if (statuses === undefined || statuses.length === 0) return ''
+  // `statuses[0]` under `noUncheckedIndexedAccess` is `string | undefined` even here, so the
+  // fallback is the one the length test already proved cannot be reached.
+  return statuses.length === 1 ? (statuses[0] ?? '') : SEVERAL
 }
 
 /**
@@ -90,7 +91,9 @@ export function KnowledgeClient({
   readonly initial: KnowledgeView
 }): React.JSX.Element {
   const [view, setView] = useState<KnowledgeView>(initial)
-  const [filters, setFilters] = useState<Filters>(NO_FILTERS)
+  // Seeded from the URL and written back to it, so a filtered page is a link somebody can share
+  // and the server render is already the rows this bar claims to be showing.
+  const { filters, setFilters } = useKnowledgeFilters(workspaceId)
   /** The one memory currently writing. Per-row rather than per-page: verifying one claim must not
    *  grey out the row beside it. */
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -102,30 +105,64 @@ export function KnowledgeClient({
   const [correctPending, setCorrectPending] = useState(false)
   const [reasons, setReasons] = useState<Readonly<Record<string, string>>>({})
 
+  /**
+   * The rows that render are the LATEST request's answer, never merely the last one to arrive
+   * (fix round 1, Important 1 -- `WorkforceCatalog`'s own monotonic id).
+   *
+   * The search box issues one request per keystroke, so `?q=check` and `?q=checkout` are in flight
+   * together as a matter of course. Without a sequence the slower answer wins whichever query it
+   * belongs to, and the page shows rows nobody asked for under a filter bar that says something
+   * else -- a wrong list is worse than a slow one, because nothing on screen says it is wrong.
+   *
+   * A monotonic id rather than an `AbortController`: a superseded response here is not a resource
+   * to reclaim, it is an answer to ignore, and ignoring it is one comparison with no second code
+   * path for "the request was cancelled" to go wrong in. A superseded FAILURE is ignored too --
+   * the newer request is the one this page is waiting on, and a stale band about a query nobody is
+   * showing is noise.
+   */
+  const latest = useRef(0)
+
   /** Re-read this page. The rows already on screen stay until the new ones land: a page that
    *  empties itself between a click and its answer is harder to read than one that lags by a
    *  request, and a failed refetch says so rather than showing nothing (`OrganizationClient`). */
-  const reload = async (next: Filters): Promise<void> => {
-    const query = toQuery(next)
+  const reload = async (next: KnowledgeFilters): Promise<void> => {
+    const query = knowledgeFilterParams(next).toString()
+    const id = latest.current + 1
+    latest.current = id
     try {
       const response = await fetch(`/api/w/${workspaceId}/memories${query === '' ? '' : `?${query}`}`)
       if (!response.ok) {
-        setStale(true)
+        if (id === latest.current) setStale(true)
         return
       }
-      setView((await response.json()) as KnowledgeView)
+      const answer = (await response.json()) as KnowledgeView
+      // Superseded: a newer request is already in flight, and its answer is the one this page is
+      // going to show. Say nothing -- not even that this one arrived.
+      if (id !== latest.current) return
+      setView(answer)
       setStale(false)
     } catch {
-      setStale(true)
+      if (id === latest.current) setStale(true)
     }
   }
 
-  /** A filter moves the page immediately and asks the route with the NEW value -- read off the
-   *  event rather than off `filters`, which React has not written yet at this point. */
-  const change = (patch: Partial<Filters>): void => {
-    const next = { ...filters, ...patch }
+  /** A filter moves the page immediately -- the state, the address bar and the request, in that
+   *  order -- and asks the route with the NEW value, built here rather than read back off
+   *  `filters`, which React has not written yet at this point. */
+  const apply = (next: KnowledgeFilters): void => {
     setFilters(next)
     void reload(next)
+  }
+
+  /**
+   * One dimension changes. A control set to its empty option means "no filter on this dimension",
+   * which is the ABSENCE of the key and never an empty value: `{ type: undefined }` still has a
+   * `type`, `knowledgeFilterParams` would have to know that, and the route would read `type=` on
+   * the wire.
+   */
+  const pick = <K extends keyof KnowledgeFilters>(key: K, value: KnowledgeFilters[K] | undefined): void => {
+    const { [key]: _gone, ...rest } = filters
+    apply(value === undefined ? (rest as KnowledgeFilters) : ({ ...rest, [key]: value } as KnowledgeFilters))
   }
 
   const verify = async (row: KnowledgeRow): Promise<void> => {
@@ -183,60 +220,71 @@ export function KnowledgeClient({
 
         <Panel title="what this project knows">
           <div className="flex flex-wrap items-end gap-2">
-            <label className="flex flex-col gap-1">
-              <FieldLabel>scope</FieldLabel>
-              <select
-                data-testid="knowledge-filter-scope"
-                value={filters.scope}
-                onChange={(event) => change({ scope: event.target.value })}
-                className={INPUT_SHELL}
-              >
-                <option value="">Anybody&apos;s</option>
-                {MEMORY_SCOPES.map((scope) => (
-                  <option key={scope} value={scope}>
-                    {MEMORY_SCOPE_LABEL[scope]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <FieldLabel>kind</FieldLabel>
-              <select
-                data-testid="knowledge-filter-type"
-                value={filters.type}
-                onChange={(event) => change({ type: event.target.value })}
-                className={INPUT_SHELL}
-              >
-                <option value="">Any kind</option>
-                {MEMORY_TYPES.map((type) => (
-                  <option key={type} value={type}>
-                    {MEMORY_TYPE_LABEL[type]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <FieldLabel>status</FieldLabel>
-              <select
-                data-testid="knowledge-filter-status"
-                value={filters.status}
-                onChange={(event) => change({ status: event.target.value })}
-                className={INPUT_SHELL}
-              >
-                <option value="">Verified and waiting</option>
-                {MEMORY_STATUSES.map((status) => (
-                  <option key={status} value={status}>
-                    {MEMORY_STATUS_LABEL[status]}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {/* The kit's own field shell (M16 §2), not three hand-rolled `<select>`s: the testid,
+              * the value and the handler ride through `selectProps` untouched, and the radius and
+              * the focus ring are the ones every other form on this app already wears. The cast is
+              * `NewSlaveDrawer`'s and `DepartmentsTable`'s -- `SelectHTMLAttributes` has no index
+              * signature, so an object LITERAL carrying `data-testid` trips the excess-property
+              * check even though the attribute spreads onto the element perfectly well. */}
+            <SelectField
+              label="scope"
+              selectProps={{
+                'data-testid': 'knowledge-filter-scope',
+                value: filters.scope ?? '',
+                onChange: (event) => pick('scope', asMember<MemoryScope>(event.target.value, MEMORY_SCOPES)),
+              } as React.SelectHTMLAttributes<HTMLSelectElement>}
+            >
+              <option value="">Anybody&apos;s</option>
+              {MEMORY_SCOPES.map((scope) => (
+                <option key={scope} value={scope}>
+                  {MEMORY_SCOPE_LABEL[scope]}
+                </option>
+              ))}
+            </SelectField>
+            <SelectField
+              label="kind"
+              selectProps={{
+                'data-testid': 'knowledge-filter-type',
+                value: filters.type ?? '',
+                onChange: (event) => pick('type', asMember<MemoryType>(event.target.value, MEMORY_TYPES)),
+              } as React.SelectHTMLAttributes<HTMLSelectElement>}
+            >
+              <option value="">Any kind</option>
+              {MEMORY_TYPES.map((type) => (
+                <option key={type} value={type}>
+                  {MEMORY_TYPE_LABEL[type]}
+                </option>
+              ))}
+            </SelectField>
+            <SelectField
+              label="status"
+              selectProps={{
+                'data-testid': 'knowledge-filter-status',
+                value: statusValue(filters.statuses),
+                onChange: (event) => {
+                  const one = asMember<MemoryStatus>(event.target.value, MEMORY_STATUSES)
+                  pick('statuses', one === undefined ? undefined : [one])
+                },
+              } as React.SelectHTMLAttributes<HTMLSelectElement>}
+            >
+              <option value="">Verified and waiting</option>
+              {MEMORY_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {MEMORY_STATUS_LABEL[status]}
+                </option>
+              ))}
+              {/* Only while the LINK carries several -- never a thing to choose, only a thing the
+                * bar can honestly report about itself. */}
+              {statusValue(filters.statuses) === SEVERAL && (
+                <option value={SEVERAL}>Several ({(filters.statuses ?? []).length})</option>
+              )}
+            </SelectField>
             <label className="flex flex-col gap-1">
               <FieldLabel>search the titles</FieldLabel>
               <input
                 data-testid="knowledge-filter-q"
-                value={filters.q}
-                onChange={(event) => change({ q: event.target.value })}
+                value={filters.q ?? ''}
+                onChange={(event) => pick('q', event.target.value.trim() === '' ? undefined : event.target.value)}
                 placeholder="a word in the title"
                 className={INPUT_SHELL}
               />
@@ -248,7 +296,7 @@ export function KnowledgeClient({
               title="counted over this project’s own memories, whatever the filters above show"
               className="pb-1.5 text-xs text-text-3"
             >
-              {view.counts.verified} verified · {view.counts.candidates} waiting on you
+              {view.counts.verified} verified · {view.counts.candidates} candidates
             </span>
           </div>
         </Panel>
@@ -433,6 +481,13 @@ export function KnowledgeClient({
       </Drawer>
     </PageShell>
   )
+}
+
+/** A `<select>`'s value back as the union member it came from, or `undefined` for the empty option
+ *  -- and for a value no union member matches, which is a `<select>` nobody built but a DOM
+ *  somebody could have edited. */
+function asMember<T extends string>(value: string, known: readonly string[]): T | undefined {
+  return known.includes(value) ? (value as T) : undefined
 }
 
 /** One `id — title` line of the chain, or nothing at all: an empty heading is a promise this row
