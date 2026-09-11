@@ -122,11 +122,22 @@ export type RuntimeEvent =
    *
    * `RunOutcome.tokens` is the run's CUMULATIVE figure and arrives only on the terminal `result`
    * line, so a live runaway is invisible until it stops. This member is what makes it visible --
-   * and it is an explicit FLOOR, not a total: measured on `test/fixtures/complete.ndjson`, the
-   * assistant lines' own `output_tokens` sum to 27 against the result line's 741, because a
-   * streamed message's per-turn usage is not the whole of what the run was billed. The pump
-   * accumulates it while the run is live and the terminal write REPLACES it with the authoritative
-   * figure (plan erratum E4).
+   * and it is an explicit FLOOR in BOTH halves, not a total. The direction is stated per half,
+   * because the two halves reach it for different reasons and one of them was originally wrong
+   * (fix round 1, review Important 1), measured on `test/fixtures/complete.ndjson`:
+   *
+   *   - `output` is the line's `output_tokens`. The four assistant lines sum to **27** against the
+   *     `result` line's **741**: a streamed message's per-turn usage is not the whole of what the
+   *     turn was billed.
+   *   - `input` is the line's RAW `input_tokens`, and NOT `RunOutcome.tokens.input`'s billed sum
+   *     (input + cache creation + cache read). Those cache counters are what the RUN was charged
+   *     once; summing them per turn re-counts a context the run re-reads every request, which on
+   *     this fixture gives **126,830** against a terminal **63,684** -- a "floor" twice the real
+   *     figure. Raw `input_tokens` sums to **8** against 63,684, which is a floor.
+   *
+   * So both halves only ever under-report while the run is live, and the terminal write REPLACES
+   * them with the authoritative billed figures (plan erratum E4). A reader watching a live estimate
+   * should expect it to RISE to the terminal one, never fall to it.
    *
    * Claude only: Cursor's stream carries no per-turn usage at all (`reportsCost: false`, and its
    * `result` line's `usage` is the only figure it has).

@@ -28,9 +28,18 @@ set -uo pipefail
 # a failed printf must not skip an explicit fail-closed exit; here, no failure of any kind may
 # produce anything but exit 0, and every exit path below is explicit.
 
-# The longest line this script will append. A tailer reads this file line by line, so an over-long
-# line is DROPPED rather than cut: a cut line is invalid JSON the adapter's tailer would then have
-# to be defensive about, and one missing result is a gap the stream already fills.
+# The C locale, for the whole script and on purpose. A hook is invoked by an external binary in an
+# environment this system does not control, and two things below depend on the locale: `${#line}`
+# counts CHARACTERS in a UTF-8 locale and BYTES here, which is what the cap below is denominated in
+# (fix round 1, review Minor 4); and `${var,,}` lowercases per locale, where the classifier's tokens
+# are ASCII and want nothing else. `grep` becomes byte-oriented too, which is both faster and one
+# fewer thing that varies between deployments.
+export LC_ALL=C
+
+# The longest line this script will append, INCLUDING its newline, in bytes (see the LC_ALL note
+# above). A tailer reads this file line by line, so an over-long line is DROPPED rather than cut: a
+# cut line is invalid JSON the adapter's tailer would then have to be defensive about, and one
+# missing result is a gap the stream already fills.
 TAP_LINE_MAX_BYTES=4096
 
 # How much of a failed call's response body is READ (never written) to decide its class. The body
@@ -52,7 +61,8 @@ tap_warn() {
 #
 # Reads the JSON-ENCODED error text, not a decoded one: `\n` and `\"` are the only things encoding
 # changes, and no token here spans either, so the substring test is the same test on either form
-# and the payload never has to be decoded to be classified.
+# and the payload never has to be decoded to be classified. ASCII-only lowercasing, which the
+# LC_ALL=C above guarantees and which is all these five tokens need.
 classify_tool_error() {
   local lower="${1,,}"
   case "$lower" in
@@ -124,27 +134,39 @@ tap_read_payload_node() {
 }
 
 # The fallback for a PATH with no `node` on it. BEST-EFFORT and bounded, and said so out loud: it
-# reads the first `"key": "value"` pair for each of the two names it wants and stops at the first
+# reads the first `"key": "value"` pair for each of the names it wants and stops at the first
 # unescaped quote, so a tool name containing an escaped quote is read short. That is a degradation
 # this script accepts rather than a correctness claim -- the stream carries the same facts, and a
 # short name in a gap-filling line costs nothing a run notices.
+#
+# The CLASS is best-effort in the same way (fix round 1, review Minor 5). The error text is taken
+# from the first `"content"` pair AFTER the literal `"tool_response"`, so a `Bash` call whose own
+# COMMAND mentions a missing file is not classified `not_found` on the strength of its input -- the
+# failure that classifies is the one the runtime reported. Without a parser that scoping is textual
+# and can be wrong on a payload that nests `"tool_response"` somewhere unexpected; an unrecognised
+# text is `other`, which is the same answer this function gives when it finds nothing at all.
 tap_read_payload_grep() {
   local payload="${1:0:$TAP_ERROR_TEXT_SCAN}"
   local id name
   id=$(printf '%s' "$payload" | grep -o '"tool_use_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1)
   name=$(printf '%s' "$payload" | grep -o '"tool_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1)
   [[ -n "$id" && -n "$name" ]] || return 1
-  # `${var##*:}` leaves whatever whitespace a pretty-printed payload put after the colon; the value
-  # itself is quoted, so trimming to the first quote and putting one back is exact.
-  TAP_ID_JSON="${id##*:}"
-  TAP_NAME_JSON="${name##*:}"
+  # `${var#*:}` -- the FIRST colon, which is the key/value separator, never the last: a value that
+  # itself contains a colon (`"tool_use_id":"a:b"`) would otherwise be cut in half. What is left may
+  # carry whatever whitespace a pretty-printed payload put after that colon; the value itself is
+  # quoted, so trimming to the first quote and putting one back is exact.
+  TAP_ID_JSON="${id#*:}"
+  TAP_NAME_JSON="${name#*:}"
   TAP_ID_JSON="\"${TAP_ID_JSON#*\"}"
   TAP_NAME_JSON="\"${TAP_NAME_JSON#*\"}"
   if printf '%s' "$payload" | grep -q '"is_error"[[:space:]]*:[[:space:]]*true'; then
     TAP_IS_ERROR='1'
-    # No structure to walk without a parser: the WHOLE bounded payload is what the classifier sees.
-    # It is read, never written -- the output line below carries a class and four fields, as always.
-    TAP_TEXT_JSON="$payload"
+    # Scoped to the RESPONSE half of the payload, never the whole of it -- see the note above. Read,
+    # never written: the output line below carries a class and four fields, as always.
+    local response="${payload#*\"tool_response\"}"
+    local content
+    content=$(printf '%s' "$response" | grep -o '"content"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1)
+    TAP_TEXT_JSON="${content#*:}"
   else
     TAP_IS_ERROR='0'
     TAP_TEXT_JSON='""'
@@ -184,14 +206,18 @@ fi
 line=$(printf '{"toolUseId":%s,"toolName":%s,"outcome":"%s","errorClass":%s}' \
   "$TAP_ID_JSON" "$TAP_NAME_JSON" "$outcome" "$error_class")
 
-if (( ${#line} > TAP_LINE_MAX_BYTES )); then
-  tap_warn "the line for this call was ${#line} bytes, past the ${TAP_LINE_MAX_BYTES}-byte cap -- dropped rather than truncated"
+# Bytes, including the newline `printf` adds below -- LC_ALL=C above is what makes `${#line}` count
+# them (fix round 1, review Minor 4).
+if (( ${#line} + 1 > TAP_LINE_MAX_BYTES )); then
+  tap_warn "the line for this call was $(( ${#line} + 1 )) bytes, past the ${TAP_LINE_MAX_BYTES}-byte cap -- dropped rather than truncated"
   exit 0
 fi
 
-# `>>`, and one `printf` well under PIPE_BUF (4096 bytes on Linux, which is what TAP_LINE_MAX_BYTES
-# is): writes at this size are atomic, so a concurrent hook cannot interleave half a line into the
-# middle of this one. A failed append is a gap the stream fills, and still exit 0.
+# `>>`, which opens the file O_APPEND: every write starts at the current end of file, atomically,
+# so two hooks firing at once cannot interleave half a line into the middle of the other's. (It is
+# O_APPEND that gives that, not PIPE_BUF -- that constant governs pipes, and this is a regular
+# file.) One `printf`, one line, bounded above. A failed append is a gap the stream fills, and
+# still exit 0.
 if ! printf '%s\n' "$line" >> "$results_path"; then
   tap_warn "could not append to ${results_path} -- no line recorded for this call"
 fi

@@ -1,6 +1,6 @@
-import { chmodSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { fileURLToPath } from 'node:url'
 import { preflightTap, runGateScript } from '../src/runtime/gate-preflight.js'
@@ -118,9 +118,21 @@ describe('preflightTap (M51 R6, plan erratum E11)', () => {
   it('leaves nothing behind -- it mints and removes its own directory', async () => {
     // `preflightGate`'s isolation discipline, for its reason: a caller-supplied path could point
     // at a live run's own results file by accident, so there is no such parameter to point.
-    const before = readdirSync(tmpdir()).filter((entry) => entry.startsWith('slaveofai-tap-preflight-'))
-    await preflightTap({ tapPath: REAL_TAP })
-    const after = readdirSync(tmpdir()).filter((entry) => entry.startsWith('slaveofai-tap-preflight-'))
-    expect(after).toEqual(before)
+    //
+    // THIS call's directory, not a diff of the whole of `/tmp` (fix round 1, review Minor 6): the
+    // adapter's own tests run `preflightTap` under the same prefix in a parallel worker, so a
+    // before/after listing fails for a reason that has nothing to do with the code under test. The
+    // stand-in tap below reports the path it was handed, which names the directory exactly.
+    const dir = tempDir('gate-')
+    const echoed = join(dir, 'preflight-path.txt')
+    const reporting = hookWith(
+      `cat > /dev/null\nprintf '%s\\n' "$SLAVEOFAI_TOOL_RESULTS" >> ${JSON.stringify(echoed)}\n` +
+        `printf '%s\\n' '{"toolUseId":"preflight","toolName":"Preflight","outcome":"ok","errorClass":null}' >> "$SLAVEOFAI_TOOL_RESULTS"\nexit 0`,
+    )
+    await preflightTap({ tapPath: reporting })
+    const resultsPath = readFileSync(echoed, 'utf8').trim()
+    expect(resultsPath).not.toBe('')
+    expect(existsSync(resultsPath)).toBe(false)
+    expect(existsSync(dirname(resultsPath))).toBe(false)
   })
 })

@@ -359,7 +359,12 @@ function parseToolCallLine(raw: unknown, line: string): RuntimeEvent {
     // result at all is `ignored`, because "the call finished" with no evidence either way must not
     // count toward an error storm.
     if (toolKey === undefined || !isRecord(result)) return { kind: 'ignored', line }
-    const ok = 'success' in result
+    // A result object with NO KEYS says the call finished and says nothing about how, which is the
+    // same absence of evidence the `ignored` branch above turns away -- so it reads `ok`, never
+    // `error` (fix round 1, review Minor 3). It stays an EVENT rather than joining that branch
+    // because "this call finished" is itself the fact that stops a trailing running call from
+    // suppressing every arm (R1); what it must not do is count toward a storm.
+    const ok = 'success' in result || Object.keys(result).length === 0
     return {
       kind: 'tool_result',
       toolUseId: data.call_id,

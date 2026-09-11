@@ -460,20 +460,17 @@ const toolResultContentSchema = z.object({
   is_error: z.boolean().optional(),
 })
 
+type ToolResultEvent = Extract<RuntimeEvent, { readonly kind: 'tool_result' }>
+
 /**
- * One `user` line's `tool_result` block, as a `tool_result` event (M51 R1).
+ * One `tool_result` content block as an event, or `null` when the block cannot be read.
  *
- * A `user` line whose content is a bare prompt string (the echo, and the resumed conversation) is
- * recognised and carries no decision, exactly as it always did -- `userEnvelopeSchema` requires an
- * ARRAY, so a string body falls to `ignored` rather than to `unparsable`.
+ * The ONE place a block becomes an event, shared by {@link parseStreamLine}'s `user` arm and by
+ * {@link parseStreamResults}, so the two can never come to disagree about the same block.
  */
-function parseUserLine(raw: unknown, line: string): RuntimeEvent {
-  const envelope = userEnvelopeSchema.safeParse(raw)
-  if (!envelope.success) return { kind: 'ignored', line }
-  const block = envelope.data.message.content.find(isToolResultBlock)
-  if (block === undefined) return { kind: 'ignored', line }
+function toolResultEventOf(block: unknown): ToolResultEvent | null {
   const result = toolResultContentSchema.safeParse(block)
-  if (!result.success) return { kind: 'unparsable', line }
+  if (!result.success) return null
   // The runtime's OWN boolean, never an inference from the text: a result whose body happens to
   // contain the word "error" is not a failed call, and a storm built on that reading would trip on
   // a worker grepping its own logs. Absent reads as OK -- MEASURED on `fixtures/complete.ndjson`,
@@ -491,15 +488,77 @@ function parseUserLine(raw: unknown, line: string): RuntimeEvent {
   }
 }
 
+/**
+ * One `user` line's FIRST `tool_result` block, as a `tool_result` event (M51 R1).
+ *
+ * The first and only the first, because {@link parseStreamLine} returns exactly one event per line.
+ * A `user` line can carry SEVERAL blocks -- Claude batches the results of parallel tool calls onto
+ * one line -- and the rest of them are read by {@link parseStreamResults}, which the adapter calls
+ * INSTEAD of this function's result for a `user` line so nothing is pushed twice (fix round 1,
+ * review Important 4). Both go through `toolResultEventOf`, so the first block reads the same way
+ * whichever door it comes through, and `parseStreamResults(line)[0]` equals `parseStreamLine(line)`
+ * for every line that has one -- pinned in `test/stream.test.ts`.
+ *
+ * A `user` line whose content is a bare prompt string (the echo, and the resumed conversation) is
+ * recognised and carries no decision, exactly as it always did -- `userEnvelopeSchema` requires an
+ * ARRAY, so a string body falls to `ignored` rather than to `unparsable`.
+ */
+function parseUserLine(raw: unknown, line: string): RuntimeEvent {
+  const envelope = userEnvelopeSchema.safeParse(raw)
+  if (!envelope.success) return { kind: 'ignored', line }
+  const block = envelope.data.message.content.find(isToolResultBlock)
+  if (block === undefined) return { kind: 'ignored', line }
+  return toolResultEventOf(block) ?? { kind: 'unparsable', line }
+}
+
+/**
+ * EVERY `tool_result` block on one line, as events (M51 R1, fix round 1 -- review Important 4).
+ *
+ * A THIRD pure function beside {@link parseStreamLine} and {@link parseStreamUsage}, and for the
+ * same reason as the second one (plan erratum E4's shape, applied again): `parseStreamLine` returns
+ * exactly one `RuntimeEvent` per line, which is what its exhaustiveness tests and every caller rest
+ * on -- and Claude batches the results of PARALLEL tool calls into one `user` message. Reading only
+ * the first block dropped the rest silently: a parallel call's failure never reached the error-storm
+ * arm, and its call never got a result at all, which R1 says suppresses every arm. A run that was
+ * failing read as a run that was quiet.
+ *
+ * The adapter calls this for `user` lines and pushes what it returns INSTEAD of `parseStreamLine`'s
+ * own event, never both -- which is the one arrangement that cannot double-push the first block.
+ *
+ * Empty for every line that is not a `user` line with at least one readable `tool_result` block. A
+ * malformed block is SKIPPED rather than failing its neighbours: a block with no `tool_use_id`
+ * pairs with nothing and is not a fact anything can use, while the well-formed block beside it is.
+ * (`parseStreamLine` still reports such a line as `unparsable` when the malformed block happens to
+ * be first -- that is its own contract about whether the LINE was understood, and it is unchanged.)
+ */
+export function parseStreamResults(line: string): readonly ToolResultEvent[] {
+  let raw: unknown
+  try {
+    raw = JSON.parse(line)
+  } catch {
+    return []
+  }
+  const envelope = userEnvelopeSchema.safeParse(raw)
+  if (!envelope.success) return []
+  const events: ToolResultEvent[] = []
+  for (const block of envelope.data.message.content) {
+    if (!isToolResultBlock(block)) continue
+    const event = toolResultEventOf(block)
+    if (event !== null) events.push(event)
+  }
+  return events
+}
+
 const assistantUsageSchema = z.object({
   type: z.literal('assistant'),
   message: z.object({
+    // The two cache counters are deliberately NOT read here (fix round 1, review Important 1) --
+    // they belong to the terminal `result` line's billed figure, not to a per-turn floor. They are
+    // still present on the real line and `.passthrough()` lets them through unread.
     usage: z
       .object({
         input_tokens: z.number().optional(),
         output_tokens: z.number().optional(),
-        cache_creation_input_tokens: z.number().optional(),
-        cache_read_input_tokens: z.number().optional(),
       })
       .passthrough()
       .optional(),
@@ -517,14 +576,20 @@ const assistantUsageSchema = z.object({
  * array. The adapter calls both, in one pass over one line, and pushes whichever events came back
  * into the same queue.
  *
- * The billed-input rule is `parseResultLine`'s, verbatim and for its reason: `input_tokens +
- * cache_creation_input_tokens + cache_read_input_tokens`, each 0 when absent. Both halves or
- * neither -- a `usage` carrying only one is a measurement that did not complete, and a fabricated
- * zero would land in a token sum.
+ * `input` is the line's RAW `input_tokens`, deliberately NOT `parseResultLine`'s billed-input sum
+ * (fix round 1, review Important 1). The billed rule -- input + cache creation + cache read -- is
+ * the RESULT line's because that is what the RUN was charged once; applied per assistant line it
+ * re-counts a context the run re-reads on every request. MEASURED on
+ * `test/fixtures/complete.ndjson`: the four assistant lines' billed input sums to 126,830 against
+ * the result line's 63,684, so a figure advertised as a floor was twice the real one. Raw
+ * `input_tokens` sums to 8 there, which is a floor, and the cache counters stay where they belong.
  *
- * What this figure is NOT: the run's total. MEASURED on `test/fixtures/complete.ndjson`, the four
- * assistant lines sum to 27 output tokens against the `result` line's 741 (plan erratum E4). It is
- * a FLOOR the pump may show while the run is live, and the terminal write replaces it.
+ * Both halves or neither -- a `usage` carrying only one is a measurement that did not complete, and
+ * a fabricated zero would land in a token sum.
+ *
+ * What this figure is NOT: the run's total. It is a FLOOR in BOTH halves -- 8 against 63,684 in,
+ * 27 against 741 out (plan erratum E4, and both directions pinned in `test/stream.test.ts`) -- that
+ * the pump may show while the run is live, and the terminal write replaces it.
  */
 export function parseStreamUsage(line: string): { readonly input: number; readonly output: number } | null {
   let raw: unknown
@@ -538,8 +603,5 @@ export function parseStreamUsage(line: string): { readonly input: number; readon
   const usage = parsed.data.message.usage
   if (usage === undefined) return null
   if (typeof usage.input_tokens !== 'number' || typeof usage.output_tokens !== 'number') return null
-  return {
-    input: usage.input_tokens + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0),
-    output: usage.output_tokens,
-  }
+  return { input: usage.input_tokens, output: usage.output_tokens }
 }

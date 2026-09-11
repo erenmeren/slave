@@ -17,7 +17,7 @@ import type { RunOutcome, RuntimeEvent } from '../types.js'
 import type { Checkpoint } from './checkpoint.js'
 import { claudeFlags, preflightGate } from './flags.js'
 import { writeSettingsFile } from './settings.js'
-import { parseStreamLine, parseStreamUsage } from './stream.js'
+import { parseStreamLine, parseStreamResults, parseStreamUsage } from './stream.js'
 
 /**
  * What a runtime can promise. Every member has exactly one consumer in the system --
@@ -239,8 +239,13 @@ interface RunState {
   /**
    * Stops the tap's tailer after one last drain, or `undefined` for an untapped run. Torn down
    * with the run, in the same place the child's listeners are.
+   *
+   * Assigned rather than constructed with the rest of the state (fix round 1, review Important 3):
+   * the tailer is started only once the run is actually REGISTERED, so every path that abandons the
+   * spawn -- a bad command, no pid, no stdout pipe -- leaves nothing polling by construction rather
+   * than by remembering to tear it down at three call sites.
    */
-  readonly stopTap: (() => Promise<void>) | undefined
+  stopTap: (() => Promise<void>) | undefined
 }
 
 /**
@@ -423,10 +428,8 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         rawResultPayload: undefined,
         startInput: spec.startInput,
         seenToolResults,
-        stopTap:
-          resultsPath === undefined || resultsPath === ''
-            ? undefined
-            : startTapTailer({ resultsPath, queue, seen: seenToolResults }),
+        // Started below, after `this.runs.set` -- see the field's own docstring.
+        stopTap: undefined,
       }
       let settled = false
 
@@ -452,7 +455,11 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         }
         // The run already started successfully; a later spawn-layer error
         // (e.g. failing to signal the child) is handled the same way the
-        // stream simply ending is -- close the queue, do not crash.
+        // stream simply ending is -- close the queue, do not crash. The tailer goes with it (fix
+        // round 1, review Important 3): `timer.unref()` keeps a stray interval from holding the
+        // process open, not from polling a worktree that may already be gone, once per errored run,
+        // for the life of the daemon.
+        void state.stopTap?.()
         queue.close()
       })
 
@@ -479,6 +486,12 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
 
       this.runs.set(spec.runId, state)
 
+      // The tailer starts HERE and not with the state above: every rejection path between the two
+      // returns without a run, and none of them now has an interval to forget.
+      if (resultsPath !== undefined && resultsPath !== '') {
+        state.stopTap = startTapTailer({ resultsPath, queue, seen: seenToolResults })
+      }
+
       // stderr is drained, not surfaced as a RuntimeEvent: the normalized
       // vocabulary comes entirely from stdout's NDJSON stream (spec §5.4).
       // Draining avoids backpressure stalling the child if it writes a lot.
@@ -497,9 +510,21 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         // check-and-add before pushing, exactly as the tailer does, so the pump sees one result per
         // call whichever got there first.
         if (event.kind === 'tool_result') {
-          if (!seenToolResults.has(event.toolUseId)) {
-            seenToolResults.add(event.toolUseId)
-            queue.push(event)
+          // Fix round 1 (review Important 4): a `user` line can carry SEVERAL `tool_result` blocks
+          // -- Claude batches the results of parallel tool calls onto one line -- and
+          // `parseStreamLine` returns only the first, because one line is one event. The array is
+          // pushed INSTEAD of `event`, never as well as it: `parseStreamResults(line)[0]` IS
+          // `event` for any line that produced one, so this is the one arrangement of the two calls
+          // that cannot double-push the first block.
+          //
+          // A `user` line whose FIRST block is unreadable still reports `unparsable` through
+          // `parseStreamLine` and reaches the `else` below, taking its readable siblings with it.
+          // That is the parser's existing posture for a line it could not understand, and it is
+          // strictly better than before, when the whole line was dropped either way.
+          for (const result of parseStreamResults(line)) {
+            if (seenToolResults.has(result.toolUseId)) continue
+            seenToolResults.add(result.toolUseId)
+            queue.push(result)
           }
         } else {
           queue.push(event)
@@ -699,8 +724,12 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         permissionsFilePath: resumedInput.permissionsFilePath,
         // The resumed run's scratch directory is the ORIGINAL one (`resumedInput.runDir`, recovered
         // from `checkpoint.settingsPath`), so a resumed run appends to the same file its first half
-        // wrote -- and the tailer starts from offset 0, which the dedupe set makes harmless: every
-        // id the stream already reported is replayed into a `has` check and dropped.
+        // wrote. What makes that safe is `startTapTailer`'s own rule -- it starts at the file's
+        // CURRENT SIZE, never at zero (see its docstring) -- and NOT the dedupe set, which is fresh
+        // for every spawn (`spawnChild` mints a new `Set` per `RunState`). The pre-pause lines were
+        // already delivered to the previous pump by the run segment that wrote them; replaying them
+        // into a set that has never seen them would write a second `run.tool_result` row for every
+        // call the run made before it paused.
         ...(this.tapPath === undefined ? {} : { toolResultsPath: toolResultsPathFor(resumedInput.runDir) }),
       }),
       startInput: resumedInput,
@@ -776,6 +805,10 @@ function startTapTailer(spec: {
   let carry = ''
   let draining = false
 
+  // One line on stderr per run, not per poll: a broken tap is a standing condition, and a 25 ms
+  // timer would turn it into a flood that buries whatever the operator was actually reading.
+  let warned = false
+
   const drain = async (): Promise<void> => {
     // Re-entrancy guard, not a lock: two overlapping drains would both read from the same `offset`
     // and push every line twice -- which the dedupe set would then swallow, hiding the bug.
@@ -801,8 +834,8 @@ function startTapTailer(spec: {
       }
       const parts = carry.split('\n')
       // The last part is whatever came after the final newline -- an unfinished line, or the empty
-      // string. Held back rather than parsed: the tap writes atomically under PIPE_BUF, but a read
-      // can still land mid-line.
+      // string. Held back rather than parsed: one `printf` of a bounded line to a file opened
+      // `O_APPEND` is atomic, but a READ can still land mid-line.
       carry = parts.pop() ?? ''
       for (const line of parts) {
         const event = parseTapLine(line)
@@ -810,6 +843,21 @@ function startTapTailer(spec: {
         if (spec.seen.has(event.toolUseId)) continue
         spec.seen.add(event.toolUseId)
         spec.queue.push(event)
+      }
+    } catch (error) {
+      // A TAP MUST NEVER INTERFERE, and an unhandled rejection is the loudest interference there is
+      // (fix round 1, review Important 2). `open` is guarded above; `stat`, `read` and `close` were
+      // not, and `setInterval(() => { void drain() })` attaches no handler -- so on Node >= 15 one
+      // transient read error in a gap-filling tap took the whole orchestrator down, which is the
+      // opposite of everything else in this file. Swallowed here, said once, and the poll continues:
+      // the stream carries the same facts, so a tap that cannot read is a gap and not a failure.
+      if (!warned) {
+        warned = true
+        console.warn(
+          `ClaudeCodeAdapter: tool-result tap at ${spec.resultsPath} could not be read ` +
+            `(${error instanceof Error ? error.message : String(error)}). The run continues on the ` +
+            'stream alone; this is reported once per run.',
+        )
       }
     } finally {
       draining = false
@@ -825,6 +873,9 @@ function startTapTailer(spec: {
 
   return async () => {
     clearInterval(timer)
+    // `drain` swallows its own failures (above), so this can only reject if that guarantee is
+    // broken -- and the caller (`lines.close`) closes the queue in a `.finally`, which would drop
+    // the close on the floor if it did.
     await drain()
   }
 }

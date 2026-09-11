@@ -6,15 +6,27 @@ import { createHash } from 'node:crypto'
  * A cap PER STRING, never a slice of the whole serialisation -- and that distinction is the whole
  * point of this module. A prefix slice of the serialised input collides two calls whose difference
  * sits past the cut, which in the harness this finding comes from meant nine different `Bash`
- * commands sharing a long path preamble all hashed the same and a working agent was constrained for
- * repeating itself. A per-string cap collides only two strings that are identical for their first
- * 512 characters, which is a real collision and a rare one, and never mixes one argument's length
- * with another's.
+ * commands sharing a long path preamble all hashed the same and a working slave was constrained for
+ * repeating itself.
+ *
+ * The cut is NOT a collision (fix round 1, review Minor 2). A digest of the WHOLE string is appended
+ * after it, so the canonical form stays bounded -- which is all the cap was ever for -- while two
+ * strings that differ only past character 512 still hash differently. Without that, 512 defeated
+ * the recorded instance of the bug above and not its family: a 687-character `cd … &&` preamble put
+ * `npm test` and `npm run build` back on the same digest, and two `Edit`s differing only late in a
+ * long `old_string` were one call again.
  *
  * Code points rather than UTF-16 units so a cut never lands inside a surrogate pair and produces a
  * lone half that hashes differently from run to run.
  */
 export const HASH_STRING_CAP = 512
+
+/**
+ * How many hex characters of the full-string digest ride along after a cut. Sixteen is 64 bits,
+ * which is far past any collision a tool input could reach by accident and keeps the canonical form
+ * short enough that the cap still does its bounding job.
+ */
+const HASH_TAIL_DIGEST_CHARS = 16
 
 /**
  * How many entries of any one array are read. The COUNT is canonicalised alongside them, so two
@@ -39,7 +51,11 @@ export const HASH_DEPTH_MAX = 6
  * Canonicalisation, in one pass, and every rule is a way two calls could look different while being
  * the same call (or the reverse):
  *   - object keys are SORTED, so `{a,b}` and `{b,a}` are one call;
- *   - each string is capped at {@link HASH_STRING_CAP} code points;
+ *   - keys and string values are JSON-ENCODED, so a `,`, `=` or `:` inside a value cannot
+ *     impersonate the structure around it (fix round 1, review Minor 1: `{a:'x', b:1}` and
+ *     `{a:'x,b=n:1'}` used to produce one digest);
+ *   - each string is capped at {@link HASH_STRING_CAP} code points, with a digest of the whole
+ *     string appended after the cut so the cap bounds the form without folding two calls together;
  *   - each array is capped at {@link HASH_ARRAY_MAX} entries, with its true LENGTH kept beside them;
  *   - the walk stops at {@link HASH_DEPTH_MAX} and writes a sentinel;
  *   - non-finite numbers, functions, symbols and `undefined` are DROPPED (they cannot round-trip
@@ -62,7 +78,12 @@ function canonical(value: unknown, depth: number, seen: Set<object>): string {
   switch (typeof value) {
     case 'string': {
       const points = [...value]
-      return points.length <= HASH_STRING_CAP ? `s:${value}` : `s:${points.slice(0, HASH_STRING_CAP).join('')}#cut`
+      if (points.length <= HASH_STRING_CAP) return `s:${JSON.stringify(value)}`
+      const head = points.slice(0, HASH_STRING_CAP).join('')
+      // The tail is a DIGEST, not the tail itself: the output stays bounded (the whole reason the
+      // cap exists) and the difference past the cut still reaches the outer hash.
+      const tail = createHash('sha256').update(value).digest('hex').slice(0, HASH_TAIL_DIGEST_CHARS)
+      return `s:${JSON.stringify(head)}#cut:${tail}`
     }
     case 'number':
       return Number.isFinite(value) ? `n:${String(value)}` : '#drop'
@@ -92,7 +113,7 @@ function canonical(value: unknown, depth: number, seen: Set<object>): string {
       // for a reason nobody could see.
       .filter(([, entry]) => entry !== '#drop')
       .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-    return `o:{${entries.map(([key, entry]) => `${key}=${entry}`).join(',')}}`
+    return `o:{${entries.map(([key, entry]) => `${JSON.stringify(key)}=${entry}`).join(',')}}`
   } finally {
     seen.delete(object)
   }

@@ -35,6 +35,22 @@ function resolveOnPath(tool: string): string | null {
   return null
 }
 
+/**
+ * A PATH directory holding everything the tap needs EXCEPT `node`, so the grep fallback is the path
+ * actually taken. `null` when the box has no coreutils to link.
+ */
+async function minimalBinDir(): Promise<string | null> {
+  const bin = path.join(tempDir(), 'bin')
+  mkdirSync(bin, { recursive: true })
+  // `env` and `bash` are the shebang's own needs; `cat`, `grep` and `head` are the fallback's.
+  for (const tool of ['env', 'bash', 'cat', 'grep', 'head']) {
+    const resolved = resolveOnPath(tool)
+    if (resolved === null) return null
+    symlinkSync(resolved, path.join(bin, tool))
+  }
+  return bin
+}
+
 interface TapResult {
   readonly stdout: string
   readonly stderr: string
@@ -174,15 +190,9 @@ describe('scripts/tool-result-tap.sh', () => {
     // fields rather than nothing: a hook is invoked by an external binary whose PATH this system
     // does not control, and a tap that only works when `node` happens to be on it is a tap that
     // silently records nothing on the deployment that needed it most.
+    const bin = await minimalBinDir()
+    if (bin === null) return // nothing to prove on a box without coreutils
     const dir = tempDir()
-    const bin = path.join(dir, 'bin')
-    mkdirSync(bin)
-    // `env` and `bash` are the shebang's own needs; `cat`, `grep` and `head` are the fallback's.
-    for (const tool of ['env', 'bash', 'cat', 'grep', 'head']) {
-      const resolved = resolveOnPath(tool)
-      if (resolved === null) return // nothing to prove on a box without coreutils
-      symlinkSync(resolved, path.join(bin, tool))
-    }
     const resultsPath = path.join(dir, 'tool-results.ndjson')
     const one = await spawnTap(
       JSON.stringify({ tool_use_id: 'toolu_grep', tool_name: 'Read', tool_response: { is_error: true, content: 'ENOENT' } }),
@@ -195,6 +205,45 @@ describe('scripts/tool-result-tap.sh', () => {
       toolName: 'Read',
       outcome: 'error',
       errorClass: 'not_found',
+    })
+  })
+
+  it('counts BYTES against the cap, not characters (fix round 1, review Minor 4)', async () => {
+    // 1,500 emoji is 1,500 code points and 6,000 UTF-8 bytes. Under a UTF-8 locale `${#line}` would
+    // have called this line ~1,540 and written it; the cap is denominated in bytes because that is
+    // what a tailer reading the file has to cope with, and `LC_ALL=C` is what makes the script's own
+    // measurement agree with its comment.
+    const { exitCode, lines } = await runTap({
+      tool_use_id: 'toolu_wide',
+      tool_name: '🙂'.repeat(1_500),
+      tool_response: { is_error: false },
+    })
+    expect(exitCode).toBe(0)
+    expect(lines).toEqual([])
+  })
+
+  it('classifies the RESPONSE, not the tool input, even on the grep fallback (fix round 1, Minor 5)', async () => {
+    // Without `node` there is no parser to walk the payload with, and the whole bounded payload used
+    // to reach the classifier -- so a `Bash` call whose own COMMAND mentions a missing file was
+    // classified `not_found` on the strength of its input. The failure that classifies is the one the
+    // runtime reported.
+    const bin = await minimalBinDir()
+    if (bin === null) return
+    const dir = tempDir()
+    const resultsPath = path.join(dir, 'tool-results.ndjson')
+    const one = await spawnTap(
+      JSON.stringify({
+        tool_use_id: 'toolu_scoped',
+        tool_name: 'Bash',
+        tool_input: { command: 'test -f /nope || echo ENOENT: no such file' },
+        tool_response: { is_error: true, content: 'API Error: 529 overloaded' },
+      }),
+      { SLAVEOFAI_TOOL_RESULTS: resultsPath, PATH: bin },
+    )
+    expect(one.exitCode).toBe(0)
+    expect(JSON.parse(readFileSync(resultsPath, 'utf8').trim())).toMatchObject({
+      outcome: 'error',
+      errorClass: 'api_error',
     })
   })
 

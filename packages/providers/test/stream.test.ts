@@ -1,6 +1,11 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { isPreToolUseHookResponseLine, parseStreamLine, parseStreamUsage } from '../src/claude/stream.js'
+import {
+  isPreToolUseHookResponseLine,
+  parseStreamLine,
+  parseStreamResults,
+  parseStreamUsage,
+} from '../src/claude/stream.js'
 import { hashToolInput } from '../src/hash.js'
 import { PERMISSION_DENY_REASON_PREFIX } from '../src/gate.js'
 import type { RuntimeEvent } from '../src/types.js'
@@ -722,7 +727,13 @@ describe('the user/tool_result line (M51 R1)', () => {
 })
 
 describe('parseStreamUsage (M51 R5)', () => {
-  it('reads an assistant line\u2019s per-turn usage under the same billed-input rule the result uses', () => {
+  it('reads an assistant line\u2019s RAW input_tokens, leaving the cache counters to the result line', () => {
+    // Fix round 1 (review Important 1). The billed-input rule -- input + cache_creation + cache_read
+    // -- is the RESULT line's, because that is what the run was charged. Applying it per assistant
+    // line double-counts a context the run re-reads every request: measured on
+    // `fixtures/complete.ndjson`, the four assistant lines' billed input summed to 126,830 against
+    // the result line's 63,684, so the event advertised as a FLOOR was twice the real figure for
+    // that half. Raw `input_tokens` is a floor in both halves and is what this event is for.
     const raw = JSON.stringify({
       type: 'assistant',
       message: {
@@ -730,7 +741,7 @@ describe('parseStreamUsage (M51 R5)', () => {
         usage: { input_tokens: 2, cache_creation_input_tokens: 100, cache_read_input_tokens: 900, output_tokens: 7 },
       },
     })
-    expect(parseStreamUsage(raw)).toEqual({ input: 1002, output: 7 })
+    expect(parseStreamUsage(raw)).toEqual({ input: 2, output: 7 })
   })
 
   it('is null for every line that is not an assistant line with usage on it', () => {
@@ -744,24 +755,38 @@ describe('parseStreamUsage (M51 R5)', () => {
     expect(parseStreamUsage(raw)).toBeNull()
   })
 
-  it('does NOT sum to the run\u2019s own result line, and that is a measured fact not a bug', () => {
-    // MEASURED against `fixtures/complete.ndjson`: the four assistant lines report 27 output tokens
-    // between them, the `result` line reports 741. The mid-run figure is a FLOOR, and this test is
-    // what stops a later reader believing it is the total.
+  it('is a FLOOR in BOTH halves against the run\u2019s own result line, which is a measured fact not a bug', () => {
+    // MEASURED against `fixtures/complete.ndjson`, and BOTH directions are pinned here since fix
+    // round 1 (review Important 1) -- the docstring calls this event a floor, and a claim about two
+    // numbers needs two assertions. Output: the four assistant lines report 27 between them, the
+    // `result` line reports 741. Input: 8 against 63,684, because the result line's figure folds in
+    // the cache creation and cache reads the run was billed for and the per-turn lines do not.
     const lines = readFileSync(new URL('./fixtures/complete.ndjson', import.meta.url), 'utf8')
       .split('\n')
       .filter((one) => one !== '')
+    let input = 0
     let output = 0
-    let terminal = 0
+    let terminalInput = 0
+    let terminalOutput = 0
     for (const line of lines) {
       const usage = parseStreamUsage(line)
-      if (usage !== null) output += usage.output
+      if (usage !== null) {
+        input += usage.input
+        output += usage.output
+      }
       const event = parseStreamLine(line)
-      if (event.kind === 'terminated') terminal = event.outcome.tokens?.output ?? 0
+      if (event.kind === 'terminated') {
+        terminalInput = event.outcome.tokens?.input ?? 0
+        terminalOutput = event.outcome.tokens?.output ?? 0
+      }
     }
     expect(output).toBe(27)
-    expect(terminal).toBe(741)
-    expect(output).toBeLessThan(terminal)
+    expect(terminalOutput).toBe(741)
+    expect(input).toBe(8)
+    expect(terminalInput).toBe(63_684)
+    // The claim the docstring makes, asserted rather than described.
+    expect(output).toBeLessThanOrEqual(terminalOutput)
+    expect(input).toBeLessThanOrEqual(terminalInput)
   })
 
   it('never changes what parseStreamLine returns for the same line', () => {
@@ -773,5 +798,59 @@ describe('parseStreamUsage (M51 R5)', () => {
     // The usage rides a SECOND pure function the adapter calls beside it, which is exactly why this
     // member did not have to change one parser's signature into an array.
     expect(parseStreamLine(raw)).toEqual({ kind: 'text', text: 'hi' })
+  })
+})
+
+describe('parseStreamResults (M51 R1, fix round 1 -- review Important 4)', () => {
+  const parallel = JSON.stringify({
+    type: 'user',
+    message: {
+      content: [
+        { tool_use_id: 'toolu_a', type: 'tool_result', content: 'ok', is_error: false },
+        { tool_use_id: 'toolu_b', type: 'tool_result', content: 'ENOENT: no such file', is_error: true },
+        { tool_use_id: 'toolu_c', type: 'tool_result', content: 'ok' },
+      ],
+    },
+  })
+
+  it('returns ONE event per tool_result block -- Claude batches parallel calls onto one user line', () => {
+    // The bug this closes: `.find(...)` kept the first block and dropped the rest silently, so a
+    // parallel call\u2019s failure never reached the error-storm arm and its call never got a result,
+    // which R1 says suppresses every arm. A quiet run that was actually failing read as a quiet run.
+    expect(parseStreamResults(parallel)).toEqual([
+      { kind: 'tool_result', toolUseId: 'toolu_a', toolName: '', outcome: 'ok', errorClass: null },
+      { kind: 'tool_result', toolUseId: 'toolu_b', toolName: '', outcome: 'error', errorClass: 'not_found' },
+      { kind: 'tool_result', toolUseId: 'toolu_c', toolName: '', outcome: 'ok', errorClass: null },
+    ])
+  })
+
+  it('is empty for every line that carries no tool_result block at all', () => {
+    expect(parseStreamResults(JSON.stringify({ type: 'user', message: { content: 'do the thing' } }))).toEqual([])
+    expect(parseStreamResults(JSON.stringify({ type: 'assistant', message: { content: [] } }))).toEqual([])
+    expect(parseStreamResults('{bad')).toEqual([])
+  })
+
+  it('skips a malformed block instead of dropping its well-formed neighbours', () => {
+    const mixed = JSON.stringify({
+      type: 'user',
+      message: {
+        content: [
+          { type: 'tool_result' },
+          { tool_use_id: 'toolu_ok', type: 'tool_result', is_error: false },
+        ],
+      },
+    })
+    // A block with no `tool_use_id` pairs with nothing and is not a fact anything can use; the one
+    // beside it still is. `parseStreamLine` keeps reporting the LINE as `unparsable` for that same
+    // shape -- that is its own contract about whether the line was understood, and this function\u2019s
+    // job is the results it could actually read.
+    expect(parseStreamResults(mixed)).toEqual([
+      { kind: 'tool_result', toolUseId: 'toolu_ok', toolName: '', outcome: 'ok', errorClass: null },
+    ])
+  })
+
+  it('agrees with parseStreamLine on the FIRST block, so the two can never disagree about one call', () => {
+    const [first] = parseStreamResults(parallel)
+    expect(parseStreamLine(parallel)).toEqual(first)
   })
 })

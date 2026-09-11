@@ -1,9 +1,9 @@
-import { appendFileSync, chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { runId, type RunId } from '@slave-of-ai/domain'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
 import { ClaudeCodeAdapter, type StartRunInput } from '../src/claude/adapter.js'
 import type { RuntimeEvent } from '../src/types.js'
@@ -327,6 +327,93 @@ describe('ClaudeCodeAdapter and the tool-result tap (M51 R6)', () => {
     expect(results).toHaveLength(2)
     for (const event of results) expect(event.toolName).toBe('')
     expect(existsSync(path.join(worktreePath, 'tool-results.ndjson'))).toBe(false)
+  })
+
+  it('survives a tailer read that fails, without an unhandled rejection (fix round 1, Important 2)', async (): Promise<void> => {
+    // A DIRECTORY where the tap's file should be: `open` succeeds on Linux and `read` rejects with
+    // EISDIR (measured), which is the shape of every transient read failure at once. Before the fix
+    // that rejection escaped `void drain()` with no handler, and `apps/orchestrator/src/daemon.ts`
+    // installs no `unhandledRejection` handler -- so one bad read in a GAP-FILLING tap took the
+    // whole orchestrator down, which is the exact opposite of what a tap is allowed to do.
+    const rejections: unknown[] = []
+    const onUnhandled = (reason: unknown): void => {
+      rejections.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      const adapter = new ClaudeCodeAdapter({
+        command: 'node',
+        extraArgs: [FAKE, '--fixture', 'complete'],
+        hookPath,
+        tapPath: TAP,
+      })
+      await adapter.start(input)
+      // After start(), so the tailer's own initial offset was taken while nothing was there.
+      mkdirSync(path.join(worktreePath, 'tool-results.ndjson'))
+      const events = await drain(adapter, input.runId)
+      // The run is unaffected: the stream's own results and its terminal event all arrive.
+      expect(events.filter((event) => event.kind === 'tool_result')).toHaveLength(2)
+      expect(events.some((event) => event.kind === 'terminated')).toBe(true)
+      await new Promise((resolve) => setTimeout(resolve, 60))
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandled)
+    }
+    expect(rejections).toEqual([])
+  })
+
+  it('starts no tailer at all when the spawn fails (fix round 1, Important 3)', async (): Promise<void> => {
+    // The tailer is created only once the run is actually registered, so every path that abandons
+    // the spawn -- a bad command, no pid, no stdout pipe -- leaves nothing polling by construction
+    // rather than by remembering to tear it down.
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
+    try {
+      const adapter = new ClaudeCodeAdapter({
+        command: '/nope/does-not-exist-claude-binary',
+        hookPath,
+        tapPath: TAP,
+      })
+      await expect(adapter.start(input)).rejects.toThrow(/failed to spawn/u)
+      expect(setIntervalSpy).not.toHaveBeenCalled()
+    } finally {
+      setIntervalSpy.mockRestore()
+    }
+  })
+
+  it('clears the tailer it started when the run ends (fix round 1, Important 3)', async (): Promise<void> => {
+    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
+    const clearIntervalSpy = vi.spyOn(globalThis, 'clearInterval')
+    try {
+      const adapter = new ClaudeCodeAdapter({
+        command: 'node',
+        extraArgs: [FAKE, '--fixture', 'complete'],
+        hookPath,
+        tapPath: TAP,
+      })
+      await adapter.start(input)
+      await drain(adapter, input.runId)
+      expect(setIntervalSpy.mock.calls.length).toBeGreaterThan(0)
+      // Every interval this run started has been cleared: a 25 ms poll against a worktree that may
+      // already be gone, once per run, for the life of the process, is what an omission here costs.
+      expect(clearIntervalSpy.mock.calls.length).toBe(setIntervalSpy.mock.calls.length)
+    } finally {
+      setIntervalSpy.mockRestore()
+      clearIntervalSpy.mockRestore()
+    }
+  })
+
+  it('delivers EVERY result on a user line that batches parallel calls (fix round 1, Important 4)', async (): Promise<void> => {
+    const adapter = new ClaudeCodeAdapter({
+      command: 'node',
+      extraArgs: [FAKE, '--fixture', 'parallel-tool-results'],
+      hookPath,
+    })
+    await adapter.start(input)
+    const results = (await drain(adapter, input.runId)).filter((event) => event.kind === 'tool_result')
+    // THREE blocks on ONE `user` line, three events -- and each exactly once, which is the property
+    // that makes `parseStreamResults` safe to call beside `parseStreamLine`.
+    expect(results.map((event) => event.toolUseId)).toEqual(['toolu_par_a', 'toolu_par_b', 'toolu_par_c'])
+    expect(results.map((event) => event.outcome)).toEqual(['ok', 'error', 'ok'])
+    expect(results.map((event) => event.errorClass)).toEqual([null, 'not_found', null])
   })
 
   it('refuses to spawn when the configured tap is broken', async (): Promise<void> => {

@@ -702,6 +702,27 @@ describe('the completed tool_call line (M51 R1/E3)', () => {
     expect(parseCursorLine(rejected)).toMatchObject({ kind: 'permission_denied', toolUseId: 'c3' })
   })
 
+  it('reads a result object with no keys as OK, never as a failure', () => {
+    // Fix round 1 (review Minor 3). `{"result":{}}` says the call finished and says nothing about
+    // how. It used to fall through `'success' in result` and be counted as an error, three lines
+    // under a comment insisting that no evidence either way must not count toward a storm. It is
+    // still an EVENT rather than `ignored`, because "this call finished" is exactly the fact that
+    // stops a trailing running call from suppressing every arm (R1).
+    const blank = JSON.stringify({
+      type: 'tool_call',
+      subtype: 'completed',
+      call_id: 'c7',
+      tool_call: { shellToolCall: { args: {}, result: {} } },
+    })
+    expect(parseCursorLine(blank)).toEqual({
+      kind: 'tool_result',
+      toolUseId: 'c7',
+      toolName: 'shell',
+      outcome: 'ok',
+      errorClass: null,
+    })
+  })
+
   it('stays `ignored` for a completed line with no readable result at all', () => {
     // "The call finished" with no evidence either way must not count toward an error storm (E3).
     const blank = JSON.stringify({
