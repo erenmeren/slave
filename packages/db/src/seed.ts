@@ -62,15 +62,16 @@ export async function seed(): Promise<void> {
   // M48 R3: the checked-in runbooks. `stages` is a `Json` column, so the cast Prisma wants for a
   // readonly structure is the one `appendEvent` uses for a payload.
   await prisma.runbookTemplate.createMany({
-    data: RUNBOOK_SEED.map((runbook) => ({
-      key: runbook.key,
-      name: runbook.name,
-      description: runbook.description,
-      keywords: [...runbook.keywords],
-      requiredCapabilities: [...runbook.requiredCapabilities],
-      optionalCapabilities: [...runbook.optionalCapabilities],
-      stages: runbook.stages as unknown as Prisma.InputJsonValue,
-      source: 'seed',
+    data: RUNBOOK_SEED.map(({ stages, keywords, requiredCapabilities, optionalCapabilities, ...runbook }) => ({
+      // The row SPREAD, `source` and `sourceTemplateId` included (fix round 1, Minor 6): the seed
+      // says what it is on the row, and this writer does not re-assert it. Only the four readonly
+      // arrays are copied -- Prisma's input types are mutable -- and `stages` is a `Json` column, so
+      // it takes the cast `appendEvent` uses for a payload.
+      ...runbook,
+      keywords: [...keywords],
+      requiredCapabilities: [...requiredCapabilities],
+      optionalCapabilities: [...optionalCapabilities],
+      stages: stages as unknown as Prisma.InputJsonValue,
     })),
   })
 

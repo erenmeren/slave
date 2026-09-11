@@ -63,8 +63,14 @@ const planTaskSchema = z.object({
   // Loose on purpose, exactly like `capabilities` above: a shape violation here would make
   // `parsePlanGraph` fall back to an EARLIER draft, and a handoff that is merely incomplete is a
   // named structural refusal instead.
-  handoff: z.record(z.string(), z.unknown()).optional(),
-  stage: z.string().min(1).optional(),
+  //
+  // `.nullish()`, not `.optional()` (fix round 1, Important 1; spec erratum E18). A planner asked
+  // for an optional field answers it two ways -- by omitting it, and by writing `null` -- and
+  // `.optional()` accepted only the first. The second FAILED THE SHAPE, which is precisely the
+  // failure this looseness exists to prevent: `parsePlanGraph` walked past the final object and ran
+  // an earlier draft, silently. `null` means absent; {@link validateStructure} normalises it away.
+  handoff: z.record(z.string(), z.unknown()).nullish(),
+  stage: z.string().min(1).nullish(),
 })
 
 /** How many capabilities one task may ask for. A task naming eleven has not been decomposed --
@@ -113,7 +119,9 @@ function validateStructure(graph: PlanGraph, stageKeys: readonly string[]): Resu
     if (malformed !== undefined) {
       return err(`task "${task.key}" asks for "${malformed}", which is not a capability key`)
     }
-    if (task.handoff !== undefined) {
+    // `!= null` on purpose, for both: `null` is a planner saying "no contract" / "no stage", and
+    // erratum E18 makes that the same answer as omitting the key.
+    if (task.handoff != null) {
       const contract = handoffContractSchema.safeParse(task.handoff)
       if (!contract.success) {
         return err(`task "${task.key}" has a handoff that is not a contract: ${contract.error.message}`)
@@ -123,7 +131,7 @@ function validateStructure(graph: PlanGraph, stageKeys: readonly string[]): Resu
     // is pure. An EMPTY list is "no runbook is adopted", under which any stage stands -- a plan
     // written against a runbook that was cleared while the run was in flight is not a plan to
     // throw away.
-    if (task.stage !== undefined && stageKeys.length > 0 && !stageKeys.includes(task.stage)) {
+    if (task.stage != null && stageKeys.length > 0 && !stageKeys.includes(task.stage)) {
       return err(`task "${task.key}" names stage "${task.stage}", which this runbook does not have`)
     }
   }
@@ -147,12 +155,29 @@ function validateStructure(graph: PlanGraph, stageKeys: readonly string[]): Resu
   // The contract is re-read out of the strict schema and put back on the task, so every caller gets
   // `HandoffContract` rather than the loose record the shape let through. One parse, at the
   // boundary -- `concludePlanning` never re-validates.
-  const tasks = graph.tasks.map((task) =>
-    task.handoff === undefined
-      ? task
-      : { ...task, handoff: handoffContractSchema.parse(task.handoff) },
-  )
-  return ok({ tasks })
+  //
+  // A `null` handoff or stage is DELETED rather than carried (erratum E18): `concludePlanning`
+  // writes these straight onto a `Task` row, and a `null` reaching `Task.handoff` is a JSON null in
+  // the column -- a value every reader then has to tell apart from an absent contract -- while a
+  // `null` reaching `Task.stage` would be a stage named nothing. `undefined` is the one spelling of
+  // "the planner did not ask for this".
+  return ok({ tasks: graph.tasks.map(normalisePlanTask) })
+}
+
+/**
+ * One task with its optional M48 fields normalised: a parsed `HandoffContract` where there is one,
+ * and the KEY REMOVED where the planner wrote `null` or nothing (spec erratum E18).
+ *
+ * Exported for `delta.ts`'s `validateDelta` alone -- the same rule applies to a re-plan's `add`
+ * list, and the two must not drift -- exactly as {@link findCycle} is exported for that one caller.
+ */
+export function normalisePlanTask(task: PlanTask): PlanTask {
+  const { handoff, stage, ...rest } = task
+  return {
+    ...rest,
+    ...(handoff == null ? {} : { handoff: handoffContractSchema.parse(handoff) }),
+    ...(stage == null ? {} : { stage }),
+  }
 }
 
 /**

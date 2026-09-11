@@ -241,6 +241,29 @@ describe('handoff and stage (M48 R2)', () => {
     expect(parsePlanGraph(graph({ stage: 'anything' })).ok).toBe(true)
   })
 
+  // Fix round 1, Important 1 (spec erratum E18). A planner that writes `"handoff": null` for a task
+  // it decided needed no contract is saying "absent", not "malformed" -- and `null` failing the
+  // SHAPE is the one failure mode `capabilities`' looseness exists to prevent: it made
+  // `parsePlanGraph` walk past the final object entirely.
+  it('reads a null handoff and a null stage as ABSENT, not as a shape failure', () => {
+    const parsed = parsePlanGraph(graph({ handoff: null, stage: null }))
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.tasks[0]?.handoff).toBeUndefined()
+    expect(parsed.value.tasks[0]?.stage).toBeUndefined()
+    // Normalised to `undefined`, never carried as `null`: `concludePlanning` writes this straight
+    // into a `Json` column, and `null` there is a JSON null rather than an absent contract.
+    expect(Object.prototype.hasOwnProperty.call(parsed.value.tasks[0] ?? {}, 'handoff')).toBe(false)
+  })
+
+  it('picks the FINAL object when that is the one carrying the nulls, never an earlier draft', () => {
+    const text = `${graph({ title: 'an earlier draft' })}\n${graph({ title: 'the final graph', handoff: null, stage: null })}`
+    const parsed = parsePlanGraph(text)
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.tasks[0]?.title).toBe('the final graph')
+  })
+
   // The shape stays loose for `capabilities`' own reason: a bad handoff must not make the parser
   // fall back to an EARLIER draft object in the same message.
   it('refuses a malformed handoff outright rather than falling back to an earlier candidate', () => {

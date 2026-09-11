@@ -33,6 +33,16 @@ describe('RUNBOOK_SEED', () => {
     }
   })
 
+  // Fix round 1, Minor 6: the brief promised a `RunbookDraft`-shaped seed, and these two fields are
+  // what make the shape whole -- so `seed.ts` and `syncRunbooks()` spread a row rather than
+  // re-stating what every row already says about itself.
+  it('is RunbookDraft-shaped: every row says it is a seed row, from no template', () => {
+    for (const runbook of RUNBOOK_SEED) {
+      expect(runbook.source).toBe('seed')
+      expect(runbook.sourceTemplateId).toBeNull()
+    }
+  })
+
   it('ships NO gates: a gate is a workspace command, and the seed cannot know one', () => {
     for (const runbook of RUNBOOK_SEED) {
       for (const stage of runbook.stages) expect(stage.gates).toEqual([])

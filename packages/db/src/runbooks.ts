@@ -1,7 +1,14 @@
 import type { RunbookStage } from '@slave-of-ai/domain'
 
-/** One checked-in runbook, in the shape `syncRunbooks()` writes and the seed inserts. The `id` is
- *  the database's; `key` is the identity everything else addresses. */
+/**
+ * One checked-in runbook, in the shape `syncRunbooks()` writes and the seed inserts. The `id` is
+ * the database's; `key` is the identity everything else addresses.
+ *
+ * The same shape as the domain's `RunbookDraft` minus its `sourceTemplateId: string` (fix round 1,
+ * Minor 6): `source` and `sourceTemplateId` are stated on each ROW rather than supplied by whoever
+ * writes it, so a writer spreads the row instead of re-asserting what the row already says about
+ * itself -- and a fourth `source` arriving one day changes these literals, not two call sites.
+ */
 export interface SeedRunbook {
   readonly key: string
   readonly name: string
@@ -10,6 +17,8 @@ export interface SeedRunbook {
   readonly requiredCapabilities: readonly string[]
   readonly optionalCapabilities: readonly string[]
   readonly stages: readonly RunbookStage[]
+  readonly source: 'seed'
+  readonly sourceTemplateId: null
 }
 
 const stage = (
@@ -48,6 +57,8 @@ const stage = (
 export const RUNBOOK_SEED: readonly SeedRunbook[] = [
   {
     key: 'bug-fix',
+    source: 'seed',
+    sourceTemplateId: null,
     name: 'Bug fix',
     description: 'Reproduce it first, fix it second, prove it third, and have somebody read the fix.',
     keywords: ['bug', 'fix', 'regression', 'crash', 'defect', 'broken'],
@@ -79,6 +90,8 @@ export const RUNBOOK_SEED: readonly SeedRunbook[] = [
   },
   {
     key: 'feature-delivery',
+    source: 'seed',
+    sourceTemplateId: null,
     name: 'Feature delivery',
     description: 'Decide the shape, build it, prove it, have it read, and put it where people can use it.',
     keywords: ['feature', 'ship', 'endpoint', 'build', 'deliver', 'implement', 'launch'],
@@ -115,6 +128,8 @@ export const RUNBOOK_SEED: readonly SeedRunbook[] = [
   },
   {
     key: 'security-review',
+    source: 'seed',
+    sourceTemplateId: null,
     name: 'Security review',
     description: 'Model the attacker first, read the path, fix what is wrong, and prove the fix.',
     keywords: ['security', 'security review', 'authentication', 'authorization', 'vulnerability', 'threat', 'audit'],

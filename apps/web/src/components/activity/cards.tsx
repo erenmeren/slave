@@ -437,6 +437,15 @@ function WorkspacePlanCreatedCard(props: ActivityCardProps): ReactElement {
 
 /** `dispatchPlanning` started a re-plan run for a goal version (M40 §5). `starting`, the tone every
  *  other "a run is beginning" card carries -- nothing has been decided yet. */
+function WorkspaceReplanStartedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="starting" label={`re-planning for goal v${String(payload.version)}`} />
+    </ActivityCard>
+  )
+}
+
 /** M48 R5: a runbook adopted, or cleared. `idle` rather than `starting`: nothing is running --
  *  a decision about how the work will be done has been recorded. */
 function WorkspaceRunbookAdoptedCard(props: ActivityCardProps): ReactElement {
@@ -446,15 +455,6 @@ function WorkspaceRunbookAdoptedCard(props: ActivityCardProps): ReactElement {
       <Transition tone="idle" label={payload.cleared === true ? 'runbook cleared' : 'runbook adopted'}>
         <span data-testid="runbook-name">{payload.name}</span>
       </Transition>
-    </ActivityCard>
-  )
-}
-
-function WorkspaceReplanStartedCard(props: ActivityCardProps): ReactElement {
-  const payload = props.event.payload as { version: number }
-  return (
-    <ActivityCard {...props}>
-      <Transition tone="starting" label={`re-planning for goal v${String(payload.version)}`} />
     </ActivityCard>
   )
 }

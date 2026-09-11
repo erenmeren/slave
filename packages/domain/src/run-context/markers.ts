@@ -1,22 +1,18 @@
 /**
- * The protocol markers another party's text must not be able to reopen, and the one function that
- * defuses them.
- *
- * A LEAF module, imported by `./render.ts` (which re-exports both names, so every existing caller
- * is untouched) and by `../handoff/contract.ts`. It has no imports of its own, and that is the
- * point: `render.ts` imports `REPLAN_INSTRUCTIONS` from `../planning/delta.js`, `delta.ts` reads
- * `planGraphSchema.shape` off `../planning/graph.js` at module scope, and `graph.ts` needs the
- * handoff schema -- so a handoff module reaching straight into `render.ts` closed a four-module
- * import cycle and left `planGraphSchema` undefined at the moment `delta.ts` evaluated. Splitting
- * the two constants out is what makes the graph acyclic again.
- */
-/**
  * The M36 worker-protocol markers a quoted profile, inbox message or skill description must not
  * be able to reopen (M37 §1, "another party's text is data"). Mirrors `ASK_BLOCK_OPEN`/
  * `ASK_BLOCK_CLOSE`/`ANSWER_BLOCK_OPEN`/`ANSWER_BLOCK_CLOSE` in `../messaging/`, spelled out here
  * rather than imported so this module stays the one place that knows what "neutralised" means --
  * the messaging module's own constants are the ACTIVE markers a slave writes, these are the same
  * four strings as DATA to be defused.
+ *
+ * These two live in a LEAF module of their own (M48 t1), re-exported by `./render.ts` so every
+ * caller since M37 is untouched. The reason is the import graph: `render.ts` imports
+ * `REPLAN_INSTRUCTIONS` from `../planning/delta.js`, `delta.ts` reads `planGraphSchema.shape` off
+ * `../planning/graph.js` at MODULE scope, and `graph.ts` needs the handoff schema -- so
+ * `../handoff/contract.ts` reaching straight into `render.ts` for `neutraliseMarkers` closed a
+ * four-module cycle and left `planGraphSchema` undefined at the moment `delta.ts` evaluated. This
+ * file imports nothing, which is what makes the graph acyclic again.
  */
 export const MARKERS = ['<slave-ask>', '</slave-ask>', '<slave-answer>', '</slave-answer>'] as const
 
@@ -39,4 +35,3 @@ export function neutraliseMarkers(text: string): string {
   }
   return result
 }
-

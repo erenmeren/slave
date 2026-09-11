@@ -148,6 +148,98 @@ describe('runContextManifestSchema', () => {
     expect(runContextManifestSchema.safeParse(malformed).success).toBe(false)
   })
 
+  /**
+   * M48's three source kinds, round-tripped. All three are WRITE-STRICT by the `replan` rule: they
+   * are new in M48, so there is no history of rows written without their fields to be tolerant of --
+   * which is why each accept case below is paired with a reject case for a field left out.
+   */
+  it('accepts an implementation manifest carrying a handoff source, and returns it unchanged', () => {
+    const manifest: Manifest = {
+      kind: 'implementation',
+      sections: [
+        { kind: 'task', taskId: 't1', sha256: 'd'.repeat(64) },
+        { kind: 'handoff', taskId: 't1', sha256: 'e'.repeat(64) },
+      ],
+    }
+    const parsed = runContextManifestSchema.safeParse(manifest)
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data).toEqual(manifest)
+  })
+
+  // The same source on a REVIEW manifest: a reviewer reads the contract it is judging the diff
+  // against, so the kind is valid under two of the three run kinds (M48 R4).
+  it('accepts a review manifest carrying the same handoff source', () => {
+    const manifest: Manifest = {
+      kind: 'review',
+      sections: [
+        { kind: 'task', taskId: 't1', sha256: 'd'.repeat(64) },
+        { kind: 'handoff', taskId: 't1', sha256: 'e'.repeat(64) },
+        { kind: 'review_diff', base: 'main', head: 'task/t1', capped: false },
+      ],
+    }
+    const parsed = runContextManifestSchema.safeParse(manifest)
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data).toEqual(manifest)
+  })
+
+  it('rejects a handoff source with no sha256 -- there is no pre-M48 handoff row to tolerate', () => {
+    const malformed = { kind: 'implementation', sections: [{ kind: 'handoff', taskId: 't1' }] }
+    expect(runContextManifestSchema.safeParse(malformed).success).toBe(false)
+  })
+
+  it('accepts a planning manifest carrying a runbook source, stage keys and all', () => {
+    const manifest: Manifest = {
+      kind: 'planning',
+      sections: [
+        { kind: 'planning_goal', sha256: 'c'.repeat(64), version: 3 },
+        {
+          kind: 'runbook',
+          runbookId: 'rb-1',
+          key: 'feature-delivery',
+          stageKeys: ['design', 'implement', 'verify', 'review', 'release'],
+        },
+      ],
+    }
+    const parsed = runContextManifestSchema.safeParse(manifest)
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data).toEqual(manifest)
+  })
+
+  it('accepts a runbook source whose stage list is empty, which is a row rather than a crash', () => {
+    const manifest = {
+      kind: 'planning',
+      sections: [{ kind: 'runbook', runbookId: 'rb-1', key: 'feature-delivery', stageKeys: [] }],
+    }
+    expect(runContextManifestSchema.safeParse(manifest).success).toBe(true)
+  })
+
+  it('rejects a runbook source missing its key, and one whose stageKeys is not an array', () => {
+    expect(
+      runContextManifestSchema.safeParse({
+        kind: 'planning',
+        sections: [{ kind: 'runbook', runbookId: 'rb-1', stageKeys: ['design'] }],
+      }).success,
+    ).toBe(false)
+    expect(
+      runContextManifestSchema.safeParse({
+        kind: 'planning',
+        sections: [{ kind: 'runbook', runbookId: 'rb-1', key: 'feature-delivery', stageKeys: 'design' }],
+      }).success,
+    ).toBe(false)
+  })
+
+  // `handoff_protocol` carries no fields at all: its PRESENCE is the fact (no runbook was adopted),
+  // exactly as `ask_protocol`'s is.
+  it('accepts a planning manifest carrying a bare handoff_protocol source', () => {
+    const manifest: Manifest = {
+      kind: 'planning',
+      sections: [{ kind: 'planning_goal', sha256: 'c'.repeat(64), version: 3 }, { kind: 'handoff_protocol' }],
+    }
+    const parsed = runContextManifestSchema.safeParse(manifest)
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data).toEqual(manifest)
+  })
+
   it('rejects a manifest whose kind is not one of the three run kinds', () => {
     const malformed = { kind: 'bogus', sections: [] }
     expect(runContextManifestSchema.safeParse(malformed).success).toBe(false)

@@ -25,9 +25,20 @@ const slug = (name: string): string =>
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
 
+/**
+ * A stage title, flattened and capped at {@link TITLE_MAX} CODE POINTS.
+ *
+ * Spread into an array first (fix round 1, Minor 2), because `String.prototype.slice` counts UTF-16
+ * code UNITS: a cut that landed between a surrogate pair's halves left a lone surrogate in the
+ * title, and `RunbookTemplate.stages` is a `jsonb` column -- Postgres refuses an unpaired surrogate
+ * outright (`unsupported Unicode escape sequence`), so one long persona bullet with an emoji in the
+ * wrong place failed the whole import. Iterating a string yields code points, so a pair is never
+ * split.
+ */
 const trim = (line: string): string => {
   const flat = line.replace(/\s+/g, ' ').trim()
-  return flat.length <= TITLE_MAX ? flat : `${flat.slice(0, TITLE_MAX - 1)}…`
+  const points = [...flat]
+  return points.length <= TITLE_MAX ? flat : `${points.slice(0, TITLE_MAX - 1).join('')}…`
 }
 
 /**
@@ -66,8 +77,16 @@ export function runbookFromProfileSpec(
     escalation: null,
   }))
 
+  // Minor 3: a name with no ASCII alphanumerics -- `***`, or one written in a non-Latin script --
+  // slugs to the empty string, and `persona-` is both invalid against `RUNBOOK_KEY_PATTERN` and the
+  // SAME key for every such persona, so the second import would collide on `RunbookTemplate.key`'s
+  // unique index. The template id is the fallback because it is already unique; it goes through the
+  // same slug so the result is still a key.
+  const named = slug(template.name)
+  const key = `persona-${named === '' ? slug(template.id) : named}`
+
   return {
-    key: `persona-${slug(template.name)}`,
+    key,
     name: `${template.name} workflow`,
     description: `The ${String(lines.length)}-step process this specialist's own profile describes.`,
     keywords: template.capabilityKeys.map((key) => capabilityLabel(key, taxonomy)),

@@ -4,7 +4,7 @@ import { handoffContractSchema } from '../handoff/contract.js'
 import { jsonObjectsLastToFirst } from '../json/last-object.js'
 import { err, ok, type Result } from '../result.js'
 import type { TaskStatus } from '../task/state.js'
-import { MAX_TASK_CAPABILITIES, findCycle, planGraphSchema, type PlanTask } from './graph.js'
+import { MAX_TASK_CAPABILITIES, findCycle, planGraphSchema, normalisePlanTask, type PlanTask } from './graph.js'
 
 /**
  * What a re-plan run returns (M40 §1, "re-planning is a delta, never a rebuild").
@@ -102,13 +102,13 @@ function validateDelta(
     // `added task` wording: a malformed handoff is a NAMED refusal rather than a shape failure, and
     // an empty `stageKeys` is "no runbook is adopted", under which any stage stands (plan erratum
     // E1).
-    if (task.handoff !== undefined) {
+    if (task.handoff != null) {
       const contract = handoffContractSchema.safeParse(task.handoff)
       if (!contract.success) {
         return err(`added task "${task.key}" has a handoff that is not a contract: ${contract.error.message}`)
       }
     }
-    if (task.stage !== undefined && stageKeys.length > 0 && !stageKeys.includes(task.stage)) {
+    if (task.stage != null && stageKeys.length > 0 && !stageKeys.includes(task.stage)) {
       return err(`added task "${task.key}" names stage "${task.stage}", which this runbook does not have`)
     }
   }
@@ -148,13 +148,11 @@ function validateDelta(
     if (cancelled.has(taskId)) return err(`task "${taskId}" is both cancelled and kept`)
   }
 
-  // The contracts re-read out of the strict schema and put back, exactly as `validateStructure`
-  // does for a first plan: every caller gets `HandoffContract`, never the loose record the shape
-  // let through.
-  const add = delta.add.map((task) =>
-    task.handoff === undefined ? task : { ...task, handoff: handoffContractSchema.parse(task.handoff) },
-  )
-  return ok({ ...delta, add })
+  // {@link normalisePlanTask}, the same normalisation `validateStructure` applies to a first plan and for
+  // the same two reasons: every caller gets `HandoffContract` rather than the loose record the shape
+  // let through, and a `null` the planner wrote is DELETED rather than carried into a `Json` column
+  // (spec erratum E18).
+  return ok({ ...delta, add: delta.add.map(normalisePlanTask) })
 }
 
 /**

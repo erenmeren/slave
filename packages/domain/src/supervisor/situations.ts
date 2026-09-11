@@ -99,8 +99,8 @@ export const situationSchema: z.ZodType<Situation> = z.object({
  * key rendered as prose is the leak M44 closes -- the Supervisor panel's recent-decision rows read
  * `no_reviewer · proposed · pending · by model`.
  *
- * `Record<SituationKind, string>` is load-bearing: a twelfth kind fails the build here rather than
- * turning up on the page as an identifier. Each label says what is STUCK, in the words the report
+ * `Record<SituationKind, string>` is load-bearing: a FOURTEENTH kind fails the build here rather
+ * than turning up on the page as an identifier (thirteen as of M48's `runbook_recommended`). Each label says what is STUCK, in the words the report
  * already uses; the decision's own `situation.summary` carries the specifics beside it.
  */
 export const SITUATION_LABEL: Record<SituationKind, string> = {

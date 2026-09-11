@@ -307,6 +307,24 @@ describe('handoff and stage on an addition (M48 R2)', () => {
     })
   })
 
+  // Fix round 1, Important 1 (spec erratum E18): the delta reuses `planGraphSchema`'s task element,
+  // so the same null carried the same fallback here.
+  it('reads a null handoff and a null stage on an addition as ABSENT', () => {
+    const parsed = parsePlanDelta(delta({ handoff: null, stage: null }), [])
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.add[0]?.handoff).toBeUndefined()
+    expect(parsed.value.add[0]?.stage).toBeUndefined()
+  })
+
+  it('picks the FINAL delta when that is the one carrying the nulls', () => {
+    const text = `${delta({ title: 'an earlier draft' })}\n${delta({ title: 'the final delta', handoff: null, stage: null })}`
+    const parsed = parsePlanDelta(text, [])
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.add[0]?.title).toBe('the final delta')
+  })
+
   it('refuses a malformed handoff on an addition', () => {
     const parsed = parsePlanDelta(delta({ handoff: { objective: 'a' } }), [])
     expect(parsed.ok).toBe(false)
