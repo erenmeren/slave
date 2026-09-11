@@ -1,7 +1,6 @@
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   ACTION_KINDS,
-  MEMORY_CANDIDATE_STALE_MS,
   NON_TERMINAL_RUN_STATUSES,
   PENDING_TTL_MS,
   RUN_PROMPT_MAX_CHARS,
@@ -28,6 +27,7 @@ import {
   type ThreadMessage,
   type Tier,
 } from '@slave-of-ai/domain'
+import { staleCandidateCount } from './memory.js'
 import { stillPendingQuestion, waitingSenderRunIds } from './messaging.js'
 import { workspaceStats, type WorkspaceStatsSnapshot } from './stats.js'
 
@@ -674,15 +674,14 @@ export async function loadSupervisorWorld(
       // M49 R2: how many OBSERVATION candidates nothing has verified in over a day. A COUNT and
       // never the rows (plan erratum E11): the only predicate that reads it asks "how many", and
       // this is exactly the read `Memory`'s `(workspaceId, status, type, createdAt)` index exists
-      // for -- no row leaves the database for it.
-      const staleMemoryCandidates = await tx.memory.count({
-        where: {
-          workspaceId,
-          status: 'candidate',
-          type: 'observation',
-          createdAt: { lt: new Date(now.getTime() - MEMORY_CANDIDATE_STALE_MS) },
-        },
-      })
+      // for -- no row leaves the database for it. Unlike the catalog and the runbook table there is
+      // no gate in front of it: the question is about the project rather than about anything on the
+      // board, so there is no cheaper one to ask first.
+      //
+      // Through `staleCandidateCount` (M49 t2) so the predicate behind "stale" is written once --
+      // the verb that WITHDRAWS them has to agree with the count that raised the situation, or the
+      // Supervisor proposes five and a person gets four.
+      const staleMemoryCandidates = await staleCandidateCount(workspaceId, now, tx)
 
       const decisionRows = await tx.supervisorDecision.findMany({
         where: { workspaceId, createdAt: { gte: new Date(now.getTime() - DECISION_WINDOW_MS) } },

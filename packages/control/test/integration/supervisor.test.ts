@@ -4,6 +4,7 @@ import {
   ANSWER_MAX_CHARS,
   COOLDOWN_MS,
   DECISION_RETENTION_MS,
+  MEMORY_CANDIDATE_STALE_MS,
   PENDING_TTL_MS,
   PROFILE_MAX_CHARS,
   PRUNE_BATCH,
@@ -16,6 +17,7 @@ import {
 } from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { syncCapabilityTaxonomy } from '../../src/capability.js'
+import { STALE_CANDIDATE_REASON, recordMemory } from '../../src/memory.js'
 import { sendMessage } from '../../src/messaging.js'
 import { workspaceSpend } from '../../src/spend.js'
 import { refusalText } from '../../src/refusal.js'
@@ -28,6 +30,7 @@ import {
   pruneDecisions,
   recordDecision,
   rejectDecision,
+  resolveSettledDecisions,
   setSupervisorSettings,
 } from '../../src/supervisor.js'
 
@@ -1361,6 +1364,175 @@ describe('rejectDecision', () => {
       ok: false,
       error: { kind: 'decision_not_pending', decisionId: applied.id, status: 'applied' },
     })
+  })
+})
+
+/**
+ * M49 R2(c): what a person decided is knowledge this project keeps.
+ *
+ * The hook hangs off {@link approveDecision} and {@link rejectDecision} -- the two verbs that
+ * carry one human act on one decision -- and never off `resolveSettledDecisions`, which answers N
+ * proposals for one click (plan erratum E3).
+ */
+describe('a resolved decision becomes a memory (M49 R2c, E3)', () => {
+  let f: Fixture
+  beforeEach(async () => {
+    await reset()
+    f = await seed()
+  })
+
+  const memories = async (): Promise<
+    readonly { title: string; body: string; sourceKind: string; sourceRef: string | null; taskId: string | null }[]
+  > =>
+    prisma.memory.findMany({
+      where: { workspaceId: f.workspaceId },
+      orderBy: { createdAt: 'asc' },
+      select: { title: true, body: true, sourceKind: true, sourceRef: true, taskId: true },
+    })
+
+  it('records an approval as a verified decision memory pointing back at the row and the task', async () => {
+    const decision = await record(f, { kind: 'unblock_task', taskId: f.taskId }, 'proposed')
+    expect((await approveDecision(decision.id, { userId: f.userId })).ok).toBe(true)
+
+    const written = await prisma.memory.findFirstOrThrow({ where: { workspaceId: f.workspaceId } })
+    expect(written.type).toBe('decision')
+    expect(written.scope).toBe('workspace')
+    expect(written.status).toBe('verified')
+    expect(written.confidence).toBe('sourced')
+    expect(written.verifiedBy).toBe('human')
+    expect(written.title).toBe('Approved: the one routine move left')
+    expect(written.sourceKind).toBe('decision')
+    expect(written.sourceRef).toBe(decision.id)
+    // The task the situation was about, off `situation.facts` -- not the decision's subject key.
+    expect(written.taskId).toBe(f.taskId)
+    expect(written.createdByUserId).toBe(f.userId)
+  })
+
+  it('carries the rejecting person’s own words into the body', async () => {
+    const decision = await record(f, { kind: 'unblock_task', taskId: f.taskId }, 'proposed')
+    expect((await rejectDecision(decision.id, { userId: f.userId }, '  Maya is on leave  ')).ok).toBe(true)
+
+    const [written] = await memories()
+    expect(written?.title).toBe('Rejected: the one routine move left')
+    expect(written?.body).toBe('Rejected: the one routine move left — Maya is on leave')
+  })
+
+  // Plan erratum E3: one click, one memory -- never one per proposal it retired.
+  it('resolveSettledDecisions retires proposals and remembers NOTHING', async () => {
+    await record(f, { kind: 'unblock_task', taskId: f.taskId }, 'proposed')
+    await record(f, { kind: 'unblock_task', taskId: f.taskId }, 'proposed', { subjectId: 'another-task' })
+
+    expect(
+      await resolveSettledDecisions({
+        workspaceId: f.workspaceId,
+        situationKind: 'review_cap_blocked',
+        reason: 'a person did it by hand',
+        principal: { userId: f.userId },
+      }),
+    ).toBe(2)
+    expect(await memories()).toEqual([])
+  })
+
+  it('remembers nothing for a decision whose rationale is empty -- an empty memory reaches a prompt', async () => {
+    const decision = await record(f, { kind: 'unblock_task', taskId: f.taskId }, 'proposed')
+    await prisma.supervisorDecision.update({ where: { id: decision.id }, data: { rationale: '   ' } })
+    expect((await approveDecision(decision.id, { userId: f.userId })).ok).toBe(true)
+    expect(await memories()).toEqual([])
+  })
+
+  // Plan decision D9: the promotion rides on the outcome and must never break it.
+  it('a memory that cannot be written leaves the approval exactly as it landed', async () => {
+    const decision = await record(f, { kind: 'unblock_task', taskId: f.taskId }, 'proposed', {
+      // A task id nothing points at: `Memory.taskId` is a foreign key, so the write throws inside
+      // the hook -- which is the only way to provoke a failing promotion from outside.
+      situation: { ...situationFor(f.taskId), facts: { taskId: 'no-such-task', attempt: 1 } },
+    })
+    expect((await approveDecision(decision.id, { userId: f.userId })).ok).toBe(true)
+
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('approved')
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })).status).toBe('rework')
+    expect(await eventsOfType('supervisor_resolved')).toHaveLength(1)
+    expect(await memories()).toEqual([])
+  })
+})
+
+/**
+ * M49 R2 / plan erratum E12: the fourteenth action, and the one verb behind it. `tierOf` pins it
+ * to `proposed` on every branch, so the only way here is a person approving -- workers report, and
+ * a person decides what counts.
+ */
+describe('applyDecision -- discard_stale_candidates (M49 R2, E12)', () => {
+  let f: Fixture
+  beforeEach(async () => {
+    await reset()
+    f = await seed()
+  })
+
+  const pilingSituation = (workspaceId: string): Situation => ({
+    kind: 'memory_candidates_piling',
+    subjectId: workspaceId,
+    summary: 'things a worker reported have sat unverified for over a day',
+    facts: { candidates: 2, olderThanHours: 24 },
+  })
+
+  const candidateDraft = (workspaceId: string, title: string): Record<string, unknown> => ({
+    type: 'observation',
+    scope: 'workspace',
+    companyId: null,
+    workspaceId,
+    slaveId: null,
+    title,
+    body: 'the worker says it did the thing',
+    status: 'candidate',
+    confidence: 'interpretation',
+    capabilities: [],
+    verifiedBy: null,
+    supersedesTaskCandidates: false,
+    provenance: {
+      sourceKind: 'run_output',
+      sourceRef: '1',
+      createdBy: 'slave',
+      createdByUserId: null,
+      taskId: null,
+      runId: null,
+      goalVersion: null,
+    },
+  })
+
+  it('withdraws exactly the stale candidates, keeps every row, and marks the decision applied', async () => {
+    const stale = await recordMemory(candidateDraft(f.workspaceId, 'old'))
+    const fresh = await recordMemory(candidateDraft(f.workspaceId, 'new'))
+    expect(stale.ok && fresh.ok).toBe(true)
+    if (!stale.ok || !fresh.ok) return
+    await prisma.memory.update({
+      where: { id: stale.value.id },
+      data: { createdAt: new Date(Date.now() - MEMORY_CANDIDATE_STALE_MS - 60_000) },
+    })
+
+    const decision = await record(f, { kind: 'discard_stale_candidates', workspaceId: f.workspaceId, count: 1 }, 'proposed', {
+      subjectId: f.workspaceId,
+      situation: pilingSituation(f.workspaceId),
+    })
+    expect((await approveDecision(decision.id, { userId: f.userId })).ok).toBe(true)
+
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('approved')
+    const withdrawn = await prisma.memory.findUniqueOrThrow({ where: { id: stale.value.id } })
+    expect(withdrawn.status).toBe('removed')
+    expect(withdrawn.removedReason).toBe(STALE_CANDIDATE_REASON)
+    // Nothing is deleted (R1), and a candidate nobody has had a day to verify is untouched.
+    expect((await prisma.memory.findUniqueOrThrow({ where: { id: fresh.value.id } })).status).toBe('candidate')
+    expect(await eventsOfType('supervisor_applied')).toHaveLength(1)
+  })
+
+  it('is applied, not failed, when there is nothing left to withdraw', async () => {
+    const decision = await record(f, { kind: 'discard_stale_candidates', workspaceId: f.workspaceId, count: 3 }, 'proposed', {
+      subjectId: f.workspaceId,
+      situation: pilingSituation(f.workspaceId),
+    })
+    expect((await approveDecision(decision.id, { userId: f.userId })).ok).toBe(true)
+    const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })
+    expect(row.status).toBe('approved')
+    expect(row.failureReason).toBeNull()
   })
 })
 

@@ -125,20 +125,14 @@ export type ControlRefusal =
    *  already follows a DIFFERENT runbook. Both keys, because the only useful sentence names what
    *  was proposed and what the project actually follows. */
   | { readonly kind: 'runbook_already_adopted'; readonly adopted: string; readonly proposed: string }
-  /**
-   * M49 t1: an approved `discard_stale_candidates` decision reached `carryOut` and there is no verb
-   * behind it yet -- a later task writes `discardStaleCandidates`, and this arm's body becomes a
-   * call to it.
-   *
-   * TEMPORARY, and unreachable today, by M48 t1's own `runbook_adoption_unavailable` precedent:
-   * nothing writes a `Memory` row until the task that adds `recordMemory`, so
-   * `loadSupervisorWorld` counts zero stale candidates, so `observe` never raises
-   * `memory_candidates_piling`, so no such decision can exist to be approved. It is here because
-   * `carryOut`'s switch is exhaustive over `Action` and spec §4 says a Supervisor action that
-   * cannot be carried out is RECORDED (as `supervisor.failed`), never thrown and never reported as
-   * applied.
-   */
-  | { readonly kind: 'stale_candidate_discard_unavailable'; readonly workspaceId: string; readonly count: number }
+  /** M49 R4: every memory verb addresses a row by id, and this is the one that is not there. */
+  | { readonly kind: 'memory_not_found'; readonly memoryId: string }
+  /** M49 R4: a draft or an edit that cannot become a memory -- no target or two, a blank title or
+   *  body, one over the cap, or a removal with no reason. */
+  | { readonly kind: 'invalid_memory'; readonly detail: string }
+  /** M49 R4: a superseded or removed memory is history, and history does not change. `status` is
+   *  named because "it is frozen" without saying which of the two happened is not actionable. */
+  | { readonly kind: 'memory_not_editable'; readonly memoryId: string; readonly status: string }
   /** M46 R2: `profileOverrides` are a partial of `profileSpec`, and there is no spec on this row to
    *  be partial OF -- a hand-made template, or one whose catalog has not been imported since M46.
    *  Refused rather than invented: writing overrides against an empty spec would re-render the
@@ -425,8 +419,12 @@ export function refusalText(refusal: ControlRefusal): string {
       return `there is no capability "${refusal.key}" in the taxonomy: add it with \`capabilities add\` first`
     case 'invalid_capability':
       return `that capability cannot be added: ${refusal.detail}`
-    case 'stale_candidate_discard_unavailable':
-      return `withdrawing the ${String(refusal.count)} unverified report(s) on this project is not wired up yet`
+    case 'memory_not_found':
+      return `no memory with id ${refusal.memoryId}`
+    case 'invalid_memory':
+      return `that cannot be written as a memory: ${refusal.detail}`
+    case 'memory_not_editable':
+      return `memory ${refusal.memoryId} is ${refusal.status} and nothing changes it; correct the one that replaced it instead`
     case 'runbook_not_found':
       return `there is no runbook "${refusal.key}": \`runbooks list\` shows the ones there are`
     case 'invalid_runbook':

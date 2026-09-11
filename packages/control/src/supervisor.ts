@@ -11,6 +11,7 @@ import {
   candidateSchema,
   draftSchema,
   neutraliseMarkers,
+  promotionFor,
   situationSchema,
   type Action,
   type Candidate,
@@ -26,6 +27,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { hireFromTemplate, materialiseCompanySlave, mergeRuntimeRoles } from './capability.js'
+import { discardStaleCandidates, recordMemory } from './memory.js'
 import { answerQuestion, reassignQuestion } from './messaging.js'
 import { setRuntimeRoles } from './profile.js'
 import type { Principal } from './principal.js'
@@ -457,17 +459,15 @@ async function carryOut(
       return reached(await adoptRunbook(decision.workspaceId, action.key, { origin }, principal))
     }
     case 'discard_stale_candidates':
-      // M49 t1: the action exists, the verb does not. A later task replaces this line with
-      // `reached(await discardStaleCandidates(action.workspaceId, ...))`. Unreachable today --
-      // nothing writes a `Memory` row yet, so `loadSupervisorWorld` counts zero stale candidates
-      // and `memory_candidates_piling` never fires -- and a REFUSAL rather than `ok('none')` by
-      // M48 t1's `adopt_runbook` precedent: "nothing happened" and "this succeeded and moved
-      // nothing" are different facts, and only the first is true here (spec §4).
-      return err({
-        kind: 'stale_candidate_discard_unavailable',
-        workspaceId: action.workspaceId,
-        count: action.count,
-      })
+      // M49 R2. `tierOf` pins this to `proposed` on every branch, so the only way here is a human
+      // approving the proposal -- which is the ruling: workers report, and a person decides what
+      // counts. Nothing is deleted; every row keeps the words it was written with and the reason
+      // it was withdrawn, and each move is a `memory.changed` on the timeline.
+      //
+      // `action.count` is what the world counted when the proposal was RECORDED and is not passed
+      // on: the verb withdraws whatever is stale at the moment it runs, which after a day's wait
+      // is the honest set.
+      return reached(ok(await discardStaleCandidates(action.workspaceId, new Date(), principal)))
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')
@@ -671,6 +671,11 @@ export async function approveDecision(
     payload: { decisionId, outcome: 'approved', reason: null },
     userId: principal?.userId ?? null,
   })
+
+  // M49 R2(c): a person decided something, and what they decided is knowledge this project keeps.
+  // AFTER the apply and after the event, and never inside them: a memory that could not be written
+  // must not undo an approval that already reached the world (plan decision D9).
+  await rememberDecision(decisionId, 'approved', null, principal)
   return ok(undefined)
 }
 
@@ -703,7 +708,55 @@ export async function rejectDecision(
     payload: { decisionId, outcome: 'rejected', reason: trimmed === undefined || trimmed === '' ? null : trimmed },
     userId: principal?.userId ?? null,
   })
+
+  // M49 R2(c), the same hook as an approval's: a rejection is a decision too, and the reason a
+  // person gave for it is the part a later plan most needs to read.
+  await rememberDecision(decisionId, 'rejected', trimmed === undefined || trimmed === '' ? null : trimmed, principal)
   return ok(undefined)
+}
+
+/**
+ * Records what a person decided (M49 R2c).
+ *
+ * Only {@link approveDecision} and {@link rejectDecision} call it -- {@link resolveSettledDecisions}
+ * does NOT (plan erratum E3): it claims every pending row of one situation kind for a SINGLE human
+ * act and carries the caller's sentence rather than any decision's own rationale, so promoting
+ * there would write N identical memories for one click.
+ *
+ * Never throws: a decision that reached the world is a decision, whatever the memory write did.
+ */
+async function rememberDecision(
+  decisionId: string,
+  outcome: 'approved' | 'rejected',
+  reason: string | null,
+  principal?: Principal,
+): Promise<void> {
+  try {
+    const row = await prisma.supervisorDecision.findUnique({
+      where: { id: decisionId },
+      select: { workspaceId: true, rationale: true, situation: true, workspace: { select: { goalVersion: true } } },
+    })
+    if (row === null) return
+    const situation = situationSchema.safeParse(row.situation)
+    const fact = situation.success ? situation.data.facts['taskId'] : null
+    const taskId = typeof fact === 'string' && fact !== '' ? fact : null
+    const draft = promotionFor({
+      kind: 'decision_resolved',
+      workspaceId: row.workspaceId,
+      decisionId,
+      outcome,
+      rationale: row.rationale,
+      reason,
+      userId: principal?.userId ?? null,
+      taskId,
+      goalVersion: row.workspace.goalVersion,
+    })
+    if (draft === null) return
+    const written = await recordMemory(draft, principal)
+    if (!written.ok) console.warn(`[memory] a resolved decision was not remembered: ${refusalText(written.error)}`)
+  } catch (error) {
+    console.warn(`[memory] a resolved decision was not remembered: ${String(error)}`)
+  }
 }
 
 /**

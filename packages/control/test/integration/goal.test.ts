@@ -269,6 +269,64 @@ describe('setGoal', () => {
   })
 })
 
+/**
+ * M49 R2(c): the goal moving is a decision somebody took, and it is the one piece of provenance
+ * every plan written afterwards hangs off.
+ */
+describe('a goal change becomes a memory (M49 R2c)', () => {
+  let fixture: Fixture
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+    )
+    fixture = await seed()
+  })
+
+  it('remembers nothing for v1 -- the goal being SET is not a goal being changed', async () => {
+    expect((await setGoal(fixture.workspace.id, 'Ship the checkout redesign')).ok).toBe(true)
+    expect(await prisma.memory.count({ where: { workspaceId: fixture.workspace.id } })).toBe(0)
+  })
+
+  it('records v2 as a verified decision memory naming the version it came from', async () => {
+    expect((await setGoal(fixture.workspace.id, 'Ship the checkout redesign')).ok).toBe(true)
+    expect((await setGoal(fixture.workspace.id, 'Ship the checkout redesign, then the returns flow')).ok).toBe(true)
+
+    const written = await prisma.memory.findFirstOrThrow({ where: { workspaceId: fixture.workspace.id } })
+    expect(written.type).toBe('decision')
+    expect(written.status).toBe('verified')
+    expect(written.title).toBe('Goal v2')
+    expect(written.body).toBe('Ship the checkout redesign, then the returns flow')
+    expect(written.sourceKind).toBe('goal')
+    expect(written.sourceRef).toBe('2')
+    expect(written.goalVersion).toBe(2)
+    expect(written.taskId).toBeNull()
+  })
+
+  it('keeps the REQUEST, not the whole composed document, when somebody told the Supervisor', async () => {
+    expect((await setGoal(fixture.workspace.id, 'Ship the checkout redesign')).ok).toBe(true)
+    expect((await requestChange(fixture.workspace.id, 'Support Apple Pay too')).ok).toBe(true)
+
+    const written = await prisma.memory.findFirstOrThrow({ where: { workspaceId: fixture.workspace.id } })
+    expect(written.title).toBe('Goal v2')
+    expect(written.body).toBe('Support Apple Pay too')
+    expect(written.createdBy).toBe('human')
+  })
+
+  it('writes no memory for a refused change, and stamps the one it writes with the principal', async () => {
+    const user = await prisma.user.create({ data: { username: 'ada', passwordHash: 'x' } })
+    expect((await setGoal(fixture.workspace.id, 'Ship it', { userId: user.id })).ok).toBe(true)
+    expect((await requestChange(fixture.workspace.id, 'Apple Pay', { userId: user.id })).ok).toBe(true)
+    // Byte-equal to the newest version's request: refused, so nothing was decided and nothing is
+    // remembered.
+    expect((await requestChange(fixture.workspace.id, 'Apple Pay', { userId: user.id })).ok).toBe(false)
+
+    const rows = await prisma.memory.findMany({ where: { workspaceId: fixture.workspace.id } })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.createdByUserId).toBe(user.id)
+  })
+})
+
 describe('listGoalVersions', () => {
   let fixture: Fixture
 

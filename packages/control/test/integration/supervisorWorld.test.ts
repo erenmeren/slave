@@ -1,11 +1,15 @@
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
+  MEMORY_CANDIDATE_STALE_MS,
   RUN_PROMPT_MAX_CHARS,
+  STALE_CANDIDATES_MIN,
   SUPERVISOR_PER_CALL_CAP_USD,
   THREAD_BODY_MAX_CHARS,
   THREAD_MESSAGES_MAX,
+  observe,
 } from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { recordMemory } from '../../src/memory.js'
 import { adoptRunbook, syncRunbooks } from '../../src/runbook.js'
 import { workspaceSpend } from '../../src/spend.js'
 import { workspaceStats } from '../../src/stats.js'
@@ -85,6 +89,31 @@ async function makeTask(
   })
   return task.id
 }
+
+/** One thing a worker reported and nobody has verified -- the shape M49's stale count is about. */
+const candidateDraft = (workspaceId: string, title: string): Record<string, unknown> => ({
+  type: 'observation',
+  scope: 'workspace',
+  companyId: null,
+  workspaceId,
+  slaveId: null,
+  title,
+  body: 'the worker says it did the thing',
+  status: 'candidate',
+  confidence: 'interpretation',
+  capabilities: [],
+  verifiedBy: null,
+  supersedesTaskCandidates: false,
+  provenance: {
+    sourceKind: 'run_output',
+    sourceRef: '1',
+    createdBy: 'slave',
+    createdByUserId: null,
+    taskId: null,
+    runId: null,
+    goalVersion: null,
+  },
+})
 
 describe('loadSupervisorWorld', () => {
   beforeEach(reset)
@@ -783,6 +812,44 @@ describe('loadSupervisorWorld', () => {
 
     const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
     expect(world.budgetExhausted).toBe(false)
+  })
+})
+
+/**
+ * M49 R2 (plan erratum E11). ONE count, always, and no rows: the loader's only memory read.
+ */
+describe('loadSupervisorWorld -- the stale candidates (M49 R2)', () => {
+  beforeEach(reset)
+
+  it('counts only the OBSERVATION candidates older than a day, and the Supervisor sees the habit', async (): Promise<void> => {
+    const fixture = await seed()
+    const longAgo = ago(MEMORY_CANDIDATE_STALE_MS + 60_000)
+    for (let index = 0; index < STALE_CANDIDATES_MIN; index += 1) {
+      const written = await recordMemory(candidateDraft(fixture.workspaceId, `c${String(index)}`))
+      expect(written.ok).toBe(true)
+      if (!written.ok) return
+      await prisma.memory.update({ where: { id: written.value.id }, data: { createdAt: longAgo } })
+    }
+    // A fresh one and a verified old one, neither of which is a thing nobody verified in time.
+    expect((await recordMemory(candidateDraft(fixture.workspaceId, 'today'))).ok).toBe(true)
+    const verified = await recordMemory(candidateDraft(fixture.workspaceId, 'checked'))
+    expect(verified.ok).toBe(true)
+    if (!verified.ok) return
+    await prisma.memory.update({
+      where: { id: verified.value.id },
+      data: { createdAt: longAgo, status: 'verified', verifiedAt: longAgo, verifiedBy: 'human' },
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.staleMemoryCandidates).toBe(STALE_CANDIDATES_MIN)
+    expect(observe(world).map((one) => one.kind)).toContain('memory_candidates_piling')
+  })
+
+  it('counts nothing, and raises nothing, for a project whose workers have reported nothing', async (): Promise<void> => {
+    const fixture = await seed()
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.staleMemoryCandidates).toBe(0)
+    expect(observe(world).map((one) => one.kind)).not.toContain('memory_candidates_piling')
   })
 })
 

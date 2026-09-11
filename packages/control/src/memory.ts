@@ -1,0 +1,566 @@
+import { type Prisma, prisma } from '@slave-of-ai/db/client'
+import {
+  MEMORIES_LOADED_MAX,
+  MEMORY_BODY_MAX,
+  MEMORY_CANDIDATE_STALE_MS,
+  MEMORY_TITLE_MAX,
+  capCodePoints,
+  err,
+  ok,
+  parseMemoryDraft,
+  retrieveMemories,
+  type MemoryConfidence,
+  type MemoryDraft,
+  type MemoryScope,
+  type MemoryStatus,
+  type MemoryType,
+  type MemoryVerifier,
+  type MemoryView,
+  type Result,
+} from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
+import type { Principal } from './principal.js'
+import type { ControlRefusal } from './refusal.js'
+
+/** The reason a stale candidate is withdrawn with (M49 R2). One sentence, spelt once: it is stored
+ *  on the row, printed on the page and asserted by the gate. */
+export const STALE_CANDIDATE_REASON = 'stale candidate, never verified'
+
+/** Everything the view needs, in one shape -- `condensedFrom` is what fills `MemoryView.sourceIds`
+ *  (plan erratum E4), and it is the only reason this is not a bare `findMany`. */
+const withSources = {
+  condensedFrom: { select: { sourceMemoryId: true }, orderBy: { sourceMemoryId: 'asc' } },
+} as const
+
+type MemoryRow = Prisma.MemoryGetPayload<{ include: typeof withSources }>
+
+/**
+ * A stored row as a {@link MemoryView}: `Date`s become ISO strings and the two open vocabularies
+ * (`confidence`, `verifiedBy`) are read back as their unions.
+ *
+ * A row whose `confidence` is a word the domain does not know reads as `interpretation` rather
+ * than throwing -- every caller of this function renders a page or answers a CLI, and a
+ * hand-edited row must not take the Knowledge tab down (`viewOf`'s own rule in `runbook.ts`).
+ */
+function viewOf(row: MemoryRow): MemoryView {
+  return {
+    id: row.id,
+    type: row.type,
+    scope: row.scope,
+    companyId: row.companyId,
+    workspaceId: row.workspaceId,
+    slaveId: row.slaveId,
+    title: row.title,
+    body: row.body,
+    status: row.status,
+    confidence: (row.confidence === 'sourced' ? 'sourced' : 'interpretation') satisfies MemoryConfidence,
+    capabilities: row.capabilities,
+    verifiedAt: row.verifiedAt?.toISOString() ?? null,
+    verifiedBy:
+      row.verifiedBy === 'verification' || row.verifiedBy === 'review' || row.verifiedBy === 'human'
+        ? (row.verifiedBy satisfies MemoryVerifier)
+        : null,
+    supersededById: row.supersededById,
+    removedReason: row.removedReason,
+    sourceIds: row.condensedFrom.map((one) => one.sourceMemoryId),
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    provenance: {
+      sourceKind: row.sourceKind,
+      sourceRef: row.sourceRef,
+      createdBy: row.createdBy,
+      createdByUserId: row.createdByUserId,
+      taskId: row.taskId,
+      runId: row.runId,
+      goalVersion: row.goalVersion,
+    },
+  }
+}
+
+/** The `workspaceId` an event about this memory belongs to. A worker's lesson and a company's fact
+ *  have none of their own, so the caller's workspace is used -- an event with no workspace reaches
+ *  no stream at all. */
+function eventWorkspace(row: MemoryRow, fallback: string | null): string | null {
+  return row.workspaceId ?? fallback
+}
+
+async function announceRecorded(row: MemoryRow, workspaceId: string | null, principal?: Principal): Promise<void> {
+  const target = eventWorkspace(row, workspaceId)
+  if (target === null) return
+  await appendEvent({
+    type: 'memory.recorded',
+    workspaceId: target,
+    // Plan erratum E13: the task travels on the ENVELOPE, where it is indexed and where the
+    // Activity filter and the task drawer both read it.
+    ...(row.taskId === null ? {} : { taskId: row.taskId }),
+    ...(row.slaveId === null ? {} : { slaveId: row.slaveId }),
+    ...(row.runId === null ? {} : { runId: row.runId }),
+    actor: row.createdBy,
+    payload: {
+      memoryId: row.id,
+      type: row.type,
+      scope: row.scope,
+      status: row.status,
+      sourceKind: row.sourceKind,
+    },
+    userId: principal?.userId ?? row.createdByUserId ?? null,
+  })
+}
+
+async function announceChanged(
+  row: MemoryRow,
+  from: MemoryStatus,
+  to: MemoryStatus,
+  by: 'human' | 'system',
+  workspaceId: string | null,
+  reason?: string,
+  principal?: Principal,
+): Promise<void> {
+  const target = eventWorkspace(row, workspaceId)
+  if (target === null) return
+  await appendEvent({
+    type: 'memory.changed',
+    workspaceId: target,
+    ...(row.taskId === null ? {} : { taskId: row.taskId }),
+    actor: by,
+    payload: { memoryId: row.id, from, to, ...(reason === undefined ? {} : { reason }) },
+    userId: principal?.userId ?? null,
+  })
+}
+
+const dataOf = (draft: MemoryDraft): Prisma.MemoryUncheckedCreateInput => ({
+  type: draft.type,
+  scope: draft.scope,
+  companyId: draft.companyId,
+  workspaceId: draft.workspaceId,
+  slaveId: draft.slaveId,
+  title: draft.title,
+  body: draft.body,
+  status: draft.status,
+  confidence: draft.confidence,
+  sourceKind: draft.provenance.sourceKind,
+  sourceRef: draft.provenance.sourceRef,
+  createdBy: draft.provenance.createdBy,
+  createdByUserId: draft.provenance.createdByUserId,
+  taskId: draft.provenance.taskId,
+  runId: draft.provenance.runId,
+  goalVersion: draft.provenance.goalVersion,
+  capabilities: [...draft.capabilities],
+  verifiedAt: draft.status === 'verified' ? new Date() : null,
+  verifiedBy: draft.verifiedBy,
+})
+
+/**
+ * The one write behind every promotion (M49 R2).
+ *
+ * Validates first and writes second, so a malformed draft never reaches the column: the "exactly
+ * one target" invariant lives in `memoryDraftSchema` rather than in a database CHECK (plan decision
+ * D1), which makes THIS the place it is enforced.
+ *
+ * `supersedesTaskCandidates` (plan decision D3) is carried out inside the same transaction as the
+ * insert: a fact that retired nothing, or a candidate retired by a fact that failed to land, are
+ * both states a reader could not explain. The events are appended AFTER the commit, the way every
+ * other verb in this package does it.
+ */
+export async function recordMemory(draft: unknown, principal?: Principal): Promise<Result<MemoryView, ControlRefusal>> {
+  const parsed = parseMemoryDraft(draft)
+  if (!parsed.ok) return err({ kind: 'invalid_memory', detail: parsed.error })
+  const value = parsed.value
+
+  const written = await prisma.$transaction(async (tx) => {
+    const created = await tx.memory.create({ data: dataOf(value), include: withSources })
+    if (!value.supersedesTaskCandidates || value.provenance.taskId === null) {
+      return { created, retired: [] as MemoryRow[] }
+    }
+    const open = await tx.memory.findMany({
+      // `id: { not: created.id }` because the insert above is already in this transaction: a
+      // candidate observation that asked to retire its task's candidates would otherwise match
+      // itself and be written as superseded by itself.
+      where: { taskId: value.provenance.taskId, type: 'observation', status: 'candidate', id: { not: created.id } },
+      include: withSources,
+      orderBy: { createdAt: 'asc' },
+    })
+    if (open.length > 0) {
+      await tx.memory.updateMany({
+        where: { id: { in: open.map((one) => one.id) } },
+        data: { status: 'superseded', supersededById: created.id },
+      })
+    }
+    return { created, retired: open }
+  })
+
+  await announceRecorded(written.created, value.workspaceId, principal)
+  for (const row of written.retired) {
+    await announceChanged(row, 'candidate', 'superseded', 'system', row.workspaceId ?? value.workspaceId)
+  }
+  return ok(viewOf(written.created))
+}
+
+/** What a person types (M49 R4). Everything about provenance is decided HERE and never taken from
+ *  the caller: a memory a person wrote says so, and an operator who could set `sourceKind` could
+ *  make the record claim a verification that never happened (`ProfileSpec.source`'s own rule). */
+export async function addMemory(input: unknown, principal?: Principal): Promise<Result<MemoryView, ControlRefusal>> {
+  const shape = input as {
+    workspaceId?: unknown
+    companyId?: unknown
+    slaveId?: unknown
+    scope?: unknown
+    type?: unknown
+    title?: unknown
+    body?: unknown
+    capabilities?: unknown
+  }
+  const draft = {
+    type: shape.type,
+    scope: shape.scope,
+    companyId: shape.companyId ?? null,
+    workspaceId: shape.scope === 'workspace' ? (shape.workspaceId ?? null) : null,
+    slaveId: shape.slaveId ?? null,
+    title: typeof shape.title === 'string' ? capCodePoints(shape.title.trim(), MEMORY_TITLE_MAX) : shape.title,
+    body: typeof shape.body === 'string' ? capCodePoints(shape.body.trim(), MEMORY_BODY_MAX) : shape.body,
+    status: 'verified',
+    confidence: 'interpretation',
+    capabilities: shape.capabilities ?? [],
+    verifiedBy: 'human',
+    supersedesTaskCandidates: false,
+    provenance: {
+      sourceKind: 'human',
+      sourceRef: null,
+      createdBy: 'human',
+      createdByUserId: principal?.userId ?? null,
+      taskId: null,
+      runId: null,
+      goalVersion: null,
+    },
+  }
+  return recordMemory(draft, principal)
+}
+
+/** A row, or the refusal that says why not. `editable` is the frozen check R4 names: a superseded
+ *  or removed memory is history, and history does not change. */
+async function editable(id: string): Promise<Result<MemoryRow, ControlRefusal>> {
+  const row = await prisma.memory.findUnique({ where: { id }, include: withSources })
+  if (row === null) return err({ kind: 'memory_not_found', memoryId: id })
+  if (row.status === 'superseded' || row.status === 'removed') {
+    return err({ kind: 'memory_not_editable', memoryId: id, status: row.status })
+  }
+  return ok(row)
+}
+
+/** A person says a candidate is true (M49 R4). */
+export async function verifyMemory(id: string, principal?: Principal): Promise<Result<MemoryView, ControlRefusal>> {
+  const found = await editable(id)
+  if (!found.ok) return found
+  if (found.value.status === 'verified') return ok(viewOf(found.value))
+  const updated = await prisma.memory.update({
+    where: { id },
+    data: { status: 'verified', verifiedAt: new Date(), verifiedBy: 'human' },
+    include: withSources,
+  })
+  await announceChanged(updated, found.value.status, 'verified', 'human', updated.workspaceId, undefined, principal)
+  return ok(viewOf(updated))
+}
+
+/** Thrown, never returned: it happens after a write inside `$transaction`, and a returned refusal
+ *  there would COMMIT the insert it is refusing. Caught by {@link supersedeMemory} below. */
+class MemoryRaceError extends Error {
+  constructor(readonly memoryId: string) {
+    super(`memory ${memoryId} changed while it was being corrected`)
+    this.name = 'MemoryRaceError'
+  }
+}
+
+/**
+ * A person corrects a memory (M49 R4): a NEW verified row carrying the old one's provenance, and
+ * the old one stamped `superseded` pointing at it.
+ *
+ * The old row's provenance is copied rather than re-derived, with `sourceRef` set to the id it
+ * replaced: the correction's own history is "a person rewrote THAT", and losing which task and run
+ * the knowledge came from would make a corrected memory less traceable than the one it fixed.
+ */
+export async function supersedeMemory(
+  id: string,
+  next: { readonly title: string; readonly body: string },
+  principal?: Principal,
+): Promise<Result<{ readonly superseded: MemoryView; readonly created: MemoryView }, ControlRefusal>> {
+  const found = await editable(id)
+  if (!found.ok) return found
+  const old = found.value
+  const validated = parseMemoryDraft({
+    type: old.type,
+    scope: old.scope,
+    companyId: old.companyId,
+    workspaceId: old.workspaceId,
+    slaveId: old.slaveId,
+    title: capCodePoints(next.title.trim(), MEMORY_TITLE_MAX),
+    body: capCodePoints(next.body.trim(), MEMORY_BODY_MAX),
+    status: 'verified',
+    confidence: old.confidence === 'sourced' ? 'sourced' : 'interpretation',
+    capabilities: old.capabilities,
+    verifiedBy: 'human',
+    supersedesTaskCandidates: false,
+    provenance: {
+      // A person wrote these words, whatever produced the memory they replace.
+      sourceKind: 'human',
+      sourceRef: old.id,
+      createdBy: 'human',
+      createdByUserId: principal?.userId ?? null,
+      taskId: old.taskId,
+      runId: old.runId,
+      goalVersion: old.goalVersion,
+    },
+  })
+  if (!validated.ok) return err({ kind: 'invalid_memory', detail: validated.error })
+
+  let written: { readonly created: MemoryRow; readonly superseded: MemoryRow }
+  try {
+    written = await prisma.$transaction(async (tx) => {
+      const created = await tx.memory.create({ data: dataOf(validated.value), include: withSources })
+      // Conditional on the status this verb read: a memory somebody else removed or corrected while
+      // this one was being typed must not be stamped twice.
+      const claimed = await tx.memory.updateMany({
+        where: { id: old.id, status: old.status },
+        data: { status: 'superseded', supersededById: created.id },
+      })
+      if (claimed.count !== 1) {
+        // A refusal after a write inside a transaction has to THROW, or Prisma commits the insert.
+        throw new MemoryRaceError(old.id)
+      }
+      const superseded = await tx.memory.findUniqueOrThrow({ where: { id: old.id }, include: withSources })
+      return { created, superseded }
+    })
+  } catch (error) {
+    if (error instanceof MemoryRaceError) {
+      return err({ kind: 'memory_not_editable', memoryId: id, status: 'superseded' })
+    }
+    throw error
+  }
+
+  await announceRecorded(written.created, written.created.workspaceId, principal)
+  await announceChanged(
+    written.superseded,
+    old.status,
+    'superseded',
+    'human',
+    written.superseded.workspaceId,
+    undefined,
+    principal,
+  )
+  return ok({ superseded: viewOf(written.superseded), created: viewOf(written.created) })
+}
+
+/** Withdrawn, with a reason, and still in the table (M49 R1/R4). */
+export async function removeMemory(
+  id: string,
+  reason: string,
+  principal?: Principal,
+): Promise<Result<MemoryView, ControlRefusal>> {
+  const trimmed = reason.trim()
+  if (trimmed === '') return err({ kind: 'invalid_memory', detail: 'a removal needs a reason' })
+  const found = await editable(id)
+  if (!found.ok) return found
+  const capped = capCodePoints(trimmed, MEMORY_BODY_MAX)
+  const updated = await prisma.memory.update({
+    where: { id },
+    data: { status: 'removed', removedReason: capped },
+    include: withSources,
+  })
+  await announceChanged(updated, found.value.status, 'removed', 'human', updated.workspaceId, capped, principal)
+  return ok(viewOf(updated))
+}
+
+export interface MemoryFilter {
+  readonly workspaceId: string
+  readonly scope?: MemoryScope
+  readonly type?: MemoryType
+  readonly statuses?: readonly MemoryStatus[]
+  readonly taskId?: string
+  readonly capability?: string
+  /** A case-insensitive `contains` on the TITLE only (R6). Not the body: a search over paragraphs
+   *  returns the memory that mentions a word rather than the one that is about it. */
+  readonly q?: string
+  readonly limit?: number
+}
+
+/** Which scope one of the three `OR` clauses below is about. A tiny helper so `filter.scope` can
+ *  narrow the same list rather than a second `where` being built for it. */
+function scopeOf(clause: Prisma.MemoryWhereInput): MemoryScope {
+  if ('companyId' in clause) return 'company'
+  if ('slaveId' in clause) return 'worker'
+  return 'workspace'
+}
+
+/**
+ * Everything this project can see, filtered (M49 R4).
+ *
+ * "This project can see" is the same three scopes a run is given: the workspace's own, its
+ * company's, and the workers on it. One query with an `OR`, never three.
+ */
+export async function listMemories(filter: MemoryFilter): Promise<readonly MemoryView[]> {
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: filter.workspaceId },
+    select: { companyId: true, teams: { select: { slaves: { select: { id: true } } } } },
+  })
+  if (workspace === null) return []
+  const slaveIds = workspace.teams.flatMap((team) => team.slaves.map((slave) => slave.id))
+  const scopes: Prisma.MemoryWhereInput[] = [{ workspaceId: filter.workspaceId }]
+  if (workspace.companyId !== null) scopes.push({ companyId: workspace.companyId })
+  if (slaveIds.length > 0) scopes.push({ slaveId: { in: slaveIds } })
+
+  const rows = await prisma.memory.findMany({
+    where: {
+      OR: filter.scope === undefined ? scopes : scopes.filter((one) => scopeOf(one) === filter.scope),
+      ...(filter.type === undefined ? {} : { type: filter.type }),
+      ...(filter.statuses === undefined ? {} : { status: { in: [...filter.statuses] } }),
+      ...(filter.taskId === undefined ? {} : { taskId: filter.taskId }),
+      ...(filter.capability === undefined ? {} : { capabilities: { has: filter.capability } }),
+      ...(filter.q === undefined || filter.q.trim() === ''
+        ? {}
+        : { title: { contains: filter.q.trim(), mode: 'insensitive' } }),
+    },
+    include: withSources,
+    // Key-stable (R4): newest first, ties broken by id, so two reads of one unchanged table give
+    // the same list in the same order.
+    orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+    take: filter.limit ?? MEMORIES_LOADED_MAX,
+  })
+  return rows.map(viewOf)
+}
+
+export interface MemoryChain {
+  readonly memory: MemoryView
+  /** What this one replaced. */
+  readonly supersedes: MemoryView | null
+  /** What replaced this one. */
+  readonly supersededBy: MemoryView | null
+  /** What it summarises, when it is a condensation (R5). */
+  readonly sources: readonly MemoryView[]
+}
+
+/** One memory and the chain around it (M49 R4/R6) -- what it replaced, what replaced it, and what
+ *  it is a summary of. */
+export async function readMemory(id: string): Promise<Result<MemoryChain, ControlRefusal>> {
+  const row = await prisma.memory.findUnique({ where: { id }, include: withSources })
+  if (row === null) return err({ kind: 'memory_not_found', memoryId: id })
+  const [supersedes, supersededBy, sources] = await Promise.all([
+    prisma.memory.findFirst({ where: { supersededById: row.id }, include: withSources, orderBy: { createdAt: 'asc' } }),
+    row.supersededById === null
+      ? Promise.resolve(null)
+      : prisma.memory.findUnique({ where: { id: row.supersededById }, include: withSources }),
+    row.condensedFrom.length === 0
+      ? Promise.resolve([])
+      : prisma.memory.findMany({
+          where: { id: { in: row.condensedFrom.map((one) => one.sourceMemoryId) } },
+          include: withSources,
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        }),
+  ])
+  return ok({
+    memory: viewOf(row),
+    supersedes: supersedes === null ? null : viewOf(supersedes),
+    supersededBy: supersededBy === null ? null : viewOf(supersededBy),
+    sources: sources.map(viewOf),
+  })
+}
+
+export interface MemoriesForRunInput {
+  readonly workspaceId: string
+  /** Null only for the re-plan preview, which picks no persona (plan erratum E14). */
+  readonly slaveId: string | null
+  readonly taskId: string | null
+  readonly kind: 'implementation' | 'planning'
+}
+
+/**
+ * The knowledge one run is given (M49 R3).
+ *
+ * ONE bounded query for all three scopes, then the pure ranking. Bounded at
+ * `MEMORIES_LOADED_MAX` and ordered `createdAt desc, id asc` so the set handed to the ranking is
+ * itself deterministic -- a workspace with six hundred memories must give the same twelve every
+ * time, and "the newest five hundred" is a rule a reader can state.
+ */
+export async function memoriesForRun(input: MemoriesForRunInput): Promise<readonly MemoryView[]> {
+  const [workspace, task] = await Promise.all([
+    prisma.workspace.findUnique({ where: { id: input.workspaceId }, select: { companyId: true, goalVersion: true } }),
+    input.taskId === null
+      ? Promise.resolve(null)
+      : prisma.task.findUnique({
+          where: { id: input.taskId },
+          select: { requiredCapabilities: true, goalVersion: true },
+        }),
+  ])
+  if (workspace === null) return []
+
+  const scopes: Prisma.MemoryWhereInput[] = [{ workspaceId: input.workspaceId }]
+  if (workspace.companyId !== null) scopes.push({ companyId: workspace.companyId })
+  if (input.slaveId !== null) scopes.push({ slaveId: input.slaveId })
+
+  const rows = await prisma.memory.findMany({
+    where: { status: 'verified', OR: scopes },
+    include: withSources,
+    orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+    take: MEMORIES_LOADED_MAX,
+  })
+
+  return retrieveMemories({
+    memories: rows.map(viewOf),
+    scopes: { companyId: workspace.companyId, workspaceId: input.workspaceId, slaveId: input.slaveId },
+    refs: {
+      taskId: input.taskId,
+      requiredCapabilities: task?.requiredCapabilities ?? [],
+      goalVersion: task?.goalVersion ?? workspace.goalVersion,
+    },
+    kind: input.kind,
+  })
+}
+
+/** How many OBSERVATION candidates have sat unverified for over a day (M49 R2, plan erratum E11).
+ *  ONE count over `@@index([workspaceId, status, type, createdAt])`; no rows come back, which is
+ *  why the Supervisor's loader can afford it on every tick with no gate in front of it. */
+export async function staleCandidateCount(
+  workspaceId: string,
+  now: Date,
+  tx: Pick<typeof prisma, 'memory'> = prisma,
+): Promise<number> {
+  return tx.memory.count({
+    where: {
+      workspaceId,
+      type: 'observation',
+      status: 'candidate',
+      createdAt: { lt: new Date(now.getTime() - MEMORY_CANDIDATE_STALE_MS) },
+    },
+  })
+}
+
+/**
+ * Withdraws every stale OBSERVATION candidate with a reason (M49 R2, plan erratum E12) -- the verb
+ * the Supervisor's `discard_stale_candidates` arm carries out.
+ *
+ * Nothing is deleted: each row keeps its words, its provenance and the reason it was withdrawn,
+ * and each move is a `memory.changed` a person can read on the timeline.
+ */
+export async function discardStaleCandidates(
+  workspaceId: string,
+  now: Date = new Date(),
+  principal?: Principal,
+): Promise<number> {
+  const stale = await prisma.memory.findMany({
+    where: {
+      workspaceId,
+      type: 'observation',
+      status: 'candidate',
+      createdAt: { lt: new Date(now.getTime() - MEMORY_CANDIDATE_STALE_MS) },
+    },
+    include: withSources,
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  })
+  if (stale.length === 0) return 0
+  await prisma.memory.updateMany({
+    where: { id: { in: stale.map((one) => one.id) } },
+    data: { status: 'removed', removedReason: STALE_CANDIDATE_REASON },
+  })
+  for (const row of stale) {
+    await announceChanged(row, 'candidate', 'removed', 'human', workspaceId, STALE_CANDIDATE_REASON, principal)
+  }
+  return stale.length
+}

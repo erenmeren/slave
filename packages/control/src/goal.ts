@@ -1,8 +1,9 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { type GoalDiff, type Result, composeGoal, err, goalDiff, goalSha256, ok } from '@slave-of-ai/domain'
+import { type GoalDiff, type Result, composeGoal, err, goalDiff, goalSha256, ok, promotionFor } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { recordMemory } from './memory.js'
 import type { Principal } from './principal.js'
-import type { ControlRefusal } from './refusal.js'
+import { refusalText, type ControlRefusal } from './refusal.js'
 
 /**
  * Set the workspace's standing goal, as a NEW VERSION of it (M40 §1).
@@ -161,6 +162,27 @@ async function writeGoalVersion(
     payload: { goal: outcome.goal, version: outcome.version, sha256: outcome.sha256, ...(request === null ? {} : { request }) },
     userId: principal?.userId ?? null,
   })
+
+  // M49 R2(c): the goal moving is a decision somebody took, and it is the one piece of provenance
+  // every plan written afterwards hangs off. v1 is the goal being SET rather than changed, and
+  // `promotionFor` answers null for it. Outside the transaction and after the event, and it never
+  // throws: a goal that reached the world is the goal, whatever the memory write did.
+  try {
+    const draft = promotionFor({
+      kind: 'goal_changed',
+      workspaceId,
+      version: outcome.version,
+      request,
+      goal: outcome.goal,
+      userId: principal?.userId ?? null,
+    })
+    if (draft !== null) {
+      const written = await recordMemory(draft, principal)
+      if (!written.ok) console.warn(`[memory] a goal change was not remembered: ${refusalText(written.error)}`)
+    }
+  } catch (error) {
+    console.warn(`[memory] a goal change was not remembered: ${String(error)}`)
+  }
 
   return ok({ version: outcome.version, sha256: outcome.sha256, goal: outcome.goal })
 }
