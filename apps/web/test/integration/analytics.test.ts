@@ -110,7 +110,9 @@ describe('buildAnalytics', () => {
     const snapshot = await buildAnalytics(fixture.workspaceId)
     const spend = snapshot.kpis.find((k) => k.label === 'Spend')
     expect(spend?.value).toBe('$1.50')
-    expect(spend?.note).toBe('1 run unmeasured')
+    // M51 R7: the count, and the bound beside it -- never folded into the figure. `$2.50` is
+    // `knownUsd` plus the one unmeasured run at `RUN_UNMEASURED_CAP_USD`, shown and never charged.
+    expect(spend?.note).toBe('1 run unmeasured — upper bound $2.50')
   })
 
   it('counts pauses from the event log, not from a run column', async (): Promise<void> => {

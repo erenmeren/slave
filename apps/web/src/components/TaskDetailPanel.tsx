@@ -1,13 +1,14 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import type { Manifest } from '@slave-of-ai/domain'
+import { costProvenanceOf, estimateCostUsd, type CostProvenance, type Manifest } from '@slave-of-ai/domain'
 import { onUnauthorized } from '../lib/onUnauthorized'
 import { errorMessage, sendControl } from '../lib/postControl'
 import { sectionLine } from '../lib/runContextSummary'
+import { formatUsd } from '../lib/realMoney'
 import { priorityChip } from '../lib/taskColumns'
 import type { TaskMemoriesView } from '../server/memory'
-import type { TaskBoardItem } from '../server/tasks'
+import type { TaskBoardItem, TaskRunSummary } from '../server/tasks'
 import { taskStatusWord } from '../lib/tones'
 import { TASK_STATUS_TEXT, goalStampText, isStale, whyOf } from './TaskCard'
 import { Button } from './ui/Button'
@@ -28,6 +29,38 @@ interface OpenRunContext {
   readonly runId: string
   readonly prompt: string
   readonly manifest: Manifest
+}
+
+/**
+ * WHERE one run's figure came from, for a person (M51 R5, `docs/ia.md` rule 3).
+ *
+ * A `Record<CostProvenance, string>` so a fourth provenance is a build error here rather than a
+ * card printing a raw member. The three words happen to read the same as the three keys -- they
+ * are English, not identifiers -- and the table exists so that stays a choice rather than an
+ * accident.
+ */
+const COST_PROVENANCE_WORD: Record<CostProvenance, string> = {
+  reported: 'reported',
+  estimated: 'estimated',
+  unmeasured: 'unmeasured',
+}
+
+/**
+ * THE RULE, in one place (M51 R5): a reported figure wins, always.
+ *
+ * Every figure this panel prints goes through here -- the per-run rows, the Run group's one-line
+ * total and the retried-work line -- so the panel cannot show one run an estimate and count it as a
+ * reported figure a line later. `null` means nobody can name what this run cost, and `formatUsd`
+ * prints that as `—` rather than as a zero somebody would believe.
+ */
+function costOf(run: TaskRunSummary): number | null {
+  return (
+    run.costUsd ??
+    estimateCostUsd(
+      run.model,
+      run.tokensIn === null || run.tokensOut === null ? null : { input: run.tokensIn, output: run.tokensOut },
+    )
+  )
 }
 
 /**
@@ -78,9 +111,20 @@ export function TaskDetailPanel({
   // M45 R4: the one line the Runs group keeps once the per-run figures move into Cost. Runs whose
   // runtime reported nothing are counted apart rather than folded in as zero -- "we spent $0.42
   // and do not know about two more runs" is a different fact from "we spent $0.42".
-  const measuredRuns = task.runs.filter((run) => run.costUsd !== null)
-  const totalCostUsd = measuredRuns.reduce((sum, run) => sum + (run.costUsd ?? 0), 0)
+  //
+  // M51 R7 widened "measured" from "reported" to "reported or priceable": a run that reported no
+  // figure but carries tokens and a model is not a hole, it is an estimate, and `costOf` below is
+  // the one place that decision is made for the rows and both totals alike.
+  const measuredRuns = task.runs.filter((run) => costOf(run) !== null)
+  const totalCostUsd = measuredRuns.reduce((sum, run) => sum + (costOf(run) ?? 0), 0)
   const unmeasuredRuns = task.runs.length - measuredRuns.length
+  // `retried work` is every IMPLEMENTATION run of this task but its newest -- `task.runs` is
+  // newest-first (`server/tasks.ts`'s `orderBy: { startedAt: 'desc' }`). A review run is not a
+  // retry of the implementation, and folding one in would make "what did getting this wrong cost"
+  // answer a different question. There is no `SlaveRun.attempt` column and M51 adds none (decision
+  // D20): the ordinal IS the order this list is already in.
+  const implRuns = task.runs.filter((run) => run.kind === 'implementation')
+  const retriedUsd = implRuns.slice(1).reduce((sum, run) => sum + (costOf(run) ?? 0), 0)
   const why = whyOf(task)
 
   const collect = async (): Promise<void> => {
@@ -311,7 +355,7 @@ export function TaskDetailPanel({
               * reported spend at all, never `$0.00` -- that would claim a measurement nobody made
               * (spec Decision 6). */}
             <p data-testid="run-total-cost" className="font-mono text-[10.5px] text-text-3">
-              {measuredRuns.length === 0 ? '—' : `$${totalCostUsd.toFixed(2)}`} across {task.runs.length} run
+              {measuredRuns.length === 0 ? '—' : formatUsd(totalCostUsd)} across {task.runs.length} run
               {task.runs.length === 1 ? '' : 's'}
               {unmeasuredRuns > 0 && ` · ${unmeasuredRuns} unmeasured`}
             </p>
@@ -324,7 +368,19 @@ export function TaskDetailPanel({
                     <span>
                       <span className="font-mono text-[10px] text-text-faint">{run.id.slice(0, 8)}</span> {run.status}
                     </span>
-                    <span className="font-mono">{run.toolCalls} calls</span>
+                    {/* The ceiling this run is actually counting against (M51 R7, decision D16):
+                      * the breaker's cap STANDS after its word de-escalates, so a constrained run
+                      * that reads WORKING again still has a ceiling nothing else on the page would
+                      * mention. Absent for every run nothing capped. */}
+                    <span
+                      data-testid="run-tool-calls"
+                      className="font-mono"
+                      {...(run.toolCallCap === null
+                        ? {}
+                        : { title: `the behavioural breaker capped this run at ${run.toolCallCap} tool calls` })}
+                    >
+                      {run.toolCallCap === null ? `${run.toolCalls} calls` : `${run.toolCalls}/${run.toolCallCap} calls`}
+                    </span>
                   </div>
                   {run.checkpoint !== null && run.checkpoint.pausedAtStep !== null && (
                     <div className="mt-1 text-text-3">
@@ -564,10 +620,26 @@ export function TaskDetailPanel({
             {task.runs.map((run) => (
               <li key={run.id} data-testid="run-cost-row" className="flex items-center justify-between font-mono text-[10.5px]">
                 <span className="text-text-3">{run.id.slice(0, 8)}</span>
-                <span>{run.costUsd === null ? '—' : `$${run.costUsd.toFixed(2)}`}</span>
+                {/* WHERE the figure came from, beside it (M51 R5): a reported figure and a priced
+                  * guess are different kinds of number, and a column of dollars that does not say
+                  * which is which invites a reader to add them up as if they were the same. */}
+                <span className="flex items-baseline gap-1.5">
+                  <span data-testid="run-cost-provenance" className="text-[9.5px] uppercase text-text-3">
+                    {COST_PROVENANCE_WORD[costProvenanceOf(run)]}
+                  </span>
+                  <span>{formatUsd(costOf(run))}</span>
+                </span>
               </li>
             ))}
           </ul>
+        )}
+        {/* What getting this wrong already cost (M51 R7). Only on a task that has been tried more
+          * than once -- on a first attempt the figure would be $0.00, which reads as a measurement
+          * rather than as "there was no retry". */}
+        {implRuns.length > 1 && (
+          <p data-testid="task-cost-retried" className="text-xs text-tone-waiting">
+            retried work {formatUsd(retriedUsd)}
+          </p>
         )}
       </DetailsGroup>
 

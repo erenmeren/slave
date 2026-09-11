@@ -3,15 +3,18 @@ import type { DomainEventType } from '@slave-of-ai/db'
 import {
   BREAKER_LEVEL_LABEL,
   BREAKER_TRIP_LABEL,
+  GUARDRAIL_LABEL,
   MEMORY_SOURCE_KIND_LABEL,
   MEMORY_STATUS_LABEL,
   MEMORY_TYPE_LABEL,
   type BreakerTripKind,
+  type GuardrailKind,
   type MemoryScope,
   type MemorySourceKind,
   type MemoryStatus,
   type MemoryType,
 } from '@slave-of-ai/domain'
+import { formatUsd } from '../../lib/realMoney'
 import { plural } from '../../lib/plural'
 import { ActivityCard, type ActivityCardProps } from './ActivityCard'
 
@@ -312,7 +315,7 @@ function RunSucceededCard(props: ActivityCardProps): ReactElement {
     <ActivityCard {...props}>
       <Transition tone="working" label="run succeeded">
         <span data-testid="run-succeeded-stats">
-          {payload.numTurns} turns · {payload.costUsd === null ? '—' : `$${payload.costUsd.toFixed(2)}`}
+          {payload.numTurns} turns · {formatUsd(payload.costUsd)}
         </span>
       </Transition>
     </ActivityCard>
@@ -494,9 +497,21 @@ function BreakerCard(props: ActivityCardProps): ReactElement {
 
 function GuardrailTrippedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as { guardrail: string; detail: string }
+  // M51 R4: the LABEL is what a person reads and the KEY is what a machine reads (`docs/ia.md`
+  // rule 3). `?? payload.guardrail` is not defensive -- the stored payload is deliberately a
+  // forgiving `z.string()` (see `guardrails/kinds.ts`), so a row carrying a spelling this build has
+  // never heard of must print as itself rather than as `undefined`.
+  const label = GUARDRAIL_LABEL[payload.guardrail as GuardrailKind] ?? payload.guardrail
   return (
     <ActivityCard {...props}>
-      <Transition tone="warn" label={payload.guardrail}>
+      <Transition
+        tone="warn"
+        label={
+          <span data-testid="guardrail-label" title={payload.guardrail} data-guardrail={payload.guardrail}>
+            {label}
+          </span>
+        }
+      >
         <span data-testid="guardrail-detail">{payload.detail}</span>
       </Transition>
     </ActivityCard>

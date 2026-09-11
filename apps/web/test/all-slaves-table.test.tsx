@@ -37,6 +37,10 @@ function row(over: Partial<AllSlaveRow> = {}): AllSlaveRow {
     // ordinary hire, which is what most of this file's rows are.
     lifecycle: 'project',
     released: null,
+    // M51 R7: the rung the behavioural breaker has this worker's live run on -- polled like
+    // `status`, because a steered run must reach this table within one tick and not at the next
+    // full reload. `none` is every healthy worker.
+    breakerLevel: 'none',
     ...over,
   }
 }
@@ -68,6 +72,7 @@ function polledWorker(over: Partial<{
   runtimeRoles: readonly string[]
   lifecycle: AllSlaveRow['lifecycle']
   released: AllSlaveRow['released']
+  breakerLevel: AllSlaveRow['breakerLevel']
 }> = {}) {
   return {
     slaveId: 'a1',
@@ -86,6 +91,7 @@ function polledWorker(over: Partial<{
     runtimeRoles: [],
     lifecycle: 'project' as const,
     released: null,
+    breakerLevel: 'none' as const,
     ...over,
   }
 }
@@ -139,6 +145,43 @@ describe('AllSlavesTable', () => {
     // pulses) rather than the settled grey-blue `paused` -- `lib/tones.ts`'s own distinction, and
     // the reason this case pins the tone as well as the word.
     expect(pill?.getAttribute('data-tone')).toBe('waiting')
+  })
+
+  // M51 R7: the same word the Overview card says, from the same projection, for the same reason --
+  // two surfaces describing one live run must not disagree about what is happening to it.
+  it('says STEERED for a working run the breaker has spoken to', () => {
+    render(
+      <AllSlavesTable
+        initial={page([row({ slaveId: 'a1', name: 'Alex', status: 'working', breakerLevel: 'steered' })])}
+        onOpen={vi.fn()}
+      />,
+    )
+    const pill = screen.getAllByTestId('status-pill')[0]
+    expect(pill?.textContent).toContain('STEERED')
+    expect(pill?.getAttribute('title')).toBe('working')
+    expect(pill?.getAttribute('data-tone')).toBe('waiting')
+  })
+
+  it('carries the rung in every poll tick, so a steered run does not wait for a reload', async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ workers: [polledWorker({ breakerLevel: 'constrained' })] }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    vi.useFakeTimers()
+    try {
+      render(
+        <AllSlavesTable initial={page([row({ slaveId: 'a1', name: 'Alex', status: 'working' })])} onOpen={vi.fn()} />,
+      )
+      expect(screen.getAllByTestId('status-pill')[0]?.textContent).toContain('WORKING')
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000)
+      })
+      expect(screen.getAllByTestId('status-pill')[0]?.textContent).toContain('CONSTRAINED')
+    } finally {
+      vi.useRealTimers()
+      vi.unstubAllGlobals()
+    }
   })
 
   it("calls onOpen with the clicked project row's own slaveId and workspaceId", () => {

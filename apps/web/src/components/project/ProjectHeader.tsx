@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import type { ShellFacts } from '../../server/shell'
+import { formatUsd } from '../../lib/realMoney'
 import { useShellFacts } from '../../hooks/useShellFacts'
 import { useStreamState } from '../../hooks/useStreamState'
 import { EmergencyStopButton } from '../EmergencyStopButton'
@@ -100,8 +101,8 @@ export function ProjectHeader({
       <span className="ml-auto flex items-center gap-3">
         <span data-testid="budget" className="flex items-center gap-2 text-xs text-text-2">
           <span className="font-mono">
-            ${facts.status.spentUsd.toFixed(2)}
-            {budgetUsd !== null && ` / $${budgetUsd.toFixed(2)}`}
+            {formatUsd(facts.status.spentUsd)}
+            {budgetUsd !== null && ` / ${formatUsd(budgetUsd)}`}
           </span>
           {facts.status.unmeasuredRuns > 0 && (
             <span data-testid="budget-unmeasured" className="text-text-3">

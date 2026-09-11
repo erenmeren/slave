@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { SLAVE_LIFECYCLE_LABEL, SUPERVISOR_PER_CALL_CAP_USD, USER_CARD_LABEL, type UserCardState } from '@slave-of-ai/domain'
 import type { ProjectBrief as ProjectBriefFacts } from '../../server/brief'
 import type { NeedsYouItem } from '../../server/needsYou'
+import { formatUsd } from '../../lib/realMoney'
 import { CARD_STATE_TONE } from '../../lib/tones'
 import { AvatarTile } from '../ui/AvatarTile'
 import { Chip } from '../ui/Chip'
@@ -194,15 +195,35 @@ export function ProjectBrief({
 
       <Tile fact="cost" caption="cost">
         <span className="font-mono text-[15px] text-text-1">
-          {cost.budgetUsd === null ? `$${cost.spentUsd.toFixed(2)}` : `$${cost.spentUsd.toFixed(2)} / $${String(cost.budgetUsd)}`}
+          {cost.budgetUsd === null ? formatUsd(cost.spentUsd) : `${formatUsd(cost.spentUsd)} / $${String(cost.budgetUsd)}`}
         </span>
-        {/* The M32 upper-bound policy, in three sentences that are three different facts and never
-          * one number pretending to be all three: what somebody reported, what was charged at the
-          * cap because nothing came back, and what nobody can account for at all. */}
-        <span className="text-[11px] text-text-2">measured ${cost.measuredUsd.toFixed(2)}</span>
+        {/* The M32 upper-bound policy, in sentences that are different facts and never one number
+          * pretending to be all of them: what somebody reported, what was charged at the cap
+          * because nothing came back, and what nobody can account for at all.
+          *
+          * M51 R5: three answers to three different questions, and the tile says which is which.
+          * The big mono figure above is still `spentUsd`, the ONE number the budget guardrail
+          * compares -- which is how this stays inside the one-figure rule rather than breaking it:
+          * a page showing two totals for one project teaches its reader to trust neither, and a
+          * page showing three LABELLED answers to three questions teaches them which to ask.
+          * Both extra lines are CONDITIONAL (decision D19), so a project where everything reported
+          * shows exactly the lines it showed before M51, with `measured` renamed `actual`. */}
+        <span data-testid="brief-cost-actual" className="text-[11px] text-text-2">
+          actual {formatUsd(cost.actualUsd)}
+        </span>
+        {cost.estimatedUsd !== cost.actualUsd && (
+          <span data-testid="brief-cost-estimated" className="text-[11px] text-text-2">
+            estimated {formatUsd(cost.estimatedUsd)}
+          </span>
+        )}
+        {cost.upperBoundUsd !== cost.spentUsd && (
+          <span data-testid="brief-cost-upper-bound" className="text-[11px] text-tone-waiting">
+            upper bound {formatUsd(cost.upperBoundUsd)}
+          </span>
+        )}
         {cost.unmeasuredCalls > 0 && (
           <span data-testid="brief-cost-unmeasured-calls" className="text-[11px] text-tone-waiting">
-            {cost.unmeasuredCalls} unmeasured calls charged at ${SUPERVISOR_PER_CALL_CAP_USD.toFixed(2)} each
+            {cost.unmeasuredCalls} unmeasured calls charged at {formatUsd(SUPERVISOR_PER_CALL_CAP_USD)} each
           </span>
         )}
         {cost.unmeasuredRuns > 0 && (

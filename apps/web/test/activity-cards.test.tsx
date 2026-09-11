@@ -206,8 +206,26 @@ describe('targeted card bodies', () => {
   it('guardrail.tripped shows the limit name and the observed value', () => {
     const Card = ACTIVITY_CARDS['guardrail.tripped']
     render(<Card event={fixtureFor('guardrail.tripped')} {...CARD_PROPS} />)
-    expect(screen.getByTestId('transition-label').textContent).toBe('budget_exhausted')
+    // M51 R4: the LABEL, not the key. The key is one hover (and one `data-` attribute) away.
+    expect(screen.getByTestId('transition-label').textContent).toBe('Budget spent')
     expect(screen.getByTestId('guardrail-detail').textContent).toBe('Spent $20 of $20.')
+  })
+
+  it('prints the guardrail\u2019s LABEL and keeps the key on the element (M51 R4)', () => {
+    const Card = ACTIVITY_CARDS['guardrail.tripped']
+    const event = baseEvent('guardrail.tripped', { guardrail: 'behavioural_loop', detail: 'x' })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('guardrail-label').textContent).toBe('Going in circles')
+    expect(screen.getByTestId('guardrail-label').getAttribute('data-guardrail')).toBe('behavioural_loop')
+    expect(screen.getByTestId('guardrail-label').getAttribute('title')).toBe('behavioural_loop')
+  })
+
+  it('prints an unknown guardrail as itself rather than crashing -- the log is forgiving', () => {
+    const Card = ACTIVITY_CARDS['guardrail.tripped']
+    const event = baseEvent('guardrail.tripped', { guardrail: 'from_the_future', detail: 'x' })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('guardrail-label').textContent).toBe('from_the_future')
+    expect(screen.getByTestId('guardrail-label').getAttribute('data-guardrail')).toBe('from_the_future')
   })
 
   it('an intervention (run.pause_requested) shows who requested it', () => {

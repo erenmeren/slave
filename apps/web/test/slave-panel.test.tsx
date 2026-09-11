@@ -42,6 +42,9 @@ const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
   // neither; the default is the ordinary project hire.
   lifecycle: 'project' as const,
   released: null,
+  // M51 R7: the rung the breaker has this worker's live run on. The panel shows no word off it --
+  // the CARD does -- so every case here is the healthy default.
+  breakerLevel: 'none' as const,
   ...over,
 })
 

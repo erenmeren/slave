@@ -1,5 +1,6 @@
 import { SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-ai/domain'
 import type { OverviewSnapshot } from '../server/overview'
+import { formatUsd } from '../lib/realMoney'
 import { CARD_STATE_TONE } from '../lib/tones'
 import { TONE_TEXT, type StatusTone } from './ui/StatusPill'
 
@@ -48,7 +49,7 @@ export function TopStrip({ snapshot }: { readonly snapshot: OverviewSnapshot }):
     // KNOWN spend (`sumSpend`), never a guess. The count of runs nobody could measure rides
     // underneath as its own line rather than being folded in -- Decision 6: `$3.00` on its own
     // would read as the total when part of the total is unrecoverable.
-    { key: 'spend', value: `$${snapshot.workspace.spentUsd.toFixed(2)}`, label: 'spend' },
+    { key: 'spend', value: formatUsd(snapshot.workspace.spentUsd), label: 'spend' },
   ]
 
   return (
@@ -71,12 +72,12 @@ export function TopStrip({ snapshot }: { readonly snapshot: OverviewSnapshot }):
           )}
           {tile.key === 'spend' && supervisorSpent && (
             <span data-testid="strip-supervisor-spend" className="font-mono text-[9.5px] text-text-3">
-              {`supervisor $${supervisor.measuredUsd.toFixed(2)}`}
+              {`supervisor ${formatUsd(supervisor.measuredUsd)}`}
               {/* The unmeasured calls are NAMED with what they were charged, not folded into the
                 * figure beside them: `workspaceSpend` bills each at the per-call cap, and a
                 * reader has to be able to tell an estimate from a measurement. */}
               {supervisor.unmeasuredCalls > 0 &&
-                ` · ${supervisor.unmeasuredCalls} at $${SUPERVISOR_PER_CALL_CAP_USD.toFixed(2)}`}
+                ` · ${supervisor.unmeasuredCalls} at ${formatUsd(SUPERVISOR_PER_CALL_CAP_USD)}`}
             </span>
           )}
         </div>

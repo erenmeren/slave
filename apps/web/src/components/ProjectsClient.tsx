@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import type { SlaveStatus, UserWorkspaceState } from '@slave-of-ai/domain'
 import { userWorkspaceStatus } from '@slave-of-ai/domain'
 import { CARD_STATE_TONE, cardStateForSlave } from '../lib/tones'
+import { formatUsd } from '../lib/realMoney'
 import { sendControl } from '../lib/postControl'
 import type { Kpi } from '../server/analytics'
 import type { ProjectRow } from '../server/org'
@@ -145,7 +146,7 @@ function ProjectCard({
                 : [
                     {
                       label: 'spend',
-                      value: `$${project.spend.toFixed(2)}`,
+                      value: formatUsd(project.spend),
                       ...(project.unmeasuredRuns > 0
                         ? {
                             note: (

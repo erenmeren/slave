@@ -154,6 +154,33 @@ describe('cardStateFor', () => {
     expect(cardStateFor('idle', null)).toBe('idle')
   })
 
+  // M51 R7 / decision D6: the breaker's word speaks ONLY over `working`. Everywhere else somebody
+  // (or something) acted to produce the status on screen, and overwriting it with CONSTRAINED
+  // would describe a tool budget nobody is spending.
+  describe('the breaker’s word (M51 R7)', () => {
+    it('replaces the working word with the rung the breaker is on', () => {
+      expect(cardStateFor('working', 'running', { breakerLevel: 'steered' })).toBe('steered')
+      expect(cardStateFor('working', 'running', { breakerLevel: 'constrained' })).toBe('constrained')
+      expect(cardStateForSlave('working', { breakerLevel: 'constrained' })).toBe('constrained')
+      expect(toneForStatus('working', { breakerLevel: 'steered' })).toBe('waiting')
+    })
+
+    it('says nothing at all at level none, or with no facts passed', () => {
+      expect(cardStateFor('working', 'running', { breakerLevel: 'none' })).toBe('working')
+      expect(cardStateFor('working', 'running', {})).toBe('working')
+      expect(cardStateFor('working', 'running')).toBe('working')
+      expect(cardStateForSlave('working')).toBe('working')
+      expect(toneForStatus('working')).toBe('working')
+    })
+
+    it('never speaks over a word somebody else produced', () => {
+      expect(cardStateFor('paused', 'running', { breakerLevel: 'constrained' })).toBe('paused')
+      expect(cardStateFor('working', 'reviewing', { breakerLevel: 'constrained' })).toBe('review')
+      expect(cardStateFor('working', 'blocked', { breakerLevel: 'steered' })).toBe('blocked')
+      expect(cardStateForSlave('paused', { breakerLevel: 'steered' })).toBe('paused')
+    })
+  })
+
   it('covers every TaskStatus', () => {
     // `TASK_STATUSES` (`@slave-of-ai/db`'s `enums.ts`) is type-pinned complete and sound against
     // the domain's `TaskStatus` union by its own `_TaskStatusesComplete`/`_TaskStatusesSound`

@@ -245,6 +245,12 @@ describe('TaskDetailPanel', () => {
               id: 'r1',
               status: 'working',
               costUsd: 0.42,
+              kind: 'implementation' as const,
+              tokensIn: null,
+              tokensOut: null,
+              model: null,
+              provider: 'claude_code',
+              toolCallCap: null,
               toolCalls: 5,
               startedAt: new Date(0).toISOString(),
               endedAt: null,
@@ -314,6 +320,12 @@ describe('TaskDetailPanel', () => {
               id: 'r1',
               status: 'paused',
               costUsd: 0.1,
+              kind: 'implementation' as const,
+              tokensIn: null,
+              tokensOut: null,
+              model: null,
+              provider: 'claude_code',
+              toolCallCap: null,
               toolCalls: 2,
               startedAt: new Date(0).toISOString(),
               endedAt: null,
@@ -343,6 +355,12 @@ describe('TaskDetailPanel', () => {
               id: 'r1',
               status: 'paused',
               costUsd: 0.1,
+              kind: 'implementation' as const,
+              tokensIn: null,
+              tokensOut: null,
+              model: null,
+              provider: 'claude_code',
+              toolCallCap: null,
               toolCalls: 2,
               startedAt: new Date(0).toISOString(),
               endedAt: null,
@@ -372,6 +390,12 @@ describe('TaskDetailPanel', () => {
               id: 'r1',
               status: 'paused',
               costUsd: 0.1,
+              kind: 'implementation' as const,
+              tokensIn: null,
+              tokensOut: null,
+              model: null,
+              provider: 'claude_code',
+              toolCallCap: null,
               toolCalls: 2,
               startedAt: new Date(0).toISOString(),
               endedAt: null,
@@ -418,6 +442,12 @@ describe('TaskDetailPanel — what a run saw (M37 §6)', () => {
     id: 'r1',
     status: 'succeeded' as const,
     costUsd: 0.1,
+    kind: 'implementation' as const,
+    tokensIn: null,
+    tokensOut: null,
+    model: null,
+    provider: 'claude_code',
+    toolCallCap: null,
     toolCalls: 2,
     startedAt: new Date(0).toISOString(),
     endedAt: new Date(0).toISOString(),
@@ -548,6 +578,12 @@ describe('TaskDetailPanel worktree collection (M23 B4)', () => {
     id: 'r1',
     status: 'succeeded' as const,
     costUsd: 0.1,
+    kind: 'implementation' as const,
+    tokensIn: null,
+    tokensOut: null,
+    model: null,
+    provider: 'claude_code',
+    toolCallCap: null,
     toolCalls: 1,
     startedAt: new Date(0).toISOString(),
     endedAt: new Date(1).toISOString(),
@@ -904,6 +940,12 @@ describe('TaskCard (M45 R4: the simple row)', () => {
               id: 'r1',
               status: 'paused',
               costUsd: null,
+              kind: 'implementation' as const,
+              tokensIn: null,
+              tokensOut: null,
+              model: null,
+              provider: 'claude_code',
+              toolCallCap: null,
               toolCalls: 0,
               startedAt: new Date(0).toISOString(),
               endedAt: null,
@@ -947,8 +989,16 @@ describe('TaskDetailPanel (M45 R4: the expanded view)', () => {
   const runRow = {
     id: 'r1',
     status: 'succeeded' as const,
+    // M51 R5/R7: an implementation run that REPORTED its figure, so the estimate never speaks for
+    // it and this fixture's every existing assertion reads exactly as it did.
+    kind: 'implementation' as const,
     costUsd: 0.25,
+    tokensIn: null,
+    tokensOut: null,
+    model: null,
+    provider: 'claude_code',
     toolCalls: 3,
+    toolCallCap: null,
     startedAt: new Date(0).toISOString(),
     endedAt: new Date(1).toISOString(),
     worktreePath: '/r/.slaveofai/worktrees/T-1',
@@ -1109,5 +1159,114 @@ describe('TaskDetailPanel (M45 R4: the expanded view)', () => {
     render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ id: 't1' })} onClose={() => {}} />)
     openGroup('events')
     expect(screen.getByTestId('task-events-link').getAttribute('href')).toBe('/w/w1/activity?tasks=t1')
+  })
+})
+
+// =================================================================================================
+// M51 R7: the Cost group answers "what did this run cost, and how do you know" -- and what getting
+// it wrong the first two times cost.
+// =================================================================================================
+
+describe('the Cost group after M51 R7', () => {
+  const run = (over: Partial<TaskBoardItem['runs'][number]>): TaskBoardItem['runs'][number] => ({
+    id: 'r0',
+    kind: 'implementation',
+    status: 'succeeded',
+    costUsd: null,
+    tokensIn: null,
+    tokensOut: null,
+    model: null,
+    provider: 'claude_code',
+    toolCalls: 3,
+    toolCallCap: null,
+    startedAt: new Date(0).toISOString(),
+    endedAt: new Date(1).toISOString(),
+    worktreePath: null,
+    checkpoint: null,
+    waitingFor: null,
+    ...over,
+  })
+
+  // Newest first, exactly as `server/tasks.ts` orders them (`startedAt: 'desc'`): the third attempt,
+  // then the two that came before it. One megatoken of Opus input prices at $5.00 with nothing
+  // reported, which is the estimate the panel must show WITHOUT overwriting a reported figure.
+  const runs = [
+    run({ id: 'r3', costUsd: null, tokensIn: 1_000_000, tokensOut: 0, model: 'claude-opus-5' }),
+    run({ id: 'r2', costUsd: 2 }),
+    run({ id: 'r1', costUsd: 1.5 }),
+  ]
+
+  it('names each run’s provenance beside its figure', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs })} onClose={() => {}} />)
+    openGroup('cost')
+    const words = screen.getAllByTestId('run-cost-provenance').map((node) => node.textContent)
+    expect(words).toEqual(['estimated', 'reported', 'reported'])
+  })
+
+  it('shows a run’s ESTIMATE where nothing was reported, and never overwrites a reported figure', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs })} onClose={() => {}} />)
+    openGroup('cost')
+    const figures = screen.getAllByTestId('run-cost-row').map((node) => node.textContent)
+    expect(figures[0]).toContain('$5.00')
+    expect(figures[1]).toContain('$2.00')
+  })
+
+  it('says a run nobody can price at all is unmeasured, and prints no figure for it', () => {
+    render(
+      <TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: [run({ id: 'rx' })] })} onClose={() => {}} />,
+    )
+    openGroup('cost')
+    expect(screen.getByTestId('run-cost-provenance').textContent).toBe('unmeasured')
+    expect(screen.getByTestId('run-cost-row').textContent).toContain('—')
+    expect(screen.getByTestId('run-cost-row').textContent).not.toContain('$')
+  })
+
+  it('says what the RETRIED work cost -- every implementation run but the newest', () => {
+    render(
+      <TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs, attempt: 3 })} onClose={() => {}} />,
+    )
+    openGroup('cost')
+    expect(screen.getByTestId('task-cost-retried').textContent).toBe('retried work $3.50')
+  })
+
+  it('says nothing about retried work on a task that has only ever had one run', () => {
+    render(
+      <TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: [runs[1]!] })} onClose={() => {}} />,
+    )
+    openGroup('cost')
+    expect(screen.queryByTestId('task-cost-retried')).toBeNull()
+  })
+
+  it('counts only IMPLEMENTATION runs as retried work -- a review run is not a retry', () => {
+    const withReview = [runs[0]!, run({ id: 'rev', kind: 'review', costUsd: 9 }), runs[1]!, runs[2]!]
+    render(
+      <TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: withReview })} onClose={() => {}} />,
+    )
+    openGroup('cost')
+    expect(screen.getByTestId('task-cost-retried').textContent).toBe('retried work $3.50')
+  })
+
+  // D16: de-escalation lowers the WORD and the cap STANDS until the run ends, so the one surface
+  // that shows a run's tool calls says which ceiling it is counting against.
+  it('names the breaker’s own ceiling on a run it capped', () => {
+    render(
+      <TaskDetailPanel
+        workspaceGoalVersion={0}
+        workspaceId="w1"
+        task={task({ runs: [run({ id: 'rc', status: 'working', toolCalls: 34, toolCallCap: 64 })] })}
+        onClose={() => {}}
+      />,
+    )
+    const calls = screen.getByTestId('run-tool-calls')
+    expect(calls.textContent).toBe('34/64 calls')
+    expect(calls.getAttribute('title')).toBe('the behavioural breaker capped this run at 64 tool calls')
+  })
+
+  it('names no ceiling on a run nothing has capped', () => {
+    render(
+      <TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({ runs: [run({ id: 'ru', toolCalls: 7 })] })} onClose={() => {}} />,
+    )
+    expect(screen.getByTestId('run-tool-calls').textContent).toBe('7 calls')
+    expect(screen.getByTestId('run-tool-calls').getAttribute('title')).toBeNull()
   })
 })

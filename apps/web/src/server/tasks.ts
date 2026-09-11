@@ -11,12 +11,52 @@ import {
 import { artifactLabel } from '../lib/artifactLabel'
 import { buildShellFacts, type ShellFacts } from './shell'
 
+/**
+ * `SlaveRun.kind`, spelled as a union rather than imported (M51 R7): the generated `RunKind` lives
+ * in `@slave-of-ai/db`, whose barrel is a server module, and this DTO is rendered by a client
+ * component. Three members, the same three the schema has.
+ */
+export type TaskRunKind = 'implementation' | 'review' | 'planning'
+
 export interface TaskRunSummary {
   readonly id: string
   readonly status: RunStatus
+  /** WHICH kind of run this is (M51 R7). The drawer's `retried work` counts implementation runs
+   *  only: a review run is not a retry of the implementation, and folding one in would make
+   *  "what did getting this wrong cost" answer a different question (decision D20). */
+  readonly kind: TaskRunKind
   /** USD, or `null` when this run's runtime reported no spend (M12 Task 9 -- spec Decision 6). */
   readonly costUsd: number | null
+  /**
+   * What it takes to ESTIMATE a run that reported nothing (M51 R5): the folded input figure, the
+   * output figure, and the model half of the pair the run was dispatched with. All three are null
+   * on a run recorded before M51 and on a runtime that reports no usage at all -- which is exactly
+   * `costProvenanceOf`'s `unmeasured`, and the panel prints `—` for it rather than a zero.
+   */
+  readonly tokensIn: number | null
+  readonly tokensOut: number | null
+  readonly model: string | null
+  /**
+   * `SlaveRun.provider` -- the runtime that actually ran this, or `null` for a run that never
+   * spawned one.
+   *
+   * Here so a run row IS a `CostRow` (`packages/domain/src/guardrails/spend.ts`) and the panel can
+   * ask the domain where a figure came from rather than restating that rule in a component. It is
+   * also the column `sumSpend` discriminates an unmeasured run on, so the two readings of "nobody
+   * measured this" stay the same reading.
+   */
+  readonly provider: string | null
   readonly toolCalls: number
+  /**
+   * This run's OWN tool-call ceiling (M51 R7, decision D16), or `null` when the workspace's
+   * `maxToolCallsPerRun` is the only limit on it.
+   *
+   * Non-null means the behavioural breaker constrained this run, and the cap STANDS even after the
+   * breaker's word de-escalates -- nothing clears it before the run ends. So the one line that
+   * shows a run's tool calls says which ceiling it is counting against, rather than leaving a
+   * capped run looking like an ordinary one.
+   */
+  readonly toolCallCap: number | null
   readonly startedAt: string
   readonly endedAt: string | null
   /** M23 B4: null once collected. */
@@ -225,11 +265,19 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         runs: task.runs.map((run) => ({
           id: run.id,
           status: run.status,
+          kind: run.kind,
           // Passed through as `number | null` (M12 Task 9, ruling R3). The comment this replaces
           // chose `$0.00` to avoid "widening this DTO to a tri-state" -- widening it is exactly
           // what spec Decision 6 asks for, and `TaskDetailPanel` renders `—` for the null.
           costUsd: run.costUsd,
+          // M51 R5: the three columns an estimate needs, straight off the row the `include` above
+          // already loads in full -- a projection change and nothing more.
+          tokensIn: run.tokensIn,
+          tokensOut: run.tokensOut,
+          model: run.model,
+          provider: run.provider,
           toolCalls: run.toolCalls,
+          toolCallCap: run.toolCallCap,
           startedAt: run.startedAt.toISOString(),
           endedAt: run.endedAt?.toISOString() ?? null,
           // M23 B4: null once collected.

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { userSlaveStatus } from '@slave-of-ai/domain'
 import type { SlaveFeedEvent } from '../lib/feedSummary'
+import { formatUsd } from '../lib/realMoney'
 import { providerLabel } from '../lib/providerLabel'
 import type { SlaveCardData } from '../server/overview'
 import { sendControl } from '../lib/postControl'
@@ -438,7 +439,7 @@ export function SlavePanel({
         * measurement this run never made (spec Decision 6; M12 Task 9, ruling R3). */}
       <DetailsGroup group="cost" title="Cost">
         <span data-testid="run-cost" className="font-mono text-xs text-text-2">
-          {slave.costUsd === null ? '—' : `$${slave.costUsd.toFixed(2)}`}
+          {formatUsd(slave.costUsd)}
         </span>
       </DetailsGroup>
 

@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation'
 import { formatDuration, formatTokens } from '../lib/format'
+import { formatUsd } from '../lib/realMoney'
 import type { AnalyticsSnapshot } from '../server/analytics'
 import { BarChart } from './BarChart'
 import { KpiStrip } from './analytics/KpiStrip'
@@ -117,7 +118,7 @@ export function AnalyticsClient({
                     * I1): a cost that hides how many of the slave's runs were never measured
                     * presents the measured part of a bill as the whole of it. */}
                   <span className="font-mono text-[11px] text-text-1">
-                    ${row.costUsd.toFixed(2)}
+                    {formatUsd(row.costUsd)}
                     {row.unmeasuredRuns > 0 && (
                       <span data-testid={`perf-unmeasured-${row.slaveId}`} className="text-text-3">
                         {' '}

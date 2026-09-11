@@ -56,6 +56,9 @@ const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
   // ordinary hire and prints no chip at all, so the cases that want one state their own.
   lifecycle: 'project',
   released: null,
+  // M51 R7: the rung the behavioural breaker has this worker's live run on. `none` is every
+  // healthy worker, and it is what the card says nothing about.
+  breakerLevel: 'none',
   ...over,
 })
 
@@ -89,7 +92,7 @@ const snapshot = (slaves: readonly SlaveCardData[]): OverviewSnapshot => ({
     team: [],
     needsYou: [],
     latestVerified: null,
-    cost: { spentUsd: 0, measuredUsd: 0, unmeasuredCalls: 0, unmeasuredRuns: 0, budgetUsd: null },
+    cost: { spentUsd: 0, measuredUsd: 0, actualUsd: 0, estimatedUsd: 0, upperBoundUsd: 0, unmeasuredCalls: 0, unmeasuredRuns: 0, budgetUsd: null },
     recentChanges: [],
     knowledge: { verified: 0, candidates: 0 },
   },
@@ -236,6 +239,42 @@ describe('SlaveCard', () => {
     // M14 Task 2: the card says its state in the handoff's `StatusPill` vocabulary now, not the
     // raw `SlaveStatus` word the M5 card printed into `status-label`.
     expect(screen.getByTestId('status-pill').textContent).toBe('WORKING')
+  })
+
+  // M51 R7: the run is still WORKING and the breaker is speaking to it. The word is the difference
+  // and the tone is not -- nothing needs a person, so this must not read as a red BLOCKED.
+  it('says STEERED and CONSTRAINED for a run the breaker has spoken to', () => {
+    const { rerender } = render(
+      <SlaveCard
+        slave={slave({ status: 'working', taskStatus: 'running', breakerLevel: 'steered' })}
+        liveActionLine={null}
+        workspaceId="w1"
+        onOpen={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('status-pill').textContent).toBe('STEERED')
+    rerender(
+      <SlaveCard
+        slave={slave({ status: 'working', taskStatus: 'running', breakerLevel: 'constrained' })}
+        liveActionLine={null}
+        workspaceId="w1"
+        onOpen={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('status-pill').textContent).toBe('CONSTRAINED')
+    expect(screen.getByTestId('status-pill').getAttribute('data-tone')).toBe('waiting')
+  })
+
+  it('keeps the word somebody else produced on a worker that is not working', () => {
+    render(
+      <SlaveCard
+        slave={slave({ status: 'paused', taskStatus: 'running', breakerLevel: 'constrained' })}
+        liveActionLine={null}
+        workspaceId="w1"
+        onOpen={() => {}}
+      />,
+    )
+    expect(screen.getByTestId('status-pill').textContent).toBe('PAUSED')
   })
 
   it('falls back to the snapshot action line when no live one has arrived', () => {

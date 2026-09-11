@@ -22,6 +22,7 @@ import {
   sumSpendFromGroups,
   NON_TERMINAL_RUN_STATUSES,
   SUPERVISOR_PER_CALL_CAP_USD,
+  type BreakerLevel,
   type CapabilityRecord,
   type Result,
   type SlaveLifecycle,
@@ -380,6 +381,10 @@ interface CurrentTask {
 interface SlaveLiveInfo {
   readonly status: SlaveStatus
   readonly currentTask: CurrentTask | null
+  /** M51 R7: the rung the behavioural breaker has this worker's live run on, `'none'` with no live
+   *  run. Derived here, beside the status, so every surface that shows a worker's word reads one
+   *  derivation rather than two. */
+  readonly breakerLevel: BreakerLevel
 }
 
 /**
@@ -411,13 +416,14 @@ async function loadSlaveLiveInfo(
   for (const slaveId of slaveIds) {
     const run = liveRunBySlave.get(slaveId) ?? null
     const status = deriveSlaveStatus(run === null ? null : toRunState(run))
+    const breakerLevel = run?.breakerLevel ?? 'none'
     let currentTask: CurrentTask | null = null
     if (run !== null && run.task !== null) {
       const maxToolCalls = maxToolCallsByWorkspace.get(workspaceIdBySlave.get(slaveId) ?? '') ?? 0
       const pct = maxToolCalls > 0 ? Math.min(100, Math.max(0, Math.round((run.toolCalls / maxToolCalls) * 100))) : 0
       currentTask = { title: run.task.title, pct }
     }
-    result.set(slaveId, { status, currentTask })
+    result.set(slaveId, { status, currentTask, breakerLevel })
   }
   return result
 }
@@ -585,6 +591,9 @@ export interface WorkerRow {
   readonly workspaceId: string
   readonly projectName: string
   readonly status: string
+  /** M51 R7: the rung the breaker has this worker's live run on -- polled with `status` and for the
+   *  same reason, so a steered run reaches the Slaves table within one tick. */
+  readonly breakerLevel: BreakerLevel
   readonly currentTask: CurrentTask | null
   /** The worker's team name -- the handoff's "department" column. */
   readonly department: string
@@ -715,6 +724,7 @@ export async function listWorkers(options?: { readonly includeArchived?: boolean
       workspaceId: slave.team.workspaceId,
       projectName: slave.team.workspace.name,
       status: info?.status ?? 'idle',
+      breakerLevel: info?.breakerLevel ?? 'none',
       currentTask: info?.currentTask ?? null,
       department: slave.team.name,
       teamId: slave.teamId,
@@ -780,6 +790,10 @@ export interface AllSlaveRow {
    *  (materialized or not): a project row's department select reads/writes `teamId` instead. */
   readonly companyTeamId: string | null
   readonly status: string
+  /** M51 R7: the rung the breaker has this row's live run on; `'none'` for an idle worker AND for
+   *  every catalog row, which has no `Slave` -- and so no run -- to read a column off. Merged on
+   *  every poll tick like `status`. */
+  readonly breakerLevel: BreakerLevel
   readonly currentTask: CurrentTask | null
   readonly provider: ProviderKind | null
   readonly gate: WorkerGate | null
@@ -876,6 +890,7 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
     companyId: null, // filled below from the roster when the worker is roster-linked
     companyTeamId: null,
     status: w.status,
+    breakerLevel: w.breakerLevel,
     currentTask: w.currentTask,
     provider: w.provider,
     gate: w.gate,
@@ -906,7 +921,8 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
     lifecycle: 'permanent', released: null,
     departmentName: team.teamName, projectName: null, workspaceId: null,
     teamId: null, companyId: company.companyId, companyTeamId: team.companyTeamId,
-    status: 'idle', currentTask: null,
+    // A catalog member has no run at all, so no breaker can have spoken to it (M51 R7).
+    status: 'idle', breakerLevel: 'none', currentTask: null,
     provider: member.effectiveProvider,
     gate: member.effectiveProvider === null ? null : capabilitiesOf(member.effectiveProvider).gate,
     model: member.effectiveModel, costUsd: 0, unmeasuredRuns: 0, runCount: 0,

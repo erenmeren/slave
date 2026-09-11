@@ -66,9 +66,26 @@ export function cardStateForRun(status: RunStatus | null, facts?: UserCardFacts)
   return userRunStatus(status, facts).state
 }
 
-/** `deriveSlaveStatus`'s output, through the domain. */
-export function cardStateForSlave(status: SlaveStatus): CardState {
-  return userSlaveStatus(status).state
+/**
+ * The breaker's word over a state that was going to read WORKING (M51 R7, decision D6).
+ *
+ * The domain states this rule in `userRunStatus` for a `RunStatus`; this is the same clause for the
+ * two SLAVE-side projections below, which start from `deriveSlaveStatus`'s output and a task status
+ * rather than from a run's own column. One clause, in one place, so the three projections cannot
+ * disagree about when the breaker is allowed to speak.
+ *
+ * Only over `working`: every other word on a card is one somebody (or something) acted to produce,
+ * and overwriting a PAUSED with CONSTRAINED would describe a tool budget nobody is spending.
+ */
+function withBreaker(state: CardState, facts?: UserCardFacts): CardState {
+  if (state !== 'working') return state
+  return facts?.breakerLevel === undefined || facts.breakerLevel === 'none' ? state : facts.breakerLevel
+}
+
+/** `deriveSlaveStatus`'s output, through the domain. `facts` is M51 R7's optional second argument:
+ *  a worker whose live run the breaker has spoken to says STEERED/CONSTRAINED instead of WORKING. */
+export function cardStateForSlave(status: SlaveStatus, facts?: UserCardFacts): CardState {
+  return withBreaker(userSlaveStatus(status).state, facts)
 }
 
 /**
@@ -86,9 +103,9 @@ export const KNOWN_SLAVE_STATUSES = ['idle', 'starting', 'working', 'pausing', '
  * always `deriveSlaveStatus`'s output, so anything outside the vocabulary falls back to `idle`
  * rather than throwing at render time.
  */
-export function toneForStatus(status: string): StatusTone {
+export function toneForStatus(status: string, facts?: UserCardFacts): StatusTone {
   const known = KNOWN_SLAVE_STATUSES.find((member) => member === status)
-  return CARD_STATE_TONE[known === undefined ? 'idle' : cardStateForSlave(known)].tone
+  return CARD_STATE_TONE[known === undefined ? 'idle' : cardStateForSlave(known, facts)].tone
 }
 
 /**
@@ -98,8 +115,8 @@ export function toneForStatus(status: string): StatusTone {
  * task is blocked is simply `idle`, and `idle` is what the card would say without this. The three
  * overrides are exactly the states the handoff's card set has and the slave vocabulary does not.
  */
-export function cardStateFor(slave: SlaveStatus, task: TaskStatus | null): CardState {
-  if (task === null) return cardStateForSlave(slave)
+export function cardStateFor(slave: SlaveStatus, task: TaskStatus | null, facts?: UserCardFacts): CardState {
+  if (task === null) return cardStateForSlave(slave, facts)
   switch (task) {
     case 'blocked':
       return 'blocked'
@@ -119,14 +136,14 @@ export function cardStateFor(slave: SlaveStatus, task: TaskStatus | null): CardS
       // Only when nobody is still working on it: a `done` task whose slave is mid-run means the
       // slave has moved on and the snapshot has not caught up, and the SLAVE is what this card
       // is about.
-      return slave === 'idle' ? 'completed' : cardStateForSlave(slave)
+      return slave === 'idle' ? 'completed' : cardStateForSlave(slave, facts)
     case 'backlog':
     case 'ready':
     case 'assigned':
     case 'running':
     case 'verifying':
     case 'rework':
-      return cardStateForSlave(slave)
+      return cardStateForSlave(slave, facts)
     default: {
       // The `capabilitiesOf` idiom (`packages/providers/src/capabilities.ts:29-38`). `tsconfig.base`
       // sets `strict` but not `noImplicitReturns`, so a fourteenth `TaskStatus` added later would

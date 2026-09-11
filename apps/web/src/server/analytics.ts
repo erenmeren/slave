@@ -1,7 +1,8 @@
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import { SEED_WORKSPACE_ID } from '@slave-of-ai/db'
-import { NON_TERMINAL_RUN_STATUSES } from '@slave-of-ai/domain'
+import { NON_TERMINAL_RUN_STATUSES, RUN_UNMEASURED_CAP_USD } from '@slave-of-ai/domain'
 import { formatDuration } from '../lib/format'
+import { formatUsd } from '../lib/realMoney'
 
 /**
  * The Analytics page's aggregation (M14 §4.4): one query round per section, all scoped to a
@@ -218,10 +219,19 @@ export async function buildAnalytics(workspaceId: string | null): Promise<Analyt
     },
     {
       label: 'Spend',
-      value: `$${knownUsd.toFixed(2)}`,
+      value: formatUsd(knownUsd),
       // Its own line, never folded into the figure (Decision 4): a total that silently absorbs
       // unmeasured runs as zeros presents the measured part of a bill as the whole of it.
-      note: unknownRuns === 0 ? null : `${unknownRuns} run${unknownRuns === 1 ? '' : 's'} unmeasured`,
+      //
+      // M51 R7: the existing `note` convention, one clause wider. `knownUsd` above is unchanged and
+      // is still the measured figure; the bound is named BESIDE it rather than folded into it, for
+      // the same reason the count is -- and because charging an unmeasured run would let a budget
+      // halt fire on spending nobody measured (`RUN_UNMEASURED_CAP_USD`'s own docstring).
+      note:
+        unknownRuns === 0
+          ? null
+          : `${unknownRuns} run${unknownRuns === 1 ? '' : 's'} unmeasured — upper bound ` +
+            `${formatUsd(knownUsd + unknownRuns * RUN_UNMEASURED_CAP_USD)}`,
     },
     { label: 'Tool calls', value: String(toolCallsTotal), note: null },
     { label: 'Pauses', value: String(pauses), note: null },

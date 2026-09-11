@@ -8,14 +8,17 @@ import {
 import { workspaceSpend, type WorkspaceSpend } from '@slave-of-ai/control'
 import {
   NON_TERMINAL_RUN_STATUSES,
+  RUN_UNMEASURED_CAP_USD,
+  SUPERVISOR_PER_CALL_CAP_USD,
   TERMINAL,
   deriveSlaveStatus,
+  estimateCostUsd,
   sumSpend,
   userSlaveStatus,
   userSupervisorStatus,
   userTaskStatus,
+  type CostRow,
   type SlaveLifecycle,
-  type SpendRow,
   type TaskStatus,
   type UserSupervisorState,
   type UserTaskState,
@@ -125,8 +128,35 @@ export interface ProjectBrief {
    * measured has been charged for. It has not.
    */
   readonly cost: {
+    /**
+     * THE GUARDRAIL'S NUMBER, unchanged: `workspaceSpend()`'s total. Every other figure on this
+     * tile is a different question, and exactly one of them -- this one -- is what
+     * `evaluateGuardrails` compares against the budget.
+     */
     readonly spentUsd: number
     readonly measuredUsd: number
+    /**
+     * M51 R5, **Actual**: what a provider actually reported, summed. Identical to `measuredUsd` to
+     * the cent -- it IS `runsMeasuredUsd + supervisorMeasuredUsd` -- and it is kept as its own field
+     * rather than reusing the old name because the tile now names three figures and a field called
+     * `measured` beside `estimated` and `upperBound` reads as a fourth (plan erratum E13: the LINE
+     * `measured $X` is replaced, not joined).
+     */
+    readonly actualUsd: number
+    /**
+     * M51 R5, **Estimated**: the same total with the price table filling in wherever nothing was
+     * reported. Reported runs contribute their reported figure, never their estimate -- the rule
+     * `costProvenanceOf` enforces in one place. Equal to `actualUsd` on a project where everything
+     * reported, which is when the tile hides the line.
+     */
+    readonly estimatedUsd: number
+    /**
+     * M51 R5, **Upper bound**: `spentUsd` plus every concluded unmeasured RUN at
+     * `RUN_UNMEASURED_CAP_USD`. A DISPLAY figure and nothing charges it -- see
+     * `RUN_UNMEASURED_CAP_USD`'s own docstring for why charging it would move the budget guardrail
+     * and `gate:m38-supervisor` stage 3 with it.
+     */
+    readonly upperBoundUsd: number
     readonly unmeasuredCalls: number
     readonly unmeasuredRuns: number
     readonly budgetUsd: number | null
@@ -154,8 +184,10 @@ export interface ProjectBriefReads {
   readonly needsYou?: readonly NeedsYouItem[]
   /** `workspaceSpend()`'s total -- the ONE spend formula (spec erratum E2). */
   readonly spend?: WorkspaceSpend
-  /** The rows `sumSpend` counts unmeasured RUNS from. */
-  readonly spendRows?: readonly SpendRow[]
+  /** The rows `sumSpend` counts unmeasured RUNS from -- and, since M51 R5 (plan erratum E14), the
+   *  rows the ESTIMATE is computed from. A `CostRow` IS a `SpendRow`, so `sumSpend` keeps taking
+   *  exactly what it took. */
+  readonly spendRows?: readonly CostRow[]
 }
 
 export async function buildProjectBrief(
@@ -215,7 +247,11 @@ export async function buildProjectBrief(
       shared.spendRows ??
         prisma.slaveRun.findMany({
           where: { slave: { team: { workspaceId } } },
-          select: { costUsd: true, provider: true, status: true },
+          // M51 R5: `tokensIn`/`tokensOut`/`model` join the three `sumSpend` reads, so the brief's
+          // ESTIMATE can be computed from the same rows rather than from a second scan. `sumSpend`
+          // itself is untouched and still reads only the three it always did -- a `CostRow` IS a
+          // `SpendRow`.
+          select: { costUsd: true, provider: true, status: true, tokensIn: true, tokensOut: true, model: true },
         }),
       // A COUNT, not a listing (fix round 1, review Important 8 / minor 2): the word only needs
       // how many are waiting, and `listDecisions` both fetches every row's JSON and caps itself at
@@ -293,6 +329,23 @@ export async function buildProjectBrief(
     cost: {
       spentUsd: spend.spentUsd,
       measuredUsd: spend.runsMeasuredUsd + spend.supervisorMeasuredUsd,
+      // The SAME sum under its own name (M51 R5, erratum E13): the tile's `actual` line replaces
+      // its `measured` line, and the field is duplicated rather than renamed so nothing that reads
+      // `measuredUsd` today has to move.
+      actualUsd: spend.runsMeasuredUsd + spend.supervisorMeasuredUsd,
+      // Σ over runs of (reported ?? estimated ?? 0), plus the Supervisor's own measured spend and
+      // its capped unmeasured calls -- i.e. `spentUsd` with the holes filled in wherever they can
+      // be. A run that reported nothing and cannot be priced contributes 0 here and shows up in
+      // `unmeasuredRuns` instead, which is the honest split. A REPORTED figure is never replaced
+      // by its estimate: the `??` chain checks `costUsd` first, the one rule `costProvenanceOf`
+      // states in one place.
+      estimatedUsd:
+        spendRows.reduce((total, row) => total + (row.costUsd ?? estimateCostUsd(row.model, tokensOf(row)) ?? 0), 0) +
+        spend.supervisorMeasuredUsd +
+        spend.supervisorUnmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD,
+      // A DISPLAY figure, computed HERE and never inside `workspaceSpend` (spec R5): charging an
+      // unmeasured run would let a budget halt fire on spending nobody measured.
+      upperBoundUsd: spend.spentUsd + runSpend.unknownRuns * RUN_UNMEASURED_CAP_USD,
       // Two different facts, kept apart: a CALL is charged at the cap and is inside `spentUsd`; a
       // RUN nobody measured is in no total at all (`sumSpend`'s own reading).
       unmeasuredCalls: spend.supervisorUnmeasuredCalls,
@@ -317,6 +370,18 @@ export async function buildProjectBrief(
  * thing in up to three round trips on a page that refetches on every event (fix round 1, review
  * minor 10).
  */
+/**
+ * One run's token reading, or `null` when either half is missing (M51 R5).
+ *
+ * `estimateCostUsd`'s own contract: a half-measured run is not a measured one, and passing a `0`
+ * for the half nobody recorded would price a run at a fraction of what it really cost. Both columns
+ * are written together by the pump, so "one of them null" means the run predates M51 or its runtime
+ * reports no usage at all.
+ */
+function tokensOf(row: CostRow): { readonly input: number; readonly output: number } | null {
+  return row.tokensIn === null || row.tokensOut === null ? null : { input: row.tokensIn, output: row.tokensOut }
+}
+
 async function latestVerifiedRows(
   workspaceId: string,
 ): Promise<readonly { readonly type: string; readonly taskId: string | null; readonly ts: Date }[]> {

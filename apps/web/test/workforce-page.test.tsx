@@ -57,6 +57,7 @@ function slaveRow(over: Partial<AllSlaveRow> = {}): AllSlaveRow {
     companyId: null,
     companyTeamId: null,
     status: 'working',
+    breakerLevel: 'none',
     currentTask: { title: 'Add the thing', pct: 40 },
     provider: null,
     gate: null,

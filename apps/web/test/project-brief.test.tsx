@@ -29,7 +29,20 @@ const BRIEF = {
     { kind: 'decision' as const, id: 'd1', title: 'No reviewer: nobody holds reviewer', href: '/w/w1#decision-d1', since: '2026-09-09T09:00:00.000Z', taskId: null, decisionId: 'd1', messageId: null },
   ],
   latestVerified: { taskTitle: 'Add the banner', kind: 'integrated' as const, at: '2026-09-09T10:00:00.000Z' },
-  cost: { spentUsd: 12.5, measuredUsd: 9.5, unmeasuredCalls: 3, unmeasuredRuns: 0, budgetUsd: 25 },
+  // M51 R5: three figures and two holes. `actualUsd` IS `measuredUsd` to the cent (plan erratum
+  // E13), and this fixture is a project where everything that finished reported -- so the estimate
+  // equals the actual and the upper bound equals the total, which is exactly when the tile shows
+  // neither line (decision D19) and reads precisely as it did before M51.
+  cost: {
+    spentUsd: 12.5,
+    measuredUsd: 9.5,
+    actualUsd: 9.5,
+    estimatedUsd: 9.5,
+    upperBoundUsd: 12.5,
+    unmeasuredCalls: 3,
+    unmeasuredRuns: 0,
+    budgetUsd: 25,
+  },
   recentChanges: [{ at: '2026-09-09T10:30:00.000Z', summary: 'Project · goal set' }],
   knowledge: { verified: 3, candidates: 1 },
 }
@@ -98,7 +111,9 @@ describe('ProjectBrief', () => {
     const tile = tileFor('cost')
     expect(tile.textContent).toContain('$12.50')
     expect(tile.textContent).toContain('$25')
-    expect(tile.textContent).toContain('measured $9.50')
+    // M51 R5 / erratum E13: `actual` REPLACED this line's old `measured` word -- one number, one
+    // label, and never both words for the same sum.
+    expect(tile.textContent).toContain('actual $9.50')
     expect(tile.textContent).toContain('3 unmeasured calls charged at $1.00 each')
     // Never $0.00 for a hole: an unmeasured call costs an unknown amount up to the cap.
     expect(tile.textContent).not.toContain('$0.00')
@@ -245,5 +260,63 @@ describe('ProjectBrief', () => {
     const tile = tileFor('recent-changes')
     expect(tile.textContent).toContain('10:30:00')
     expect(tile.textContent).toContain('Project · goal set')
+  })
+})
+
+/**
+ * M51 R5/R7: the cost tile answers three different questions and says which is which. The big mono
+ * figure is still `spentUsd` -- the ONE number the budget guardrail compares -- which is how three
+ * answers stay inside the one-figure rule rather than breaking it.
+ */
+describe('the cost tile after M51 R7', () => {
+  const cost = {
+    spentUsd: 4.5,
+    measuredUsd: 3.5,
+    actualUsd: 3.5,
+    estimatedUsd: 6.25,
+    upperBoundUsd: 5.5,
+    unmeasuredCalls: 1,
+    unmeasuredRuns: 1,
+    budgetUsd: 25,
+  }
+  const briefWith = (over: Partial<typeof cost>): typeof BRIEF => ({ ...BRIEF, cost: { ...cost, ...over } })
+
+  it('is still ONE tile among the eight, and the big figure is still the guardrail’s number', () => {
+    render(<ProjectBrief workspaceId="w1" brief={briefWith({})} />)
+    expect(screen.getAllByTestId('brief-tile')).toHaveLength(8)
+    expect(tileFor('cost').textContent).toContain('$4.50 / $25')
+  })
+
+  it('labels all three figures, so no number has to be guessed at', () => {
+    render(<ProjectBrief workspaceId="w1" brief={briefWith({})} />)
+    expect(screen.getByTestId('brief-cost-actual').textContent).toBe('actual $3.50')
+    expect(screen.getByTestId('brief-cost-estimated').textContent).toBe('estimated $6.25')
+    expect(screen.getByTestId('brief-cost-upper-bound').textContent).toBe('upper bound $5.50')
+  })
+
+  it('keeps both hole sentences exactly as they were', () => {
+    render(<ProjectBrief workspaceId="w1" brief={briefWith({})} />)
+    expect(screen.getByTestId('brief-cost-unmeasured-calls').textContent).toBe(
+      '1 unmeasured calls charged at $1.00 each',
+    )
+    expect(screen.getByTestId('brief-cost-unmeasured-runs').textContent).toBe('1 unmeasured runs (not in the total)')
+  })
+
+  it('replaces the old `measured` line rather than sitting beside it -- one number, one label', () => {
+    render(<ProjectBrief workspaceId="w1" brief={briefWith({})} />)
+    expect(tileFor('cost').textContent).not.toContain('measured $')
+  })
+
+  it('hides the estimate when it is no different from the actual -- a repeated number is noise', () => {
+    render(<ProjectBrief workspaceId="w1" brief={briefWith({ estimatedUsd: 3.5 })} />)
+    expect(screen.queryByTestId('brief-cost-estimated')).toBeNull()
+  })
+
+  // The other half of decision D19, and the one `gate:m45`'s fold check depends on: a project where
+  // every concluded run reported shows exactly the lines it showed before M51.
+  it('hides the upper bound when nothing unmeasured moves it off the total', () => {
+    render(<ProjectBrief workspaceId="w1" brief={briefWith({ upperBoundUsd: 4.5, unmeasuredRuns: 0 })} />)
+    expect(screen.queryByTestId('brief-cost-upper-bound')).toBeNull()
+    expect(screen.getByTestId('brief-cost-actual').textContent).toBe('actual $3.50')
   })
 })

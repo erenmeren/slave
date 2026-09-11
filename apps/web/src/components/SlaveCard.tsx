@@ -81,7 +81,9 @@ export function SlaveCard({
   readonly onOpen: (id: string) => void
 }): React.JSX.Element {
   const line = liveActionLine ?? slave.actionLine
-  const state = cardStateFor(slave.status, slave.taskStatus)
+  // M51 R7: the breaker's rung is the third fact the word is built from -- a working run the
+  // breaker has spoken to reads STEERED/CONSTRAINED rather than WORKING, and nothing else moves.
+  const state = cardStateFor(slave.status, slave.taskStatus, { breakerLevel: slave.breakerLevel })
   const { tone, label, pulse } = CARD_STATE_TONE[state]
 
   const [pending, setPending] = useState<ReadonlySet<CardAction>>(new Set())

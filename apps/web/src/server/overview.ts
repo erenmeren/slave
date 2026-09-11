@@ -7,6 +7,7 @@ import {
   mergeQueueOrder,
   sumSpend,
   NON_TERMINAL_RUN_STATUSES,
+  type BreakerLevel,
   type SlaveLifecycle,
   type SlaveStatus,
   type TaskStatus,
@@ -82,6 +83,15 @@ export interface SlaveCardData {
    *  and `reason` is the sentence the release was recorded with. Null for everybody still here. */
   readonly released: { readonly at: string; readonly reason: string } | null
   readonly status: SlaveStatus
+  /**
+   * The rung the behavioural breaker has this worker's LIVE run on (M51 R7), or `'none'` for a
+   * worker with no live run -- an absent run is not a steered one, the same statement
+   * `toolCalls: 0` makes beside it.
+   *
+   * The card's WORD reads off this: a `working` run at `steered`/`constrained` says so instead of
+   * saying WORKING. Not a status -- the run really is working, and that is the point of the word.
+   */
+  readonly breakerLevel: BreakerLevel
   readonly taskTitle: string | null
   /** The live run's task id — the card renders `TASK-<first 8 chars>` from it (the handoff's mono
    *  task reference). `null` with no live run or a task-less `planning` run (M8b). */
@@ -90,14 +100,19 @@ export interface SlaveCardData {
    *  `blocked`/`review`/`completed` — three states `SlaveStatus` alone cannot express. */
   readonly taskStatus: TaskStatus | null
   /**
-   * The run's progress as a percentage of the workspace's own tool-call ceiling
-   * (`Workspace.maxToolCallsPerRun`, the limit `sweep.ts` enforces), clamped to [0,100]. `0` with
-   * no live run: an absent run has made no progress, the same measured zero `toolCalls: 0` makes
-   * beside it. NOT null-able: there is no "unknown progress" state — the ceiling is a column and
-   * the count is a column.
+   * The run's progress as a percentage of the tool-call ceiling that will actually stop it,
+   * clamped to [0,100]. `0` with no live run: an absent run has made no progress, the same measured
+   * zero `toolCalls: 0` makes beside it. NOT null-able: there is no "unknown progress" state — the
+   * ceiling is a column and the count is a column.
+   *
+   * The ceiling is `SlaveRun.toolCallCap ?? Workspace.maxToolCallsPerRun` (M51 R7, decision D16) --
+   * the SAME expression `sweep.ts` compares against, so the bar measures the run against the limit
+   * that will actually stop it. A constrained run keeps its own cap even after the breaker's word
+   * de-escalates, and a bar drawn against the workspace ceiling would show it two thirds of the way
+   * through a budget it is in fact about to exhaust.
    */
   readonly progressPct: number
-  /** `"<toolCalls>/<maxToolCallsPerRun>"`, or `null` with no live run (rendered `—`). */
+  /** `"<toolCalls>/<the ceiling above>"`, or `null` with no live run (rendered `—`). */
   readonly stepLabel: string | null
   /**
    * The skill this run most recently invoked — the `summary` of its latest `run.tool_call` event
@@ -480,7 +495,11 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   const [spendRows, taskGroups, spendTotal, pendingDecisions] = await Promise.all([
     prisma.slaveRun.findMany({
       where: { slave: { team: { workspaceId } } },
-      select: { costUsd: true, provider: true, status: true },
+      // M51 R5 (plan erratum E14): `tokensIn`/`tokensOut`/`model` join the three `sumSpend` reads,
+      // so the brief's ESTIMATE is computed from these same rows rather than from a second scan.
+      // `sumSpend` below is untouched and still reads only the three columns it always did -- a
+      // `CostRow` IS a `SpendRow`.
+      select: { costUsd: true, provider: true, status: true, tokensIn: true, tokensOut: true, model: true },
     }),
     prisma.task.groupBy({ by: ['status'], where: { workspaceId }, _count: { _all: true } }),
     workspaceSpend(workspaceId),
@@ -587,6 +606,17 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   for (const event of approvalEvents) {
     if (event.taskId !== null) latestApprovalSeq.set(event.taskId, Number(event.seq))
   }
+  /**
+   * The tool-call ceiling a run is actually measured against (M51 R7, decision D16).
+   *
+   * `SlaveRun.toolCallCap ?? Workspace.maxToolCallsPerRun` -- the SAME expression `sweep.ts`'s
+   * over-cap arm reads. A constrained run keeps its own cap after the breaker's word
+   * de-escalates, so the workspace ceiling alone would draw a bar (and print a pair) against a
+   * limit that is not the one about to stop this run.
+   */
+  const toolCallCeiling = (run: { readonly toolCallCap: number | null }): number =>
+    run.toolCallCap ?? workspace.maxToolCallsPerRun
+
   const taskById = new Map(mergingTasks.map((task) => [task.id, task]))
   const approvedQueue = mergeQueueOrder(
     mergingTasks
@@ -650,17 +680,17 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         provider: run?.provider ?? null,
         gate: run === null || run.provider === null ? null : capabilitiesOf(run.provider).gate,
         status: deriveSlaveStatus(run === null ? null : toRunState(run)),
+        // The run's own column (M51 R7). `'none'` with no live run: an absent run is not a steered
+        // one, and the card's word for a worker with nothing in flight is IDLE either way.
+        breakerLevel: run?.breakerLevel ?? 'none',
         taskTitle: run?.task?.title ?? null,
         taskId: run?.taskId ?? null,
         taskStatus: (run?.task?.status as TaskStatus | undefined) ?? null,
         // The ceiling is `sweep.ts`'s own, so the bar measures the run against the limit that will
         // actually stop it. A workspace configured with a non-positive ceiling has no scale to
         // measure against at all, and 0% is the only honest reading of an undefined denominator.
-        progressPct:
-          run === null || workspace.maxToolCallsPerRun <= 0
-            ? 0
-            : Math.min(100, Math.round((run.toolCalls / workspace.maxToolCallsPerRun) * 100)),
-        stepLabel: run === null ? null : `${run.toolCalls}/${workspace.maxToolCallsPerRun}`,
+        progressPct: run === null || toolCallCeiling(run) <= 0 ? 0 : Math.min(100, Math.round((run.toolCalls / toolCallCeiling(run)) * 100)),
+        stepLabel: run === null ? null : `${run.toolCalls}/${toolCallCeiling(run)}`,
         skill: skills.get(slave.id) ?? null,
         actionLine: lines.get(slave.id) ?? null,
         runId: run?.id ?? null,

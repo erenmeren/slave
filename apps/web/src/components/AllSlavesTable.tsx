@@ -2,13 +2,14 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { SLAVE_LIFECYCLE_LABEL, userSlaveStatus } from '@slave-of-ai/domain'
+import { SLAVE_LIFECYCLE_LABEL } from '@slave-of-ai/domain'
 import type { AllSlaveRow, AllSlavesPage } from '../server/org'
 import { sendControl } from '../lib/postControl'
+import { formatUsd } from '../lib/realMoney'
 import { providerLabel } from '../lib/providerLabel'
 import { RuntimeRoleChips } from './RuntimeRoleChips'
 import { SlaveRowActions } from './SlaveRowActions'
-import { KNOWN_SLAVE_STATUSES, toneForStatus } from '../lib/tones'
+import { CARD_STATE_TONE, KNOWN_SLAVE_STATUSES, cardStateForSlave, toneForStatus } from '../lib/tones'
 import { ModelOverrideEditor } from './ModelOverrideEditor'
 import { ShellOnlyMark } from './ShellOnlyMark'
 import { AvatarTile } from './ui/AvatarTile'
@@ -34,6 +35,9 @@ interface PolledWorker {
   readonly workspaceId: string
   readonly projectName: string
   readonly status: string
+  /** M51 R7: the rung the breaker has this worker's live run on -- merged like `status`, so a
+   *  steered run shows the word within one five-second tick rather than at the next full reload. */
+  readonly breakerLevel: AllSlaveRow['breakerLevel']
   readonly currentTask: AllSlaveRow['currentTask']
   /** The worker's own project `Team.id` (M25 Task 6) -- merged into a known row's `teamId`, so
    *  a department move made through the select on another tab (or another operator) shows up in
@@ -122,6 +126,7 @@ export function AllSlavesTable({
             kept.push({
               ...r,
               status: w.status,
+              breakerLevel: w.breakerLevel,
               currentTask: w.currentTask,
               teamId: w.teamId,
               departmentName: w.department,
@@ -152,6 +157,7 @@ export function AllSlavesTable({
               companyId: null,
               companyTeamId: null,
               status: w.status,
+              breakerLevel: w.breakerLevel,
               currentTask: w.currentTask,
               provider: w.provider,
               gate: w.gate,
@@ -185,13 +191,17 @@ export function AllSlavesTable({
   return (
     <DataTable columns={COLUMNS} header={[...HEADER]}>
       {rows.map((row, index) => {
-        const tone = toneForStatus(row.status)
+        // M51 R7: the breaker's rung is the second fact the word is built from, and the Overview
+        // card builds its word from the same pair -- two surfaces describing one live run must not
+        // disagree about what is happening to it.
+        const facts = { breakerLevel: row.breakerLevel }
+        const tone = toneForStatus(row.status, facts)
         // R5 leak 1: this pill printed `row.status` -- "pausing" where the Overview card said
         // PAUSING. Both words come from the same projection now, and the raw value stays one hover
         // away. `AllSlaveRow.status` is a bare `string`, so an unknown member falls back to its own
         // uppercased self rather than throwing at render time (`toneForStatus`'s own rule).
         const known = KNOWN_SLAVE_STATUSES.find((member) => member === row.status)
-        const word = known === undefined ? row.status.toUpperCase() : userSlaveStatus(known).label
+        const word = known === undefined ? row.status.toUpperCase() : CARD_STATE_TONE[cardStateForSlave(known, facts)].label
         // Plain locals, not `row.slaveId`/`row.workspaceId` property accesses: TS narrows a
         // captured variable across the `onClick` closure below, but not a captured property.
         const { slaveId, workspaceId } = row
@@ -270,7 +280,7 @@ export function AllSlavesTable({
               {/* The KPI tile's own idiom (M14 fix wave, review I1 / Decision 4: "a sum over
                 * unknowns says how many were unknown"), unchanged from the old worker list. */}
               <span data-testid="worker-cost" className="font-mono text-[11px] text-text-1">
-                ${row.costUsd.toFixed(2)}
+                {formatUsd(row.costUsd)}
                 {row.unmeasuredRuns > 0 && (
                   <span data-testid={`worker-unmeasured-${slaveId ?? row.companySlaveId ?? ''}`} className="text-text-3">
                     {' '}

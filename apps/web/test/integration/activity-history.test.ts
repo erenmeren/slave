@@ -151,7 +151,10 @@ describe('buildActivityHistory', () => {
       taskId: fixture.taskId2,
       slaveId: fixture.slaveId1,
       actor: 'system',
-      payload: { guardrail: 'budget', detail: 'over budget' },
+      // `budget_exhausted`, not `budget` (M51 R4, plan erratum E15): `budget` was never a spelling
+      // any producer wrote, and with `GUARDRAIL_KINDS` closed a fixture that is not a real kind is
+      // a fixture whose label lookup falls through to the key.
+      payload: { guardrail: 'budget_exhausted', detail: 'over budget' },
     })
 
     const filters: ActivityFilters = {
