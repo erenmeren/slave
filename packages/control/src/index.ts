@@ -44,6 +44,7 @@ export type { ModelListing, ModelOption } from '@slave-of-ai/providers'
  */
 export { PROVIDER_KINDS } from '@slave-of-ai/providers'
 export * from './pause.js'
+export * from './breaker.js'
 export * from './stop.js'
 export * from './emergency.js'
 export * from './resume.js'

@@ -3487,6 +3487,66 @@ describe('the orchestrator CLI', () => {
     })
   })
 
+  // M51 R3 / D18. The ONE breaker verb, and it is read-only.
+  describe('breaker --run', () => {
+    it('prints the level, the counters and the cap for a run nothing has tripped', async (): Promise<void> => {
+      const run = await prisma.slaveRun.create({
+        data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'working', toolCalls: 7 },
+      })
+
+      const result = await runCli(['breaker', '--run', run.id])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toBe(
+        `run ${run.id} is healthy (0 trip(s), 0 steer(s))\n` + '  tool calls  7, cap none\n' + '  last trip   none\n',
+      )
+    })
+
+    it('names the newest trip in WORDS, with its key beside them', async (): Promise<void> => {
+      const run = await prisma.slaveRun.create({
+        data: {
+          taskId: fixture.taskId,
+          slaveId: fixture.slaveId,
+          status: 'working',
+          toolCalls: 61,
+          toolCallCap: 91,
+          breakerLevel: 'constrained',
+          breakerTrips: 2,
+          breakerSteers: 1,
+        },
+      })
+      for (const payload of [
+        { level: 'steered' as const, trip: 'repeated_call' as const, count: 8, detail: 'Bash:abc' },
+        { level: 'constrained' as const, trip: 'error_storm' as const, count: 5, detail: 'timeout' },
+      ]) {
+        await appendEvent({
+          type: 'run.breaker',
+          workspaceId: fixture.workspaceId,
+          taskId: fixture.taskId,
+          slaveId: fixture.slaveId,
+          runId: run.id,
+          actor: 'system',
+          payload,
+        })
+      }
+
+      const result = await runCli(['breaker', '--run', run.id])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain(`run ${run.id} is constrained (2 trip(s), 1 steer(s))`)
+      expect(result.stdout).toContain('  tool calls  61, cap 91')
+      // The LABEL first and the key beside it (`docs/ia.md` rule 3), and the NEWEST trip only.
+      expect(result.stdout).toContain('  last trip   Everything is failing (error_storm), 5x, timeout')
+      expect(result.stdout).not.toContain('repeated_call')
+    })
+
+    it('refuses a run id nobody has, and changes nothing', async (): Promise<void> => {
+      const result = await runCli(['breaker', '--run', '11111111-1111-1111-1111-111111111111'])
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('11111111-1111-1111-1111-111111111111')
+    })
+  })
+
   describe('show-profile', () => {
     it('prints the upstream spec, the overrides and the merge as JSON', async (): Promise<void> => {
       const spec = {

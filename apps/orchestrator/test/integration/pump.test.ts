@@ -365,7 +365,16 @@ describe('pumpRun', () => {
       where: { runId: ids.runId, type: 'run_tool_call' },
     })
     const payload = toolCallEvent.payload as { name: string; summary: string }
-    expect(payload).toEqual({ name: 'Write', summary: 'Write note3.txt' })
+    // M51 R1 widened this payload by two keys. The M4 assertion this case exists for is the one
+    // below -- the summary is the READABLE form and never the opaque id -- and it is unchanged; the
+    // whole-payload `toEqual` is kept exhaustive rather than relaxed to `toMatchObject`, so a third
+    // key added here later still has to be looked at by somebody.
+    expect(payload).toEqual({
+      name: 'Write',
+      summary: 'Write note3.txt',
+      toolUseId: 'toolu_01UCoRZm85rNxfupNQPToZXL',
+      argsHash: testArgsHash('Write note3.txt'),
+    })
     expect(payload.summary).not.toBe('toolu_01UCoRZm85rNxfupNQPToZXL')
   })
 
@@ -1998,5 +2007,192 @@ describe('pumpRun', () => {
       // `starting`, not `pause_requested` -- so nothing had a reason to write one.
       await expect(prisma.checkpoint.findUnique({ where: { runId: ids.runId } })).resolves.toBeNull()
     })
+  })
+})
+
+/**
+ * What the pump persists for the behavioural breaker and for money (M51 R1/R5, errata E4/E10).
+ *
+ * A describe of its own rather than more cases inside `pumpRun` above: every one of these is about
+ * a WRITE the detector or the cost tile reads back, and they share three helpers the older cases
+ * have no use for.
+ */
+describe('pumpRun and what M51 made it persist', () => {
+  let ids: Ids
+
+  const HASH_A = testArgsHash('Bash npm test')
+
+  /** The rows of one event type for this run, oldest first. */
+  async function rowsOfType(forRunId: string, type: string): Promise<readonly { payload: unknown }[]> {
+    return prisma.executionEvent.findMany({
+      where: { runId: forRunId, type: type as never },
+      orderBy: { seq: 'asc' },
+      select: { payload: true },
+    })
+  }
+
+  const outcomeWith = (over: Partial<RunOutcome>): RunOutcome => ({ ...okOutcome, ...over })
+
+  /** What a gate deny looks like on the stream: the pause protocol, which is what writes a
+   *  checkpoint. `spawn` has to come with it, or `writeCheckpoint` declines to write half a row. */
+  const pauseSequence = (): readonly RuntimeEvent[] => [
+    { kind: 'hook_denied', hookName: 'PreToolUse', reason: 'operator asked to pause' },
+  ]
+
+  const SPAWN = {
+    settingsPath: '/tmp/slaveofai-m51/settings.json',
+    pauseFlagPath: '/tmp/slaveofai-m51/pause.flag',
+    hookPath: '/tmp/slaveofai-m51/pause-gate.sh',
+    gitIdentity: { name: 'Alex', email: 'alex@slaveofai.local' },
+  } as const
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+    ids = await seed()
+  })
+
+  it('records the tool-use id and the args hash on every tool call it writes', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'tool_call', toolUseId: 'toolu_1', toolName: 'Bash', summary: 'Bash npm test', argsHash: HASH_A },
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+    const [row] = await rowsOfType(ids.runId, 'run_tool_call')
+    expect(row?.payload).toEqual({ name: 'Bash', summary: 'Bash npm test', toolUseId: 'toolu_1', argsHash: HASH_A })
+  })
+
+  it('writes a tool RESULT row carrying four fields and no result text', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'tool_result', toolUseId: 'toolu_1', toolName: 'Bash', outcome: 'error', errorClass: 'timeout' },
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+    const [row] = await rowsOfType(ids.runId, 'run_tool_result')
+    expect(row?.payload).toEqual({ toolUseId: 'toolu_1', toolName: 'Bash', outcome: 'error', errorClass: 'timeout' })
+  })
+
+  it('names the tool on a result that arrived without one, from the call it answers', async (): Promise<void> => {
+    // Claude's `tool_result` block carries the id, not the tool. The pump already binds
+    // `lastToolUse`; M51 keeps a small id -> name map for the same reason `hookBindings` exists.
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'tool_call', toolUseId: 'toolu_1', toolName: 'Bash', summary: 's', argsHash: HASH_A },
+        { kind: 'tool_result', toolUseId: 'toolu_1', toolName: '', outcome: 'ok', errorClass: null },
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+    const [row] = await rowsOfType(ids.runId, 'run_tool_result')
+    expect((row?.payload as { toolName: string }).toolName).toBe('Bash')
+  })
+
+  it('names an unpaired result `unknown` rather than writing an empty name the schema refuses', async (): Promise<void> => {
+    // A resumed run's first result answers a call THIS pump never saw. The row is still a fact, and
+    // `run.tool_result.toolName` is `min(1)` on the wire.
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'tool_result', toolUseId: 'toolu_orphan', toolName: '', outcome: 'ok', errorClass: null },
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+    const [row] = await rowsOfType(ids.runId, 'run_tool_result')
+    expect((row?.payload as { toolName: string }).toolName).toBe('unknown')
+  })
+
+  it('writes tokens MID-RUN, while the run is still working', async (): Promise<void> => {
+    let release = (): void => {}
+    const held = new Promise<void>((res) => {
+      release = res
+    })
+    async function* stalls(): AsyncIterable<RuntimeEvent> {
+      yield { kind: 'session_started', sessionId: 's-1' }
+      yield { kind: 'usage', input: 1000, output: 40 }
+      await held
+      yield { kind: 'terminated', outcome: okOutcome }
+    }
+
+    const pumping = pumpRun({ ...ids, events: stalls() })
+    await until('the mid-run token write', async () => {
+      const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      return row.tokensIn === 1000
+    })
+    const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(row.status).toBe('working')
+    expect(row.tokensIn).toBe(1000)
+    expect(row.tokensOut).toBe(40)
+    release()
+    await pumping
+  })
+
+  it('accumulates usage across turns and lets the terminal figure REPLACE it', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'usage', input: 1000, output: 40 },
+        { kind: 'usage', input: 2000, output: 60 },
+        { kind: 'terminated', outcome: outcomeWith({ tokens: { input: 9000, output: 741 } }) },
+      ]),
+    })
+    const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    // The mid-run figure was a FLOOR (3000/100); the `result` line is what the run was billed.
+    expect(row.tokensIn).toBe(9000)
+    expect(row.tokensOut).toBe(741)
+  })
+
+  it('does NOT erase the mid-run figure when the result line carried no usage', async (): Promise<void> => {
+    // Plan erratum E4: `writeStreamUsage` used to write `?? null` unconditionally, which with a
+    // mid-run writer in place destroys a real measurement on every degraded result line.
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'usage', input: 1000, output: 40 },
+        { kind: 'terminated', outcome: outcomeWith({ tokens: null }) },
+      ]),
+    })
+    const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+    expect(row.tokensIn).toBe(1000)
+    expect(row.tokensOut).toBe(40)
+  })
+
+  it('writes a real cumulative ESTIMATE onto the checkpoint at a pause', async (): Promise<void> => {
+    // The M12 Task 9 R4 ruling is kept intact and is why this is allowed: `cumulativeCostUsd` stays
+    // NOT NULL and its only reader is a DISPLAY line -- no sum, no comparison, no guardrail.
+    await prisma.slaveRun.update({ where: { id: ids.runId }, data: { model: 'claude-opus-5' } })
+    await pumpRun({
+      ...ids,
+      spawn: SPAWN,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'usage', input: 1_000_000, output: 0 },
+        ...pauseSequence(),
+      ]),
+    })
+    const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: ids.runId } })
+    expect(checkpoint.cumulativeCostUsd).toBeCloseTo(5, 6)
+    expect(checkpoint.cumulativeTokens).toBe(1_000_000)
+  })
+
+  it('falls back to the reported cost, then to zero, when there is nothing to estimate from', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      spawn: SPAWN,
+      events: fromArray([{ kind: 'session_started', sessionId: 's-1' }, ...pauseSequence()]),
+    })
+    const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: ids.runId } })
+    expect(checkpoint.cumulativeCostUsd).toBe(0)
+    expect(checkpoint.cumulativeTokens).toBe(0)
   })
 })

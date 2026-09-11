@@ -38,6 +38,18 @@ export type ControlRefusal =
   /** `requestPause` claimed the run but `signalPause` threw; the claim was rolled back (M13 §3.4). */
   | { readonly kind: 'pause_unsignalled'; readonly runId: string; readonly reason: string }
   /**
+   * M51 R3: `steerRun`/`constrainRun` were asked about a run that is not `working`. Steering a
+   * paused, stopping or concluded run would queue a sentence nobody will ever read, and the
+   * ladder would then believe it had spoken.
+   */
+  | { readonly kind: 'run_not_steerable'; readonly runId: string; readonly status: string }
+  /**
+   * M51 R3: `deliverBreakerSteer` was asked to resume a run the breaker never armed -- one the
+   * breaker has not touched, one a person paused, or one whose steer has already been asked for.
+   * A per-tick pass calls this speculatively, so this is an ordinary answer, not a fault.
+   */
+  | { readonly kind: 'breaker_not_armed'; readonly runId: string }
+  /**
    * The run's provider cannot continue a session it stopped (`canResumeSession: false`), so there
    * is no resume to record (M12 final review I1, spec §4). Unreachable for both shipped providers,
    * which is why it is defined with the rest of the taxonomy rather than at its one raise site.
@@ -383,6 +395,10 @@ export function refusalText(refusal: ControlRefusal): string {
       return 'the run is still stopping; retry in a moment'
     case 'pause_unsignalled':
       return `the pause could not be signalled to run ${refusal.runId}: ${refusal.reason}`
+    case 'run_not_steerable':
+      return `run ${refusal.runId} is ${refusal.status}; only a working run can be steered or constrained`
+    case 'breaker_not_armed':
+      return `run ${refusal.runId} has no breaker steer waiting to be delivered`
     case 'provider_cannot_resume':
       return `run ${refusal.runId} is on ${refusal.provider}, which cannot continue a stopped session`
     case 'task_not_found':

@@ -1,4 +1,7 @@
 import { createHash } from 'node:crypto'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   ANSWER_MAX_CHARS,
@@ -9,6 +12,7 @@ import {
   PROFILE_MAX_CHARS,
   PRUNE_BATCH,
   SUPERVISOR_PER_CALL_CAP_USD,
+  steerTextFor,
   type Action,
   type Candidate,
   type Draft,
@@ -608,6 +612,90 @@ describe('applyDecision', () => {
     const [released] = await eventsOfType('slave_released')
     expect(released?.actor).toBe('system')
     expect(released?.payload).toMatchObject({ slaveId, name: 'Robin', worktreesCollected: 0 })
+  })
+
+  // M51 R3, the sixteenth arm. `tierOf` makes it `applied`, so this is what a TICK does with it:
+  // no person, no approval, and the sentence is a constant no model has ever seen.
+  it('carries out steer_run: the run is asked to pause with the sentence queued on it', async () => {
+    // A real repo path, because `steerRun` pauses the run and `requestPause` writes a flag file
+    // under it.
+    const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-supervisor-steer-'))
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { repoPath } })
+    const run = await prisma.slaveRun.create({
+      data: {
+        slaveId: f.slaveId,
+        taskId: f.taskId,
+        status: 'working',
+        kind: 'implementation',
+        breakerLevel: 'steered',
+        breakerTrips: 1,
+      },
+    })
+    const text = steerTextFor({ kind: 'repeated_call', count: 8, detail: 'Bash:abc' })
+    const decision = await record(f, { kind: 'steer_run', runId: run.id, slaveId: f.slaveId, text }, 'applied', {
+      subjectId: run.id,
+      situation: {
+        kind: 'run_looping',
+        subjectId: run.id,
+        summary: 'This run has been going in circles (same call over and over, 8x) and has not been told so yet.',
+        facts: {
+          runId: run.id,
+          slaveId: f.slaveId,
+          taskId: f.taskId,
+          trip: 'repeated_call',
+          detail: 'Bash:abc',
+          count: 8,
+          level: 'steered',
+          steers: 0,
+        },
+      },
+    })
+
+    expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('applied')
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.status).toBe('pause_requested')
+    expect(after.pauseReason).toBe('guardrail')
+    // VERBATIM: the decision row and the worker must not be able to disagree about what was said.
+    expect(after.queuedMessage).toBe(text)
+    expect(after.breakerSteers).toBe(1)
+    const [applied] = await eventsOfType('supervisor_applied')
+    expect(applied?.payload).toEqual({ decisionId: decision.id, action: { kind: 'steer_run' } })
+    rmSync(repoPath, { recursive: true, force: true })
+  })
+
+  /**
+   * The refusal half, and the reason `steerRun` returns one instead of throwing: this arm runs
+   * inside a tick, and a run that concluded while the decision was waiting is a race the pass must
+   * lose as a readable `failed` row rather than as a crashed tick.
+   */
+  it('records a failed decision, not a crash, when the run moved before the steer landed', async () => {
+    const run = await prisma.slaveRun.create({
+      data: { slaveId: f.slaveId, taskId: f.taskId, status: 'succeeded', kind: 'implementation' },
+    })
+    const decision = await record(f, { kind: 'steer_run', runId: run.id, slaveId: f.slaveId, text: 'stop' }, 'applied', {
+      subjectId: run.id,
+      situation: {
+        kind: 'run_looping',
+        subjectId: run.id,
+        summary: 'This run has been going in circles (same call over and over, 8x) and has not been told so yet.',
+        facts: {
+          runId: run.id,
+          slaveId: f.slaveId,
+          taskId: f.taskId,
+          trip: 'repeated_call',
+          detail: 'Bash:abc',
+          count: 8,
+          level: 'steered',
+          steers: 0,
+        },
+      },
+    })
+
+    expect((await applyDecision(decision.id, 'system')).ok).toBe(false)
+    const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })
+    expect(row.status).toBe('failed')
+    expect(row.failureReason).toContain('only a working run can be steered')
   })
 
   /**

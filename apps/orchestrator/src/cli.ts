@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync } from 'node:fs'
+import { accessSync, constants, readFileSync, realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -105,6 +105,8 @@ import {
   SLAVE_LIFECYCLES,
   SLAVE_LIFECYCLE_LABEL,
   SUPERVISOR_DEFAULT_MODEL,
+  BREAKER_LEVEL_LABEL,
+  BREAKER_TRIP_LABEL,
   candidates,
   chooseByRules,
   displayName,
@@ -114,6 +116,7 @@ import {
   runContextManifestSchema,
   stageOrder,
   workspaceId as brandWorkspaceId,
+  type BreakerTripKind,
   type MemoryStatus,
   type MemoryType,
   type WorkspaceId,
@@ -146,6 +149,10 @@ const USAGE = `usage: orchestrator <command> [options]
   pause --run <id> [--by <name>]       ask a run to stop at its next tool call
   resume --run <id> [--message <text>] continue a paused run, with an optional instruction
   cancel --run <id>                    stop a run for good; its worktree is preserved
+  breaker --run <id>                   print the run's breaker level, trips, steers, tool-call cap
+                                       and its last trip. READ-ONLY: there is no steer or constrain
+                                       verb -- the ladder is the system's, and a person who wants to
+                                       intervene has pause, stop and the resume message box.
   confirm-integration --task <id>      a human merged a done task's branch by hand -- the
                                        autoMerge-off workspace's own default -- so stamp it
                                        integrated and let its dependents start. Refused unless
@@ -578,6 +585,44 @@ function hookPath(): string {
 }
 
 /**
+ * The PostToolUse tap (M51 R6), sourced exactly the way {@link hookPath} above sources the pause
+ * gate -- derived from this file's own location so a checkout works with no configuration, and
+ * overridable because an installed daemon's layout is not this one.
+ *
+ * **A tap that cannot be used is a WARNING, never a refusal to start.** This is the ruling the
+ * spike's own measurement earns: the tap fills a gap only in a DEGRADED Claude stream, and
+ * `reportsToolResults` is `true` for both providers on the stream alone, so the breaker works
+ * without it. The pause gate is the opposite -- `preflightGate` fails the spawn, because a slave
+ * running with no gate cannot be stopped -- and treating the two the same way would let a lost exec
+ * bit on an optional script stop a whole fleet. So a missing or non-executable tap is reported once,
+ * here, and `tapPath` is simply not wired: the deployment then runs exactly as it did before M51,
+ * which is the honest null outcome R6 explicitly allows for.
+ *
+ * `SLAVEOFAI_TAP_PATH=''` disables it outright, for a deployment that does not want the hook at all.
+ */
+function tapPath(): string | undefined {
+  const fromEnv = process.env['SLAVEOFAI_TAP_PATH']
+  if (fromEnv === '') return undefined
+  const path =
+    fromEnv === undefined
+      ? resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'scripts', 'tool-result-tap.sh')
+      : resolve(fromEnv)
+  try {
+    // The cheap half of a pre-flight, and the half that can run inside a synchronous registry
+    // builder: is there an executable script there at all. The adapter runs the REAL one
+    // (`preflightTap`, which spawns it with a synthetic payload) on every spawn.
+    accessSync(path, constants.X_OK)
+    return path
+  } catch {
+    console.warn(
+      `[orchestrator] no usable tool-result tap at ${path}; tool results will come from the stream ` +
+        'alone (this is not fatal -- both providers report them)',
+    )
+    return undefined
+  }
+}
+
+/**
  * The deny-all gate a SIMULATION's model call is spawned with (M31a §4), sourced exactly the way
  * `hookPath()` above sources the pause gate and for the same reasons. A separate script, not a
  * parameterisation of the pause gate: this one denies EVERY tool call unconditionally, whatever
@@ -675,6 +720,7 @@ function cursorGatePath(): string {
  */
 function buildAdapterRegistry(): AdapterRegistry {
   const cursorExtra = process.env['SLAVEOFAI_CURSOR_ARGS']
+  const tap = tapPath()
   return buildRegistry({
     claudeCode: {
       ...claudeCommand(),
@@ -682,6 +728,12 @@ function buildAdapterRegistry(): AdapterRegistry {
       // it used to be threaded through `TickDeps`/`DaemonDeps` and into every `adapter.start()`
       // call; now it is set once, here.
       hookPath: hookPath(),
+      // M51 R6: the PostToolUse tap, beside the gate and carried the same way. A conditional spread
+      // because `exactOptionalPropertyTypes` treats an explicit `undefined` as a different (and
+      // disallowed) thing from the key being absent -- and an absent `tapPath` is exactly what "run
+      // as we did before M51" means to the adapter: no registration, no tailer, no env var, no
+      // pre-flight.
+      ...(tap === undefined ? {} : { tapPath: tap }),
     },
     cursor: {
       // Injectable through the environment for the same reason `SLAVEOFAI_CLAUDE_BIN` is: the gate
@@ -1047,6 +1099,39 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (!result.ok) throw new Error(refusalText(result.error))
       // §7.4: the worktree is the inspection surface and is deliberately left in place.
       process.stdout.write(`stopped ${runIdFlag}; its worktree is preserved\n`)
+      return 0
+    }
+
+    case 'breaker': {
+      // M51 R3, and READ-ONLY on purpose (D18). There is no `steer` or `constrain` verb: the ladder
+      // is the system's, and a hand-typed rung would be a fourth actor in a design whose whole shape
+      // is three. A person who wants to intervene already has `pause`, `stop` and the resume message
+      // box. What this answers is the question somebody standing in front of a stuck run actually
+      // has -- what does the breaker think, and what did it last see.
+      const run = await mustGetRun(requireFlag(flags, 'run'))
+      const [trip] = await prisma.executionEvent.findMany({
+        where: { runId: run.id, type: 'run_breaker' },
+        orderBy: { seq: 'desc' },
+        take: 1,
+      })
+      const cap = run.toolCallCap === null ? 'none' : String(run.toolCallCap)
+      process.stdout.write(
+        `run ${run.id} is ${BREAKER_LEVEL_LABEL[run.breakerLevel].toLowerCase()} ` +
+          `(${String(run.breakerTrips)} trip(s), ${String(run.breakerSteers)} steer(s))\n` +
+          `  tool calls  ${String(run.toolCalls)}, cap ${cap}\n`,
+      )
+      if (trip === undefined) {
+        // Not an error and not silence: "the breaker has never tripped on this run" is the answer
+        // for nearly every run there is, and a verb that printed nothing would read as broken.
+        process.stdout.write('  last trip   none\n')
+        return 0
+      }
+      const payload = trip.payload as { trip: string; count: number; detail: string }
+      process.stdout.write(
+        `  last trip   ${BREAKER_TRIP_LABEL[payload.trip as BreakerTripKind] ?? payload.trip}` +
+          ` (${payload.trip}), ${String(payload.count)}x, ${payload.detail}\n` +
+          `              at ${trip.ts.toISOString()}\n`,
+      )
       return 0
     }
 

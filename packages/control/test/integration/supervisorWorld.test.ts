@@ -8,6 +8,7 @@ import {
   THREAD_MESSAGES_MAX,
   observe,
 } from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { recordMemory } from '../../src/memory.js'
 import { adoptRunbook, syncRunbooks } from '../../src/runbook.js'
@@ -1316,5 +1317,96 @@ describe('loadSupervisorWorld -- the runbook fields (M48 R5, E6, E8)', () => {
     expect(world.questions.find((question) => question.taskId === goodTask)?.taskHandoff).toEqual(contract)
     // A malformed handoff must not take the Supervisor's mailbox down.
     expect(world.questions.find((question) => question.taskId === badTask)?.taskHandoff).toBeNull()
+  })
+
+  // M51 R3 / plan erratum E9: the world's first run-derived rows.
+  describe('world.runs (M51 R3)', () => {
+    it('carries the workspace’s non-terminal runs, and leaves the terminal ones out', async (): Promise<void> => {
+      const fixture = await seed()
+      const slave = await prisma.slave.create({
+        data: { teamId: fixture.teamId, name: 'Alex', role: 'Senior Engineer', runtimeRoles: ['backend'] },
+      })
+      const taskId = await makeTask(fixture, { title: 'the work', status: 'running' })
+      const live = await prisma.slaveRun.create({
+        data: { slaveId: slave.id, taskId, status: 'working', kind: 'implementation', toolCalls: 12 },
+      })
+      await prisma.slaveRun.create({ data: { slaveId: slave.id, taskId, status: 'succeeded', kind: 'implementation' } })
+
+      const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+      expect(world.runs.map((run) => run.id)).toEqual([live.id])
+      expect(world.runs[0]).toEqual({
+        id: live.id,
+        taskId,
+        slaveId: slave.id,
+        status: 'working',
+        toolCalls: 12,
+        toolCallCap: null,
+        breakerLevel: 'none',
+        breakerTrips: 0,
+        breakerSteers: 0,
+        // A healthy run has no trip to project, and all three are null together.
+        trip: null,
+        detail: null,
+        count: null,
+      })
+    })
+
+    it('asks the event log NOTHING while every run is at level none', async (): Promise<void> => {
+      // The gate the loader is built on: a project that has never tripped the breaker pays exactly
+      // the queries it paid before M51. Proved by writing a `run.breaker` row for a run the loader
+      // will NOT read the trip of -- if the query ran unconditionally, the trip would appear.
+      const fixture = await seed()
+      const slave = await prisma.slave.create({
+        data: { teamId: fixture.teamId, name: 'Alex', role: 'Senior Engineer', runtimeRoles: [] },
+      })
+      const run = await prisma.slaveRun.create({
+        data: { slaveId: slave.id, status: 'working', kind: 'implementation' },
+      })
+      await appendEvent({
+        type: 'run.breaker',
+        workspaceId: fixture.workspaceId,
+        slaveId: slave.id,
+        runId: run.id,
+        actor: 'system',
+        payload: { level: 'steered', trip: 'repeated_call', count: 8, detail: 'Bash:abc' },
+      })
+
+      const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+      expect(world.runs[0]?.trip).toBeNull()
+    })
+
+    it('projects the NEWEST run.breaker onto a steered run, so the Supervisor has a sentence to send', async (): Promise<void> => {
+      const fixture = await seed()
+      const slave = await prisma.slave.create({
+        data: { teamId: fixture.teamId, name: 'Alex', role: 'Senior Engineer', runtimeRoles: [] },
+      })
+      const run = await prisma.slaveRun.create({
+        data: {
+          slaveId: slave.id,
+          status: 'working',
+          kind: 'implementation',
+          breakerLevel: 'steered',
+          breakerTrips: 1,
+        },
+      })
+      for (const payload of [
+        { level: 'steered' as const, trip: 'error_storm' as const, count: 5, detail: 'timeout' },
+        { level: 'steered' as const, trip: 'repeated_call' as const, count: 9, detail: 'Bash:abc' },
+      ]) {
+        await appendEvent({
+          type: 'run.breaker',
+          workspaceId: fixture.workspaceId,
+          slaveId: slave.id,
+          runId: run.id,
+          actor: 'system',
+          payload,
+        })
+      }
+
+      const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+      expect(world.runs[0]).toMatchObject({ trip: 'repeated_call', count: 9, detail: 'Bash:abc' })
+      // And the situation the whole projection exists for is now raisable.
+      expect(observe(world).map((situation) => situation.kind)).toContain('run_looping')
+    })
   })
 })

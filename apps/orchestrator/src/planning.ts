@@ -571,7 +571,12 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       where: { id: run.id },
       // `provider` (M12 Task 8) -- see `tick.ts`'s own `startRun` for why it is written here,
       // alongside `pid`, rather than at creation.
-      data: { pid: handle.pid, worktreePath: workspace.repoPath, provider: resolved.provider },
+      // `model` (M51 R5 / plan erratum E10): the other half of the runtime pair, written in the same
+      // statement for the same reason -- `resolveRuntime` is consulted at dispatch and the chain can
+      // move under a live run, so the run's own row has to say which model it was actually spawned
+      // with. `?? null` because `ResolvedRuntime.model` is `undefined` when nothing in the chain
+      // named one, and the column's null means exactly that: unpriced, and honestly so.
+      data: { pid: handle.pid, worktreePath: workspace.repoPath, provider: resolved.provider, model: resolved.model ?? null },
     })
 
     // M40 §1: written once the run is really running, because it is what "this version got its

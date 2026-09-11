@@ -16,6 +16,18 @@ export async function requestPause(
   requestedBy: string,
   category: PauseCategory = 'human',
   principal?: Principal,
+  /**
+   * Who the `run.pause_requested` event is attributed to (M51 R3). `'human'` is the default and
+   * the only value every caller before this milestone could have wanted -- an operator's Pause
+   * button, the CLI, an emergency stop a person engaged.
+   *
+   * `steerRun` (`./breaker.ts`) passes `'system'`: the behavioural breaker paused the run, nobody
+   * pressed anything, and recording it as a human intervention would put it in the web's own
+   * "interventions" activity filter under a person who was never there. The exact reason
+   * `requestResume`'s own `actor` parameter exists, one file over -- and the two halves of one
+   * round trip must not disagree about who asked.
+   */
+  actor: 'human' | 'system' = 'human',
 ): Promise<Result<void, ControlRefusal>> {
   // Scoped through `slave -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and
   // `slave -> team -> workspace` is the only linkage such a run has to a workspace -- the same
@@ -103,7 +115,7 @@ export async function requestPause(
     taskId: run.taskId,
     slaveId: run.slaveId,
     runId: run.id,
-    actor: 'human',
+    actor,
     payload: { requestedBy },
     userId: principal?.userId ?? null,
   })

@@ -123,7 +123,17 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
     where: { id: run.id },
     // `pausedAtStep` is cleared with the pause itself: the domain's `resuming -> working` edge
     // clears it, and a running run reporting where it once paused reads as still paused.
-    data: { pid: handle.pid, pauseReason: null, pausedAtStep: null },
+    //
+    // `model` (M51 R5 / erratum E10) rides along, from the CHECKPOINT and never re-resolved: this
+    // process is spawning the child with exactly that model, so the row must say so. Spread rather
+    // than written as `?? null`, for the reason the adapter's own checkpoint spread gives -- a
+    // legacy checkpoint that recorded none must not erase whatever the original dispatch wrote.
+    data: {
+      pid: handle.pid,
+      pauseReason: null,
+      pausedAtStep: null,
+      ...(checkpoint.model !== null ? { model: checkpoint.model } : {}),
+    },
   })
   await appendEvent({
     type: 'run.resumed',

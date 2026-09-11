@@ -26,6 +26,7 @@ import {
   ok,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { steerRun } from './breaker.js'
 import { hireFromTemplate, materialiseCompanySlave, mergeRuntimeRoles } from './capability.js'
 import { releaseWorker } from './lifecycle.js'
 import { discardStaleCandidates, recordMemory } from './memory.js'
@@ -486,21 +487,17 @@ async function carryOut(
       // unhalted project, so this arm runs inside a TICK -- which is exactly why `releaseWorker`
       // skips and counts a worktree it could not remove instead of throwing.
       return reached(await releaseWorker(action.slaveId, action.reason, principal, origin))
-    // M51 R3: declared in Task 2 with the action it carries out, and given its verb in Task 4 --
-    // `steerRun` (`packages/control/src/breaker.ts`), the pause -> `queuedMessage` -> resume round
-    // trip. Nothing can reach this arm in the meantime: `loadSupervisorWorld` hands the world
-    // `runs: []`, so `observe` never raises `run_looping` and no `steer_run` decision is ever
-    // recorded. `'none'` rather than a throw for exactly that reason -- an unreachable arm must not
-    // be able to take a tick down -- and rather than `'applied'`, which would write a
-    // `supervisor.applied` event about a worker nobody spoke to.
-    //
-    // LOUD while it is a stub (fix round 1, Important 4), the `hire_from_catalog` downgrade
-    // precedent forty lines above: `'none'` also means no `supervisor.applied` event, so if Task 4
-    // wires the LOADER before the verb, every steer decision is recorded and no worker is told and
-    // the log says nothing at all. Task 4 deletes this whole arm.
     case 'steer_run':
-      console.warn('[supervisor] steer_run reached before Task 4 wired steerRun -- no message was delivered')
-      return ok('none')
+      // M51 R3. `tierOf` makes this `applied` on an unhalted project, so this arm runs inside a
+      // TICK -- which is why `steerRun` returns a refusal for a run that moved under it rather than
+      // throwing, and why that refusal is an ordinary `failed` decision a person can read rather
+      // than a crashed pass.
+      //
+      // `action.text` verbatim: it was built by `candidates.ts` from `steerTextFor(trip)`, a
+      // constant with one integer in it, and it is stored on the decision so a reader months later
+      // can see what was actually said. Nothing re-derives it here -- re-deriving would mean a row
+      // could claim one sentence and the worker receive another.
+      return reached(await steerRun(action.runId, action.text, principal))
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

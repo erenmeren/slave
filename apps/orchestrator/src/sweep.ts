@@ -1,6 +1,24 @@
-import { isAlive } from '@slave-of-ai/control'
+import {
+  constrainRun,
+  deliverBreakerSteer,
+  isAlive,
+  realWorktreeProbe,
+  type WorktreeProbe,
+} from '@slave-of-ai/control'
 import { prisma as db } from '@slave-of-ai/db/client'
-import { runId as brandRunId, type RunId, type RunStatus, type WorkspaceId } from '@slave-of-ai/domain'
+import {
+  BREAKER_BEAT_MS,
+  BREAKER_WINDOW,
+  CONSTRAIN_GRACE_CALLS,
+  type BreakerRow,
+  type BreakerVerdict,
+  detectBehaviour,
+  runId as brandRunId,
+  steerTextFor,
+  type RunId,
+  type RunStatus,
+  type WorkspaceId,
+} from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import type { AdapterRegistry } from '@slave-of-ai/providers'
@@ -17,6 +35,15 @@ export interface SweepDeps {
    * failure). Optional so direct callers (tests, a future one-shot) can sweep unfiltered.
    */
   readonly livePumpRunIds?: ReadonlySet<string>
+  /**
+   * How the breaker's worktree clock is measured (M51 R1, plan erratum E7). Optional and defaulting
+   * to {@link realWorktreeProbe}, so every existing direct caller and test compiles unchanged --
+   * the `livePumpRunIds` precedent directly above.
+   *
+   * A SECOND interface rather than a third method on `GitProbe`: see `WorktreeProbe`'s own
+   * docstring in `packages/control/src/git-probe.ts` for why that one may not grow one.
+   */
+  readonly worktreeProbe?: WorktreeProbe
 }
 
 export interface SweepReport {
@@ -25,6 +52,12 @@ export interface SweepReport {
   readonly deadPids: readonly RunId[]
   /** Task ids whose `activeRunId` pointed at a run that was already over (M42 t1, spec R6a). */
   readonly strandedClaims: readonly string[]
+  /** M51 R2: the runs this sweep moved UP a rung, one list per rung. Empty on every tick of a
+   *  healthy project, which is nearly all of them. A run appears in exactly one of the three per
+   *  beat -- one rung, one name. */
+  readonly breakerSteered: readonly RunId[]
+  readonly breakerConstrained: readonly RunId[]
+  readonly breakerStopped: readonly RunId[]
 }
 
 /**
@@ -389,6 +422,18 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   const timedOut: RunId[] = []
   const overToolCap: RunId[] = []
   const deadPids: RunId[] = []
+  const breakerMoves: Record<BreakerMove, RunId[]> = {
+    breakerSteered: [],
+    breakerConstrained: [],
+    breakerStopped: [],
+  }
+
+  // BEFORE the per-run loop, and on every tick rather than on the beat (M51 R3, erratum E8). The
+  // loop cannot do this: `paused` is not in `SWEEPABLE`, so a parked run is not even in `runs`
+  // above, and the loop skips a run with no pid -- which a paused run never has, because pausing IS
+  // killing the child. And a steer that has been queued should land as soon as the run is actually
+  // parked, not up to a minute later.
+  await deliverBreakerSteers(deps)
 
   for (const run of runs) {
     // The pid, not liveness, is what tells a dead run from one that is mid-spawn: Task 13 records
@@ -406,8 +451,31 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     }
 
     const timedOutNow = Date.now() - run.startedAt.getTime() > workspace.runTimeoutMs
-    const overCapNow = run.toolCalls > workspace.maxToolCallsPerRun
-    if (!timedOutNow && !overCapNow) continue
+    // M51 R3: the run's OWN cap when the breaker wrote one, the workspace's otherwise -- one
+    // comparison and one new column, and the breach it produces is the EXISTING `tool_call_ceiling`.
+    // A constrained run really is past its tool-call ceiling; giving the same fact a second name is
+    // how a filter comes to miss half of it.
+    const overCapNow = run.toolCalls > (run.toolCallCap ?? workspace.maxToolCallsPerRun)
+    // M51 R2/E6. The breaker is evaluated here, INSIDE the branch that used to `continue`, which is
+    // also exactly what "after the hard limits" means: a run past its timeout or its ceiling is
+    // stopped for THAT reason and never reaches the breaker, so one run is never stopped twice
+    // under two names. Everything below this line is the hard-limit path, untouched.
+    if (!timedOutNow && !overCapNow) {
+      // The one `try` in this loop, and it is the breaker's whole "nothing here may throw" promise
+      // made good at the boundary rather than asserted inside: this pass spawns git, reads the
+      // event log and calls two control verbs, and one of them (`requestPause`, through
+      // `constrainRun`) throws outright when the workspace's repo path cannot be stat'd. An escape
+      // here would abandon the rest of the sweep -- every LATER run's timeout, ceiling and orphan
+      // check -- over one run's unreadable worktree. `pauseActiveRuns`' per-run `try` exists for
+      // exactly this, and says so at greater length.
+      try {
+        const beat = await beatBreaker(deps, run)
+        if (beat !== null) breakerMoves[beat].push(brandRunId(run.id))
+      } catch (error) {
+        console.error(`[sweep] the breaker beat failed for run ${run.id}:`, error)
+      }
+      continue
+    }
 
     const breaches: string[] = []
     if (timedOutNow) breaches.push(`it has been running longer than the workspace's ${workspace.runTimeoutMs}ms limit`)
@@ -478,7 +546,357 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   // and running this first would look at claims it is about to make current.
   const strandedClaims = await reconcileStrandedClaims(deps, workspace)
 
-  return { timedOut, overToolCap, deadPids, strandedClaims }
+  return { timedOut, overToolCap, deadPids, strandedClaims, ...breakerMoves }
+}
+
+/** Which rung a beat climbed -- the three `SweepReport` keys, so the push site cannot misspell one. */
+type BreakerMove = 'breakerSteered' | 'breakerConstrained' | 'breakerStopped'
+
+/**
+ * The previous beat's worktree fingerprint, per run, for THIS process.
+ *
+ * In memory and not in a column, deliberately. The question the clock asks is "did anything change
+ * since the last beat", which needs the previous answer and nothing older; a column would be an
+ * eighth one whose only job is to hold a value with a one-minute lifetime, written on every beat of
+ * every live run. The cost of losing it -- a daemon restart, or the bound below -- is exactly one
+ * beat read as `worktreeChanged: true`, which SUPPRESSES the no-progress arm rather than tripping
+ * it (D17): no evidence is never evidence of a loop.
+ */
+const worktreeFingerprints = new Map<string, string>()
+
+/** Past this many runs the fingerprint memory is dropped whole rather than grown. A long-lived
+ *  daemon sees every run of every workspace it owns; one forgotten beat per run costs a minute. */
+const FINGERPRINT_MEMORY_MAX = 500
+
+/**
+ * Deliver whatever steers are waiting (M51 R3, plan erratum E8).
+ *
+ * A pass of its own rather than part of `sweep`'s per-run loop, for two reasons the loop makes
+ * unavoidable: `paused` is not in {@link SWEEPABLE}, and the loop skips a run with no pid -- which a
+ * paused run never has, because pausing IS killing the child. And on every TICK rather than on the
+ * beat: a steer that has been queued should land as soon as the run is actually parked.
+ *
+ * One indexed query over four columns, returning nothing on the overwhelming majority of ticks.
+ * `deliverBreakerSteer` re-checks the whole marker under its own read, so a run that moved between
+ * this query and that call is refused rather than resumed -- which is why every refusal here is
+ * counted and dropped rather than logged: this pass calls the verb SPECULATIVELY.
+ *
+ * Returns how many steers it actually delivered, for a direct caller that wants to know; `sweep`
+ * itself reports the three RUNGS and not this, because a delivery is the completion of a rung
+ * already announced rather than a rung of its own.
+ */
+async function deliverBreakerSteers(deps: SweepDeps): Promise<number> {
+  const parked = await db.slaveRun.findMany({
+    where: {
+      slave: { team: { workspaceId: deps.workspaceId } },
+      status: 'paused',
+      pauseReason: 'guardrail',
+      breakerLevel: { not: 'none' },
+      queuedMessage: { not: null },
+      resumeRequestedAt: null,
+    },
+    select: { id: true },
+  })
+
+  let delivered = 0
+  for (const run of parked) {
+    const result = await deliverBreakerSteer(run.id)
+    if (result.ok) delivered += 1
+  }
+  return delivered
+}
+
+/**
+ * One beat of the behavioural breaker for one run (M51 R2).
+ *
+ * Returns which rung it climbed, or `null` for "nothing, not yet" -- which is the common case by a
+ * wide margin: the daemon ticks about once a second and this beats once a minute per run.
+ *
+ * ## The order, and why each step is where it is
+ *
+ * 1. **The beat gate.** `breakerBeatAt` within {@link BREAKER_BEAT_MS} returns immediately, before
+ *    any query and before any probe. Without it a tripping run would climb steer -> constrain ->
+ *    stop in three seconds, which is a kill with two extra events rather than a ladder.
+ * 2. **The window**, one indexed read of this run's last {@link BREAKER_WINDOW} call/result/output
+ *    rows (`ExecutionEvent`'s own `(runId, seq)` index).
+ * 3. **The worktree clock**, and only when the beat is otherwise QUIET: a subprocess per run per
+ *    minute is cheap, a subprocess per run per tick is not, and a run that produced output or a
+ *    differently-keyed call since its last beat has already answered the only question the probe
+ *    could answer. It is not skipped on the FIRST quiet beat, because `quiet` is the conjunction of
+ *    all three clocks -- a beat cannot be recorded quiet without knowing what the worktree did, and
+ *    guessing either way would either never accumulate a quiet beat or count one on a run that was
+ *    committing.
+ * 4. **The verdict**, from `detectBehaviour`, which is pure.
+ * 5. **The act**, and exactly one of them.
+ *
+ * ## What is written, in every case
+ *
+ * `breakerBeatAt` and `breakerQuietBeats` are written on EVERY beat, including the ones that do
+ * nothing: the beat clock is what paces the ladder and the quiet count is what debounces it, and a
+ * beat that measured and wrote neither would leave both stale.
+ *
+ * ## Nothing here may throw
+ *
+ * This runs inside `sweep()`, inside a tick. The probe returns `null` on failure, every control
+ * refusal is skipped, and a refusal is an ordinary outcome -- the run concluded between the read and
+ * the act, which is a race this pass must lose gracefully rather than a fault.
+ */
+async function beatBreaker(
+  deps: SweepDeps,
+  run: {
+    readonly id: string
+    readonly taskId: string | null
+    readonly slaveId: string
+    readonly provider: string | null
+    readonly worktreePath: string | null
+    readonly startedAt: Date
+    readonly breakerLevel: 'none' | 'steered' | 'constrained'
+    readonly breakerTrips: number
+    readonly breakerSteers: number
+    readonly breakerBeatAt: Date | null
+    readonly breakerQuietBeats: number
+  },
+): Promise<BreakerMove | null> {
+  const now = new Date()
+  if (run.breakerBeatAt !== null && now.getTime() - run.breakerBeatAt.getTime() < BREAKER_BEAT_MS) return null
+
+  const rows = await loadBreakerWindow(run.id)
+  // The beat boundary. A run that has never beaten is measured from its own start, which is the
+  // only honest reading of "since the last beat" for a first beat.
+  const since = run.breakerBeatAt ?? run.startedAt
+  const sinceRows = rows.filter((row) => row.ts > since)
+  const trailingKey = [...rows].reverse().find((row) => row.row.kind === 'call')?.key ?? null
+  const distinctKey = sinceRows.some((row) => row.row.kind === 'call' && row.key !== trailingKey)
+  const output = sinceRows.some((row) => row.row.kind === 'output')
+
+  // Step 3: measured only when nothing else already says the run moved.
+  const worktreeChanged = distinctKey || output ? true : await worktreeMoved(deps, run)
+
+  const verdict = detectBehaviour({
+    level: run.breakerLevel,
+    trips: run.breakerTrips,
+    steers: run.breakerSteers,
+    quietBeats: run.breakerQuietBeats,
+    rows: rows.map((row) => row.row),
+    progress: { distinctKey, worktreeChanged, output },
+  })
+
+  // The beat clock and the debounce, from the verdict's own two flags and nowhere else: a
+  // `suppressed` beat leaves the count exactly as it found it (a long build must neither accumulate
+  // quiet beats nor discard the ones a wedged run had already earned), a `quiet` one increments, and
+  // anything else resets. `endedAt: null` because a run that concluded under this pass keeps its
+  // conclusion.
+  await db.slaveRun.updateMany({
+    where: { id: run.id, endedAt: null },
+    data: {
+      breakerBeatAt: now,
+      ...quietBeatsWrite(verdict, run.breakerQuietBeats),
+      // The de-escalation, written here because it is not an ACT: it is what the beat measured, it
+      // announces nothing (D: de-escalation is silent), and the three arms below all write the
+      // level themselves. `verdict.level` is a real `BreakerLevel` on this branch -- `'stop'` is
+      // only ever returned with a trip.
+      ...(verdict.trip === null ? { breakerLevel: verdict.level as 'none' | 'steered' | 'constrained' } : {}),
+    },
+  })
+
+  if (verdict.trip === null) return null
+  const trip = verdict.trip
+
+  if (verdict.level === 'steered') {
+    // The sweep raises the LEVEL and does NOT call `steerRun` (D15): the STEER rung is the
+    // Supervisor's act, and this write is what lets `observe` see a run worth speaking to. The
+    // Supervisor's own limits -- the halt demotion, the cooldown, `supervisorEnabled` -- then apply
+    // for free to the one rung that puts words in front of a person's worker.
+    const claimed = await db.slaveRun.updateMany({
+      where: { id: run.id, endedAt: null },
+      data: { breakerLevel: 'steered', breakerTrips: { increment: 1 } },
+    })
+    if (claimed.count === 0) return null
+    await appendBreakerEvent(deps, run, 'steered', trip)
+    return 'breakerSteered'
+  }
+
+  if (verdict.level === 'constrained') {
+    // `constrainRun` writes the level itself, under the row lock that computes the cap, so the
+    // sweep does not write it twice. The steer text rides along: a constrained worker that was
+    // never told why would simply hit the ceiling in silence (spec R3).
+    const constrained = await constrainRun(run.id, CONSTRAIN_GRACE_CALLS, steerTextFor(trip))
+    if (!constrained.ok) return null
+    await db.slaveRun.updateMany({ where: { id: run.id, endedAt: null }, data: { breakerTrips: { increment: 1 } } })
+    await appendBreakerEvent(deps, run, 'constrained', trip)
+    return 'breakerConstrained'
+  }
+
+  return (await stopForBehaviour(deps, run, trip.kind, trip.detail)) ? 'breakerStopped' : null
+}
+
+/** The `breakerQuietBeats` write for this verdict -- the one place the three cases are spelled. */
+function quietBeatsWrite(verdict: BreakerVerdict, current: number): { breakerQuietBeats?: number } {
+  if (verdict.suppressed) return {}
+  return { breakerQuietBeats: verdict.quiet ? current + 1 : 0 }
+}
+
+/** One `run.breaker` row. The two quiet rungs announce themselves here; the loud one does not --
+ *  it is a `guardrail.tripped`, because one rung gets one name (D9). */
+async function appendBreakerEvent(
+  deps: SweepDeps,
+  run: { readonly id: string; readonly taskId: string | null; readonly slaveId: string },
+  level: 'steered' | 'constrained',
+  trip: { readonly kind: string; readonly count: number; readonly detail: string },
+): Promise<void> {
+  await appendEvent({
+    type: 'run.breaker',
+    workspaceId: deps.workspaceId,
+    taskId: run.taskId,
+    slaveId: run.slaveId,
+    runId: run.id,
+    actor: 'system',
+    payload: { level, trip: trip.kind, count: trip.count, detail: trip.detail.slice(0, BREAKER_DETAIL_MAX) },
+  })
+}
+
+/** `run.breaker.detail`'s own bound, restated at the one write site: the payload refuses anything
+ *  longer, and a detector that one day names a very long tool key must not take a tick down. */
+const BREAKER_DETAIL_MAX = 200
+
+/**
+ * The STOP rung: the sweep's own claim/cancel shape, verbatim from the hard-limit path above.
+ *
+ * **No terminal row**, for `run_timeout`'s exact reason: `pump.ts` concludes a run claimed into
+ * `stopping` as `failed`, `verify.ts` releases the task to `rework` and charges an attempt, and the
+ * existing `circuit_breaker` streak counts it -- so the two breakers compose. Writing `stopped` here
+ * would make the run `terminal_uncounted` and the behavioural stop would never reach the failure
+ * streak at all.
+ *
+ * `breakerLevel` is left at `constrained` on the concluded row, which is the record of how the run
+ * ended.
+ */
+async function stopForBehaviour(
+  deps: SweepDeps,
+  run: {
+    readonly id: string
+    readonly taskId: string | null
+    readonly slaveId: string
+    readonly provider: string | null
+  },
+  trip: string,
+  detail: string,
+): Promise<boolean> {
+  const claimed = await db.slaveRun.updateMany({
+    where: { id: run.id, status: { in: [...SWEEPABLE] } },
+    data: { status: 'stopping' },
+  })
+  if (claimed.count === 0) return false
+
+  // The fingerprint memory is this run's last use of it.
+  worktreeFingerprints.delete(run.id)
+
+  // A failure here makes the event louder rather than silencing it, and `resolveAdapter` is inside
+  // the `try` for the reason the hard-limit path gives: an uncaught throw would abort the sweep with
+  // this run already claimed into `stopping`, which nothing in this file sweeps.
+  let cancelError: unknown = null
+  try {
+    const adapter = resolveAdapter(deps.registry, (run.provider ?? 'claude_code') as 'claude_code' | 'cursor')
+    await adapter.cancel(brandRunId(run.id))
+  } catch (error) {
+    cancelError = error
+  }
+
+  await appendEvent({
+    type: 'guardrail.tripped',
+    workspaceId: deps.workspaceId,
+    taskId: run.taskId,
+    slaveId: run.slaveId,
+    runId: run.id,
+    actor: 'system',
+    payload: {
+      guardrail: 'behavioural_loop',
+      detail:
+        `cancelling this run: it is going in circles (${trip}, ${detail})` +
+        (cancelError === null
+          ? ''
+          : ` -- AND THE CANCEL FAILED (${String(cancelError)}): the process may still be running.`),
+    },
+  })
+  return true
+}
+
+/**
+ * Did this run's worktree move since the last beat?
+ *
+ * `true` whenever there is no evidence either way (D17) -- no worktree at all (a planning run), a
+ * probe that could not measure, or no previous fingerprint to compare with. A breaker that read a
+ * failed measurement as a loop would stop healthy runs on a slow disk.
+ */
+async function worktreeMoved(
+  deps: SweepDeps,
+  run: { readonly id: string; readonly worktreePath: string | null },
+): Promise<boolean> {
+  if (run.worktreePath === null || run.worktreePath === '') return true
+  const probe = deps.worktreeProbe ?? realWorktreeProbe
+  let fingerprint: string | null = null
+  try {
+    fingerprint = await probe.fingerprint(run.worktreePath)
+  } catch {
+    // A probe that throws is a probe that did not measure. It is not allowed to take a tick down.
+    fingerprint = null
+  }
+  if (fingerprint === null) return true
+
+  const previous = worktreeFingerprints.get(run.id)
+  if (worktreeFingerprints.size >= FINGERPRINT_MEMORY_MAX) worktreeFingerprints.clear()
+  worktreeFingerprints.set(run.id, fingerprint)
+  return previous === undefined || previous !== fingerprint
+}
+
+/** One row of the breaker's window, with the two things the domain's own shape does not carry: the
+ *  timestamp the beat scope is measured against, and a call's key. */
+interface WindowRow {
+  readonly row: BreakerRow
+  readonly ts: Date
+  readonly key: string | null
+}
+
+/**
+ * The run's last {@link BREAKER_WINDOW} call / result / output rows, OLDEST FIRST.
+ *
+ * Read newest-first and reversed, because "the last sixty" is the question and `(runId, seq)` is the
+ * index that answers it. A pre-M51 `run.tool_call` row carries no `toolUseId` and no `argsHash`;
+ * such a row is DROPPED rather than given an invented key, because a key two different calls could
+ * share is exactly the collision (#377) this milestone's hash exists to remove -- and a dropped call
+ * can only make the repeat arm quieter, never louder.
+ */
+async function loadBreakerWindow(runId: string): Promise<readonly WindowRow[]> {
+  const rows = await db.executionEvent.findMany({
+    where: { runId, type: { in: ['run_tool_call', 'run_tool_result', 'run_output'] } },
+    orderBy: { seq: 'desc' },
+    take: BREAKER_WINDOW,
+    select: { seq: true, ts: true, type: true, payload: true },
+  })
+
+  const window: WindowRow[] = []
+  for (const row of [...rows].reverse()) {
+    const seq = Number(row.seq)
+    const payload = (row.payload ?? {}) as Record<string, unknown>
+    if (row.type === 'run_output') {
+      window.push({ row: { kind: 'output', seq }, ts: row.ts, key: null })
+      continue
+    }
+    const toolUseId = typeof payload['toolUseId'] === 'string' ? payload['toolUseId'] : null
+    if (toolUseId === null) continue
+    if (row.type === 'run_tool_call') {
+      const argsHash = typeof payload['argsHash'] === 'string' ? payload['argsHash'] : null
+      const name = typeof payload['name'] === 'string' ? payload['name'] : null
+      if (argsHash === null || name === null) continue
+      const key = `${name}:${argsHash}`
+      window.push({ row: { kind: 'call', seq, toolUseId, key }, ts: row.ts, key })
+      continue
+    }
+    const outcome = payload['outcome'] === 'error' ? 'error' : 'ok'
+    const errorClass = typeof payload['errorClass'] === 'string' ? payload['errorClass'] : null
+    window.push({ row: { kind: 'result', seq, toolUseId, outcome, errorClass }, ts: row.ts, key: null })
+  }
+  return window
 }
 
 /**

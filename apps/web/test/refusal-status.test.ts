@@ -19,6 +19,11 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   no_checkpoint: true,
   run_still_stopping: true,
   pause_unsignalled: true,
+  // M51 R3: the breaker's two. Neither ends in `_not_found`, so both answer 409 -- the run exists
+  // and the request does not make sense against it, which is what the neighbouring run refusals
+  // (`wrong_status`, `run_still_stopping`) already answer.
+  run_not_steerable: true,
+  breaker_not_armed: true,
   provider_cannot_resume: true,
   task_not_found: true,
   task_not_done: true,

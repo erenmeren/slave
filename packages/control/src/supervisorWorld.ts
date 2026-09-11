@@ -20,9 +20,12 @@ import {
   type SupervisorCatalogEntry,
   type SupervisorCompanyWorker,
   type SupervisorQuestion,
+  type SupervisorRun,
   type SupervisorSlave,
   type SupervisorTask,
   type SupervisorWorld,
+  type BreakerTripKind,
+  type RunStatus,
   type TaskStatusName,
   type ThreadMessage,
   type Tier,
@@ -282,6 +285,45 @@ async function loadLatestGuardrails(
     ORDER BY e."taskId", e.seq DESC
   `
   return new Map(rows.flatMap((row) => (row.guardrail === null ? [] : [[row.taskId, row.guardrail] as const])))
+}
+
+/**
+ * The newest `run.breaker` per run (M51 R3) -- the trip the Supervisor's sentence is built from.
+ *
+ * Bounded to the caller's run ids for {@link loadStatusSince}'s reason, and NOT CALLED AT ALL when
+ * every loaded run is at level `none`, which is every tick of a healthy project. Modelled line for
+ * line on {@link loadLatestGuardrails} above: the same `DISTINCT ON` idiom for the same shape of
+ * question.
+ *
+ * A row missing any of the three is dropped whole rather than half-carried: `observe`'s predicate
+ * requires all three to be non-null anyway, and a half-projection would put a run in front of the
+ * Supervisor with a trip it cannot describe.
+ */
+async function loadLatestBreakerTrips(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  runIds: readonly string[],
+): Promise<ReadonlyMap<string, { readonly trip: string; readonly detail: string; readonly count: number }>> {
+  const rows = await tx.$queryRaw<
+    { readonly runId: string; readonly trip: string | null; readonly detail: string | null; readonly count: number | null }[]
+  >`
+    SELECT DISTINCT ON (e."runId") e."runId" AS "runId",
+           e.payload->>'trip' AS trip,
+           e.payload->>'detail' AS detail,
+           (e.payload->>'count')::int AS count
+    FROM "ExecutionEvent" e
+    WHERE e."workspaceId" = ${workspaceId}
+      AND e."runId" = ANY(${[...runIds]}::text[])
+      AND e.type::text = 'run.breaker'
+    ORDER BY e."runId", e.seq DESC
+  `
+  return new Map(
+    rows.flatMap((row) =>
+      row.trip === null || row.detail === null || row.count === null
+        ? []
+        : [[row.runId, { trip: row.trip, detail: row.detail, count: row.count }] as const],
+    ),
+  )
 }
 
 /** `text` at most `max` characters. Every foreign text this loader puts into the world is bounded
@@ -580,6 +622,33 @@ export async function loadSupervisorWorld(
       const statusSince = await loadStatusSince(tx, workspaceId, taskIds)
       const guardrails = await loadLatestGuardrails(tx, workspaceId, taskIds)
 
+      // M51 R3 / plan erratum E9: the workspace's NON-TERMINAL runs, the first run-derived rows the
+      // world has ever carried. `slave -> team -> workspaceId`, not `task`, because a `planning` run
+      // (M8b) has no `Task` row and is exactly the kind of run that can go in circles while
+      // spending money. Eleven columns and no relation: `observe`'s predicate reads nothing else.
+      const runRows = await tx.slaveRun.findMany({
+        where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, slave: { team: { workspaceId } } },
+        select: {
+          id: true,
+          taskId: true,
+          slaveId: true,
+          status: true,
+          toolCalls: true,
+          toolCallCap: true,
+          breakerLevel: true,
+          breakerTrips: true,
+          breakerSteers: true,
+        },
+        orderBy: { id: 'asc' },
+      })
+
+      // ONLY when some run is above `none`, which is every tick of a healthy project: the trip
+      // fields are a projection of the newest `run.breaker` row, and a project that has never
+      // tripped one has no rows to project. One query for the whole board, never one per run.
+      const breakerTrips = runRows.some((row) => row.breakerLevel !== 'none')
+        ? await loadLatestBreakerTrips(tx, workspaceId, runRows.map((row) => row.id))
+        : new Map<string, { readonly trip: string; readonly detail: string; readonly count: number }>()
+
       const slaveRows = await tx.slave.findMany({
         where: { team: { workspaceId } },
         select: {
@@ -755,6 +824,26 @@ export async function loadSupervisorWorld(
         })
       }
 
+      const runs: SupervisorRun[] = runRows.map((row): SupervisorRun => {
+        const trip = breakerTrips.get(row.id) ?? null
+        return {
+          id: row.id,
+          taskId: row.taskId,
+          slaveId: row.slaveId,
+          status: row.status as RunStatus,
+          toolCalls: row.toolCalls,
+          toolCallCap: row.toolCallCap,
+          breakerLevel: row.breakerLevel,
+          breakerTrips: row.breakerTrips,
+          breakerSteers: row.breakerSteers,
+          // All three together or none: the read above drops a row missing any of them, so there is
+          // no shape here where the Supervisor knows the count and not what tripped.
+          trip: trip === null ? null : (trip.trip as BreakerTripKind),
+          detail: trip?.detail ?? null,
+          count: trip?.count ?? null,
+        }
+      })
+
       const slaves: SupervisorSlave[] = slaveRows.map((row) => ({
         id: row.id,
         name: row.name,
@@ -785,13 +874,11 @@ export async function loadSupervisorWorld(
           snapshot.limits.budgetUsd !== null && snapshot.stats.spentUsd >= snapshot.limits.budgetUsd,
         tasks,
         slaves,
-        // M51 R3 / plan erratum E9: the world gained `runs` in Task 2, and Task 4 gives it its
-        // loader -- one `findMany` over the workspace's non-terminal runs, plus the newest
-        // `run.breaker` per run only when some run is above level `none`. EMPTY until then, which
-        // is a real and quiet state: `observe`'s `run_looping` predicate iterates this list, so an
-        // empty one raises nothing and every board reads exactly as it did before this milestone.
-        // The M47 `capability_unstaffed` precedent -- declared before it is emitted.
-        runs: [],
+        // M51 R3 / plan erratum E9: the workspace's non-terminal runs, with the newest
+        // `run.breaker` projected onto the ones the breaker has touched. Empty on a project with
+        // nothing running, which raises nothing -- `observe`'s `run_looping` predicate iterates
+        // this list.
+        runs,
         questions: questionRows.map((row): SupervisorQuestion => {
           const task = row.taskId === null ? undefined : questionTasks.get(row.taskId)
           return {

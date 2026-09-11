@@ -4,7 +4,7 @@ import { promisify } from 'node:util'
 import { killWithEscalation } from '@slave-of-ai/control'
 import { toExecutionEvent } from '@slave-of-ai/db'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
-import type { SlaveId, RunId, TaskId, WorkspaceId } from '@slave-of-ai/domain'
+import { estimateCostUsd, type SlaveId, type RunId, type TaskId, type WorkspaceId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import {
   classifyGateEvent,
@@ -216,7 +216,13 @@ async function writeStreamUsage(input: {
   // row then would erase a total an earlier pump of this same run already wrote (a resume that
   // itself pauses again). So, unlike `skillCalls` above, this write only happens when THIS
   // stream's `outcome` is not `null`.
-  if (input.outcome === null) return
+  //
+  // M51 plan erratum E4: RETURN on a null TOKEN reading too, not only on a null outcome. Before the
+  // mid-run writer existed, writing `?? null` below was harmless because nothing else had ever
+  // written these columns; now it would destroy a real measurement every time a `result` line came
+  // back degraded. A terminal figure REPLACES the mid-run floor; the absence of one leaves the
+  // floor standing.
+  if (input.outcome === null || input.outcome.tokens === null) return
   await prisma.slaveRun.updateMany({
     where: { id: input.runId },
     data: {
@@ -226,11 +232,27 @@ async function writeStreamUsage(input: {
       // (`cursor/stream.ts`'s `tokensFromUsage` already degrades a malformed or absent `usage`
       // to `null` before this ever sees it), and M15 spec §4 supersedes M14's provider-keyed
       // `null` for tokens specifically. When `outcome.tokens` is `null` -- Cursor result lines
-      // with no usable `usage`, or any provider's degraded reading -- both columns stay `null`.
-      tokensIn: input.outcome.tokens?.input ?? null,
-      tokensOut: input.outcome.tokens?.output ?? null,
+      // with no usable `usage`, or any provider's degraded reading -- the early return above leaves
+      // whatever this stream measured mid-run exactly where it is (M51 erratum E4).
+      tokensIn: input.outcome.tokens.input,
+      tokensOut: input.outcome.tokens.output,
     },
   })
+}
+
+/**
+ * The row's token reading as {@link estimateCostUsd} takes it, or `null` when there is not one.
+ *
+ * BOTH columns or neither: a run that reported input and no output is a half-measurement, and
+ * pricing it would put a confidently wrong figure in front of a person -- which is the one thing
+ * `pricing.ts`'s whole docstring is about. `null` is the true answer and `costProvenanceOf` reports
+ * such a run `unmeasured`, which is also true.
+ */
+function tokensOf(run: {
+  readonly tokensIn: number | null
+  readonly tokensOut: number | null
+}): { readonly input: number; readonly output: number } | null {
+  return run.tokensIn === null || run.tokensOut === null ? null : { input: run.tokensIn, output: run.tokensOut }
 }
 
 /**
@@ -262,6 +284,11 @@ async function writeCheckpoint(input: {
   }
 
   const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: input.runId } })
+  // M51 R5. The spawn's own model FIRST, because that is the pair this process actually started the
+  // child with; the row is the fallback for a caller with no spawn model (a resumed run whose
+  // checkpoint carried none) and for a run whose dispatch wrote `SlaveRun.model` and nothing else.
+  const spawnModel = input.spawn.model ?? run.model
+  const estimated = estimateCostUsd(spawnModel, tokensOf(run))
   const worktreePath = run.worktreePath ?? ''
   const headCommit = worktreePath === '' ? '' : await gitOutput(worktreePath, ['rev-parse', 'HEAD'])
   const dirtyFiles =
@@ -308,7 +335,17 @@ async function writeCheckpoint(input: {
       // checkpoint bookkeeping, not spend the budget believes, so `?? 0` here is not the lie
       // Decision 6 is about. The cost if this is wrong is that a paused unmeasured run's
       // bookkeeping figure reads 0 instead of unknown, and no decision anywhere consumes it.
-      cumulativeCostUsd: run.costUsd ?? 0,
+      //
+      // M51 R5. That ruling is KEPT, not overturned: the column stays NOT NULL and `?? 0` stays,
+      // because its only reader is `resume.ts` carrying it into the resumed run's checkpoint, and
+      // nothing anywhere sums or compares it. What changes is that the figure is no longer always
+      // literally zero -- `run.costUsd` is still null mid-run, but `tokensIn`/`tokensOut` are now
+      // real by the time a pause happens, and a priced model turns them into a number a person can
+      // read. Order is the rule the whole milestone runs on: the ESTIMATE is consulted only because
+      // nothing was reported, and it can never overwrite a reported figure, because a run with a
+      // reported figure is a run that already concluded.
+      cumulativeCostUsd: estimated ?? run.costUsd ?? 0,
+      cumulativeTokens: (run.tokensIn ?? 0) + (run.tokensOut ?? 0),
       pauseReason: input.pauseReason,
       requestedBy: input.requestedBy,
     },
@@ -324,7 +361,9 @@ async function writeCheckpoint(input: {
       dirtyFiles,
       // Settled with the `create` branch above (M12 Task 9, ruling R4): NOT NULL stays, because
       // nothing consumes this figure for a money decision.
-      cumulativeCostUsd: run.costUsd ?? 0,
+      // M51 R5 gives it a real writer here too, identically -- see the `create` branch above.
+      cumulativeCostUsd: estimated ?? run.costUsd ?? 0,
+      cumulativeTokens: (run.tokensIn ?? 0) + (run.tokensOut ?? 0),
       pauseReason: input.pauseReason,
       requestedBy: input.requestedBy,
     },
@@ -534,6 +573,21 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
    * capture; this product registers one).
    */
   const hookBindings = new Map<string, { readonly toolUseId: string; readonly toolName: string }>()
+  /**
+   * M51 R1 / D11: `tool_use_id` -> the tool that call named, kept so a `tool_result` that arrived
+   * WITHOUT a tool name can be given one.
+   *
+   * Claude's `tool_result` content block carries the id and not the tool; Cursor's `completed` line
+   * and the PostToolUse tap both carry the name. Rather than making the field optional -- two
+   * shapes for every consumer -- `RuntimeEvent.tool_result.toolName` is the empty string when the
+   * producer did not name one, and this map is what fills it in. `run.tool_result.toolName` is
+   * `z.string().min(1)` on the wire, so a result this map cannot answer for is written `'unknown'`:
+   * a result whose call this pump never saw (a resumed run's first) is still a fact.
+   *
+   * The `hookBindings` shape immediately above, with the same bound and the same lifetime: at most
+   * one entry per tool call of this run, gone when the pump is.
+   */
+  const toolNames = new Map<string, string>()
   const denied: string[] = []
   /**
    * M18 Task 6 fix round 1 (review Critical 1): the tool-use ids this pump itself routed to
@@ -593,6 +647,17 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
    * seed it also started from.
    */
   const skillCalls = new Map<string, number>()
+  /**
+   * The run's token FLOOR, accumulated from the stream's own `usage` events (M51 R5, erratum E4).
+   *
+   * Seeded from the row rather than from zero, for the reason `toolCalls` is: a resumed run is a
+   * SECOND `pumpRun` on the same row, and an accumulator starting at zero would write a figure
+   * smaller than the one the run's first half already measured -- a live cost estimate that falls
+   * when a run is resumed. The terminal `result` line REPLACES both columns outright, so the floor
+   * is only ever what is known before one arrives.
+   */
+  let usageIn = startingRow.tokensIn ?? 0
+  let usageOut = startingRow.tokensOut ?? 0
   // Seeded from the row for the same reason the counter is: a resumed pump is continuing a run that
   // already has a session. Without this, a resumed run that pauses again bails with "nothing could
   // resume it" and silently leaves the *previous*, now-stale checkpoint for the next resume to use.
@@ -655,11 +720,75 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           skillCalls.set(name, (skillCalls.get(name) ?? 0) + 1)
         }
         lastToolUse = { id: event.toolUseId, name: event.toolName }
+        // M51 R1/D11: beside `lastToolUse`, and for one job only -- naming a `tool_result` that
+        // arrived without a tool name. Bounded exactly as `hookBindings` is, and by the same
+        // quantity: at most one entry per tool call of this run.
+        toolNames.set(event.toolUseId, event.toolName)
         await prisma.slaveRun.updateMany({ where: { id: runId, endedAt: null }, data: { toolCalls: { increment: 1 } } })
         // `summary` is the readable form the parser derives from the tool_use block's `input`
         // (M4 spec §1) -- e.g. `Write note3.txt` rather than the opaque `toolUseId`. It falls
         // back to the bare tool name when no known argument key is present.
-        await emit('run.tool_call', 'slave', { name: event.toolName, summary: event.summary })
+        //
+        // M51 R1: `toolUseId` and `argsHash` join it. Both unconditionally -- `argsHash` is
+        // REQUIRED on `RuntimeEvent.tool_call` (erratum E2), so there is no `??` here, and the
+        // payload's own schema makes both optional on READ for pre-M51 rows only. The args
+        // THEMSELVES are never persisted: the event log is not a transcript.
+        await emit('run.tool_call', 'slave', {
+          name: event.toolName,
+          summary: event.summary,
+          toolUseId: event.toolUseId,
+          argsHash: event.argsHash,
+        })
+        break
+      }
+
+      case 'tool_result': {
+        // M51 R1. One row per completed call, and the four fields are the whole of it -- no
+        // content, no stdout, no diff. This is what makes "a tool call with no result yet is never
+        // a trip" decidable from the log months later, and what makes an api-error storm visible at
+        // all.
+        //
+        // Unconditioned on the run's own status, like `run.output` beside it: a result that arrived
+        // is a fact of the stream, and a row already concluded by another writer does not make it
+        // untrue.
+        //
+        // Exactly one event per `toolUseId` is the ADAPTER's guarantee (the stream and the
+        // PostToolUse tap are deduped there, first arrival kept), so there is no dedupe here -- and
+        // one `user` line can deliver SEVERAL of these, one per parallel call, which this loop
+        // needs no special shape for.
+        await emit('run.tool_result', 'slave', {
+          toolUseId: event.toolUseId,
+          // The parser names the tool when its line carried one (Cursor's does, and so does the
+          // tap's); Claude's `tool_result` block names only the id, so it is paired back to the
+          // call it answers. `'unknown'` and never `''`: the payload's own schema requires a
+          // non-empty name, and a result whose call this pump never saw (a resumed run's first
+          // result) is still a fact.
+          toolName: event.toolName !== '' ? event.toolName : (toolNames.get(event.toolUseId) ?? 'unknown'),
+          outcome: event.outcome,
+          errorClass: event.errorClass,
+        })
+        break
+      }
+
+      case 'usage': {
+        // M51 R5: tokens MID-RUN, so a live runaway is visible before it concludes.
+        //
+        // An ACCUMULATION and explicitly a FLOOR, not a total -- measured on
+        // `packages/providers/test/fixtures/complete.ndjson`, the assistant lines' own usage sums to
+        // 8 in / 27 out against the `result` line's 63,684 / 741, because a streamed message's
+        // per-turn usage is not the whole of what the turn was billed. `writeStreamUsage` REPLACES
+        // both columns with the authoritative figure when a `result` line arrives, which is what
+        // makes the floor safe to write: a live estimate RISES to the terminal one, never falls.
+        //
+        // Local accumulation, one write: a resumed run is a SECOND pump on this row, so the
+        // accumulator starts at what the row already holds (see its declaration), the way the
+        // skills tally does.
+        usageIn += event.input
+        usageOut += event.output
+        await prisma.slaveRun.updateMany({
+          where: { id: runId, endedAt: null },
+          data: { tokensIn: usageIn, tokensOut: usageOut },
+        })
         break
       }
 

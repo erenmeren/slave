@@ -1,10 +1,18 @@
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import { workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import type { WorktreeProbe } from '@slave-of-ai/control'
+import {
+  BREAKER_BEAT_MS,
+  CONSTRAIN_GRACE_CALLS,
+  REPEAT_TRIP_COUNT,
+  workspaceId as brandWorkspaceId,
+} from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
 import type { SlaveRuntimeAdapter } from '@slave-of-ai/providers'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { noteTickRan, reconcileOrphans, resetTickObservation, sweep, type SweepDeps } from '../../src/sweep.js'
@@ -32,11 +40,16 @@ interface Fixture {
 
 const dirs: string[] = []
 
-async function seed(overrides: { readonly runTimeoutMs?: number; readonly name?: string } = {}): Promise<Fixture> {
+async function seed(
+  overrides: { readonly runTimeoutMs?: number; readonly name?: string; readonly repoPath?: string } = {},
+): Promise<Fixture> {
   const workspace = await prisma.workspace.create({
     data: {
       name: overrides.name ?? 'Checkout Platform',
-      repoPath: '/tmp/checkout',
+      // `/tmp/checkout` need not exist for the passes above, which never touch the filesystem. The
+      // breaker's CONSTRAIN rung does -- it pauses the run, and `requestPause` writes a flag under
+      // the repo path -- so that describe passes a real directory (M51 R3).
+      repoPath: overrides.repoPath ?? '/tmp/checkout',
       verifyCommands: ['true'],
       setupCommands: [],
       maxToolCallsPerRun: 200,
@@ -302,7 +315,17 @@ describe('sweep and reconcileOrphans', () => {
 
     const report = await sweep(deps)
 
-    expect(report).toEqual({ timedOut: [], overToolCap: [], deadPids: [], strandedClaims: [] })
+    expect(report).toEqual({
+      timedOut: [],
+      overToolCap: [],
+      deadPids: [],
+      strandedClaims: [],
+      // M51 R2: the three breaker rungs join the report. Kept in this EXHAUSTIVE `toEqual` rather
+      // than relaxed, so a fourth list still has to be looked at by somebody.
+      breakerSteered: [],
+      breakerConstrained: [],
+      breakerStopped: [],
+    })
     expect(cancelled).toEqual([])
     expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
   })
@@ -395,7 +418,17 @@ describe('sweep and reconcileOrphans', () => {
 
     // The other half of the same race: a run already terminal is not swept at all, so no cancel is
     // issued and nothing announces one.
-    expect(report).toEqual({ timedOut: [], overToolCap: [], deadPids: [], strandedClaims: [] })
+    expect(report).toEqual({
+      timedOut: [],
+      overToolCap: [],
+      deadPids: [],
+      strandedClaims: [],
+      // M51 R2: the three breaker rungs join the report. Kept in this EXHAUSTIVE `toEqual` rather
+      // than relaxed, so a fourth list still has to be looked at by somebody.
+      breakerSteered: [],
+      breakerConstrained: [],
+      breakerStopped: [],
+    })
     expect(cancelled).toEqual([])
     expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
   })
@@ -465,7 +498,17 @@ describe('sweep and reconcileOrphans', () => {
     // it is reached. Seeded away from the boundary, `>` and `>=` are indistinguishable.
     const report = await sweep(deps)
 
-    expect(report).toEqual({ timedOut: [], overToolCap: [], deadPids: [], strandedClaims: [] })
+    expect(report).toEqual({
+      timedOut: [],
+      overToolCap: [],
+      deadPids: [],
+      strandedClaims: [],
+      // M51 R2: the three breaker rungs join the report. Kept in this EXHAUSTIVE `toEqual` rather
+      // than relaxed, so a fourth list still has to be looked at by somebody.
+      breakerSteered: [],
+      breakerConstrained: [],
+      breakerStopped: [],
+    })
   })
 
   it('counts only the runs it actually failed', async (): Promise<void> => {
@@ -536,7 +579,17 @@ describe('sweep and reconcileOrphans', () => {
 
     const report = await sweep(deps)
 
-    expect(report).toEqual({ timedOut: [], overToolCap: [], deadPids: [], strandedClaims: [] })
+    expect(report).toEqual({
+      timedOut: [],
+      overToolCap: [],
+      deadPids: [],
+      strandedClaims: [],
+      // M51 R2: the three breaker rungs join the report. Kept in this EXHAUSTIVE `toEqual` rather
+      // than relaxed, so a fourth list still has to be looked at by somebody.
+      breakerSteered: [],
+      breakerConstrained: [],
+      breakerStopped: [],
+    })
     expect(cancelled).toEqual([])
   })
 
@@ -744,5 +797,355 @@ describe('sweep and reconcileOrphans', () => {
     expect(task.status).toBe('cancelled')
     expect(task.activeRunId).toBe(run.id)
     expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
+  })
+})
+
+/**
+ * The behavioural breaker's beat (M51 R2), end to end against a real database.
+ *
+ * Its own describe, with its own fixture: every case here needs a run with a LIVE pid and a window
+ * of real `run.tool_call` / `run.tool_result` / `run.output` rows, which nothing above this line
+ * has any use for. The detector itself is pinned purely in `packages/domain`; what these cases
+ * exist for is the half that is not pure -- the beat clock, the ladder, what is written on every
+ * beat including the ones that do nothing, and the delivery pass.
+ */
+describe('the breaker beat (M51 R2)', () => {
+  let fixture: Fixture
+  let deps: SweepDeps
+  let cancelled: string[]
+  /** A REAL directory: the constrain rung pauses the run, and `requestPause` writes a flag file
+   *  under the workspace's repo path. A path that does not exist makes that verb throw. */
+  let repoPath = ''
+
+  /** A fingerprint probe with a fixed answer -- `null` is "could not measure". */
+  const probeReturning = (value: string | null): WorktreeProbe => ({ fingerprint: async () => value })
+
+  const givenBreakerRun = async (data: {
+    status?: 'working' | 'pause_requested' | 'paused'
+    pid?: number | null
+    toolCalls?: number
+    toolCallCap?: number | null
+    startedAt?: Date
+    breakerLevel?: 'none' | 'steered' | 'constrained'
+    breakerTrips?: number
+    breakerSteers?: number
+    queuedMessage?: string
+    pauseReason?: 'human' | 'guardrail'
+    worktreePath?: string
+  }) =>
+    prisma.slaveRun.create({
+      data: {
+        taskId: fixture.taskId,
+        slaveId: fixture.slaveId,
+        status: data.status ?? 'working',
+        pid: data.pid === undefined ? process.pid : data.pid,
+        toolCalls: data.toolCalls ?? 0,
+        ...(data.toolCallCap === undefined ? {} : { toolCallCap: data.toolCallCap }),
+        ...(data.startedAt === undefined ? {} : { startedAt: data.startedAt }),
+        ...(data.breakerLevel === undefined ? {} : { breakerLevel: data.breakerLevel }),
+        ...(data.breakerTrips === undefined ? {} : { breakerTrips: data.breakerTrips }),
+        ...(data.breakerSteers === undefined ? {} : { breakerSteers: data.breakerSteers }),
+        ...(data.queuedMessage === undefined ? {} : { queuedMessage: data.queuedMessage }),
+        ...(data.pauseReason === undefined ? {} : { pauseReason: data.pauseReason }),
+        ...(data.worktreePath === undefined ? {} : { worktreePath: data.worktreePath }),
+      },
+    })
+
+  const hashOf = (text: string): string => createHash('sha256').update(text).digest('hex')
+
+  /** One answered tool call, written the way the pump writes it. */
+  async function call(runId: string, key: { tool: string; args: string }, id: string): Promise<void> {
+    await appendEvent({
+      type: 'run.tool_call',
+      workspaceId: fixture.workspaceId,
+      taskId: fixture.taskId,
+      slaveId: fixture.slaveId,
+      runId,
+      actor: 'slave',
+      payload: { name: key.tool, summary: `${key.tool} ${key.args}`, toolUseId: id, argsHash: hashOf(key.args) },
+    })
+  }
+
+  async function result(runId: string, id: string, outcome: 'ok' | 'error', toolName = 'Bash'): Promise<void> {
+    await appendEvent({
+      type: 'run.tool_result',
+      workspaceId: fixture.workspaceId,
+      taskId: fixture.taskId,
+      slaveId: fixture.slaveId,
+      runId,
+      actor: 'slave',
+      payload: { toolUseId: id, toolName, outcome, errorClass: outcome === 'error' ? 'timeout' : null },
+    })
+  }
+
+  async function output(runId: string, text: string): Promise<void> {
+    await appendEvent({
+      type: 'run.output',
+      workspaceId: fixture.workspaceId,
+      taskId: fixture.taskId,
+      slaveId: fixture.slaveId,
+      runId,
+      actor: 'slave',
+      payload: { text },
+    })
+  }
+
+  /** A healthy live run: nothing in its window at all. */
+  const liveRun = async (over: Parameters<typeof givenBreakerRun>[0] = {}) => givenBreakerRun(over)
+
+  /** A run going in circles: REPEAT_TRIP_COUNT byte-identical calls, each one answered. */
+  async function loopingRun(over: Parameters<typeof givenBreakerRun>[0] = {}): Promise<{ id: string }> {
+    const run = await givenBreakerRun(over)
+    for (let i = 0; i < REPEAT_TRIP_COUNT; i += 1) {
+      await call(run.id, { tool: 'Bash', args: 'npm test' }, `toolu_${String(i)}`)
+      await result(run.id, `toolu_${String(i)}`, 'ok')
+    }
+    return run
+  }
+
+  /** A run that is neither repeating nor failing, and has said nothing since its last beat. */
+  async function quietRun(): Promise<{ id: string }> {
+    // A worktree path, because the clock that matters here is the worktree one: a run with NO
+    // worktree reads `worktreeChanged: true` without ever consulting the probe (D17).
+    const run = await givenBreakerRun({ worktreePath: repoPath })
+    await call(run.id, { tool: 'Read', args: 'src/index.ts' }, 'toolu_q')
+    await result(run.id, 'toolu_q', 'ok')
+    return run
+  }
+
+  /** The quiet-long-build shape: one call still outstanding, and nothing else. */
+  async function quietRunWithOneOutstandingCall(): Promise<{ id: string }> {
+    const run = await givenBreakerRun({ worktreePath: repoPath })
+    await call(run.id, { tool: 'Bash', args: 'npm run build' }, 'toolu_build')
+    return run
+  }
+
+  const reload = async (run: { id: string }) => prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
+
+  /** Back-date the beat so the next sweep is allowed to beat again, instead of sleeping a minute. */
+  const ageTheBeat = async (id: string): Promise<void> => {
+    await prisma.slaveRun.update({
+      where: { id },
+      data: { breakerBeatAt: new Date(Date.now() - BREAKER_BEAT_MS - 1_000) },
+    })
+  }
+
+  /** Something changed: a call with a different key, so the trailing repeat run is broken. */
+  const makeItBehave = async (id: string): Promise<void> => {
+    await call(id, { tool: 'Write', args: 'src/fix.ts' }, 'toolu_new')
+    await result(id, 'toolu_new', 'ok', 'Write')
+    await output(id, 'I have changed approach.')
+  }
+
+  async function eventsOfType(runId: string, type: string): Promise<readonly { payload: unknown }[]> {
+    return prisma.executionEvent.findMany({
+      where: { runId, type: type as never },
+      orderBy: { seq: 'asc' },
+      select: { payload: true },
+    })
+  }
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+    repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-sweep-breaker-'))
+    dirs.push(repoPath)
+    fixture = await seed({ repoPath })
+    cancelled = []
+    resetTickObservation()
+    const adapter = {
+      cancel: async (runId: string): Promise<void> => {
+        cancelled.push(runId)
+      },
+    } as unknown as SlaveRuntimeAdapter
+    deps = { workspaceId: brandWorkspaceId(fixture.workspaceId), registry: { resolve: () => adapter } }
+  })
+
+  afterAll((): void => {
+    for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('does nothing to a healthy run, and stamps the beat so the next tick waits', async (): Promise<void> => {
+    const run = await liveRun()
+    await sweep({ ...deps, worktreeProbe: probeReturning('same') })
+    const after = await reload(run)
+    expect(after.breakerLevel).toBe('none')
+    expect(after.breakerBeatAt).not.toBeNull()
+  })
+
+  it('beats at most once per BREAKER_BEAT_MS, so a one-second tick loop cannot climb in three', async (): Promise<void> => {
+    const run = await loopingRun()
+    await sweep(deps)
+    await sweep(deps)
+    await sweep(deps)
+    const after = await reload(run)
+    expect(after.breakerLevel).toBe('steered')
+    expect(after.breakerTrips).toBe(1)
+  })
+
+  it('climbs one rung per beat: steered, then constrained, then stopped', async (): Promise<void> => {
+    const run = await loopingRun()
+    await sweep(deps)
+    expect((await reload(run)).breakerLevel).toBe('steered')
+    await ageTheBeat(run.id)
+    await sweep(deps)
+    const constrained = await reload(run)
+    expect(constrained.breakerLevel).toBe('constrained')
+    expect(constrained.toolCallCap).toBe(constrained.toolCalls + CONSTRAIN_GRACE_CALLS)
+    await ageTheBeat(run.id)
+    const report = await sweep(deps)
+    expect(report.breakerStopped).toEqual([run.id])
+    expect((await reload(run)).status).toBe('stopping')
+    expect(cancelled).toEqual([run.id])
+  })
+
+  it('announces each of the two quiet rungs once, and the loud one as a guardrail', async (): Promise<void> => {
+    const run = await loopingRun()
+    await sweep(deps)
+    await ageTheBeat(run.id)
+    await sweep(deps)
+    const breaker = await eventsOfType(run.id, 'run_breaker')
+    expect(breaker.map((row) => (row.payload as { level: string }).level)).toEqual(['steered', 'constrained'])
+    expect((breaker[0]?.payload as { trip: string }).trip).toBe('repeated_call')
+    await ageTheBeat(run.id)
+    await sweep(deps)
+    // One rung, one name: the STOP rung writes `guardrail.tripped` and no third `run.breaker`.
+    expect(await eventsOfType(run.id, 'run_breaker')).toHaveLength(2)
+    const [tripped] = await eventsOfType(run.id, 'guardrail_tripped')
+    expect((tripped?.payload as { guardrail: string }).guardrail).toBe('behavioural_loop')
+  })
+
+  it('writes NO terminal row for a behavioural stop -- the pump concludes it `failed`', async (): Promise<void> => {
+    // The laundering bug `pump.ts` spells out: a `stopped` row here is `terminal_uncounted`, so the
+    // behavioural stop would never reach the failure streak and the two breakers would not compose.
+    const run = await loopingRun()
+    await sweep(deps)
+    await ageTheBeat(run.id)
+    await sweep(deps)
+    await ageTheBeat(run.id)
+    await sweep(deps)
+    const after = await reload(run)
+    expect(after.status).toBe('stopping')
+    expect(after.terminalAt).toBeNull()
+    expect(after.endedAt).toBeNull()
+  })
+
+  it('steps DOWN one rung on a healthy beat and writes no event at all', async (): Promise<void> => {
+    const run = await loopingRun()
+    await sweep(deps)
+    await ageTheBeat(run.id)
+    await makeItBehave(run.id)
+    await sweep(deps)
+    expect((await reload(run)).breakerLevel).toBe('none')
+    expect(await eventsOfType(run.id, 'run_breaker')).toHaveLength(1)
+  })
+
+  it('leaves a cap it already wrote standing when the level steps back down', async (): Promise<void> => {
+    // The design call M51 Task 4 owns: de-escalation lowers the WORD, never the CAP. Clearing it on
+    // the way down would make `constrainRun`'s own no-second-refund clause unreachable and turn the
+    // thirty-call grace into a refill a wedged run collects every couple of minutes.
+    const run = await loopingRun()
+    await sweep(deps)
+    await ageTheBeat(run.id)
+    await sweep(deps)
+    const cap = (await reload(run)).toolCallCap
+    expect(cap).not.toBeNull()
+    await ageTheBeat(run.id)
+    await makeItBehave(run.id)
+    await sweep(deps)
+    const after = await reload(run)
+    expect(after.breakerLevel).toBe('steered')
+    expect(after.toolCallCap).toBe(cap)
+  })
+
+  it('honours the run’s OWN cap once one is written, and trips the existing ceiling breach', async (): Promise<void> => {
+    const run = await liveRun({ toolCalls: 40, toolCallCap: 30 })
+    await sweep(deps)
+    const [tripped] = await eventsOfType(run.id, 'guardrail_tripped')
+    // The existing name, never a new one: the run really is past its tool-call ceiling, and giving
+    // the same fact two names is how a filter comes to miss half of it.
+    expect((tripped?.payload as { guardrail: string }).guardrail).toBe('tool_call_ceiling')
+  })
+
+  it('is checked AFTER the hard limits -- a timed-out looping run is stopped for the timeout', async (): Promise<void> => {
+    const run = await loopingRun({ startedAt: hoursAgo(2) })
+    const report = await sweep(deps)
+    expect(report.timedOut).toEqual([run.id])
+    expect(report.breakerStopped).toEqual([])
+    expect((await reload(run)).breakerLevel).toBe('none')
+  })
+
+  it('never trips while a tool call is still outstanding, however quiet the run is', async (): Promise<void> => {
+    const run = await quietRunWithOneOutstandingCall()
+    await sweep({ ...deps, worktreeProbe: probeReturning('same') })
+    await ageTheBeat(run.id)
+    await sweep({ ...deps, worktreeProbe: probeReturning('same') })
+    await ageTheBeat(run.id)
+    await sweep({ ...deps, worktreeProbe: probeReturning('same') })
+    expect((await reload(run)).breakerLevel).toBe('none')
+    expect(await eventsOfType(run.id, 'run_breaker')).toHaveLength(0)
+  })
+
+  it('treats an UNREADABLE worktree as evidence of nothing, and does not trip on it', async (): Promise<void> => {
+    const run = await quietRun()
+    await sweep({ ...deps, worktreeProbe: probeReturning(null) })
+    await ageTheBeat(run.id)
+    await sweep({ ...deps, worktreeProbe: probeReturning(null) })
+    await ageTheBeat(run.id)
+    await sweep({ ...deps, worktreeProbe: probeReturning(null) })
+    expect((await reload(run)).breakerLevel).toBe('none')
+    expect((await reload(run)).breakerQuietBeats).toBe(0)
+  })
+
+  it('trips no_progress on the second quiet beat when the worktree really did not move', async (): Promise<void> => {
+    // The positive control for the case above: the same run, with a probe that can MEASURE, does
+    // trip -- so "a null suppresses" is a real difference and not a test that could never fire.
+    const run = await quietRun()
+    const probe = { ...deps, worktreeProbe: probeReturning('unchanged') }
+    // The first beat has no previous fingerprint to compare with, which is itself no evidence.
+    await sweep(probe)
+    await ageTheBeat(run.id)
+    await sweep(probe)
+    expect((await reload(run)).breakerQuietBeats).toBe(1)
+    await ageTheBeat(run.id)
+    await sweep(probe)
+    const after = await reload(run)
+    expect(after.breakerLevel).toBe('steered')
+    const [breaker] = await eventsOfType(run.id, 'run_breaker')
+    expect((breaker?.payload as { trip: string }).trip).toBe('no_progress')
+  })
+
+  it('delivers a steer on the tick that finds the run actually paused', async (): Promise<void> => {
+    const run = await givenBreakerRun({
+      status: 'pause_requested',
+      pid: null,
+      breakerLevel: 'steered',
+      breakerTrips: 1,
+      breakerSteers: 1,
+      pauseReason: 'guardrail',
+      queuedMessage: 'stop and rethink',
+    })
+    await sweep(deps)
+    expect((await reload(run)).resumeRequestedAt).toBeNull()
+    // What the pump does when the gate denies the next call: the child is dead and the row parks.
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { status: 'paused' } })
+    await prisma.checkpoint.create({
+      data: {
+        runId: run.id,
+        sessionId: 's-1',
+        worktreePath: '/tmp/worktree',
+        pauseFlagPath: '/tmp/pause.flag',
+        settingsPath: '/tmp/settings.json',
+        hookPath: '/tmp/pause-gate.sh',
+        gitAuthorName: 'Alex',
+        gitAuthorEmail: 'alex@slaveofai.local',
+        headCommit: 'abc123',
+      },
+    })
+    await sweep(deps)
+    const after = await reload(run)
+    expect(after.resumeRequestedAt).not.toBeNull()
+    expect(after.queuedMessage).toBe('stop and rethink')
   })
 })
