@@ -32,10 +32,13 @@
 //                  arm for the M8b gate. A planning prompt (containing
 //                  `"task graph"`, the literal substring the planning prompt
 //                  always carries) replays the `plan-graph` fixture with no
-//                  side effect -- no commit, no file written. A review
-//                  prompt (containing `"verdict"`) replays `review-approve`,
-//                  same as m8a-flow. Any other prompt is a work run and
-//                  reuses the m8a-flow work body verbatim.
+//                  side effect -- no commit, no file written. WHICH plan it
+//                  replays is `--plan-fixture <name>` from ARGV (M47),
+//                  defaulting to `plan-graph`, so one gate can be answered
+//                  with a graph written in capabilities without a mode of
+//                  its own. A review prompt (containing `"verdict"`) replays
+//                  `review-approve`, same as m8a-flow. Any other prompt is a
+//                  work run and reuses the m8a-flow work body verbatim.
 //   m36-flow       synthetic, selected by ARGV rather than by prompt content:
 //                  the two legs of M36's ask/answer round trip. A run spawned
 //                  WITHOUT `--resume` is the asking leg -- it replays
@@ -232,6 +235,23 @@ function answerFixtureName() {
   const named = index === -1 ? undefined : args[index + 1]
   if (named !== undefined && !named.startsWith('-')) return named
   return process.env.FAKE_CLAUDE_ANSWER_FIXTURE ?? 'supervisor-answer'
+}
+
+/**
+ * M47: which plan a `"task graph"` prompt is answered with -- `--plan-fixture <name>` from ARGV,
+ * defaulting to the stock `plan-graph`. Argv rather than an env var for `--answer-fixture`'s own
+ * reason: `SLAVEOFAI_CLAUDE_ARGS` rides through as `extraArgs` on every spawn, and it is the one
+ * per-daemon channel a gate can count on.
+ *
+ * A MODE was the alternative and would have been worse: every arm of `m8-flow` -- the two decision
+ * arms, the re-plan arm, review, work -- is exactly what an M47 gate needs, and a copy of them
+ * beside a different planning fixture is five arms that can drift from the five they were copied
+ * from.
+ */
+function planFixtureName() {
+  const index = args.indexOf('--plan-fixture')
+  const named = index === -1 ? undefined : args[index + 1]
+  return named === undefined || named.startsWith('-') ? 'plan-graph' : named
 }
 
 /**
@@ -440,7 +460,7 @@ async function main() {
     if (await answerArm(prompt)) return
     if (await replanArm(prompt)) return
     if (prompt.includes('"task graph"')) {
-      await replayFixture('plan-graph')
+      await replayFixture(planFixtureName())
       return
     }
     if (prompt.includes('"verdict"')) {

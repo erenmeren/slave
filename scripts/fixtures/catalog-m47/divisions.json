@@ -1,0 +1,7 @@
+{
+  "_note": "M47's own catalog. Two divisions, two personas whose capability bullets are taxonomy labels and whose collaboration line names the other one by title. Separate from catalog-m46, whose four-persona counts that gate asserts exactly, and from catalog-m42, whose skip reasons gate:m42 asserts exactly.",
+  "divisions": {
+    "engineering": { "label": "Engineering" },
+    "security": { "label": "Security" }
+  }
+}

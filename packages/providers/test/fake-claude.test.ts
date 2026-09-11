@@ -171,6 +171,41 @@ describe('fake-claude', () => {
     expect(result?.result).toContain('"key":"core"')
   })
 
+  describe('--plan-fixture (M47)', () => {
+    /** A prompt with the one literal the planning prompt always carries. */
+    const PROMPT = 'produce the "task graph" now'
+
+    it('answers a planning prompt with the stock plan when no flag is passed', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm8-flow', '-p', PROMPT])
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"key":"core"')
+      // The stock plan is written in ROLES; nothing in it asks for a capability.
+      expect(result?.result).toContain('"role":"backend"')
+      expect(result?.result).not.toContain('"capabilities"')
+    })
+
+    it('answers it from the named fixture when --plan-fixture is on the argv', async (): Promise<void> => {
+      const { stdout } = await run('node', [
+        FAKE,
+        '--fixture',
+        'm8-flow',
+        '--plan-fixture',
+        'plan-graph-capabilities',
+        '-p',
+        PROMPT,
+      ])
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"capabilities":["backend.api-design"]')
+      expect(result?.result).toContain('"key":"auth"')
+    })
+
+    it('ignores a --plan-fixture whose value is another flag', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm8-flow', '--plan-fixture', '--verbose', '-p', PROMPT])
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"key":"api"')
+    })
+  })
+
   describe('the re-plan arm (M40)', () => {
     /** A prompt with the one literal `REPLAN_INSTRUCTIONS` always carries. */
     const PROMPT = 'The GOAL changed and this is a "replan": return {"add":[],"cancel":[],"keep":[]}'

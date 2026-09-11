@@ -31,7 +31,7 @@
 //      Graph and Office, whose routes still render.
 //   3. Every page renders inside PageShell or its page-level equivalent, with the one main
 //      landmark and the sidebar present.
-//   4. NO RAW ENUM TOKEN is visible text on the eleven pages -- the blocklist is DERIVED from the
+//   4. NO RAW ENUM TOKEN is visible text on the fidelity pages -- the blocklist is DERIVED from the
 //      domain's own unions, not typed here.
 //   5. A drawer traps Tab and gives focus back on Escape.
 //   6. The skip link is the first focusable element and reaches `main`.
@@ -678,9 +678,13 @@ try {
   // it -- and both stages want exactly the same set of pages in exactly the same state. Each page
   // prints its own stage-3 line and its own stage-4 line before either is asserted.
   //
-  // The ELEVEN pages of R8 are the fidelity gate's nine (with `workforce` for `slaves`) plus
-  // `/w/<id>/office` and `/w/<id>/settings`. `/sim` and `/sim/<id>` are scanned too: the fixture's
-  // paused simulation lives there, and leak 6's word is on the first of them.
+  // The R8 eleven are the fidelity gate's nine (with `workforce` for `slaves`) plus
+  // `/w/<id>/office` and `/w/<id>/settings`; M47 R6's `/w/<id>/organization` is the twelfth page
+  // the fidelity gate photographs and is scanned here on the same terms -- the shell contract and
+  // the raw-token rule are page-wide rules, and a new surface that skipped them would be the one
+  // place a raw `security.application` could reach a person's screen. `/sim` and `/sim/<id>` are
+  // scanned too: the fixture's paused simulation lives there, and leak 6's word is on the first of
+  // them.
   // ============================================================================================
   const PAGES = [
     { name: 'projects', path: `/`, testId: 'project-card', fidelity: true },
@@ -694,6 +698,7 @@ try {
     { name: 'graph', path: `/w/${workspaceId}/graph`, testId: 'graph-canvas', fidelity: true },
     { name: 'office', path: `/w/${workspaceId}/office`, testId: 'office-canvas', fidelity: true },
     { name: 'project-settings', path: `/w/${workspaceId}/settings`, testId: 'perm-caption', fidelity: true },
+    { name: 'organization', path: `/w/${workspaceId}/organization`, testId: 'organization-rows', fidelity: true },
     { name: 'simulations', path: `/sim`, testId: 'sim-card', fidelity: false },
     { name: 'simulation', path: `/sim/${simulationId}`, testId: 'sim-company', fidelity: false },
   ]
@@ -905,7 +910,8 @@ try {
   )
   console.log(
     `stage 4 PASSED: none of the ${String(RAW_TOKENS.length)} derived raw tokens is rendered text on any of ` +
-      `${String(PAGES.length)} pages (${String(PAGES.filter((p) => p.fidelity).length)} of them the R8 eleven), with a positive ` +
+      `${String(PAGES.length)} pages (${String(PAGES.filter((p) => p.fidelity).length)} of them pages the fidelity gate ` +
+      'photographs), with a positive ' +
       `counterpart read back on five surfaces, and NO exemption list; ${String(hiddenTokenPages)} page(s) carry a token ` +
       'only inside un-rendered text (a closed <details>)',
   )

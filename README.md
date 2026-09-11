@@ -172,6 +172,7 @@ one of them — `docs/ia.md` is the map, and says where anything that left a mai
 | **Graph** (Advanced ▾) `/w/<id>/graph` | Five views: the org tree, live execution, the task dependency DAG (draw or delete an edge to change it), the skill chain, and who handed work to whom. Reached from the project's `Advanced ▾` menu, or by its URL. |
 | **Office** (Advanced ▾) `/w/<id>/office` | The project's departments and slaves as a pixel office: who is working, blocked or paused, on what and how far; pause, resume or stop the focused slave's run; scroll to zoom, drag to pan, click a slave to focus. Reached from the project's `Advanced ▾` menu, or by its URL. |
 | **Activity** `/w/<id>/activity` | Every event, live, filterable by kind, slave and task; the filters live in the URL. Events made from the UI name the user who made them. |
+| **Organization** `/w/<id>/organization` | Who is on this project, what each of them can DO, and the sentence that says why they are here — beside what the project still needs, who could cover it and the offers waiting for your answer, and the advice each worker's own profile gives about who to consult. |
 | **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the read-only concurrency/timeout/attempts limits), its own slave permissions, its emergency stop, and its danger zone to archive/restore the project. |
 | **Workforce** `/workforce` | Everyone who works here, in four tabs. **Slaves**: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete with its history and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project. **Departments**: add, rename or delete a project's department and see who is on it. **Catalog**: every slave template as one searchable catalog — filter by division, capability, skill or where it came from, and click a row for its specialist profile: who it is, what it is for, what it must never do and where all of that came from, with any field customisable in place and the raw Markdown a run is given under `Advanced ▾` — beside the companies and their department templates, with the log of catalog imports under the tab's own `Advanced ▾`. **Skills**: the skill catalog and its assignments. `/slaves` and `/skills` still work — they redirect here. |
 | **Simulations** `/sim` | Company simulation runs (M29): create one from a catalog company — a trade company on synthetic data, decided by the rules provider, no repository and no model call; step it by day, run it to a horizon, pause, halt, add customer demand or a supplier delay; the simulated company's cash and the real model cost are two separate panels; metrics are computed from the run's own journal; clone a run under another policy, let the daemon auto-run it, compare two runs side by side (no verdict); adopt a software run's organisation into a company-less project (M33). |
@@ -432,6 +433,35 @@ you want when you have written a persona yourself, and exactly what you do not w
 meant to change a sentence. The catalog marks the two differently: `customised` for fields,
 `raw override` for the whole text.
 
+## Capabilities
+
+A worker is chosen for what it can DO, not for what it is called. Capabilities are a dotted
+vocabulary in a table — `backend.api-design`, `security.application`, `qa.test-automation` — and
+every one of them names the runtime role it projects to.
+
+```bash
+npm run orchestrator -- capabilities list
+npm run orchestrator -- capabilities add --key legal.contracts --label "Contract review" --role legal
+npm run orchestrator -- set-capabilities --slave <id> --capabilities backend.api-design,security.application
+```
+
+A plan says what each task NEEDS; the scheduler still dispatches on one string, because a
+capability projects to a runtime role and a worker who provides the capability is given that role.
+There is exactly one matching rule in this system and this milestone did not add a second.
+
+When the board needs something nobody can be dispatched for, the Supervisor says so by capability
+and offers the smallest fix it can find, in this order: somebody already here who can do it and was
+never given the role, somebody on the company roster, and only then a new worker from the catalog —
+one worker who covers two gaps rather than two who cover one each. The first is applied routinely,
+because the worker's own record is the evidence. The other two are proposals a person answers, and
+the sentence that convinced the Supervisor is stored on the worker it hired: Workforce → the
+project's Organization tab shows who is here, what they provide, and why each of them was chosen.
+
+Persona collaboration lines ("consult the Gate Platform Builder before changing an endpoint")
+become advisory relationships — shown on the profile and on the Organization tab, used to break a
+tie between two equally capable candidates, and never, under any circumstance, allowed to decide
+who does the work.
+
 ## The whole story
 
 Every section above describes one seam. `npm run gate:m41-scenario` runs them in sequence, once,
@@ -679,8 +709,8 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m31a-llm-decisions`, `gate:m31b-software-sector`, `gate:m33-adopt`,
 `gate:m35-pipeline-honesty`, `gate:m36-messaging`, `gate:m37-run-context`, `gate:m38-supervisor`,
 `gate:m39-supervisor-mailbox`, `gate:m40-requirement-versioning`, `gate:m41-scenario`,
-`gate:m42-catalog-import`, `gate:m44-ux-foundation`, `gate:m45-project-experience` and
-`gate:m46-workforce-catalog` on every push — `m36` stops the orchestrator and starts it again
+`gate:m42-catalog-import`, `gate:m44-ux-foundation`, `gate:m45-project-experience`,
+`gate:m46-workforce-catalog` and `gate:m47-team-formation` on every push — `m36` stops the orchestrator and starts it again
 mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was
 given the persona and the skills it was assigned, `m38` drives a real daemon until the Supervisor
 proposes the staffing a reviewer-less project needs, waits for a human to approve it, unblocks a
@@ -699,7 +729,7 @@ template catalog twice over — creating what is new, skipping what an operator 
 what changed on disk, and staffing a project from the result until the imported persona itself turns
 up in a real run's recorded prompt, and `m44` drives a real browser over every page at once to
 check that there are four ways into the product, that the project's own strip answers "what is
-happening" in four tabs with Graph and Office still one menu away, that nothing on any of eleven
+happening" in five tabs with Graph and Office still one menu away, that nothing on any of twelve
 pages is a database value a person would have to decode, that a drawer traps the Tab key and hands
 focus back on Escape, that the skip link is the first thing the keyboard finds, that the sidebar
 collapses on a narrow window, and that simulated money is never shown beside real model cost,
@@ -716,7 +746,17 @@ checkout's commit and the licence off its LICENSE file, one field customised in 
 still the operator's after the file behind it changes (and the import says it kept it), a raw
 Markdown override still stops an import dead while the row beside it updates, and the profile a
 worker is finally given — rendered sections, the operator's sentence and the persona's own words —
-turns up in a real run's recorded prompt. That is 21 gates. Tests and gates share one Postgres — run one at a time.
+turns up in a real run's recorded prompt,
+and `m47` proves a worker can be chosen by capability without the scheduler learning a second way
+to match: a fixture catalog's persona bullets become taxonomy keys and its collaboration line
+becomes one advisory edge pointing at the persona it names; a plan written in capabilities produces
+tasks whose dispatch role is DERIVED from them, with an invented key dropped and named on the plan
+event; the Supervisor raises the gap by capability and proposes a hire that waits for a person;
+approving it puts a specialist on the project with the sentence that chose it, and the very next
+tick dispatches the authentication task to that specialist by ROLE; a capability an idle worker
+already provides is granted routinely instead, without asking anybody; and the Organization tab
+shows who is here, what they can do and why. That is 22 gates. Tests and gates share one Postgres --
+run one at a time.
 
 ## Learn more
 
