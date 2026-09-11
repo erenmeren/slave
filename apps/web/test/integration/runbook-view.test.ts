@@ -73,6 +73,41 @@ describe('buildRunbookPanel', () => {
     expect(view?.all.map((option) => option.key)).toContain('feature-delivery')
   })
 
+  // Fix round 1, Critical: the panel needs the KEY the Supervisor proposed, not merely the fact
+  // that some decision is pending -- a click on another runbook must not approve this one.
+  it('carries the pending proposal by key and name, and nothing when the action cannot be read', async () => {
+    const decision = await prisma.supervisorDecision.create({
+      data: {
+        workspaceId,
+        situationKind: 'runbook_recommended',
+        subjectId: workspaceId,
+        situation: { kind: 'runbook_recommended', subjectId: workspaceId, summary: 'this goal looks like a security review', facts: {} },
+        candidates: [],
+        chosenIndex: 0,
+        action: { kind: 'adopt_runbook', runbookId: 'rb-1', key: 'security-review', name: 'Security review', rationale: 'The goal says "security".' },
+        rationale: 'The goal says "security".',
+        tier: 'proposed',
+        status: 'pending',
+        decidedBy: 'rules',
+        modelCalled: false,
+      },
+    })
+
+    expect((await buildRunbookPanel(workspaceId))?.pendingDecision).toEqual({
+      id: decision.id,
+      key: 'security-review',
+      name: 'Security review',
+    })
+
+    // A row whose action this build cannot read is not a proposal this panel can route a click
+    // through -- it adopts by hand instead, and the decision stays for the timeline.
+    await prisma.supervisorDecision.update({ where: { id: decision.id }, data: { action: { kind: 'not_an_action' } } })
+    expect((await buildRunbookPanel(workspaceId))?.pendingDecision).toBeNull()
+
+    await prisma.supervisorDecision.delete({ where: { id: decision.id } })
+    expect((await buildRunbookPanel(workspaceId))?.pendingDecision).toBeNull()
+  })
+
   it('is null for a workspace that does not exist, which is what the route turns into a 404', async () => {
     expect(await buildRunbookPanel('nope')).toBeNull()
   })

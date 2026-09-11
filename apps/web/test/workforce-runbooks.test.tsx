@@ -88,8 +88,13 @@ describe('the Runbooks tab (M48 R7)', () => {
     expect(drawer.textContent).not.toContain('tpl1')
   })
 
-  it('says so when there is no runbook at all', () => {
+  // Fix round 1, minor 6: the empty state names the BINARY (`SkillsClient`'s own wording), and it
+  // lives inside the `workforce-runbooks` wrapper -- that handle is "where the runbooks are", and
+  // a gate looking for it must find the tab's answer whichever answer it is.
+  it('says so when there is no runbook at all, and names the command that writes them', () => {
     render(<RunbooksTab runbooks={[]} taxonomy={taxonomy} />)
-    expect(screen.getByTestId('runbooks-empty')).toBeTruthy()
+    const empty = screen.getByTestId('runbooks-empty')
+    expect(empty.textContent).toContain('orchestrator runbooks sync')
+    expect(screen.getByTestId('workforce-runbooks').contains(empty)).toBe(true)
   })
 })

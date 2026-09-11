@@ -41,6 +41,7 @@ const task = (over: Partial<TaskBoardItem>): TaskBoardItem => ({
   // The handoff group and the stage chip have their own file (`task-detail-handoff.test.tsx`).
   handoff: null,
   stage: null,
+  stageTitle: null,
   ...over,
 })
 

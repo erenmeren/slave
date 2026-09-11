@@ -69,26 +69,44 @@ export function RunbookPanel({
 
   if (view === null || (view.adopted === null && view.recommendations.length === 0)) return null
 
+  const proposed = view.pendingDecision
+
+  /**
+   * Adopt what was CLICKED (fix round 1, Critical).
+   *
+   * The pending proposal is approved only when the clicked key IS the one it is about: approving is
+   * what the person is being asked for there, and adopting behind the proposal's back would leave
+   * it pending forever. Every OTHER click is a by-hand adoption of the runbook that was actually
+   * chosen -- the round-1 version sent every click to the approve route, so with a proposal for
+   * `security-review` on screen, clicking "Bug fix" adopted the security review.
+   *
+   * A by-hand adoption leaves the proposal standing on purpose: it is still a question somebody
+   * asked, and the note below says where to answer it.
+   */
   const adopt = async (key: string | null): Promise<void> => {
     setPending(key ?? 'clear')
     // A retry starts clean: a prior refusal must not linger through a second attempt that then
     // succeeds and only clears it after the refetch (`TaskDetailPanel.collect`'s own rule).
     setError(null)
-    // Through the pending DECISION when the Supervisor has already made one: approving is what the
-    // person is being asked for, and adopting behind the proposal's back leaves it pending forever.
     const failure =
-      key !== null && view.pendingDecisionId !== null
-        ? await sendControl(`/api/w/${workspaceId}/supervisor/decisions/${view.pendingDecisionId}/approve`, { method: 'POST', body: {} })
-        : key === null
-          ? await sendControl(`/api/w/${workspaceId}/runbook`, { method: 'DELETE' })
+      key === null
+        ? await sendControl(`/api/w/${workspaceId}/runbook`, { method: 'DELETE' })
+        : proposed !== null && proposed.key === key
+          ? await sendControl(`/api/w/${workspaceId}/supervisor/decisions/${proposed.id}/approve`, { method: 'POST', body: {} })
           : await sendControl(`/api/w/${workspaceId}/runbook`, { method: 'POST', body: { key } })
     setPending(null)
     if (failure !== null) {
       setError(failure)
       return
     }
+    // The box must not go on claiming a choice that has already happened (fix round 1, minor 7):
+    // the refresh below re-reads the panel, and the picker's job starts again from "choose…".
+    setPicked('')
     router.refresh()
   }
+
+  // What the picker may offer: everything but the runbook this project already follows.
+  const choosable = view.all.filter((runbook) => runbook.key !== view.adopted?.key)
 
   const currentTitle =
     view.currentStage === null
@@ -102,6 +120,18 @@ export function RunbookPanel({
           <Alert variant="error" testId="runbook-error">
             {error}
           </Alert>
+        )}
+
+        {/* A proposal is a question somebody asked, and adopting something else by hand does not
+          * answer it -- so it is said UP FRONT, not in reaction to what is selected: a person
+          * about to pick another runbook should know the question is waiting before they click,
+          * and where it can be answered. Silent once the proposed runbook IS the adopted one,
+          * which is a proposal with nothing left to decide. The name, never the key
+          * (`docs/ia.md` rule 3). */}
+        {proposed !== null && proposed.key !== view.adopted?.key && (
+          <span data-testid="runbook-pending-note" className="text-[11px] text-tone-waiting">
+            The Supervisor proposed {proposed.name}; answer it on the timeline or adopt another below.
+          </span>
         )}
 
         {view.adopted === null ? (
@@ -205,10 +235,13 @@ export function RunbookPanel({
           </>
         )}
 
-        {view.all.length > 0 && (
+        {choosable.length > 0 && (
           <div className="flex flex-wrap items-center gap-2">
             <SectionLabel>{view.adopted === null ? 'or pick one' : 'follow a different one'}</SectionLabel>
-            {/* The NAMES, with the key on each option's value where only the machine reads it. */}
+            {/* The NAMES, with the key on each option's value where only the machine reads it. The
+              * runbook this project ALREADY follows is not in the list (fix round 1, minor 7): a
+              * picker offers what you could switch to, and adopting the one you have is a write
+              * that changes nothing. */}
             <select
               data-testid="runbook-picker"
               aria-label="Pick a runbook"
@@ -217,7 +250,7 @@ export function RunbookPanel({
               className="rounded border border-line bg-bg-0 px-2 py-1 text-xs text-text-1"
             >
               <option value="">choose…</option>
-              {view.all.map((runbook) => (
+              {choosable.map((runbook) => (
                 <option key={runbook.key} value={runbook.key}>
                   {runbook.name}
                 </option>
@@ -226,7 +259,9 @@ export function RunbookPanel({
             <Button
               variant="ghost"
               size="sm"
-              data-testid="runbook-adopt"
+              // Its OWN name (fix round 1, minor 3): two elements answering to `runbook-adopt` made
+              // "the Adopt button" ambiguous to a gate that has to click one of them on purpose.
+              data-testid="runbook-picker-adopt"
               disabled={picked === '' || pending !== null}
               onClick={() => void adopt(picked)}
             >

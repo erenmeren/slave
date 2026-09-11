@@ -32,8 +32,9 @@ function queryOf(params: Record<string, string | readonly string[] | undefined>)
 
 /**
  * The people (M44 R1): every slave, the departments they sit on, the catalog they are made from,
- * and the skills they are given -- four tabs on one page instead of two sidebar rows and a section
- * on the Projects home. `/slaves` and `/skills` are 307s into it (`next.config.ts`).
+ * the skills they are given and -- since M48 R7 -- the runbooks they can be asked to follow: five
+ * tabs on one page instead of two sidebar rows and a section on the Projects home. `/slaves` and
+ * `/skills` are 307s into it (`next.config.ts`).
  *
  * The tab is in the URL (`?tab=`), the way the Graph page keeps its mode, so `/skills` can redirect
  * to a tab and a reload or a shared link keeps it. An unknown value falls back to `slaves` rather

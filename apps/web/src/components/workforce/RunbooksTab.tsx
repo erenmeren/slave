@@ -48,41 +48,48 @@ export function RunbooksTab({
   const label = (key: string): string => index.get(key)?.label ?? key
   const open = runbooks.find((runbook) => runbook.key === openKey) ?? null
 
-  if (runbooks.length === 0) {
-    return <EmptyState testId="runbooks-empty" message="no runbook is installed — `runbooks sync` writes the ones that ship with the product." />
-  }
-
   return (
     <div className="flex flex-col gap-3">
       <div data-testid="workforce-runbooks">
-        <DataTable columns={COLUMNS} header={[...HEADER]}>
-          {runbooks.map((runbook, position) => (
-            // The row carries the identity a gate reads; the `Row` primitive keeps the handle four
-            // gates already drive (`WorkforceCatalog`'s own reason for wrapping).
-            <div key={runbook.key} data-testid="runbook-row" data-key={runbook.key}>
-              {/* `last` because this `Row` is the only child of its wrapper, so its own
-                * `:last-child` selector would match every row and draw no separator at all. */}
-              <Row columns={COLUMNS} last={position === runbooks.length - 1}>
-                <button
-                  type="button"
-                  data-testid={`runbook-open-${runbook.key}`}
-                  onClick={() => setOpenKey(runbook.key)}
-                  className="truncate text-left text-sm text-text-1 hover:text-text-2"
-                >
-                  {runbook.name}
-                </button>
-                <span className="truncate text-text-2">{runbook.description}</span>
-                <span className="font-mono text-xs text-text-2">{plural(runbook.stages.length, 'stage')}</span>
-                <span className="truncate text-xs text-text-3" title={runbook.source}>
-                  {runbook.source === 'persona' && runbook.sourceTemplateName !== null
-                    ? `${SOURCE_WORD.persona} · ${runbook.sourceTemplateName}`
-                    : SOURCE_WORD[runbook.source]}
-                </span>
-                <span className="font-mono text-xs text-text-2">{plural(runbook.workspaceCount, 'project')}</span>
-              </Row>
-            </div>
-          ))}
-        </DataTable>
+        {/* The empty state stays INSIDE this wrapper (fix round 1, minor 6): `workforce-runbooks`
+          * is "where the runbooks are", and a gate that looks for it must find the tab's answer
+          * either way. The command is spelt with its binary, the way `SkillsClient`'s own empty
+          * state names `orchestrator skills sync`. */}
+        {runbooks.length === 0 ? (
+          <EmptyState
+            testId="runbooks-empty"
+            message="no runbook is installed — run `orchestrator runbooks sync` to write the ones that ship with the product"
+          />
+        ) : (
+          <DataTable columns={COLUMNS} header={[...HEADER]}>
+            {runbooks.map((runbook, position) => (
+              // The row carries the identity a gate reads; the `Row` primitive keeps the handle four
+              // gates already drive (`WorkforceCatalog`'s own reason for wrapping).
+              <div key={runbook.key} data-testid="runbook-row" data-key={runbook.key}>
+                {/* `last` because this `Row` is the only child of its wrapper, so its own
+                  * `:last-child` selector would match every row and draw no separator at all. */}
+                <Row columns={COLUMNS} last={position === runbooks.length - 1}>
+                  <button
+                    type="button"
+                    data-testid={`runbook-open-${runbook.key}`}
+                    onClick={() => setOpenKey(runbook.key)}
+                    className="truncate text-left text-sm text-text-1 hover:text-text-2"
+                  >
+                    {runbook.name}
+                  </button>
+                  <span className="truncate text-text-2">{runbook.description}</span>
+                  <span className="font-mono text-xs text-text-2">{plural(runbook.stages.length, 'stage')}</span>
+                  <span className="truncate text-xs text-text-3" title={runbook.source}>
+                    {runbook.source === 'persona' && runbook.sourceTemplateName !== null
+                      ? `${SOURCE_WORD.persona} · ${runbook.sourceTemplateName}`
+                      : SOURCE_WORD[runbook.source]}
+                  </span>
+                  <span className="font-mono text-xs text-text-2">{plural(runbook.workspaceCount, 'project')}</span>
+                </Row>
+              </div>
+            ))}
+          </DataTable>
+        )}
       </div>
       {open !== null && (
         <Drawer open onClose={() => setOpenKey(null)} label={open.name} testId="runbook-drawer">

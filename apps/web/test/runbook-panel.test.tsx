@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { RunbookPanel } from '../src/components/project/RunbookPanel'
 import type { RunbookPanelView } from '../src/server/runbook'
 
@@ -12,8 +12,35 @@ const view = (overrides: Partial<RunbookPanelView>): RunbookPanelView => ({
   stages: [],
   recommendations: [],
   all: [],
-  pendingDecisionId: null,
+  pendingDecision: null,
   ...overrides,
+})
+
+const option = (key: string, name: string): RunbookPanelView['all'][number] => ({
+  key,
+  name,
+  description: 'd',
+  stageCount: 4,
+  source: 'seed',
+  why: `The goal says "${key}".`,
+})
+
+/** Every POST this panel made, in order -- the whole point of the three cases below is WHICH url a
+ *  click reaches, so the stub records rather than asserts. */
+function stubFetch(): { readonly urls: string[] } {
+  const urls: string[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) => {
+      urls.push(url)
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    }),
+  )
+  return { urls }
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 describe('RunbookPanel', () => {
@@ -63,6 +90,100 @@ describe('RunbookPanel', () => {
     expect(chips.map((chip) => chip.getAttribute('data-covered'))).toEqual(['true', 'false'])
     // A key is a machine handle here and nowhere else: `data-`/`title`, never visible text.
     expect(screen.getByTestId('runbook-panel').textContent).not.toContain('planning.decomposition')
+  })
+
+  // Fix round 1, Critical: a click adopts WHAT WAS CLICKED. Approving the pending proposal is right
+  // only when the person clicked the runbook that proposal is about; every other click is a
+  // by-hand adoption, and the proposal stays for the timeline.
+  describe('a pending proposal (fix round 1, Critical)', () => {
+    const pending = { id: 'd1', key: 'security-review', name: 'Security review' }
+    const recommended = view({
+      recommendations: [option('security-review', 'Security review'), option('bug-fix', 'Bug fix')],
+      all: [option('security-review', 'Security review'), option('bug-fix', 'Bug fix')],
+      pendingDecision: pending,
+    })
+
+    it('approves the decision when the person clicks the runbook it is about', async () => {
+      const { urls } = stubFetch()
+      render(<RunbookPanel workspaceId="w1" view={recommended} />)
+      await act(async () => {
+        fireEvent.click(screen.getAllByTestId('runbook-adopt')[0] as HTMLButtonElement)
+      })
+      expect(urls).toEqual(['/api/w/w1/supervisor/decisions/d1/approve'])
+    })
+
+    it('adopts by hand when the person clicks a DIFFERENT runbook, leaving the proposal waiting', async () => {
+      const { urls } = stubFetch()
+      render(<RunbookPanel workspaceId="w1" view={recommended} />)
+      await act(async () => {
+        fireEvent.click(screen.getAllByTestId('runbook-adopt')[1] as HTMLButtonElement)
+      })
+      expect(urls).toEqual(['/api/w/w1/runbook'])
+    })
+
+    it('adopts by hand from the picker too, and says the proposal is still waiting', async () => {
+      const { urls } = stubFetch()
+      render(<RunbookPanel workspaceId="w1" view={recommended} />)
+      // Said BEFORE the click, which is when it is useful: the name, never the key, and it points
+      // at the one surface that can answer the proposal.
+      const note = screen.getByTestId('runbook-pending-note')
+      expect(note.textContent).toContain('Security review')
+      expect(note.textContent).toContain('timeline')
+      expect(note.textContent).not.toContain('security-review')
+
+      fireEvent.change(screen.getByTestId('runbook-picker'), { target: { value: 'bug-fix' } })
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('runbook-picker-adopt'))
+      })
+      expect(urls).toEqual(['/api/w/w1/runbook'])
+    })
+
+    it('says nothing about a proposal the project has already adopted', () => {
+      render(
+        <RunbookPanel
+          workspaceId="w1"
+          view={view({
+            adopted: { ...option('security-review', 'Security review'), why: null },
+            all: [option('security-review', 'Security review'), option('bug-fix', 'Bug fix')],
+            pendingDecision: pending,
+          })}
+        />,
+      )
+      expect(screen.queryByTestId('runbook-pending-note')).toBeNull()
+    })
+  })
+
+  // Fix round 1, minor 7: the picker offers what you could switch TO.
+  it('leaves the adopted runbook out of the picker, and will not adopt nothing', () => {
+    render(
+      <RunbookPanel
+        workspaceId="w1"
+        view={view({
+          adopted: { ...option('feature-delivery', 'Feature delivery'), why: null },
+          all: [option('feature-delivery', 'Feature delivery'), option('bug-fix', 'Bug fix')],
+        })}
+      />,
+    )
+    const options = [...screen.getByTestId('runbook-picker').querySelectorAll('option')].map((node) => node.getAttribute('value'))
+    expect(options).toEqual(['', 'bug-fix'])
+    expect((screen.getByTestId('runbook-picker-adopt') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(screen.getByTestId('runbook-picker'), { target: { value: 'bug-fix' } })
+    expect((screen.getByTestId('runbook-picker-adopt') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('clears the picker once the write lands, so the box does not claim a choice that happened', async () => {
+    stubFetch()
+    render(
+      <RunbookPanel
+        workspaceId="w1"
+        view={view({ recommendations: [option('bug-fix', 'Bug fix')], all: [option('bug-fix', 'Bug fix')] })}
+      />,
+    )
+    fireEvent.change(screen.getByTestId('runbook-picker'), { target: { value: 'bug-fix' } })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('runbook-picker-adopt'))
+    })
+    expect((screen.getByTestId('runbook-picker') as HTMLSelectElement).value).toBe('')
   })
 
   it('renders nothing at all when there is no runbook and nothing to recommend', () => {

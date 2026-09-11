@@ -1,4 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
+import { adoptRunbook, syncRunbooks } from '@slave-of-ai/control'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildTasksSnapshot } from '../../src/server/tasks.js'
 import { GET as tasksGET } from '../../src/app/api/w/[workspaceId]/tasks/route.js'
@@ -35,6 +36,34 @@ describe('buildTasksSnapshot', () => {
 
   afterAll(async (): Promise<void> => {
     await prisma.$disconnect()
+  })
+
+  // Fix round 1, Important 2: a stage is a key in the column and a TITLE on the page. The drawer's
+  // chip printed the key, which is the one thing `docs/ia.md` rule 3 forbids, so the snapshot that
+  // already reads the workspace resolves it against the adopted runbook.
+  it('carries each task stage with the adopted runbook\'s own title for it, and null for a stage nothing lists', async (): Promise<void> => {
+    await syncRunbooks()
+    await adoptRunbook(fixture.workspaceId, 'security-review')
+    await prisma.task.create({
+      data: { workspaceId: fixture.workspaceId, title: 'Model it', description: 'x', status: 'ready', maxAttempts: 3, stage: 'threat-model' },
+    })
+    await prisma.task.create({
+      data: { workspaceId: fixture.workspaceId, title: 'Something else', description: 'x', status: 'ready', maxAttempts: 3, stage: 'shipit' },
+    })
+    await prisma.task.create({
+      data: { workspaceId: fixture.workspaceId, title: 'Hand made', description: 'x', status: 'ready', maxAttempts: 3 },
+    })
+
+    const snapshot = await buildTasksSnapshot(fixture.workspaceId)
+    const byTitle = new Map((snapshot?.tasks ?? []).map((task) => [task.title, task] as const))
+
+    expect(byTitle.get('Model it')?.stage).toBe('threat-model')
+    expect(byTitle.get('Model it')?.stageTitle).toBe('Threat model')
+    // A stage the adopted runbook does not list has no title to show -- the panel says so in words
+    // rather than falling back to the key.
+    expect(byTitle.get('Something else')?.stageTitle).toBeNull()
+    expect(byTitle.get('Hand made')?.stage).toBeNull()
+    expect(byTitle.get('Hand made')?.stageTitle).toBeNull()
   })
 
   it('names who a waiting run is waiting on, and leaves an ordinary pause alone (M36 t3)', async (): Promise<void> => {

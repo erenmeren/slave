@@ -35,15 +35,15 @@ export const WORKFORCE_TABS: readonly { readonly id: WorkforceTab; readonly labe
 ]
 
 /**
- * The Workforce page (M44 R1). Four tabs, and every panel on them is the one that was already
- * there: this milestone MOVES surfaces, it does not rewrite them (R5, and the roadmap's "extend,
- * do not rewrite"). What changed is where a person finds them -- four surfaces for "a slave" used
- * to be a sidebar row, another sidebar row, a section on the Projects home and a panel inside a
- * project.
+ * The Workforce page (M44 R1). Five tabs since M48 R7, and every panel on them is the one that was
+ * already there: that milestone MOVED surfaces, it did not rewrite them (R5, and the roadmap's
+ * "extend, do not rewrite"). What changed is where a person finds them -- four surfaces for "a
+ * slave" used to be a sidebar row, another sidebar row, a section on the Projects home and a panel
+ * inside a project; Runbooks, the fifth tab, is the way those people are asked to WORK.
  *
  * The tab lives in `?tab=`, written with `window.history.replaceState` (fix round 1). It is the
  * SMALLER of the two options: `router.replace` on an `export const dynamic = 'force-dynamic'` page
- * re-runs all eight of `workforce/page.tsx`'s loaders -- eight queries, including `buildSkillsPage`'s
+ * re-runs all eleven of `workforce/page.tsx`'s loaders -- eleven reads, including `buildSkillsPage`'s
  * disk scan -- to re-render a page whose data did not change and whose panel switch this component
  * already made in local state. `replaceState` writes the URL and nothing else, so a reload or a
  * shared link still lands on the tab, which is the whole contract. Neither stacks a history entry

@@ -3,6 +3,7 @@ import {
   NON_TERMINAL_RUN_STATUSES,
   TERMINAL,
   parseHandoffContract,
+  parseRunbookStages,
   type HandoffContract,
   type RunStatus,
   type TaskStatus,
@@ -96,8 +97,18 @@ export interface TaskBoardItem {
    */
   readonly handoff: HandoffContract | null
   /** M48 R2: the runbook stage, rendered as a chip beside the goal stamp. Null for a task no
-   *  runbook produced. */
+   *  runbook produced. The KEY -- what `title=` and `data-` carry. */
   readonly stage: string | null
+  /**
+   * That stage's TITLE off the adopted runbook (fix round 1, Important 2) -- what the chip actually
+   * prints, because a key is never visible text (`docs/ia.md` rule 3).
+   *
+   * Null in three cases the panel says the same thing about: the task has no stage, the project has
+   * adopted no runbook, or the adopted runbook does not list this stage (a task stamped by an
+   * earlier runbook, or by a plan that invented a stage). "Unlisted stage" is the honest reading of
+   * all three, and the key stays one hover away.
+   */
+  readonly stageTitle: string | null
 }
 
 export interface TasksSnapshot {
@@ -123,7 +134,10 @@ export interface TasksSnapshot {
 
 export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnapshot | null> {
   const [workspace, tasks, shellFacts] = await Promise.all([
-    prisma.workspace.findUnique({ where: { id: workspaceId } }),
+    // The runbook comes off the workspace row this function already reads (fix round 1, Important
+    // 2), not a second query: `Workspace.runbookId` is a relation, and its `stages` column is the
+    // only place a stage key has a title.
+    prisma.workspace.findUnique({ where: { id: workspaceId }, include: { runbook: { select: { stages: true } } } }),
     prisma.task.findMany({
       where: { workspaceId },
       orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
@@ -168,6 +182,15 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
     }
   }
 
+  // ONE parse for the whole board: `parseRunbookStages` validates a JSON column, and a task list
+  // of thirty would otherwise re-validate it thirty times. A column that will not parse leaves the
+  // map empty, which reads as "no title known" -- the same as no runbook at all.
+  const stageTitles = new Map<string, string>()
+  const stages = workspace.runbook === null ? null : parseRunbookStages(workspace.runbook.stages)
+  if (stages !== null && stages.ok) {
+    for (const stage of stages.value) stageTitles.set(stage.key, stage.title)
+  }
+
   return {
     workspace: { id: workspace.id, name: workspace.name, haltedReason: workspace.haltedReason, goalVersion: workspace.goalVersion },
     shellFacts,
@@ -192,6 +215,7 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         collectable: TERMINAL.includes(task.status) && task.runs.some((run) => run.worktreePath !== null),
         handoff: handoffOf(task.handoff),
         stage: task.stage,
+        stageTitle: task.stage === null ? null : (stageTitles.get(task.stage) ?? null),
         artifacts: task.artifacts.map((artifact) => ({
           id: artifact.id,
           kind: artifact.kind,

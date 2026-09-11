@@ -16,7 +16,7 @@ vi.mock('next/navigation', () => ({
 }))
 
 /**
- * The Workforce page itself is a server component that reads eight loaders, one of which opens
+ * The Workforce page itself is a server component that reads eleven loaders, one of which opens
  * Postgres and another of which scans the skills directories on disk. The wiring this file is
  * about -- WHICH filters reach the catalog read, and what the pickers are handed -- is above all
  * of that, so the loaders are stubs and the read model keeps its own integration coverage

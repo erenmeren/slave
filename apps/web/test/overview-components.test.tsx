@@ -809,7 +809,7 @@ describe('shell facts and stream state reach the project header, never the sideb
             stages: [{ key: 'design', title: 'Design', objective: 'Decide', state: 'active', taskCount: 1, capabilities: [] }],
             recommendations: [],
             all: [],
-            pendingDecisionId: null,
+            pendingDecision: null,
           },
         }}
       />,

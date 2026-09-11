@@ -27,6 +27,7 @@ export function taskItem(over: Partial<TaskBoardItem>): TaskBoardItem {
     artifacts: [],
     handoff: null,
     stage: null,
+    stageTitle: null,
     ...over,
   }
 }

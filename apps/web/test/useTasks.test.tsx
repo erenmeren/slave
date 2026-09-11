@@ -31,6 +31,7 @@ const SNAPSHOT: TasksSnapshot = {
       // M48 R1/R2: a task with no contract and no stage, which is what this fixture is.
       handoff: null,
       stage: null,
+      stageTitle: null,
       runs: [
         {
           id: 'r1',

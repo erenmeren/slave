@@ -1,6 +1,13 @@
 import { listRunbooks, loadSupervisorWorld, runbookStatus } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { capabilityIndex, recommendRunbooks, teamPlanOf, type CapabilityRecord, type Runbook } from '@slave-of-ai/domain'
+import {
+  actionSchema,
+  capabilityIndex,
+  recommendRunbooks,
+  teamPlanOf,
+  type CapabilityRecord,
+  type Runbook,
+} from '@slave-of-ai/domain'
 
 /** One runbook, as a picker row and as a recommendation. Keys never reach the page (`docs/ia.md`
  *  rule 3) except as the machine handle on `data-key`. */
@@ -31,12 +38,22 @@ export interface RunbookPanelView {
   readonly recommendations: readonly RunbookOption[]
   readonly all: readonly RunbookOption[]
   /**
-   * A `pending` `adopt_runbook` decision for this workspace, if the Supervisor has already made
-   * one. The Adopt button goes through the DECISION when there is one -- approving is what a
-   * person is being asked for, and adopting behind the proposal's back would leave it pending
-   * forever.
+   * The `pending` `adopt_runbook` proposal for this workspace, if the Supervisor has made one --
+   * its id AND the runbook it is about (fix round 1, Critical).
+   *
+   * The KEY is the load-bearing half. A click adopts what the person clicked: it goes through the
+   * DECISION only when the clicked key IS the proposed one (approving is what they are being asked
+   * for, and adopting behind the proposal's back would leave it pending forever), and adopts by
+   * hand otherwise. An id alone made every click an approval of whatever the Supervisor happened to
+   * have proposed.
+   *
+   * `name` rides along because the panel's note names the proposal in words and a key may never be
+   * visible text (`docs/ia.md` rule 3); it is the name the DECISION was made with, which is the
+   * text the person is being asked about. Null when no proposal waits -- and also when the stored
+   * action cannot be read as an `adopt_runbook` one, which is the same thing to this panel: there
+   * is no key to compare a click against, so every click adopts by hand.
    */
-  readonly pendingDecisionId: string | null
+  readonly pendingDecision: { readonly id: string; readonly key: string; readonly name: string } | null
 }
 
 /**
@@ -60,10 +77,18 @@ export async function buildRunbookPanel(workspaceId: string): Promise<RunbookPan
   // owes its caller a 404) -- `buildOrganization`'s own rule.
   if (workspace === null) return null
 
-  const [all, status, { world }] = await Promise.all([
+  const [all, status, { world }, pending] = await Promise.all([
     listRunbooks(),
     runbookStatus(workspaceId),
     loadSupervisorWorld(workspaceId, new Date()),
+    // In the batch with the other three (fix round 1, minor 5): it depends on nothing any of them
+    // returns, and a fourth round trip run in series would be one more wait on every stream-driven
+    // refetch of the Overview.
+    prisma.supervisorDecision.findFirst({
+      where: { workspaceId, status: 'pending', situationKind: 'runbook_recommended' },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, action: true },
+    }),
   ])
   if (!status.ok) return null
 
@@ -87,11 +112,6 @@ export async function buildRunbookPanel(workspaceId: string): Promise<RunbookPan
   const label = labeller(world.taxonomy)
 
   const stageByKey = new Map((status.value.runbook?.stages ?? []).map((stage) => [stage.key, stage] as const))
-  const pending = await prisma.supervisorDecision.findFirst({
-    where: { workspaceId, status: 'pending', situationKind: 'runbook_recommended' },
-    orderBy: { createdAt: 'desc' },
-    select: { id: true },
-  })
 
   return {
     adopted: status.value.runbook === null ? null : option(status.value.runbook, null),
@@ -113,8 +133,24 @@ export async function buildRunbookPanel(workspaceId: string): Promise<RunbookPan
     }),
     recommendations,
     all: all.map((runbook) => option(runbook, null)),
-    pendingDecisionId: pending?.id ?? null,
+    pendingDecision: proposalOf(pending),
   }
+}
+
+/**
+ * The waiting proposal, as the panel can act on it: its id and the runbook it names.
+ *
+ * `safeParse` and not `parsedOrThrow`: the Overview must render for a project whose decision row
+ * carries an action a newer build wrote, and "I cannot read which runbook was proposed" is not a
+ * page failure -- it is a click that adopts by hand while the decision waits for the timeline.
+ */
+function proposalOf(
+  row: { readonly id: string; readonly action: unknown } | null,
+): { readonly id: string; readonly key: string; readonly name: string } | null {
+  if (row === null) return null
+  const action = actionSchema.safeParse(row.action)
+  if (!action.success || action.data.kind !== 'adopt_runbook') return null
+  return { id: row.id, key: action.data.key, name: action.data.name }
 }
 
 /** A runbook as the panel's one row shape. `why` is the recommendation's sentence and null

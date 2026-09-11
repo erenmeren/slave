@@ -182,8 +182,18 @@ export function TaskDetailPanel({
             {/* M48 R2: which stage of the adopted runbook this task belongs to, beside the goal
               * stamp because both answer "where did this task come from". A stage is a LABEL --
               * `decide()` has never read it and it is not a dependency -- so it is a chip, not a
-              * status. */}
-            {task.stage !== null && <Chip testId="task-stage-chip">{task.stage}</Chip>}
+              * status.
+              *
+              * The runbook's own TITLE for the stage, with the key in `title=` (fix round 1,
+              * Important 2): every other surface prints the words. A stage the adopted runbook
+              * does not list -- one stamped by an earlier runbook, or invented by a plan -- has no
+              * words to print, and `Unlisted stage` says exactly that instead of leaking the key
+              * (`docs/ia.md` rule 3, M44 R5). */}
+            {task.stage !== null && (
+              <Chip testId="task-stage-chip" title={task.stage}>
+                {task.stageTitle ?? 'Unlisted stage'}
+              </Chip>
+            )}
           </p>
           <h2 className="text-sm font-medium text-text-1">{task.title}</h2>
           {/* M45 R4: the domain's word, the board column's colour, and the raw status kept in
