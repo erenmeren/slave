@@ -126,6 +126,32 @@ describe('buildSupervisorTimeline', () => {
     expect(entries[0]?.lane).toBe('user_request')
   })
 
+  // M48 R7: the one entry that says how this project decided to WORK. The NAME, never the key --
+  // this line is read on the PLAN CHANGE lane beside every re-plan.
+  it('says which runbook was adopted, and which one was stopped', async (): Promise<void> => {
+    const { workspaceId } = await seedWorkspace({})
+    await appendEvent({
+      type: 'workspace.runbook_adopted',
+      workspaceId,
+      actor: 'human',
+      payload: { runbookId: 'rb-1', key: 'feature-delivery', name: 'Feature delivery' },
+    })
+    await appendEvent({
+      type: 'workspace.runbook_adopted',
+      workspaceId,
+      actor: 'human',
+      payload: { runbookId: 'rb-1', key: 'feature-delivery', name: 'Feature delivery', cleared: true },
+    })
+
+    const entries = await buildSupervisorTimeline(workspaceId)
+
+    expect(entries[0]?.lane).toBe('plan_change')
+    expect(entries[0]?.title).toBe('stopped following Feature delivery')
+    expect(entries[1]?.title).toBe('adopted Feature delivery as the way this project works')
+    // Never the key, on either line.
+    expect(entries.map((entry) => entry.title).join(' ')).not.toContain('feature-delivery')
+  })
+
   it('shows a goal set with no request as the goal it set', async (): Promise<void> => {
     const { workspaceId } = await seedWorkspace({})
     await appendEvent({

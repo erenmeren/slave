@@ -14,6 +14,7 @@ import { feedSummary, type SlaveFeedEvent } from '../lib/feedSummary'
 import { skillNameOf } from '../lib/skillName'
 import { buildProjectBrief, type ProjectBrief } from './brief'
 import { buildNeedsYou, type NeedsYouItem } from './needsYou'
+import { buildRunbookPanel, type RunbookPanelView } from './runbook'
 import { buildSupervisorTimeline, type TimelineEntry } from './timeline'
 
 // Re-exported so callers that already import from `server/overview.ts` keep working; the
@@ -297,6 +298,16 @@ export interface OverviewSnapshot {
   readonly brief: ProjectBrief
   readonly needsYou: readonly NeedsYouItem[]
   readonly timeline: readonly TimelineEntry[]
+  /**
+   * How this project works (M48 R7): the adopted runbook and where the work has got to, or -- for
+   * a project that has adopted nothing -- the runbooks its goal looks like.
+   *
+   * ON THIS SNAPSHOT for `brief`/`timeline`'s own reason (M45 erratum E19): this page owns exactly
+   * one `EventSource`, and an adoption is a `workspace.runbook_adopted` event like any other, so
+   * the panel refreshes on the refetch the page already makes. `null` only for a workspace that
+   * vanished between two reads.
+   */
+  readonly runbook: RunbookPanelView | null
 }
 
 // A task under review or in the merge queue is still active work, not a vanished one — widened
@@ -504,13 +515,17 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   // the spend total and the run rows behind it. What each still reads for itself is documented on
   // its own module: the brief's task and worker rows (a different `select` from this function's),
   // and the timeline's event page and task titles.
-  const [brief, timeline] = await Promise.all([
+  const [brief, timeline, runbook] = await Promise.all([
     buildProjectBrief(workspaceId, new Date(), {
       needsYou: needsYouItems,
       spend: spendTotal,
       spendRows,
     }),
     buildSupervisorTimeline(workspaceId, { needsYou: needsYouItems, decisions: pendingDecisions }),
+    // M48 R7: beside the other two builders rather than after them -- it opens a Supervisor world
+    // transaction of its own, and a third round trip run in series would be one more wait on every
+    // stream-driven refetch of this page.
+    buildRunbookPanel(workspaceId),
   ])
   // Dead in practice -- the missing-workspace case returned above -- but the compiler cannot see
   // that across two reads, and narrowing is honest where a cast would not be.
@@ -676,5 +691,6 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
     brief,
     needsYou: brief.needsYou,
     timeline,
+    runbook,
   }
 }

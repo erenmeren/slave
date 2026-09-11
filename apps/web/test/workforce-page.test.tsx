@@ -37,6 +37,9 @@ vi.mock('../src/server/org.js', () => ({
   listCapabilityTaxonomy: async () => [],
   listWorkforceCatalogPage: (filters?: unknown) => listWorkforceCatalogPage(filters),
   listTemplates: () => listTemplates(),
+  // M48 R7: the fifth tab's rows. Empty here -- these cases are about which filters reach the
+  // catalog read, and the Runbooks tab has its own file (`workforce-runbooks.test.tsx`).
+  listRunbookRows: async () => [],
 }))
 
 vi.mock('../src/server/skills.js', () => ({ buildSkillsPage: async () => skillsPage() }))
@@ -145,6 +148,7 @@ function TestWorkforceClient(
       catalogImports={[]}
       skills={skillsPage()}
       taxonomy={[]}
+      runbooks={[]}
       {...props}
     />
   )
@@ -159,12 +163,13 @@ afterEach(() => {
 describe('WorkforceClient tabs (M44 R1)', () => {
   // The four surfaces the M44 audit found for "a slave" -- a sidebar row, another sidebar row, a
   // section on the Projects home and a panel inside a project -- are four tabs on one page now.
-  it('renders the slaves table by default, with the other three tabs beside it', () => {
+  it('renders the slaves table by default, with the other four tabs beside it', () => {
     render(<TestWorkforceClient />)
     expect(screen.getByTestId('data-table')).toBeTruthy()
     expect(screen.getByTestId('worker-row-button').textContent).toContain('Alex')
     expect(screen.getByTestId('workforce-tab-slaves').getAttribute('aria-selected')).toBe('true')
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Slaves', 'Departments', 'Catalog', 'Skills'])
+    // FIVE since M48 R7 added Runbooks, last.
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Slaves', 'Departments', 'Catalog', 'Skills', 'Runbooks'])
   })
 
   it('switches to the Departments tab and renders a DepartmentsTable row', () => {
@@ -206,6 +211,45 @@ describe('WorkforceClient tabs (M44 R1)', () => {
     expect(screen.getByTestId('skill-state-s1')).toBeTruthy()
     expect(screen.getByTestId('skill-provider')).toBeTruthy()
     expect(screen.getByTestId('provider-name-p1').textContent).toBe('plugin:superpowers')
+  })
+
+  // M48 R7: the fifth tab, and the only enumeration of the strip anywhere (E13) is the case above.
+  it('renders the runbooks on the Runbooks tab', () => {
+    render(
+      <TestWorkforceClient
+        initialTab="runbooks"
+        runbooks={[
+          {
+            id: 'r1',
+            key: 'feature-delivery',
+            name: 'Feature delivery',
+            description: 'Decide the shape, build it, prove it.',
+            keywords: [],
+            requiredCapabilities: [],
+            optionalCapabilities: [],
+            stages: [
+              {
+                key: 'design',
+                title: 'Design',
+                objective: 'Decide the shape.',
+                capabilities: [],
+                dependsOn: [],
+                expectedOutputs: [],
+                gates: [],
+                retry: null,
+                escalation: null,
+              },
+            ],
+            source: 'seed',
+            sourceTemplateId: null,
+            sourceTemplateName: null,
+            workspaceCount: 1,
+          },
+        ]}
+      />,
+    )
+    expect(screen.getByTestId('workforce-tab-runbooks').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('runbook-row').getAttribute('data-key')).toBe('feature-delivery')
   })
 
   // The tab is in the URL the way the Graph page keeps its mode: `/skills` redirects to a tab, and

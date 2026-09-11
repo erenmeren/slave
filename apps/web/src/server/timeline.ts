@@ -236,6 +236,16 @@ function titleFor(
         titles,
       )
     }
+    // M48 R5/R7: a runbook adopted, or stopped. The payload's `title` is not a field this event
+    // carries, so without a case of its own it would read as its own type name on the PLAN CHANGE
+    // lane -- and this is the one entry that says how the project decided to work.
+    case 'workspace.runbook_adopted': {
+      const name = payload['name']
+      const cleared = payload['cleared'] === true
+      // The NAME, never the key: this line is read on the Overview's PLAN CHANGE lane.
+      const what = typeof name === 'string' && name !== '' ? name : 'a runbook'
+      return cleared ? `stopped following ${what}` : `adopted ${what} as the way this project works`
+    }
     default: {
       const title = payload['title']
       return typeof title === 'string' && title !== '' ? title : readableEventType(type)

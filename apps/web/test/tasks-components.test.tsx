@@ -37,6 +37,10 @@ const task = (over: Partial<TaskBoardItem>): TaskBoardItem => ({
   collectable: false,
   artifacts: [],
   integratedAt: null,
+  // M48 R1/R2: a hand-made task has neither a contract nor a stage, which is what this fixture is.
+  // The handoff group and the stage chip have their own file (`task-detail-handoff.test.tsx`).
+  handoff: null,
+  stage: null,
   ...over,
 })
 

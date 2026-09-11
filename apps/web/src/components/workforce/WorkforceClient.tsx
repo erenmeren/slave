@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import type { CapabilityRecord } from '@slave-of-ai/domain'
-import type { AllSlavesPage, CatalogRowView, ProjectTeamRow, RosterCompany, WorkforceCatalogView } from '../../server/org'
+import type { AllSlavesPage, CatalogRowView, ProjectTeamRow, RosterCompany, RunbookRowView, WorkforceCatalogView } from '../../server/org'
 import type { OverviewSnapshot, SlaveCardData } from '../../server/overview'
 import type { SkillsPage } from '../../server/skills'
 import { AllSlavesTable } from '../AllSlavesTable'
@@ -13,6 +13,7 @@ import { DepartmentsTable } from '../DepartmentsTable'
 import { SkillsClient } from '../SkillsClient'
 import { SlavePanel } from '../SlavePanel'
 import { NewSlaveDrawer } from '../slaves/NewSlaveDrawer'
+import { RunbooksTab } from './RunbooksTab'
 import { WorkforceCatalog } from './WorkforceCatalog'
 import { Alert } from '../ui/Alert'
 import { Button } from '../ui/Button'
@@ -21,13 +22,16 @@ import { PageShell } from '../ui/PageShell'
 import { Panel } from '../ui/Panel'
 import { Tabs } from '../ui/Tabs'
 
-export type WorkforceTab = 'slaves' | 'departments' | 'catalog' | 'skills'
+export type WorkforceTab = 'slaves' | 'departments' | 'catalog' | 'skills' | 'runbooks'
 
 export const WORKFORCE_TABS: readonly { readonly id: WorkforceTab; readonly label: string }[] = [
   { id: 'slaves', label: 'Slaves' },
   { id: 'departments', label: 'Departments' },
   { id: 'catalog', label: 'Catalog' },
   { id: 'skills', label: 'Skills' },
+  // M48 R7, LAST: a runbook is a way of WORKING, which is what you look for after you know who is
+  // here and what they are made of.
+  { id: 'runbooks', label: 'Runbooks' },
 ]
 
 /**
@@ -57,6 +61,7 @@ export function WorkforceClient({
   catalogImports,
   skills,
   taxonomy,
+  runbooks,
 }: {
   readonly initialTab: WorkforceTab
   readonly slaves: AllSlavesPage
@@ -69,8 +74,11 @@ export function WorkforceClient({
   readonly catalogImports: readonly CatalogImportRow[]
   readonly skills: SkillsPage
   /** The capability taxonomy (M47 §2), read once by the page: what the catalog's profile drawer
-   *  resolves a row's `capabilityKeys` into words with. */
+   *  resolves a row's `capabilityKeys` into words with -- and, since M48, a runbook stage's own
+   *  capabilities too. */
   readonly taxonomy: readonly CapabilityRecord[]
+  /** Every runbook (M48 R7) -- read by the page beside the taxonomy that labels their stages. */
+  readonly runbooks: readonly RunbookRowView[]
 }): React.JSX.Element {
   const searchParams = useSearchParams()
   const [tab, setTab] = useState<WorkforceTab>(initialTab)
@@ -173,6 +181,7 @@ export function WorkforceClient({
         </div>
       )}
       {tab === 'skills' && <SkillsClient page={skills} />}
+      {tab === 'runbooks' && <RunbooksTab runbooks={runbooks} taxonomy={taxonomy} />}
       <NewSlaveDrawer
         open={newOpen}
         onClose={() => setNewOpen(false)}

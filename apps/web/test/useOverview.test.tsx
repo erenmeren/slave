@@ -61,6 +61,8 @@ const SNAPSHOT: OverviewSnapshot = {
   },
   needsYou: [],
   timeline: [],
+  // M48 R7: nothing adopted and nothing to recommend -- this hook's cases are about refetching.
+  runbook: null,
 }
 
 /** Minimal EventSource stand-in: capture instances, let tests push messages and errors. */

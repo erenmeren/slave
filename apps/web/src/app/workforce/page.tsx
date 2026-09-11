@@ -5,6 +5,7 @@ import {
   listCompanies,
   listProjectTeams,
   listRoster,
+  listRunbookRows,
   listTemplates,
   listWorkforceCatalogPage,
   listWorkspaceNames,
@@ -15,7 +16,7 @@ import { WorkforceClient, type WorkforceTab } from '../../components/workforce/W
 
 export const dynamic = 'force-dynamic'
 
-const TAB_IDS: readonly WorkforceTab[] = ['slaves', 'departments', 'catalog', 'skills']
+const TAB_IDS: readonly WorkforceTab[] = ['slaves', 'departments', 'catalog', 'skills', 'runbooks']
 
 /** Next hands a repeated param (`?capability=a&capability=b`) as an array; the catalog's filters
  *  are one value each, so the first wins -- the same thing `URLSearchParams.get` does for the
@@ -64,7 +65,7 @@ export default async function WorkforcePage({
   const tab = typeof params.tab === 'string' ? params.tab : undefined
   const filters = parseCatalogFilters(queryOf(params))
   const filtered = Object.keys(filters).length > 0
-  const [slaves, teams, workspaces, companies, roster, catalog, allTemplates, catalogImports, skills, taxonomy] =
+  const [slaves, teams, workspaces, companies, roster, catalog, allTemplates, catalogImports, skills, taxonomy, runbooks] =
     await Promise.all([
       listAllSlaves(),
       listProjectTeams(),
@@ -78,6 +79,10 @@ export default async function WorkforcePage({
       // M47 §2: one read, beside the catalog it labels -- the drawer resolves a row's capability
       // keys against it rather than opening a request of its own per profile.
       listCapabilityTaxonomy(),
+      // M48 R7: the fifth tab's rows, read here with the other nine rather than fetched by the
+      // component -- a runbook changes when an operator adds a file or an import runs, which is
+      // not something this page has to watch for.
+      listRunbookRows(),
     ])
   const initialTab = TAB_IDS.find((id) => id === tab) ?? 'slaves'
   return (
@@ -93,6 +98,7 @@ export default async function WorkforcePage({
       catalogImports={catalogImports}
       skills={skills}
       taxonomy={taxonomy}
+      runbooks={runbooks}
     />
   )
 }

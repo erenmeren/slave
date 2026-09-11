@@ -41,6 +41,10 @@ export type DetailsGroupName =
   // overridable field like any other, and it had no group to be edited in.
   | 'body'
   | 'advanced'
+  // M48 R7: the typed contract a task was handed -- what it is for, what counts as done, and what
+  // proof it owes. The fourteenth of R6's groups and the first that is about the WORK rather than
+  // about the worker.
+  | 'handoff'
 
 /**
  * One `Details ▾` group (M45 R4).

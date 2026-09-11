@@ -10,7 +10,9 @@ import type { TaskBoardItem } from '../server/tasks'
 import { taskStatusWord } from '../lib/tones'
 import { TASK_STATUS_TEXT, goalStampText, isStale, whyOf } from './TaskCard'
 import { Button } from './ui/Button'
+import { Chip } from './ui/Chip'
 import { DetailsGroup } from './ui/DetailsGroup'
+import { SectionLabel } from './ui/SectionLabel'
 import { TONE_TEXT } from './ui/StatusPill'
 
 interface OpenArtifact {
@@ -177,6 +179,11 @@ export function TaskDetailPanel({
             {isStale(task.goalVersion, workspaceGoalVersion) && (
               <span data-testid="task-panel-stale" className="uppercase tracking-wide text-tone-waiting">stale</span>
             )}
+            {/* M48 R2: which stage of the adopted runbook this task belongs to, beside the goal
+              * stamp because both answer "where did this task come from". A stage is a LABEL --
+              * `decide()` has never read it and it is not a dependency -- so it is a chip, not a
+              * status. */}
+            {task.stage !== null && <Chip testId="task-stage-chip">{task.stage}</Chip>}
           </p>
           <h2 className="text-sm font-medium text-text-1">{task.title}</h2>
           {/* M45 R4: the domain's word, the board column's colour, and the raw status kept in
@@ -210,6 +217,22 @@ export function TaskDetailPanel({
         >
           {why}
         </span>
+      )}
+
+      {/* M48 R7: the contract this task was handed, directly after the identity block and before
+        * anything about a RUN -- what the work is for is what a person reads first, and it is the
+        * only thing here that a reviewer judges the diff against. Open by default for the same
+        * reason. Every list is omitted when it is empty: an empty heading is a promise the planner
+        * did not make (`renderHandoff`'s own rule, which the prompt follows too). */}
+      {task.handoff !== null && (
+        <DetailsGroup group="handoff" title="Handoff" defaultOpen>
+          <HandoffField label="Objective" value={task.handoff.objective} />
+          <HandoffField label="Expected output" value={task.handoff.expectedOutput} />
+          <HandoffList label="Acceptance criteria" items={task.handoff.acceptanceCriteria} />
+          <HandoffList label="Known constraints" items={task.handoff.knownConstraints} />
+          <HandoffList label="Evidence required" items={task.handoff.evidenceRequired} />
+          <HandoffList label="Context references" items={task.handoff.contextReferences} />
+        </DetailsGroup>
       )}
 
       {/* The one group this panel leads with: what its runs are doing right now. */}
@@ -515,5 +538,34 @@ export function TaskDetailPanel({
         </Link>
       </DetailsGroup>
     </aside>
+  )
+}
+
+/** One required field of a handoff: a caption and the planner's sentence, interpolated as children
+ *  so another party's text is characters on the page and never elements (spec §1). */
+function HandoffField({ label, value }: { readonly label: string; readonly value: string }): React.JSX.Element {
+  return (
+    <div data-testid="handoff-field" data-field={label} className="flex flex-col gap-0.5">
+      <SectionLabel>{label}</SectionLabel>
+      <span className="text-xs text-text-1">{value}</span>
+    </div>
+  )
+}
+
+/** One of a handoff's four lists, or NOTHING when it is empty -- an empty heading reads as a field
+ *  somebody left blank, and a planner that wrote no constraints did not leave one blank. */
+function HandoffList({ label, items }: { readonly label: string; readonly items: readonly string[] }): React.JSX.Element | null {
+  if (items.length === 0) return null
+  return (
+    <div data-testid="handoff-field" data-field={label} className="flex flex-col gap-0.5">
+      <SectionLabel>{label}</SectionLabel>
+      <ul className="flex list-disc flex-col gap-0.5 pl-4">
+        {items.map((item) => (
+          <li key={item} className="text-xs text-text-2">
+            {item}
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }

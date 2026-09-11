@@ -28,6 +28,9 @@ const SNAPSHOT: TasksSnapshot = {
       collectable: false,
       artifacts: [],
       integratedAt: null,
+      // M48 R1/R2: a task with no contract and no stage, which is what this fixture is.
+      handoff: null,
+      stage: null,
       runs: [
         {
           id: 'r1',

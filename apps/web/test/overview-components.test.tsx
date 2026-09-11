@@ -90,6 +90,9 @@ const snapshot = (slaves: readonly SlaveCardData[]): OverviewSnapshot => ({
   },
   needsYou: [],
   timeline: [],
+  // M48 R7: a project that has adopted nothing and has nothing to recommend renders no panel at
+  // all -- which is what every case in this file is about the absence of.
+  runbook: null,
 })
 
 describe('SlaveCard provider chip', () => {
@@ -787,6 +790,34 @@ describe('shell facts and stream state reach the project header, never the sideb
     const order = [...shell.children].map((child) => child.getAttribute('data-testid')).filter((id) => id !== null)
     expect(order).toEqual(['brief', 'strip', 'supervisor-request', 'supervisor-timeline', 'team', 'overview-advanced'])
     expect(screen.getByTestId('supervisor-timeline').contains(screen.getByTestId('timeline'))).toBe(true)
+  })
+
+  // M48 R7: how this project works goes BETWEEN what you asked for and what happened -- and a
+  // project nobody has an opinion about (the fixture above) gets no panel at all.
+  it('puts the runbook panel between the request box and the timeline, and nothing when there is none', () => {
+    render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+    expect(screen.queryByTestId('runbook-panel')).toBeNull()
+
+    render(
+      <OverviewClient
+        workspaceId="w1"
+        initial={{
+          ...PUBLISHED,
+          runbook: {
+            adopted: { key: 'feature-delivery', name: 'Feature delivery', description: 'd', stageCount: 5, source: 'seed', why: null },
+            currentStage: 'design',
+            stages: [{ key: 'design', title: 'Design', objective: 'Decide', state: 'active', taskCount: 1, capabilities: [] }],
+            recommendations: [],
+            all: [],
+            pendingDecisionId: null,
+          },
+        }}
+      />,
+    )
+    const order = [...screen.getAllByTestId('page-shell')[1]!.children]
+      .map((child) => child.getAttribute('data-testid'))
+      .filter((id) => id !== null)
+    expect(order).toEqual(['brief', 'strip', 'supervisor-request', 'runbook-panel', 'supervisor-timeline', 'team', 'overview-advanced'])
   })
 
   // M45 plan erratum E22: NOTHING was removed. All four panels are one disclosure lower, and a

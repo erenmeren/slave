@@ -1,5 +1,12 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { NON_TERMINAL_RUN_STATUSES, TERMINAL, type RunStatus, type TaskStatus } from '@slave-of-ai/domain'
+import {
+  NON_TERMINAL_RUN_STATUSES,
+  TERMINAL,
+  parseHandoffContract,
+  type HandoffContract,
+  type RunStatus,
+  type TaskStatus,
+} from '@slave-of-ai/domain'
 import { artifactLabel } from '../lib/artifactLabel'
 import { buildShellFacts, type ShellFacts } from './shell'
 
@@ -81,6 +88,16 @@ export interface TaskBoardItem {
   readonly collectable: boolean
   /** M23 C1: the verify logs `apps/orchestrator/src/verify.ts` wrote for this task, newest first. */
   readonly artifacts: readonly TaskArtifactSummary[]
+  /**
+   * M48 R1: the typed handoff, parsed server-side so the panel never imports a zod schema. Null
+   * for a hand-made task, one planned before this milestone, or a column that will not parse --
+   * all three mean "there is no contract to show", and none of them is a failure this panel can
+   * do anything about.
+   */
+  readonly handoff: HandoffContract | null
+  /** M48 R2: the runbook stage, rendered as a chip beside the goal stamp. Null for a task no
+   *  runbook produced. */
+  readonly stage: string | null
 }
 
 export interface TasksSnapshot {
@@ -173,6 +190,8 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         // one of its runs. Computed here, not in the panel -- the panel never imports `TERMINAL`
         // from `@slave-of-ai/domain`.
         collectable: TERMINAL.includes(task.status) && task.runs.some((run) => run.worktreePath !== null),
+        handoff: handoffOf(task.handoff),
+        stage: task.stage,
         artifacts: task.artifacts.map((artifact) => ({
           id: artifact.id,
           kind: artifact.kind,
@@ -211,4 +230,13 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
       }
     }),
   }
+}
+
+/** A stored `Task.handoff` column as a contract, or null. A row that will not parse is null rather
+ *  than a throw: the board must render for every task on it, and a malformed contract is a planner
+ *  bug for `concludePlanning` to refuse by name -- not a reason this page cannot open. */
+function handoffOf(value: unknown): HandoffContract | null {
+  if (value === null || value === undefined) return null
+  const parsed = parseHandoffContract(value)
+  return parsed.ok ? parsed.value : null
 }

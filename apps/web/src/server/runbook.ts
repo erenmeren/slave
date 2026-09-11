@@ -1,0 +1,140 @@
+import { listRunbooks, loadSupervisorWorld, runbookStatus } from '@slave-of-ai/control'
+import { prisma } from '@slave-of-ai/db/client'
+import { capabilityIndex, recommendRunbooks, teamPlanOf, type CapabilityRecord, type Runbook } from '@slave-of-ai/domain'
+
+/** One runbook, as a picker row and as a recommendation. Keys never reach the page (`docs/ia.md`
+ *  rule 3) except as the machine handle on `data-key`. */
+export interface RunbookOption {
+  readonly key: string
+  readonly name: string
+  readonly description: string
+  readonly stageCount: number
+  readonly source: 'seed' | 'persona' | 'human'
+  /** Present on a recommendation only: the sentence the rules wrote, which is the same sentence a
+   *  pending `adopt_runbook` decision carries. */
+  readonly why: string | null
+}
+
+export interface RunbookStageView {
+  readonly key: string
+  readonly title: string
+  readonly objective: string
+  readonly state: 'done' | 'active' | 'pending' | 'missing'
+  readonly taskCount: number
+  readonly capabilities: readonly { readonly key: string; readonly label: string; readonly covered: boolean }[]
+}
+
+export interface RunbookPanelView {
+  readonly adopted: RunbookOption | null
+  readonly currentStage: string | null
+  readonly stages: readonly RunbookStageView[]
+  readonly recommendations: readonly RunbookOption[]
+  readonly all: readonly RunbookOption[]
+  /**
+   * A `pending` `adopt_runbook` decision for this workspace, if the Supervisor has already made
+   * one. The Adopt button goes through the DECISION when there is one -- approving is what a
+   * person is being asked for, and adopting behind the proposal's back would leave it pending
+   * forever.
+   */
+  readonly pendingDecisionId: string | null
+}
+
+/**
+ * The Overview's runbook panel (M48 R7).
+ *
+ * ONE derivation for both halves of the panel, and both halves come from functions a decision was
+ * made from: `recommendRunbooks` is what `observe` raises `runbook_recommended` with, and
+ * `runbookStatus` is what `runbook-status` prints. Two computations of "which runbook fits" or "what
+ * stage is this project on" would eventually disagree in front of a person -- and the one a person
+ * could act on would be the other one.
+ *
+ * The four stage STATES are `runbookStatus`' own (`done` / `active` / `pending` / `missing`), read
+ * and never re-derived here: that ladder asks where the WORK is before it asks what each stage
+ * holds, and a second reading off the task counts is exactly how "current stage: Design" came to sit
+ * above a row saying Design had been skipped (M48 t2 fix round 1).
+ */
+export async function buildRunbookPanel(workspaceId: string): Promise<RunbookPanelView | null> {
+  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true, goal: true } })
+  // The one null this builder has, decided HERE: the world loader below opens a transaction whose
+  // `findUniqueOrThrow` raises for a missing workspace (right for a tick, wrong for a route, which
+  // owes its caller a 404) -- `buildOrganization`'s own rule.
+  if (workspace === null) return null
+
+  const [all, status, { world }] = await Promise.all([
+    listRunbooks(),
+    runbookStatus(workspaceId),
+    loadSupervisorWorld(workspaceId, new Date()),
+  ])
+  if (!status.ok) return null
+
+  const rosterCapabilities = [...new Set(world.slaves.flatMap((slave) => slave.capabilities))]
+  const recommendations =
+    status.value.runbook !== null || workspace.goal === null || workspace.goal === ''
+      ? []
+      : recommendRunbooks(workspace.goal, all, rosterCapabilities, world.taxonomy).map((recommendation) =>
+          option(recommendation.runbook, recommendation.rationale),
+        )
+
+  // M47's own coverage reading, reused rather than re-derived: `teamPlanOf` is the function the
+  // Organization page and `candidates` both answer "who covers what" from. The roster's own keys
+  // join it because `teamPlanOf` only speaks about capabilities the BOARD asks for, and a stage
+  // asks for capabilities no task may have been written for yet.
+  const plan = teamPlanOf(world)
+  const covered = new Set([...plan.covered.map((entry) => entry.capability), ...rosterCapabilities])
+
+  // ONE index for the whole render (the M47 carry): `capabilityLabel` builds a fresh Map out of the
+  // taxonomy per call, and this view labels a capability per stage of a runbook with up to twelve.
+  const label = labeller(world.taxonomy)
+
+  const stageByKey = new Map((status.value.runbook?.stages ?? []).map((stage) => [stage.key, stage] as const))
+  const pending = await prisma.supervisorDecision.findFirst({
+    where: { workspaceId, status: 'pending', situationKind: 'runbook_recommended' },
+    orderBy: { createdAt: 'desc' },
+    select: { id: true },
+  })
+
+  return {
+    adopted: status.value.runbook === null ? null : option(status.value.runbook, null),
+    currentStage: status.value.currentStage,
+    stages: status.value.stages.map((stage) => {
+      const source = stageByKey.get(stage.key)
+      return {
+        key: stage.key,
+        title: stage.title,
+        objective: source?.objective ?? '',
+        state: stage.state,
+        taskCount: stage.taskCount,
+        capabilities: (source?.capabilities ?? []).map((key) => ({
+          key,
+          label: label(key),
+          covered: covered.has(key),
+        })),
+      }
+    }),
+    recommendations,
+    all: all.map((runbook) => option(runbook, null)),
+    pendingDecisionId: pending?.id ?? null,
+  }
+}
+
+/** A runbook as the panel's one row shape. `why` is the recommendation's sentence and null
+ *  everywhere else -- a picker row has no reason to offer, and inventing one would be a rule
+ *  nobody wrote. */
+function option(runbook: Runbook, why: string | null): RunbookOption {
+  return {
+    key: runbook.key,
+    name: runbook.name,
+    description: runbook.description,
+    stageCount: runbook.stages.length,
+    source: runbook.source,
+    why,
+  }
+}
+
+/** `capabilityLabel`'s answer over ONE index, with the key itself as the fallback -- `server/
+ *  organization.ts`'s own helper, for its own reason: a stage written by a newer build can name a
+ *  key this bundle's taxonomy has never heard of. */
+function labeller(taxonomy: readonly CapabilityRecord[]): (key: string) => string {
+  const index = capabilityIndex(taxonomy)
+  return (key) => index.get(key)?.label ?? key
+}

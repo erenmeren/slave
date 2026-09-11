@@ -4,11 +4,13 @@ import {
   capabilitiesOf,
   listCapabilities,
   listCatalogImports as listCatalogImportRows,
+  listRunbooks,
   listWorkforceCatalog,
   readTemplateProfile,
   type ControlRefusal,
   type ProviderCapabilities,
   type ProviderKind,
+  type RunbookView,
   type TemplateProfileView,
   type WorkforceCatalogFacets,
   type WorkforceCatalogFilters,
@@ -937,6 +939,38 @@ export async function listWorkforceCatalogPage(filters: WorkforceCatalogFilters 
  *  before M46; nothing they used has moved or changed shape. */
 export async function listTemplates(): Promise<readonly CatalogRowView[]> {
   return (await listWorkforceCatalogPage()).rows
+}
+
+/** One runbook as the Workforce tab reads it (M48 R7): the whole runbook, plus the NAME of the
+ *  specialist a `persona` one was translated from. The name and not the id, because the drawer says
+ *  where a process came from and an id says nothing to the person reading it (`docs/ia.md` rule 3);
+ *  null for a `seed` or `human` runbook, which came from nobody. */
+export interface RunbookRowView extends RunbookView {
+  readonly sourceTemplateName: string | null
+}
+
+/**
+ * Every runbook, key ascending (M48 R7) -- the Workforce tab's rows, under the web's own name for
+ * the control verb (the `listCapabilityTaxonomy` idiom, and the reason every loader this page uses
+ * goes through this module).
+ *
+ * ONE extra query, and only when a `persona` runbook exists: the template names are looked up in a
+ * single `findMany` over the ids actually present rather than once per row.
+ */
+export async function listRunbookRows(): Promise<readonly RunbookRowView[]> {
+  const rows = await listRunbooks()
+  const templateIds = [...new Set(rows.map((row) => row.sourceTemplateId).filter((id): id is string => id !== null))]
+  const templates =
+    templateIds.length === 0
+      ? []
+      : await prisma.slaveTemplate.findMany({ where: { id: { in: templateIds } }, select: { id: true, name: true } })
+  const nameById = new Map(templates.map((template) => [template.id, template.name]))
+  return rows.map((row) => ({
+    ...row,
+    // A template deleted since the translation leaves the runbook standing and the name unknown --
+    // the row is still a process somebody can follow, and hiding it would lose it.
+    sourceTemplateName: row.sourceTemplateId === null ? null : (nameById.get(row.sourceTemplateId) ?? null),
+  }))
 }
 
 /** One template's whole specialist profile, for the drawer (plan erratum E10): far too much to put

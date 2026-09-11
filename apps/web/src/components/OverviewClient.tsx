@@ -14,6 +14,7 @@ import { postControl } from '../lib/postControl'
 import { TopStrip } from './TopStrip'
 import { OverviewAdvanced } from './project/OverviewAdvanced'
 import { ProjectBrief } from './project/ProjectBrief'
+import { RunbookPanel } from './project/RunbookPanel'
 import { SupervisorRequest } from './project/SupervisorRequest'
 import { SupervisorTimeline } from './project/SupervisorTimeline'
 import { Alert } from './ui/Alert'
@@ -258,6 +259,8 @@ export function OverviewClient({
           <TopStrip snapshot={view} />
           {/* M45 R3 */}
           <SupervisorRequest workspaceId={workspaceId} />
+          {/* M48 R7: how this project works, between what you asked for and what happened. */}
+          <RunbookPanel workspaceId={workspaceId} view={view.runbook} />
           {/* M45 R2 */}
           <SupervisorTimeline workspaceId={workspaceId} entries={view.timeline} needsYou={view.needsYou} />
           <section id="team" data-testid="team" className="px-[20px] pt-[16px]">
