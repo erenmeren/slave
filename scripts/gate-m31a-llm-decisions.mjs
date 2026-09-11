@@ -415,8 +415,12 @@ try {
   await waitVisible(page.getByTestId('sim-strip'), `"${SIM_NAME}"'s run page's strip`)
   {
     const stripText = await page.getByTestId('sim-strip').textContent()
-    if (!stripText?.includes(`llm provider · claude_code · ${MODEL_NAME}`)) {
-      await fail(`sim-strip reads ${JSON.stringify(stripText)}, expected it to contain "llm provider · claude_code · ${MODEL_NAME}"`)
+    // M44 R5: a provider KIND is a column value, and no surface prints one at a person any more --
+    // `providerLabel` turns `claude_code` into `Claude Code`, and `gate:m44-ux-foundation`'s raw
+    // token blocklist would fail the page that still did. This gate had expected the raw member
+    // ever since and has been red on `main` for it (M47 final review, Minor 11).
+    if (!stripText?.includes(`llm provider · Claude Code · ${MODEL_NAME}`)) {
+      await fail(`sim-strip reads ${JSON.stringify(stripText)}, expected it to contain "llm provider · Claude Code · ${MODEL_NAME}"`)
     }
   }
   await armAutoRunOnPage(5)

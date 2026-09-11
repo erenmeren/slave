@@ -21,6 +21,14 @@ describe('CAPABILITY_SEED', () => {
     }
   })
 
+  // Final review, Minor 10: the file's own doc comment says KEY ASCENDING -- which is the order
+  // `listCapabilities()` reads the table back in -- and a hand-maintained list drifts out of the
+  // order it claims the moment somebody appends a row at the bottom.
+  it('is sorted by key ascending, the order the table is read back in', () => {
+    const keys = CAPABILITY_SEED.map((record) => record.key)
+    expect(keys).toEqual([...keys].sort())
+  })
+
   it("stores each key's own prefix as its domain, so a facet list is a groupBy", () => {
     for (const record of CAPABILITY_SEED) {
       expect(record.key.split('.')[0], record.key).toBe(record.domain)

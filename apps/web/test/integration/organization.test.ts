@@ -1,4 +1,4 @@
-import { syncCapabilityTaxonomy } from '@slave-of-ai/control'
+import { loadSupervisorWorld, syncCapabilityTaxonomy } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildOrganization, type OrganizationView } from '../../src/server/organization'
@@ -143,6 +143,7 @@ describe('buildOrganization', () => {
           kind: 'hire_from_catalog',
           templateId: security.id,
           capability: 'security.application',
+          capabilityLabel: 'Application security',
           name: 'Security Reviewer',
           rationale: 'Security Reviewer provides Application security and nobody here does.',
           temporary: false,
@@ -178,6 +179,10 @@ describe('buildOrganization', () => {
 
   it('shows what the board needs, the proposals waiting on a person, and what nobody can do', async () => {
     const view = await buildOrganization(workspaceId)
+    // The `not.toBeNull()` is the assertion; the narrowing return below is only TypeScript's
+    // (final review, Minor 9). Without it a builder that started returning null would make every
+    // one of these cases pass by asserting nothing at all.
+    expect(view).not.toBeNull()
     if (view === null) return
     expect(view.needs.map((need) => need.capability)).toEqual(['security.application'])
     expect(view.needs[0]?.label).toBe('Application security')
@@ -190,6 +195,10 @@ describe('buildOrganization', () => {
 
   it('carries the advisory edges, and never anything that dispatches', async () => {
     const view = await buildOrganization(workspaceId)
+    // The `not.toBeNull()` is the assertion; the narrowing return below is only TypeScript's
+    // (final review, Minor 9). Without it a builder that started returning null would make every
+    // one of these cases pass by asserting nothing at all.
+    expect(view).not.toBeNull()
     if (view === null) return
     expect(view.hints).toEqual([
       {
@@ -209,6 +218,10 @@ describe('buildOrganization', () => {
   // capability as unstaffed while the worker holding its role sat two rows above it.
   it('never calls a settled task\'s capability a gap, however the roster stands', async () => {
     const view = await buildOrganization(workspaceId)
+    // The `not.toBeNull()` is the assertion; the narrowing return below is only TypeScript's
+    // (final review, Minor 9). Without it a builder that started returning null would make every
+    // one of these cases pass by asserting nothing at all.
+    expect(view).not.toBeNull()
     if (view === null) return
     const named = [
       ...view.needs.map((need) => need.capability),
@@ -218,6 +231,63 @@ describe('buildOrganization', () => {
     expect(named).not.toContain('data.pipelines')
     expect(named).not.toContain('qa.test-automation')
     expect(view.covered.map((one) => one.capability)).toEqual(['backend.api-design'])
+  })
+
+  /**
+   * FINAL REVIEW, IMPORTANT 2. Three readings of "what is missing" disagreed: `observe` said
+   * `ready && dependenciesDone`, `teamPlanOf` said `ready || blocked`, and this count said `ready`
+   * alone. So a BLOCKED task -- one waiting on a guardrail or a human, which staffing does not
+   * unstick -- produced a proposal no situation would ever raise, and a need row a person could not
+   * act on; and a ready task whose dependency was not integrated was counted here and not there.
+   */
+  it('is not a staffing need while the work is blocked, and counts only what the situation counted', async () => {
+    const reviewer = await prisma.slave.findFirstOrThrow({ where: { name: 'Security Reviewer', team: { workspaceId } } })
+    // A second capability the same worker provides and nobody holds the role for: under the old
+    // `ready || blocked` reading the blocked task below made it a gap on this page.
+    await prisma.slave.update({
+      where: { id: reviewer.id },
+      data: { capabilities: ['security.application', 'docs.technical-writing'] },
+    })
+    const blocked = await prisma.task.create({
+      data: {
+        workspaceId,
+        title: 'Write the integration guide',
+        description: 'seeded by the M47 organization fixture',
+        status: 'blocked',
+        requiredRole: 'dev',
+        requiredCapabilities: ['docs.technical-writing'],
+        maxAttempts: 3,
+      },
+    })
+    // A second ready task for the capability that IS a need, waiting on that blocked one: ready,
+    // but not startable, so neither the situation nor this count may include it.
+    const waiting = await prisma.task.create({
+      data: {
+        workspaceId,
+        title: 'Re-review the checkout API',
+        description: 'seeded by the M47 organization fixture',
+        status: 'ready',
+        requiredRole: 'dev',
+        requiredCapabilities: ['security.application'],
+        maxAttempts: 3,
+      },
+    })
+    await prisma.taskDependency.create({ data: { taskId: waiting.id, dependsOnTaskId: blocked.id } })
+
+    const view = await buildOrganization(workspaceId)
+    expect(view).not.toBeNull()
+    if (view === null) return
+    const named = [
+      ...view.needs.map((need) => need.capability),
+      ...view.covered.map((one) => one.capability),
+      ...view.unfillable.map((one) => one.capability),
+    ]
+    expect(named).not.toContain('docs.technical-writing')
+    // The one ready, startable task -- not the one waiting on a dependency that has not been
+    // integrated, and this is the number the stored situation's own `readyTasks` fact carries.
+    const need = view.needs.find((one) => one.capability === 'security.application')
+    expect(need?.readyTasks).toBe(1)
+    expect(need?.decisions[0]?.situation.facts.readyTasks).toBe(need?.readyTasks)
   })
 
   // Fix round 1, minor 4. A proposal whose capability somebody has since been given a role for is
@@ -250,6 +320,7 @@ describe('buildOrganization', () => {
     })
 
     const after = await buildOrganization(workspaceId)
+    expect(after).not.toBeNull()
     expect(after?.pendingElsewhere).toBe(1)
     expect(after?.needs.map((need) => need.capability)).toEqual(['security.application'])
   })
@@ -259,6 +330,16 @@ describe('buildOrganization', () => {
   it('is null when the project is deleted between the check and the world load', async () => {
     loaderThrows.value = Object.assign(new Error('record not found'), { code: 'P2025' })
     expect(await buildOrganization(workspaceId)).toBeNull()
+  })
+
+  // The fact the mock above STANDS IN FOR, asserted against the real loader (final review, Minor
+  // 9): `isRecordNotFound` reads Prisma's `P2025` off the error it actually throws, and a mock
+  // that made that code up would keep passing after the loader stopped throwing it.
+  it('is really P2025 the loader throws for a project that is not there', async () => {
+    // `loaderThrows` is null here (the `beforeEach` resets it), so the wrapper above calls straight
+    // through to the real loader -- no second module instance, and no second Prisma client.
+    loaderThrows.value = null
+    await expect(loadSupervisorWorld('nope', new Date())).rejects.toMatchObject({ code: 'P2025' })
   })
 
   it('still throws when the world load fails for any other reason', async () => {

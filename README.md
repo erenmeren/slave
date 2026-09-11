@@ -443,7 +443,15 @@ every one of them names the runtime role it projects to.
 npm run orchestrator -- capabilities list
 npm run orchestrator -- capabilities add --key legal.contracts --label "Contract review" --role legal
 npm run orchestrator -- set-capabilities --slave <id> --capabilities backend.api-design,security.application
+npm run orchestrator -- capabilities backfill --workspace <id>
 ```
+
+**Existing projects: run `capabilities backfill` once.** Every worker created before this existed
+has an empty capability set, and the cheapest way to fill a gap — somebody already here who can do
+the work and was never given the role — is the one that reads that set. The verb fills it in from
+the template each worker was hired or materialised from, adds the runtime roles those capabilities
+project to, and never touches a worker an operator has already described by hand. Without
+`--workspace` it does every project at once.
 
 A plan says what each task NEEDS; the scheduler still dispatches on one string, because a
 capability projects to a runtime role and a worker who provides the capability is given that role.

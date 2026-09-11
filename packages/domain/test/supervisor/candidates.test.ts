@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { candidateSchema, type Action, type Candidate } from '../../src/supervisor/actions.js'
-import { candidates, teamPlanOf } from '../../src/supervisor/candidates.js'
+import { candidates, isStaffableTask, teamPlanOf } from '../../src/supervisor/candidates.js'
 import { WAITING_STALE_MS } from '../../src/supervisor/constants.js'
 import { observe } from '../../src/supervisor/observe.js'
 import type { Situation } from '../../src/supervisor/situations.js'
@@ -425,7 +425,13 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
       catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false }],
     })
     const offers = candidates(situation, w)
-    expect(offers[0]?.action).toEqual({ kind: 'assign_capability', slaveId: 's1', capability: 'security.application', role: 'security' })
+    expect(offers[0]?.action).toEqual({
+      kind: 'assign_capability',
+      slaveId: 's1',
+      capability: 'security.application',
+      capabilityLabel: 'Application security',
+      role: 'security',
+    })
     expect(offers[0]?.tier).toBe('applied')
     expect(offers[0]?.why).toContain('Application security')
   })
@@ -445,6 +451,7 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
       kind: 'materialise_company_worker',
       companySlaveId: 'cs1',
       capability: 'security.application',
+      capabilityLabel: 'Application security',
       name: 'Sam',
       rationale: expect.stringContaining('Application security'),
     })
@@ -475,6 +482,7 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
       kind: 'hire_from_catalog',
       templateId: 'tpl1',
       capability: 'security.application',
+      capabilityLabel: 'Application security',
       name: 'Security Reviewer',
       rationale: expect.stringContaining('Application security'),
       temporary: false,
@@ -507,13 +515,23 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
   })
 })
 
+describe('isStaffableTask (M47 final review, Important 2)', () => {
+  it('is the situation predicate: ready, with its dependencies integrated', () => {
+    expect(isStaffableTask(task({ status: 'ready', dependenciesDone: true }))).toBe(true)
+    expect(isStaffableTask(task({ status: 'ready', dependenciesDone: false }))).toBe(false)
+    for (const status of ['backlog', 'blocked', 'running', 'reviewing', 'done', 'failed'] as const) {
+      expect(isStaffableTask(task({ status, dependenciesDone: true })), status).toBe(false)
+    }
+  })
+})
+
 describe('teamPlanOf (M47 R4)', () => {
-  it('reads the board\'s ready and blocked tasks and nothing else', () => {
+  it('reads the board\'s startable tasks and nothing else', () => {
     const w = world({
       taxonomy: TAXONOMY,
       tasks: [
         task({ id: 't1', status: 'ready', requiredCapabilities: ['security.application'] }),
-        task({ id: 't2', status: 'blocked', requiredCapabilities: ['backend.api-design'] }),
+        task({ id: 't2', status: 'ready', requiredCapabilities: ['backend.api-design'] }),
         task({ id: 't3', status: 'done', requiredCapabilities: ['qa.test-automation'] }),
       ],
       slaves: [slave({ id: 's1', runtimeRoles: ['backend'] })],
@@ -523,6 +541,26 @@ describe('teamPlanOf (M47 R4)', () => {
     expect(plan.covered).toEqual([{ capability: 'backend.api-design', by: 's1' }])
     expect(plan.proposals.map((one) => one.pick.id)).toEqual(['tpl1'])
     expect(plan.unfillable).toEqual([])
+  })
+
+  // Final review, Important 2: `teamPlanOf` used to read `ready || blocked` while `observe` read
+  // `ready && dependenciesDone`, so a BLOCKED task's capability produced a proposal nobody would
+  // ever be asked to approve -- there was no situation to hang it on -- and the Organization page
+  // showed a need row for work that is waiting on a human, not on a specialist.
+  it('is not a staffing need while the task is blocked or waiting on a dependency', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [
+        task({ id: 't1', status: 'blocked', requiredCapabilities: ['security.application'] }),
+        task({ id: 't2', status: 'ready', dependenciesDone: false, requiredCapabilities: ['backend.api-design'] }),
+      ],
+      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false }],
+    })
+    const plan = teamPlanOf(w)
+    expect(plan.proposals).toEqual([])
+    expect(plan.covered).toEqual([])
+    expect(plan.unfillable).toEqual([])
+    expect(observe(w).map((situation) => situation.kind)).not.toContain('capability_unstaffed')
   })
 
   // Fix round 1 of Task 1: one worker with two gaps is ONE proposal covering both, and each
@@ -542,6 +580,7 @@ describe('teamPlanOf (M47 R4)', () => {
         kind: 'assign_capability',
         slaveId: 's1',
         capability: key,
+        capabilityLabel: key === 'security.application' ? 'Application security' : 'API design',
         role: key === 'security.application' ? 'security' : 'backend',
       })
     }

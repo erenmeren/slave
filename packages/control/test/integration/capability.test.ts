@@ -2,6 +2,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   addCapability,
+  backfillSlaveCapabilities,
   hireFromTemplate,
   listCapabilities,
   listOrganization,
@@ -10,6 +11,7 @@ import {
   setSlaveCapabilities,
   syncCapabilityTaxonomy,
 } from '../../src/capability.js'
+import { setRuntimeRoles } from '../../src/profile.js'
 
 /**
  * The package's own truncate idiom (there is no shared helper in this directory): the project and
@@ -33,6 +35,21 @@ beforeEach(async (): Promise<void> => {
 /** The `slave.runtime_roles_changed` rows written for one worker. */
 const roleEvents = (slaveId: string) =>
   prisma.executionEvent.findMany({ where: { type: 'slave_runtime_roles_changed', slaveId } })
+
+/** The `org.changed { field: 'capabilities' }` rows written for one worker (final review, 5c/8). */
+const capabilityEvents = async (slaveId: string): Promise<{ from: string | null; to: string | null }[]> => {
+  const rows = await prisma.executionEvent.findMany({
+    where: { type: 'org_changed', slaveId },
+    orderBy: { seq: 'asc' },
+  })
+  return rows
+    .map((row) => row.payload as { field?: string; from?: string | null; to?: string | null })
+    .filter((payload) => payload.field === 'capabilities')
+    .map((payload) => ({ from: payload.from ?? null, to: payload.to ?? null }))
+}
+
+/** A role set one under the cap, so adding exactly one more crosses it. */
+const ROLES_AT_CAP = Array.from({ length: 20 }, (_, index) => `role-${String(index)}`)
 
 async function workspace(): Promise<{ workspaceId: string; teamId: string }> {
   const ws = await prisma.workspace.create({
@@ -115,6 +132,52 @@ describe('setSlaveCapabilities', () => {
     if (out.ok) return
     expect(out.error.kind).toBe('slave_not_found')
   })
+
+  // Final review, Minor 8. The role event fired on every call, so re-running the verb with the same
+  // list put a role change on a timeline where no role had changed -- and writing the capability
+  // set, the thing the operator actually asked for, was recorded nowhere at all.
+  it('records the capability change in labels, and the role change only when the roles moved', async (): Promise<void> => {
+    const { teamId } = await workspace()
+    const slave = await prisma.slave.create({
+      data: { teamId, name: 'Rae', role: 'Engineer', runtimeRoles: ['backend'] },
+    })
+
+    expect((await setSlaveCapabilities(slave.id, ['security.application'], 'operator')).ok).toBe(true)
+    expect(await roleEvents(slave.id)).toHaveLength(1)
+    // LABELS on the event (Minor 5c): the timeline card renders `from -> to` verbatim at a person.
+    expect(await capabilityEvents(slave.id)).toEqual([{ from: null, to: 'Application security' }])
+
+    // The same list again: nothing moved, and nothing is recorded.
+    expect((await setSlaveCapabilities(slave.id, ['security.application'], 'operator')).ok).toBe(true)
+    expect(await roleEvents(slave.id)).toHaveLength(1)
+    expect(await capabilityEvents(slave.id)).toHaveLength(1)
+
+    // A different capability whose role the worker ALREADY holds: the capabilities moved, the roles
+    // did not, and exactly one of the two events is written.
+    expect((await setSlaveCapabilities(slave.id, ['backend.api-design'], 'operator')).ok).toBe(true)
+    expect(await roleEvents(slave.id)).toHaveLength(1)
+    expect(await capabilityEvents(slave.id)).toEqual([
+      { from: null, to: 'Application security' },
+      { from: 'Application security', to: 'API design' },
+    ])
+  })
+
+  // Final review, Minor 7. `setRuntimeRoles` refuses a set over the cap; this verb unions into the
+  // same column and never asked, so it could write a set the operator-facing verb would refuse.
+  it('refuses, before writing anything, when the projected roles would pass the cap', async (): Promise<void> => {
+    const { teamId } = await workspace()
+    const slave = await prisma.slave.create({
+      data: { teamId, name: 'Rae', role: 'Engineer', runtimeRoles: ROLES_AT_CAP },
+    })
+    const out = await setSlaveCapabilities(slave.id, ['security.application'], 'operator')
+    expect(out.ok).toBe(false)
+    if (out.ok) return
+    expect(out.error.kind).toBe('invalid_runtime_roles')
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id: slave.id } })
+    expect(row.runtimeRoles).toEqual(ROLES_AT_CAP)
+    expect(row.capabilities).toEqual([])
+    expect(await roleEvents(slave.id)).toHaveLength(0)
+  })
 })
 
 /**
@@ -173,6 +236,32 @@ describe('mergeRuntimeRoles', () => {
     expect(out.ok).toBe(false)
     if (out.ok) return
     expect(out.error.kind).toBe('slave_not_found')
+  })
+
+  // Final review, Minor 7: the refusal is returned BEFORE the write, so the Supervisor arm that
+  // calls this records the decision `failed` and the worker keeps the roles it had.
+  it('refuses rather than growing a worker past the runtime-role cap', async (): Promise<void> => {
+    const { teamId } = await workspace()
+    const slave = await prisma.slave.create({
+      data: { teamId, name: 'Rae', role: 'Engineer', runtimeRoles: ROLES_AT_CAP },
+    })
+    const out = await mergeRuntimeRoles(slave.id, ['security'], 'supervisor')
+    expect(out.ok).toBe(false)
+    if (out.ok) return
+    expect(out.error.kind).toBe('invalid_runtime_roles')
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slave.id } })).runtimeRoles).toEqual(ROLES_AT_CAP)
+    expect(await roleEvents(slave.id)).toHaveLength(0)
+  })
+
+  // The cap is a cap, not a refusal to be idempotent: a worker already AT it can still be merged
+  // with a role it holds, because the union does not grow.
+  it('still succeeds at the cap when every add is already held', async (): Promise<void> => {
+    const { teamId } = await workspace()
+    const slave = await prisma.slave.create({
+      data: { teamId, name: 'Rae', role: 'Engineer', runtimeRoles: ROLES_AT_CAP },
+    })
+    const out = await mergeRuntimeRoles(slave.id, ['role-0'], 'supervisor')
+    expect(out.ok).toBe(true)
   })
 })
 
@@ -303,6 +392,181 @@ describe('hireFromTemplate', () => {
     expect(unknown.error.kind).toBe('capability_not_found')
     // Refused BEFORE the write: nothing was hired.
     expect(await prisma.slave.count({ where: { team: { workspaceId } } })).toBe(0)
+  })
+
+  /**
+   * FINAL REVIEW, IMPORTANT 1. The reuse branch held the WORKSPACE row under `FOR UPDATE` -- which
+   * serialises it against another hire and against nothing else. `setRuntimeRoles`,
+   * `setSlaveCapabilities` and `mergeRuntimeRoles` all lock the SLAVE row, so a `set-runtime-roles`
+   * landing between the `findFirst` and the update was overwritten by a union computed from the
+   * row as it was BEFORE it: the role the operator had just granted, gone, with no event to say so.
+   *
+   * Back to back rather than concurrent, for the reason the round-1 concurrency case gives: the
+   * `FOR UPDATE` is the argument, and a sequential case is the one that can actually assert which
+   * roles survived.
+   */
+  it('lands both a role granted between two hires and the roles the second hire brings', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const first = await hireFromTemplate(workspaceId, template.id, { rationale: 'first' })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+
+    // The operator's own write, through the verb that owns the column.
+    const granted = await setRuntimeRoles(first.value.slaveId, ['security', 'reviewer'], 'operator')
+    expect(granted.ok).toBe(true)
+
+    const second = await hireFromTemplate(workspaceId, template.id, {
+      rationale: 'second',
+      capabilities: ['qa.test-automation'],
+    })
+    expect(second.ok).toBe(true)
+    if (!second.ok) return
+    expect(second.value.slaveId).toBe(first.value.slaveId)
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id: first.value.slaveId } })
+    // `reviewer` is the one the stale read used to eat.
+    expect(row.runtimeRoles).toEqual(['security', 'reviewer', 'qa'])
+    expect(row.capabilities).toEqual(['qa.test-automation', 'security.application'])
+  })
+
+  // Final review, Minor 5c: the event a person reads carries the WORDS. The keys are on the slave
+  // row this event names, so nothing is lost.
+  it('records a reuse that only added capabilities in labels, not in keys', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const first = await hireFromTemplate(workspaceId, template.id, { rationale: 'first' })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    // `review.code-review` projects to `reviewer`; give it to them first, so the reuse below moves
+    // the capabilities and NOT the roles and takes the `org.changed` arm.
+    expect((await setRuntimeRoles(first.value.slaveId, ['security', 'reviewer'], 'operator')).ok).toBe(true)
+    expect(
+      (await hireFromTemplate(workspaceId, template.id, { rationale: 'second', capabilities: ['review.code-review'] })).ok,
+    ).toBe(true)
+    expect(await capabilityEvents(first.value.slaveId)).toEqual([
+      { from: 'Application security', to: 'Code review, Application security' },
+    ])
+  })
+
+  // Final review, Minor 7: the reuse merge unions into `runtimeRoles` like the other two writers,
+  // and refuses the same way when the union would pass the cap.
+  it('refuses a reuse whose merged roles would pass the cap, and writes nothing', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const first = await hireFromTemplate(workspaceId, template.id, { rationale: 'first' })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    await prisma.slave.update({ where: { id: first.value.slaveId }, data: { runtimeRoles: ROLES_AT_CAP } })
+
+    const second = await hireFromTemplate(workspaceId, template.id, {
+      rationale: 'second',
+      capabilities: ['qa.test-automation'],
+    })
+    expect(second.ok).toBe(false)
+    if (second.ok) return
+    expect(second.error.kind).toBe('invalid_runtime_roles')
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id: first.value.slaveId } })
+    expect(row.runtimeRoles).toEqual(ROLES_AT_CAP)
+    expect(row.capabilities).toEqual(['security.application'])
+  })
+})
+
+/**
+ * FINAL REVIEW, IMPORTANT 4. `Slave.capabilities` is `@default([])` and nothing backfilled it, so on
+ * every project that existed before M47 the column is empty on every row -- and `formTeam`'s FIRST
+ * and cheapest tier is the one that reads it. This verb is the once-per-project fix.
+ */
+describe('backfillSlaveCapabilities', () => {
+  async function fixture(): Promise<{
+    workspaceId: string
+    hired: string
+    materialised: string
+    described: string
+    bare: string
+  }> {
+    const { workspaceId, teamId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const company = await prisma.company.create({ data: { name: 'M47 Co' } })
+    const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Security' } })
+    const roster = await prisma.companySlave.create({
+      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Sam' },
+    })
+    // Every one of these is shaped like a worker the pre-M47 code wrote: linked to a template,
+    // holding a role, providing nothing.
+    const hired = await prisma.slave.create({
+      data: { teamId, name: 'Hired', role: 'security', runtimeRoles: ['backend'], hiredFromTemplateId: template.id },
+    })
+    const materialised = await prisma.slave.create({
+      data: { teamId, name: 'Sam', role: 'security', runtimeRoles: [], companySlaveId: roster.id },
+    })
+    const described = await prisma.slave.create({
+      data: {
+        teamId,
+        name: 'Described',
+        role: 'security',
+        runtimeRoles: ['backend'],
+        hiredFromTemplateId: template.id,
+        capabilities: ['backend.api-design'],
+      },
+    })
+    const bare = await prisma.slave.create({ data: { teamId, name: 'Bare', role: 'Engineer', runtimeRoles: ['backend'] } })
+    return { workspaceId, hired: hired.id, materialised: materialised.id, described: described.id, bare: bare.id }
+  }
+
+  it('describes a worker from the template it came from and adds the roles those project to', async (): Promise<void> => {
+    const f = await fixture()
+    // `described` is not even scanned -- the query asks for an EMPTY capability set -- so the one
+    // skip is `bare`, the worker with no template to read.
+    expect(await backfillSlaveCapabilities(f.workspaceId)).toEqual({ updated: 2, skipped: 1 })
+
+    const hired = await prisma.slave.findUniqueOrThrow({ where: { id: f.hired } })
+    expect(hired.capabilities).toEqual(['security.application'])
+    // UNIONED, never replaced: taking a role away as a side effect of describing a skill parks a
+    // worker mid-project.
+    expect(hired.runtimeRoles).toEqual(['backend', 'security'])
+
+    // Through the roster row's template, which is how a materialised worker is linked.
+    const materialised = await prisma.slave.findUniqueOrThrow({ where: { id: f.materialised } })
+    expect(materialised.capabilities).toEqual(['security.application'])
+    expect(materialised.runtimeRoles).toEqual(['security'])
+  })
+
+  it("never touches a worker an operator has already described, or one with no template", async (): Promise<void> => {
+    const f = await fixture()
+    await backfillSlaveCapabilities(f.workspaceId)
+    const described = await prisma.slave.findUniqueOrThrow({ where: { id: f.described } })
+    expect(described.capabilities).toEqual(['backend.api-design'])
+    expect(described.runtimeRoles).toEqual(['backend'])
+    const bare = await prisma.slave.findUniqueOrThrow({ where: { id: f.bare } })
+    expect(bare.capabilities).toEqual([])
+  })
+
+  it('writes one org.changed per changed worker, in labels, and nothing on a second run', async (): Promise<void> => {
+    const f = await fixture()
+    await backfillSlaveCapabilities(f.workspaceId)
+    expect(await capabilityEvents(f.hired)).toEqual([{ from: null, to: 'Application security' }])
+    expect(await capabilityEvents(f.described)).toEqual([])
+
+    // Idempotent: the second run finds nothing empty that has a template.
+    expect(await backfillSlaveCapabilities(f.workspaceId)).toEqual({ updated: 0, skipped: 1 })
+    expect(await capabilityEvents(f.hired)).toHaveLength(1)
+  })
+
+  it('does every project when no workspace is named, and skips a worker the cap would break', async (): Promise<void> => {
+    const f = await fixture()
+    await prisma.slave.update({ where: { id: f.hired }, data: { runtimeRoles: ROLES_AT_CAP } })
+    const out = await backfillSlaveCapabilities()
+    // The materialised worker was described; the capped one and the bare one were not.
+    expect(out).toEqual({ updated: 1, skipped: 2 })
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: f.hired } })).capabilities).toEqual([])
   })
 })
 

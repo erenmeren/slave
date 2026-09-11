@@ -1546,7 +1546,7 @@ describe('applyDecision -- the M47 capability actions', () => {
   const capabilitySituation = (): Situation => ({
     kind: 'capability_unstaffed',
     subjectId: CAPABILITY,
-    summary: `1 startable task(s) need "${CAPABILITY}" and no slave can be dispatched as "security".`,
+    summary: '1 startable task(s) need Application security and no slave can be dispatched as security.',
     facts: { capability: CAPABILITY, role: 'security', readyTasks: 1, firstTaskId: 't1' },
   })
 
@@ -1563,7 +1563,7 @@ describe('applyDecision -- the M47 capability actions', () => {
     await prisma.slave.update({ where: { id: f.slaveId }, data: { capabilities: [CAPABILITY] } })
     const recorded = await record(
       f,
-      { kind: 'assign_capability', slaveId: f.slaveId, capability: CAPABILITY, role: 'security' },
+      { kind: 'assign_capability', slaveId: f.slaveId, capability: CAPABILITY, capabilityLabel: 'Application security', role: 'security' },
       'applied',
       { subjectId: CAPABILITY, situation: capabilitySituation() },
     )
@@ -1586,6 +1586,7 @@ describe('applyDecision -- the M47 capability actions', () => {
         kind: 'hire_from_catalog',
         templateId: template.id,
         capability: CAPABILITY,
+        capabilityLabel: 'Application security',
         name: 'Security Reviewer',
         rationale: 'Security Reviewer provides Application security, which nobody on this project does.',
         temporary: false,
@@ -1621,6 +1622,7 @@ describe('applyDecision -- the M47 capability actions', () => {
         kind: 'materialise_company_worker',
         companySlaveId: rosterWorker.id,
         capability: CAPABILITY,
+        capabilityLabel: 'Application security',
         name: 'Sam',
         rationale: 'Sam is already on the company roster and provides Application security.',
       },
@@ -1649,6 +1651,7 @@ describe('applyDecision -- the M47 capability actions', () => {
         kind: 'hire_from_catalog',
         templateId: template.id,
         capability: CAPABILITY,
+        capabilityLabel: 'Application security',
         name: 'Gone Reviewer',
         rationale: 'nobody here provides Application security',
         temporary: false,

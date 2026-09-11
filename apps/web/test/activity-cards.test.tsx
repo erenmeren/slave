@@ -442,6 +442,23 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('org-to').textContent).toBe('Design')
   })
 
+  // M47 final review, Minor 5c: the WRITER stores labels, because this card renders `from -> to`
+  // verbatim at a person and the keys are recoverable from the slave row the event names.
+  it('org.changed shows a capability change in the words the writer stored, never a key', () => {
+    const Card = ACTIVITY_CARDS['org.changed']
+    const event = baseEvent('org.changed', {
+      entity: 'slave',
+      id: 'ag-1',
+      field: 'capabilities',
+      from: 'Application security',
+      to: 'Application security, Code review',
+    })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('org-from').textContent).toBe('Application security')
+    expect(screen.getByTestId('org-to').textContent).toBe('Application security, Code review')
+    expect(screen.getByTestId('org-to').textContent).not.toContain('security.application')
+  })
+
   it('org.changed shows "moved to department" for a moved slave (M25)', () => {
     const Card = ACTIVITY_CARDS['org.changed']
     const event = baseEvent('org.changed', { entity: 'slave', id: 'ag-1', field: 'team', from: 'Engineering', to: 'QA' })

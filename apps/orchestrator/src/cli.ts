@@ -9,6 +9,7 @@ import {
   approveDecision,
   addCapability,
   archiveWorkspace,
+  backfillSlaveCapabilities,
   cancelTask,
   assignCompany,
   claimResume,
@@ -267,6 +268,12 @@ const USAGE = `usage: orchestrator <command> [options]
                                        add an operator's own capability. The key's prefix IS its
                                        domain, and --role is the runtime role it projects to.
   capabilities list                    every capability: key, label and the role it projects to.
+  capabilities backfill [--workspace <id>]
+                                       fill in what every worker created BEFORE capabilities
+                                       existed provides, off the template it was already hired or
+                                       materialised from, and add the runtime roles those project
+                                       to. Only workers whose own capability set is empty; never
+                                       one an operator has described by hand. Run once per project.
   set-capabilities --slave <id> --capabilities a,b [--by <name>]
                                        what this slave PROVIDES. Keys, labels and synonyms are all
                                        accepted and resolved to keys; a word matching nothing is
@@ -1513,13 +1520,26 @@ export async function main(argv: readonly string[]): Promise<number> {
         process.stdout.write(`${result.value.key} added: ${result.value.label}, dispatched as "${result.value.role}"\n`)
         return 0
       }
+      if (sub === 'backfill') {
+        // M47 final review, Important 4. `Slave.capabilities` is `@default([])` and nothing
+        // backfilled it, so on a project that predates M47 the first and cheapest staffing tier --
+        // "somebody already here who can do it and was never given the role" -- has nothing to
+        // read and never fires. One verb, run once, and it says what it did rather than reporting
+        // a silent success.
+        const out = await backfillSlaveCapabilities(flagText(flags, 'workspace'))
+        process.stdout.write(
+          `capabilities backfilled: ${String(out.updated)} worker(s) described from their template, ` +
+            `${String(out.skipped)} left alone\n`,
+        )
+        return 0
+      }
       if (sub === 'list') {
         for (const record of await listCapabilities()) {
           process.stdout.write(`${record.key}\t${record.label}\t-> ${record.role}\n`)
         }
         return 0
       }
-      throw new Error('capabilities takes sync, add or list')
+      throw new Error('capabilities takes sync, add, backfill or list')
     }
 
     case 'set-capabilities': {

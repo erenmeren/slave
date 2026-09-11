@@ -1,4 +1,5 @@
-import { projectRoles } from '../capability/taxonomy.js'
+import { capabilityIndex, projectRoles } from '../capability/taxonomy.js'
+import { isStaffableTask } from './candidates.js'
 import {
   COOLDOWN_MS,
   INTEGRATED_STALE_MS,
@@ -209,7 +210,9 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
   const unstaffedCapabilities = new Map<string, SupervisorTask[]>()
   const raisedFor = new Set<string>()
   for (const t of world.tasks) {
-    if (t.status !== 'ready' || !t.dependenciesDone) continue
+    // {@link isStaffableTask}, the one predicate three readings of "what is missing" now share
+    // (M47 final review, Important 2) -- this loop's own rule, promoted to the shared one.
+    if (!isStaffableTask(t)) continue
     for (const capability of t.requiredCapabilities) {
       const role = projectRoles([capability], world.taxonomy)[0]
       // A key the taxonomy does not have projects no role and staffs nobody: it is not a gap this
@@ -221,12 +224,18 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
       raisedFor.add(t.id)
     }
   }
+  // The summary is read by a person on the Supervisor panel and on the Organization page, so it is
+  // written in the taxonomy's WORDS, never in its keys (M47 final review, Minor 5a; `docs/ia.md`
+  // rule 3). The key itself stays on `subjectId` and on `facts.capability` -- which is where every
+  // machine reader (the decision's key, the need row's testid, the panel's `data-` attributes)
+  // takes it from, so labelling the sentence loses nothing.
+  const labels = capabilityIndex(world.taxonomy)
   for (const [capability, waiting] of unstaffedCapabilities) {
     const role = projectRoles([capability], world.taxonomy)[0] ?? ''
     add({
       kind: 'capability_unstaffed',
       subjectId: capability,
-      summary: `${waiting.length} startable task(s) need "${capability}" and no slave can be dispatched as "${role}".`,
+      summary: `${waiting.length} startable task(s) need ${labels.get(capability)?.label ?? capability} and no slave can be dispatched as ${role}.`,
       facts: { capability, role, readyTasks: waiting.length, firstTaskId: waiting[0]?.id ?? null },
     })
   }
@@ -235,7 +244,7 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
   // are one situation with one decision -- not N proposals a human has to approve N times.
   const unstaffedRoles = new Map<string, SupervisorTask[]>()
   for (const task of world.tasks) {
-    if (task.status !== 'ready' || !task.dependenciesDone) continue
+    if (!isStaffableTask(task)) continue
     // An empty `requiredRole` is a real value -- "any role will do" (see `SchedulableSlave.
     // runtimeRoles` in `../scheduler/decide.ts`, which reasons about exactly this string). Such a
     // task cannot be "unstaffed BY ROLE", and keying a situation on it would put an empty

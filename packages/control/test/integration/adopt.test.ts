@@ -1,6 +1,7 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { assignCompany } from '../../src/org.js'
+import { syncCapabilityTaxonomy } from '../../src/capability.js'
 import { adoptSimulation, adoptionPreview, createSimulation, loadSimulation } from '../../src/simulation.js'
 
 /** The catalog's "Checkout Platform" crew, exactly as `software.test.ts` seeds it: the roster the
@@ -247,6 +248,27 @@ describe('adoptSimulation', () => {
 
     const loaded = await loadSimulation(id)
     expect(loaded.ok === true && loaded.value.summary.adoptedBy).toEqual([{ workspaceId: alpha.id, workspaceName: 'Alpha Project' }])
+  })
+
+  // FINAL REVIEW, IMPORTANT 3 (M47 R2). `assignCompanyTx` projects each template's capabilities
+  // into the worker's runtime roles, and an ABSENT taxonomy means "project nothing" -- so adoption,
+  // the one path that materialises a whole company without going through `assignCompany`, produced
+  // workers holding the capabilities and none of the roles those project to. A `security.application`
+  // specialist adopted from a simulation was undispatchable for the work it was adopted to do.
+  it('projects each template\'s capabilities into the runtime roles it materialises', async () => {
+    await syncCapabilityTaxonomy()
+    await prisma.slaveTemplate.update({
+      where: { name: 'Checkout Platform Security' },
+      data: { capabilityKeys: ['security.application'] },
+    })
+    const id = await softwareRun()
+
+    expect((await adoptSimulation(id, { workspaceId: alpha.id })).ok).toBe(true)
+
+    const sarah = await prisma.slave.findFirstOrThrow({ where: { name: 'Sarah', team: { workspaceId: alpha.id } } })
+    expect(sarah.capabilities).toEqual(['security.application'])
+    // The catalog role it always had, PLUS the one the capability projects to.
+    expect(sarah.runtimeRoles).toEqual(['Security', 'security'])
   })
 
   it('emits the company_assigned event a hand assignment emits', async () => {

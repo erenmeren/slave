@@ -51,13 +51,16 @@ export function actionText(action: Action, taskTitles: Readonly<Record<string, s
     case 'set_runtime_roles':
       return `set the runtime roles of ${action.slaveId} to ${action.roles.length === 0 ? 'none' : action.roles.join(', ')}`
     // M47 R4, the three ways to fill a missing capability. Each names the CAPABILITY it is for:
-    // the situation chip says "Missing a capability" and this line says which one.
+    // the situation chip says "Missing a capability" and this line says which one -- in the
+    // taxonomy's WORDS, which the action carries (`capabilityLabel`, final review Minor 5b). This
+    // function runs in the browser and has no taxonomy to look a key up in, and the key is in the
+    // decision row for anyone who needs it.
     case 'assign_capability':
-      return `give ${action.slaveId} the "${action.role}" runtime role, for ${action.capability}`
+      return `give ${action.slaveId} the "${action.role}" runtime role, for ${action.capabilityLabel}`
     case 'materialise_company_worker':
-      return `bring ${action.name} onto this project from the company roster, for ${action.capability}`
+      return `bring ${action.name} onto this project from the company roster, for ${action.capabilityLabel}`
     case 'hire_from_catalog':
-      return `hire ${action.name} from the catalog${action.temporary ? ' as a temporary specialist' : ''}, for ${action.capability}`
+      return `hire ${action.name} from the catalog${action.temporary ? ' as a temporary specialist' : ''}, for ${action.capabilityLabel}`
     case 'answer_question':
       return `answer question ${action.messageId}`
     case 'reassign_question':

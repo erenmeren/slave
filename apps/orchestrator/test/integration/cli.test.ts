@@ -1447,6 +1447,35 @@ describe('the orchestrator CLI', () => {
       expect(row.runtimeRoles).toEqual(['backend', 'security'])
     }, 60_000)
 
+    // FINAL REVIEW, IMPORTANT 4: the once-per-project verb that fills in what every worker created
+    // before capabilities existed provides.
+    it('backfills a pre-M47 worker from the template it was hired from, and leaves a described one alone', async (): Promise<void> => {
+      const template = await prisma.slaveTemplate.create({
+        data: { name: `Backfill Reviewer ${String(Date.now())}`, role: 'security', capabilityKeys: ['security.application'] },
+      })
+      const legacy = await prisma.slave.create({
+        data: {
+          teamId: fixture.teamId,
+          name: `Legacy ${String(Date.now())}`,
+          role: 'security',
+          runtimeRoles: ['backend'],
+          hiredFromTemplateId: template.id,
+        },
+      })
+
+      const out = await runCli(['capabilities', 'backfill', '--workspace', fixture.workspaceId])
+      expect(out.code).toBe(0)
+      expect(out.stdout).toContain('capabilities backfilled')
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: legacy.id } })
+      expect(row.capabilities).toEqual(['security.application'])
+      expect(row.runtimeRoles).toEqual(['backend', 'security'])
+
+      // Idempotent: nothing is left with an empty set and a template to read.
+      const again = await runCli(['capabilities', 'backfill', '--workspace', fixture.workspaceId])
+      expect(again.code).toBe(0)
+      expect(again.stdout).toContain('0 worker(s)')
+    }, 60_000)
+
     it('hires a specialist once and reuses it the second time', async (): Promise<void> => {
       const template = await prisma.slaveTemplate.create({
         data: { name: `Security Reviewer ${String(Date.now())}`, role: 'security', capabilityKeys: ['security.application'] },

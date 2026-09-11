@@ -379,6 +379,20 @@ describe('observe -- capability_unstaffed (M47 R4)', () => {
     expect(observe(w)[0]?.facts).toEqual({ capability: 'security.application', role: 'security', readyTasks: 1, firstTaskId: 't1' })
   })
 
+  // Final review, Minor 5a: a person reads this sentence on the Supervisor panel and again on the
+  // Organization page, and it printed the dotted key at them. The key stays on `subjectId` and on
+  // `facts.capability`, which is where every machine reader takes it from.
+  it('says what is missing in the taxonomy\'s words, never in its keys', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [task({ status: 'ready', requiredRole: 'security', requiredCapabilities: ['security.application'] })],
+      slaves: [slave({ runtimeRoles: ['backend'] })],
+    })
+    const summary = observe(w)[0]?.summary ?? ''
+    expect(summary).toBe('1 startable task(s) need Application security and no slave can be dispatched as security.')
+    expect(summary).not.toContain('security.application')
+  })
+
   it('does not fire when somebody holds the role the capability projects to', () => {
     const w = world({
       taxonomy: TAXONOMY,

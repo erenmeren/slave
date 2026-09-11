@@ -56,6 +56,7 @@ import { loopbackChildEnv } from './lib/child-env.mjs'
 import { chromium } from 'playwright-core'
 import { createSimulation } from '../packages/control/dist/index.js'
 import { prisma } from '../packages/db/dist/client.js'
+import { CAPABILITY_SEED } from '../packages/db/dist/capabilities.js'
 import { EVENT_TYPE_BY_DOMAIN_TYPE, RUN_STATUSES, TASK_STATUSES } from '../packages/db/dist/enums.js'
 import { DECISION_STATUSES, SITUATION_KINDS, TIERS } from '../packages/domain/dist/index.js'
 import { PROVIDER_KINDS } from '../packages/providers/dist/index.js'
@@ -128,6 +129,13 @@ const RAW_TOKENS = [
   // this gate is a plain node script, so the `node:child_process` imports that keep `apps/web`
   // from reaching that barrel are no obstacle here.
   ...PROVIDER_KINDS,
+  // Every capability KEY (M47 final review, Minor 6). A capability is a table row rather than a
+  // union member, so none of the enum sources above can see one -- and M47 put keys on four
+  // surfaces this gate visits, one of which (the Organization tab's needs summary) printed
+  // `backend.api-design` at a person inside an otherwise ordinary English sentence. The keys are
+  // all `<domain>.<name>`, so every one of them survives the `_`/`.` filter below. Read from the
+  // checked-in list, not from the table: this gate must fail on a leak whatever a database holds.
+  ...CAPABILITY_SEED.map((record) => record.key),
   ...Object.values(EVENT_TYPE_BY_DOMAIN_TYPE),
   ...Object.keys(EVENT_TYPE_BY_DOMAIN_TYPE),
 ].filter((token) => token.includes('_') || token.includes('.'))
@@ -304,6 +312,7 @@ try {
   )
   assert(RAW_TOKENS.includes('pause_requested'), 'the derived blocklist lost `pause_requested`, the token leak 1 used to print')
   assert(RAW_TOKENS.includes('no_reviewer'), 'the derived blocklist lost the SituationKind members')
+  assert(RAW_TOKENS.includes('backend.api-design'), 'the derived blocklist lost the capability keys (M47)')
   assert(RAW_TOKENS.includes('run.tool_call') && RAW_TOKENS.includes('run_tool_call'), 'the derived blocklist lost the event types')
 
   await preflightCleanup()

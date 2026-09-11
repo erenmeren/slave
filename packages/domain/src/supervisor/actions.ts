@@ -17,18 +17,23 @@ export type Action =
    *  current set with these, which is what stops an approval taking back a role granted meanwhile. */
   | { readonly kind: 'set_runtime_roles'; readonly slaveId: string; readonly roles: readonly string[] }
   /** `setRuntimeRoles` (as a union): a worker who ALREADY provides the capability is given the
-   *  runtime role it projects to. The routine one of the three (M47 R4) -- see `tierOf`. */
-  | { readonly kind: 'assign_capability'; readonly slaveId: string; readonly capability: string; readonly role: string }
+   *  runtime role it projects to. The routine one of the three (M47 R4) -- see `tierOf`.
+   *
+   *  `capabilityLabel` is the taxonomy's WORDS for {@link capability}, carried on the action rather
+   *  than resolved by whoever renders it (M47 final review, Minor 5b): `actionText` runs in the
+   *  browser, where there is no taxonomy, and a decision row read a year from now must still say
+   *  what it was about in the vocabulary of the day it was made. The key stays for the machines. */
+  | { readonly kind: 'assign_capability'; readonly slaveId: string; readonly capability: string; readonly capabilityLabel: string; readonly role: string }
   /** `materialiseCompanySlave`: one worker off the company roster onto this project. `rationale`
    *  is the sentence stored on the worker (`Slave.selectionRationale`), exactly as it is for a
    *  catalog hire -- what the Organization view shows a person months later, in words rather than
    *  in taxonomy keys (fix round 1, Minor 5). */
-  | { readonly kind: 'materialise_company_worker'; readonly companySlaveId: string; readonly capability: string; readonly name: string; readonly rationale: string }
+  | { readonly kind: 'materialise_company_worker'; readonly companySlaveId: string; readonly capability: string; readonly capabilityLabel: string; readonly name: string; readonly rationale: string }
   /** `hireFromTemplate`: a new project worker from a catalog template. `rationale` is the sentence
    *  stored on the worker (`Slave.selectionRationale`) and shown on the Organization view --
    *  "why selected", months later. `temporary` is M50's lifecycle, recorded as a claim on the
    *  decision and in the rationale until there is something that can release a worker. */
-  | { readonly kind: 'hire_from_catalog'; readonly templateId: string; readonly capability: string; readonly name: string; readonly rationale: string; readonly temporary: boolean }
+  | { readonly kind: 'hire_from_catalog'; readonly templateId: string; readonly capability: string; readonly capabilityLabel: string; readonly name: string; readonly rationale: string; readonly temporary: boolean }
   /** `answerQuestion` with `answeredBy: 'supervisor'`: the Supervisor answers a slave's question
    *  itself, in a body a SECOND model call drafted and `verifySources` checked. This is the one
    *  action whose stored tier is not the last word: the catalogue stamps it `proposed` and
@@ -74,11 +79,18 @@ export const actionSchema: z.ZodType<Action> = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('unblock_task'), taskId: z.string().min(1) }),
   z.object({ kind: z.literal('raise_max_attempts'), taskId: z.string().min(1) }),
   z.object({ kind: z.literal('set_runtime_roles'), slaveId: z.string().min(1), roles: z.array(z.string().min(1)) }),
-  z.object({ kind: z.literal('assign_capability'), slaveId: z.string().min(1), capability: z.string().min(1), role: z.string().min(1) }),
+  z.object({
+    kind: z.literal('assign_capability'),
+    slaveId: z.string().min(1),
+    capability: z.string().min(1),
+    capabilityLabel: z.string().min(1),
+    role: z.string().min(1),
+  }),
   z.object({
     kind: z.literal('materialise_company_worker'),
     companySlaveId: z.string().min(1),
     capability: z.string().min(1),
+    capabilityLabel: z.string().min(1),
     name: z.string().min(1),
     rationale: z.string().min(1),
   }),
@@ -86,6 +98,7 @@ export const actionSchema: z.ZodType<Action> = z.discriminatedUnion('kind', [
     kind: z.literal('hire_from_catalog'),
     templateId: z.string().min(1),
     capability: z.string().min(1),
+    capabilityLabel: z.string().min(1),
     name: z.string().min(1),
     rationale: z.string().min(1),
     temporary: z.boolean(),

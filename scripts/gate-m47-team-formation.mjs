@@ -985,6 +985,16 @@ try {
   if (!needText.includes(dataLabel)) {
     await fail(`stage 7: the need does not name ${JSON.stringify(dataLabel)}: ${JSON.stringify(needText)}`)
   }
+  // R5 / `docs/ia.md` rule 3, asserted on the NEEDS section the way it already is on the advice
+  // below (M47 final review, Minor 5). The summary a person reads here is written by `observe` in
+  // the domain, and it used to print the dotted key inside an English sentence; the key stays on
+  // the row's own testid, which is where this gate finds the section in the first place.
+  for (const key of CAPABILITY_SEED.map((record) => record.key)) {
+    if (needText.includes(key)) {
+      await fail(`stage 7: the needs summary prints the raw key ${key} at a person: ${JSON.stringify(needText)}`)
+    }
+  }
+  console.log(`stage 7 -- the need reads ${JSON.stringify(needText)} with no taxonomy key in it`)
   await waitVisible(need.getByTestId('supervisor-proposal'), 'the offer waiting under the gap')
   await waitVisible(need.getByTestId('supervisor-approve'), 'the Approve a person answers the offer with')
   // The negative beside it: a gap that was CLOSED is not still on the page.

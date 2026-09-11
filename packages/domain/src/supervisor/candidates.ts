@@ -1,4 +1,4 @@
-import { projectRoles } from '../capability/taxonomy.js'
+import { capabilityLabel as capabilityLabelIn, projectRoles } from '../capability/taxonomy.js'
 import { formTeam, type TeamPlan, type TeamProposal } from '../capability/team.js'
 import type { Action, Candidate } from './actions.js'
 import { staffableSlaves } from './observe.js'
@@ -54,8 +54,38 @@ function staffingCandidates(world: SupervisorWorld, kind: SituationKind, role: s
   )
 }
 
+/** The words for a key, off the world's own taxonomy -- the key itself when the taxonomy has never
+ *  heard of it, which is `capabilityLabel`'s own fallback and keeps `capabilityLabel: z.string()
+ *  .min(1)` satisfiable for any key at all. */
+function capabilityLabelOf(key: string, world: SupervisorWorld): string {
+  return capabilityLabelIn(key, world.taxonomy)
+}
+
 function candidate(action: Action, world: SupervisorWorld, kind: SituationKind, why: string): Candidate {
   return { action, tier: tierOf(action, world, kind), why }
+}
+
+/**
+ * Is this task a STAFFING NEED right now (M47 final review, Important 2)?
+ *
+ * ONE predicate, exported, because there were three spellings of "what is missing" -- `observe`'s
+ * `capability_unstaffed` loop said `ready && dependenciesDone`, {@link teamPlanOf} said
+ * `ready || blocked`, and the Organization view's own `readyTasks` count said `ready` alone. Three
+ * readings of one question disagree in front of a person: the page counted a task the situation
+ * had not raised, and `teamPlanOf` proposed a hire for a `blocked` task no proposal could start.
+ *
+ * `ready && dependenciesDone` is the SITUATION's reading, and it wins because a situation is what
+ * raises a decision. A `blocked` task is not yet a staffing need -- it is waiting on a guardrail or
+ * a human, and staffing it changes nothing until it is unblocked, at which point this predicate
+ * says yes and the gap is raised then. `dependenciesDone` is there for the same reason the
+ * scheduler has it: a `ready` task whose dependency has not been integrated is not startable, and
+ * hiring for it would put a specialist on a project to wait.
+ *
+ * Structurally typed rather than taking a whole `SupervisorTask`: `loadSupervisorWorld`'s own row
+ * shape carries both fields and asks the same question before it pays for the catalog reads.
+ */
+export function isStaffableTask(task: Pick<SupervisorTask, 'status' | 'dependenciesDone'>): boolean {
+  return task.status === 'ready' && task.dependenciesDone
 }
 
 /**
@@ -65,9 +95,7 @@ function candidate(action: Action, world: SupervisorWorld, kind: SituationKind, 
  * is missing" would eventually disagree in front of a person.
  */
 export function teamPlanOf(world: SupervisorWorld): TeamPlan {
-  const required = world.tasks
-    .filter((task) => task.status === 'ready' || task.status === 'blocked')
-    .flatMap((task) => task.requiredCapabilities)
+  const required = world.tasks.filter(isStaffableTask).flatMap((task) => task.requiredCapabilities)
   return formTeam({
     required,
     roster: world.slaves.map((slave) => ({
@@ -97,12 +125,17 @@ export function teamPlanOf(world: SupervisorWorld): TeamPlan {
  *  never emits (M50 owns that lifecycle) -- an arm that threw on it would make a future data
  *  change a crash rather than an offer nobody makes yet. */
 function actionOf(proposal: TeamProposal, capability: string, world: SupervisorWorld): Action | null {
+  // The taxonomy's words, stamped on the action at DECISION time (M47 final review, Minor 5b). The
+  // panel that renders this a day later has no taxonomy to look it up in, and a row read a year
+  // later should still say what it was about rather than print a key at a person.
+  const capabilityLabel = capabilityLabelOf(capability, world)
   switch (proposal.source) {
     case 'existing_worker':
       return {
         kind: 'assign_capability',
         slaveId: proposal.pick.id,
         capability,
+        capabilityLabel,
         role: projectRoles([capability], world.taxonomy)[0] ?? '',
       }
     case 'company_worker':
@@ -110,6 +143,7 @@ function actionOf(proposal: TeamProposal, capability: string, world: SupervisorW
         kind: 'materialise_company_worker',
         companySlaveId: proposal.pick.id,
         capability,
+        capabilityLabel,
         name: proposal.pick.name,
         rationale: proposal.rationale,
       }
@@ -118,6 +152,7 @@ function actionOf(proposal: TeamProposal, capability: string, world: SupervisorW
         kind: 'hire_from_catalog',
         templateId: proposal.pick.id,
         capability,
+        capabilityLabel,
         name: proposal.pick.name,
         rationale: proposal.rationale,
         temporary: proposal.temporary,

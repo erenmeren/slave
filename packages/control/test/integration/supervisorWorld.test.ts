@@ -987,7 +987,13 @@ describe('loadSupervisorWorld -- the capability facts (M47 R4)', () => {
     ])
   })
 
-  it('reads all three for a BLOCKED task too, which is a gap somebody still has to fill', async () => {
+  // FINAL REVIEW, IMPORTANT 2. This gate used to read `ready || blocked` -- `teamPlanOf`'s old
+  // filter -- and the round-1 version of this case asserted the catalog WAS read for a blocked
+  // task. `isStaffableTask` is now the one predicate all four readings share, and a blocked task is
+  // not yet a staffing need: it is waiting on a guardrail or a human, staffing it unsticks nothing,
+  // and `observe` was never going to raise a situation for it anyway. So there is nothing for
+  // `formTeam` to be handed a roster and a catalog FOR, and the three queries are not paid.
+  it('does not pay for the catalog for a BLOCKED task, which no situation would staff', async () => {
     const f = await seed()
     await makeTask(f, { title: 'stuck', status: 'blocked', requiredCapabilities: ['security.application'] })
     await prisma.slaveTemplate.create({
@@ -995,8 +1001,10 @@ describe('loadSupervisorWorld -- the capability facts (M47 R4)', () => {
     })
 
     const { world } = await loadSupervisorWorld(f.workspaceId, NOW)
-    expect(world.taxonomy.length).toBeGreaterThan(0)
-    expect(world.catalog).toHaveLength(1)
+    expect(world.taxonomy).toEqual([])
+    expect(world.catalog).toEqual([])
+    // The task's own keys still come through: they are on a row the loader already reads.
+    expect(world.tasks.map((task) => task.requiredCapabilities)).toEqual([['security.application']])
   })
 
   it('reads all three the moment one task names a capability, and carries the keys through', async () => {

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DecisionView } from '@slave-of-ai/control'
 import type { OrganizationView } from '../src/server/organization'
 import { OrganizationClient } from '../src/components/organization/OrganizationClient'
+import { SECTION_LABEL_CLASS } from '../src/components/ui/SectionLabel'
 
 const decision: DecisionView = {
   id: 'd1',
@@ -23,6 +24,7 @@ const decision: DecisionView = {
     kind: 'hire_from_catalog',
     templateId: 't-sec',
     capability: 'security.application',
+    capabilityLabel: 'Application security',
     name: 'Security Reviewer',
     rationale: 'Security Reviewer provides Application security and nobody here does.',
     temporary: false,
@@ -216,7 +218,10 @@ describe('OrganizationClient', () => {
   it('puts the advice caption on the section label itself', () => {
     render(<OrganizationClient workspaceId="w1" initial={view} />)
     const caption = screen.getByTestId('organization-advice')
-    expect(caption.className).toContain('font-mono')
+    // The RECIPE, not one of the four classes in it (final review, Minor 9): `font-mono` is shared
+    // with half a dozen captions that are not section labels, and asserting it would keep passing
+    // if the caption stopped composing `SECTION_LABEL_CLASS` altogether.
+    expect(caption.className).toBe(SECTION_LABEL_CLASS)
     expect(within(caption).queryByTestId('section-label')).toBeNull()
   })
 

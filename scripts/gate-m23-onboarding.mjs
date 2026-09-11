@@ -567,7 +567,10 @@ try {
 
     const setRole = runCli(['set-role', '--slave', idle.id, '--role', 'qa'])
     assert(setRole.status === 0, `set-role: expected exit 0, got ${String(setRole.status)} -- stderr: ${setRole.stderr}`)
-    assert(setRole.stdout.includes(`role set to qa on ${idle.id}`), `set-role: unexpected stdout ${setRole.stdout}`)
+    // M37 renamed what this verb writes: `Slave.role` is the profile's TITLE and is dispatched on
+    // by nothing, and the CLI says so. The gate had expected M23's wording ever since and has been
+    // red on `main` for it (M47 final review, Minor 11) -- the product's line is the deliberate one.
+    assert(setRole.stdout.includes(`title set to qa on ${idle.id}`), `set-role: unexpected stdout ${setRole.stdout}`)
 
     const deleteIdle = runCli(['delete-slave', '--slave', idle.id, '--yes'])
     assert(deleteIdle.status === 0, `delete-slave (idle): expected exit 0, got ${String(deleteIdle.status)} -- stderr: ${deleteIdle.stderr}`)

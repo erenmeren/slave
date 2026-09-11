@@ -3,6 +3,7 @@ import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   CAPABILITY_KEY_PATTERN,
   NON_TERMINAL_RUN_STATUSES,
+  capabilityLabel,
   err,
   normaliseCapabilities,
   ok,
@@ -12,6 +13,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { AssignmentRefused, departmentFor } from './department.js'
+import { MAX_RUNTIME_ROLES } from './profile.js'
 import type { ControlRefusal } from './refusal.js'
 
 /** Every taxonomy row, KEY ASCENDING -- the order every caller gets, so `normaliseCapabilities`'
@@ -109,6 +111,17 @@ export async function addCapability(input: {
  * those two afterwards); the runtime roles are UNIONED, because taking a role away as a side
  * effect of describing a skill would park a worker mid-project. `set-runtime-roles` stays the way
  * a role is removed.
+ *
+ * TWO events, each only when its own half actually moved (M47 final review, Minor 8). This verb
+ * wrote `slave.runtime_roles_changed` unconditionally, so re-running it with the same list put a
+ * role-change on the timeline where no role had changed -- and writing the capability set, the
+ * thing the operator actually asked for, showed up nowhere at all. The capability event is
+ * `org.changed { field: 'capabilities' }`, the same one `hireFromTemplate`'s reuse branch writes,
+ * carrying LABELS (Minor 5c).
+ *
+ * The cap is checked BEFORE the write and returned as a value (Minor 7): the union can carry a
+ * worker past `MAX_RUNTIME_ROLES`, and a set this verb wrote is one `setRuntimeRoles` would refuse
+ * to.
  */
 export async function setSlaveCapabilities(
   slaveId: string,
@@ -124,20 +137,50 @@ export async function setSlaveCapabilities(
   const { keys, unresolved } = normaliseCapabilities(values, taxonomy)
   const outcome = await prisma.$transaction(async (tx) => {
     const slave = await lockedSlave(tx, slaveId)
-    if (slave === null) return null
+    if (slave === null) return { refusal: { kind: 'slave_not_found', slaveId } as ControlRefusal }
     const runtimeRoles = [...slave.runtimeRoles]
     for (const role of projectRoles(keys, taxonomy)) if (!runtimeRoles.includes(role)) runtimeRoles.push(role)
+    // Before the update, inside the lock: nothing has been written, so this is a returned value and
+    // the transaction has nothing to roll back.
+    const refusal = overCap(runtimeRoles)
+    if (refusal !== null) return { refusal }
+    const before = [...slave.capabilities]
     await tx.slave.update({ where: { id: slaveId }, data: { capabilities: [...keys], runtimeRoles } })
-    return { workspaceId: slave.workspaceId, runtimeRoles }
+    return {
+      workspaceId: slave.workspaceId,
+      runtimeRoles,
+      before,
+      rolesChanged: runtimeRoles.length !== slave.runtimeRoles.length,
+      // A REPLACEMENT, so "changed" is a set comparison and not a length one: naming the same two
+      // capabilities in the other order is not a change, and swapping one for another is.
+      capabilitiesChanged: before.length !== keys.length || before.some((key) => !keys.includes(key)),
+    }
   })
-  if (outcome === null) return err({ kind: 'slave_not_found', slaveId })
-  await appendEvent({
-    type: 'slave.runtime_roles_changed',
-    workspaceId: outcome.workspaceId,
-    slaveId,
-    actor: 'human',
-    payload: { slaveId, roles: outcome.runtimeRoles, actor },
-  })
+  if ('refusal' in outcome) return err(outcome.refusal)
+  if (outcome.rolesChanged) {
+    await appendEvent({
+      type: 'slave.runtime_roles_changed',
+      workspaceId: outcome.workspaceId,
+      slaveId,
+      actor: 'human',
+      payload: { slaveId, roles: outcome.runtimeRoles, actor },
+    })
+  }
+  if (outcome.capabilitiesChanged) {
+    await appendEvent({
+      type: 'org.changed',
+      workspaceId: outcome.workspaceId,
+      slaveId,
+      actor: 'human',
+      payload: {
+        entity: 'slave',
+        id: slaveId,
+        field: 'capabilities',
+        from: capabilityLabels([...outcome.before].toSorted(), taxonomy),
+        to: capabilityLabels(keys, taxonomy),
+      },
+    })
+  }
   return ok({ keys, unresolved, runtimeRoles: outcome.runtimeRoles })
 }
 
@@ -171,7 +214,7 @@ export async function mergeRuntimeRoles(
 ): Promise<Result<{ readonly runtimeRoles: readonly string[] }, ControlRefusal>> {
   const outcome = await prisma.$transaction(async (tx) => {
     const slave = await lockedSlave(tx, slaveId)
-    if (slave === null) return null
+    if (slave === null) return { refusal: { kind: 'slave_not_found', slaveId } as ControlRefusal }
     const runtimeRoles = [...slave.runtimeRoles]
     for (const role of adds) {
       const trimmed = role.trim()
@@ -180,13 +223,19 @@ export async function mergeRuntimeRoles(
       // empty string into a set the scheduler matches on.
       if (trimmed !== '' && !runtimeRoles.includes(trimmed)) runtimeRoles.push(trimmed)
     }
+    // The cap `setRuntimeRoles` keeps, before the write (M47 final review, Minor 7). Returned, not
+    // thrown: nothing in this transaction has been written yet. The Supervisor's `assign_capability`
+    // arm turns the refusal into a `failed` decision, which is the honest record -- the role was
+    // not granted, and a human has to take one away before it can be.
+    const refusal = overCap(runtimeRoles)
+    if (refusal !== null) return { refusal }
     // Both sets only ever grow here, so a length that did not move is a set that did not move --
     // the same reading `hireFromTemplate`'s reuse branch makes.
     const changed = runtimeRoles.length !== slave.runtimeRoles.length
     if (changed) await tx.slave.update({ where: { id: slaveId }, data: { runtimeRoles } })
     return { workspaceId: slave.workspaceId, runtimeRoles, changed }
   })
-  if (outcome === null) return err({ kind: 'slave_not_found', slaveId })
+  if ('refusal' in outcome) return err(outcome.refusal)
   if (outcome.changed) {
     await appendEvent({
       type: 'slave.runtime_roles_changed',
@@ -200,19 +249,58 @@ export async function mergeRuntimeRoles(
 }
 
 /** The row plus the workspace the event needs, under `FOR UPDATE` -- `lockSlave`'s shape from
- *  `org.ts`, re-read here because that helper returns the whole include and this file needs two
- *  fields. */
+ *  `org.ts`, re-read here because that helper returns the whole include and this file needs three
+ *  fields. `capabilities` came with the final review's Important 1: `hireFromTemplate`'s reuse
+ *  branch merges BOTH sets, and a merge computed off a row read before the lock is the lost update
+ *  this helper exists to stop. */
 async function lockedSlave(
   tx: Prisma.TransactionClient,
   slaveId: string,
-): Promise<{ readonly runtimeRoles: readonly string[]; readonly workspaceId: string } | null> {
+): Promise<{
+  readonly runtimeRoles: readonly string[]
+  readonly capabilities: readonly string[]
+  readonly workspaceId: string
+} | null> {
   const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "Slave" WHERE id = ${slaveId} FOR UPDATE`
   if (locked.length === 0) return null
   const row = await tx.slave.findUnique({
     where: { id: slaveId },
-    select: { runtimeRoles: true, team: { select: { workspaceId: true } } },
+    select: { runtimeRoles: true, capabilities: true, team: { select: { workspaceId: true } } },
   })
-  return row === null ? null : { runtimeRoles: row.runtimeRoles, workspaceId: row.team.workspaceId }
+  return row === null
+    ? null
+    : { runtimeRoles: row.runtimeRoles, capabilities: row.capabilities, workspaceId: row.team.workspaceId }
+}
+
+/**
+ * The cap `setRuntimeRoles` keeps, kept by every OTHER writer of the column too (M47 final review,
+ * Minor 7).
+ *
+ * `setRuntimeRoles` is a replacement and refuses a set over `MAX_RUNTIME_ROLES`; the three writers
+ * that UNION -- {@link mergeRuntimeRoles}, {@link setSlaveCapabilities} and
+ * {@link hireFromTemplate}'s reuse merge -- grew the same column without ever asking, so a worker
+ * that provides a dozen capabilities across a dozen domains could end up holding a role set the
+ * operator-facing verb would refuse to write and could then no longer edit in one go.
+ *
+ * The same refusal, word for word, because it is the same invariant and the operator's fix is the
+ * same one: take a role away first. Returned BEFORE any write in every caller, so it is a value
+ * and never a thrown rollback.
+ */
+function overCap(roles: readonly string[]): ControlRefusal | null {
+  if (roles.length <= MAX_RUNTIME_ROLES) return null
+  return {
+    kind: 'invalid_runtime_roles',
+    reason: `a slave may hold at most ${String(MAX_RUNTIME_ROLES)} runtime roles; this set has ${String(roles.length)}`,
+  }
+}
+
+/** The taxonomy's WORDS for a set of keys, comma-joined in the keys' own order -- what an
+ *  `org.changed { field: 'capabilities' }` payload carries (M47 final review, Minor 5c). The
+ *  timeline card renders `from -> to` verbatim, and the key is recoverable from the slave row, so
+ *  the event is the one place the two can differ and the words are what a person needs there. */
+function capabilityLabels(keys: readonly string[], taxonomy: readonly CapabilityRecord[]): string | null {
+  if (keys.length === 0) return null
+  return keys.map((key) => capabilityLabel(key, taxonomy)).join(', ')
 }
 
 /**
@@ -342,12 +430,28 @@ export async function hireFromTemplate(
       orderBy: { id: 'asc' },
     })
     if (existing !== null) {
-      const merged = [...new Set([...existing.capabilities, ...capabilities])].toSorted()
-      const roles = [...existing.runtimeRoles]
+      // The Slave row under `FOR UPDATE`, and the merge computed off THAT read (M47 final review,
+      // Important 1). The workspace lock above serialises this branch against another hire; it does
+      // NOT serialise it against `setRuntimeRoles`, `setSlaveCapabilities` or `mergeRuntimeRoles`,
+      // every one of which locks the Slave row alone. A `set-runtime-roles` landing between the
+      // `findFirst` above and the update below was overwritten by a union computed from a row read
+      // before it -- the role the operator had just granted silently gone. Lock order is
+      // Workspace -> Slave, the order `materialiseCompanySlave` and `assignCompanyTx` also take,
+      // so two of these can never deadlock against each other.
+      const locked = await lockedSlave(tx, existing.id)
+      // The worker was deleted between the two reads inside this transaction. Nothing is written,
+      // so this is a returned refusal; the caller may hire again and will create one.
+      if (locked === null) return { kind: 'vanished' as const, slaveId: existing.id }
+      const merged = [...new Set([...locked.capabilities, ...capabilities])].toSorted()
+      const roles = [...locked.runtimeRoles]
       for (const role of runtimeRoles) if (!roles.includes(role)) roles.push(role)
       // Both sets only ever grow here, so a length that did not move is a set that did not move.
-      const rolesChanged = roles.length !== existing.runtimeRoles.length
-      const capabilitiesChanged = merged.length !== existing.capabilities.length
+      const rolesChanged = roles.length !== locked.runtimeRoles.length
+      const capabilitiesChanged = merged.length !== locked.capabilities.length
+      // The cap, before the write and before anything else in this transaction has written either
+      // (M47 final review, Minor 7).
+      const refusal = overCap(roles)
+      if (refusal !== null) return { kind: 'refused' as const, refusal }
       if (rolesChanged || capabilitiesChanged) {
         await tx.slave.update({ where: { id: existing.id }, data: { capabilities: merged, runtimeRoles: roles } })
       }
@@ -356,7 +460,7 @@ export async function hireFromTemplate(
         slaveId: existing.id,
         capabilities: merged,
         runtimeRoles: roles,
-        before: existing.capabilities,
+        before: locked.capabilities,
         rolesChanged,
         capabilitiesChanged,
       }
@@ -384,6 +488,8 @@ export async function hireFromTemplate(
     return { kind: 'created' as const, slaveId: worker.id, name: worker.name }
   })
 
+  if (outcome.kind === 'vanished') return err({ kind: 'slave_not_found', slaveId: outcome.slaveId })
+  if (outcome.kind === 'refused') return err(outcome.refusal)
   if (outcome.kind === 'created') {
     await appendEvent({
       type: 'org.changed',
@@ -414,16 +520,105 @@ export async function hireFromTemplate(
       workspaceId,
       slaveId: outcome.slaveId,
       actor: 'system',
+      // LABELS, not keys (M47 final review, Minor 5c): the timeline card renders `from -> to`
+      // verbatim at a person, and the keys are recoverable from the slave row this event names.
       payload: {
         entity: 'slave',
         id: outcome.slaveId,
         field: 'capabilities',
-        from: outcome.before.length === 0 ? null : [...outcome.before].toSorted().join(', '),
-        to: outcome.capabilities.join(', '),
+        from: capabilityLabels([...outcome.before].toSorted(), taxonomy),
+        to: capabilityLabels(outcome.capabilities, taxonomy),
       },
     })
   }
   return ok({ slaveId: outcome.slaveId, reused: true, capabilities: outcome.capabilities, runtimeRoles: outcome.runtimeRoles })
+}
+
+/**
+ * What every worker who PREDATES M47 provides, read off the template it already came from (M47
+ * final review, Important 4).
+ *
+ * `Slave.capabilities` is `@default([])` and nothing backfilled it, so on any project that existed
+ * before this milestone the column is empty on every row -- and `formTeam`'s FIRST tier, "somebody
+ * already here who can do it and was never given the role", is the one that reads it. The tier is
+ * not wrong; it is dead, and every gap on a real project skips straight past the cheapest fix to a
+ * hire a human has to answer. This verb is that fix, run once per project.
+ *
+ * ONLY a worker whose own capability set is EMPTY, and only from the template it is already linked
+ * to (`hiredFromTemplateId`, else its roster row's `templateId`). A worker an operator has already
+ * described with `set-capabilities` is never touched: that set is a human's answer and this verb
+ * has nothing better. A worker with no template link is skipped -- there is nothing to read.
+ *
+ * Roles are UNIONED, never replaced, for the reason `setSlaveCapabilities` unions them: taking a
+ * role away as a side effect of describing a skill parks a worker mid-project. Each worker is read
+ * and written under its own `FOR UPDATE`, one transaction each rather than one for the lot: a
+ * project-wide lock held across hundreds of rows would block every tick for as long as it ran, and
+ * a partial backfill is a correct backfill -- re-running finishes it.
+ *
+ * `workspaceId` narrows it to one project; absent, it is every project in the installation.
+ */
+export async function backfillSlaveCapabilities(
+  workspaceId?: string,
+): Promise<{ readonly updated: number; readonly skipped: number }> {
+  const taxonomy = await listCapabilities()
+  const rows = await prisma.slave.findMany({
+    where: {
+      capabilities: { isEmpty: true },
+      ...(workspaceId === undefined ? {} : { team: { workspaceId } }),
+    },
+    select: {
+      id: true,
+      hiredFromTemplate: { select: { capabilityKeys: true } },
+      companySlave: { select: { template: { select: { capabilityKeys: true } } } },
+    },
+    orderBy: { id: 'asc' },
+  })
+
+  let updated = 0
+  let skipped = 0
+  for (const row of rows) {
+    const keys = row.hiredFromTemplate?.capabilityKeys ?? row.companySlave?.template.capabilityKeys ?? []
+    if (keys.length === 0) {
+      skipped += 1
+      continue
+    }
+    const outcome = await prisma.$transaction(async (tx) => {
+      const slave = await lockedSlave(tx, row.id)
+      // Re-read under the lock: `set-capabilities` may have described this worker between the scan
+      // above and this transaction, and that answer is a human's.
+      if (slave === null || slave.capabilities.length > 0) return null
+      const runtimeRoles = [...slave.runtimeRoles]
+      for (const role of projectRoles(keys, taxonomy)) if (!runtimeRoles.includes(role)) runtimeRoles.push(role)
+      // The cap is an invariant, not a preference: a worker whose template would carry it past
+      // `MAX_RUNTIME_ROLES` keeps the roles it has and is reported as skipped, rather than being
+      // written into a state `set-runtime-roles` would refuse to write.
+      if (overCap(runtimeRoles) !== null) return null
+      await tx.slave.update({ where: { id: row.id }, data: { capabilities: [...keys], runtimeRoles } })
+      return { workspaceId: slave.workspaceId }
+    })
+    if (outcome === null) {
+      skipped += 1
+      continue
+    }
+    // ONE event per worker actually changed -- in LABELS, like every other `capabilities` write
+    // (Minor 5c). `from` is null because the whole predicate of this verb is that there was nothing
+    // there.
+    await appendEvent({
+      type: 'org.changed',
+      workspaceId: outcome.workspaceId,
+      slaveId: row.id,
+      actor: 'human',
+      payload: {
+        entity: 'slave',
+        id: row.id,
+        field: 'capabilities',
+        from: null,
+        to: capabilityLabels(keys, taxonomy),
+      },
+    })
+    updated += 1
+  }
+  return { updated, skipped }
 }
 
 /** `Name`, then `Name 2`, `Name 3`… -- a project may already have a worker with the template's

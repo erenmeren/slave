@@ -1,6 +1,7 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { err, ok, type Result } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { listCapabilities } from '../capability.js'
 import { admitRoster, AssignmentRefused, assignCompanyTx, type AssignReport } from '../org.js'
 import type { Principal } from '../principal.js'
 import type { ControlRefusal } from '../refusal.js'
@@ -255,6 +256,11 @@ export async function adoptSimulation(
   const admission = await admitRoster(workspace, companyId)
   if (admission !== null) return err(admission)
 
+  // OUTSIDE the transaction, like every other pre-check here (M47 final review, Important 3):
+  // `assignCompanyTx` runs on this function's own `tx` and cannot read a second connection, so the
+  // taxonomy it projects capabilities to roles with has to be in hand before the transaction opens.
+  const taxonomy = await listCapabilities()
+
   try {
     const outcome = await prisma.$transaction(async (tx) => {
       const got = await locked(tx, simulationId)
@@ -320,7 +326,14 @@ export async function adoptSimulation(
       }
 
       const roleOverrides = roleOverridesOf(loaded.definition)
-      const assigned = await assignCompanyTx(tx, input.workspaceId, companyId, { roleOverrides })
+      // The taxonomy, read ONCE before this transaction opened and handed down (M47 final review,
+      // Important 3). `assignCompanyTx` projects each template's `capabilityKeys` into the worker's
+      // runtime roles, and an ABSENT taxonomy means "project nothing" -- so adoption, the one path
+      // that materialises a whole company without going through `assignCompany`, was the one path
+      // that produced workers holding the capabilities and none of the roles they project to. It
+      // cannot be read here: this runs inside somebody else's transaction and must not open a
+      // second connection.
+      const assigned = await assignCompanyTx(tx, input.workspaceId, companyId, { roleOverrides, taxonomy })
       if (!assigned.ok) throw new AdoptionRefused(assigned.error)
 
       const proposal = proposedSettings(loaded.definition)

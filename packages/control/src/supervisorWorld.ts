@@ -7,6 +7,7 @@ import {
   THREAD_BODY_MAX_CHARS,
   boundThread,
   evaluateGuardrails,
+  isStaffableTask,
   type ActionKind,
   type CapabilityRecord,
   type DecisionStatus,
@@ -504,12 +505,13 @@ export async function loadSupervisorWorld(
       // roles -- gets exactly the queries it got before, and no tick scans hundreds of templates
       // to answer a question nobody asked. One query each, never one per capability.
       //
-      // The gate is the SAME filter `teamPlanOf` applies (`ready` or `blocked`), not "any task ever"
-      // (fix round 1, Minor 6): a finished 200-task project whose history is full of capabilities
-      // has no gap left to staff, and paying three queries a tick to build a roster and a catalog
-      // `formTeam` would then be handed zero requirements for is a cost with no answer in it.
+      // The gate is the SAME predicate every reading of "what is missing" now applies -- the domain's
+      // own `isStaffableTask` (M47 final review, Important 2), not a fourth spelling of it here.
+      // A finished 200-task project whose history is full of capabilities has no gap left to staff,
+      // and paying three queries a tick to build a roster and a catalog `formTeam` would then be
+      // handed zero requirements for is a cost with no answer in it.
       const asksForCapabilities = taskRows.some(
-        (row) => (row.status === 'ready' || row.status === 'blocked') && row.requiredCapabilities.length > 0,
+        (row) => isStaffableTask(row) && row.requiredCapabilities.length > 0,
       )
       const taxonomy = asksForCapabilities ? await loadTaxonomy(tx) : []
       const companyRows = asksForCapabilities ? await loadCompanyRoster(tx, workspaceId) : []

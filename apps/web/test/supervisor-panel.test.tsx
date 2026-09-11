@@ -113,8 +113,16 @@ describe('actionText', () => {
   // because the situation chip beside it only says that one is missing.
   it('names the role an assign_capability grants and the capability it is for', () => {
     expect(
-      actionText({ kind: 'assign_capability', slaveId: 'Rae', capability: 'security.application', role: 'security' }),
-    ).toBe('give Rae the "security" runtime role, for security.application')
+      actionText({
+        kind: 'assign_capability',
+        slaveId: 'Rae',
+        capability: 'security.application',
+        capabilityLabel: 'Application security',
+        role: 'security',
+      }),
+      // Final review, Minor 5b: the WORDS, off the action itself -- a panel in a browser has no
+      // taxonomy to resolve a key with, and the key is one field away on the same row.
+    ).toBe('give Rae the "security" runtime role, for Application security')
   })
 
   it('names the worker a materialise_company_worker brings over', () => {
@@ -123,10 +131,11 @@ describe('actionText', () => {
         kind: 'materialise_company_worker',
         companySlaveId: 'cs1',
         capability: 'security.application',
+        capabilityLabel: 'Application security',
         name: 'Sam',
         rationale: 'Sam is already on the company roster and provides Application security.',
       }),
-    ).toBe('bring Sam onto this project from the company roster, for security.application')
+    ).toBe('bring Sam onto this project from the company roster, for Application security')
   })
 
   it('says when a catalog hire is a temporary specialist, and says nothing when it is not', () => {
@@ -134,14 +143,15 @@ describe('actionText', () => {
       kind: 'hire_from_catalog',
       templateId: 'tpl1',
       capability: 'security.application',
+      capabilityLabel: 'Application security',
       name: 'Security Reviewer',
       rationale: 'nobody here provides Application security',
     } as const
     expect(actionText({ ...hire, temporary: false })).toBe(
-      'hire Security Reviewer from the catalog, for security.application',
+      'hire Security Reviewer from the catalog, for Application security',
     )
     expect(actionText({ ...hire, temporary: true })).toBe(
-      'hire Security Reviewer from the catalog as a temporary specialist, for security.application',
+      'hire Security Reviewer from the catalog as a temporary specialist, for Application security',
     )
   })
 
@@ -261,13 +271,14 @@ describe('SupervisorPanel', () => {
           situation: {
             kind: 'capability_unstaffed',
             subjectId: 'security.application',
-            summary: '1 startable task(s) need "security.application" and no slave can be dispatched as "security".',
+            summary: '1 startable task(s) need Application security and no slave can be dispatched as security.',
             facts: { capability: 'security.application', role: 'security', readyTasks: 1, firstTaskId: 't-1' },
           },
           action: {
             kind: 'hire_from_catalog',
             templateId: 'tpl1',
             capability: 'security.application',
+            capabilityLabel: 'Application security',
             name: 'Security Reviewer',
             rationale: 'Security Reviewer provides Application security, which nobody on this project does.',
             temporary: false,
@@ -282,7 +293,7 @@ describe('SupervisorPanel', () => {
     expect(screen.getByTestId('supervisor-proposal-kind').textContent).toBe('Missing a capability')
     expect(screen.getByTestId('supervisor-proposal-kind').getAttribute('title')).toBe('capability_unstaffed')
     expect(screen.getByTestId('supervisor-proposal-action').textContent).toBe(
-      'hire Security Reviewer from the catalog, for security.application',
+      'hire Security Reviewer from the catalog, for Application security',
     )
   })
 

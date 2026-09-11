@@ -5,7 +5,13 @@ import {
   loadSupervisorWorld,
   type DecisionView,
 } from '@slave-of-ai/control'
-import { capabilityIndex, teamPlanOf, type CapabilityRecord, type SupervisorWorld } from '@slave-of-ai/domain'
+import {
+  capabilityIndex,
+  isStaffableTask,
+  teamPlanOf,
+  type CapabilityRecord,
+  type SupervisorWorld,
+} from '@slave-of-ai/domain'
 
 /** One worker, as the Organization view reads them (R6): who, how they got here, what they
  *  provide, and what they are doing right now. */
@@ -123,8 +129,12 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
         label: label(capability),
         summary:
           decisions[0]?.situation.summary ?? `Nobody on this project can be dispatched for ${label(capability)}.`,
+        // `isStaffableTask`, the SAME predicate the situation raised the gap with (final review,
+        // Important 2). This count read `status === 'ready'` alone, so a ready task whose
+        // dependency had not been integrated was counted here and not there -- the page said "2
+        // ready tasks" under a summary that said one.
         readyTasks: world.tasks.filter(
-          (task) => task.status === 'ready' && task.requiredCapabilities.includes(capability),
+          (task) => isStaffableTask(task) && task.requiredCapabilities.includes(capability),
         ).length,
         decisions,
       }
