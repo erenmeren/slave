@@ -96,6 +96,9 @@ beforeAll(async () => {
  * asks the project what it knows, would otherwise be answered with the one before it.
  */
 beforeEach(async () => {
+  // The events go too: several cases below count the `memory.changed` rows one verb wrote, and an
+  // event the case before it left behind would be indistinguishable from one this verb produced.
+  await prisma.executionEvent.deleteMany({ where: { workspaceId } })
   await prisma.memorySource.deleteMany({})
   await prisma.memory.deleteMany({
     where: { OR: [{ workspaceId }, { companyId }, { slaveId: { in: [slaveId, otherSlaveId] } }] },
@@ -250,7 +253,7 @@ describe('the verbs a person uses', () => {
     const chain = await readMemory(corrected.value.created.id)
     expect(chain.ok).toBe(true)
     if (!chain.ok) return
-    expect(chain.value.supersedes?.id).toBe(candidate.value.id)
+    expect(chain.value.supersedes.map((one) => one.id)).toEqual([candidate.value.id])
     expect(chain.value.supersededBy).toBeNull()
     expect(chain.value.sources).toEqual([])
   })
@@ -282,6 +285,89 @@ describe('the verbs a person uses', () => {
     if (result.ok) return
     expect(result.error.kind).toBe('invalid_memory')
     expect((await prisma.memory.findUniqueOrThrow({ where: { id: one.value.id } })).status).toBe('candidate')
+  })
+
+  // Fix round 1, minor 4: provenance is decided here, and so is the TARGET -- a caller that sends a
+  // companyId beside a workspace scope must not have it written into the row the scope does not name.
+  it('nulls every target but the one the scope names', async () => {
+    const added = await addMemory(
+      {
+        workspaceId,
+        companyId,
+        slaveId,
+        scope: 'workspace',
+        type: 'fact',
+        title: 'Only the project',
+        body: 'one target, and it is the one the scope names',
+        capabilities: [],
+      },
+      { userId },
+    )
+    expect(added.ok).toBe(true)
+    if (!added.ok) return
+    expect(added.value.workspaceId).toBe(workspaceId)
+    expect(added.value.companyId).toBeNull()
+    expect(added.value.slaveId).toBeNull()
+  })
+
+  // Fix round 1, minor 3: a corrected condensation still knows what it is a summary of.
+  it('carries the old row’s sources onto the correction', async () => {
+    const first = await recordMemory(draft({ title: 'source one' }))
+    const second = await recordMemory(draft({ title: 'source two' }))
+    const summary = await recordMemory(
+      draft({
+        type: 'procedure',
+        status: 'verified',
+        confidence: 'sourced',
+        verifiedBy: 'human',
+        title: 'what those two say',
+        provenance: { ...(draft().provenance as Record<string, unknown>), sourceKind: 'condensation', sourceRef: null },
+      }),
+    )
+    expect(first.ok && second.ok && summary.ok).toBe(true)
+    if (!first.ok || !second.ok || !summary.ok) return
+    await prisma.memorySource.createMany({
+      data: [
+        { memoryId: summary.value.id, sourceMemoryId: first.value.id },
+        { memoryId: summary.value.id, sourceMemoryId: second.value.id },
+      ],
+    })
+
+    const corrected = await supersedeMemory(summary.value.id, { title: 'what those two really say', body: 'both' }, { userId })
+    expect(corrected.ok).toBe(true)
+    if (!corrected.ok) return
+    const expected = [first.value.id, second.value.id].sort((a, b) => a.localeCompare(b))
+    expect([...corrected.value.created.sourceIds]).toEqual(expected)
+    const chain = await readMemory(corrected.value.created.id)
+    expect(chain.ok).toBe(true)
+    if (!chain.ok) return
+    expect(chain.value.sources.map((one) => one.id).sort((a, b) => a.localeCompare(b))).toEqual(expected)
+  })
+
+  // Fix round 1, minor 5: one memory can retire SEVERAL -- a verified fact retires every candidate
+  // its task left behind -- so the chain reads the whole set, not the first one found.
+  it('reads every row a memory replaced, oldest first', async () => {
+    const one = await recordMemory(draft({ title: 'first claim' }))
+    const two = await recordMemory(draft({ title: 'second claim' }))
+    expect(one.ok && two.ok).toBe(true)
+    if (!one.ok || !two.ok) return
+    const fact = await recordMemory(
+      draft({
+        type: 'fact',
+        status: 'verified',
+        confidence: 'sourced',
+        verifiedBy: 'verification',
+        supersedesTaskCandidates: true,
+        title: 'what actually happened',
+        provenance: { ...(draft().provenance as Record<string, unknown>), sourceKind: 'verification', sourceRef: null },
+      }),
+    )
+    expect(fact.ok).toBe(true)
+    if (!fact.ok) return
+    const chain = await readMemory(fact.value.id)
+    expect(chain.ok).toBe(true)
+    if (!chain.ok) return
+    expect(chain.value.supersedes.map((row) => row.title)).toEqual(['first claim', 'second claim'])
   })
 
   it('reads a memory that is not there as a refusal rather than an empty chain', async () => {
@@ -359,9 +445,175 @@ describe('listMemories and memoriesForRun', () => {
     expect(given.map((one) => one.title)).toEqual(['mine', 'project fact', 'company fact'])
   })
 
+  // R3's first eligibility rule, enforced in the QUERY and not only in the ranking: a candidate is
+  // a worker's claim, and a run must never be handed one as knowledge.
+  it('never loads an unverified candidate, however well it matches the task', async () => {
+    const claim = await recordMemory(draft({ title: 'a claim nobody checked' }))
+    expect(claim.ok).toBe(true)
+    expect(await memoriesForRun({ workspaceId, slaveId, taskId, kind: 'implementation' })).toEqual([])
+  })
+
   it('answers an unknown project with nothing at all rather than throwing', async () => {
     expect(await listMemories({ workspaceId: 'nope' })).toEqual([])
     expect(await memoriesForRun({ workspaceId: 'nope', slaveId: null, taskId: null, kind: 'planning' })).toEqual([])
+  })
+})
+
+/**
+ * Fix round 1, Important 1: every one of these verbs reads a row, decides, and then writes. The
+ * write is conditional on the status the READ saw -- `supersedeMemory`'s own idiom -- so a
+ * concurrent verb that moved the row in between wins it, and this one is refused rather than
+ * stamping over somebody else's decision.
+ *
+ * Each case reassigns one Prisma delegate method to a wrapper that still forwards to the real
+ * implementation, so the race happens for real against Postgres in the exact window the guard
+ * exists for. `vi.spyOn` does not survive the delegate's Proxy (M49 note; `skill-graph.test.ts`
+ * has the same escape hatch), and every wrapper is restored in a `finally`.
+ */
+describe('the write is conditional on the status the read saw (fix round 1)', () => {
+  /**
+   * Runs `during` once around the next `prisma.memory.<method>` call, then forwards; every later
+   * call goes straight through.
+   *
+   * `when` is the whole point. Racing a READ means the other writer lands AFTER the read returns,
+   * so the verb decides on a value that is already out of date. Racing a WRITE means it lands
+   * BEFORE, so the write's own `where` is what has to notice. Each case below picks the one that
+   * puts the race in the window its guard exists for.
+   */
+  async function racing<T>(
+    method: 'findUnique' | 'updateMany',
+    when: 'after' | 'before',
+    during: () => Promise<unknown>,
+    body: () => Promise<T>,
+  ): Promise<T> {
+    const delegate = prisma.memory as unknown as Record<string, (args: unknown) => unknown>
+    const original = (delegate[method] as (args: unknown) => unknown).bind(prisma.memory)
+    let raced = false
+    delegate[method] = (args: unknown): unknown => {
+      if (raced) return original(args)
+      raced = true
+      return (async (): Promise<unknown> => {
+        if (when === 'before') {
+          await during()
+          return original(args)
+        }
+        const result = await original(args)
+        await during()
+        return result
+      })()
+    }
+    try {
+      return await body()
+    } finally {
+      delegate[method] = original
+    }
+  }
+
+  it('refuses a verify whose row somebody withdrew after the read, and leaves it withdrawn', async () => {
+    const one = await recordMemory(draft())
+    expect(one.ok).toBe(true)
+    if (!one.ok) return
+
+    const result = await racing(
+      'findUnique',
+      'after',
+      () =>
+        prisma.memory.update({
+          where: { id: one.value.id },
+          data: { status: 'removed', removedReason: 'somebody else withdrew it' },
+        }),
+      () => verifyMemory(one.value.id, { userId }),
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.kind).toBe('memory_not_editable')
+    const row = await prisma.memory.findUniqueOrThrow({ where: { id: one.value.id } })
+    // Still withdrawn, and still for the reason the person who withdrew it gave.
+    expect(row.status).toBe('removed')
+    expect(row.removedReason).toBe('somebody else withdrew it')
+    expect(row.verifiedBy).toBeNull()
+  })
+
+  it('refuses a removal whose row somebody verified after the read', async () => {
+    const one = await recordMemory(draft())
+    expect(one.ok).toBe(true)
+    if (!one.ok) return
+
+    const result = await racing(
+      'findUnique',
+      'after',
+      () =>
+        prisma.memory.update({
+          where: { id: one.value.id },
+          data: { status: 'superseded', supersededById: null },
+        }),
+      () => removeMemory(one.value.id, 'out of date', { userId }),
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.kind).toBe('memory_not_editable')
+    const row = await prisma.memory.findUniqueOrThrow({ where: { id: one.value.id } })
+    expect(row.status).toBe('superseded')
+    expect(row.removedReason).toBeNull()
+  })
+
+  it('refuses a correction whose row moved after the read, and leaves NO half-written replacement', async () => {
+    const one = await recordMemory(draft())
+    expect(one.ok).toBe(true)
+    if (!one.ok) return
+    const before = await prisma.memory.count({ where: { workspaceId } })
+
+    const result = await racing(
+      'findUnique',
+      'after',
+      () =>
+        prisma.memory.update({
+          where: { id: one.value.id },
+          data: { status: 'removed', removedReason: 'somebody else withdrew it' },
+        }),
+      () => supersedeMemory(one.value.id, { title: 'a better title', body: 'better words' }, { userId }),
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.kind).toBe('memory_not_editable')
+    // The insert and the stamp are one transaction: the refusal THROWS inside it, so the row it
+    // had already written is rolled back rather than committed as an orphan.
+    expect(await prisma.memory.count({ where: { workspaceId } })).toBe(before)
+  })
+
+  it('skips a stale candidate somebody verified between the discard’s read and its write', async () => {
+    const longAgo = new Date(Date.now() - MEMORY_CANDIDATE_STALE_MS - 60_000)
+    const lucky = await recordMemory(draft({ title: 'lucky' }))
+    const doomed = await recordMemory(draft({ title: 'doomed' }))
+    expect(lucky.ok && doomed.ok).toBe(true)
+    if (!lucky.ok || !doomed.ok) return
+    await prisma.memory.updateMany({
+      where: { id: { in: [lucky.value.id, doomed.value.id] } },
+      data: { createdAt: longAgo },
+    })
+
+    const withdrawn = await racing(
+      'updateMany',
+      'before',
+      () =>
+        prisma.memory.update({
+          where: { id: lucky.value.id },
+          data: { status: 'verified', verifiedAt: new Date(), verifiedBy: 'human' },
+        }),
+      () => discardStaleCandidates(workspaceId, new Date(), { userId }),
+    )
+
+    // One, not two: a thing somebody verified in that window is knowledge, and calling it "never
+    // verified" would be a lie the row would carry forever.
+    expect(withdrawn).toBe(1)
+    expect((await prisma.memory.findUniqueOrThrow({ where: { id: lucky.value.id } })).status).toBe('verified')
+    expect((await prisma.memory.findUniqueOrThrow({ where: { id: doomed.value.id } })).status).toBe('removed')
+    const events = await prisma.executionEvent.findMany({ where: { workspaceId, type: 'memory_changed' } })
+    const about = events.map((event) => (event.payload as { memoryId: string }).memoryId)
+    expect(about).toEqual([doomed.value.id])
   })
 })
 
@@ -383,5 +635,24 @@ describe('the stale-candidate count and the discard (R2, plan errata E11/E12)', 
     expect((await prisma.memory.findUniqueOrThrow({ where: { id: fresh.value.id } })).status).toBe('candidate')
     expect(await staleCandidateCount(workspaceId, new Date())).toBe(0)
     expect(await discardStaleCandidates(workspaceId, new Date())).toBe(0)
+  })
+
+  // Fix round 1, minor 2: the discard pages rather than loading a year of unverified reports into
+  // memory at once. Three rows through a batch of two is the smallest shape that proves the loop
+  // takes a second page and stops on the third.
+  it('withdraws every stale candidate across as many pages as it takes', async () => {
+    const longAgo = new Date(Date.now() - MEMORY_CANDIDATE_STALE_MS - 60_000)
+    const ids: string[] = []
+    for (const title of ['one', 'two', 'three']) {
+      const written = await recordMemory(draft({ title }))
+      expect(written.ok).toBe(true)
+      if (!written.ok) return
+      ids.push(written.value.id)
+    }
+    await prisma.memory.updateMany({ where: { id: { in: ids } }, data: { createdAt: longAgo } })
+
+    expect(await discardStaleCandidates(workspaceId, new Date(), { userId }, { batch: 2 })).toBe(3)
+    expect(await prisma.memory.count({ where: { id: { in: ids }, status: 'removed' } })).toBe(3)
+    expect(await prisma.executionEvent.count({ where: { workspaceId, type: 'memory_changed' } })).toBe(3)
   })
 })
