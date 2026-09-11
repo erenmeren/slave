@@ -1,0 +1,7 @@
+{
+  "_note": "M50's own catalog. Two divisions, two personas: one providing Application security and one providing Test automation, so a gap that belongs to ONE startable task and a gap TWO tasks share can be measured side by side in one project. Separate from catalog-m47, whose two personas gate:m47 asserts exactly.",
+  "divisions": {
+    "security": { "label": "Security" },
+    "qa": { "label": "Quality" }
+  }
+}

@@ -65,6 +65,7 @@ import {
   MEMORY_STATUSES,
   MEMORY_TYPES,
   SITUATION_KINDS,
+  SLAVE_LIFECYCLES,
   TIERS,
 } from '../packages/domain/dist/index.js'
 import { PROVIDER_KINDS } from '../packages/providers/dist/index.js'
@@ -164,6 +165,12 @@ const RAW_TOKENS = [
   ...Object.values(EVENT_TYPE_BY_DOMAIN_TYPE),
   ...Object.keys(EVENT_TYPE_BY_DOMAIN_TYPE),
   ...MEMORY_UNIONS,
+  // M50 R6: the three lifecycles. Every member is a bare English word, so the `_`/`.` filter below
+  // drops all three and this line adds nothing to the blocklist TODAY -- which is exactly the
+  // M49/E10 shape it is written in: the first member a later milestone spells `needs_release` joins
+  // the blocklist with no edit here, and the real protection is `SLAVE_LIFECYCLE_LABEL`, pinned by
+  // `organization-page.test.tsx`.
+  ...SLAVE_LIFECYCLES,
 ].filter((token) => token.includes('_') || token.includes('.'))
 
 /**

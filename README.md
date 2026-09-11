@@ -831,7 +831,8 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m35-pipeline-honesty`, `gate:m36-messaging`, `gate:m37-run-context`, `gate:m38-supervisor`,
 `gate:m39-supervisor-mailbox`, `gate:m40-requirement-versioning`, `gate:m41-scenario`,
 `gate:m42-catalog-import`, `gate:m44-ux-foundation`, `gate:m45-project-experience`,
-`gate:m46-workforce-catalog`, `gate:m47-team-formation`, `gate:m48-runbooks` and `gate:m49-memory` on every push — `m36` stops the orchestrator and starts it again
+`gate:m46-workforce-catalog`, `gate:m47-team-formation`, `gate:m48-runbooks`, `gate:m49-memory` and
+`gate:m50-ephemeral` on every push — `m36` stops the orchestrator and starts it again
 mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was
 given the persona and the skills it was assigned, `m38` drives a real daemon until the Supervisor
 proposes the staffing a reviewer-less project needs, waits for a human to approve it, unblocks a
@@ -894,8 +895,12 @@ decisions and none of the candidate, one correction typed at the CLI leaves a ch
 the old wording still readable, twenty facts become one summary that keeps all twenty linked and
 is what the next run is given instead of them, and the Knowledge tab shows every piece with the
 sentence that says where it came from — where a person can verify it, correct it, or withdraw it
-with a reason and still find it afterwards. That is
-24 gates. Tests and gates share one Postgres --
+with a reason and still find it afterwards,
+and `m50` drives one until the Supervisor asks for a specialist for exactly one assignment and an
+ordinary hire for the gap two tasks share, hires the first when a person approves it, dispatches it
+by role, and — once that one assignment is done — releases it by itself: roles emptied, worktree
+gone, and every run, message and thing it learnt still exactly where it was. That is
+25 gates. Tests and gates share one Postgres --
 run one at a time.
 
 ## Learn more

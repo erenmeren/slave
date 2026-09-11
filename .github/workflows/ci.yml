@@ -75,3 +75,4 @@ jobs:
       - run: npm run gate:m47-team-formation
       - run: npm run gate:m48-runbooks
       - run: npm run gate:m49-memory
+      - run: npm run gate:m50-ephemeral
