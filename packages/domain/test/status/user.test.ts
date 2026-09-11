@@ -11,6 +11,7 @@ import {
   userSupervisorStatus,
   userTaskStatus,
   userWorkspaceStatus,
+  type UserCardFacts,
   type UserCardState,
   type UserSupervisorState,
   type UserTaskState,
@@ -38,7 +39,7 @@ const ALL_TASK_STATES: Record<UserTaskState, true> = {
 const ALL_CARD_STATES: Record<UserCardState, true> = {
   working: true, planning: true, waiting: true, review: true, paused: true,
   pause_requested: true, resuming: true, blocked: true, cancelled: true, idle: true,
-  completed: true,
+  completed: true, steered: true, constrained: true,
 }
 const ALL_WORKSPACE_STATES: Record<UserWorkspaceState, true> = {
   archived: true, halted: true, needs_you: true, working: true, idle: true,
@@ -166,6 +167,9 @@ describe('userRunStatus and userSlaveStatus', () => {
       working: 'WORKING', planning: 'PLANNING', waiting: 'WAITING', review: 'REVIEW',
       paused: 'PAUSED', pause_requested: 'PAUSING', resuming: 'RESUMING', blocked: 'BLOCKED',
       cancelled: 'CANCELLED', idle: 'IDLE', completed: 'DONE',
+      // M51 R7. The eleven words above are still the eleven the web rendered before M44 moved
+      // them here, to the letter; these two are new states, not renamed old ones.
+      steered: 'STEERED', constrained: 'CONSTRAINED',
     })
   })
 
@@ -275,5 +279,44 @@ describe('userSupervisorStatus', () => {
     ]
     expect(reached.map((status) => status.state).sort()).toEqual(states.sort())
     for (const status of reached) expect(status.label.length).toBeGreaterThan(0)
+  })
+})
+
+describe('userRunStatus with breaker facts (M51 R7)', () => {
+  it('reads exactly as it always did when called with one argument', () => {
+    // The ~20 existing call sites, unchanged: `apps/web/src/lib/tones.ts`'s `cardStateForRun` is
+    // the adapter they all go through and it passes no facts.
+    expect(userRunStatus('working')).toEqual({ state: 'working', label: 'WORKING', needsYou: false })
+    expect(userRunStatus(null).state).toBe('idle')
+  })
+
+  it('says STEERED and CONSTRAINED for a working run the breaker has spoken to', () => {
+    expect(userRunStatus('working', { breakerLevel: 'steered' })).toEqual({
+      state: 'steered',
+      label: 'STEERED',
+      needsYou: false,
+    })
+    expect(userRunStatus('working', { breakerLevel: 'constrained' }).label).toBe('CONSTRAINED')
+  })
+
+  it('says nothing new at level `none`, or with an empty facts object', () => {
+    expect(userRunStatus('working', { breakerLevel: 'none' }).state).toBe('working')
+    expect(userRunStatus('working', {}).state).toBe('working')
+  })
+
+  it('never lets a breaker level speak over a status a person acted on', () => {
+    // A paused run reads PAUSED even at level `constrained`: somebody (or the breaker itself) has
+    // stopped it, and "constrained" would describe a budget nobody is spending.
+    const facts: UserCardFacts = { breakerLevel: 'constrained' }
+    expect(userRunStatus('paused', facts).state).toBe('paused')
+    expect(userRunStatus('pause_requested', facts).state).toBe('pause_requested')
+    expect(userRunStatus('failed', facts).state).toBe('blocked')
+    expect(userRunStatus('succeeded', facts).state).toBe('completed')
+    expect(userRunStatus(null, facts).state).toBe('idle')
+  })
+
+  it('gives both new states a word', () => {
+    expect(USER_CARD_LABEL.steered).toBe('STEERED')
+    expect(USER_CARD_LABEL.constrained).toBe('CONSTRAINED')
   })
 })

@@ -32,16 +32,24 @@ const EXPECTED: Record<CardState, { tone: string; label: string; pulse: boolean 
   cancelled: { tone: 'idle', label: 'CANCELLED', pulse: false },
   idle: { tone: 'idle', label: 'IDLE', pulse: false },
   completed: { tone: 'done', label: 'DONE', pulse: false },
+  // M51 R7: the twelfth and thirteenth states. The breaker is speaking to a run that is still
+  // WORKING, so both ride `waiting`'s amber and both pulse -- nothing needs a person, and the run
+  // is live. The WORD is what separates them, the way `pause_requested` and `waiting` already
+  // share a tone.
+  steered: { tone: 'waiting', label: 'STEERED', pulse: true },
+  constrained: { tone: 'waiting', label: 'CONSTRAINED', pulse: true },
 }
 
 describe('CARD_STATE_TONE', () => {
-  it('carries the mockup table verbatim for all eleven states', () => {
+  it('carries the mockup table verbatim for all thirteen states', () => {
     expect(CARD_STATE_TONE).toEqual(EXPECTED)
   })
 
-  it('pulses exactly the five in-flight states the spec names', () => {
+  it('pulses exactly the in-flight states the spec names, plus M51\u2019s two breaker words', () => {
     const pulsing = (Object.keys(CARD_STATE_TONE) as CardState[]).filter((s) => CARD_STATE_TONE[s].pulse).sort()
-    expect(pulsing).toEqual(['pause_requested', 'planning', 'resuming', 'review', 'working'].sort())
+    expect(pulsing).toEqual(
+      ['constrained', 'pause_requested', 'planning', 'resuming', 'review', 'steered', 'working'].sort(),
+    )
   })
 })
 

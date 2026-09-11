@@ -1,4 +1,11 @@
-import { USER_CARD_LABEL, userRunStatus, userSlaveStatus, userTaskStatus, type UserCardState } from '@slave-of-ai/domain'
+import {
+  USER_CARD_LABEL,
+  userRunStatus,
+  userSlaveStatus,
+  userTaskStatus,
+  type UserCardFacts,
+  type UserCardState,
+} from '@slave-of-ai/domain'
 import type { SlaveStatus, RunStatus, TaskStatus } from '@slave-of-ai/domain'
 import type { StatusTone } from '../components/ui/StatusPill'
 import { COLUMN_FOR_STATUS, COLUMN_STATE } from './taskColumns'
@@ -38,6 +45,12 @@ const TONE_AND_PULSE: Record<CardState, { readonly tone: StatusTone; readonly pu
   cancelled: { tone: 'idle', pulse: false },
   idle: { tone: 'idle', pulse: false },
   completed: { tone: 'done', pulse: false },
+  // M51 R7: the breaker is speaking to this run and it is still working. `waiting` amber rather
+  // than `blocked` red -- nothing needs a person, the system is handling it -- and it PULSES,
+  // because the run is live. `constrained` is the louder of the two and shares the tone, the way
+  // `pause_requested` and `waiting` already do: the WORD is the difference, not the colour.
+  steered: { tone: 'waiting', pulse: true },
+  constrained: { tone: 'waiting', pulse: true },
 }
 
 export const CARD_STATE_TONE: Record<CardState, ToneSpec> = Object.fromEntries(
@@ -49,8 +62,8 @@ export const CARD_STATE_TONE: Record<CardState, ToneSpec> = Object.fromEntries(
 
 /** A run's own status. `null` means "no live run", which is `idle`. Thin adapter over the domain's
  *  `userRunStatus` -- kept so the ~20 existing call sites read the same as they always did. */
-export function cardStateForRun(status: RunStatus | null): CardState {
-  return userRunStatus(status).state
+export function cardStateForRun(status: RunStatus | null, facts?: UserCardFacts): CardState {
+  return userRunStatus(status, facts).state
 }
 
 /** `deriveSlaveStatus`'s output, through the domain. */

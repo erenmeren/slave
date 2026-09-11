@@ -1,4 +1,5 @@
 import { NON_TERMINAL_RUN_STATUSES, type RunStatus } from '../run/state.js'
+import { estimateCostUsd } from './pricing.js'
 
 /**
  * What a set of runs is known to have cost, and how many of them nobody can account for.
@@ -124,3 +125,65 @@ export function sumSpendFromGroups(groups: readonly SpendGroup[]): Spend {
   }
   return { known, unknownRuns }
 }
+
+/**
+ * A {@link SpendRow} plus what it takes to ESTIMATE the rows that reported nothing (M51 R5).
+ *
+ * Deliberately an extension rather than a widening of `SpendRow`: `sumSpend` and
+ * `sumSpendFromGroups` are pinned against each other over the whole product of providers, statuses
+ * and costs (`test/spend-groups.test.ts`), and a `CostRow` IS a `SpendRow`, so both functions keep
+ * taking exactly what they took. The three extra columns are read by nothing in this file except
+ * {@link costProvenanceOf}.
+ */
+export interface CostRow extends SpendRow {
+  readonly tokensIn: number | null
+  readonly tokensOut: number | null
+  /** `SlaveRun.model` (M51 R5) -- the model half of the pair `resolveRuntime` dispatched with,
+   *  written beside `provider` and null on every run recorded before M51. */
+  readonly model: string | null
+}
+
+/**
+ * WHERE one run's cost figure came from. Derived per run, never stored: the three columns already
+ * say it, and a fourth column claiming it is a fourth thing to keep in step.
+ */
+export type CostProvenance = 'reported' | 'estimated' | 'unmeasured'
+
+/**
+ * The one place the Actual / Estimated / Unmeasured split is decided (M51 R5).
+ *
+ * Order is the whole rule: a REPORTED figure wins, always and first. Only when nothing was reported
+ * is the price table consulted, and only when the price table has an answer is the run called
+ * estimated. This is the function that makes "the estimate is fallback-only and never overwrites a
+ * reported figure" a property of the code rather than a sentence in a docstring.
+ *
+ * Note what it does NOT do: it says nothing about whether the run is finished. `sumSpend`'s
+ * `unknownRuns` is the finished-and-unmeasured count the budget surfaces use and it keeps its own
+ * rule; this one answers "what kind of number can I show for THIS row", which a live run has an
+ * honest answer to (`estimated`, from tokens that are now written mid-run).
+ */
+export function costProvenanceOf(row: CostRow): CostProvenance {
+  if (row.costUsd !== null) return 'reported'
+  const tokens =
+    row.tokensIn === null || row.tokensOut === null ? null : { input: row.tokensIn, output: row.tokensOut }
+  return estimateCostUsd(row.model, tokens) === null ? 'unmeasured' : 'estimated'
+}
+
+/**
+ * What a CONCLUDED run nobody measured is worth as an UPPER BOUND, in USD (M51 R5).
+ *
+ * The same one dollar `SUPERVISOR_PER_CALL_CAP_USD` charges an unmeasured Supervisor call, and
+ * deliberately the same number: both are "something finished, it spent real money, and nobody can
+ * name how much".
+ *
+ * **It is a DISPLAY figure and nothing charges it.** `workspaceSpend` does not read it,
+ * `stats.spentUsd` does not include it, and `evaluateGuardrails`'s budget arm never sees it. The
+ * asymmetry with the Supervisor's cap is the ruling, not an oversight: an unmeasured CALL is
+ * charged because it is finished and nothing will ever report it, while charging an unmeasured RUN
+ * would let a budget halt fire on spending nobody measured -- which `evaluate.ts:86-95` and
+ * `packages/control/src/stats.ts:183-187` both refused in writing, and which would move
+ * `gate:m38-supervisor` stage 3, whose whole purpose is asserting that a halt's reason is
+ * `budget_exhausted` and not something else. Showing a bound and charging for it are different
+ * acts; M51 does the first only.
+ */
+export const RUN_UNMEASURED_CAP_USD = 1

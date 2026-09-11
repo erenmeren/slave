@@ -1,3 +1,4 @@
+import type { BreakerLevel } from '../breaker/detect.js'
 import type { RunStatus } from '../run/state.js'
 import type { SlaveStatus } from '../slave/derived.js'
 import type { TaskStatus } from '../task/state.js'
@@ -169,6 +170,11 @@ export type UserCardState =
   | 'cancelled'
   | 'idle'
   | 'completed'
+  // M51 R7: a run the behavioural breaker has spoken to. Not a `RunStatus` -- the run is still
+  // WORKING, and that is the point of the word: something is being done about it and nobody has to
+  // press anything.
+  | 'steered'
+  | 'constrained'
 
 export const USER_CARD_LABEL: Record<UserCardState, string> = {
   working: 'WORKING',
@@ -182,18 +188,38 @@ export const USER_CARD_LABEL: Record<UserCardState, string> = {
   cancelled: 'CANCELLED',
   idle: 'IDLE',
   completed: 'DONE',
+  steered: 'STEERED',
+  constrained: 'CONSTRAINED',
+}
+
+/**
+ * Everything the run projection needs that a `RunStatus` alone cannot say (M51 R7).
+ *
+ * The {@link UserTaskFacts} shape, for its reason: a status is a projection over a column, and the
+ * breaker's level is a second column. OPTIONAL as a whole and optional in every field, so the ~20
+ * one-argument call sites that reach this through `apps/web/src/lib/tones.ts`'s `cardStateForRun`
+ * keep reading exactly as they always did, and every default is the one that says nothing new.
+ */
+export interface UserCardFacts {
+  readonly breakerLevel?: BreakerLevel
 }
 
 /** A run's own status. `null` means "no live run", which is `idle` -- the same statement
  *  `deriveSlaveStatus(null)` makes. A run never needs a person by itself: what needs a person is
  *  the TASK the run is on, and {@link needsYou} is where that is decided. */
-export function userRunStatus(status: RunStatus | null): UserStatus<UserCardState> {
-  const state = runCardState(status)
+export function userRunStatus(status: RunStatus | null, facts: UserCardFacts = {}): UserStatus<UserCardState> {
+  const state = runCardState(status, facts)
   return { state, label: USER_CARD_LABEL[state], needsYou: false }
 }
 
-function runCardState(status: RunStatus | null): UserCardState {
+function runCardState(status: RunStatus | null, facts: UserCardFacts): UserCardState {
   if (status === null) return 'idle'
+  // The breaker's word speaks ONLY over `working` (decision D6). A paused, pausing, resuming,
+  // stopping or terminal run has a status somebody (or something) acted to produce, and overwriting
+  // it with `CONSTRAINED` would describe a tool budget nobody is spending.
+  if (status === 'working' && facts.breakerLevel !== undefined && facts.breakerLevel !== 'none') {
+    return facts.breakerLevel
+  }
   switch (status) {
     case 'starting':
       return 'planning'

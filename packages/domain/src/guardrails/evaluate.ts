@@ -1,3 +1,5 @@
+import type { GuardrailKind } from './kinds.js'
+
 export interface GuardrailLimits {
   readonly maxConcurrentRuns: number
   /**
@@ -26,7 +28,13 @@ export interface WorkspaceStats {
 }
 
 export interface GuardrailBreach {
-  readonly guardrail: string
+  /**
+   * M51 R4: the closed union, not a bare string. Every producer of a breach or of a
+   * `guardrail.tripped` payload now imports a member of {@link GUARDRAIL_KINDS}, so a seventeenth
+   * spelling is a build error here rather than a value nobody can filter for or label. The stored
+   * payload's own schema stays `z.string()` -- see `kinds.ts` for why.
+   */
+  readonly guardrail: GuardrailKind
   readonly detail: string
   readonly haltsScheduling: boolean
 }

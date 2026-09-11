@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { sumSpend, type SpendRow } from '../../src/guardrails/spend.js'
+import {
+  RUN_UNMEASURED_CAP_USD,
+  costProvenanceOf,
+  sumSpend,
+  type CostRow,
+  type SpendRow,
+} from '../../src/guardrails/spend.js'
 
 /**
  * A run that a runtime actually ran and concluded: `provider` is written in the same statement as
@@ -110,5 +116,47 @@ describe('sumSpend', () => {
         { costUsd: 2.0, provider: null, status: 'succeeded' }, // legacy row
       ]),
     ).toEqual({ known: 3.5, unknownRuns: 1 })
+  })
+})
+
+const ROW: CostRow = {
+  costUsd: null,
+  provider: 'claude_code',
+  status: 'succeeded',
+  tokensIn: null,
+  tokensOut: null,
+  model: null,
+}
+
+describe('RUN_UNMEASURED_CAP_USD', () => {
+  it('is one dollar, the same cap an unmeasured Supervisor call is charged at', () => {
+    expect(RUN_UNMEASURED_CAP_USD).toBe(1)
+  })
+})
+
+describe('costProvenanceOf', () => {
+  it('is `reported` whenever a figure came back, tokens or no tokens', () => {
+    expect(costProvenanceOf({ ...ROW, costUsd: 3.5 })).toBe('reported')
+    // A measured ZERO is still a measurement (`sumSpend`'s own `=== null` rule).
+    expect(costProvenanceOf({ ...ROW, costUsd: 0 })).toBe('reported')
+  })
+
+  it('is `estimated` when nothing was reported but a priced model left tokens behind', () => {
+    expect(costProvenanceOf({ ...ROW, tokensIn: 10, tokensOut: 10, model: 'claude-opus-5' })).toBe('estimated')
+  })
+
+  it('is `unmeasured` when the model is unpriced, whatever the tokens say', () => {
+    expect(costProvenanceOf({ ...ROW, tokensIn: 10, tokensOut: 10, model: 'default' })).toBe('unmeasured')
+    expect(costProvenanceOf({ ...ROW, tokensIn: 10, tokensOut: 10, model: null })).toBe('unmeasured')
+  })
+
+  it('is `unmeasured` when a priced model reported no tokens either', () => {
+    expect(costProvenanceOf({ ...ROW, model: 'claude-opus-5' })).toBe('unmeasured')
+  })
+
+  it('never lets the estimate overwrite a reported figure -- the reported branch is checked first', () => {
+    expect(costProvenanceOf({ ...ROW, costUsd: 0.01, tokensIn: 9e6, tokensOut: 9e6, model: 'claude-fable-5-1' })).toBe(
+      'reported',
+    )
   })
 })
