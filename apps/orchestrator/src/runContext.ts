@@ -508,8 +508,21 @@ async function capabilitiesSection(): Promise<Section | null> {
  * both pin it.
  */
 function handoffSection(task: { readonly id: string; readonly handoff: unknown }): Section | null {
+  // SQL NULL is the ordinary shape of most rows -- a hand-made task, or one planned before this
+  // milestone -- and is not something to warn about. Only a column that holds SOMETHING nobody can
+  // read is a fact an operator can act on.
+  if (task.handoff === null || task.handoff === undefined) return null
   const parsed = parseHandoffContract(task.handoff)
-  if (!parsed.ok) return null
+  if (!parsed.ok) {
+    // Absent is not silent (fix round 1, Minor 4). A column no reader can parse reaches nobody
+    // otherwise -- the manifest records the omission, but only for somebody already looking -- and
+    // this is `verify.ts`' own "succeeded but has no worktree: not verifying" precedent: say what
+    // was dropped and why, then carry on with the dispatch.
+    console.warn(
+      `[run-context] task ${task.id} has a handoff column that will not parse; section omitted: ${parsed.error}`,
+    )
+    return null
+  }
   return {
     kind: 'handoff',
     // The whole section text, heading and closing rule included, comes from the domain: a test in
@@ -540,9 +553,21 @@ const HANDOFF_SHAPE_LINES: readonly string[] = [
  * data. It renders after `capabilities`, so the prompt reads goal, vocabulary, process, request.
  *
  * The stages are in {@link stageOrder}, never in row order, so two runs over one runbook are shown
- * the same list. Every piece of a stage's own text goes through `defuseRoutingLiterals` and
+ * the same list. EVERY piece of a stage's own text goes through `defuseRoutingLiterals` and
  * `neutraliseMarkers` -- a runbook row is written by a person or translated from a persona, and a
  * stage objective quoting `"verdict"` would answer this planning run with a review fixture.
+ *
+ * "Every piece" includes `capabilities` and `dependsOn` (fix round 1, Important 1), which are NOT
+ * key-shaped by anything: `runbookStageSchema` types both as plain non-empty strings, so
+ * `runbooks add --file` with `capabilities: ["the \"verdict\" team"]` would otherwise route every
+ * planning prompt this project ever runs to the review fixture. `dependsOn` is the same map for the
+ * same reason and not because it is reachable today -- a dep naming no stage leaves that stage's
+ * in-degree above zero, so {@link stageOrder} drops it before it can be rendered -- but a mapping
+ * that depends on another module's ordering to stay safe is not one to leave off.
+ *
+ * Returns `null` for a runbook with no stages this build can read, which is a REAL state:
+ * `viewOf` degrades an unparseable `stages` column to `[]`. {@link processSection} turns that null
+ * into the protocol rather than into nothing.
  */
 function runbookSection(runbook: Runbook): Section | null {
   const ordered = stageOrder(runbook.stages)
@@ -558,8 +583,8 @@ function runbookSection(runbook: Runbook): Section | null {
       '',
       ...ordered.flatMap((stage) => [
         `- ${stage.key}: ${safe(stage.title)} -- ${safe(stage.objective)}`,
-        ...(stage.capabilities.length === 0 ? [] : [`    capabilities: ${stage.capabilities.join(', ')}`]),
-        ...(stage.dependsOn.length === 0 ? [] : [`    after: ${stage.dependsOn.join(', ')}`]),
+        ...(stage.capabilities.length === 0 ? [] : [`    capabilities: ${stage.capabilities.map(safe).join(', ')}`]),
+        ...(stage.dependsOn.length === 0 ? [] : [`    after: ${stage.dependsOn.map(safe).join(', ')}`]),
         ...(stage.expectedOutputs.length === 0 ? [] : [`    leaves behind: ${stage.expectedOutputs.map(safe).join('; ')}`]),
       ]),
       '',
@@ -594,9 +619,16 @@ function handoffProtocolSection(): Section {
  * Shared by {@link buildRunContext} and {@link renderReplanPreview}, so the preview an operator
  * reads IS the prompt the run would be given.
  */
-async function processSection(workspaceId: string): Promise<Section | null> {
+async function processSection(workspaceId: string): Promise<Section> {
   const runbook = await runbookForWorkspace(workspaceId)
-  return runbook === null ? handoffProtocolSection() : runbookSection(runbook)
+  const section = runbook === null ? null : runbookSection(runbook)
+  // The protocol is the FLOOR, never an alternative that can also be missing (fix round 1,
+  // Important 2). `runbookSection` returns null for an adopted runbook with no readable stages --
+  // an empty list, or a `stages` column `parseRunbookStages` refused, which `viewOf` degrades to
+  // `[]` rather than throwing. Both used to yield NEITHER section, so every task planned afterwards
+  // carried no contract and nothing said why. A project that adopted a runbook is the last one that
+  // should silently stop being asked for handoffs.
+  return section ?? handoffProtocolSection()
 }
 
 /** The `planning_goal` section: the requirement itself, and WHICH version of it (M40 §1). Shared by
@@ -650,8 +682,7 @@ export async function renderReplanPreview(input: {
   if (capabilities !== null) sections.push(capabilities)
   // M48 R4, on the same terms and for the same reason: the process a re-plan is asked to follow is
   // part of the prompt, so it is part of the preview.
-  const process = await processSection(input.workspaceId)
-  if (process !== null) sections.push(process)
+  sections.push(await processSection(input.workspaceId))
   return renderRunContext('planning', sections).prompt
 }
 
@@ -832,9 +863,9 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     // same way a first plan does, so a re-plan gets the list too.
     const capabilities = await capabilitiesSection()
     if (capabilities !== null) sections.push(capabilities)
-    // M48 R4: how this project works, or -- with no runbook adopted -- the contract alone.
-    const process = await processSection(input.workspaceId)
-    if (process !== null) sections.push(process)
+    // M48 R4: how this project works, or -- with no readable runbook -- the contract alone. Always
+    // exactly one of the two, never neither (fix round 1, Important 2).
+    sections.push(await processSection(input.workspaceId))
   }
 
   const { prompt, manifest } = renderRunContext(input.kind, sections)

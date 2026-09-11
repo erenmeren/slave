@@ -7,7 +7,7 @@ import {
   type WorkspaceId,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
-import { rejectTask, runVerify } from './verify.js'
+import { rejectTask, runVerify, stageGatesFor } from './verify.js'
 import { gitIn } from './worktree.js'
 
 /**
@@ -190,7 +190,12 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
 
   // Re-verify the rebased result: the real gate. A rebase can silently change behaviour even
   // without a textual conflict, so the branch is judged again exactly as the first implementation
-  // run's result was.
+  // run's result was -- the stage's own gates included (M48 R6, controller ruling). What a stage's
+  // gate proves is exactly as true of the REBASED tree as of the tree review read, and a gate that
+  // only ever ran before the rebase would be a check this pass could silently invalidate. It does
+  // mean a gate runs twice for a clean merge, once at verify and once here; that is the cost of
+  // judging the tree that actually lands.
+  const stage = await stageGatesFor(workspaceId, task.stage)
   const result = await runVerify({
     taskId: brandTaskId(task.id),
     worktreePath,
@@ -200,20 +205,19 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
     // attempt number. Without the `merge` segment the two writers collide on the same paths and
     // this pass's log silently overwrites the implementation attempt's.
     artifactDir: join(workspace.repoPath, '.slaveofai', 'artifacts', task.id, 'merge'),
-    commands: workspace.verifyCommands,
-    // M48 R6: the workspace's own commands and nothing else. The stage gates are
-    // `verifyConcludedRun`'s (spec R6 names that function), and this pass asks a different
-    // question -- "does the REBASED tree still hold up" -- of a task that has already been through
-    // its stage's gate and been approved. Re-running the gate here would charge a merge-conflict
-    // path for a phase the work has left.
-    stage: null,
+    commands: [...workspace.verifyCommands, ...(stage?.gates ?? [])],
+    stage,
     timeoutMs: workspace.runTimeoutMs,
   })
   if (result.kind !== 'passed') {
+    // Which check said no, in the words the person reading `task.merge_failed` needs: a gate's
+    // failure is about the PHASE the work is in, and a reason that named only the command would
+    // send an operator looking through the workspace's own verify list for a command that is not
+    // in it.
+    const failed =
+      result.stage === null ? String(result.failedCommand) : `stage "${result.stage}" gate ${String(result.failedCommand)}`
     const reason =
-      result.kind === 'failed'
-        ? `post-rebase verify failed: ${result.failedCommand} exited ${result.exitCode}`
-        : result.output
+      result.kind === 'failed' ? `post-rebase verify failed: ${failed} exited ${String(result.exitCode)}` : result.output
     await failMerge({ taskId: task.id, workspaceId, taskKey, reason })
     return
   }

@@ -298,8 +298,10 @@ export const executionEventSchema = z.discriminatedUnion('type', [
        *  silently ignored vocabulary is how an operator concludes the feature does not work.
        *  Optional: every event written before M47 has none. */
       droppedCapabilities: z.array(z.string().min(1)).optional(),
-      /** M48 R2: the same adherence block `workspace.plan_created` carries, measured over the board
-       *  the delta left behind. */
+      /** M48 R2: the same adherence block `workspace.plan_created` carries, measured over what THIS
+       *  DELTA added -- never over the board it landed on. A re-plan is judged by the work it
+       *  asked for, and a board carrying a first plan's five stages would report full coverage for
+       *  a delta that touched one of them. Absent when the project has adopted no runbook. */
       runbook: runbookAdherence.optional(),
     }),
   }),

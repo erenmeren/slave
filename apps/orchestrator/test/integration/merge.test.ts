@@ -6,7 +6,7 @@ import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-a
 import { prisma } from '@slave-of-ai/db/client'
 import { workspaceId as brandWorkspaceId, taskId as brandTaskId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
-import { confirmIntegration } from '@slave-of-ai/control'
+import { addRunbook, adoptRunbook, confirmIntegration } from '@slave-of-ai/control'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { runMergePass } from '../../src/merge.js'
 import { loadWorld } from '../../src/world.js'
@@ -71,7 +71,14 @@ interface MergingTask {
  */
 async function seedMergingTask(
   workspace: Workspace,
-  input: { readonly title?: string; readonly fileName?: string; readonly content?: string } = {},
+  input: {
+    readonly title?: string
+    readonly fileName?: string
+    readonly content?: string
+    /** M48 R6, fix round 1: the runbook stage this task belongs to, whose gates the post-rebase
+     *  re-verify now runs too. `undefined` is every task planned before that milestone. */
+    readonly stage?: string
+  } = {},
 ): Promise<MergingTask> {
   const task = await prisma.task.create({
     data: {
@@ -81,6 +88,7 @@ async function seedMergingTask(
       status: 'merging',
       requiredRole: 'backend',
       maxAttempts: 5,
+      ...(input.stage === undefined ? {} : { stage: input.stage }),
     },
   })
   const taskKey = `T-${task.id.slice(0, 8)}`
@@ -434,5 +442,118 @@ describe('runMergePass + loadWorld: integratedAt unblocks dependents', () => {
 
     const { world } = await loadWorld(brandWorkspaceId(workspace.id))
     expect(world.tasks.find((t) => t.id === brandTaskId(bystander.id))?.dependenciesDone).toBe(true)
+  })
+
+  // M48 R6, fix round 1 (controller ruling): a rebase can change behaviour without a textual
+  // conflict, and what a stage's gate proves is exactly as true of the rebased tree as of the one
+  // review read. So the post-rebase re-verify runs the stage's gates too -- which does mean a gate
+  // runs twice for a clean merge, once at verify and once here. That is intended.
+  describe('stage gates on the post-rebase re-verify (M48 R6)', () => {
+    const KEY = 'gate-m48-merge'
+
+    /** One stage, whichever gates the case wants. Written through `addRunbook` the first time --
+     *  the verb is what validates a stage list -- and its gates set directly afterwards, because
+     *  the row outlives this file's TRUNCATE. */
+    async function adoptGateRunbook(workspaceId: string, gates: readonly string[]): Promise<void> {
+      const existing = await prisma.runbookTemplate.findUnique({ where: { key: KEY } })
+      if (existing === null) {
+        const added = await addRunbook({
+          key: KEY,
+          name: 'Gate merge',
+          description: 'x',
+          stages: [{ key: 'implement', title: 'Implement', objective: 'Build', gates: [...gates] }],
+        })
+        expect(added.ok).toBe(true)
+      } else {
+        await prisma.runbookTemplate.update({
+          where: { key: KEY },
+          data: {
+            stages: [
+              {
+                key: 'implement',
+                title: 'Implement',
+                objective: 'Build',
+                capabilities: [],
+                dependsOn: [],
+                expectedOutputs: [],
+                gates: [...gates],
+                retry: null,
+                escalation: null,
+              },
+            ],
+          },
+        })
+      }
+      expect((await adoptRunbook(workspaceId, KEY)).ok).toBe(true)
+    }
+
+    afterAll(async (): Promise<void> => {
+      await prisma.runbookTemplate.deleteMany({ where: { key: KEY } })
+    })
+
+    it('fails the merge when the stage gate fails, and names the stage in the reason', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: ['true'] })
+      await adoptGateRunbook(workspace.id, ['false'])
+      const { taskId } = await seedMergingTask(workspace, { stage: 'implement' })
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.status).not.toBe('done')
+      const failure = await prisma.executionEvent.findFirstOrThrow({
+        where: { taskId, type: 'task_merge_failed' },
+      })
+      expect((failure.payload as { reason: string }).reason).toBe(
+        'post-rebase verify failed: stage "implement" gate false exited 1',
+      )
+      // Nothing reached the base branch.
+      expect(mergeCommitSubjects(workspace.repoPath)).toHaveLength(0)
+
+      // The workspace's own `true` ran first and passed; the stage's `false` ran second.
+      const mergeDir = join(workspace.repoPath, '.slaveofai', 'artifacts', taskId, 'merge')
+      const artifacts = await prisma.artifact.findMany({ where: { taskId }, orderBy: { createdAt: 'asc' } })
+      expect(artifacts).toHaveLength(2)
+      for (const artifact of artifacts) expect(artifact.path).toContain(mergeDir)
+      expect(readFileSync(artifacts[1]?.path ?? '', 'utf8')).toContain('stage "implement" gate')
+    })
+
+    it('merges a staged task whose gate passes', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: ['true'] })
+      await adoptGateRunbook(workspace.id, ['true'])
+      const { taskId, taskKey } = await seedMergingTask(workspace, { stage: 'implement' })
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskId } })
+      expect(task.status).toBe('done')
+      expect(task.integratedAt).not.toBeNull()
+      expect(mergeCommitSubjects(workspace.repoPath).some((subject) => subject.includes(taskKey))).toBe(true)
+      // Both commands ran: the workspace's own and the stage's gate.
+      expect(await prisma.artifact.count({ where: { taskId } })).toBe(2)
+    })
+
+    it('leaves an UNSTAGED task exactly as it was: the workspace commands and nothing else', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: ['true'] })
+      await adoptGateRunbook(workspace.id, ['false'])
+      const { taskId } = await seedMergingTask(workspace)
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('done')
+      expect(await prisma.artifact.count({ where: { taskId } })).toBe(1)
+    })
+
+    it('names no stage when a WORKSPACE command fails on a staged task', async (): Promise<void> => {
+      const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: ['exit 7'] })
+      await adoptGateRunbook(workspace.id, ['true'])
+      const { taskId } = await seedMergingTask(workspace, { stage: 'implement' })
+
+      await runMergePass(brandWorkspaceId(workspace.id))
+
+      const failure = await prisma.executionEvent.findFirstOrThrow({
+        where: { taskId, type: 'task_merge_failed' },
+      })
+      expect((failure.payload as { reason: string }).reason).toBe('post-rebase verify failed: exit 7 exited 7')
+    })
   })
 })

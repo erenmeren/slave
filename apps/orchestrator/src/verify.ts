@@ -204,6 +204,35 @@ export async function runVerify(input: RunVerifyInput): Promise<VerifyResult> {
 }
 
 /**
+ * The gates a task's runbook stage owes, ready to hand to {@link runVerify} (M48 R6).
+ *
+ * `null` in all three ordinary cases: the task carries no stage, the project has adopted no
+ * runbook, or the adopted runbook has no key matching the stamp. The third is a task stamped
+ * against a runbook the project has since replaced, which is a fact rather than a reason to refuse
+ * the verify it would otherwise have had.
+ *
+ * The `stage === null` guard comes FIRST so an UNSTAGED task -- every task planned before this
+ * milestone and every hand-made one -- pays no runbook read at all. That is the common case on both
+ * call sites, and both of them are on a per-task hot path.
+ *
+ * Shared by {@link verifyConcludedRun} and the merge pass's post-rebase re-verify
+ * (`apps/orchestrator/src/merge.ts`, fix round 1 controller ruling): a rebase can change behaviour
+ * without a textual conflict, and what a stage's gate proves is exactly as true of the rebased tree
+ * as of the tree review read. One gate therefore runs twice for a clean merge -- once at verify,
+ * once here -- which is intended: a gate is a check, and running a check twice costs its runtime.
+ */
+export async function stageGatesFor(
+  workspaceId: string,
+  stage: string | null,
+): Promise<{ readonly key: string; readonly gates: readonly string[] } | null> {
+  if (stage === null) return null
+  const runbook = await runbookForWorkspace(workspaceId)
+  if (runbook === null) return null
+  const found = runbook.stages.find((entry) => entry.key === stage)
+  return found === undefined ? null : { key: found.key, gates: found.gates }
+}
+
+/**
  * The reaction spec §3.2 leaves outside `decide()`: whatever a concluded run means for the *task*
  * it was working. Called by whoever awaited the run's pump — the tick's per-run chain for fresh
  * runs, `resume` for continuations — because the pump owns the *run* row and this owns what
@@ -332,16 +361,7 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
   // M48 R6: the stage's gates, after the workspace's own. A stage gate is a project's answer to
   // "what does this phase have to prove", and it runs LAST for `runVerify`'s own reason -- later
   // commands routinely depend on earlier ones, and a stage's gate is the most specific thing here.
-  //
-  // A stage the ADOPTED runbook has no key for contributes nothing: a task stamped against a
-  // runbook the project has since replaced is a fact, not a reason to refuse the verify it would
-  // otherwise have had.
-  const runbook = await runbookForWorkspace(task.workspaceId)
-  const stage =
-    runbook === null || task.stage === null
-      ? null
-      : (runbook.stages.find((entry) => entry.key === task.stage) ?? null)
-  const gates = stage?.gates ?? []
+  const stage = await stageGatesFor(task.workspaceId, task.stage)
 
   const result = await runVerify({
     taskId: brandTaskId(task.id),
@@ -349,8 +369,8 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
     // Outside the worktree — that is what the slave commits from — and per task, the same layout
     // verify's own tests pin.
     artifactDir: join(task.workspace.repoPath, '.slaveofai', 'artifacts', task.id),
-    commands: [...task.workspace.verifyCommands, ...gates],
-    stage: stage === null ? null : { key: stage.key, gates: stage.gates },
+    commands: [...task.workspace.verifyCommands, ...(stage?.gates ?? [])],
+    stage,
     // Spec §8 reuses the run's ceiling: the same operator's answer to the same question.
     timeoutMs: task.workspace.runTimeoutMs,
   })

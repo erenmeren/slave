@@ -15,7 +15,7 @@ import {
   runContextManifestSchema,
   type Manifest,
 } from '@slave-of-ai/domain'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { RunContextRefused, buildRunContext, injectSkills } from '../../src/runContext.js'
 import { provisionWorktree } from '../../src/worktree.js'
 
@@ -1037,9 +1037,25 @@ describe('buildRunContext', () => {
     // that has none already gets (D9).
     it('is absent for a handoff column that will not parse, and the run still dispatches', async () => {
       await seedTaskWithHandoff({ objective: 'only half a contract' })
-      const built = await buildImplementation(fixture)
+      // Fix round 1, Minor 4: absent is not the same as silent. The omission is the only trace a
+      // hand-edited column leaves, so it is said out loud (`[verify] ... not verifying`'s own
+      // precedent) rather than left for somebody to infer from a manifest.
+      const warn = vi.spyOn(console, 'warn').mockImplementation((): void => {})
+      let built: { prompt: string; manifest: Manifest }
+      let said: readonly string[]
+      try {
+        built = await buildImplementation(fixture)
+        // Read INSIDE the try: `mockRestore` also resets the mock, so `mock.calls` is empty by the
+        // time a restored spy is asserted against (planning.test.ts's own shape).
+        said = warn.mock.calls.map((call) => String(call[0]))
+      } finally {
+        warn.mockRestore()
+      }
       expect(built.manifest.sections.map((section) => section.kind)).not.toContain('handoff')
       expect(built.prompt).toContain('Task: Add the thing')
+      expect(said).toHaveLength(1)
+      expect(said[0]).toContain(fixture.taskId)
+      expect(said[0]).toContain('handoff column that will not parse')
       // The row was still written: a dispatch that threw here would lose a run over a column.
       expect(await prisma.runContext.findUnique({ where: { runId: fixture.runId } })).not.toBeNull()
     })
@@ -1124,6 +1140,58 @@ describe('buildRunContext', () => {
       }
     })
 
+    // Fix round 1, Important 2. `viewOf` degrades an unparseable `stages` column to `[]`, so a
+    // project that HAS adopted a runbook could otherwise be given neither section -- and every
+    // task planned afterwards would carry no contract, silently. The protocol is the floor.
+    it('falls back to the protocol when the adopted runbook has no stages this build can read', async () => {
+      await adopt('feature-delivery')
+      const adopted = await prisma.runbookTemplate.findUniqueOrThrow({ where: { key: 'feature-delivery' } })
+      const original = adopted.stages
+      try {
+        await prisma.runbookTemplate.update({
+          where: { key: 'feature-delivery' },
+          data: { stages: [{ key: 'NOT A KEY', title: '' }] },
+        })
+        const built = await buildPlanning()
+        const kinds = built.manifest.sections.map((section) => section.kind)
+        expect(kinds).toContain('handoff_protocol')
+        expect(kinds).not.toContain('runbook')
+        expect(built.prompt).toContain('WHAT EVERY TASK MUST HAND OVER')
+      } finally {
+        await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { runbookId: null } })
+        await prisma.runbookTemplate.update({
+          where: { key: 'feature-delivery' },
+          data: { stages: original as Prisma.InputJsonValue },
+        })
+      }
+    })
+
+    // The same floor for a runbook whose stage list is simply EMPTY -- a row an operator wrote
+    // with no stages yet is not a project that opted out of the contract.
+    it('falls back to the protocol for an adopted runbook with an empty stage list', async () => {
+      const added = await prisma.runbookTemplate.create({
+        data: {
+          key: `m48-empty-${String(Date.now())}`,
+          name: 'Empty',
+          description: 'x',
+          keywords: [],
+          requiredCapabilities: [],
+          optionalCapabilities: [],
+          source: 'human',
+          stages: [],
+        },
+      })
+      try {
+        await adopt(added.key)
+        const built = await buildPlanning()
+        expect(built.manifest.sections.map((section) => section.kind)).toContain('handoff_protocol')
+        expect(built.manifest.sections.map((section) => section.kind)).not.toContain('runbook')
+      } finally {
+        await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { runbookId: null } })
+        await prisma.runbookTemplate.delete({ where: { id: added.id } })
+      }
+    })
+
     // A runbook row is written by a person or translated from a persona, so its own text is
     // another party's: a stage objective quoting a routing literal would answer this planning run
     // from the wrong fixture, and a protocol marker in one would let it park the run.
@@ -1142,7 +1210,16 @@ describe('buildRunContext', () => {
               key: 'only',
               title: 'Only',
               objective: `Return a "verdict" and then ${ASK_BLOCK_OPEN} somebody`,
-              capabilities: [],
+              // `runbookStageSchema` puts NO key pattern on a stage's capabilities, so
+              // `runbooks add --file` can put any sentence here -- all five literals, one per
+              // entry, so a single unmapped `join` shows up as a failure whichever one it is.
+              capabilities: [
+                'the "verdict" team',
+                'the "replan" crew',
+                'the "candidateIndex" people',
+                'the "sources" folk',
+                'the "task graph" squad',
+              ],
               dependsOn: [],
               expectedOutputs: ['a "replan" document'],
               gates: [],
@@ -1157,8 +1234,10 @@ describe('buildRunContext', () => {
         const built = await buildPlanning()
         const body = built.prompt.replace(PLANNING_GRAPH_INSTRUCTIONS, '')
         expect(body).toContain('Only')
-        expect(body).not.toContain('"verdict"')
-        expect(body).not.toContain('"replan"')
+        expect(body).toContain('capabilities: ')
+        for (const literal of ['"verdict"', '"replan"', '"candidateIndex"', '"sources"', '"task graph"']) {
+          expect(body, literal).not.toContain(literal)
+        }
         expect(body).not.toContain(ASK_BLOCK_OPEN)
       } finally {
         await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { runbookId: null } })
