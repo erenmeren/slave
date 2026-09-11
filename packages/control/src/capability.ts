@@ -206,6 +206,20 @@ export async function setSlaveCapabilities(
  *
  * `slave_not_found` is reached before anything is written, so it is RETURNED rather than thrown --
  * the transaction has nothing to roll back.
+ *
+ * **A released worker is refused** (M50 final review, Important 1). A release is permanent: it
+ * writes `runtimeRoles = []`, and that empty set is the WHOLE of how a released worker stops being
+ * dispatched (`lifecycle.ts`). Every producer of an `assign_capability` proposal already skips a
+ * released worker at DRAFT time -- `staffableSlaves` and `formTeam`'s roster both filter on it --
+ * but a proposal may sit `pending` for a whole `PENDING_TTL_MS`, and an approval that lands after
+ * the release re-armed the worker for good: `isReleasable` refuses an already-released row, so
+ * `engagement_over` could never take the role back off again. This is the apply-time re-check, in
+ * the verb, under the lock the write takes.
+ *
+ * `already_released` is `releaseWorker`'s own kind for the same fact, not a new one -- it is the
+ * same sentence a person gets from `release-worker`, and the arm turns it into a `failed` decision
+ * with that text on the row. A PERSON may still re-arm the worker by hand: `setRuntimeRoles`
+ * carries no such guard, deliberately (`lifecycle.ts`'s `setLifecycle` docblock).
  */
 export async function mergeRuntimeRoles(
   slaveId: string,
@@ -216,6 +230,11 @@ export async function mergeRuntimeRoles(
   const outcome = await prisma.$transaction(async (tx) => {
     const slave = await lockedSlave(tx, slaveId)
     if (slave === null) return { refusal: { kind: 'slave_not_found', slaveId } as ControlRefusal }
+    // Before the union and before the write, so it is a returned value and never a thrown rollback
+    // -- the transaction has written nothing at this point.
+    if (slave.releasedAt !== null) {
+      return { refusal: { kind: 'already_released', slaveId, at: slave.releasedAt.toISOString() } as ControlRefusal }
+    }
     const runtimeRoles = [...slave.runtimeRoles]
     for (const role of adds) {
       const trimmed = role.trim()
@@ -253,24 +272,32 @@ export async function mergeRuntimeRoles(
  *  `org.ts`, re-read here because that helper returns the whole include and this file needs three
  *  fields. `capabilities` came with the final review's Important 1: `hireFromTemplate`'s reuse
  *  branch merges BOTH sets, and a merge computed off a row read before the lock is the lost update
- *  this helper exists to stop. */
+ *  this helper exists to stop. `releasedAt` came with M50's (Important 1): whether this engagement
+ *  is over has to be read under the SAME lock the write takes, or the release and the re-arming
+ *  interleave and the worker keeps the role. */
 async function lockedSlave(
   tx: Prisma.TransactionClient,
   slaveId: string,
 ): Promise<{
   readonly runtimeRoles: readonly string[]
   readonly capabilities: readonly string[]
+  readonly releasedAt: Date | null
   readonly workspaceId: string
 } | null> {
   const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "Slave" WHERE id = ${slaveId} FOR UPDATE`
   if (locked.length === 0) return null
   const row = await tx.slave.findUnique({
     where: { id: slaveId },
-    select: { runtimeRoles: true, capabilities: true, team: { select: { workspaceId: true } } },
+    select: { runtimeRoles: true, capabilities: true, releasedAt: true, team: { select: { workspaceId: true } } },
   })
   return row === null
     ? null
-    : { runtimeRoles: row.runtimeRoles, capabilities: row.capabilities, workspaceId: row.team.workspaceId }
+    : {
+        runtimeRoles: row.runtimeRoles,
+        capabilities: row.capabilities,
+        releasedAt: row.releasedAt,
+        workspaceId: row.team.workspaceId,
+      }
 }
 
 /**

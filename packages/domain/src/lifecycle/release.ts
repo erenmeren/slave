@@ -4,9 +4,19 @@ import type { SlaveLifecycle } from './types.js'
 /**
  * The five facts {@link isReleasable} decides on, and the whole of what the rule reads.
  *
- * Deliberately NOT a `SupervisorSlave`: control re-asks the same question of Prisma rows under a
- * row lock, and a shape both sides can build is what keeps one rule from becoming two that drift
- * (the `AnswerEligibility` precedent in `../supervisor/policy.ts`).
+ * Deliberately NOT a `SupervisorSlave`: this is the whole of what the RULE reads, five flat facts
+ * a caller with Prisma rows can assemble as easily as one with a world, and keeping it that narrow
+ * is what stops the predicate from growing a dependency on the Supervisor's own shape (the
+ * `AnswerEligibility` precedent in `../supervisor/policy.ts`).
+ *
+ * Control does NOT re-ask this question (M50 final review, Minor 1). `releaseWorker` applies a
+ * deliberately LOOSER rule under its row lock -- `slave_not_found`, `not_ephemeral`,
+ * `already_released`, `live_runs` -- and accepts a release whatever the engagement state, because a
+ * person may end an engagement early and `release-worker` asks for no finished task. So the two are
+ * not one rule in two places: this decides who the Supervisor OFFERS to release, and control
+ * decides what it will actually write. The three facts they do share -- ephemeral, not already
+ * released, no live run -- are refused on both sides, so the observe-to-apply race ends in a
+ * refusal rather than a bad write.
  *
  * `engagementTaskStatus` is the status of the ONE task this worker was brought in for, or null when
  * the worker names no task or the world no longer holds it. `openAssignedTasks` counts the

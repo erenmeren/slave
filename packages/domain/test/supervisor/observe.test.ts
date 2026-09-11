@@ -122,6 +122,21 @@ describe('observe -- unanswerable_question', () => {
     expect(keys(observe(w))).toEqual([['unanswerable_question', 'm1']])
   })
 
+  /**
+   * M50 final wave, I2. A released worker is still a row in the workspace -- nothing is deleted
+   * (R5) -- so the id lookup found it and the question read as deliverable. It is not: the
+   * engagement is over, the worker will never be dispatched again, and the asking run would sit in
+   * `waiting` until `waiting_stale` nudged a human. `unanswerable_question` is the truth, and it
+   * fires at once.
+   */
+  it('reports a question addressed by id to a worker whose engagement is over', () => {
+    const w = world({
+      questions: [question({ recipientRole: null, recipientSlaveId: 's2' })],
+      slaves: [slave({ id: 's1' }), slave({ id: 's2', lifecycle: 'ephemeral', released: true, runtimeRoles: [] })],
+    })
+    expect(keys(observe(w))).toEqual([['unanswerable_question', 'm1']])
+  })
+
   it('stays silent for a fresh question whose role has a holder other than the asker', () => {
     const w = world({
       questions: [question({ recipientRole: 'backend' })],

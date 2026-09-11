@@ -43,12 +43,26 @@ export function rosterCapabilities(world: SupervisorWorld): readonly string[] {
 
 /**
  * Can the question reach anybody at all? A message addressed to a named slave needs that slave to
- * still be in the workspace; one addressed to a role needs a holder. A question addressed to
- * NEITHER can never be delivered, so it counts as unanswerable -- silently dropping it would
- * leave the asking task in `waiting` forever with nothing on any report to say why.
+ * still be in the workspace AND still working here; one addressed to a role needs a holder. A
+ * question addressed to NEITHER can never be delivered, so it counts as unanswerable -- silently
+ * dropping it would leave the asking task in `waiting` forever with nothing on any report to say
+ * why.
+ *
+ * A RELEASED worker is not a recipient (M50 final review, Important 2). Its row is still here --
+ * a release deletes nothing (R5) -- so the id lookup finds it and the question read as deliverable;
+ * it is not, because the engagement is over and the worker will never run again. Excluded here and
+ * from the prompt's own roster (`apps/orchestrator/src/inbox.ts`), so the asker learns in this tick
+ * rather than when `waiting_stale` fires.
+ *
+ * `roleHasHolder` below is deliberately NOT filtered the same way: it answers who can be
+ * DISPATCHED as a role, and a release empties `runtimeRoles`, so a released worker already falls
+ * out of it -- unless a person put the roles back by hand, which is exactly the case where the
+ * worker really can answer.
  */
 function questionHasRecipient(world: SupervisorWorld, question: SupervisorQuestion): boolean {
-  if (question.recipientSlaveId !== null) return world.slaves.some((slave) => slave.id === question.recipientSlaveId)
+  if (question.recipientSlaveId !== null) {
+    return world.slaves.some((slave) => slave.id === question.recipientSlaveId && !slave.released)
+  }
   // The asker is excluded (M39 residual R2): a role whose only holder is the worker that asked the
   // question has nobody who can answer it, which is exactly what `unanswerable_question` means.
   if (question.recipientRole !== null) return roleHasHolder(world, question.recipientRole, question.askerSlaveId)

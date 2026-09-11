@@ -402,6 +402,26 @@ describe('a slave answers, and the asker resumes', () => {
       expect(SECTION_ORDER.implementation).toContain('ask_protocol')
     })
 
+    /**
+     * M50 final wave, I2. "SLAVES YOU CAN ADDRESS" is a promise, and a released worker cannot keep
+     * it: its engagement is over, its runtime roles are empty and it will never be dispatched
+     * again, so a question addressed to it by id would leave the asker in `waiting` until
+     * `waiting_stale` nudged a human. The row stays (R5) -- it is only no longer a mailbox.
+     */
+    it('leaves out a worker whose engagement is over: a released peer is not addressable', async () => {
+      const before = await rosterSection(fixture.alex.slaveId, fixture.workspaceId)
+      expect(before?.text).toContain('Maya')
+
+      await prisma.slave.update({
+        where: { id: fixture.maya.slaveId },
+        data: { lifecycle: 'ephemeral', releasedAt: new Date(), releaseReason: 'the engagement is over', runtimeRoles: [] },
+      })
+
+      const after = await rosterSection(fixture.alex.slaveId, fixture.workspaceId)
+      expect(after?.text).not.toContain('Maya')
+      expect(after?.source.kind === 'roster' ? after.source.slaveIds : []).not.toContain(fixture.maya.slaveId)
+    })
+
     it('offers nothing when there is nobody to ask: every recipient would be refused anyway', async () => {
       const alone = await prisma.workspace.create({
         data: { name: 'Solo', repoPath: '/tmp/solo', verifyCommands: ['true'], setupCommands: [] },

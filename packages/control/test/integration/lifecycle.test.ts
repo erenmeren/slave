@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, describe, expect, it } from 'vitest'
+import { mergeRuntimeRoles } from '../../src/capability.js'
 import { releaseWorker, setLifecycle } from '../../src/lifecycle.js'
+import { setRuntimeRoles } from '../../src/profile.js'
 
 /** Every row this file makes carries one of these two prefixes, so the teardown can find its own
  *  work in a database every other integration file in this run also writes to. `M50 Lifecycle` and
@@ -226,6 +228,38 @@ describe('releaseWorker', () => {
       orderBy: { seq: 'desc' },
     })
     expect(event.payload).toMatchObject({ slaveId, reason: 'released' })
+  })
+})
+
+describe('a released worker and who may re-arm it', () => {
+  /**
+   * M50 final wave, I1. The automatic writers refuse a released worker; a PERSON does not. The
+   * whole of what a release writes is `runtimeRoles = []`, and `set-runtime-roles` is documented as
+   * the way into and out of that parked state -- an operator who wants the worker back on the board
+   * for an afternoon says so by hand, and the row keeps `releasedAt` and the sentence either way.
+   */
+  it('still lets a person put the roles back by hand, releasedAt and the reason untouched', async () => {
+    const { slaveId } = await seedEngagement({ taskStatus: 'done' })
+    expect((await releaseWorker(slaveId, 'the engagement is over')).ok).toBe(true)
+
+    const result = await setRuntimeRoles(slaveId, ['security'], 'operator')
+    expect(result.ok).toBe(true)
+    const after = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })
+    expect(after.runtimeRoles).toEqual(['security'])
+    expect(after.releasedAt).not.toBeNull()
+    expect(after.releaseReason).toBe('the engagement is over')
+  })
+
+  // The other half of the same rule: the Supervisor's own union verb refuses the row a person may
+  // still write, with the kind a second release already uses.
+  it('refuses the Supervisor union verb on a released worker, and writes nothing', async () => {
+    const { slaveId } = await seedEngagement({ taskStatus: 'done' })
+    expect((await releaseWorker(slaveId, 'the engagement is over')).ok).toBe(true)
+
+    const merged = await mergeRuntimeRoles(slaveId, ['security'], 'supervisor', 'system')
+    expect(merged.ok).toBe(false)
+    expect(merged.ok ? null : merged.error.kind).toBe('already_released')
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })).runtimeRoles).toEqual([])
   })
 })
 

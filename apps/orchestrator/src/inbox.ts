@@ -104,10 +104,17 @@ const ROSTER_CAP = 25
  * `role`: the roles a slave may be DISPATCHED as are what a peer needs in order to address it,
  * while `role` is only its title. A slave with no runtime roles is still listed (`roles: none`) --
  * it can still answer a question addressed to it by id.
+ *
+ * A RELEASED worker is the one exception (M50 final review, Important 2). Its row stays forever --
+ * nothing is deleted (spec R5) -- but its engagement is over and it will never be dispatched
+ * again, so listing it under "SLAVES YOU CAN ADDRESS" would be the section's one lie: a question
+ * addressed to it by id is delivered to a mailbox nobody reads, and the asker waits for
+ * `waiting_stale` to nudge a human. `observe`'s `questionHasRecipient` makes the same exclusion, so
+ * a question that reaches one anyway is `unanswerable_question` at once rather than in an hour.
  */
 export async function rosterSection(slaveId: string, workspaceId: string): Promise<Section | null> {
   const peers = await prisma.slave.findMany({
-    where: { id: { not: slaveId }, team: { workspaceId } },
+    where: { id: { not: slaveId }, team: { workspaceId }, releasedAt: null },
     select: { id: true, name: true, role: true, runtimeRoles: true },
     orderBy: [{ role: 'asc' }, { name: 'asc' }],
     take: ROSTER_CAP,

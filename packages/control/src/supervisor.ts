@@ -584,14 +584,28 @@ function roleDelta(
  *
  * `slave_not_found` when the worker is gone, which is the same refusal `setRuntimeRoles` would
  * have produced for the same row.
+ *
+ * `already_released` when the engagement ended while the proposal waited (M50 final review,
+ * Important 1). This is the same staleness the union exists for, one step further on: a release
+ * writes `runtimeRoles = []` and is PERMANENT, so an approval landing after it would put a
+ * released worker back on the board with nothing able to take the role off again. The guard sits
+ * HERE, on the Supervisor's own path, and not inside `setRuntimeRoles`: re-arming a released worker
+ * by hand is deliberate (`lifecycle.ts`), and the operator-facing verb must keep doing it.
+ * `mergeRuntimeRoles` makes the same refusal under its row lock for `assign_capability`.
  */
 async function addRuntimeRoles(
   slaveId: string,
   adds: readonly string[],
   origin: 'human' | 'system',
 ): Promise<Result<void, ControlRefusal>> {
-  const slave = await prisma.slave.findUnique({ where: { id: slaveId }, select: { runtimeRoles: true } })
+  const slave = await prisma.slave.findUnique({
+    where: { id: slaveId },
+    select: { runtimeRoles: true, releasedAt: true },
+  })
   if (slave === null) return err({ kind: 'slave_not_found', slaveId })
+  if (slave.releasedAt !== null) {
+    return err({ kind: 'already_released', slaveId, at: slave.releasedAt.toISOString() })
+  }
   const union = [...slave.runtimeRoles]
   for (const role of adds) if (!union.includes(role)) union.push(role)
   return setRuntimeRoles(slaveId, union, SUPERVISOR_ACTOR, origin)

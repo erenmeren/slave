@@ -20,6 +20,7 @@ import { syncCapabilityTaxonomy } from '../../src/capability.js'
 import { STALE_CANDIDATE_REASON, recordMemory } from '../../src/memory.js'
 import { sendMessage } from '../../src/messaging.js'
 import { workspaceSpend } from '../../src/spend.js'
+import { releaseWorker } from '../../src/lifecycle.js'
 import { refusalText } from '../../src/refusal.js'
 import { syncRunbooks } from '../../src/runbook.js'
 import {
@@ -607,6 +608,64 @@ describe('applyDecision', () => {
     const [released] = await eventsOfType('slave_released')
     expect(released?.actor).toBe('system')
     expect(released?.payload).toMatchObject({ slaveId, name: 'Robin', worktreesCollected: 0 })
+  })
+
+  /**
+   * M50 final wave, I1. A release is PERMANENT, and the one automatic path that contradicted that
+   * was a decision drafted BEFORE the release and carried out after it: every producer filters a
+   * released worker at DRAFT time (`staffableSlaves`, `formTeam`'s roster), and nothing re-asked
+   * the question at apply time. A proposal may sit pending for a whole `PENDING_TTL_MS`, so the
+   * verb itself has to refuse -- under the row lock it already takes, before its first write, with
+   * the `already_released` kind `releaseWorker` uses for the same fact.
+   */
+  it('refuses an assign_capability approved after the worker was released, and leaves the roles empty', async () => {
+    const { slaveId } = await seedReleasableWorker(f)
+    const decision = await record(
+      f,
+      {
+        kind: 'assign_capability',
+        slaveId,
+        capability: 'security.application',
+        capabilityLabel: 'Application security',
+        role: 'security',
+      },
+      'applied',
+      {
+        subjectId: 'security.application',
+        situation: {
+          kind: 'capability_unstaffed',
+          subjectId: 'security.application',
+          summary: '1 startable task(s) need Application security and no slave can be dispatched as security.',
+          facts: { capability: 'security.application', role: 'security', readyTasks: 1, firstTaskId: f.taskId },
+        },
+      },
+    )
+    // ...and the engagement ends while the decision waits.
+    expect((await releaseWorker(slaveId, 'the engagement is over')).ok).toBe(true)
+
+    const applied = await applyDecision(decision.id, 'system')
+    expect(applied.ok).toBe(false)
+    expect(applied.ok ? null : applied.error.kind).toBe('already_released')
+    // Nothing written, and the decision keeps the refusal rather than pretending it went through.
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })).runtimeRoles).toEqual([])
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('failed')
+  })
+
+  // The sibling arm, and the same staleness: `set_runtime_roles` unions through `addRuntimeRoles`,
+  // which is the Supervisor's own re-read. A person's `setRuntimeRoles` stays allowed -- re-arming
+  // a released worker by hand is deliberate (`lifecycle.ts`) -- so the guard lives on the automatic
+  // path rather than on the verb both of them call.
+  it('refuses a set_runtime_roles approved after the worker was released', async () => {
+    const { slaveId } = await seedReleasableWorker(f)
+    const decision = await record(f, { kind: 'set_runtime_roles', slaveId, roles: ['security', 'reviewer'] }, 'proposed', {
+      subjectId: slaveId,
+    })
+    expect((await releaseWorker(slaveId, 'the engagement is over')).ok).toBe(true)
+
+    const approved = await approveDecision(decision.id, { userId: f.userId })
+    expect(approved.ok).toBe(false)
+    expect(approved.ok ? null : approved.error.kind).toBe('already_released')
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })).runtimeRoles).toEqual([])
   })
 
   it('raise_max_attempts unblocks a task at its ceiling, raising maxAttempts to attempt + 1', async () => {
