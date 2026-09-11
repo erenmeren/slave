@@ -37,8 +37,11 @@
 //                  defaulting to `plan-graph`, so one gate can be answered
 //                  with a graph written in capabilities without a mode of
 //                  its own. A review prompt (containing `"verdict"`) replays
-//                  `review-approve`, same as m8a-flow. Any other prompt is a
-//                  work run and reuses the m8a-flow work body verbatim.
+//                  the fixture `--review-fixture <name>` names (M49 erratum
+//                  E8), defaulting to `review-approve` -- so one gate can run
+//                  an approving project and a rejecting one side by side, each
+//                  with its own daemon. Any other prompt is a work run and
+//                  reuses the m8a-flow work body verbatim.
 //   m36-flow       synthetic, selected by ARGV rather than by prompt content:
 //                  the two legs of M36's ask/answer round trip. A run spawned
 //                  WITHOUT `--resume` is the asking leg -- it replays
@@ -255,6 +258,21 @@ function planFixtureName() {
 }
 
 /**
+ * M49 (plan erratum E8): which verdict a `"verdict"` prompt is answered with -- `--review-fixture
+ * <name>` from ARGV, defaulting to the stock `review-approve`.
+ *
+ * `--plan-fixture`'s exact shape, for its exact reason: `SLAVEOFAI_CLAUDE_ARGS` rides through as
+ * `extraArgs` on every spawn, and it is the one per-daemon channel a gate can count on. One
+ * daemon's argv therefore decides every review IT runs, which is why a gate that wants an approval
+ * and a rejection in the same story runs two projects with two daemons.
+ */
+function reviewFixtureName() {
+  const index = args.indexOf('--review-fixture')
+  const named = index === -1 ? undefined : args[index + 1]
+  return named === undefined || named.startsWith('-') ? 'review-approve' : named
+}
+
+/**
  * M40 (erratum E3): the RE-PLAN arm -- a planning run whose goal changed under a board that
  * already exists, recognised by the one literal `REPLAN_INSTRUCTIONS` guarantees.
  *
@@ -464,7 +482,9 @@ async function main() {
       return
     }
     if (prompt.includes('"verdict"')) {
-      await replayFixture('review-approve')
+      // M49 E8: the VERDICT is chosen on argv here and nowhere else -- `m8a-flow` and `m41-flow`
+      // are other milestones' stories and keep their fixed `review-approve`.
+      await replayFixture(reviewFixtureName())
       return
     }
     // A work run: the m8a-flow work body verbatim -- leave a real commit in the worktree

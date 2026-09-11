@@ -226,6 +226,41 @@ describe('fake-claude', () => {
     })
   })
 
+  describe('--review-fixture (M49 E8)', () => {
+    /** A prompt with the one literal the review prompt always carries. */
+    const PROMPT = 'return a "verdict"'
+
+    it('M49 E8: m8-flow answers a review with --review-fixture, and with review-approve when given none', async (): Promise<void> => {
+      // The `result` line's own payload, not raw stdout: every fixture line is NDJSON, so the
+      // verdict object reaches the pipe JSON-escaped and a substring test against stdout would be
+      // testing the escaping rather than the verdict.
+      const verdictOf = (stdout: string): string | undefined =>
+        (parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined)?.result
+
+      const rejected = await run('node', [FAKE, '--fixture', 'm8-flow', '--review-fixture', 'review-reject', '-p', PROMPT])
+      expect(verdictOf(rejected.stdout)).toContain('"verdict":"reject"')
+      const approved = await run('node', [FAKE, '--fixture', 'm8-flow', '-p', PROMPT])
+      expect(verdictOf(approved.stdout)).toContain('"verdict":"approve"')
+    })
+
+    it('ignores a --review-fixture whose value is another flag', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm8-flow', '--review-fixture', '--verbose', '-p', PROMPT])
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"verdict":"approve"')
+    })
+
+    // The negative that makes the flag a property of `m8-flow` alone: the two other flow modes are
+    // other milestones' stories, and a gate that set this flag on one of them must not change what
+    // its reviews say.
+    it('changes nothing in m8a-flow or m41-flow, which keep their fixed approval', async (): Promise<void> => {
+      for (const mode of ['m8a-flow', 'm41-flow']) {
+        const { stdout } = await run('node', [FAKE, '--fixture', mode, '--review-fixture', 'review-reject', '-p', PROMPT])
+        const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+        expect(result?.result).toContain('"verdict":"approve"')
+      }
+    })
+  })
+
   describe('the re-plan arm (M40)', () => {
     /** A prompt with the one literal `REPLAN_INSTRUCTIONS` always carries. */
     const PROMPT = 'The GOAL changed and this is a "replan": return {"add":[],"cancel":[],"keep":[]}'

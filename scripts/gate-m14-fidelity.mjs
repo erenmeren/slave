@@ -767,7 +767,7 @@ try {
   })
 
   // ============================================================================================
-  // Stage 1: twelve pages render, and each is screenshotted.
+  // Stage 1: thirteen pages render, and each is screenshotted.
   // ============================================================================================
   const PAGES = [
     { name: 'overview', path: () => `/w/${workspaceId}`, testId: 'strip' },
@@ -780,6 +780,12 @@ try {
     // it lists are who is on the project and what they provide, and neither of those changes when
     // a run goes live, so a second capture would be a diff that says nothing.
     { name: 'organization', path: () => `/w/${workspaceId}/organization`, testId: 'organization-rows' },
+    // M49 R6: the project's fourth tab. In `PAGES` and deliberately NOT in `LIVE_PAGES` -- what a project
+    // has LEARNT does not change because a run went live, so a second capture would be a diff that says
+    // nothing. `knowledge-counts` is its structural marker rather than `knowledge-rows`, for
+    // `timeline-viewport`'s reason: this workspace has no memories, and the list wrapper is absent when
+    // there are none, so the EMPTY state is what has to render.
+    { name: 'knowledge', path: () => `/w/${workspaceId}/knowledge`, testId: 'knowledge-counts' },
     { name: 'graph', path: () => `/w/${workspaceId}/graph`, testId: 'graph-canvas' },
     // `timeline-viewport`, not `timeline-rule`: the rule is absolutely positioned inside the
     // virtualizer's sized spacer, so on a workspace with no events yet it is ATTACHED but zero-high
@@ -1077,12 +1083,14 @@ try {
   // banner appearing on a global page would mean a page had guessed at a workspace it does not
   // belong to.
   //
-  // `office` is the exception this gate states rather than hides: it IS workspace-scoped, and it
-  // renders no `HaltBanner` at all (`OfficeClient` is the one `/w/<id>/*` client that does not
-  // import it). So it is neither -- listed by name below, asserted to show no banner, and reported
-  // as what it is. Closing that gap is a change to Office, which M44 §3 puts out of scope.
+  // `office`, `organization` (M47) and `knowledge` (M49) are the exceptions this gate states rather
+  // than hides: all three ARE workspace-scoped, and none of them renders a `HaltBanner`
+  // (`OfficeClient`, `OrganizationClient` and `KnowledgeClient` are the `/w/<id>/*` clients that do
+  // not import it). So they are neither -- listed by name below, asserted to show no banner, and
+  // reported as what they are. Closing that gap is a change to those three pages, which M44 §3 and
+  // M49 §3 both put out of scope.
   const SCOPED = new Set(['overview', 'tasks', 'graph', 'activity', 'project-settings'])
-  const SCOPED_WITHOUT_BANNER = new Set(['office'])
+  const SCOPED_WITHOUT_BANNER = new Set(['office', 'organization', 'knowledge'])
   for (const target of PAGES) {
     await gotoReliably(`${baseUrl}${target.path()}`)
     await waitVisible(page.getByTestId(target.testId), `${target.name} while the workspace is halted`)

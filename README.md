@@ -173,6 +173,7 @@ one of them — `docs/ia.md` is the map, and says where anything that left a mai
 | **Office** (Advanced ▾) `/w/<id>/office` | The project's departments and slaves as a pixel office: who is working, blocked or paused, on what and how far; pause, resume or stop the focused slave's run; scroll to zoom, drag to pan, click a slave to focus. Reached from the project's `Advanced ▾` menu, or by its URL. |
 | **Activity** `/w/<id>/activity` | Every event, live, filterable by kind, slave and task; the filters live in the URL. Events made from the UI name the user who made them. |
 | **Organization** `/w/<id>/organization` | Who is on this project, what each of them can DO, and the sentence that says why they are here — beside what the project still needs, who could cover it and the offers waiting for your answer, and the advice each worker's own profile gives about who to consult. |
+| **Knowledge** `/w/<id>/knowledge` | What this project has learnt, one row per piece, with the sentence that says where each came from — filters for kind, scope, status and title that live in the URL, and the chain (what this replaced, what replaced it, what it summarises) folded inside each row. Verify a claim a worker made, correct a memory (the old wording is kept and marked replaced), or withdraw one with a reason — nothing is ever deleted. |
 | **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the read-only concurrency/timeout/attempts limits), its own slave permissions, its emergency stop, and its danger zone to archive/restore the project. |
 | **Workforce** `/workforce` | Everyone who works here, in four tabs. **Slaves**: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete with its history and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project. **Departments**: add, rename or delete a project's department and see who is on it. **Catalog**: every slave template as one searchable catalog — filter by division, capability, skill or where it came from, and click a row for its specialist profile: who it is, what it is for, what it must never do and where all of that came from, with any field customisable in place and the raw Markdown a run is given under `Advanced ▾` — beside the companies and their department templates, with the log of catalog imports under the tab's own `Advanced ▾`. **Skills**: the skill catalog and its assignments. `/slaves` and `/skills` still work — they redirect here. |
 | **Simulations** `/sim` | Company simulation runs (M29): create one from a catalog company — a trade company on synthetic data, decided by the rules provider, no repository and no model call; step it by day, run it to a horizon, pause, halt, add customer demand or a supplier delay; the simulated company's cash and the real model cost are two separate panels; metrics are computed from the run's own journal; clone a run under another policy, let the daemon auto-run it, compare two runs side by side (no verdict); adopt a software run's organisation into a company-less project (M33). |
@@ -525,6 +526,63 @@ gates that can be run twice.
 stage the work is on, and what each stage's state is: done, happening now, planned, or not in the
 plan.
 
+## Knowledge
+
+What a project learns is kept as knowledge with provenance, not as a transcript. One table, six
+kinds — fact, decision, procedure, lesson, observation, hypothesis — each belonging to the company,
+to one project, or to one worker, and each carrying where it came from: what produced it, which
+exact thing, who was acting, which task, which run and which version of the goal was standing at
+the time.
+
+Four things write it, and none of them is a model:
+
+- **a run that succeeds** leaves an *observation* — the worker's own closing words, and a
+  **candidate**, because a worker saying it did the thing is not the thing being done. No run is
+  ever given one;
+- **a verification that passes** writes a *fact* whose body is the handoff contract's expected
+  output (or, with no contract, the commands that agreed), and retires that task's candidate in the
+  same breath — the candidate is marked `superseded` and points at the fact that answered it;
+- **a review or a verification that says no** writes a *lesson* for the worker who wrote the diff,
+  never the one who caught it. A lesson is only ever shown to the worker it belongs to;
+- **a person deciding** — approving or rejecting a Supervisor proposal, or changing the goal —
+  writes a *decision* with the rationale they were answering. Setting the first goal writes none:
+  there was nothing to change.
+
+Nothing is ever deleted. Correcting a memory writes a new one and stamps the old `superseded`;
+withdrawing one stamps it `removed` with the reason a person typed. Both rows stay in the table and
+are one filter away.
+
+```bash
+npm run orchestrator -- memories list --workspace <id> [--status verified] [--type fact] [--q text]
+npm run orchestrator -- memories show <memoryId>
+npm run orchestrator -- memories add --workspace <id> --type fact --title "…" --body "…"
+npm run orchestrator -- memories verify <memoryId>
+npm run orchestrator -- memories supersede <memoryId> --title "…" --body "…"
+npm run orchestrator -- memories remove <memoryId> --reason "why"
+npm run orchestrator -- memories condense --workspace <id> [--type fact]
+```
+
+Every run is given what this organisation knows, deterministically. Only `verified` memories
+qualify; only the three scopes that run belongs to; a lesson only for its own worker. What is left
+is ranked — the more specific the scope first, then what was DECIDED before what is known before
+how things are done before what went wrong — and the best twelve become a `WHAT THE ORGANISATION
+KNOWS` section of the prompt, each line saying where it came from. The manifest records exactly
+which memories that was, so `show-context --run <id>` answers "what did this run know" months
+later. Another party's words are defused on the way in: a memory quoting a routing literal cannot
+reshape the run it is handed to.
+
+`memories condense` is the one thing that summarises. It is string concatenation over the sources'
+own titles — no model, no embedding, no score — and it needs twenty verified memories of one kind
+in one scope before it writes anything. The summary keeps every source linked and verified, and a
+run is given the summary **instead of** its sources rather than both. Nothing schedules it: it
+happens when a person or a cron types it.
+
+The **Knowledge** tab on a project shows every piece with the sentence that says where it came
+from, filters that live in the link, and the chain — what this replaced, what replaced it, what it
+summarises — folded inside each row. A person can verify a claim, correct one, or withdraw it with
+a reason, and still find it afterwards. A task's own drawer says what its runs were given and what
+they taught.
+
 ## The whole story
 
 Every section above describes one seam. `npm run gate:m41-scenario` runs them in sequence, once,
@@ -773,7 +831,7 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m35-pipeline-honesty`, `gate:m36-messaging`, `gate:m37-run-context`, `gate:m38-supervisor`,
 `gate:m39-supervisor-mailbox`, `gate:m40-requirement-versioning`, `gate:m41-scenario`,
 `gate:m42-catalog-import`, `gate:m44-ux-foundation`, `gate:m45-project-experience`,
-`gate:m46-workforce-catalog`, `gate:m47-team-formation` and `gate:m48-runbooks` on every push — `m36` stops the orchestrator and starts it again
+`gate:m46-workforce-catalog`, `gate:m47-team-formation`, `gate:m48-runbooks` and `gate:m49-memory` on every push — `m36` stops the orchestrator and starts it again
 mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was
 given the persona and the skills it was assigned, `m38` drives a real daemon until the Supervisor
 proposes the staffing a reviewer-less project needs, waits for a human to approve it, unblocks a
@@ -792,7 +850,7 @@ template catalog twice over — creating what is new, skipping what an operator 
 what changed on disk, and staffing a project from the result until the imported persona itself turns
 up in a real run's recorded prompt, and `m44` drives a real browser over every page at once to
 check that there are four ways into the product, that the project's own strip answers "what is
-happening" in five tabs with Graph and Office still one menu away, that nothing on any of twelve
+happening" in six tabs with Graph and Office still one menu away, that nothing on any of twelve
 pages is a database value a person would have to decode, that a drawer traps the Tab key and hands
 focus back on Escape, that the skip link is the first thing the keyboard finds, that the sidebar
 collapses on a narrow window, and that simulated money is never shown beside real model cost,
@@ -825,8 +883,19 @@ waits for a person to adopt it, the plan that follows carries a stage and a type
 task -- with the verify stage's own retry cap, and the two stages it skipped named on the plan
 event -- the contract turns up in the real prompt the worker was given and in the reviewer's, a
 stage's own gate runs after the project's verify commands and its failure says which stage it was,
-and the Overview shows which stage the work is on and which stages the plan never covered. That is
-23 gates. Tests and gates share one Postgres --
+and the Overview shows which stage the work is on and which stages the plan never covered,
+and `m49` proves that what this organisation learns is kept as knowledge rather than as a
+transcript: a worker's own closing report becomes a candidate nobody is given, the verification
+that passes turns it into a fact whose words are the contract it proved and retires the candidate
+in the same breath, a rejected review teaches the worker who wrote the diff and not the one who
+caught it, a person's approval and a changed goal are both recorded as decisions with the
+rationale behind them, the very next run's recorded prompt carries exactly that fact and those
+decisions and none of the candidate, one correction typed at the CLI leaves a chain of two with
+the old wording still readable, twenty facts become one summary that keeps all twenty linked and
+is what the next run is given instead of them, and the Knowledge tab shows every piece with the
+sentence that says where it came from — where a person can verify it, correct it, or withdraw it
+with a reason and still find it afterwards. That is
+24 gates. Tests and gates share one Postgres --
 run one at a time.
 
 ## Learn more

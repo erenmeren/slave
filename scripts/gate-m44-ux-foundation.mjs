@@ -723,9 +723,10 @@ try {
   //
   // The R8 eleven are the fidelity gate's nine (with `workforce` for `slaves`) plus
   // `/w/<id>/office` and `/w/<id>/settings`; M47 R6's `/w/<id>/organization` is the twelfth page
-  // the fidelity gate photographs and is scanned here on the same terms -- the shell contract and
+  // the fidelity gate photographs and is scanned here on the same terms; M49 R6's
+  // `/w/<id>/knowledge` is the thirteenth -- the shell contract and
   // the raw-token rule are page-wide rules, and a new surface that skipped them would be the one
-  // place a raw `security.application` could reach a person's screen. `/sim` and `/sim/<id>` are
+  // place a raw `security.application` or a raw `run_output` could reach a person's screen. `/sim` and `/sim/<id>` are
   // scanned too: the fixture's paused simulation lives there, and leak 6's word is on the first of
   // them.
   // ============================================================================================
@@ -742,6 +743,11 @@ try {
     { name: 'office', path: `/w/${workspaceId}/office`, testId: 'office-canvas', fidelity: true },
     { name: 'project-settings', path: `/w/${workspaceId}/settings`, testId: 'perm-caption', fidelity: true },
     { name: 'organization', path: `/w/${workspaceId}/organization`, testId: 'organization-rows', fidelity: true },
+    // M49 R6's Knowledge tab, the thirteenth page the fidelity gate photographs. `knowledge-counts` rather
+    // than `knowledge-rows` is its structural marker for `timeline-viewport`'s reason: this fixture has no
+    // memories at all, the list wrapper is absent when there are none, and the EMPTY state is exactly the
+    // state the shell contract and the raw-token rule have to hold in.
+    { name: 'knowledge', path: `/w/${workspaceId}/knowledge`, testId: 'knowledge-counts', fidelity: true },
     { name: 'simulations', path: `/sim`, testId: 'sim-card', fidelity: false },
     { name: 'simulation', path: `/sim/${simulationId}`, testId: 'sim-company', fidelity: false },
   ]
