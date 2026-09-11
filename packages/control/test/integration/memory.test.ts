@@ -3,6 +3,7 @@ import { MEMORIES_IN_PROMPT, MEMORY_CANDIDATE_STALE_MS } from '@slave-of-ai/doma
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   addMemory,
+  condenseWorkspaceMemories,
   discardStaleCandidates,
   listMemories,
   listMemoriesByIds,
@@ -766,5 +767,121 @@ describe('the stale-candidate count and the discard (R2, plan errata E11/E12)', 
     expect(await discardStaleCandidates(workspaceId, new Date(), { userId }, { batch: 2 })).toBe(3)
     expect(await prisma.memory.count({ where: { id: { in: ids }, status: 'removed' } })).toBe(3)
     expect(await prisma.executionEvent.count({ where: { workspaceId, type: 'memory_changed' } })).toBe(3)
+  })
+})
+
+/**
+ * M49 R5. Deterministic text, no model call, and nothing replaced: the twenty sources stay
+ * `verified` and stay in the table, and it is retrieval that prefers the summary over them.
+ */
+describe('condenseWorkspaceMemories (R5)', () => {
+  it('writes one summary with twenty MemorySource rows, and the next run gets it instead of them', async () => {
+    for (let index = 0; index < 20; index += 1) {
+      const written = await recordMemory(
+        draft({
+          type: 'fact',
+          status: 'verified',
+          confidence: 'sourced',
+          verifiedBy: 'verification',
+          title: `Fact ${String(index)}`,
+        }),
+      )
+      expect(written.ok).toBe(true)
+    }
+    const made = await condenseWorkspaceMemories(workspaceId, 'fact')
+    expect(made).toHaveLength(1)
+    expect(made[0]?.type).toBe('fact')
+    expect(made[0]?.sources).toBe(20)
+    const memoryId = made[0]?.memoryId ?? ''
+    expect(await prisma.memorySource.count({ where: { memoryId } })).toBe(20)
+    // The sources are untouched: a summary is an index, not a replacement.
+    expect(await prisma.memory.count({ where: { workspaceId, type: 'fact', status: 'verified' } })).toBe(21)
+
+    const summary = await readMemory(memoryId)
+    expect(summary.ok).toBe(true)
+    if (!summary.ok) return
+    expect(summary.value.memory.provenance.sourceKind).toBe('condensation')
+    expect(summary.value.memory.title).toMatch(/^Fact summary \(20 sources, /)
+    expect(summary.value.sources).toHaveLength(20)
+    // The event a person reads on the timeline: twenty promotions and the summary that indexes
+    // them, all filed in this project (`beforeEach` empties the stream).
+    expect(await prisma.executionEvent.count({ where: { workspaceId, type: 'memory_recorded' } })).toBe(21)
+
+    // Plan erratum E4, through the database: the summary is what a run is given, and its twenty
+    // sources are not given again beside it.
+    const given = await memoriesForRun({ workspaceId, slaveId, taskId, kind: 'implementation' })
+    expect(given.memories.map((one) => one.id)).toEqual([memoryId])
+    expect(given.eligible).toBe(1)
+
+    // Idempotent by construction: every loose fact is now covered, so a second pass finds nothing.
+    expect(await condenseWorkspaceMemories(workspaceId, 'fact')).toEqual([])
+  })
+
+  it('condenses a worker’s twenty lessons into a procedure, and leaves the company alone', async () => {
+    const companyFacts: string[] = []
+    for (let index = 0; index < 20; index += 1) {
+      const lesson = await recordMemory(
+        draft({
+          type: 'lesson',
+          scope: 'worker',
+          workspaceId: null,
+          slaveId,
+          status: 'verified',
+          confidence: 'sourced',
+          verifiedBy: 'review',
+          title: `Lesson ${String(index)}`,
+        }),
+        undefined,
+        workspaceId,
+      )
+      expect(lesson.ok).toBe(true)
+      const fact = await recordMemory(
+        draft({
+          type: 'fact',
+          scope: 'company',
+          workspaceId: null,
+          companyId,
+          status: 'verified',
+          confidence: 'sourced',
+          verifiedBy: 'verification',
+          title: `Company fact ${String(index)}`,
+        }),
+        undefined,
+        workspaceId,
+      )
+      expect(fact.ok).toBe(true)
+      if (fact.ok) companyFacts.push(fact.value.id)
+    }
+
+    const made = await condenseWorkspaceMemories(workspaceId)
+    // One summary, and it is the worker's: a project's cron must never rewrite what the company
+    // knows, because that knowledge is shared between projects.
+    expect(made).toHaveLength(1)
+    expect(made[0]?.type).toBe('lesson')
+    const summary = await readMemory(made[0]?.memoryId ?? '')
+    expect(summary.ok).toBe(true)
+    if (!summary.ok) return
+    expect(summary.value.memory.type).toBe('procedure')
+    expect(summary.value.memory.scope).toBe('worker')
+    expect(summary.value.memory.slaveId).toBe(slaveId)
+    expect(summary.value.memory.title).toMatch(/^What this worker has learned to do \(20 sources, /)
+    expect(await prisma.memory.count({ where: { id: { in: companyFacts }, status: 'verified' } })).toBe(20)
+  })
+
+  it('says nothing at all below the threshold, and nothing at all for a project that is not there', async () => {
+    for (let index = 0; index < 19; index += 1) {
+      const written = await recordMemory(
+        draft({
+          type: 'fact',
+          status: 'verified',
+          confidence: 'sourced',
+          verifiedBy: 'verification',
+          title: `Fact ${String(index)}`,
+        }),
+      )
+      expect(written.ok).toBe(true)
+    }
+    expect(await condenseWorkspaceMemories(workspaceId, 'fact')).toEqual([])
+    expect(await condenseWorkspaceMemories('no-such-workspace')).toEqual([])
   })
 })

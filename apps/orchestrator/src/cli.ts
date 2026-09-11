@@ -18,6 +18,7 @@ import {
   claimResume,
   cloneSimulation,
   compareSimulations,
+  condenseWorkspaceMemories,
   confirmIntegration,
   createCompany,
   createProjectTeam,
@@ -317,6 +318,10 @@ const USAGE = `usage: orchestrator <command> [options]
   memories supersede <id> --title <t> --body <b>
                                        correct one: the old row is kept and pointed at the new.
   memories remove <id> --reason <why>  withdraw one. Nothing is deleted; the reason is stored.
+  memories condense --workspace <id> [--type <t>]
+                                       twenty verified memories of one kind become one summary that
+                                       links every one of them. Nothing is replaced, and running it
+                                       twice writes nothing the second time.
   adopt-runbook --workspace <id> --runbook <key>
                                        the project follows this runbook. The next planning run is
                                        asked to adapt it; nothing re-plans by itself.
@@ -1745,7 +1750,28 @@ export async function main(argv: readonly string[]): Promise<number> {
         process.stdout.write(`${result.value.id} withdrawn: ${result.value.removedReason ?? ''}\n`)
         return 0
       }
-      throw new Error('memories takes list, show, add, verify, supersede or remove')
+      if (sub === 'condense') {
+        // Deterministic text and no model call (R5): the same rows produce the same summary, so a
+        // person can run this twice and the second run finds nothing rather than writing a second
+        // summary of the same knowledge.
+        const made = await condenseWorkspaceMemories(
+          await resolveWorkspace(flags),
+          flagText(flags, 'type') === undefined ? undefined : oneOfFlag<MemoryType>(flags, 'type', MEMORY_TYPES),
+        )
+        if (made.length === 0) {
+          process.stdout.write(
+            'nothing to summarise: no scope holds 20 verified memories of one type that are not already in a summary\n',
+          )
+          return 0
+        }
+        for (const one of made) {
+          // The type SUMMARISED, which is not always the type written: a worker's lessons become a
+          // procedure, and "Lesson summary" is what the operator asked about.
+          process.stdout.write(`${one.memoryId}: ${MEMORY_TYPE_LABEL[one.type]} summary of ${String(one.sources)} sources\n`)
+        }
+        return 0
+      }
+      throw new Error('memories takes list, show, add, verify, supersede, remove or condense')
     }
 
     case 'adopt-runbook': {

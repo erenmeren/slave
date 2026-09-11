@@ -1769,7 +1769,7 @@ describe('the orchestrator CLI', () => {
 
       const badSub = await runCli(['memories', 'nonsense'])
       expect(badSub.code).not.toBe(0)
-      expect(badSub.stderr).toContain('list, show, add, verify, supersede or remove')
+      expect(badSub.stderr).toContain('list, show, add, verify, supersede, remove or condense')
 
       const badType = await runCli([
         'memories',
@@ -1789,6 +1789,62 @@ describe('the orchestrator CLI', () => {
       const noId = await runCli(['memories', 'show'])
       expect(noId.code).not.toBe(0)
       expect(noId.stderr).toContain('memories show needs an id')
+    }, 60_000)
+
+    // M49 R5: deterministic text, no model call, and nothing replaced.
+    it('condenses twenty verified facts into one summary, and says so when there is nothing', async (): Promise<void> => {
+      // This project's own knowledge and nobody else's: the cases above leave withdrawn and
+      // superseded rows behind (R1 deletes nothing), and a summary counts only what is verified.
+      await prisma.memorySource.deleteMany({})
+      await prisma.memory.deleteMany({ where: { workspaceId: fixture.workspaceId } })
+      try {
+        const empty = await runCli(['memories', 'condense', '--workspace', fixture.workspaceId])
+        expect(empty.code).toBe(0)
+        expect(empty.stdout).toBe(
+          'nothing to summarise: no scope holds 20 verified memories of one type that are not already in a summary\n',
+        )
+
+        await prisma.memory.createMany({
+          data: Array.from({ length: 20 }, (_, index) => ({
+            type: 'fact' as const,
+            scope: 'workspace' as const,
+            workspaceId: fixture.workspaceId,
+            title: `Release fact ${String(index)}`,
+            body: 'It is true.',
+            status: 'verified' as const,
+            confidence: 'sourced' as const,
+            sourceKind: 'verification' as const,
+            createdBy: 'system' as const,
+            verifiedAt: new Date(),
+            verifiedBy: 'verification',
+          })),
+        })
+
+        const made = await runCli(['memories', 'condense', '--workspace', fixture.workspaceId, '--type', 'fact'])
+        expect(made.code).toBe(0)
+        const line = made.stdout.trim()
+        expect(line).toMatch(/^\S+: Fact summary of 20 sources$/)
+        const summaryId = line.split(':')[0] ?? ''
+        expect(await prisma.memorySource.count({ where: { memoryId: summaryId } })).toBe(20)
+
+        // `memories show` is where an operator sees what a summary is made of.
+        const shown = await runCli(['memories', 'show', summaryId])
+        expect(shown.code).toBe(0)
+        expect(shown.stdout).toContain('summarises: ')
+        expect(shown.stdout.split('\n')[1]).toMatch(/^Fact summary \(20 sources, /)
+
+        // Twice is once: every loose fact is covered now.
+        const again = await runCli(['memories', 'condense', '--workspace', fixture.workspaceId, '--type', 'fact'])
+        expect(again.code).toBe(0)
+        expect(again.stdout).toContain('nothing to summarise')
+
+        const badType = await runCli(['memories', 'condense', '--workspace', fixture.workspaceId, '--type', 'gossip'])
+        expect(badType.code).not.toBe(0)
+        expect(badType.stderr).toContain('--type must be one of')
+      } finally {
+        await prisma.memorySource.deleteMany({})
+        await prisma.memory.deleteMany({ where: { workspaceId: fixture.workspaceId } })
+      }
     }, 60_000)
   })
 

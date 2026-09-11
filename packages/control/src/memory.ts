@@ -5,7 +5,9 @@ import {
   MEMORY_BODY_MAX,
   MEMORY_CANDIDATE_STALE_MS,
   MEMORY_TITLE_MAX,
+  MEMORY_TYPES,
   capCodePoints,
+  condenseMemories,
   err,
   ok,
   parseMemoryDraft,
@@ -703,4 +705,67 @@ export async function discardStaleCandidates(
     total += changed.length
     if (page.length < size) return total
   }
+}
+
+/**
+ * Condenses everything this project holds that is worth condensing (M49 R5).
+ *
+ * A person or a cron calls this, never the Supervisor and never a tick: R5 keeps it out of the
+ * decision loop deliberately, because a summary is cheap to make and awkward to unmake.
+ *
+ * Every scope this project can see is offered to {@link condenseMemories}, one type at a time: the
+ * workspace's own memories, and each worker's. The company's are NOT: a company's knowledge is
+ * shared between projects, and one project's cron must not rewrite it.
+ *
+ * The insert and its `MemorySource` rows are ONE transaction -- a summary whose sources failed to
+ * link is a memory that claims twenty sources and points at none, and retrieval would then show it
+ * beside every one of them. The event is appended after the commit, as every other verb here does.
+ *
+ * The `type` reported back is the type that was SUMMARISED, which is not always the type that was
+ * written: a worker's lessons condense into a procedure (R5's one automatic PROCEDURE), and the
+ * caller asked about lessons.
+ */
+export async function condenseWorkspaceMemories(
+  workspaceId: string,
+  type?: MemoryType,
+  principal?: Principal,
+): Promise<readonly { readonly type: MemoryType; readonly memoryId: string; readonly sources: number }[]> {
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { teams: { select: { slaves: { select: { id: true } } } } },
+  })
+  if (workspace === null) return []
+  const slaveIds = workspace.teams.flatMap((team) => team.slaves.map((slave) => slave.id))
+  const types = type === undefined ? MEMORY_TYPES : [type]
+
+  const targets: { readonly scope: MemoryScope; readonly targetId: string }[] = [
+    { scope: 'workspace', targetId: workspaceId },
+    // In id order, so a run over one project writes the same summaries in the same order twice.
+    ...slaveIds.toSorted((a, b) => a.localeCompare(b)).map((id) => ({ scope: 'worker' as const, targetId: id })),
+  ]
+
+  const made: { type: MemoryType; memoryId: string; sources: number }[] = []
+  for (const target of targets) {
+    const rows = await prisma.memory.findMany({
+      where: target.scope === 'workspace' ? { workspaceId: target.targetId } : { slaveId: target.targetId },
+      include: withSources,
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: MEMORIES_LOADED_MAX,
+    })
+    const memories = rows.map(viewOf)
+    for (const one of types) {
+      const condensation = condenseMemories({ memories, scope: target.scope, targetId: target.targetId, type: one })
+      if (condensation === null) continue
+      const written = await prisma.$transaction(async (tx) => {
+        const created = await tx.memory.create({ data: dataOf(condensation.draft), include: withSources })
+        await tx.memorySource.createMany({
+          data: condensation.sourceIds.map((sourceMemoryId) => ({ memoryId: created.id, sourceMemoryId })),
+        })
+        return tx.memory.findUniqueOrThrow({ where: { id: created.id }, include: withSources })
+      })
+      await announceRecorded(written, workspaceId, principal)
+      made.push({ type: one, memoryId: written.id, sources: condensation.sourceIds.length })
+    }
+  }
+  return made
 }
