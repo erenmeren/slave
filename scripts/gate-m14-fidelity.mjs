@@ -1,4 +1,5 @@
-// M14's own gate (Task 17 brief, spec §6): "eleven pages, one design" (nine until M44 R8).
+// M14's own gate (Task 17 brief, spec §6): "twelve pages, one design" (nine until M44 R8, eleven
+// until M47 R6 added the project's Organization tab).
 //
 // `gate-m11-shell.mjs`'s shape -- a real `next dev`, a real Chromium through `playwright-core`,
 // every assertion re-read from prisma or from the DOM -- with `gate-m13-runtime.mjs`'s newer
@@ -16,7 +17,7 @@
 //   SLAVEOFAI_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" npm run gate:m14-fidelity
 //
 // The five stages of spec §6:
-//   1. eleven pages render at 1440x900 with their structural testids, each screenshotted into
+//   1. twelve pages render at 1440x900 with their structural testids, each screenshotted into
 //      `docs/superpowers/fidelity/m14/<page>.png` and committed;
 //   2. every README number read back from `getComputedStyle`, failing by page + property;
 //   3. motion: a `working` card sweeps and an in-flight pill pulses; under emulated
@@ -124,7 +125,7 @@ const runTimestamp = new Date().toISOString()
 const WORKSPACE_PREFIX = 'M14 Gate Project'
 const WORKSPACE_NAME = `${WORKSPACE_PREFIX} ${runTimestamp.slice(11, 19)}`
 const WORKER_NAME = 'Gate Worker'
-const PASS_LINE = 'eleven pages, one design'
+const PASS_LINE = 'twelve pages, one design'
 
 // The pair a dispatch resolves on. `resolveRuntime` only consults a level that NAMES a model, so
 // the worker carries both halves explicitly rather than falling through to a workspace default
@@ -582,7 +583,7 @@ try {
       autoMerge: true,
       verifyCommands: ['true'],
       setupCommands: [],
-      goal: 'prove the eleven pages render on real data',
+      goal: 'prove the twelve pages render on real data',
     },
   })
   workspaceId = workspace.id
@@ -766,7 +767,7 @@ try {
   })
 
   // ============================================================================================
-  // Stage 1: eleven pages render, and each is screenshotted.
+  // Stage 1: twelve pages render, and each is screenshotted.
   // ============================================================================================
   const PAGES = [
     { name: 'overview', path: () => `/w/${workspaceId}`, testId: 'strip' },
@@ -775,6 +776,10 @@ try {
     // actually lands on rather than a redirect's destination reached the long way round.
     { name: 'workforce', path: () => '/workforce', testId: 'data-table' },
     { name: 'tasks', path: () => `/w/${workspaceId}/tasks`, testId: 'column' },
+    // M47 R6: the project's fifth tab. In `PAGES` and deliberately NOT in `LIVE_PAGES` -- the rows
+    // it lists are who is on the project and what they provide, and neither of those changes when
+    // a run goes live, so a second capture would be a diff that says nothing.
+    { name: 'organization', path: () => `/w/${workspaceId}/organization`, testId: 'organization-rows' },
     { name: 'graph', path: () => `/w/${workspaceId}/graph`, testId: 'graph-canvas' },
     // `timeline-viewport`, not `timeline-rule`: the rule is absolutely positioned inside the
     // virtualizer's sized spacer, so on a workspace with no events yet it is ATTACHED but zero-high
