@@ -87,6 +87,7 @@ const snapshot = (slaves: readonly SlaveCardData[]): OverviewSnapshot => ({
     latestVerified: null,
     cost: { spentUsd: 0, measuredUsd: 0, unmeasuredCalls: 0, unmeasuredRuns: 0, budgetUsd: null },
     recentChanges: [],
+    knowledge: { verified: 0, candidates: 0 },
   },
   needsYou: [],
   timeline: [],

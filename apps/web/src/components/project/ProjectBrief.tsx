@@ -101,7 +101,8 @@ function Tile({
 }
 
 /**
- * The eight facts (M45 R1), in two rows of four.
+ * The eight facts (M45 R1), in two rows of four -- eight, still, since M49 R6 put what this project
+ * KNOWS on a line inside the `latest verified` tile rather than on a ninth one (plan erratum E6).
  *
  * The `work` tile and the `strip` below it on the page BOTH count this project's tasks, and that
  * is deliberate (M45 plan erratum E17). They are not the same statement: this tile speaks the
@@ -125,7 +126,7 @@ export function ProjectBrief({
    *  to be a correct brief, so a row with nowhere to go is a plain row rather than a dead button. */
   readonly onOpenSlave?: (slaveId: string) => void
 }): React.JSX.Element {
-  const { objective, supervisor, work, cost, needsYou, latestVerified, team, recentChanges } = brief
+  const { objective, supervisor, work, cost, needsYou, latestVerified, team, recentChanges, knowledge } = brief
   const supervisorTone: StatusTone = supervisor.needsYou ? 'blocked' : supervisor.state === 'working' ? 'working' : 'idle'
   const needsYouShown = needsYou.slice(0, BRIEF_LIST_MAX)
   const teamShown = team.slice(0, BRIEF_LIST_MAX)
@@ -249,6 +250,16 @@ export function ProjectBrief({
             <span className="font-mono text-[10px] text-text-3">{clock(latestVerified.at)}</span>
           </>
         )}
+        {/* M49 R6: what this project knows, beside the last thing it proved -- one line, inside an
+          * existing fact, because the brief is eight tiles and `gate:m45` says so (plan erratum
+          * E6). */}
+        <Link
+          href={`/w/${workspaceId}/knowledge`}
+          data-testid="brief-knowledge"
+          className="text-[11px] text-text-2 underline"
+        >
+          Knowledge: {knowledge.verified} verified · {knowledge.candidates} candidates
+        </Link>
       </Tile>
 
       <Tile fact="team" caption="team">

@@ -6,6 +6,7 @@ import { onUnauthorized } from '../lib/onUnauthorized'
 import { errorMessage, sendControl } from '../lib/postControl'
 import { sectionLine } from '../lib/runContextSummary'
 import { priorityChip } from '../lib/taskColumns'
+import type { TaskMemoriesView } from '../server/memory'
 import type { TaskBoardItem } from '../server/tasks'
 import { taskStatusWord } from '../lib/tones'
 import { TASK_STATUS_TEXT, goalStampText, isStale, whyOf } from './TaskCard'
@@ -66,6 +67,9 @@ export function TaskDetailPanel({
   const [runContext, setRunContext] = useState<OpenRunContext | null>(null)
   const [runContextPending, setRunContextPending] = useState(false)
   const [runContextError, setRunContextError] = useState<string | null>(null)
+  const [memories, setMemories] = useState<TaskMemoriesView | null>(null)
+  const [memoriesPending, setMemoriesPending] = useState(false)
+  const [memoriesError, setMemoriesError] = useState<string | null>(null)
 
   // M23 B4 (controller ruling): `task.collectable` is computed server-side on the DTO
   // (`buildTasksSnapshot`) -- this panel never imports `TERMINAL` from `@slave-of-ai/domain`.
@@ -150,6 +154,36 @@ export function TaskDetailPanel({
       setRunContextError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setRunContextPending(false)
+    }
+  }
+
+  /**
+   * Reads what this task's runs were GIVEN and what the task left behind (M49 R6, plan erratum E7).
+   *
+   * `openRunContext`'s shape exactly -- a plain `fetch`, because a 200 here is a `TaskMemoriesView`
+   * rather than the `{ ok: true }` envelope `sendControl` decodes, and the same try/catch/finally so
+   * the pending flag always clears. On demand, because the board POLLS this panel's task: carrying
+   * every task's memories on every poll to fill a group nobody has opened is the cost this avoids.
+   */
+  const openMemories = async (): Promise<void> => {
+    setMemoriesPending(true)
+    setMemoriesError(null)
+    try {
+      const response = await fetch(`/api/w/${workspaceId}/tasks/${task.id}/memories`)
+      if (response.status === 401) {
+        onUnauthorized()
+        return
+      }
+      const data: unknown = await response.json().catch(() => null)
+      if (!response.ok) {
+        setMemoriesError(errorMessage(data, response.status))
+        return
+      }
+      setMemories(data as TaskMemoriesView)
+    } catch (cause) {
+      setMemoriesError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setMemoriesPending(false)
     }
   }
 
@@ -415,6 +449,55 @@ export function TaskDetailPanel({
         {runContextError !== null && (
           <span role="alert" data-testid="run-context-error" className="text-xs text-tone-blocked">
             {runContextError}
+          </span>
+        )}
+      </DetailsGroup>
+
+      {/* M49 R6: the knowledge this task's runs were GIVEN (off their recorded manifests, which is
+        * the only record of it) and what it PRODUCED. Fetched on demand, like the context group
+        * above it: a board poll must not carry every task's memories. */}
+      <DetailsGroup group="memories" title="Knowledge">
+        <button
+          type="button"
+          data-testid="task-memories-open"
+          disabled={memoriesPending}
+          onClick={() => void openMemories()}
+          className="text-left text-[10.5px] text-text-3 underline decoration-dotted hover:text-text-1 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          What this task knew, and what it taught
+        </button>
+        {memories !== null && (
+          <div className="flex flex-col gap-2">
+            <ul data-testid="task-memory-received" className="flex flex-col gap-0.5">
+              {memories.received.length === 0 ? (
+                <li className="text-[10.5px] text-text-3">no run of this task was given anything yet</li>
+              ) : (
+                memories.received.map((row) => (
+                  <li key={row.memory.id} data-testid="task-memory-row" className="text-[10.5px] text-text-2">
+                    {/* The LABEL, with the key one hover away (`docs/ia.md` rule 3), and the
+                      * memory's own words as JSX children (spec section 1). */}
+                    <span title={row.memory.type}>{row.typeLabel}</span> · {row.memory.title}
+                  </li>
+                ))
+              )}
+            </ul>
+            <ul data-testid="task-memory-produced" className="flex flex-col gap-0.5">
+              {memories.produced.length === 0 ? (
+                <li className="text-[10.5px] text-text-3">this task has not taught anybody anything yet</li>
+              ) : (
+                memories.produced.map((row) => (
+                  <li key={row.memory.id} data-testid="task-memory-row" className="text-[10.5px] text-text-2">
+                    <span title={row.memory.type}>{row.typeLabel}</span> · {row.memory.title} —{' '}
+                    <span title={row.memory.status}>{row.statusLabel}</span>
+                  </li>
+                ))
+              )}
+            </ul>
+          </div>
+        )}
+        {memoriesError !== null && (
+          <span role="alert" data-testid="task-memories-error" className="text-xs text-tone-blocked">
+            {memoriesError}
           </span>
         )}
       </DetailsGroup>

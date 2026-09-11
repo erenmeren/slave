@@ -27,6 +27,7 @@ const BRIEF = {
   latestVerified: { taskTitle: 'Add the banner', kind: 'integrated' as const, at: '2026-09-09T10:00:00.000Z' },
   cost: { spentUsd: 12.5, measuredUsd: 9.5, unmeasuredCalls: 3, unmeasuredRuns: 0, budgetUsd: 25 },
   recentChanges: [{ at: '2026-09-09T10:30:00.000Z', summary: 'Project · goal set' }],
+  knowledge: { verified: 3, candidates: 1 },
 }
 
 /** The one tile carrying a given fact. */
@@ -43,6 +44,15 @@ describe('ProjectBrief', () => {
     expect(tiles.map((tile) => tile.getAttribute('data-brief'))).toEqual([
       'objective', 'supervisor', 'work', 'cost', 'needs-you', 'latest-verified', 'team', 'recent-changes',
     ])
+  })
+
+  it('M49 R6: the knowledge line is a link inside the latest-verified tile, not a ninth tile', () => {
+    render(<ProjectBrief workspaceId="w1" brief={BRIEF} />)
+    expect(screen.getAllByTestId('brief-tile')).toHaveLength(8)
+    const line = screen.getByTestId('brief-knowledge')
+    expect(line.getAttribute('href')).toBe('/w/w1/knowledge')
+    expect(line.textContent).toBe('Knowledge: 3 verified · 1 candidates')
+    expect(tileFor('latest-verified').contains(line)).toBe(true)
   })
 
   it('says the objective and its version, and links to where it is edited', () => {

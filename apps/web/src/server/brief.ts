@@ -129,6 +129,10 @@ export interface ProjectBrief {
     readonly budgetUsd: number | null
   }
   readonly recentChanges: readonly { readonly at: string; readonly summary: string }[]
+  /** M49 R6: what this project knows, in two numbers. A LINE inside the `latest verified` fact and
+   *  never a ninth tile (plan erratum E6): the eight facts are pinned by `gate:m45` and by
+   *  `project-brief.test.tsx`, and R6 asks for a line rather than a panel. */
+  readonly knowledge: { readonly verified: number; readonly candidates: number }
 }
 
 /**
@@ -162,8 +166,18 @@ export async function buildProjectBrief(
   })
   if (workspace === null) return null
 
-  const [tasks, slaves, spend, spendRows, pendingDecisions, needsYouItems, changeRows, verified] =
-    await Promise.all([
+  const [
+    tasks,
+    slaves,
+    spend,
+    spendRows,
+    pendingDecisions,
+    needsYouItems,
+    changeRows,
+    verified,
+    verifiedMemories,
+    candidateMemories,
+  ] = await Promise.all([
       prisma.task.findMany({
         where: { workspaceId },
         select: { id: true, title: true, status: true, integratedAt: true },
@@ -207,6 +221,11 @@ export async function buildProjectBrief(
         take: RECENT_CHANGES_LIMIT,
       }),
       latestVerifiedRows(workspaceId),
+      // Two index probes over the index M49 t1 added, in the batch that is already running: the
+      // brief refetches on every event, and a count is what a LINE needs -- the same reason
+      // `pendingDecisions` above is a count rather than a listing.
+      prisma.memory.count({ where: { workspaceId, status: 'verified' } }),
+      prisma.memory.count({ where: { workspaceId, status: 'candidate' } }),
     ])
 
   // The counts a person reads, in the DOMAIN's words -- `userTaskStatus`, the same projection the
@@ -268,6 +287,7 @@ export async function buildProjectBrief(
       unmeasuredRuns: runSpend.unknownRuns,
       budgetUsd: workspace.budgetUsd,
     },
+    knowledge: { verified: verifiedMemories, candidates: candidateMemories },
     recentChanges: changeRows.map((row) => ({
       at: row.ts.toISOString(),
       // The family, said out loud -- never the dotted type. `readableEventType` is the projection

@@ -963,6 +963,9 @@ describe('TaskDetailPanel (M45 R4: the expanded view)', () => {
       'run',
       'messages',
       'context',
+      // M49 R6: what this task's runs were given, and what it taught -- after the context they were
+      // assembled from and before the attempts that proved it.
+      'memories',
       'verification',
       'cost',
       'worktree',

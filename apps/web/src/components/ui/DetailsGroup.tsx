@@ -45,6 +45,11 @@ export type DetailsGroupName =
   // proof it owes. The fourteenth of R6's groups and the first that is about the WORK rather than
   // about the worker.
   | 'handoff'
+  // M49 R6: where a memory came from, and what a task's runs were given and left behind. The
+  // fifteenth and sixteenth of R6's groups, and the first two about what the organisation KNOWS
+  // rather than about what it did.
+  | 'provenance'
+  | 'memories'
 
 /**
  * One `Details ▾` group (M45 R4).

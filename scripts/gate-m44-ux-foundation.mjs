@@ -58,7 +58,15 @@ import { createSimulation } from '../packages/control/dist/index.js'
 import { prisma } from '../packages/db/dist/client.js'
 import { CAPABILITY_SEED } from '../packages/db/dist/capabilities.js'
 import { EVENT_TYPE_BY_DOMAIN_TYPE, RUN_STATUSES, TASK_STATUSES } from '../packages/db/dist/enums.js'
-import { DECISION_STATUSES, SITUATION_KINDS, TIERS } from '../packages/domain/dist/index.js'
+import {
+  DECISION_STATUSES,
+  MEMORY_SCOPES,
+  MEMORY_SOURCE_KINDS,
+  MEMORY_STATUSES,
+  MEMORY_TYPES,
+  SITUATION_KINDS,
+  TIERS,
+} from '../packages/domain/dist/index.js'
 import { PROVIDER_KINDS } from '../packages/providers/dist/index.js'
 
 const ACTION_TIMEOUT_MS = 30_000
@@ -138,6 +146,15 @@ const RAW_TOKENS = [
   ...CAPABILITY_SEED.map((record) => record.key),
   ...Object.values(EVENT_TYPE_BY_DOMAIN_TYPE),
   ...Object.keys(EVENT_TYPE_BY_DOMAIN_TYPE),
+  // M49 R6 (plan erratum E10): the four memory unions. Every member today is a bare English word
+  // except `run_output`, so this contributes exactly one token -- and that is the point. The line
+  // is here so the FIRST member with an underscore or a dot that a later milestone adds to any of
+  // the four joins the blocklist with no edit at all, exactly as `DECISION_STATUSES` and `TIERS`
+  // above are enumerated for a fifth tier nobody has written yet.
+  ...MEMORY_TYPES,
+  ...MEMORY_SCOPES,
+  ...MEMORY_STATUSES,
+  ...MEMORY_SOURCE_KINDS,
 ].filter((token) => token.includes('_') || token.includes('.'))
 
 /**
@@ -314,6 +331,7 @@ try {
   assert(RAW_TOKENS.includes('no_reviewer'), 'the derived blocklist lost the SituationKind members')
   assert(RAW_TOKENS.includes('backend.api-design'), 'the derived blocklist lost the capability keys (M47)')
   assert(RAW_TOKENS.includes('run.tool_call') && RAW_TOKENS.includes('run_tool_call'), 'the derived blocklist lost the event types')
+  assert(RAW_TOKENS.includes('run_output'), 'the derived blocklist lost the memory source kinds (M49)')
 
   await preflightCleanup()
 
@@ -620,10 +638,10 @@ try {
     ),
   )
   console.log(`stage 2: project tabs = ${JSON.stringify(stripLabels)}`)
-  // FIVE since M47 R6 added the Organization tab, third. This stage of M44's gate names a later
+  // SIX since M49 R6 added the Knowledge tab, fourth. This stage of M44's gate names a later
   // milestone deliberately: the strip is M44's contract, and whoever widens it moves this line with
   // the component, in the same commit, or learns here that they did not.
-  const EXPECTED_TABS = ['Overview', 'Tasks', 'Organization', 'Activity', 'Settings']
+  const EXPECTED_TABS = ['Overview', 'Tasks', 'Organization', 'Knowledge', 'Activity', 'Settings']
   if (JSON.stringify(stripLabels) !== JSON.stringify(EXPECTED_TABS)) {
     await fail(`stage 2: the project strip is ${JSON.stringify(stripLabels)}, expected ${JSON.stringify(EXPECTED_TABS)}`)
   }
