@@ -736,6 +736,11 @@ export async function loadSupervisorWorld(
           latestGuardrail: guardrails.get(row.id) ?? null,
           goalVersion: row.goalVersion,
           requiredCapabilities: row.requiredCapabilities,
+          // M50 R3 (plan erratum E4), DECLARED HERE and filled by Task 2, which widens the raw
+          // SELECT this row comes from. Null is the honest placeholder and not a shortcut: nothing
+          // in the pipeline writes `Task.assigneeId`, and `engagement_over` -- the one predicate
+          // that reads it -- cannot fire at all while the slave rows below say nobody is ephemeral.
+          assigneeId: null,
           stage: row.stage,
           // Plan erratum E6: resolved HERE, so `observe` can append the sentence without knowing
           // what a runbook is. Null whenever the task has no stage, the workspace has no runbook,
@@ -751,6 +756,15 @@ export async function loadSupervisorWorld(
         runtimeRoles: row.runtimeRoles,
         capabilities: row.capabilities,
         busy: row.runs.length > 0,
+        // M50 R1/R3 (plan erratum E4): the three lifecycle facts, DECLARED here in Task 1 and read
+        // off the columns by Task 2, which widens this query's `select` and wires `releaseWorker`
+        // behind the action. Until then every worker this loader hands the rules is an ordinary
+        // unreleased project worker -- which is what the pre-M50 world said and what every row in
+        // the database is until a temporary hire lands -- so `engagement_over` raises nothing and
+        // the `release_worker` arm of `carryOut` is unreachable.
+        lifecycle: 'project',
+        engagementTaskId: null,
+        released: false,
       }))
 
       const world: SupervisorWorld = {

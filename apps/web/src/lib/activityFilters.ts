@@ -112,6 +112,10 @@ export const TYPES_BY_KIND = {
     // and (for the ones a person makes) not a guardrail trip either.
     'memory.recorded',
     'memory.changed',
+    // M50 t1: a worker's engagement ending is a change to the project's roster, the same chip
+    // `org.changed` and `slave.runtime_roles_changed` sit under -- not a run outcome, and it
+    // carries no taskId of its own.
+    'slave.released',
   ],
 } as const satisfies Record<ActivityKind, readonly DomainEventType[]>
 

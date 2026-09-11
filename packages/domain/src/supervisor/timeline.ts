@@ -69,6 +69,10 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   'run.paused': 'work',
   'run.resumed': 'work',
   'slave.message_sent': 'work',
+  // M50 R3: the end of one worker's engagement is part of the work story, beside the messages and
+  // the pauses -- who was here, and until when. Not `decision`: the Supervisor applies this
+  // routinely, and the decision lane is for what a person still has to answer.
+  'slave.released': 'work',
   // DECISION REQUIRED -- the two events that record a decision already TAKEN (erratum E27).
   // `supervisor.proposed` and `supervisor.decided` stay off the timeline: the proposal itself is
   // shown as the pending `SupervisorDecision` row, and showing both would double every entry.

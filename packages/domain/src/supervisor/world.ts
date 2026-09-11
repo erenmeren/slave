@@ -1,5 +1,6 @@
 import type { CapabilityRecord } from '../capability/taxonomy.js'
 import type { HandoffContract } from '../handoff/contract.js'
+import type { SlaveLifecycle } from '../lifecycle/types.js'
 import type { Runbook } from '../runbook/spec.js'
 import type { TaskStatus } from '../task/state.js'
 import type { ActionKind, DecisionStatus, Tier } from './actions.js'
@@ -67,6 +68,15 @@ export interface SupervisorTask {
    * than something a loader should silently filter.
    */
   readonly requiredCapabilities: readonly string[]
+  /**
+   * The worker a task is HAND-assigned to (M50 R3), or null.
+   *
+   * LOADER CONTRACT: `Task.assigneeId` verbatim. Nothing in the pipeline writes this column -- a run
+   * is linked to its worker through `SlaveRun.slaveId` -- so it is null on every task this product
+   * plans. It is read by exactly one predicate, `engagement_over`, which must not release the only
+   * worker holding a hand-assigned task.
+   */
+  readonly assigneeId: string | null
   /** M48 R2: the runbook stage this task belongs to, or null for a task planned without one.
    *  A LABEL, never a scheduler input -- `decide()` has never seen it. */
   readonly stage: string | null
@@ -93,6 +103,18 @@ export interface SupervisorSlave {
    */
   readonly capabilities: readonly string[]
   readonly busy: boolean
+  /** M50 R1: why this worker exists. A COLUMN -- `permanent` is a roster worker, `project` a
+   *  project hire, `ephemeral` a specialist brought in for one assignment. */
+  readonly lifecycle: SlaveLifecycle
+  /** M50 R2: the ONE assignment an `ephemeral` worker was brought in for, null on everything else.
+   *  Read by `engagement_over`, which measures the end of the engagement against that task's own
+   *  status. */
+  readonly engagementTaskId: string | null
+  /** M50 R3: the engagement is over and the worker was released. A released worker holds no runtime
+   *  roles -- which is what stops `decide()` picking it, one rule and no second filter -- and it is
+   *  excluded from `formTeam`'s roster and from `staffableSlaves` so nothing proposes giving it
+   *  roles back. */
+  readonly released: boolean
 }
 
 /**

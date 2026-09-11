@@ -28,6 +28,8 @@ const decision: DecisionView = {
     name: 'Security Reviewer',
     rationale: 'Security Reviewer provides Application security and nobody here does.',
     temporary: false,
+    // M50 R2: an ordinary hire names no engagement.
+    engagementTaskId: null,
   },
   draft: null,
   rationale: 'Security Reviewer provides Application security and nobody here does.',

@@ -20,6 +20,12 @@ describe('every union a person reads has a label (M44 R5)', () => {
     }
   })
 
+  // M50 R3: the fifteenth kind, asserted BY NAME -- the coverage check above would pass on
+  // `engagement_over: 'engagement over'`, and rule 3 is about what a person reads.
+  it('names the fifteenth situation the way a person says it', () => {
+    expect(SITUATION_LABEL.engagement_over).toBe('Engagement over')
+  })
+
   it('covers every tier, decision status and decider', () => {
     expect(Object.keys(TIER_LABEL).sort()).toEqual([...TIERS].sort())
     expect(Object.keys(DECISION_STATUS_LABEL).sort()).toEqual([...DECISION_STATUSES].sort())

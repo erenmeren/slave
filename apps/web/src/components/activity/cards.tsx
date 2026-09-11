@@ -148,7 +148,7 @@ function TaskFailedCard(props: ActivityCardProps): ReactElement {
 // operator's button. `idle` tone: this is bookkeeping after the task already concluded, not a
 // new outcome of its own.
 function TaskWorktreeCollectedCard(props: ActivityCardProps): ReactElement {
-  const payload = props.event.payload as { path: string; reason: 'aged' | 'operator'; branch: string | null }
+  const payload = props.event.payload as { path: string; reason: 'aged' | 'operator' | 'released'; branch: string | null }
   return (
     <ActivityCard {...props}>
       <Transition tone="idle" label="worktree collected">
@@ -668,7 +668,7 @@ function WorkspaceCreatedCard(props: ActivityCardProps): ReactElement {
 // slave to another department) all land here, distinguished by `payload.field`. `idle` tone,
 // matching `WorkspaceSettingsChangedCard` above: an edit to configuration, not a run outcome.
 const ORG_CHANGED_LABEL: Record<
-  'name' | 'role' | 'model' | 'deleted' | 'created' | 'team' | 'capabilities',
+  'name' | 'role' | 'model' | 'deleted' | 'created' | 'team' | 'capabilities' | 'lifecycle',
   string
 > = {
   name: 'renamed',
@@ -679,13 +679,15 @@ const ORG_CHANGED_LABEL: Record<
   team: 'moved to department',
   // M47: a hire REUSED this worker and merged capability keys into it.
   capabilities: 'capabilities changed',
+  // M50 R4: a person moved this worker between permanent, project and ephemeral. Nothing else can.
+  lifecycle: 'lifecycle changed',
 }
 
 function OrgChangedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
     entity: 'slave' | 'team'
     id: string
-    field: 'name' | 'role' | 'model' | 'deleted' | 'created' | 'team' | 'capabilities'
+    field: 'name' | 'role' | 'model' | 'deleted' | 'created' | 'team' | 'capabilities' | 'lifecycle'
     // `createProjectTeam` (field: 'created') carries `from: null` -- the new department had no
     // prior name -- the same nullable shape `to` already has for `deleted`.
     from: string | null
@@ -1046,6 +1048,30 @@ function MemoryChangedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+/** M50 R3: a temporary specialist's engagement ended. `idle` tone, for `TaskWorktreeCollectedCard`'s
+ *  reason -- this is the organisation tidying up after work that already concluded, not a new
+ *  outcome. The count says what was actually removed from disk; the worker's own rows are all
+ *  still there, which is the whole ruling. */
+function SlaveReleasedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    slaveId: string
+    name: string
+    reason: string
+    worktreesCollected: number
+  }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label="released">
+        <span data-testid="released-name">{payload.name}</span>
+        {' · '}
+        <span data-testid="released-reason">{payload.reason}</span>
+        {' · '}
+        <span data-testid="released-worktrees">{plural(payload.worktreesCollected, 'worktree')} collected</span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 /**
  * One card component per `DomainEventType`. `satisfies` (not a type annotation) is load-bearing:
  * it keeps each entry's own component type while still failing the build the moment a type is
@@ -1105,4 +1131,5 @@ export const ACTIVITY_CARDS = {
   'workspace.runbook_adopted': WorkspaceRunbookAdoptedCard,
   'memory.recorded': MemoryRecordedCard,
   'memory.changed': MemoryChangedCard,
+  'slave.released': SlaveReleasedCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>

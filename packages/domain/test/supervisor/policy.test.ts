@@ -34,6 +34,7 @@ const ACTIONS: Readonly<Record<Action['kind'], Action>> = {
     name: 'Security Reviewer',
     rationale: 'nobody here provides Application security',
     temporary: false,
+    engagementTaskId: null,
   },
   adopt_runbook: {
     kind: 'adopt_runbook',
@@ -47,6 +48,7 @@ const ACTIONS: Readonly<Record<Action['kind'], Action>> = {
   mark_task_failed: { kind: 'mark_task_failed', taskId: 't1', reason: 'dead end' },
   cancel_task: { kind: 'cancel_task', taskId: 't1', reason: 'the new goal no longer needs it' },
   discard_stale_candidates: { kind: 'discard_stale_candidates', workspaceId: 'ws-1', count: 9 },
+  release_worker: { kind: 'release_worker', slaveId: 's9', name: 'Robin', reason: 'the engagement is over' },
   escalate_to_human: { kind: 'escalate_to_human', summary: 'a human must look' },
   no_action: { kind: 'no_action' },
 }
@@ -96,6 +98,16 @@ describe('tierOf', () => {
    * unblock reversed one tick later. Only the review cap, a policy counter rather than a person,
    * keeps the routine exit.
    */
+  it('applies release_worker routinely -- it is the routine this milestone exists for', () => {
+    const action = { kind: 'release_worker' as const, slaveId: 's9', name: 'Robin', reason: 'over' }
+    expect(tierOf(action, RUNNING, 'engagement_over')).toBe('applied')
+  })
+
+  it('demotes release_worker to a proposal while the workspace is halted, like everything else', () => {
+    const action = { kind: 'release_worker' as const, slaveId: 's9', name: 'Robin', reason: 'over' }
+    expect(tierOf(action, HALTED, 'engagement_over')).toBe('proposed')
+  })
+
   it('makes an unblock a PROPOSAL for every stuck-task situation except the review cap', () => {
     expect(tierOf(ACTIONS.unblock_task, RUNNING, 'task_blocked_human')).toBe('proposed')
     expect(tierOf(ACTIONS.unblock_task, RUNNING, 'task_failed')).toBe('proposed')

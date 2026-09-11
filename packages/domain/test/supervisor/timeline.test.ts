@@ -15,8 +15,8 @@ describe('LANE_BY_TYPE', () => {
     expect(Object.keys(LANE_BY_TYPE).sort()).toEqual(Object.keys(EVENT_TYPE_BY_DOMAIN_TYPE).sort())
   })
 
-  it('carries the 52 members the schema has today -- a fifty-third is a deliberate decision', () => {
-    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(52)
+  it('carries the 53 members the schema has today -- a fifty-fourth is a deliberate decision', () => {
+    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(53)
   })
 
   it('every value is a lane this file names, or null', () => {

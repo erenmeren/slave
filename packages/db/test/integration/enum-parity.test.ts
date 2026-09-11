@@ -6,6 +6,7 @@ import {
   MEMORY_STATUSES,
   MEMORY_TYPES,
   SITUATION_KINDS,
+  SLAVE_LIFECYCLES,
   TIERS,
   executionEventSchema,
 } from '@slave-of-ai/domain'
@@ -81,6 +82,13 @@ describe('database enums match the domain unions', () => {
 
   it('MemorySourceKind matches MEMORY_SOURCE_KINDS, member for member', async () => {
     expect(await enumValues('MemorySourceKind')).toEqual([...MEMORY_SOURCE_KINDS].sort())
+  })
+
+  // M50 R1: the lifecycle enum. Same reason as the Supervisor's four and M49's -- nothing in
+  // TypeScript ties a Prisma enum to the domain union it mirrors, and a missing member fails at the
+  // first INSERT rather than at build.
+  it('SlaveLifecycle matches SLAVE_LIFECYCLES, member for member', async () => {
+    expect(await enumValues('SlaveLifecycle')).toEqual([...SLAVE_LIFECYCLES].sort())
   })
 
   // The test above pins the database enum to `EVENT_TYPE_BY_DOMAIN_TYPE`, a hand-maintained

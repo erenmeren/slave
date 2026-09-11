@@ -68,6 +68,13 @@ export function tierOf(action: Action, world: SupervisorWorld, situationKind: Si
     // proposing here would park every offer made against a roster a caller had not filled.
     case 'assign_capability':
       return world.slaves.find((slave) => slave.id === action.slaveId)?.busy === true ? 'proposed' : 'applied'
+    // ROUTINE (M50 R3), and for `assign_capability`'s own reason: EVIDENCE. The worker's own row
+    // says it was brought in for one assignment and the board says that assignment is over --
+    // nobody new arrives, nothing is spent, nothing is deleted, and the worker keeps every row it
+    // wrote. A proposal here would be a person asked to confirm a fact two columns already state.
+    // `halted` still demotes it above, like everything else.
+    case 'release_worker':
+      return 'applied'
     // Both bring a WORKER onto a project. Never automatic: a roster is a person's decision, and
     // a hire is a commitment the Supervisor may propose and may not make.
     case 'materialise_company_worker':

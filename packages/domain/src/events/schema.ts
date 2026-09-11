@@ -371,11 +371,12 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     }),
   }),
   z.object({ ...envelope, type: z.literal('workspace.restored'), payload: z.object({ name: z.string().min(1) }) }),
-  // M23 B2: `collectTaskWorktree` removed a terminal task's worktree.
+  // M23 B2: `collectTaskWorktree` removed a terminal task's worktree. M50 R3 adds the third reason:
+  // a WORKER was released and the trees its runs were holding went with the engagement.
   z.object({
     ...envelope,
     type: z.literal('task.worktree_collected'),
-    payload: z.object({ path: z.string().min(1), reason: z.enum(['aged', 'operator']), branch: z.string().nullable() }),
+    payload: z.object({ path: z.string().min(1), reason: z.enum(['aged', 'operator', 'released']), branch: z.string().nullable() }),
   }),
   // M23 D1 / M25 §3.1: one of the roster and department control verbs in `org.ts` edited an
   // slave or a team (or created/deleted one). `to: null` is `deleted`'s own shape and `from: null`
@@ -395,8 +396,10 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       id: z.string().min(1),
       /** `capabilities` is M47 t2's: `hireFromTemplate` REUSED a worker and merged new capability
        *  keys into it without its runtime role set moving. `from`/`to` are the key lists, comma
-       *  separated, so the timeline says what the worker gained. */
-      field: z.enum(['name', 'role', 'model', 'deleted', 'created', 'team', 'capabilities']),
+       *  separated, so the timeline says what the worker gained. `lifecycle` is M50 R4's: a PERSON
+       *  moved a worker between `permanent`, `project` and `ephemeral`. `from`/`to` are the
+       *  lifecycle values. */
+      field: z.enum(['name', 'role', 'model', 'deleted', 'created', 'team', 'capabilities', 'lifecycle']),
       from: z.string().nullable(),
       to: z.string().nullable(),
       /** `deleteSlave`/`deleteTeam` only (M27): runs the cascade took with the row. */
@@ -549,6 +552,23 @@ export const executionEventSchema = z.discriminatedUnion('type', [
         reason: z.string().min(1).optional(),
       })
       .strict(),
+  }),
+  // M50 R3: an EPHEMERAL worker's one assignment ended and the worker was released. Its runtime
+  // roles are empty, its terminal tasks' worktrees are gone from disk, and NOTHING else moved --
+  // every run, context, checkpoint, message and memory it produced is exactly where it was. This is
+  // deliberately not `org.changed { field: 'deleted' }`: that event means a row went away, and this
+  // one means a person's engagement here finished. `worktreesCollected` is what the release
+  // actually managed to remove, which can be fewer than the worker's terminal tasks -- a tree a
+  // `git worktree remove` refused is skipped, never retried, and never a failed release.
+  z.object({
+    ...envelope,
+    type: z.literal('slave.released'),
+    payload: z.object({
+      slaveId: z.string().min(1),
+      name: z.string().min(1),
+      reason: z.string().min(1),
+      worktreesCollected: z.number().int().nonnegative(),
+    }),
   }),
 ])
 

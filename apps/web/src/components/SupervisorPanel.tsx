@@ -77,6 +77,10 @@ export function actionText(action: Action, taskTitles: Readonly<Record<string, s
     // word that says the rows stay (nothing here is ever deleted).
     case 'discard_stale_candidates':
       return `withdraw ${String(action.count)} unverified report(s) nothing ever checked`
+    // M50 R3: the NAME, off the action -- this function runs in the browser and has no roster to
+    // look a slave id up in, exactly as it has no taxonomy for `capabilityLabel` above.
+    case 'release_worker':
+      return `release ${action.name}: their one assignment is over`
     case 'escalate_to_human':
       return `escalate to a human: ${action.summary}`
     case 'no_action':

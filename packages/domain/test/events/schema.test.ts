@@ -991,3 +991,48 @@ describe('M49 events', () => {
     ).toBe(false)
   })
 })
+
+describe('M50 events', () => {
+  const ENVELOPE = { seq: 1, ts: '2026-09-12T00:00:00.000Z', workspaceId: 'w1', actor: 'system' as const }
+
+  it('accepts slave.released, the 53rd type', () => {
+    const parsed = parseExecutionEvent({
+      ...ENVELOPE,
+      type: 'slave.released',
+      slaveId: 's9',
+      payload: { slaveId: 's9', name: 'Robin', reason: 'the engagement is over', worktreesCollected: 1 },
+    })
+    expect(parsed.ok).toBe(true)
+  })
+
+  it('refuses a slave.released with no count -- the payload says what was cleaned up', () => {
+    const parsed = parseExecutionEvent({
+      ...ENVELOPE,
+      type: 'slave.released',
+      slaveId: 's9',
+      payload: { slaveId: 's9', name: 'Robin', reason: 'the engagement is over' },
+    })
+    expect(parsed.ok).toBe(false)
+  })
+
+  it('accepts org.changed on the lifecycle field', () => {
+    const parsed = parseExecutionEvent({
+      ...ENVELOPE,
+      actor: 'human',
+      type: 'org.changed',
+      slaveId: 's9',
+      payload: { entity: 'slave', id: 's9', field: 'lifecycle', from: 'ephemeral', to: 'project' },
+    })
+    expect(parsed.ok).toBe(true)
+  })
+
+  it('accepts a worktree collected because a worker was released', () => {
+    const parsed = parseExecutionEvent({
+      ...ENVELOPE,
+      type: 'task.worktree_collected',
+      taskId: 't1',
+      payload: { path: '/tmp/wt', reason: 'released', branch: 'feature/auth' },
+    })
+    expect(parsed.ok).toBe(true)
+  })
+})

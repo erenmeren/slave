@@ -24,6 +24,17 @@ export interface TeamCatalogEntry {
 export interface TeamInput {
   /** The capabilities the BOARD needs -- the union over its ready and blocked tasks. */
   readonly required: readonly CapabilityKey[]
+  /**
+   * WHICH startable tasks need each capability (M50 R2) -- the task ids per key, from the SAME
+   * staffable tasks {@link TeamInput.required} is built from (`teamPlanOf`, one pass over one
+   * filtered array; plan erratum E3). It is what makes "one assignment" answerable here rather than
+   * guessable: a gap exactly one task has is a job, and a gap two tasks share is a seat.
+   *
+   * A key that is absent, or whose list is empty, has no sole assignment and can never become a
+   * temporary hire -- which is what an unfilled map means, and why every caller written before
+   * this milestone keeps behaving exactly as it did.
+   */
+  readonly requiredBy: ReadonlyMap<CapabilityKey, readonly string[]>
   readonly roster: readonly TeamRosterMember[]
   /** The company's roster rows that are NOT already materialised into this project. */
   readonly company: readonly TeamCompanyWorker[]
@@ -35,9 +46,9 @@ export interface TeamInput {
 }
 
 /** Where a proposed worker would come from, in the preference order R4 fixes: an existing capable
- *  worker, an existing company worker, a new project worker, a temporary specialist. `temporary`
- *  is never emitted in M47 -- M50 owns that lifecycle -- and is in the union so the surfaces that
- *  render a source do not have to change again when it arrives. */
+ *  worker, an existing company worker, a new project worker, a temporary specialist. `temporary` is
+ *  a CATALOG pick whose gap belongs to exactly one startable task (M50 R2) -- the same hire, with
+ *  an end written into it. */
 export type TeamSource = 'existing_worker' | 'company_worker' | 'project_worker' | 'temporary'
 
 export interface TeamProposal {
@@ -47,8 +58,15 @@ export interface TeamProposal {
   /** Every missing capability this one pick would cover -- what makes "one worker instead of two"
    *  visible to a person rather than implicit in the count. */
   readonly covers: readonly CapabilityKey[]
-  /** M50's flag, always false here (R4: "here it is a flag on the proposal"). */
+  /** M50 R2: true exactly when {@link TeamProposal.source} is `temporary`. Kept as its own field
+   *  because the ACTION carries it as a flag and a decision row read a year later must say what was
+   *  claimed. */
   readonly temporary: boolean
+  /** The ONE assignment a temporary specialist is being asked for (M50 R2, plan erratum E1), null
+   *  on every other source. Carried on the proposal because `actionOf` -- which builds the action
+   *  the decision stores -- is handed a proposal and a world, and {@link TeamInput.requiredBy} is
+   *  an input to this function that neither of them can reach. */
+  readonly engagementTaskId: string | null
   readonly rationale: string
 }
 
@@ -124,6 +142,7 @@ export function formTeam(input: TeamInput): TeamPlan {
       pick: { kind: 'slave', id: member.slaveId, name: member.name },
       covers,
       temporary: false,
+      engagementTaskId: null,
       rationale:
         `${member.name} already provides ${labelList(covers, input.taxonomy)} and does not hold the ` +
         `${roles.map((role) => `"${role}"`).join(' and ')} runtime role${roles.length === 1 ? '' : 's'}, so ` +
@@ -148,6 +167,7 @@ export function formTeam(input: TeamInput): TeamPlan {
         pick: { kind: 'company_slave', id: pick.id, name: pick.name },
         covers,
         temporary: false,
+        engagementTaskId: null,
         rationale:
           `${pick.name} is already on the company roster and provides ${labelList(covers, input.taxonomy)}, so this ` +
           'project can be staffed from people who already work here rather than by hiring.',
@@ -162,17 +182,29 @@ export function formTeam(input: TeamInput): TeamPlan {
       capabilities: entry.capabilities,
       recommended: recommended.has(entry.templateId),
     })),
-    (pick, covers) =>
+    (pick, covers) => {
+      // M50 R2. The ONE difference between a hire and a temporary hire is how much work is waiting:
+      // one startable task is an assignment, two are a seat. Everything else about the pick -- how
+      // it was chosen, what it covers, the tie-breaks it won -- is identical, which is why this is
+      // a field on the proposal rather than a fourth tier of the search.
+      const engagementTaskId = soleTaskFor(covers, input.requiredBy)
+      const recommendedClause = pick.recommended ? ", and a worker's profile recommends pairing with it" : ''
       proposals.push({
         capability: covers[0] as CapabilityKey,
-        source: 'project_worker',
+        source: engagementTaskId === null ? 'project_worker' : 'temporary',
         pick: { kind: 'template', id: pick.id, name: pick.name },
         covers,
-        temporary: false,
+        temporary: engagementTaskId !== null,
+        engagementTaskId,
         rationale:
-          `${pick.name} provides ${labelList(covers, input.taxonomy)}, which nobody on this project or on the ` +
-          `company roster does${pick.recommended ? ", and a worker's profile recommends pairing with it" : ''}.`,
-      }),
+          engagementTaskId === null
+            ? `${pick.name} provides ${labelList(covers, input.taxonomy)}, which nobody on this project or on the ` +
+              `company roster does${recommendedClause}.`
+            : `${pick.name} provides ${labelList(covers, input.taxonomy)}, which nobody on this project or on the ` +
+              `company roster does, and exactly one piece of startable work needs it -- so this is one assignment ` +
+              `rather than a standing seat${recommendedClause}.`,
+      })
+    },
   )
 
   return {
@@ -231,3 +263,29 @@ function beats(challenger: Candidate, holder: Candidate): boolean {
 
 const labelList = (keys: readonly CapabilityKey[], taxonomy: readonly CapabilityRecord[]): string =>
   keys.map((key) => capabilityLabel(key, taxonomy)).join(' and ')
+
+/**
+ * The ONE task every capability in `covers` is required by, or null (M50 R2, plan erratum E2).
+ *
+ * A catalog pick covers a SET -- that minimality is what M47 is named for -- so "the capability it
+ * covers is required by exactly one task" has to be read over the UNION of the tasks behind those
+ * keys. One worker brought in for two capabilities the same task needs is still one assignment;
+ * two capabilities two different tasks need is a seat, whoever fills it.
+ *
+ * Null for an empty list as well as for a crowded one: a key nothing is recorded as needing cannot
+ * name the assignment a release would later be measured against, and a temporary worker with no
+ * engagement is one nothing can ever release.
+ */
+function soleTaskFor(
+  covers: readonly CapabilityKey[],
+  requiredBy: ReadonlyMap<CapabilityKey, readonly string[]>,
+): string | null {
+  const tasks = new Set<string>()
+  for (const capability of covers) {
+    const waiting = requiredBy.get(capability) ?? []
+    if (waiting.length === 0) return null
+    for (const taskId of waiting) tasks.add(taskId)
+    if (tasks.size > 1) return null
+  }
+  return tasks.size === 1 ? ([...tasks][0] as string) : null
+}

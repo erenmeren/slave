@@ -195,6 +195,18 @@ model Team {
   @@index([workspaceId])
 }
 
+/// M50 R1: why a worker exists -- the closed set `SLAVE_LIFECYCLES` in
+/// `packages/domain/src/lifecycle/types.ts` mirrors, pinned member-for-member by
+/// `packages/db/test/integration/enum-parity.test.ts`.
+enum SlaveLifecycle {
+  /// Materialised from a company roster row: this worker exists in the organisation.
+  permanent
+  /// Hired for this project.
+  project
+  /// Brought in for ONE assignment (`engagementTaskId`), and released when it is over.
+  ephemeral
+}
+
 model Slave {
   id             String        @id @default(uuid())
   teamId         String
@@ -244,10 +256,36 @@ model Slave {
   /// `slave.profile ?? companySlave.profile ?? template.profile ?? null`, the same chain `model`
   /// already follows. Nullable: most workers read their profile from the roster/template.
   profile        String?
+  /// M50 R1: WHY this worker exists, written at the creation site and never derived. Until this
+  /// milestone three surfaces each read `companySlaveId === null ? 'project' : 'company'` for
+  /// themselves, and none of them could say "this one is temporary" because no column held the
+  /// fact. `assignCompanyTx` and `materialiseCompanySlave` write `permanent`; `hireFromTemplate`
+  /// writes `project`, or `ephemeral` with an `engagementTaskId` when the Supervisor asked for one
+  /// assignment. `@default(project)` is the honest default for a hand-made row -- the migration's
+  /// one data statement corrects the roster-linked ones, which the default would call project
+  /// hires.
+  lifecycle          SlaveLifecycle @default(project)
+  /// M50 R2: the ONE assignment an `ephemeral` worker was brought in for -- what `engagement_over`
+  /// measures the end of the engagement against. `onDelete: SetNull`, the rule `companySlaveId` and
+  /// `hiredFromTemplateId` already follow: a worker with run history must survive the deletion of
+  /// the task it was hired for. NULL on every other lifecycle.
+  engagementTaskId   String?
+  /// M50 R3: when the engagement ended. NULL is "still engaged". A released worker keeps every row
+  /// it ever wrote and holds no runtime roles -- that empty set is what stops `decide()` picking
+  /// it, and there is no second filter anywhere.
+  releasedAt         DateTime?
+  /// M50 R3: the sentence the release was recorded with -- the Supervisor's own situation summary,
+  /// or an operator's `--reason`.
+  releaseReason      String?
+  /// M50 R1: when this worker joined the project. Every row that predates this milestone reads back
+  /// the migration's own timestamp, which is the only honest answer a table with no history can
+  /// give -- and is why no surface presents it as a hire date.
+  createdAt          DateTime @default(now())
 
   team         Team          @relation(fields: [teamId], references: [id], onDelete: Cascade)
   companySlave CompanySlave? @relation(fields: [companySlaveId], references: [id], onDelete: SetNull)
   hiredFromTemplate SlaveTemplate? @relation("HiredWorkers", fields: [hiredFromTemplateId], references: [id], onDelete: SetNull)
+  engagementTask    Task?          @relation("EngagementWorkers", fields: [engagementTaskId], references: [id], onDelete: SetNull)
 
   permissions SlavePermission[]
   skills      SlaveSkill[]
@@ -257,6 +295,8 @@ model Slave {
   memories    Memory[]
 
   @@index([teamId])
+  /// M50 R3: `engagement_over`'s own read -- "which workers were brought in for this task".
+  @@index([engagementTaskId])
 }
 
 /// The global catalog (M10 §3): role-shaped cookie cutters a company's roster is instantiated
@@ -636,6 +676,9 @@ model Task {
   dependents    TaskDependency[] @relation("dependedOn")
   /// M49 R1: what was learnt ON this task. SetNull on the other side -- knowledge outlives it.
   memories      Memory[]
+  /// M50 R2: the temporary specialists brought in for THIS task. SetNull on the other side -- a
+  /// worker outlives the task it was hired for.
+  engagedWorkers Slave[] @relation("EngagementWorkers")
 
   @@index([workspaceId, status])
 }
@@ -989,6 +1032,9 @@ enum SupervisorSituationKind {
   /// the role-only fallback for a task that declared no capabilities.
   capability_unstaffed
   done_not_integrated_stale
+  /// M50 R3: a worker brought in for one assignment, whose assignment is over. The subject is the
+  /// SLAVE.
+  engagement_over
   /// M49 R2: unverified observation candidates are piling up on this project.
   memory_candidates_piling
   workspace_halted
@@ -1233,6 +1279,10 @@ enum EventType {
   /// removed). Nothing is ever deleted, so these two are the whole life of a memory.
   memory_recorded             @map("memory.recorded")
   memory_changed              @map("memory.changed")
+  /// M50 R3: an ephemeral worker's engagement ended -- runtime roles emptied, worktrees collected,
+  /// and everything it produced left where it is. Never a deletion: `org.changed { field:
+  /// 'deleted' }` is that, and this is not it.
+  slave_released              @map("slave.released")
 }
 
 model ExecutionEvent {

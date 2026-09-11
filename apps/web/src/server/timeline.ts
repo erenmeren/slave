@@ -291,6 +291,14 @@ function titleFor(
         ? `knowledge ${label.toLowerCase()}: ${reason}`
         : `knowledge ${label.toLowerCase()}`
     }
+    // M50 R3: a temporary specialist's engagement ended. The payload carries no `title`, so without
+    // a case of its own this would read as its own type name on the WORK lane.
+    case 'slave.released': {
+      const name = payload['name']
+      const who = typeof name === 'string' && name !== '' ? name : 'a temporary specialist'
+      const reason = payload['reason']
+      return typeof reason === 'string' && reason !== '' ? `released ${who}: ${reason}` : `released ${who}`
+    }
     default: {
       const title = payload['title']
       return typeof title === 'string' && title !== '' ? title : readableEventType(type)

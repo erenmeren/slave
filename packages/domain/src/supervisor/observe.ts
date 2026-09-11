@@ -1,5 +1,7 @@
 import { capabilityIndex, projectRoles } from '../capability/taxonomy.js'
+import { isReleasable } from '../lifecycle/release.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
+import { TERMINAL } from '../task/state.js'
 import { isStaffableTask } from './candidates.js'
 import {
   COOLDOWN_MS,
@@ -300,6 +302,41 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
     })
   }
 
+  // engagement_over: a worker brought in for ONE assignment, whose assignment is over. The subject
+  // is the SLAVE, not the task -- what is over is this person's engagement, and there is exactly one
+  // situation per worker however many rows their runs left behind.
+  const statusByTask = new Map(world.tasks.map((one) => [one.id, one.status] as const))
+  for (const worker of world.slaves) {
+    const engagementTaskStatus =
+      worker.engagementTaskId === null ? null : (statusByTask.get(worker.engagementTaskId) ?? null)
+    const openAssignedTasks = world.tasks.filter(
+      (one) => one.assigneeId === worker.id && !TERMINAL.includes(one.status),
+    ).length
+    const releasable = isReleasable({
+      lifecycle: worker.lifecycle,
+      released: worker.released,
+      busy: worker.busy,
+      engagementTaskStatus,
+      openAssignedTasks,
+    })
+    if (!releasable) continue
+    // The task's TITLE, not its id: this sentence is read on the Supervisor panel and in the
+    // decision row a year later, and a uuid is not something anybody can judge an offer by. The id
+    // stays on `facts`, which is where every machine reader takes it from.
+    const title = world.tasks.find((one) => one.id === worker.engagementTaskId)?.title ?? 'one assignment'
+    add({
+      kind: 'engagement_over',
+      subjectId: worker.id,
+      summary: `${worker.name} was brought in for "${title}" and that assignment is over, with nothing else open for them.`,
+      facts: {
+        slaveId: worker.id,
+        name: worker.name,
+        engagementTaskId: worker.engagementTaskId,
+        engagementTaskStatus,
+      },
+    })
+  }
+
   // memory_candidates_piling: workers keep reporting and nothing keeps verifying. The subject is
   // the WORKSPACE -- five stale candidates are one habit, not five situations.
   if (world.staleMemoryCandidates >= STALE_CANDIDATES_MIN) {
@@ -346,9 +383,11 @@ export function filterFresh(situations: readonly Situation[], world: SupervisorW
 
 /**
  * The slaves a staffing action could add `role` to: not busy (a running slave's roles must not
- * change under it) and not already holding it. Lives here rather than in `candidates.ts` because
- * it is the same "who holds what" reading the predicates above are built on.
+ * change under it), not already holding it, and NOT RELEASED (M50 R3) -- a released worker's role
+ * set is empty on purpose, so without this clause it would be the first candidate every staffing
+ * offer named. Lives here rather than in `candidates.ts` because it is the same "who holds what"
+ * reading the predicates above are built on.
  */
 export function staffableSlaves(world: SupervisorWorld, role: string): readonly SupervisorSlave[] {
-  return world.slaves.filter((slave) => !slave.busy && !slave.runtimeRoles.includes(role))
+  return world.slaves.filter((slave) => !slave.busy && !slave.released && !slave.runtimeRoles.includes(role))
 }

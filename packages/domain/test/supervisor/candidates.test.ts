@@ -471,10 +471,16 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
     expect(offers[0]?.tier).toBe('proposed')
   })
 
+  // M50 R2: TWO startable tasks share the gap, which is what keeps this an ordinary hire -- the
+  // case is about the catalog offer being last and never applied, and a one-task board would now
+  // make it a temporary specialist (the case directly below asserts that reading instead).
   it('offers the catalog hire last, with the rationale a person reads, and never applies it', () => {
     const w = world({
       taxonomy: TAXONOMY,
-      tasks: [task({ status: 'ready', requiredCapabilities: ['security.application'] })],
+      tasks: [
+        task({ id: 't1', status: 'ready', requiredCapabilities: ['security.application'] }),
+        task({ id: 't2', status: 'ready', requiredCapabilities: ['security.application'] }),
+      ],
       catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false }],
     })
     const offers = candidates(situation, w)
@@ -486,6 +492,7 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
       name: 'Security Reviewer',
       rationale: expect.stringContaining('Application security'),
       temporary: false,
+      engagementTaskId: null,
     })
     expect(offers[0]?.tier).toBe('proposed')
   })
@@ -632,5 +639,76 @@ describe('memory_candidates_piling offers (M49 R2)', () => {
     expect(got.map((one) => one.action.kind)).toEqual(['discard_stale_candidates', 'escalate_to_human', 'no_action'])
     expect(got[0]?.tier).toBe('proposed')
     expect(got[0]?.action).toEqual({ kind: 'discard_stale_candidates', workspaceId: 'ws-1', count: 7 })
+  })
+})
+
+describe('engagement_over candidates', () => {
+  it('offers release_worker first, then the escalation and the no-op', () => {
+    const situation = {
+      kind: 'engagement_over' as const,
+      subjectId: 's9',
+      summary: 'Robin was brought in for "Add authentication" and that assignment is over.',
+      facts: {},
+    }
+    const offers = candidates(
+      situation,
+      world({
+        tasks: [task({ id: 't1', status: 'done' })],
+        slaves: [slave({ id: 's9', name: 'Robin', lifecycle: 'ephemeral', engagementTaskId: 't1' })],
+      }),
+    )
+    expect(offers.map((one) => one.action.kind)).toEqual(['release_worker', 'escalate_to_human', 'no_action'])
+    expect(offers[0]?.action).toEqual({
+      kind: 'release_worker',
+      slaveId: 's9',
+      name: 'Robin',
+      reason: situation.summary,
+    })
+    expect(offers[0]?.tier).toBe('applied')
+  })
+
+  it('offers only the last resorts when the world no longer holds the worker', () => {
+    const offers = candidates(
+      { kind: 'engagement_over', subjectId: 'gone', summary: 'over', facts: {} },
+      world({}),
+    )
+    expect(offers.map((one) => one.action.kind)).toEqual(['escalate_to_human', 'no_action'])
+  })
+})
+
+describe('the temporary hire reaches the action', () => {
+  it('carries temporary: true and the engagement task the rules chose', () => {
+    const offers = candidates(
+      {
+        kind: 'capability_unstaffed',
+        subjectId: 'security.application',
+        summary: '1 startable task(s) need Application security and no slave can be dispatched as security.',
+        facts: {},
+      },
+      world({
+        taxonomy: TAXONOMY,
+        tasks: [task({ id: 't1', status: 'ready', requiredCapabilities: ['security.application'] })],
+        catalog: [
+          {
+            templateId: 'tpl1',
+            name: 'Security Reviewer',
+            capabilities: ['security.application'],
+            division: 'security',
+            recommended: false,
+          },
+        ],
+      }),
+    )
+    expect(offers[0]?.action).toEqual({
+      kind: 'hire_from_catalog',
+      templateId: 'tpl1',
+      capability: 'security.application',
+      capabilityLabel: 'Application security',
+      name: 'Security Reviewer',
+      rationale: expect.stringContaining('one assignment') as unknown as string,
+      temporary: true,
+      engagementTaskId: 't1',
+    })
+    expect(offers[0]?.tier).toBe('proposed')
   })
 })

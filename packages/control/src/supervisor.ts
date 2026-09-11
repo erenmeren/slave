@@ -468,6 +468,12 @@ async function carryOut(
       // on: the verb withdraws whatever is stale at the moment it runs, which after a day's wait
       // is the honest set.
       return reached(ok(await discardStaleCandidates(action.workspaceId, new Date(), principal)))
+    // M50 R3: `releaseWorker` is Task 2's verb, and this arm is DECLARED here only because the
+    // switch is exhaustive over `Action` and the fifteenth kind arrived with the vocabulary. It is
+    // unreachable until Task 2: `supervisorWorld.ts` hands the rules no ephemeral worker yet, so
+    // `engagement_over` never fires, no `release_worker` candidate is ever offered and no decision
+    // can carry one. Task 2 replaces the body with the verb.
+    case 'release_worker':
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

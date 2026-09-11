@@ -146,6 +146,9 @@ describe('actionText', () => {
       capabilityLabel: 'Application security',
       name: 'Security Reviewer',
       rationale: 'nobody here provides Application security',
+      // M50 R2: the engagement is what makes the hire temporary, and `actionText` reads neither --
+      // the flag is the whole of what it says. Carried here because the action type requires it.
+      engagementTaskId: null,
     } as const
     expect(actionText({ ...hire, temporary: false })).toBe(
       'hire Security Reviewer from the catalog, for Application security',
@@ -282,6 +285,7 @@ describe('SupervisorPanel', () => {
             name: 'Security Reviewer',
             rationale: 'Security Reviewer provides Application security, which nobody on this project does.',
             temporary: false,
+            engagementTaskId: null,
           },
           rationale: 'Security Reviewer provides Application security, which nobody on this project does.',
         }),

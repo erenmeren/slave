@@ -31,9 +31,18 @@ export type Action =
   | { readonly kind: 'materialise_company_worker'; readonly companySlaveId: string; readonly capability: string; readonly capabilityLabel: string; readonly name: string; readonly rationale: string }
   /** `hireFromTemplate`: a new project worker from a catalog template. `rationale` is the sentence
    *  stored on the worker (`Slave.selectionRationale`) and shown on the Organization view --
-   *  "why selected", months later. `temporary` is M50's lifecycle, recorded as a claim on the
-   *  decision and in the rationale until there is something that can release a worker. */
-  | { readonly kind: 'hire_from_catalog'; readonly templateId: string; readonly capability: string; readonly capabilityLabel: string; readonly name: string; readonly rationale: string; readonly temporary: boolean }
+   *  "why selected", months later. `temporary` is M50's lifecycle: true makes the hire `ephemeral`
+   *  and `engagementTaskId` is the ONE assignment it was brought in for -- the task
+   *  `engagement_over` later measures the end of the engagement against. Both are null/false for an
+   *  ordinary hire. */
+  | { readonly kind: 'hire_from_catalog'; readonly templateId: string; readonly capability: string; readonly capabilityLabel: string; readonly name: string; readonly rationale: string; readonly temporary: boolean; readonly engagementTaskId: string | null }
+  /** `releaseWorker` (M50 R3): an ephemeral worker whose one assignment is over. Its runtime roles
+   *  are emptied so nothing dispatches it again and its terminal tasks' worktrees are collected;
+   *  NOTHING is deleted -- every run, context, message and memory it produced stays. The ROUTINE
+   *  one ({@link tierOf}): the worker's own row is the evidence, nobody new arrives, and nothing is
+   *  spent. `name` is carried for the same reason `capabilityLabel` is -- `actionText` runs in the
+   *  browser and has no roster to look a slave id up in. */
+  | { readonly kind: 'release_worker'; readonly slaveId: string; readonly name: string; readonly reason: string }
   /** `adoptRunbook`: the workspace adopts a way of working. Never automatic ({@link tierOf}) -- a
    *  process is a person's decision, exactly as a hire is, and the next plan is written against it.
    *  `name` and `rationale` are carried on the action rather than resolved by whoever renders it,
@@ -77,6 +86,7 @@ export const ACTION_KINDS = [
   'mark_task_failed',
   'cancel_task',
   'discard_stale_candidates',
+  'release_worker',
   'escalate_to_human',
   'no_action',
 ] as const
@@ -86,8 +96,13 @@ export const ACTION_KINDS = [
  *  whole action back out of its `Json` column. */
 export type ActionKind = (typeof ACTION_KINDS)[number]
 
-/** Validates a `SupervisorDecision.action` `Json` value at read. */
-export const actionSchema: z.ZodType<Action> = z.discriminatedUnion('kind', [
+/** Validates a `SupervisorDecision.action` `Json` value at read.
+ *
+ *  `z.ZodType<Action, z.ZodTypeDef, unknown>` since M50: `hire_from_catalog.engagementTaskId` is
+ *  `.nullish().transform()`, so the schema's INPUT type (where the key may be absent) is no longer
+ *  its output type -- which is the whole point of the transform, since a row stored before this
+ *  milestone has no key there at all. */
+export const actionSchema: z.ZodType<Action, z.ZodTypeDef, unknown> = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('unblock_task'), taskId: z.string().min(1) }),
   z.object({ kind: z.literal('raise_max_attempts'), taskId: z.string().min(1) }),
   z.object({ kind: z.literal('set_runtime_roles'), slaveId: z.string().min(1), roles: z.array(z.string().min(1)) }),
@@ -114,6 +129,16 @@ export const actionSchema: z.ZodType<Action> = z.discriminatedUnion('kind', [
     name: z.string().min(1),
     rationale: z.string().min(1),
     temporary: z.boolean(),
+    // Nullable rather than optional: a stored row written before M50 has no key here at all, and
+    // `z.object` would strip a missing one to `undefined` -- which is not `null` and is not a value
+    // `carryOut` may pass to a column. `.nullish().transform()` makes both readings one value.
+    engagementTaskId: z.string().min(1).nullish().transform((value) => value ?? null),
+  }),
+  z.object({
+    kind: z.literal('release_worker'),
+    slaveId: z.string().min(1),
+    name: z.string().min(1),
+    reason: z.string().min(1),
   }),
   z.object({
     kind: z.literal('adopt_runbook'),
@@ -156,7 +181,9 @@ export interface Candidate {
   readonly why: string
 }
 
-export const candidateSchema: z.ZodType<Candidate> = z.object({
+/** Three-parameter for {@link actionSchema}'s own reason: the action it nests parses from
+ *  `unknown`, so this schema's input type is not its output type either. */
+export const candidateSchema: z.ZodType<Candidate, z.ZodTypeDef, unknown> = z.object({
   action: actionSchema,
   tier: z.enum(TIERS),
   why: z.string().min(1),

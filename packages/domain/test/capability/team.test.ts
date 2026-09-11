@@ -10,6 +10,10 @@ const TAXONOMY: readonly CapabilityRecord[] = [
 
 const input = (overrides: Partial<TeamInput> = {}): TeamInput => ({
   required: [],
+  // M50 R2: who needs what. EMPTY by default, so no case in this file becomes a temporary hire by
+  // accident -- a capability no task is recorded as needing has no sole assignment and stays a
+  // project worker, which is exactly what every case written before this milestone meant.
+  requiredBy: new Map(),
   roster: [],
   company: [],
   catalog: [],
@@ -121,14 +125,84 @@ describe('formTeam', () => {
     expect(one).toEqual(two)
   })
 
-  it('never emits the temporary source in this milestone, and never marks a proposal temporary', () => {
+  it('keeps a gap two startable tasks share a PROJECT worker -- a standing seat, not one assignment', () => {
     const plan = formTeam(
       input({
         required: ['security.application'],
+        requiredBy: new Map([['security.application', ['t1', 't2']]]),
         catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security' }],
       }),
     )
-    expect(plan.proposals.every((p) => p.source !== 'temporary' && !p.temporary)).toBe(true)
+    expect(plan.proposals).toHaveLength(1)
+    expect(plan.proposals[0]?.source).toBe('project_worker')
+    expect(plan.proposals[0]?.temporary).toBe(false)
+    expect(plan.proposals[0]?.engagementTaskId).toBeNull()
+  })
+
+  it('asks for a TEMPORARY specialist when the gap belongs to exactly one startable task', () => {
+    const plan = formTeam(
+      input({
+        required: ['security.application'],
+        requiredBy: new Map([['security.application', ['t1']]]),
+        catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security' }],
+      }),
+    )
+    expect(plan.proposals).toHaveLength(1)
+    expect(plan.proposals[0]?.source).toBe('temporary')
+    expect(plan.proposals[0]?.temporary).toBe(true)
+    expect(plan.proposals[0]?.engagementTaskId).toBe('t1')
+    expect(plan.proposals[0]?.rationale).toContain('one assignment')
+  })
+
+  // Erratum E2: a catalog pick covers a SET, and the rule is over the union of the tasks behind it.
+  it('is temporary when one pick covers two capabilities the SAME single task needs', () => {
+    const plan = formTeam(
+      input({
+        required: ['security.application', 'qa.test-automation'],
+        requiredBy: new Map([
+          ['security.application', ['t1']],
+          ['qa.test-automation', ['t1']],
+        ]),
+        catalog: [
+          { templateId: 'tpl-both', name: 'Security Test Engineer', capabilities: ['security.application', 'qa.test-automation'], division: 'security' },
+        ],
+      }),
+    )
+    expect(plan.proposals).toHaveLength(1)
+    expect(plan.proposals[0]?.source).toBe('temporary')
+    expect(plan.proposals[0]?.engagementTaskId).toBe('t1')
+  })
+
+  it('is NOT temporary when one pick covers two capabilities two different tasks need', () => {
+    const plan = formTeam(
+      input({
+        required: ['security.application', 'qa.test-automation'],
+        requiredBy: new Map([
+          ['security.application', ['t1']],
+          ['qa.test-automation', ['t2']],
+        ]),
+        catalog: [
+          { templateId: 'tpl-both', name: 'Security Test Engineer', capabilities: ['security.application', 'qa.test-automation'], division: 'security' },
+        ],
+      }),
+    )
+    expect(plan.proposals).toHaveLength(1)
+    expect(plan.proposals[0]?.source).toBe('project_worker')
+    expect(plan.proposals[0]?.engagementTaskId).toBeNull()
+  })
+
+  it('never makes a company worker or an existing worker temporary, however few tasks need them', () => {
+    const plan = formTeam(
+      input({
+        required: ['security.application'],
+        requiredBy: new Map([['security.application', ['t1']]]),
+        company: [{ companySlaveId: 'cs1', name: 'Sam', capabilities: ['security.application'] }],
+        catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security' }],
+      }),
+    )
+    expect(plan.proposals.map((p) => p.source)).toEqual(['company_worker'])
+    expect(plan.proposals[0]?.temporary).toBe(false)
+    expect(plan.proposals[0]?.engagementTaskId).toBeNull()
   })
 })
 

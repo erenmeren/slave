@@ -1765,6 +1765,8 @@ describe('applyDecision -- the M47 capability actions', () => {
         name: 'Security Reviewer',
         rationale: 'Security Reviewer provides Application security, which nobody on this project does.',
         temporary: false,
+        // M50 R2: an ordinary hire names no engagement -- `null` is what `actionOf` writes for one.
+        engagementTaskId: null,
       },
       'proposed',
       { subjectId: CAPABILITY, situation: capabilitySituation() },
@@ -1830,6 +1832,7 @@ describe('applyDecision -- the M47 capability actions', () => {
         name: 'Gone Reviewer',
         rationale: 'nobody here provides Application security',
         temporary: false,
+        engagementTaskId: null,
       },
       'proposed',
       { subjectId: CAPABILITY, situation: capabilitySituation() },

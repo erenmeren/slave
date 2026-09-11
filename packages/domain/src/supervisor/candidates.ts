@@ -96,16 +96,36 @@ export function isStaffableTask(task: Pick<SupervisorTask, 'status' | 'dependenc
  * is missing" would eventually disagree in front of a person.
  */
 export function teamPlanOf(world: SupervisorWorld): TeamPlan {
-  const required = world.tasks.filter(isStaffableTask).flatMap((task) => task.requiredCapabilities)
+  const staffable = world.tasks.filter(isStaffableTask)
+  const required = staffable.flatMap((task) => task.requiredCapabilities)
+  // M50 R2 (plan erratum E3): WHO needs what, off the same filtered array `required` came from --
+  // one pass, so "this gap belongs to one assignment" can never be asked of a different set of
+  // tasks than the gap itself was measured over. Ids are pushed in `world.tasks` order and never
+  // doubled, so the map is the same map whatever order the loader returned rows in.
+  const requiredBy = new Map<string, string[]>()
+  for (const task of staffable) {
+    for (const capability of task.requiredCapabilities) {
+      const waiting = requiredBy.get(capability)
+      if (waiting === undefined) requiredBy.set(capability, [task.id])
+      else if (!waiting.includes(task.id)) waiting.push(task.id)
+    }
+  }
   return formTeam({
     required,
-    roster: world.slaves.map((slave) => ({
-      slaveId: slave.id,
-      name: slave.name,
-      capabilities: slave.capabilities,
-      runtimeRoles: slave.runtimeRoles,
-      busy: slave.busy,
-    })),
+    requiredBy,
+    // M50 R3: a RELEASED worker is not on this team. Its capabilities are still on its row -- they
+    // are what it did here -- but it holds no runtime roles and nothing may propose giving it any,
+    // so leaving it in the roster would make `formTeam`'s first tier offer the one worker that
+    // cannot take the job.
+    roster: world.slaves
+      .filter((slave) => !slave.released)
+      .map((slave) => ({
+        slaveId: slave.id,
+        name: slave.name,
+        capabilities: slave.capabilities,
+        runtimeRoles: slave.runtimeRoles,
+        busy: slave.busy,
+      })),
     company: world.company.map((worker) => ({
       companySlaveId: worker.companySlaveId,
       name: worker.name,
@@ -122,10 +142,10 @@ export function teamPlanOf(world: SupervisorWorld): TeamPlan {
   })
 }
 
-/** One `formTeam` proposal as an {@link Action}. Returns null for the `temporary` source, which M47
- *  never emits (M50 owns that lifecycle) -- an arm that threw on it would make a future data
- *  change a crash rather than an offer nobody makes yet. */
-function actionOf(proposal: TeamProposal, capability: string, world: SupervisorWorld): Action | null {
+/** One `formTeam` proposal as an {@link Action}. Total since M50: the `temporary` source is a hire
+ *  with an end written into it, so all four sources map to a real offer and the return is an
+ *  `Action` rather than an `Action | null`. */
+function actionOf(proposal: TeamProposal, capability: string, world: SupervisorWorld): Action {
   // The taxonomy's words, stamped on the action at DECISION time (M47 final review, Minor 5b). The
   // panel that renders this a day later has no taxonomy to look it up in, and a row read a year
   // later should still say what it was about rather than print a key at a person.
@@ -148,7 +168,11 @@ function actionOf(proposal: TeamProposal, capability: string, world: SupervisorW
         name: proposal.pick.name,
         rationale: proposal.rationale,
       }
+    // ONE arm for both (M50 R2): the same verb, from the same catalog, chosen by the same search.
+    // The only difference is how long the worker is here for, and the proposal carries that as two
+    // fields rather than as two shapes.
     case 'project_worker':
+    case 'temporary':
       return {
         kind: 'hire_from_catalog',
         templateId: proposal.pick.id,
@@ -157,9 +181,8 @@ function actionOf(proposal: TeamProposal, capability: string, world: SupervisorW
         name: proposal.pick.name,
         rationale: proposal.rationale,
         temporary: proposal.temporary,
+        engagementTaskId: proposal.engagementTaskId,
       }
-    case 'temporary':
-      return null
   }
 }
 
@@ -291,8 +314,7 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
       // `unfillable`, and then the last resorts below are the whole catalogue. The proposal's own
       // rationale sentence is what a human -- and the model -- judges the offer by.
       for (const proposal of teamPlanOf(world).proposals.filter((one) => one.covers.includes(situation.subjectId))) {
-        const action = actionOf(proposal, situation.subjectId, world)
-        if (action !== null) offers.push(candidate(action, world, situation.kind, proposal.rationale))
+        offers.push(candidate(actionOf(proposal, situation.subjectId, world), world, situation.kind, proposal.rationale))
       }
       break
     }
@@ -374,6 +396,24 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
         ),
       )
       break
+
+    case 'engagement_over': {
+      // `subjectId` IS the slave id. A worker the world no longer holds cannot be released -- there
+      // is nothing to name in the offer -- so it falls through to the last resorts rather than
+      // offering an action against a row that is not there (the question arms' own rule).
+      const worker = world.slaves.find((one) => one.id === situation.subjectId)
+      if (worker !== undefined) {
+        offers.push(
+          candidate(
+            { kind: 'release_worker', slaveId: worker.id, name: worker.name, reason: situation.summary },
+            world,
+            situation.kind,
+            `${worker.name} was brought in for one assignment and that assignment is over. Releasing them empties their runtime roles so nothing dispatches them again and collects the worktrees their runs left behind; every run, message and thing they learnt stays exactly where it is.`,
+          ),
+        )
+      }
+      break
+    }
 
     case 'done_not_integrated_stale':
     case 'workspace_halted':

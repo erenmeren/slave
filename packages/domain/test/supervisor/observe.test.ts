@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { COOLDOWN_MS, INTEGRATED_STALE_MS, WAITING_STALE_MS } from '../../src/supervisor/constants.js'
-import { filterFresh, observe } from '../../src/supervisor/observe.js'
+import { filterFresh, observe, staffableSlaves } from '../../src/supervisor/observe.js'
 import { SITUATION_KINDS, situationSchema } from '../../src/supervisor/situations.js'
 import { NOW, TAXONOMY, decision, keys, question, runbook, slave, task, world } from './fixtures.js'
 
@@ -555,5 +555,71 @@ describe('memory_candidates_piling (M49 R2)', () => {
 
   it('M49 R2: four is one task nobody finished, and no situation at all', () => {
     expect(observe(world({ staleMemoryCandidates: 4 }))).toEqual([])
+  })
+})
+
+describe('engagement_over', () => {
+  it('raises one for an ephemeral worker whose assignment is done, keyed on the SLAVE', () => {
+    const situations = observe(
+      world({
+        tasks: [task({ id: 't1', title: 'Add authentication', status: 'done' })],
+        slaves: [slave({ id: 's9', name: 'Robin', lifecycle: 'ephemeral', engagementTaskId: 't1', runtimeRoles: ['security'] })],
+      }),
+    )
+    const found = situations.filter((one) => one.kind === 'engagement_over')
+    expect(found).toHaveLength(1)
+    expect(found[0]?.subjectId).toBe('s9')
+    expect(found[0]?.summary).toContain('Robin')
+    expect(found[0]?.summary).toContain('Add authentication')
+    expect(found[0]?.facts).toEqual({
+      slaveId: 's9',
+      name: 'Robin',
+      engagementTaskId: 't1',
+      engagementTaskStatus: 'done',
+    })
+  })
+
+  it('raises none while the assignment is still on the board', () => {
+    const situations = observe(
+      world({
+        tasks: [task({ id: 't1', status: 'running' })],
+        slaves: [slave({ id: 's9', lifecycle: 'ephemeral', engagementTaskId: 't1' })],
+      }),
+    )
+    expect(situations.filter((one) => one.kind === 'engagement_over')).toEqual([])
+  })
+
+  it('raises none for a project worker, and none for one already released', () => {
+    const done = [task({ id: 't1', status: 'done' })]
+    expect(
+      observe(world({ tasks: done, slaves: [slave({ id: 's9', engagementTaskId: 't1' })] })).filter(
+        (one) => one.kind === 'engagement_over',
+      ),
+    ).toEqual([])
+    expect(
+      observe(
+        world({
+          tasks: done,
+          slaves: [slave({ id: 's9', lifecycle: 'ephemeral', engagementTaskId: 't1', released: true, runtimeRoles: [] })],
+        }),
+      ).filter((one) => one.kind === 'engagement_over'),
+    ).toEqual([])
+  })
+
+  it('raises none while the worker still has other work assigned to it', () => {
+    const situations = observe(
+      world({
+        tasks: [task({ id: 't1', status: 'done' }), task({ id: 't2', status: 'ready', assigneeId: 's9' })],
+        slaves: [slave({ id: 's9', lifecycle: 'ephemeral', engagementTaskId: 't1' })],
+      }),
+    )
+    expect(situations.filter((one) => one.kind === 'engagement_over')).toEqual([])
+  })
+})
+
+describe('staffableSlaves', () => {
+  it('never offers a role to a released worker', () => {
+    const released = slave({ id: 's9', lifecycle: 'ephemeral', released: true, runtimeRoles: [] })
+    expect(staffableSlaves(world({ slaves: [released] }), 'reviewer')).toEqual([])
   })
 })

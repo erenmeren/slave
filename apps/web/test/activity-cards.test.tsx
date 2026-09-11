@@ -154,6 +154,7 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     sourceKind: 'verification',
   },
   'memory.changed': { memoryId: 'mem-0123456789', from: 'candidate', to: 'superseded' },
+  'slave.released': { slaveId: 'ag-9', name: 'Robin', reason: 'the engagement is over', worktreesCollected: 1 },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {
@@ -798,5 +799,16 @@ describe('the river row', () => {
   it("renders the row's trailing ref, and the unknown mark when the event carries no task", () => {
     render(<ActivityCard {...base}>body</ActivityCard>)
     expect(screen.getByTestId('event-ref').textContent).toBe('—')
+  })
+})
+
+/** M50 R3: the release card -- who left, why, and what was cleaned up after them. */
+describe('the slave.released card', () => {
+  it('names the released worker, why, and what was collected', () => {
+    const Card = ACTIVITY_CARDS['slave.released']
+    render(<Card event={fixtureFor('slave.released')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('released-name').textContent).toBe('Robin')
+    expect(screen.getByTestId('released-reason').textContent).toBe('the engagement is over')
+    expect(screen.getByTestId('released-worktrees').textContent).toBe('1 worktree collected')
   })
 })

@@ -58,6 +58,17 @@ export const SITUATION_KINDS = [
   'ready_unstaffed',
   'done_not_integrated_stale',
   /**
+   * M50 R3: a worker brought in for ONE assignment, whose assignment is over. `subjectId` is the
+   * SLAVE id -- this is about a person's engagement, not about a task or a role, and it is the
+   * first situation in this list whose subject is a worker.
+   *
+   * Directly after `done_not_integrated_stale` and before `memory_candidates_piling` (plan decision
+   * D1): all three are housekeeping. Nothing is stuck, nothing is waiting on a person, and a reader
+   * meets "finished, not integrated", "this engagement is over" and "nothing verified what was
+   * reported" in one pass at the foot of the report.
+   */
+  'engagement_over',
+  /**
    * M49 R2: unverified OBSERVATION candidates are piling up -- five or more older than
    * {@link MEMORY_CANDIDATE_STALE_MS}. `subjectId` is the WORKSPACE id: this is about the project's
    * knowledge, not about any one row in it.
@@ -109,8 +120,8 @@ export const situationSchema: z.ZodType<Situation> = z.object({
  * key rendered as prose is the leak M44 closes -- the Supervisor panel's recent-decision rows read
  * `no_reviewer · proposed · pending · by model`.
  *
- * `Record<SituationKind, string>` is load-bearing: a FIFTEENTH kind fails the build here rather
- * than turning up on the page as an identifier (fourteen as of M49's `memory_candidates_piling`).
+ * `Record<SituationKind, string>` is load-bearing: a SIXTEENTH kind fails the build here rather
+ * than turning up on the page as an identifier (fifteen as of M50's `engagement_over`).
  * Each label says what is STUCK, in the words the report already uses; the decision's own
  * `situation.summary` carries the specifics beside it.
  */
@@ -127,6 +138,7 @@ export const SITUATION_LABEL: Record<SituationKind, string> = {
   capability_unstaffed: 'Missing a capability',
   ready_unstaffed: 'Ready work, nobody to do it',
   done_not_integrated_stale: 'Finished, not integrated',
+  engagement_over: 'Engagement over',
   memory_candidates_piling: 'Unverified knowledge piling up',
   workspace_halted: 'Project halted',
 }

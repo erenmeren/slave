@@ -49,6 +49,9 @@ export function task(overrides: Partial<SupervisorTask> = {}): SupervisorTask {
     // M47: a task planned before capabilities existed asks for none, which is what every fixture
     // in this file means unless it says otherwise.
     requiredCapabilities: [],
+    // M50 R3: nobody is hand-assigned by default. `Task.assigneeId` is written by nothing in the
+    // pipeline, so a fixture that set one would be describing a board this product does not make.
+    assigneeId: null,
     // M48: a task planned before runbooks existed belongs to no stage, which is what every fixture
     // in this file means unless it says otherwise -- and a task with no stage carries no
     // escalation sentence either.
@@ -87,6 +90,11 @@ export function slave(overrides: Partial<SupervisorSlave> = {}): SupervisorSlave
     // in a test that says which capability it is about.
     capabilities: [],
     busy: false,
+    // M50 R1/R3: an ordinary project worker, engaged for nothing in particular and never released
+    // -- which is what every fixture in this file means unless it says otherwise.
+    lifecycle: 'project',
+    engagementTaskId: null,
+    released: false,
     ...overrides,
   }
 }

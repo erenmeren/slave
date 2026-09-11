@@ -117,7 +117,7 @@ export async function seed(): Promise<void> {
     // wires the scheduler onto this column instead of `role`. Mirrors the same placeholder
     // `packages/control/src/org.ts` `assignCompanyTx` writes.
     await prisma.slave.create({
-      data: { teamId, name: member.slaveName, role: member.role, runtimeRoles: [member.role] },
+      data: { teamId, name: member.slaveName, role: member.role, runtimeRoles: [member.role], lifecycle: 'project' },
     })
   }
 
