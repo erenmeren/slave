@@ -83,6 +83,11 @@ describe('tierOf', () => {
     ['cancel_task', 'proposed', 'proposed'],
     // M49 R2: withdrawing what workers reported is a person's call, halted or not.
     ['discard_stale_candidates', 'proposed', 'proposed'],
+    // M50 R3. Routine for `assign_capability`'s reason -- the worker's own row is the evidence --
+    // and demoted by the halt like everything else. The two cases below say the same thing against
+    // the situation this action is actually offered for; the row is here so the table stays the
+    // exhaustive list of `ACTION_KINDS` it reads as.
+    ['release_worker', 'applied', 'proposed'],
     ['escalate_to_human', 'escalated', 'escalated'],
     ['no_action', 'noop', 'noop'],
   ]

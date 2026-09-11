@@ -92,7 +92,9 @@ export type SituationKind = (typeof SITUATION_KINDS)[number]
  * for `no_reviewer`/`no_planner`/`ready_unstaffed` (so ten ready tasks missing one role are one
  * situation, not ten), the CAPABILITY KEY for `capability_unstaffed` (M47 R4, same rule one level
  * more specific), the WORKSPACE id for `runbook_recommended` -- which is about the project rather
- * than about any row in it -- and the workspace id for `workspace_halted`.
+ * than about any row in it -- the SLAVE id for `engagement_over` (M50 R3, the first kind whose
+ * subject is a worker: one situation per person, however many rows their runs left behind) -- and
+ * the workspace id for `workspace_halted`.
  *
  * `summary` is for a human and for the model prompt; `facts` is the evidence the predicate fired
  * on, kept as flat scalars so the whole thing survives a round trip through `SupervisorDecision.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { candidateSchema, type Action, type Candidate } from '../../src/supervisor/actions.js'
+import { actionSchema, candidateSchema, type Action, type Candidate } from '../../src/supervisor/actions.js'
 import { candidates, isStaffableTask, teamPlanOf } from '../../src/supervisor/candidates.js'
 import { WAITING_STALE_MS } from '../../src/supervisor/constants.js'
 import { observe } from '../../src/supervisor/observe.js'
@@ -473,7 +473,8 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
 
   // M50 R2: TWO startable tasks share the gap, which is what keeps this an ordinary hire -- the
   // case is about the catalog offer being last and never applied, and a one-task board would now
-  // make it a temporary specialist (the case directly below asserts that reading instead).
+  // make it a temporary specialist (`the temporary hire reaches the action`, at the foot of this
+  // file, asserts that reading instead).
   it('offers the catalog hire last, with the rationale a person reads, and never applies it', () => {
     const w = world({
       taxonomy: TAXONOMY,
@@ -710,5 +711,53 @@ describe('the temporary hire reaches the action', () => {
       engagementTaskId: 't1',
     })
     expect(offers[0]?.tier).toBe('proposed')
+  })
+})
+
+/**
+ * What `actionSchema` makes of a row that was STORED before this milestone (M50, fix round 1). The
+ * `.nullish().transform()` on `hire_from_catalog.engagementTaskId` is the whole reason the schema
+ * parses from `unknown`, and a plain `z.object` would strip an absent key to `undefined` -- which
+ * is not `null` and is not a value `carryOut` may hand a column.
+ */
+describe('actionSchema reads a stored action back', () => {
+  const STORED = {
+    kind: 'hire_from_catalog',
+    templateId: 'tpl1',
+    capability: 'security.application',
+    capabilityLabel: 'Application security',
+    name: 'Security Reviewer',
+    rationale: 'nobody here provides Application security',
+    temporary: false,
+  }
+
+  it('gives a pre-M50 hire with NO engagement key a real null, not an absent one', () => {
+    const parsed = actionSchema.safeParse(STORED)
+    expect(parsed.success).toBe(true)
+    if (!parsed.success) return
+    expect(parsed.data).toEqual({ ...STORED, engagementTaskId: null })
+    // The KEY is there, which is the half `undefined` would fail: `carryOut` reads it by name.
+    expect('engagementTaskId' in parsed.data).toBe(true)
+  })
+
+  it('keeps an explicit null and an explicit id, and refuses an empty one', () => {
+    expect(actionSchema.safeParse({ ...STORED, engagementTaskId: null })).toMatchObject({ success: true })
+    const withId = actionSchema.safeParse({ ...STORED, temporary: true, engagementTaskId: 't1' })
+    expect(withId.success).toBe(true)
+    if (withId.success && withId.data.kind === 'hire_from_catalog') expect(withId.data.engagementTaskId).toBe('t1')
+    // An empty string is not a task id, and a temporary worker with no engagement is one nothing
+    // could ever release.
+    expect(actionSchema.safeParse({ ...STORED, engagementTaskId: '' }).success).toBe(false)
+  })
+
+  it('reads the fifteenth action back through candidateSchema, the validator the row goes through', () => {
+    const stored = {
+      action: { kind: 'release_worker', slaveId: 's9', name: 'Robin', reason: 'the engagement is over' },
+      tier: 'applied',
+      why: 'Robin was brought in for one assignment and that assignment is over.',
+    }
+    const parsed = candidateSchema.safeParse(stored)
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.action).toEqual(stored.action)
   })
 })
