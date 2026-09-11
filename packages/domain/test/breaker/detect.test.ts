@@ -8,7 +8,7 @@ import {
   type BreakerWindow,
   detectBehaviour,
 } from '../../src/breaker/detect.js'
-import { ERROR_STORM_COUNT, REPEAT_TRIP_COUNT } from '../../src/breaker/constants.js'
+import { ERROR_STORM_COUNT, NO_PROGRESS_BEATS, REPEAT_TRIP_COUNT, STEERS_PER_RUN_MAX } from '../../src/breaker/constants.js'
 
 let seq = 0
 const call = (key: string, toolUseId: string): BreakerRow => ({
@@ -17,11 +17,12 @@ const call = (key: string, toolUseId: string): BreakerRow => ({
   toolUseId,
   key,
 })
-const result = (toolUseId: string, outcome: 'ok' | 'error'): BreakerRow => ({
+const result = (toolUseId: string, outcome: 'ok' | 'error', errorClass: string | null = null): BreakerRow => ({
   kind: 'result',
   seq: (seq += 1),
   toolUseId,
   outcome,
+  errorClass,
 })
 const output = (): BreakerRow => ({ kind: 'output', seq: (seq += 1) })
 
@@ -54,7 +55,7 @@ describe('the breaker vocabulary', () => {
 
 describe('detectBehaviour: a healthy run', () => {
   it('is healthy with nothing in the window at all', () => {
-    expect(detectBehaviour(WINDOW([]))).toEqual({ level: 'none', trip: null })
+    expect(detectBehaviour(WINDOW([]))).toEqual({ level: 'none', trip: null, quiet: false, suppressed: false })
   })
 
   it('is healthy with seven repeats -- the trip is at eight', () => {
@@ -105,6 +106,32 @@ describe('detectBehaviour: error_storm', () => {
   })
 })
 
+describe('detectBehaviour: the error class the storm reports', () => {
+  const storm = (classes: readonly (string | null)[]): readonly BreakerRow[] =>
+    classes.flatMap((errorClass, i) => [call(`Tool${String(i)}:x`, `e${String(i)}`), result(`e${String(i)}`, 'error', errorClass)])
+
+  it('names the most frequent class in the trailing error run, not the last one seen', () => {
+    const verdict = detectBehaviour(WINDOW(storm(['api_error', 'api_error', 'timeout', 'api_error', 'other'])))
+    expect(verdict.trip).toEqual({ kind: 'error_storm', count: ERROR_STORM_COUNT, detail: 'api_error' })
+  })
+
+  it('falls back to the bare word when no result in the run classified itself', () => {
+    expect(detectBehaviour(WINDOW(storm([null, null, null, null, null]))).trip?.detail).toBe('error')
+  })
+
+  it('ignores the classes of errors OUTSIDE the trailing run', () => {
+    // A `timeout` storm that an `ok` ended, then a fresh `api_error` storm: the trip is about the
+    // run happening now, so the older class must not out-vote it.
+    const rows = [
+      ...storm(['timeout', 'timeout', 'timeout']),
+      call('Tool9:x', 'ok1'),
+      result('ok1', 'ok'),
+      ...storm(['api_error', 'api_error', 'api_error', 'api_error', 'api_error']),
+    ]
+    expect(detectBehaviour(WINDOW(rows)).trip?.detail).toBe('api_error')
+  })
+})
+
 describe('detectBehaviour: no_progress', () => {
   const quiet = { distinctKey: false, worktreeChanged: false, output: false }
 
@@ -146,8 +173,59 @@ describe('detectBehaviour: a tool call with no result yet suppresses EVERY arm',
     ).toBeNull()
   })
 
+  it('is only the NEWEST call that suppresses -- an orphan from before does not silence the run', () => {
+    // A child SIGTERMed mid-call (the pause path, and M51's own steer rung pauses and resumes)
+    // leaves a `call` that will never get a result. It cannot age out of a window that has stopped
+    // growing, so scanning the whole window would make the constrain and stop rungs unreachable.
+    const rows = [call('Read:orphan', 'never-answered'), ...repeats(REPEAT_TRIP_COUNT)]
+    const verdict = detectBehaviour(WINDOW(rows))
+    expect(verdict.suppressed).toBe(false)
+    expect(verdict.trip).toEqual({ kind: 'repeated_call', count: REPEAT_TRIP_COUNT, detail: 'Bash:aaaa' })
+  })
+
   it('trips again the moment that call reports', () => {
     expect(detectBehaviour(WINDOW([...building, result('pending', 'ok')])).trip?.kind).toBe('repeated_call')
+  })
+})
+
+describe('detectBehaviour: the progress triple is the CALLER’s beat, never re-derived here', () => {
+  const quiet = { distinctKey: false, worktreeChanged: false, output: false }
+
+  it('counts a quiet beat even though the window still holds an older distinct key and an older output', () => {
+    // The wedge the window-scoped reading could never see: a run that did real work and then
+    // stopped keeps both of those rows in its frozen sixty, so a detector re-deriving the clocks
+    // from `rows` would read progress forever. The caller measures both since `breakerBeatAt`.
+    const rows = [call('Read:aaaa', 'a'), result('a', 'ok'), call('Bash:bbbb', 'b'), result('b', 'ok'), output()]
+    const verdict = detectBehaviour(WINDOW(rows, { progress: quiet, quietBeats: NO_PROGRESS_BEATS - 1 }))
+    expect(verdict.trip?.kind).toBe('no_progress')
+    expect(verdict.quiet).toBe(true)
+  })
+
+  it('reports a quiet beat the sweep must COUNT, one beat before the trip', () => {
+    expect(detectBehaviour(WINDOW([], { progress: quiet, quietBeats: 0 }))).toEqual({
+      level: 'none',
+      trip: null,
+      quiet: true,
+      suppressed: false,
+    })
+  })
+
+  it('reports a beat with any progress as not quiet, so the sweep RESETS the count', () => {
+    for (const live of ['distinctKey', 'worktreeChanged', 'output'] as const) {
+      const verdict = detectBehaviour(WINDOW([], { progress: { ...quiet, [live]: true }, quietBeats: 9 }))
+      expect(verdict.quiet, live).toBe(false)
+      expect(verdict.suppressed, live).toBe(false)
+    }
+  })
+
+  it('reports a mid-call beat as SUPPRESSED and not quiet -- the count neither grows nor resets', () => {
+    const rows = [call('Bash:aaaa', 'pending')]
+    expect(detectBehaviour(WINDOW(rows, { progress: quiet, quietBeats: 9 }))).toEqual({
+      level: 'none',
+      trip: null,
+      quiet: false,
+      suppressed: true,
+    })
   })
 })
 
@@ -161,13 +239,14 @@ describe('detectBehaviour: the ladder', () => {
   })
 
   it('skips the steer rung once a run has had its two, and never proposes a third', () => {
-    expect(detectBehaviour(WINDOW(tripping, { level: 'none', steers: 2 })).level).toBe('constrained')
+    expect(detectBehaviour(WINDOW(tripping, { level: 'none', steers: STEERS_PER_RUN_MAX })).level).toBe('constrained')
   })
 
   it('steps DOWN exactly one rung on a healthy beat, and carries no trip with it', () => {
-    expect(detectBehaviour(WINDOW([], { level: 'constrained' }))).toEqual({ level: 'steered', trip: null })
-    expect(detectBehaviour(WINDOW([], { level: 'steered' }))).toEqual({ level: 'none', trip: null })
-    expect(detectBehaviour(WINDOW([], { level: 'none' }))).toEqual({ level: 'none', trip: null })
+    const down = { trip: null, quiet: false, suppressed: false }
+    expect(detectBehaviour(WINDOW([], { level: 'constrained' }))).toEqual({ level: 'steered', ...down })
+    expect(detectBehaviour(WINDOW([], { level: 'steered' }))).toEqual({ level: 'none', ...down })
+    expect(detectBehaviour(WINDOW([], { level: 'none' }))).toEqual({ level: 'none', ...down })
   })
 
   it('prefers repeated_call over error_storm when both fire, so one beat names one trip', () => {

@@ -80,14 +80,19 @@ export const PRICE_ALIASES: Readonly<Record<string, string>> = {
  * WINDOW variant, not a different model: the fixture's own `result` line reports
  * `modelUsage: { "claude-opus-5[1m]": { canonicalModel: "claude-opus-5", ... } }`, so the family
  * price is the right price for it. An alias is resolved after the suffix is stripped, so
- * `opus[1m]` works too.
+ * `opus[1m]` works too, and the remainder is trimmed again so `claude-opus-5 [1m]` prices as well.
+ * A string that is nothing but a suffix is `null`, the same answer an empty model gets.
  */
 export function normaliseModelId(model: string | null): string | null {
   if (model === null) return null
   const trimmed = model.trim()
   if (trimmed === '') return null
   const bracket = trimmed.indexOf('[')
-  const base = bracket === -1 ? trimmed : trimmed.slice(0, bracket)
+  // Trimmed AGAIN after the slice, not only before it: `'claude-opus-5 [1m]'` is a shape a person
+  // can type into a model column, and `'claude-opus-5 '` matches neither table -- a model that is
+  // in the table would have priced `null` for a space.
+  const base = (bracket === -1 ? trimmed : trimmed.slice(0, bracket)).trim()
+  if (base === '') return null
   return PRICE_ALIASES[base] ?? base
 }
 

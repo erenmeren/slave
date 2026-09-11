@@ -8,6 +8,19 @@ describe('normaliseModelId', () => {
     expect(normaliseModelId('claude-opus-5[1m]')).toBe('claude-opus-5')
   })
 
+  it('trims AFTER the strip, so a space before the bracket does not cost the price', () => {
+    // `'claude-opus-5 [1m]'` used to slice to `'claude-opus-5 '`, which misses both tables and
+    // prices `null` -- a model that is right there in the table reading as unmeasured.
+    expect(normaliseModelId('claude-opus-5 [1m]')).toBe('claude-opus-5')
+    expect(normaliseModelId('  opus [1m]  ')).toBe('claude-opus-5')
+    expect(estimateCostUsd('claude-opus-5 [1m]', { input: 1_000_000, output: 0 })).toBeCloseTo(5, 10)
+  })
+
+  it('is null for a model that is nothing but a bracketed suffix', () => {
+    expect(normaliseModelId('[1m]')).toBeNull()
+    expect(normaliseModelId('   [1m]')).toBeNull()
+  })
+
   it('resolves the CLI aliases a person may have typed into a model column', () => {
     expect(normaliseModelId('opus')).toBe('claude-opus-5')
     expect(normaliseModelId('sonnet')).toBe('claude-sonnet-5')
