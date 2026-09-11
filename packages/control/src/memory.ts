@@ -23,7 +23,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
-import type { ControlRefusal } from './refusal.js'
+import { refusalText, type ControlRefusal } from './refusal.js'
 
 /** The reason a stale candidate is withdrawn with (M49 R2). One sentence, spelt once: it is stored
  *  on the row, printed on the page and asserted by the gate. */
@@ -713,59 +713,120 @@ export async function discardStaleCandidates(
  * A person or a cron calls this, never the Supervisor and never a tick: R5 keeps it out of the
  * decision loop deliberately, because a summary is cheap to make and awkward to unmake.
  *
- * Every scope this project can see is offered to {@link condenseMemories}, one type at a time: the
- * workspace's own memories, and each worker's. The company's are NOT: a company's knowledge is
- * shared between projects, and one project's cron must not rewrite it.
+ * Two scopes are offered to {@link condenseMemories}, one type at a time: the workspace's own
+ * memories, and each worker's. The company's are NOT, and M49 gives them no condensation path at
+ * all -- a company's knowledge is shared between projects, and one project's cron must not rewrite
+ * it; a company-scoped condensation needs a verb of its own with a company-wide read behind it.
  *
  * The insert and its `MemorySource` rows are ONE transaction -- a summary whose sources failed to
  * link is a memory that claims twenty sources and points at none, and retrieval would then show it
  * beside every one of them. The event is appended after the commit, as every other verb here does.
  *
- * The `type` reported back is the type that was SUMMARISED, which is not always the type that was
- * written: a worker's lessons condense into a procedure (R5's one automatic PROCEDURE), and the
- * caller asked about lessons.
+ * The `type` reported back is the type of the row that was WRITTEN (fix round 1, ruling 3): a
+ * worker's twenty lessons produce a `procedure`, and that is what a caller printing a line about
+ * this summary should name, because it is what `memories show` will say about the same id.
  */
 export async function condenseWorkspaceMemories(
   workspaceId: string,
   type?: MemoryType,
   principal?: Principal,
-): Promise<readonly { readonly type: MemoryType; readonly memoryId: string; readonly sources: number }[]> {
+): Promise<Result<readonly { readonly type: MemoryType; readonly memoryId: string; readonly sources: number }[], ControlRefusal>> {
   const workspace = await prisma.workspace.findUnique({
     where: { id: workspaceId },
     select: { teams: { select: { slaves: { select: { id: true } } } } },
   })
-  if (workspace === null) return []
+  // An id nobody answers to is a typo, and "nothing to summarise" would read as an answer about a
+  // project that does not exist (fix round 1, minor 6).
+  if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
   const slaveIds = workspace.teams.flatMap((team) => team.slaves.map((slave) => slave.id))
-  const types = type === undefined ? MEMORY_TYPES : [type]
+  const asked = type === undefined ? MEMORY_TYPES : [type]
 
-  const targets: { readonly scope: MemoryScope; readonly targetId: string }[] = [
-    { scope: 'workspace', targetId: workspaceId },
-    // In id order, so a run over one project writes the same summaries in the same order twice.
-    ...slaveIds.toSorted((a, b) => a.localeCompare(b)).map((id) => ({ scope: 'worker' as const, targetId: id })),
+  const targets: { readonly scope: MemoryScope; readonly targetId: string; readonly types: readonly MemoryType[] }[] = [
+    // A workspace-scoped LESSON is never offered (fix round 1, minor 8): `retrieveMemories` shows a
+    // lesson only to the worker who owns it, so a project-wide lesson summary is a row no run
+    // could ever be given.
+    { scope: 'workspace', targetId: workspaceId, types: asked.filter((one) => one !== 'lesson') },
+    // In sorted id order, so a run over one project writes the same summaries in the same order
+    // twice.
+    ...slaveIds
+      .toSorted((a, b) => a.localeCompare(b))
+      .map((id) => ({ scope: 'worker' as const, targetId: id, types: asked })),
   ]
 
   const made: { type: MemoryType; memoryId: string; sources: number }[] = []
   for (const target of targets) {
+    if (target.types.length === 0) continue
+    const where: Prisma.MemoryWhereInput =
+      target.scope === 'workspace' ? { workspaceId: target.targetId } : { slaveId: target.targetId }
+
+    /*
+     * The candidate SOURCES: verified rows of the types asked about, and nothing else (fix round 1,
+     * critical 1).
+     *
+     * Bounded, like every read in this file, but bounded over the rows that can actually become
+     * sources -- the old read took the oldest `MEMORIES_LOADED_MAX` rows of ANY status, so five
+     * hundred unverified reports could push every verified fact out of the window and a project
+     * that never stopped reporting could never be summarised.
+     *
+     * OLDEST first, which is the opposite of `listMemories` and `memoriesForRun` and right here:
+     * those two answer "what is current", and condensation is the other job -- the knowledge that
+     * has been sitting around longest is exactly what nobody has read together, and a summary that
+     * only ever covered the newest five hundred would leave the oldest indexed by nothing.
+     */
     const rows = await prisma.memory.findMany({
-      where: target.scope === 'workspace' ? { workspaceId: target.targetId } : { slaveId: target.targetId },
+      where: { ...where, status: 'verified', type: { in: [...target.types] } },
       include: withSources,
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       take: MEMORIES_LOADED_MAX,
     })
+
+    /*
+     * What is already indexed, read SEPARATELY from the rows above.
+     *
+     * A summary is the newest row this target owns, so it is the first thing an oldest-first window
+     * drops; read off the window, a project past `MEMORIES_LOADED_MAX` rows would re-condense the
+     * same facts on every run. This is the join instead: every `MemorySource` whose summary belongs
+     * to this target and is still `verified`. Deliberately NOT filtered by the summary's type -- a
+     * worker's lessons are covered by a `procedure` -- and deliberately not bounded, because a
+     * missing id here is a duplicate summary rather than a slower query, and ids are small.
+     */
+    const links = await prisma.memorySource.findMany({
+      where: { memory: { ...where, status: 'verified' } },
+      select: { sourceMemoryId: true },
+    })
+    const alreadyCovered = new Set(links.map((one) => one.sourceMemoryId))
+
     const memories = rows.map(viewOf)
-    for (const one of types) {
-      const condensation = condenseMemories({ memories, scope: target.scope, targetId: target.targetId, type: one })
+    for (const one of target.types) {
+      const condensation = condenseMemories({
+        memories,
+        scope: target.scope,
+        targetId: target.targetId,
+        type: one,
+        alreadyCovered,
+      })
       if (condensation === null) continue
+      // Validated like every other write in this file (fix round 1, ruling 4). The draft is
+      // machine-built, so a refusal here is a bug in the rule rather than bad input -- it is said
+      // out loud and this type is skipped, never thrown out of a verb a cron calls.
+      const parsed = parseMemoryDraft(condensation.draft)
+      if (!parsed.ok) {
+        console.warn(`[memory] a summary of ${one} was not written: ${refusalText({ kind: 'invalid_memory', detail: parsed.error })}`)
+        continue
+      }
       const written = await prisma.$transaction(async (tx) => {
-        const created = await tx.memory.create({ data: dataOf(condensation.draft), include: withSources })
+        const created = await tx.memory.create({ data: dataOf(parsed.value), include: withSources })
         await tx.memorySource.createMany({
           data: condensation.sourceIds.map((sourceMemoryId) => ({ memoryId: created.id, sourceMemoryId })),
         })
         return tx.memory.findUniqueOrThrow({ where: { id: created.id }, include: withSources })
       })
       await announceRecorded(written, workspaceId, principal)
-      made.push({ type: one, memoryId: written.id, sources: condensation.sourceIds.length })
+      // Everything this summary covers is covered from here on, so a second type in the same target
+      // cannot claim the same rows.
+      for (const sourceId of condensation.sourceIds) alreadyCovered.add(sourceId)
+      made.push({ type: written.type, memoryId: written.id, sources: condensation.sourceIds.length })
     }
   }
-  return made
+  return ok(made)
 }

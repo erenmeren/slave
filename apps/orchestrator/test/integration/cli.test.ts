@@ -1796,7 +1796,9 @@ describe('the orchestrator CLI', () => {
       // This project's own knowledge and nobody else's: the cases above leave withdrawn and
       // superseded rows behind (R1 deletes nothing), and a summary counts only what is verified.
       await prisma.memorySource.deleteMany({})
-      await prisma.memory.deleteMany({ where: { workspaceId: fixture.workspaceId } })
+      await prisma.memory.deleteMany({
+        where: { OR: [{ workspaceId: fixture.workspaceId }, { slave: { team: { workspaceId: fixture.workspaceId } } }] },
+      })
       try {
         const empty = await runCli(['memories', 'condense', '--workspace', fixture.workspaceId])
         expect(empty.code).toBe(0)
@@ -1833,6 +1835,31 @@ describe('the orchestrator CLI', () => {
         expect(shown.stdout).toContain('summarises: ')
         expect(shown.stdout.split('\n')[1]).toMatch(/^Fact summary \(20 sources, /)
 
+        // A worker's lessons are written as a PROCEDURE, and the line names the type WRITTEN (fix
+        // round 1, ruling 3) -- what `memories show` on the same id says.
+        const slave = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: fixture.workspaceId } } })
+        await prisma.memory.createMany({
+          data: Array.from({ length: 20 }, (_, index) => ({
+            type: 'lesson' as const,
+            scope: 'worker' as const,
+            slaveId: slave.id,
+            title: `Lesson ${String(index)}`,
+            body: 'Do it the other way.',
+            status: 'verified' as const,
+            confidence: 'sourced' as const,
+            sourceKind: 'review' as const,
+            createdBy: 'system' as const,
+            verifiedAt: new Date(),
+            verifiedBy: 'review',
+          })),
+        })
+        const lessons = await runCli(['memories', 'condense', '--workspace', fixture.workspaceId, '--type', 'lesson'])
+        expect(lessons.code).toBe(0)
+        expect(lessons.stdout.trim()).toMatch(/^\S+: Procedure summary of 20 sources$/)
+        const procedureId = lessons.stdout.trim().split(':')[0] ?? ''
+        const shownProcedure = await runCli(['memories', 'show', procedureId])
+        expect(shownProcedure.stdout.split('\n')[0]).toBe('Procedure · Verified · One worker')
+
         // Twice is once: every loose fact is covered now.
         const again = await runCli(['memories', 'condense', '--workspace', fixture.workspaceId, '--type', 'fact'])
         expect(again.code).toBe(0)
@@ -1841,9 +1868,15 @@ describe('the orchestrator CLI', () => {
         const badType = await runCli(['memories', 'condense', '--workspace', fixture.workspaceId, '--type', 'gossip'])
         expect(badType.code).not.toBe(0)
         expect(badType.stderr).toContain('--type must be one of')
+
+        // Fix round 1, minor 6: a project id nobody answers to is a typo, not "nothing to
+        // summarise" -- that sentence would read as an answer ABOUT a project that is not there.
+        const badWorkspace = await runCli(['memories', 'condense', '--workspace', 'no-such-workspace'])
+        expect(badWorkspace.code).not.toBe(0)
+        expect(badWorkspace.stdout).not.toContain('nothing to summarise')
       } finally {
         await prisma.memorySource.deleteMany({})
-        await prisma.memory.deleteMany({ where: { workspaceId: fixture.workspaceId } })
+        await prisma.memory.deleteMany({ where: { OR: [{ workspaceId: fixture.workspaceId }, { slave: { team: { workspaceId: fixture.workspaceId } } }] } })
       }
     }, 60_000)
   })

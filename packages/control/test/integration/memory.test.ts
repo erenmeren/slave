@@ -1,5 +1,5 @@
-import { prisma } from '@slave-of-ai/db/client'
-import { MEMORIES_IN_PROMPT, MEMORY_CANDIDATE_STALE_MS } from '@slave-of-ai/domain'
+import { type Prisma, prisma } from '@slave-of-ai/db/client'
+import { MEMORIES_IN_PROMPT, MEMORY_CANDIDATE_STALE_MS, MEMORY_CAPABILITIES_MAX } from '@slave-of-ai/domain'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
   addMemory,
@@ -788,8 +788,12 @@ describe('condenseWorkspaceMemories (R5)', () => {
       )
       expect(written.ok).toBe(true)
     }
-    const made = await condenseWorkspaceMemories(workspaceId, 'fact')
+    const result = await condenseWorkspaceMemories(workspaceId, 'fact')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const made = result.value
     expect(made).toHaveLength(1)
+    // The type WRITTEN, which for a fact is the type summarised (fix round 1, ruling 3).
     expect(made[0]?.type).toBe('fact')
     expect(made[0]?.sources).toBe(20)
     const memoryId = made[0]?.memoryId ?? ''
@@ -814,7 +818,8 @@ describe('condenseWorkspaceMemories (R5)', () => {
     expect(given.eligible).toBe(1)
 
     // Idempotent by construction: every loose fact is now covered, so a second pass finds nothing.
-    expect(await condenseWorkspaceMemories(workspaceId, 'fact')).toEqual([])
+    const twice = await condenseWorkspaceMemories(workspaceId, 'fact')
+    expect(twice.ok && twice.value).toEqual([])
   })
 
   it('condenses a worker’s twenty lessons into a procedure, and leaves the company alone', async () => {
@@ -853,11 +858,15 @@ describe('condenseWorkspaceMemories (R5)', () => {
       if (fact.ok) companyFacts.push(fact.value.id)
     }
 
-    const made = await condenseWorkspaceMemories(workspaceId)
+    const result = await condenseWorkspaceMemories(workspaceId)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const made = result.value
     // One summary, and it is the worker's: a project's cron must never rewrite what the company
     // knows, because that knowledge is shared between projects.
     expect(made).toHaveLength(1)
-    expect(made[0]?.type).toBe('lesson')
+    // The type WRITTEN (fix round 1, ruling 3): twenty lessons are a PROCEDURE.
+    expect(made[0]?.type).toBe('procedure')
     const summary = await readMemory(made[0]?.memoryId ?? '')
     expect(summary.ok).toBe(true)
     if (!summary.ok) return
@@ -868,7 +877,7 @@ describe('condenseWorkspaceMemories (R5)', () => {
     expect(await prisma.memory.count({ where: { id: { in: companyFacts }, status: 'verified' } })).toBe(20)
   })
 
-  it('says nothing at all below the threshold, and nothing at all for a project that is not there', async () => {
+  it('says nothing at all below the threshold, and refuses a project that is not there', async () => {
     for (let index = 0; index < 19; index += 1) {
       const written = await recordMemory(
         draft({
@@ -881,7 +890,162 @@ describe('condenseWorkspaceMemories (R5)', () => {
       )
       expect(written.ok).toBe(true)
     }
-    expect(await condenseWorkspaceMemories(workspaceId, 'fact')).toEqual([])
-    expect(await condenseWorkspaceMemories('no-such-workspace')).toEqual([])
+    const none = await condenseWorkspaceMemories(workspaceId, 'fact')
+    expect(none.ok && none.value).toEqual([])
+
+    // Fix round 1, minor 6: an id nobody answers to is a typo, not "nothing to summarise".
+    const missing = await condenseWorkspaceMemories('no-such-workspace')
+    expect(missing.ok).toBe(false)
+    if (missing.ok) return
+    expect(missing.error).toEqual({ kind: 'workspace_not_found', workspaceId: 'no-such-workspace' })
+  })
+
+  /** Bulk fixtures: `recordMemory` per row would be five hundred round trips for a window test. */
+  const bulk = async (
+    count: number,
+    from: number,
+    overrides: (index: number) => Pick<Prisma.MemoryCreateManyInput, 'type' | 'title'> &
+      Partial<Prisma.MemoryCreateManyInput>,
+  ): Promise<void> => {
+    await prisma.memory.createMany({
+      data: Array.from({ length: count }, (_, index) => ({
+        scope: 'workspace' as const,
+        workspaceId,
+        body: 'It is true.',
+        confidence: 'sourced' as const,
+        sourceKind: 'verification' as const,
+        createdBy: 'system' as const,
+        // One minute apart, oldest first, so "the oldest five hundred" is a set a case can name.
+        createdAt: new Date(Date.UTC(2026, 0, 1) + (from + index) * 60_000),
+        ...overrides(index),
+      })),
+    })
+  }
+
+  /**
+   * Fix round 1, critical 1. The old read took the oldest `MEMORIES_LOADED_MAX` rows of ANY status,
+   * so once a project held more than five hundred the summary it had just written fell outside its
+   * own window and the next run condensed the very same facts again -- a second summary, a second
+   * set of `MemorySource` rows, and two prompt slots spent on one thing.
+   */
+  it('does not summarise the same facts twice once the project holds more than five hundred rows', async () => {
+    await bulk(20, 0, (index) => ({
+      type: 'fact' as const,
+      status: 'verified' as const,
+      title: `Old fact ${String(index)}`,
+      verifiedAt: new Date(),
+      verifiedBy: 'verification',
+    }))
+    await bulk(500, 20, (index) => ({
+      type: 'observation' as const,
+      status: 'candidate' as const,
+      confidence: 'interpretation' as const,
+      sourceKind: 'run_output' as const,
+      createdBy: 'slave' as const,
+      title: `Noise ${String(index)}`,
+    }))
+    expect(await prisma.memory.count({ where: { workspaceId } })).toBe(520)
+
+    const first = await condenseWorkspaceMemories(workspaceId, 'fact')
+    expect(first.ok && first.value).toHaveLength(1)
+
+    // The summary is the NEWEST row of five hundred and twenty; the run that follows must still
+    // see that it covers the twenty.
+    const second = await condenseWorkspaceMemories(workspaceId, 'fact')
+    expect(second.ok && second.value).toEqual([])
+    expect(await prisma.memory.count({ where: { workspaceId, sourceKind: 'condensation' } })).toBe(1)
+    expect(await prisma.memorySource.count({})).toBe(20)
+  })
+
+  /** The other half of critical 1: five hundred unverified reports must not crowd the knowledge out
+   *  of the window that decides what gets summarised. */
+  it('summarises thirty loose facts that sit behind five hundred stale candidates', async () => {
+    await bulk(500, 0, (index) => ({
+      type: 'observation' as const,
+      status: 'candidate' as const,
+      confidence: 'interpretation' as const,
+      sourceKind: 'run_output' as const,
+      createdBy: 'slave' as const,
+      title: `Noise ${String(index)}`,
+    }))
+    await bulk(30, 500, (index) => ({
+      type: 'fact' as const,
+      status: 'verified' as const,
+      title: `Late fact ${String(index)}`,
+      verifiedAt: new Date(),
+      verifiedBy: 'verification',
+    }))
+
+    const made = await condenseWorkspaceMemories(workspaceId, 'fact')
+    expect(made.ok).toBe(true)
+    if (!made.ok) return
+    expect(made.value).toHaveLength(1)
+    expect(made.value[0]?.sources).toBe(30)
+  })
+
+  /**
+   * Fix round 1, ruling 4: the machine-built draft goes through `parseMemoryDraft` like every other
+   * write. Twenty-five sources naming twenty-five distinct capability keys is the case that proves
+   * it -- `memoryDraftSchema` caps `capabilities` at twenty, so without `condenseMemories`' own cap
+   * the parse would refuse and NOTHING would be written.
+   */
+  it('validates the draft it built, and the capability cap is what lets it through', async () => {
+    await bulk(25, 0, (index) => ({
+      type: 'fact' as const,
+      status: 'verified' as const,
+      title: `Wide fact ${String(index)}`,
+      capabilities: [`area.${String(index).padStart(2, '0')}`],
+      verifiedAt: new Date(),
+      verifiedBy: 'verification',
+    }))
+    const made = await condenseWorkspaceMemories(workspaceId, 'fact')
+    expect(made.ok).toBe(true)
+    if (!made.ok) return
+    expect(made.value).toHaveLength(1)
+    const summary = await readMemory(made.value[0]?.memoryId ?? '')
+    expect(summary.ok).toBe(true)
+    if (!summary.ok) return
+    expect(summary.value.memory.capabilities).toHaveLength(MEMORY_CAPABILITIES_MAX)
+  })
+
+  /** Fix round 1, minor 8: a workspace-scoped LESSON summary is a procedure no run could ever be
+   *  given -- `retrieveMemories` shows a lesson only to the worker who owns it. */
+  it('never offers the workspace scope its lessons', async () => {
+    await bulk(20, 0, (index) => ({
+      type: 'lesson' as const,
+      status: 'verified' as const,
+      title: `Project lesson ${String(index)}`,
+      verifiedAt: new Date(),
+      verifiedBy: 'review',
+    }))
+    const made = await condenseWorkspaceMemories(workspaceId, 'lesson')
+    expect(made.ok && made.value).toEqual([])
+    const all = await condenseWorkspaceMemories(workspaceId)
+    expect(all.ok && all.value).toEqual([])
+  })
+
+  /** Fix round 1, important 2, through the database: withdrawing a summary gives its sources back. */
+  it('re-condenses the sources of a summary somebody withdrew', async () => {
+    await bulk(20, 0, (index) => ({
+      type: 'fact' as const,
+      status: 'verified' as const,
+      title: `Fact ${String(index)}`,
+      verifiedAt: new Date(),
+      verifiedBy: 'verification',
+    }))
+    const first = await condenseWorkspaceMemories(workspaceId, 'fact')
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    const summaryId = first.value[0]?.memoryId ?? ''
+    expect(await condenseWorkspaceMemories(workspaceId, 'fact').then((one) => one.ok && one.value)).toEqual([])
+
+    const withdrawn = await removeMemory(summaryId, 'it summarised the wrong thing')
+    expect(withdrawn.ok).toBe(true)
+    const again = await condenseWorkspaceMemories(workspaceId, 'fact')
+    expect(again.ok).toBe(true)
+    if (!again.ok) return
+    expect(again.value).toHaveLength(1)
+    expect(again.value[0]?.sources).toBe(20)
+    expect(again.value[0]?.memoryId).not.toBe(summaryId)
   })
 })

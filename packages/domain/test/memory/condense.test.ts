@@ -126,7 +126,9 @@ describe('condenseMemories', () => {
     expect(got.sourceIds).toHaveLength(200)
   })
 
-  it('caps the capability union at the same twenty a draft is allowed to carry', () => {
+  it('keeps the twenty capability keys the sources name MOST, ties by key (fix round 1)', () => {
+    // Twenty-five keys, every one named once: nothing is more frequent than anything else, so the
+    // tie-break alone decides and the answer is the alphabetical first twenty.
     const wide = Array.from({ length: CONDENSE_THRESHOLD + 5 }, (_, index) =>
       fact(index, { capabilities: [`area.${String(index).padStart(2, '0')}`] }),
     )
@@ -134,6 +136,87 @@ describe('condenseMemories', () => {
     expect(got?.draft.capabilities).toHaveLength(MEMORY_CAPABILITIES_MAX)
     expect(got?.draft.capabilities[0]).toBe('area.00')
     expect(got?.draft.capabilities.at(-1)).toBe('area.19')
+
+    // The alphabetically LAST key, named by every source, must still survive the cut: what the
+    // sources are mostly about is the useful thing to index a summary by, not what sorts first.
+    const common = Array.from({ length: CONDENSE_THRESHOLD + 5 }, (_, index) =>
+      fact(index, { capabilities: [`area.${String(index).padStart(2, '0')}`, 'zz.everywhere'] }),
+    )
+    const alsoGot = condenseMemories({ memories: common, scope: 'workspace', targetId: 'w1', type: 'fact' })
+    expect(alsoGot?.draft.capabilities).toHaveLength(MEMORY_CAPABILITIES_MAX)
+    expect(alsoGot?.draft.capabilities[0]).toBe('zz.everywhere')
+    expect(alsoGot?.draft.capabilities.slice(1)).toEqual(
+      Array.from({ length: MEMORY_CAPABILITIES_MAX - 1 }, (_, index) => `area.${String(index).padStart(2, '0')}`),
+    )
+  })
+
+  /**
+   * Fix round 1, minor 5: the list is a PREFIX and not a greedy fill. A short title further down
+   * must not jump the queue over the long one that stopped the list, because `… and N more` names
+   * a TAIL -- a reader who follows the summary to its sources expects the ones it printed to be
+   * the ones it got to.
+   */
+  it('prints a prefix of the sources, never a greedy fill with holes', () => {
+    const long = Array.from({ length: CONDENSE_THRESHOLD }, (_, index) =>
+      fact(index, { id: `a${String(index).padStart(2, '0')}`, title: 'y'.repeat(110) }),
+    )
+    const short = Array.from({ length: 10 }, (_, index) =>
+      fact(20 + index, { id: `b${String(index).padStart(2, '0')}`, title: 'short' }),
+    )
+    const got = condenseMemories({ memories: [...long, ...short], scope: 'workspace', targetId: 'w1', type: 'fact' })
+    expect(got).not.toBeNull()
+    if (got === null) return
+    expect(got.draft.body).not.toContain('- short')
+    const printed = got.draft.body.split('\n').filter((line) => line.startsWith('- ')).length
+    expect(got.draft.body).toContain(`… and ${String(30 - printed)} more`)
+    expect(got.sourceIds).toHaveLength(30)
+  })
+
+  /**
+   * Fix round 1, important 2: a WITHDRAWN summary frees its sources again. `retrieveMemories`
+   * already stopped hiding them (it only drops the sources of a summary it is itself showing), and
+   * condensation that went on hiding them would leave that knowledge indexed by nothing forever.
+   */
+  it('re-condenses the sources of a summary somebody withdrew', () => {
+    const dead = fact(20, {
+      id: 'withdrawn-summary',
+      status: 'removed',
+      removedReason: 'it summarised the wrong project',
+      sourceIds: twenty.map((one) => one.id),
+    })
+    const got = condenseMemories({ memories: [...twenty, dead], scope: 'workspace', targetId: 'w1', type: 'fact' })
+    expect(got?.sourceIds).toEqual(twenty.map((one) => one.id))
+
+    // A SUPERSEDED one frees them too, and a verified one still holds them.
+    const replaced = fact(20, { id: 'old-summary', status: 'superseded', supersededById: 'x', sourceIds: twenty.map((one) => one.id) })
+    expect(condenseMemories({ memories: [...twenty, replaced], scope: 'workspace', targetId: 'w1', type: 'fact' })).not.toBeNull()
+    const live = fact(20, { id: 'live-summary', sourceIds: twenty.map((one) => one.id) })
+    expect(condenseMemories({ memories: [...twenty, live], scope: 'workspace', targetId: 'w1', type: 'fact' })).toBeNull()
+  })
+
+  /**
+   * Fix round 1, critical 1: the caller may know about coverage its own row window cannot show it
+   * -- a summary written long ago sits outside the oldest-`MEMORIES_LOADED_MAX` page -- so it says
+   * so explicitly rather than leaving the rule to infer it from rows that are not there.
+   */
+  it('takes the caller’s word for what is already covered', () => {
+    expect(
+      condenseMemories({
+        memories: twenty,
+        scope: 'workspace',
+        targetId: 'w1',
+        type: 'fact',
+        alreadyCovered: new Set([twenty[0]!.id]),
+      }),
+    ).toBeNull()
+    const got = condenseMemories({
+      memories: twenty,
+      scope: 'workspace',
+      targetId: 'w1',
+      type: 'fact',
+      alreadyCovered: new Set(['some-other-memory']),
+    })
+    expect(got?.sourceIds).toHaveLength(CONDENSE_THRESHOLD)
   })
 
   // R5's one special case.

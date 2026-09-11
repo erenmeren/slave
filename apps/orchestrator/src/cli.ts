@@ -1754,19 +1754,20 @@ export async function main(argv: readonly string[]): Promise<number> {
         // Deterministic text and no model call (R5): the same rows produce the same summary, so a
         // person can run this twice and the second run finds nothing rather than writing a second
         // summary of the same knowledge.
-        const made = await condenseWorkspaceMemories(
+        const result = await condenseWorkspaceMemories(
           await resolveWorkspace(flags),
           flagText(flags, 'type') === undefined ? undefined : oneOfFlag<MemoryType>(flags, 'type', MEMORY_TYPES),
         )
-        if (made.length === 0) {
+        if (!result.ok) throw new Error(refusalText(result.error))
+        if (result.value.length === 0) {
           process.stdout.write(
             'nothing to summarise: no scope holds 20 verified memories of one type that are not already in a summary\n',
           )
           return 0
         }
-        for (const one of made) {
-          // The type SUMMARISED, which is not always the type written: a worker's lessons become a
-          // procedure, and "Lesson summary" is what the operator asked about.
+        for (const one of result.value) {
+          // The type WRITTEN (M49 t5 fix round 1): a worker's twenty lessons are a Procedure, and
+          // this line has to name what `memories show` on the same id will say.
           process.stdout.write(`${one.memoryId}: ${MEMORY_TYPE_LABEL[one.type]} summary of ${String(one.sources)} sources\n`)
         }
         return 0
