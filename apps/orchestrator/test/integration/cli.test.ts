@@ -1654,6 +1654,144 @@ describe('the orchestrator CLI', () => {
     }, 60_000)
   })
 
+  // M49 R4: the six memory sub-verbs. Real subprocesses, like everything else in this file --
+  // exit codes and argv parsing are what a command-line tool gets wrong.
+  describe('memories (M49 R4)', () => {
+    it('adds, lists, shows, supersedes and removes, round-tripping through the real CLI', async (): Promise<void> => {
+      const added = await runCli([
+        'memories',
+        'add',
+        '--workspace',
+        fixture.workspaceId,
+        '--type',
+        'procedure',
+        '--title',
+        'How we release',
+        '--body',
+        'Tag, then deploy.',
+      ])
+      expect(added.code).toBe(0)
+      expect(added.stdout).toContain('added: Procedure, verified by a person')
+      const id = added.stdout.split(' ')[0] ?? ''
+      expect(id).not.toBe('')
+
+      const listed = await runCli(['memories', 'list', '--workspace', fixture.workspaceId])
+      expect(listed.code).toBe(0)
+      const row = listed.stdout.split('\n').find((line) => line.startsWith(`${id}\t`)) ?? ''
+      // Labels, never keys (docs/ia.md rule 3) -- the CLI is a surface too.
+      expect(row.split('\t').slice(1, 4)).toEqual(['Procedure', 'Verified', 'How we release'])
+      expect(row).toContain('from a person')
+
+      const shown = await runCli(['memories', 'show', id])
+      expect(shown.code).toBe(0)
+      expect(shown.stdout.split('\n')[0]).toBe('Procedure · Verified · This project')
+      expect(shown.stdout).toContain('Tag, then deploy.')
+
+      const replaced = await runCli([
+        'memories',
+        'supersede',
+        id,
+        '--title',
+        'How we release',
+        '--body',
+        'Tag, deploy, then announce.',
+      ])
+      expect(replaced.code).toBe(0)
+      expect(replaced.stdout).toContain(`replaces ${id}`)
+      const newId = replaced.stdout.split(' ')[0] ?? ''
+
+      const after = await runCli(['memories', 'list', '--workspace', fixture.workspaceId, '--status', 'superseded'])
+      expect(after.code).toBe(0)
+      expect(after.stdout).toContain(id)
+      expect(after.stdout).not.toContain(`${newId}\t`)
+
+      const chain = await runCli(['memories', 'show', newId])
+      expect(chain.stdout).toContain(`replaced: ${id} How we release`)
+
+      const removed = await runCli(['memories', 'remove', newId, '--reason', 'we stopped announcing'])
+      expect(removed.code).toBe(0)
+      expect(removed.stdout).toBe(`${newId} withdrawn: we stopped announcing\n`)
+    }, 60_000)
+
+    it('verifies a candidate, and filters by type, task and text', async (): Promise<void> => {
+      const candidate = await prisma.memory.create({
+        data: {
+          type: 'observation',
+          scope: 'workspace',
+          workspaceId: fixture.workspaceId,
+          taskId: fixture.taskId,
+          title: 'Task: Add the thing',
+          body: 'Both files are created in the worktree.',
+          status: 'candidate',
+          confidence: 'interpretation',
+          sourceKind: 'run_output',
+          createdBy: 'slave',
+        },
+      })
+      try {
+        const verified = await runCli(['memories', 'verify', candidate.id])
+        expect(verified.code).toBe(0)
+        expect(verified.stdout).toBe(`${candidate.id} is now Verified\n`)
+
+        const byType = await runCli(['memories', 'list', '--workspace', fixture.workspaceId, '--type', 'observation'])
+        expect(byType.stdout).toContain(candidate.id)
+        const byTask = await runCli(['memories', 'list', '--workspace', fixture.workspaceId, '--task', fixture.taskId])
+        expect(byTask.stdout).toContain(candidate.id)
+        const byText = await runCli(['memories', 'list', '--workspace', fixture.workspaceId, '--q', 'Add the thing'])
+        expect(byText.stdout).toContain(candidate.id)
+        const missed = await runCli(['memories', 'list', '--workspace', fixture.workspaceId, '--q', 'nothing matches this'])
+        expect(missed.stdout).not.toContain(candidate.id)
+      } finally {
+        await prisma.memory.deleteMany({ where: { id: candidate.id } })
+      }
+    }, 60_000)
+
+    it('refuses a frozen memory by name, and says what a bad sub-verb or type may be', async (): Promise<void> => {
+      const added = await runCli([
+        'memories',
+        'add',
+        '--workspace',
+        fixture.workspaceId,
+        '--type',
+        'fact',
+        '--title',
+        'A fact',
+        '--body',
+        'It is true.',
+      ])
+      expect(added.code).toBe(0)
+      const id = added.stdout.split(' ')[0] ?? ''
+
+      expect((await runCli(['memories', 'remove', id, '--reason', 'wrong'])).code).toBe(0)
+      const again = await runCli(['memories', 'remove', id, '--reason', 'again'])
+      expect(again.code).not.toBe(0)
+      expect(again.stderr).toContain('nothing changes it')
+
+      const badSub = await runCli(['memories', 'nonsense'])
+      expect(badSub.code).not.toBe(0)
+      expect(badSub.stderr).toContain('list, show, add, verify, supersede or remove')
+
+      const badType = await runCli([
+        'memories',
+        'add',
+        '--workspace',
+        fixture.workspaceId,
+        '--type',
+        'gossip',
+        '--title',
+        'A',
+        '--body',
+        'B',
+      ])
+      expect(badType.code).not.toBe(0)
+      expect(badType.stderr).toContain('--type must be one of')
+
+      const noId = await runCli(['memories', 'show'])
+      expect(noId.code).not.toBe(0)
+      expect(noId.stderr).toContain('memories show needs an id')
+    }, 60_000)
+  })
+
   describe('create-workspace', () => {
     it('creates a workspace from a real repo and prints its id', async () => {
       const dir = makeRepo()

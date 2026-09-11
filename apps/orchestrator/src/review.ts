@@ -17,7 +17,8 @@ import { pumpRun } from './pump.js'
 import { buildRunContext } from './runContext.js'
 import { createRunUnlessArchived } from './runs.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
-import { rejectTask, verifyConcludedRun } from './verify.js'
+import { promote } from './memory.js'
+import { implementerOf, rejectTask, verifyConcludedRun } from './verify.js'
 import { gitIn } from './worktree.js'
 
 /** A single unified diff capped this many characters, past which it is truncated with a marker. */
@@ -173,6 +174,24 @@ export async function concludeReview(runId: RunId): Promise<void> {
       payload: { reason: `review rejected after ${counted.attempt} attempts: ${parsed.value.reason}` },
     })
   }
+
+  // M49 R2(d), plan erratum E2: `run` here is the REVIEWER's, so the lesson is scoped to the
+  // worker whose diff was turned down -- the reviewer is the one who CAUGHT it, and handing
+  // somebody else's mistake to the person who found it is not knowledge. Last, after both events
+  // (the rework and, at the cap, the failure): a lesson is a record of what happened.
+  await promote({
+    kind: 'work_rejected',
+    workspaceId: task.workspaceId,
+    taskId: task.id,
+    taskTitle: task.title,
+    slaveId: await implementerOf(task.id, null),
+    runId: run.id,
+    reason: parsed.value.reason,
+    by: 'review',
+    sourceRef: run.id,
+    requiredCapabilities: task.requiredCapabilities,
+    goalVersion: task.goalVersion,
+  })
 }
 
 /**

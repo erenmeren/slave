@@ -23,6 +23,7 @@ import {
 } from '@slave-of-ai/domain'
 import type { ProviderKind } from '@slave-of-ai/providers'
 import { askProtocolSection, inboxSection, rosterSection } from './inbox.js'
+import { memorySection } from './memory.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -683,6 +684,17 @@ export async function renderReplanPreview(input: {
   // M48 R4, on the same terms and for the same reason: the process a re-plan is asked to follow is
   // part of the prompt, so it is part of the preview.
   sections.push(await processSection(input.workspaceId))
+  // M49 R3, plan erratum E14: the preview IS the prompt, so it carries the same section.
+  // `slaveId: null` for this function's own reason -- it picks no persona, so it can claim no
+  // worker scope and no lessons, and the run an operator eventually gets may carry more than the
+  // preview showed.
+  const memory = await memorySection({
+    workspaceId: input.workspaceId,
+    slaveId: null,
+    taskId: null,
+    kind: 'planning',
+  })
+  if (memory !== null) sections.push(memory)
   return renderRunContext('planning', sections).prompt
 }
 
@@ -833,6 +845,20 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     }
   }
 
+  // M49 R3: what this organisation knows, for an implementation run. Deliberately NOT inside the
+  // `task !== null` block above -- a planning run has no task and still gets one, below.
+  // `SECTION_ORDER` decides where it lands (after the contract, before the rejection -- plan
+  // decision D2); this decides only whether it exists.
+  if (order.includes('memory') && input.kind === 'implementation') {
+    const memory = await memorySection({
+      workspaceId: input.workspaceId,
+      slaveId: input.slaveId,
+      taskId: input.taskId,
+      kind: 'implementation',
+    })
+    if (memory !== null) sections.push(memory)
+  }
+
   if (input.reviewDiff !== undefined && order.includes('review_diff')) {
     const diff = input.reviewDiff
     sections.push({
@@ -866,6 +892,15 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     // M48 R4: how this project works, or -- with no readable runbook -- the contract alone. Always
     // exactly one of the two, never neither (fix round 1, Important 2).
     sections.push(await processSection(input.workspaceId))
+    // M49 R3: the same knowledge, for the manager writing the plan -- last, so it sits directly
+    // above the trailer that asks for the graph. No task: a plan is about the goal.
+    const memory = await memorySection({
+      workspaceId: input.workspaceId,
+      slaveId: input.slaveId,
+      taskId: null,
+      kind: 'planning',
+    })
+    if (memory !== null) sections.push(memory)
   }
 
   const { prompt, manifest } = renderRunContext(input.kind, sections)

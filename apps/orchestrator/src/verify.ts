@@ -2,8 +2,9 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runbookForWorkspace } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { runId as brandRunId, taskId as brandTaskId, type RunId, type TaskId } from '@slave-of-ai/domain'
+import { parseHandoffContract, runId as brandRunId, taskId as brandTaskId, type RunId, type TaskId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { promote } from './memory.js'
 import { concludePlanning } from './planning.js'
 import { concludeReview } from './review.js'
 import { describeOutcome, runShellCommand } from './shell.js'
@@ -74,6 +75,39 @@ export interface AdvanceInput {
 
 /** `task.verify_failed` wants an integer; a killed or timed-out command has no exit code at all. */
 const NO_EXIT_CODE = -1
+
+/**
+ * The contract's `expectedOutput`, when the task carries a contract that parses (M49 R2b).
+ *
+ * A column that will not parse is silently `null` here -- `handoffSection` already warns about it
+ * once per dispatch, and a second warning per verify would be noise about the same row.
+ */
+function expectedOutputOf(handoff: unknown): string | null {
+  if (handoff === null || handoff === undefined) return null
+  const parsed = parseHandoffContract(handoff)
+  return parsed.ok ? parsed.value.expectedOutput : null
+}
+
+/**
+ * The worker that DID the work this outcome is about (M49 R2d, plan erratum E2).
+ *
+ * `hint` is the run the caller already holds, used only when it turns out to be an IMPLEMENTATION
+ * run -- `advance`'s is. `concludeReview`'s is the REVIEWER's, so it passes null and this reads the
+ * task's newest implementation run instead: the reviewer caught it, the implementer learns from it.
+ * `Task.assigneeId` is not an answer -- nothing in the pipeline writes it.
+ */
+export async function implementerOf(taskId: string, hint: string | null): Promise<string | null> {
+  if (hint !== null) {
+    const run = await prisma.slaveRun.findUnique({ where: { id: hint }, select: { kind: true, slaveId: true } })
+    if (run?.kind === 'implementation') return run.slaveId
+  }
+  const latest = await prisma.slaveRun.findFirst({
+    where: { taskId, kind: 'implementation' },
+    orderBy: { startedAt: 'desc' },
+    select: { slaveId: true },
+  })
+  return latest?.slaveId ?? null
+}
 
 /**
  * The statuses a verify result may act on. A task that is `cancelled`, already `done`, or already
@@ -373,6 +407,42 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
     return
   }
 
+  // M49 R2(a), here and not in `advance` (plan erratum E1): this is the one place a SUCCEEDED
+  // implementation run, its slave and its task are all in hand, and `advance` is handed a result
+  // rather than a run. BEFORE the verify below, so the candidate already exists for the fact to
+  // retire (plan decision D3).
+  //
+  // Guarded on what is already there, because this function is legitimately REPLAYABLE: a
+  // restarted daemon or a duplicate pump settlement concludes the same succeeded run again, and a
+  // second observation for one run is a second unverified claim for the Supervisor to count and a
+  // person to read. Keyed on the task, which is the index this table has for exactly that.
+  const remembered = await prisma.memory.count({
+    where: { taskId: task.id, runId: run.id, type: 'observation' },
+  })
+  const lastOutput =
+    remembered > 0
+      ? null
+      : await prisma.executionEvent.findFirst({
+          where: { runId: run.id, type: 'run_output' },
+          orderBy: { seq: 'desc' },
+          select: { seq: true, payload: true },
+        })
+  if (remembered === 0) {
+    await promote({
+      kind: 'run_succeeded',
+      workspaceId: task.workspaceId,
+      taskId: task.id,
+      taskTitle: task.title,
+      runId: run.id,
+      slaveId: run.slaveId,
+      finalText:
+        lastOutput === null ? '' : ((lastOutput.payload as { text?: unknown }).text as string | undefined) ?? '',
+      lastOutputSeq: lastOutput === null ? null : Number(lastOutput.seq),
+      requiredCapabilities: task.requiredCapabilities,
+      goalVersion: task.goalVersion,
+    })
+  }
+
   // M48 R6: the stage's gates, after the workspace's own. A stage gate is a project's answer to
   // "what does this phase have to prove", and it runs LAST for `runVerify`'s own reason -- later
   // commands routinely depend on earlier ones, and a stage's gate is the most specific thing here.
@@ -440,8 +510,16 @@ export async function rejectTask(taskId: TaskId, reason: string): Promise<Reject
  * count attempts differently is a bug waiting for whichever one is read second.
  */
 export async function advance(input: AdvanceInput): Promise<void> {
-  const task = await prisma.task.findUniqueOrThrow({ where: { id: input.taskId } })
+  // M49 R2: the workspace's own verify commands ride along, because the fact a passed verification
+  // becomes has to name what proved it and a `VerifyResult` carries no command list.
+  const task = await prisma.task.findUniqueOrThrow({
+    where: { id: input.taskId },
+    include: { workspace: { select: { verifyCommands: true } } },
+  })
   const workspaceId = task.workspaceId
+  // M49 R2: every branch below clears the claim, and both promotions want the run that did the
+  // work. Read once, here, where it is still set.
+  const runId = task.activeRunId
 
   // Only a task that is actually being worked on can be advanced. Two things fall out of one
   // check: a stale result arriving after an operator cancelled the task cannot resurrect it to
@@ -482,6 +560,19 @@ export async function advance(input: AdvanceInput): Promise<void> {
       taskId: task.id,
       actor: 'system',
       payload: { branch: input.branch },
+    })
+    // M49 R2(b): the commands agreed, so what the contract asked for is now a fact -- and the
+    // observation the run left behind is answered by something better (plan decision D3).
+    await promote({
+      kind: 'verify_passed',
+      workspaceId,
+      taskId: task.id,
+      taskTitle: task.title,
+      runId,
+      expectedOutput: expectedOutputOf(task.handoff),
+      commands: task.workspace.verifyCommands,
+      requiredCapabilities: task.requiredCapabilities,
+      goalVersion: task.goalVersion,
     })
     return
   }
@@ -551,4 +642,21 @@ export async function advance(input: AdvanceInput): Promise<void> {
           payload: { reason: input.result.output, attempt: counted.attempt },
         },
   )
+
+  // M49 R2(d): the commands turned the work down, and the worker that did it is the one that
+  // learns from it. AFTER the events, never before: a lesson is a record of what happened, and
+  // what happened is what those events say.
+  await promote({
+    kind: 'work_rejected',
+    workspaceId,
+    taskId: task.id,
+    taskTitle: task.title,
+    slaveId: await implementerOf(task.id, runId),
+    runId,
+    reason: input.result.output,
+    by: 'verification',
+    sourceRef: runId,
+    requiredCapabilities: task.requiredCapabilities,
+    goalVersion: task.goalVersion,
+  })
 }

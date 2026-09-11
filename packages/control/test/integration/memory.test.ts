@@ -197,6 +197,52 @@ describe('recordMemory', () => {
     expect(row.status).toBe('candidate')
     expect(row.supersededById).toBeNull()
   })
+
+  // M49 t3: a worker's lesson has no workspace of its own, so without a home the event reaches no
+  // stream at all and a rejection being learnt from is invisible on the Activity page. The caller
+  // that knows the project passes it; the ROW stays the worker's.
+  it('files a worker-scoped memory’s event in the project its caller names', async () => {
+    const before = await prisma.executionEvent.count({ where: { workspaceId, type: 'memory_recorded' } })
+    const written = await recordMemory(
+      draft({
+        type: 'lesson',
+        scope: 'worker',
+        workspaceId: null,
+        slaveId,
+        status: 'verified',
+        confidence: 'sourced',
+        verifiedBy: 'review',
+        title: 'Rework on Ship the checkout API',
+        body: 'The empty-input case was not handled.',
+      }),
+      undefined,
+      workspaceId,
+    )
+    expect(written.ok).toBe(true)
+    if (!written.ok) return
+    expect(written.value.workspaceId).toBeNull()
+    expect(written.value.slaveId).toBe(slaveId)
+    expect(await prisma.executionEvent.count({ where: { workspaceId, type: 'memory_recorded' } })).toBe(before + 1)
+  })
+
+  it('writes no event at all for a worker-scoped memory nobody gave a home', async () => {
+    const before = await prisma.executionEvent.count({ where: { type: 'memory_recorded' } })
+    const written = await recordMemory(
+      draft({
+        type: 'lesson',
+        scope: 'worker',
+        workspaceId: null,
+        slaveId: otherSlaveId,
+        status: 'verified',
+        confidence: 'sourced',
+        verifiedBy: 'review',
+        title: 'Rework on Ship the checkout API',
+        body: 'Nobody said which project.',
+      }),
+    )
+    expect(written.ok).toBe(true)
+    expect(await prisma.executionEvent.count({ where: { type: 'memory_recorded' } })).toBe(before)
+  })
 })
 
 describe('the verbs a person uses', () => {

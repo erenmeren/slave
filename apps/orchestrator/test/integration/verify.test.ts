@@ -6,7 +6,9 @@ import { addRunbook, adoptRunbook } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, taskId as brandTaskId } from '@slave-of-ai/domain'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { appendEvent } from '@slave-of-ai/events'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { promote } from '../../src/memory.js'
 import { advance, runVerify, verifyConcludedRun } from '../../src/verify.js'
 import { provisionWorktree } from '../../src/worktree.js'
 
@@ -362,18 +364,26 @@ describe('verify and advance', () => {
     // `toContain` on a single value cannot see a missing event, a reordered one, or a duplicated
     // one -- the whole catalogue this task produces could be deleted and every other assertion here
     // would still pass. `task.done` no longer belongs to this sequence (M8a): it moves to the merge
-    // pass, which this call never reaches.
-    expect(await eventTypesFor(fixture.workspaceId)).toEqual(['task.verifying', 'task.verify_passed'])
+    // pass, which this call never reaches. `memory.recorded` closes it since M49 R2(b): the fact a
+    // passed verification becomes is announced after the transition it records.
+    expect(await eventTypesFor(fixture.workspaceId)).toEqual([
+      'task.verifying',
+      'task.verify_passed',
+      'memory.recorded',
+    ])
   })
 
   it('emits the failing transition sequence, with the command and its exit code', async (): Promise<void> => {
     const result = await runVerify({ ...base, commands: ['exit 3'] })
     await advance({ taskId: base.taskId, result, branch: 'slaveofai/TASK-001-x' })
 
+    // `memory.recorded` last (M49 R2d): the lesson is a record of what happened, so it is written
+    // after the events that say what happened.
     expect(await eventTypesFor(fixture.workspaceId)).toEqual([
       'task.verifying',
       'task.verify_failed',
       'task.rework',
+      'memory.recorded',
     ])
     const failed = await prisma.executionEvent.findFirstOrThrow({
       where: { workspaceId: fixture.workspaceId, type: 'task_verify_failed' },
@@ -823,4 +833,283 @@ describe('stage gates (M48 R6)', () => {
 
     expect(await prisma.executionEvent.count({ where: { taskId: fixture.taskId, type: 'task_verify_passed' } })).toBe(1)
   })
+})
+
+/**
+ * M49 R2: the three things the pipeline itself remembers -- an observation when a run finishes, a
+ * fact when the commands agree, a lesson when they do not.
+ *
+ * In-process: every case drives `verifyConcludedRun` or `advance` against forged rows rather than
+ * a real slave, because the hooks are about what the ORCHESTRATOR does with an outcome, and a
+ * spawned fixture would only re-test the fixture.
+ */
+describe('what the pipeline remembers (M49 R2)', () => {
+  interface MemoryFixture {
+    readonly workspaceId: string
+    readonly taskId: string
+    readonly slaveId: string
+    readonly runId: string
+  }
+
+  /**
+   * A succeeded implementation run with a worktree, its `run.output` events, and a task holding
+   * its claim -- the shape `verifyConcludedRun` sees after a real pump concludes.
+   *
+   * `verifyCommands` decides what the verify below then does: `['true']` passes, `['false']` fails.
+   */
+  async function seedSucceededRun(options: {
+    readonly outputs?: readonly string[]
+    readonly expectedOutput?: string
+    readonly verifyCommands?: readonly string[]
+    readonly capabilities?: readonly string[]
+  }): Promise<MemoryFixture> {
+    const repoPath = makeRepo()
+    repos.push(repoPath)
+    const workspace = await prisma.workspace.create({
+      data: {
+        name: 'Checkout Platform',
+        repoPath,
+        baseBranch: 'main',
+        verifyCommands: [...(options.verifyCommands ?? ['true'])],
+        setupCommands: [],
+        maxAttempts: 5,
+        goalVersion: 3,
+      },
+    })
+    const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+    const slave = await prisma.slave.create({
+      data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
+    })
+    const worktree = await provisionWorktree({
+      repoPath,
+      baseBranch: 'main',
+      taskKey: 'TASK-049',
+      slug: 'memory',
+      setupCommands: [],
+    })
+    const task = await prisma.task.create({
+      data: {
+        workspaceId: workspace.id,
+        title: 'Add the thing',
+        description: 'make it work',
+        status: 'running',
+        requiredRole: 'backend',
+        requiredCapabilities: [...(options.capabilities ?? [])],
+        maxAttempts: workspace.maxAttempts,
+        branch: worktree.branch,
+        goalVersion: 3,
+        ...(options.expectedOutput === undefined
+          ? {}
+          : {
+              handoff: {
+                objective: 'Add an authentication path to the orders endpoint.',
+                expectedOutput: options.expectedOutput,
+              },
+            }),
+      },
+    })
+    const run = await prisma.slaveRun.create({
+      data: {
+        taskId: task.id,
+        slaveId: slave.id,
+        kind: 'implementation',
+        status: 'succeeded',
+        worktreePath: worktree.path,
+        terminalAt: new Date(),
+        endedAt: new Date(),
+      },
+    })
+    await prisma.task.update({ where: { id: task.id }, data: { activeRunId: run.id } })
+    for (const text of options.outputs ?? []) {
+      await appendEvent({
+        type: 'run.output',
+        workspaceId: workspace.id,
+        taskId: task.id,
+        slaveId: slave.id,
+        runId: run.id,
+        actor: 'slave',
+        payload: { text },
+      })
+    }
+    return { workspaceId: workspace.id, taskId: task.id, slaveId: slave.id, runId: run.id }
+  }
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  it('turns a finished implementation run into an OBSERVATION candidate with the run on it', async (): Promise<void> => {
+    const fixture = await seedSucceededRun({
+      outputs: ['first thing', 'Both files are created in the worktree.'],
+      capabilities: ['backend.api'],
+    })
+
+    await verifyConcludedRun(brandRunId(fixture.runId))
+
+    const observation = await prisma.memory.findFirst({ where: { taskId: fixture.taskId, type: 'observation' } })
+    expect(observation).not.toBeNull()
+    // The LAST thing the worker said, not the transcript.
+    expect(observation?.body).toBe('Both files are created in the worktree.')
+    expect(observation?.runId).toBe(fixture.runId)
+    expect(observation?.createdBy).toBe('slave')
+    expect(observation?.sourceKind).toBe('run_output')
+    expect(observation?.capabilities).toEqual(['backend.api'])
+    expect(observation?.goalVersion).toBe(3)
+    // The verify below passed, so the candidate has already been answered by something better.
+    expect(observation?.status).toBe('superseded')
+
+    const lastOutput = await prisma.executionEvent.findFirst({
+      where: { runId: fixture.runId, type: 'run_output' },
+      orderBy: { seq: 'desc' },
+    })
+    expect(observation?.sourceRef).toBe(String(lastOutput?.seq))
+  }, 30_000)
+
+  // `verifyConcludedRun` is legitimately replayable -- a restarted daemon, a duplicate pump
+  // settlement -- and a second observation for one run is a second unverified claim nobody made.
+  it('writes one observation however many times the conclusion is replayed', async (): Promise<void> => {
+    const fixture = await seedSucceededRun({ outputs: ['Both files are created in the worktree.'] })
+
+    await verifyConcludedRun(brandRunId(fixture.runId))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await verifyConcludedRun(brandRunId(fixture.runId))
+    } finally {
+      warn.mockRestore()
+    }
+
+    expect(await prisma.memory.count({ where: { taskId: fixture.taskId, type: 'observation' } })).toBe(1)
+  }, 30_000)
+
+  it('remembers nothing at all for a run that said nothing', async (): Promise<void> => {
+    const fixture = await seedSucceededRun({ outputs: [] })
+
+    await verifyConcludedRun(brandRunId(fixture.runId))
+
+    expect(await prisma.memory.count({ where: { taskId: fixture.taskId, type: 'observation' } })).toBe(0)
+  }, 30_000)
+
+  it('turns a passed verification into a verified FACT that retires the candidate', async (): Promise<void> => {
+    const fixture = await seedSucceededRun({
+      outputs: ['done'],
+      expectedOutput: 'The endpoint answers 401 anonymously.',
+    })
+
+    await verifyConcludedRun(brandRunId(fixture.runId))
+
+    const fact = await prisma.memory.findFirst({ where: { taskId: fixture.taskId, type: 'fact' } })
+    expect(fact?.status).toBe('verified')
+    expect(fact?.verifiedBy).toBe('verification')
+    expect(fact?.confidence).toBe('sourced')
+    expect(fact?.body).toBe('The endpoint answers 401 anonymously.')
+    expect(fact?.runId).toBe(fixture.runId)
+
+    const observation = await prisma.memory.findFirst({ where: { taskId: fixture.taskId, type: 'observation' } })
+    expect(observation?.status).toBe('superseded')
+    expect(observation?.supersededById).toBe(fact?.id)
+  }, 30_000)
+
+  it('names the commands when the task carries no contract to quote', async (): Promise<void> => {
+    const fixture = await seedSucceededRun({ outputs: ['done'], verifyCommands: ['true'] })
+
+    await verifyConcludedRun(brandRunId(fixture.runId))
+
+    const fact = await prisma.memory.findFirst({ where: { taskId: fixture.taskId, type: 'fact' } })
+    expect(fact?.body).toBe('Add the thing — verified by true')
+  }, 30_000)
+
+  it('turns a verify failure into a LESSON for the worker that did the work', async (): Promise<void> => {
+    const fixture = await seedSucceededRun({ outputs: ['done'] })
+
+    await advance({
+      taskId: brandTaskId(fixture.taskId),
+      result: {
+        kind: 'failed',
+        passed: false,
+        failedCommand: 'npm test',
+        exitCode: 1,
+        output: 'two tests fail',
+        stage: null,
+      },
+      branch: (await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).branch ?? '',
+    })
+
+    const lesson = await prisma.memory.findFirst({ where: { taskId: fixture.taskId, type: 'lesson' } })
+    expect(lesson?.scope).toBe('worker')
+    expect(lesson?.slaveId).toBe(fixture.slaveId)
+    expect(lesson?.workspaceId).toBeNull()
+    expect(lesson?.status).toBe('verified')
+    expect(lesson?.verifiedBy).toBe('verification')
+    expect(lesson?.sourceKind).toBe('verification')
+    expect(lesson?.body).toBe('two tests fail')
+    expect(lesson?.runId).toBe(fixture.runId)
+  }, 30_000)
+
+  // The row is the worker's; the EVENT still has to reach the project's stream, or a rejection
+  // being learnt from is invisible on the Activity page.
+  it('files the lesson’s event in the project the run belongs to', async (): Promise<void> => {
+    const fixture = await seedSucceededRun({ outputs: ['done'] })
+
+    await advance({
+      taskId: brandTaskId(fixture.taskId),
+      result: { kind: 'failed', passed: false, failedCommand: 'npm test', exitCode: 1, output: 'two tests fail', stage: null },
+      branch: (await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).branch ?? '',
+    })
+
+    const recorded = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, type: 'memory_recorded' },
+    })
+    expect(recorded).toHaveLength(1)
+    expect((recorded[0]?.payload as { scope: string }).scope).toBe('worker')
+    expect(recorded[0]?.taskId).toBe(fixture.taskId)
+  }, 30_000)
+
+  // Plan decision D9: a promotion never undoes the outcome it rides on.
+  it('lets the outcome stand when there is nothing worth remembering', async (): Promise<void> => {
+    const fixture = await seedSucceededRun({ outputs: ['done'] })
+
+    await advance({
+      taskId: brandTaskId(fixture.taskId),
+      result: { kind: 'failed', passed: false, failedCommand: 'npm test', exitCode: 1, output: '   ', stage: null },
+      branch: (await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).branch ?? '',
+    })
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).status).toBe('rework')
+    expect(await prisma.memory.count({ where: { taskId: fixture.taskId, type: 'lesson' } })).toBe(0)
+  }, 30_000)
+
+  // D9 again, this time with the write actually failing. `recordMemory` returns a `Result` for a
+  // refusal but REJECTS on a database error, so `promote` has to swallow that too -- a lesson that
+  // could not be written must not undo the rework the task has already been sent back for. The
+  // reachable rejection is a foreign key nothing satisfies (`packages/control`'s own D9 case).
+  it('never throws, whatever the write does', async (): Promise<void> => {
+    const fixture = await seedSucceededRun({ outputs: ['done'] })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let warned: string[] = []
+    try {
+      await expect(
+        promote({
+          kind: 'work_rejected',
+          workspaceId: fixture.workspaceId,
+          taskId: 'no-task-has-this-id',
+          taskTitle: 'Add the thing',
+          slaveId: fixture.slaveId,
+          runId: null,
+          reason: 'two tests fail',
+          by: 'verification',
+          sourceRef: null,
+          requiredCapabilities: [],
+          goalVersion: null,
+        }),
+      ).resolves.toBeUndefined()
+      warned = warn.mock.calls.map(([message]) => String(message))
+    } finally {
+      warn.mockRestore()
+    }
+
+    expect(await prisma.memory.count({ where: { slaveId: fixture.slaveId } })).toBe(0)
+    expect(warned.some((message) => message.includes('[memory] promotion failed'))).toBe(true)
+  }, 30_000)
 })

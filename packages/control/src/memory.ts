@@ -170,8 +170,19 @@ const dataOf = (draft: MemoryDraft): Prisma.MemoryUncheckedCreateInput => ({
  * insert: a fact that retired nothing, or a candidate retired by a fact that failed to land, are
  * both states a reader could not explain. The events are appended AFTER the commit, the way every
  * other verb in this package does it.
+ *
+ * `eventWorkspaceId` is the project the EVENT is read in, for a memory that has no workspace of
+ * its own (M49 t3): a worker's lesson is `worker`-scoped by construction, so `memory.recorded` for
+ * it had no stream to reach and the Activity page never saw a rejection being learnt from. The
+ * caller that knows the project -- the orchestrator's `promote`, which holds the run -- passes it.
+ * It changes NOTHING about the row: the scope target stays the worker, and this is only where the
+ * event is filed.
  */
-export async function recordMemory(draft: unknown, principal?: Principal): Promise<Result<MemoryView, ControlRefusal>> {
+export async function recordMemory(
+  draft: unknown,
+  principal?: Principal,
+  eventWorkspaceId?: string | null,
+): Promise<Result<MemoryView, ControlRefusal>> {
   const parsed = parseMemoryDraft(draft)
   if (!parsed.ok) return err({ kind: 'invalid_memory', detail: parsed.error })
   const value = parsed.value
@@ -198,9 +209,10 @@ export async function recordMemory(draft: unknown, principal?: Principal): Promi
     return { created, retired: open }
   })
 
-  await announceRecorded(written.created, value.workspaceId, principal)
+  const home = value.workspaceId ?? eventWorkspaceId ?? null
+  await announceRecorded(written.created, home, principal)
   for (const row of written.retired) {
-    await announceChanged(row, 'candidate', 'superseded', 'system', row.workspaceId ?? value.workspaceId)
+    await announceChanged(row, 'candidate', 'superseded', 'system', row.workspaceId ?? home)
   }
   return ok(viewOf(written.created))
 }

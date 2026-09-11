@@ -8,6 +8,7 @@ import {
   answerQuestion,
   approveDecision,
   addCapability,
+  addMemory,
   addRunbook,
   adoptRunbook,
   archiveWorkspace,
@@ -39,6 +40,7 @@ import {
   listCatalogImports,
   listCapabilities,
   listDecisions,
+  listMemories,
   listGoalVersions,
   listPendingQuestions,
   listRunbooks,
@@ -49,10 +51,12 @@ import {
   moveCompanySlave,
   pauseSimulation,
   reassignQuestion,
+  readMemory,
   readRunbook,
   readTemplateProfile,
   refusalText,
   rejectDecision,
+  removeMemory,
   renameSlave,
   renameCompanyTeam,
   renameTeam,
@@ -78,25 +82,35 @@ import {
   stopAutoRun,
   syncCapabilityTaxonomy,
   syncRunbooks,
+  supersedeMemory,
   syncSkillCatalog,
   tickSimulations,
   plural,
   unblockTask,
+  verifyMemory,
   type ImportReport,
   type ModelDecider,
   type ProfileTarget,
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  MEMORY_SCOPE_LABEL,
+  MEMORY_STATUSES,
+  MEMORY_STATUS_LABEL,
+  MEMORY_TYPES,
+  MEMORY_TYPE_LABEL,
   SUPERVISOR_DEFAULT_MODEL,
   candidates,
   chooseByRules,
   displayName,
   filterFresh,
   observe,
+  provenanceLine,
   runContextManifestSchema,
   stageOrder,
   workspaceId as brandWorkspaceId,
+  type MemoryStatus,
+  type MemoryType,
   type WorkspaceId,
 } from '@slave-of-ai/domain'
 import { sectors } from '@slave-of-ai/simulation'
@@ -290,6 +304,19 @@ const USAGE = `usage: orchestrator <command> [options]
                                        retry and escalation of each.
   runbooks add --file <path.json>      write your own runbook from one JSON object. Its source is
                                        always human, so a sync can never rewrite it.
+  memories list [--workspace <id>] [--status <s>] [--type <t>] [--task <id>] [--q <text>]
+                                       what this organisation knows, and who says so: id, type,
+                                       status, title and where it came from.
+  memories show <id>                   one memory in full, with what it replaced, what replaced it
+                                       and anything it summarises.
+  memories add --workspace <id> --type <t> --title <t> --body <b> [--capabilities a,b]
+                                       write one down yourself. It is verified the moment you do,
+                                       because a person said it.
+  memories verify <id>                 a worker's unverified report becomes knowledge a run is
+                                       given.
+  memories supersede <id> --title <t> --body <b>
+                                       correct one: the old row is kept and pointed at the new.
+  memories remove <id> --reason <why>  withdraw one. Nothing is deleted; the reason is stored.
   adopt-runbook --workspace <id> --runbook <key>
                                        the project follows this runbook. The next planning run is
                                        asked to adapt it; nothing re-plans by itself.
@@ -690,6 +717,22 @@ function requireFlag(flags: Flags, name: string): string {
   const value = flagText(flags, name)
   if (value === undefined) throw new Error(`--${name} is required`)
   return value
+}
+
+/**
+ * A flag whose value must be one of a closed list (M49 R4), or `undefined` when it was not given.
+ *
+ * A bare cast would hand Postgres a word that is not an enum member and answer an operator with a
+ * Prisma stack trace; this answers with the list. The vocabularies are the domain's own arrays, so
+ * a seventh memory type is offered here the moment it exists.
+ */
+function oneOfFlag<T extends string>(flags: Flags, name: string, allowed: readonly T[]): T | undefined {
+  const value = flagText(flags, name)
+  if (value === undefined) return undefined
+  if (!(allowed as readonly string[]).includes(value)) {
+    throw new Error(`--${name} must be one of ${allowed.join(', ')}`)
+  }
+  return value as T
 }
 
 /**
@@ -1614,6 +1657,95 @@ export async function main(argv: readonly string[]): Promise<number> {
         return 0
       }
       throw new Error('runbooks takes sync, list, show or add')
+    }
+
+    case 'memories': {
+      // `memories list | show <id> | add | verify <id> | supersede <id> | remove <id>` -- the
+      // `runbooks`/`capabilities` shape in this file (the sub-verb is a POSITIONAL read off raw
+      // argv, because `parseArgs` collects only flags), for its own reason: six sibling top-level
+      // verbs for one table would read as six unrelated features.
+      const sub = argv[1] ?? 'list'
+      if (sub === 'list') {
+        const workspaceId = await resolveWorkspace(flags)
+        const status = oneOfFlag<MemoryStatus>(flags, 'status', MEMORY_STATUSES)
+        const type = oneOfFlag<MemoryType>(flags, 'type', MEMORY_TYPES)
+        const rows = await listMemories({
+          workspaceId,
+          ...(status === undefined ? {} : { statuses: [status] }),
+          ...(type === undefined ? {} : { type }),
+          ...(flagText(flags, 'task') === undefined ? {} : { taskId: requireFlag(flags, 'task') }),
+          ...(flagText(flags, 'q') === undefined ? {} : { q: requireFlag(flags, 'q') }),
+        })
+        for (const memory of rows) {
+          // Tab-separated, the shape every other list verb here uses: five columns an operator can
+          // cut, and labels rather than keys in the two that name a vocabulary (docs/ia.md rule 3).
+          process.stdout.write(
+            `${memory.id}\t${MEMORY_TYPE_LABEL[memory.type]}\t${MEMORY_STATUS_LABEL[memory.status]}\t` +
+              `${memory.title}\t${provenanceLine(memory, null)}\n`,
+          )
+        }
+        return 0
+      }
+      if (sub === 'show') {
+        const id = argv[2]
+        if (id === undefined) throw new Error('memories show needs an id')
+        const result = await readMemory(id)
+        if (!result.ok) throw new Error(refusalText(result.error))
+        const { memory, supersedes, supersededBy, sources } = result.value
+        process.stdout.write(
+          `${MEMORY_TYPE_LABEL[memory.type]} · ${MEMORY_STATUS_LABEL[memory.status]} · ${MEMORY_SCOPE_LABEL[memory.scope]}\n` +
+            `${memory.title}\n${memory.body}\n${provenanceLine(memory, null)}\n`,
+        )
+        // `supersedes` is a LIST (Task 2 fix round 1): one verified fact retires every candidate
+        // its task left behind, so "what did this replace" has more than one answer.
+        for (const replaced of supersedes) process.stdout.write(`  replaced: ${replaced.id} ${replaced.title}\n`)
+        if (supersededBy !== null) process.stdout.write(`  replaced by: ${supersededBy.id} ${supersededBy.title}\n`)
+        for (const source of sources) process.stdout.write(`  summarises: ${source.id} ${source.title}\n`)
+        return 0
+      }
+      if (sub === 'add') {
+        const type = oneOfFlag<MemoryType>(flags, 'type', MEMORY_TYPES)
+        if (type === undefined) throw new Error('--type is required')
+        const capabilities = flagText(flags, 'capabilities')
+        const result = await addMemory({
+          workspaceId: await resolveWorkspace(flags),
+          scope: 'workspace',
+          type,
+          title: requireFlag(flags, 'title'),
+          body: requireFlag(flags, 'body'),
+          capabilities: capabilities === undefined ? [] : capabilities.split(','),
+        })
+        if (!result.ok) throw new Error(refusalText(result.error))
+        // "verified by a person" is the whole point of the verb: a memory an operator typed is
+        // knowledge on somebody's authority, and the line says whose.
+        process.stdout.write(`${result.value.id} added: ${MEMORY_TYPE_LABEL[result.value.type]}, verified by a person\n`)
+        return 0
+      }
+      if (sub === 'verify') {
+        const id = argv[2]
+        if (id === undefined) throw new Error('memories verify needs an id')
+        const result = await verifyMemory(id)
+        if (!result.ok) throw new Error(refusalText(result.error))
+        process.stdout.write(`${result.value.id} is now ${MEMORY_STATUS_LABEL[result.value.status]}\n`)
+        return 0
+      }
+      if (sub === 'supersede') {
+        const id = argv[2]
+        if (id === undefined) throw new Error('memories supersede needs an id')
+        const result = await supersedeMemory(id, { title: requireFlag(flags, 'title'), body: requireFlag(flags, 'body') })
+        if (!result.ok) throw new Error(refusalText(result.error))
+        process.stdout.write(`${result.value.created.id} replaces ${result.value.superseded.id}\n`)
+        return 0
+      }
+      if (sub === 'remove') {
+        const id = argv[2]
+        if (id === undefined) throw new Error('memories remove needs an id')
+        const result = await removeMemory(id, requireFlag(flags, 'reason'))
+        if (!result.ok) throw new Error(refusalText(result.error))
+        process.stdout.write(`${result.value.id} withdrawn: ${result.value.removedReason ?? ''}\n`)
+        return 0
+      }
+      throw new Error('memories takes list, show, add, verify, supersede or remove')
     }
 
     case 'adopt-runbook': {

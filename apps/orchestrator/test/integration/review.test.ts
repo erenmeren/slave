@@ -782,3 +782,149 @@ describe('dispatchReviews', () => {
     expect(task.activeRunId).toBe(holder.id)
   })
 })
+
+/**
+ * M49 R2(d), plan erratum E2: a rejected review teaches the worker whose diff was turned down --
+ * never the reviewer that caught it.
+ *
+ * In-process: the verdict is fed to `concludeReview` as the `run.output` events a real review run
+ * leaves behind, because what is under test is the hook rather than the fixture that produces the
+ * text.
+ */
+describe('what a review teaches (M49 R2)', () => {
+  const repos: string[] = []
+
+  interface ReviewFixture {
+    readonly workspaceId: string
+    readonly taskId: string
+    readonly workerId: string
+    readonly reviewerId: string
+    readonly reviewRunId: string
+  }
+
+  async function seedReviewRun(options: {
+    readonly verdict: 'approve' | 'reject'
+    readonly reason: string
+  }): Promise<ReviewFixture> {
+    const repoPath = makeRepo()
+    repos.push(repoPath)
+    const workspace = await prisma.workspace.create({
+      data: { name: 'Checkout Platform', repoPath, baseBranch: 'main', verifyCommands: ['true'], setupCommands: [] },
+    })
+    const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+    const worker = await prisma.slave.create({
+      data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
+    })
+    const reviewer = await prisma.slave.create({
+      data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] },
+    })
+    const task = await prisma.task.create({
+      data: {
+        workspaceId: workspace.id,
+        title: 'Add the thing',
+        description: 'make it work',
+        status: 'reviewing',
+        requiredRole: 'backend',
+        maxAttempts: workspace.maxAttempts,
+        branch: 'slaveofai/TASK-049-x',
+      },
+    })
+    // The run that did the work, and then the run that judged it -- in that order, because
+    // `implementerOf` reads the task's NEWEST implementation run and both rows exist by the time
+    // the conclusion runs.
+    await prisma.slaveRun.create({
+      data: {
+        taskId: task.id,
+        slaveId: worker.id,
+        kind: 'implementation',
+        status: 'succeeded',
+        terminalAt: new Date(),
+        endedAt: new Date(),
+      },
+    })
+    const reviewRun = await prisma.slaveRun.create({
+      data: {
+        taskId: task.id,
+        slaveId: reviewer.id,
+        kind: 'review',
+        status: 'succeeded',
+        terminalAt: new Date(),
+        endedAt: new Date(),
+      },
+    })
+    await prisma.task.update({ where: { id: task.id }, data: { activeRunId: reviewRun.id } })
+    await appendEvent({
+      type: 'run.output',
+      workspaceId: workspace.id,
+      taskId: task.id,
+      slaveId: reviewer.id,
+      runId: reviewRun.id,
+      actor: 'slave',
+      payload: { text: JSON.stringify({ verdict: options.verdict, reason: options.reason }) },
+    })
+    return {
+      workspaceId: workspace.id,
+      taskId: task.id,
+      workerId: worker.id,
+      reviewerId: reviewer.id,
+      reviewRunId: reviewRun.id,
+    }
+  }
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  afterAll(async (): Promise<void> => {
+    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('a rejected review teaches the worker that DID the work, never the reviewer', async (): Promise<void> => {
+    const fixture = await seedReviewRun({
+      verdict: 'reject',
+      reason: 'The diff does not handle the empty-input case the task requires.',
+    })
+
+    await concludeReview(brandRunId(fixture.reviewRunId))
+
+    const lessons = await prisma.memory.findMany({ where: { taskId: fixture.taskId, type: 'lesson' } })
+    expect(lessons).toHaveLength(1)
+    expect(lessons[0]?.scope).toBe('worker')
+    expect(lessons[0]?.slaveId).toBe(fixture.workerId)
+    expect(lessons[0]?.slaveId).not.toBe(fixture.reviewerId)
+    expect(lessons[0]?.verifiedBy).toBe('review')
+    expect(lessons[0]?.sourceKind).toBe('review')
+    expect(lessons[0]?.body).toBe('The diff does not handle the empty-input case the task requires.')
+    expect(lessons[0]?.sourceRef).toBe(fixture.reviewRunId)
+    // The row belongs to the worker; the event still reaches the project's own stream.
+    expect(
+      await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'memory_recorded' } }),
+    ).toBe(1)
+  })
+
+  it('an approved review teaches nobody anything', async (): Promise<void> => {
+    const fixture = await seedReviewRun({ verdict: 'approve', reason: 'looks right' })
+
+    await concludeReview(brandRunId(fixture.reviewRunId))
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).status).toBe('merging')
+    expect(await prisma.memory.count({ where: { taskId: fixture.taskId } })).toBe(0)
+  })
+
+  // The reject branch that never reaches `rejectTask`: a verdict for a task somebody else has
+  // moved on is ignored, and an ignored verdict teaches nothing either.
+  it('teaches nothing when the verdict is ignored', async (): Promise<void> => {
+    const fixture = await seedReviewRun({ verdict: 'reject', reason: 'not yet' })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'cancelled' } })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await concludeReview(brandRunId(fixture.reviewRunId))
+    } finally {
+      warn.mockRestore()
+    }
+
+    expect(await prisma.memory.count({ where: { taskId: fixture.taskId } })).toBe(0)
+  })
+})
