@@ -1244,7 +1244,12 @@ try {
   console.log(`stage 7: estimateCostUsd(${ESTIMATE_MODEL}, ${String(ESTIMATE_TOKENS_IN)} in / 0 out) = ${JSON.stringify(estimatedUsd)}`)
   const expectedActual = `actual $${MEASURED_USD.toFixed(2)}`
   const expectedEstimated = `estimated $${(MEASURED_USD + estimatedUsd).toFixed(2)}`
-  const expectedUpperBound = `upper bound $${(MEASURED_USD + 2 * RUN_UNMEASURED_CAP_USD).toFixed(2)}`
+  // E20: per row with no reported cost the bound is max(cap, estimate) over the SAME rows the estimate
+  // sums -- the estimable run contributes its $5.00 estimate, the unmeasured run its $1.00 cap -- so
+  // the bound can never sit below the estimate on the same tile.
+  const expectedUpperBound = `upper bound $${(
+    MEASURED_USD + Math.max(RUN_UNMEASURED_CAP_USD, estimatedUsd ?? 0) + RUN_UNMEASURED_CAP_USD
+  ).toFixed(2)}`
   const expectedHeadline = `$${MEASURED_USD.toFixed(2)} / $${String(COST_BUDGET_USD)}`
   console.log('stage 7: the four strings the tile must carry are asserted in the browser, below')
 
