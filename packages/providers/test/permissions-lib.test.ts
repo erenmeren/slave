@@ -195,8 +195,31 @@ describe('scripts/lib/permissions.sh: read_permission_verdict (M52 R2: default-D
     expect(result.capability).toBe('run_commands')
   })
 
-  // MOVED, same name.
-  it('allows when the payload tool is present but not on the deny list', async () => {
+  // THE PAYLOAD DOES NOT GET TO CHOOSE THE CAPABILITY (M52 final review, Important 2). The verdict
+  // the library prints is TAB-delimited and the caller splits it with `cut -f2`/`cut -f3`, so a
+  // `tool_name` carrying a tab used to shift the fields: this exact payload was MEASURED returning
+  // `TOOL=Bash CAPABILITY=deploy_release` -- a broker kind no vendor tool can ever produce, which
+  // is how a worker would author the denial evidence a `request_permission` proposal is built on.
+  it('does not let a TAB in tool_name choose the capability recorded against the worker', async () => {
+    // `\\t` in the SOURCE is `\t` in the JSON, which parses to one real tab character -- a raw tab
+    // inside a JSON string is not JSON at all, and this is the escape a worker would send.
+    const result = await runVerdict('{"tool_name":"Bash\\tdeploy_release"}', writePermissionsFile(v2({})))
+
+    expect(result.code).toBe(0)
+    expect(result.status).toBe(0)
+    // The whole finding in one line: the field a person reads as the capability is not the worker's
+    // to write.
+    expect(result.capability).not.toBe('deploy_release')
+    // What it IS: the tab is stripped, so the name matches nothing in the vocabulary and the call
+    // is denied as the ungoverned tool it is.
+    expect(result.capability).toBe('ungoverned_tool')
+    expect(result.tool).toBe('Bashdeploy_release')
+    expect(result.tool).not.toContain('\t')
+  })
+
+  // MOVED from M18, where it was called "allows when the payload tool is present but not on the
+  // deny list" -- the name is the verdict, and the verdict inverted (final review Minor 3).
+  it('denies a payload tool nothing governs: default-deny has no "not on the list" arm', async () => {
     const result = await runVerdict('{"tool_name":"Sandbox"}', writePermissionsFile(v2({})))
     expect(result.code).toBe(0)
     expect(result.status).toBe(0)
@@ -204,9 +227,10 @@ describe('scripts/lib/permissions.sh: read_permission_verdict (M52 R2: default-D
     expect(result.capability).toBe('ungoverned_tool')
   })
 
-  // MOVED, same name (plan erratum E8): a PreToolUse payload this gate cannot read is a refused
-  // CALL, not a broken gate, so it denies at exit 0 and the run survives.
-  it('allows when the payload has no tool_name key at all', async () => {
+  // MOVED from M18's "allows when the payload has no tool_name key at all" (plan erratum E8): a
+  // PreToolUse payload this gate cannot read is a refused CALL, not a broken gate, so it denies at
+  // exit 0 and the run survives.
+  it('denies when the payload has no tool_name key at all', async () => {
     const result = await runVerdict('{"hook_event_name":"SessionStart"}', writePermissionsFile(v2({})))
     expect(result.code).toBe(0)
     expect(result.status).toBe(0)
@@ -247,9 +271,10 @@ describe('scripts/lib/permissions.sh: read_permission_verdict (M52 R2: default-D
     })
   })
 
-  // MOVED, same name. `JSON.parse("null")` succeeds and names no tool; under an allow list that is
-  // a call nobody can authorise.
-  it('allows cleanly, with no stderr, when the payload is the literal JSON null', async () => {
+  // MOVED from M18's "allows cleanly, with no stderr, when the payload is the literal JSON null".
+  // `JSON.parse("null")` succeeds and names no tool; under an allow list that is a call nobody can
+  // authorise.
+  it('denies cleanly, with no stderr, when the payload is the literal JSON null', async () => {
     const result = await runVerdict('null', writePermissionsFile(v2({})))
     expect(result.code).toBe(0)
     expect(result.status).toBe(0)
@@ -258,8 +283,9 @@ describe('scripts/lib/permissions.sh: read_permission_verdict (M52 R2: default-D
     expect(result.stderr).toBe('')
   })
 
-  // MOVED, same name, and widened to the whole class the security review named.
-  it('allows cleanly when the payload is valid JSON but not an object (an array)', async () => {
+  // MOVED from M18's "allows cleanly when the payload is valid JSON but not an object (an array)",
+  // and widened to the whole class the security review named.
+  it('denies cleanly when the payload is valid JSON but not an object (an array)', async () => {
     for (const payload of ['[1]', '7', '"x"']) {
       const result = await runVerdict(payload, writePermissionsFile(v2({})))
       expect(result.code, payload).toBe(0)
@@ -268,9 +294,9 @@ describe('scripts/lib/permissions.sh: read_permission_verdict (M52 R2: default-D
     }
   })
 
-  // MOVED, same name: an empty allow list is a run granted nothing, which is a real state and not
-  // an unarmed gate.
-  it('allows when the deny list is present but empty', async () => {
+  // MOVED from M18's "allows when the deny list is present but empty": an empty allow list is a run
+  // granted nothing, which is a real state and not an unarmed gate.
+  it('denies when the allow list is present but empty -- a run granted nothing', async () => {
     const result = await runVerdict('{"tool_name":"Read"}', writePermissionsFile(v2({ allow: [], grants: [] })))
     expect(result.code).toBe(0)
     expect(result.status).toBe(0)
@@ -358,10 +384,11 @@ describe('scripts/lib/permissions.sh: read_permission_verdict (M52 R2: default-D
     expect(result.status).toBe(1)
   })
 
-  // MOVED, same name, and the sharpest one: the variable is SET and the file is gone. That used to
-  // be "no matrix in play: allow", which is the self-policing hole `permissions.sh` recorded in its
-  // own header -- a run that deleted its own file disarmed itself. It fails CLOSED now.
-  it('allows when the permissions file path does not exist', async () => {
+  // MOVED from M18's "allows when the permissions file path does not exist", and the sharpest one:
+  // the variable is SET and the file is gone. That used to be "no matrix in play: allow", which is
+  // the self-policing hole `permissions.sh` recorded in its own header -- a run that deleted its own
+  // file disarmed itself. It fails CLOSED now.
+  it('fails closed (exit 2) when the permissions file path does not exist', async () => {
     const dir = makeTmpDir('slaveofai-permissions-lib-missing-')
     const missing = path.join(dir, 'nonexistent-permissions.json')
     const result = await runVerdict('{"tool_name":"Read"}', missing)

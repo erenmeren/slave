@@ -817,6 +817,31 @@ Two things to know first:
 Upgrading from an older version: `SLAVEOFAI_PASSWORD` is retired and ignored; replace it with
 `SLAVEOFAI_SESSION_SECRET` as above.
 
+## Upgrading to default-deny
+
+Two things change for an existing install the first time a slave runs under the capability broker,
+and both are deliberate.
+
+**A slave's environment is an allow list now.** A slave's process is spawned with a named set of
+variables — `PATH`, `HOME`, `USER`, `SHELL`, the locale pair, `TERM`, `TMPDIR`, the two `XDG_*`
+directories the vendor CLI keeps its own auth in, and the two TLS certificate variables — and
+nothing else. `DATABASE_URL`, session secrets and every API key your shell happens to export are
+gone from it by design. So is anything else a slave's own tooling used to pick up from your shell:
+**`HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and `SSH_AUTH_SOCK` are not passed**. Behind a corporate
+proxy, or relying on a forwarded SSH key for a `git fetch` inside a worktree, a slave that used to
+reach the network now cannot — and it fails the way a network failure looks, not the way a
+configuration error does. Configure the proxy or the key where the tool itself reads it (the vendor
+CLI's own config under `XDG_CONFIG_HOME`, or `~/.gitconfig` / `~/.ssh/config` under `HOME`, both of
+which a slave still has), or bind the operation to the broker instead — `npm run orchestrator -- broker
+bind --op <op> --command <argv>`, which runs it in the daemon's own process on the slave's behalf.
+A credential a slave may spend is a NAME the daemon holds, never a value the slave is handed.
+
+**Run directories moved out of your repositories.** A run's pause flag, its permissions verdict and
+its broker channel now live under `$XDG_STATE_HOME/slaveofai/runs/<run id>` (`~/.local/state` when
+that is unset), 0700, because a slave that can edit the repository could otherwise delete the file
+that governs it. Directories left under `~/.local/state/slaveofai/runs` by older versions belong to
+runs that are over and are safe to delete; nothing in the product removes them yet.
+
 ## Tests and CI
 
 ```bash

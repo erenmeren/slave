@@ -45,7 +45,10 @@
 //       own environment dump contains NEITHER the credential NOR `DATABASE_URL`, `broker.executed`
 //       is on the timeline, and the token's literal value appears nowhere in `ExecutionEvent`.
 //   5.  No grant, no operation: `broker.refused { permission_denied }`, and the fake never ran.
-//   6.  Two forgeries, both closed: another run's id, and a wrong token -- `identity_mismatch` both.
+//   6.  Three forgeries, all closed with `identity_mismatch`: another run's id, a wrong token, and
+//       -- the one the first two cannot see -- a live SIBLING'S REAL TOKEN presented on the thief's
+//       own channel, which is also filed as `broker.refused` against the run that wrote the line
+//       and never against the run whose token was stolen.
 //   7.  An op with no binding: `not_brokered`.
 //   8.  Nothing crosses from a simulation: an archived project is refused `simulation`.
 //   9.  The Supervisor may point, not move: a `permission_blocked` situation, a `request_permission`
@@ -1075,8 +1078,67 @@ try {
   await assertEqual(wrongTokenReply.ok, false, 'stage 6b: the reply ok')
   await assertEqual(wrongTokenReply.reason, 'identity_mismatch', 'stage 6b: the refusal reason')
 
-  await assertEqual(deployLines().length, 1, 'stage 6: the lines fake-deploy.sh has recorded after both forgeries')
-  console.log(`stage 6 PASSED: both forged lines answered ${JSON.stringify('identity_mismatch')} and neither ran anything`)
+  // ---- Stage 6c: A SIBLING'S REAL TOKEN, ON THIS RUN'S OWN CHANNEL (final review Important 1). ---
+  //
+  // The forgery 6a cannot catch and the one the erratum is actually about. The thief writes into
+  // ITS OWN directory and names ITS OWN run, so the daemon's `runId`-against-directory check -- both
+  // halves of which the thief supplies -- passes; what is stolen is the TOKEN, lifted from a live
+  // sibling under the same uid. Before the token was bound to the channel, this line ran the
+  // operation under the victim's grants and delivered the output here.
+  //
+  // The victim is seeded with a token this gate generated, for the discipline stage 4 states: the
+  // gate never reads a real run's token out of anything, so the only plaintext it can plant is one
+  // it made up and hashed onto a row itself.
+  const victimToken = randomBytes(32).toString('hex')
+  const victimRun = await prisma.slaveRun.create({
+    data: {
+      slaveId: main.worker.id,
+      status: 'working',
+      kind: 'implementation',
+      provider: 'claude_code',
+      model: 'sonnet',
+      pid: null,
+      runTokenHash: runTokenHash(victimToken),
+    },
+  })
+  console.log(`stage 6c: the victim is run ${victimRun.id}; its token is about to be planted on ${seededRun.id}'s channel`)
+  const refusalsBefore = (await eventsOf(seededRun.id, 'broker.refused')).length
+  const stolenRequestId = freshRequestId()
+  const stolenTokenReply = await askBroker('stage 6c (a sibling’s real token)', seededDir, {
+    requestId: stolenRequestId,
+    runId: seededRun.id,
+    runToken: victimToken,
+    op: DEPLOY_OP,
+    params: deployParams,
+  })
+  await assertEqual(stolenTokenReply.ok, false, 'stage 6c: the reply ok')
+  await assertEqual(stolenTokenReply.reason, 'identity_mismatch', 'stage 6c: the refusal reason')
+  // Nothing was written into the victim's own directory, and the refusal is on the timeline against
+  // the run that WROTE the line -- the only run this daemon is entitled to file history for.
+  await assertEqual(
+    existsSync(brokerReplyPathFor(runDirPathFor(victimRun.id), stolenRequestId)),
+    false,
+    "stage 6c: a reply in the victim's own run directory",
+  )
+  const refusalsAfter = await eventsOf(seededRun.id, 'broker.refused')
+  console.log(`stage 6c: broker.refused payloads on ${seededRun.id} = ${JSON.stringify(refusalsAfter.map((row) => row.payload))}`)
+  await assertEqual(refusalsAfter.length - refusalsBefore, 1, 'stage 6c: broker.refused rows this forgery added')
+  await assertEqual(
+    refusalsAfter[refusalsAfter.length - 1].payload,
+    { op: DEPLOY_OP, reason: 'identity_mismatch' },
+    'stage 6c: the payload of the row it added',
+  )
+  await assertEqual(
+    (await eventsOf(victimRun.id, 'broker.refused')).length,
+    0,
+    "stage 6c: broker.refused rows on the VICTIM's run -- a thief must not write into the history of the run it stole from",
+  )
+
+  await assertEqual(deployLines().length, 1, 'stage 6: the lines fake-deploy.sh has recorded after all three forgeries')
+  console.log(
+    `stage 6 PASSED: a forged run id, a wrong token and a SIBLING'S REAL TOKEN were all answered ` +
+      `${JSON.stringify('identity_mismatch')}, none of them ran anything, and the theft is on the timeline`,
+  )
 
   // ---- Stage 7: an op with no binding. ----------------------------------------------------------
   const removed = await prisma.brokerBinding.deleteMany({ where: { workspaceId: main.workspace.id, op: DEPLOY_OP } })

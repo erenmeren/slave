@@ -26,18 +26,30 @@ import { NON_TERMINAL_RUN_STATUSES } from './world.js'
  * child, so a process spawned in the worker's shell has no database, which is the entire point.
  *
  * IDENTITY, AND WHAT IT IS WORTH. A request line carries a run token, and `runBrokeredOperation`
- * resolves the run from that token alone -- so this pass adds the second half, which the token
- * cannot supply: a line whose `runId` is not the directory it was found in is refused
- * (`identity_mismatch`), and a reply is only ever written into the directory its request came from.
- * Without that, a token lifted from a sibling's channel could be replayed on the thief's OWN
- * channel and the operation's output delivered to the thief (plan erratum E15).
+ * resolves the run from that token -- so what this pass adds is the DIRECTORY, which the token
+ * cannot supply: the run whose channel a line was read from is passed down as `expectedRunId`, and
+ * a token resolving to any other run is refused there (`identity_mismatch`). A line whose own
+ * `runId` field disagrees with its directory is refused here first, before a row is read; that
+ * check catches a mislabelled line and nothing more, because a forger supplies both of its halves
+ * (final review Important 1). A reply is only ever written into the directory its request came
+ * from. Without the token-to-directory comparison, a token lifted from a sibling's channel could be
+ * replayed on the thief's OWN channel and the operation's output delivered to the thief (plan
+ * erratum E15).
  *
  * WHAT IS LEFT, stated rather than implied: a run directory is 0700 under the same uid as every
- * other run on this host, so a worker that enumerates `<state>/slaveofai/runs/` and reads a
- * sibling's channel -- after that sibling has made at least one request -- can act as that sibling
- * ON ITS OWN CHANNEL. Three things reduce it and none of them removes it: the directories are named
- * by uuid, they are outside every worktree a worker can see (M52 R4, which is what made that true),
- * and a served request cannot be replayed, because its reply file is its idempotency key.
+ * other run on this host, and the token itself lives in the environment of a process running under
+ * that same uid -- so a worker granted `run_commands` can read `/proc/<pid>/environ` of any sibling
+ * child and lift `SLAVEOFAI_RUN_TOKEN`, `SLAVEOFAI_PERMISSIONS_FILE` and `SLAVEOFAI_BROKER_CHANNEL`
+ * without the victim ever having used the broker; a sibling's channel file is a second route to the
+ * same token once that sibling HAS made a request. What a lifted token then buys is the victim's
+ * own channel: the operation runs under the victim's grants and the reply lands in the victim's
+ * directory, which is readable by the thief for the same uid reason -- and the run a token resolves
+ * to is not filtered by workspace, so a token lifted from a run of ANOTHER PROJECT drives that
+ * project's binding and credential. Three things reduce the class and none of them removes it: the
+ * directories are outside every worktree a worker can see (M52 R4, which is what made that true),
+ * a served request cannot be replayed because its reply file is its idempotency key, and every
+ * refusal above is on the timeline. Only a boundary the child does not hold -- a separate uid or a
+ * sandbox -- closes it (plan erratum E17).
  *
  * AT MOST ONCE, AND WHAT THAT COSTS. Two files per request, and the order is the whole mechanism
  * (fix round 1, review Important 1). `broker-<requestId>.claim` is created with `wx` BEFORE the
@@ -170,9 +182,11 @@ const inFlight = new Set<string>()
 /**
  * One pass over every live run's channel in this workspace (M52 R3).
  *
- * Returns the request ids it served -- the `brokerServed` list on `SweepReport`, empty on every
- * tick of a project that has never used the broker, which is nearly all of them. A `void` return
- * would leave the sweep having to read the directory back to learn what its own pass had done.
+ * Returns the request ids it served -- empty on every tick of a project that has never used the
+ * broker, which is nearly all of them. The daemon's own pass logs those ids and the tests assert
+ * them; nothing is carried on `SweepReport`, because the broker pass is not the sweep and running
+ * one inside the other is what fix round 1 took apart. A `void` return would leave a caller having
+ * to read the directory back to learn what the pass had just done.
  *
  * `execute` defaults to {@link realBrokerExecutor}; every test in this repository passes its own,
  * because `packages/control` hands out an argv and takes an outcome and nothing here needs a real
@@ -370,33 +384,37 @@ async function serveOneLine(
 
   inFlight.add(requestId)
   try {
-    // Plan erratum E15, and the half the token cannot supply: the line claims a run, and the claim
-    // is only believed when it names the run whose directory this line was found in. Refused BEFORE
-    // `runBrokeredOperation`, which would otherwise resolve the stolen token's own run quite
-    // happily and deliver its output here.
+    // Plan erratum E15, first half: the line claims a run, and the claim is only believed when it
+    // names the run whose directory this line was found in. A MISLABELLED LINE IS ALL THIS CATCHES
+    // (final review Important 1) -- a forger writes both the `runId` and the directory it writes
+    // into, so it can always make these two agree. The comparison that cannot be arranged away is
+    // the token's own run against this one, and it is made below, inside `runBrokeredOperation`,
+    // where the token is resolved. This arm stays because it is free: a refusal before a row is
+    // read, in the one process that knows which directory it read the line out of.
     if (request.data.runId !== run.id) {
-      // AND THE TIMELINE HEARS ABOUT IT (fix round 1, review Important 2). This is the single
-      // highest-signal security event the design can produce, and until this round its only record
-      // was a file in the attacker's own directory that the attacker could delete. Questions 1 and 2
-      // in `packages/control` refuse silently because they have no run to file against; this one
-      // does -- the run whose directory the line sits in is known, live, in this workspace, and is
-      // exactly the worker that wrote the line. Same payload shape control uses.
-      await appendEvent({
-        type: 'broker.refused',
-        workspaceId,
-        slaveId: run.slaveId,
-        runId: run.id,
-        actor: 'slave',
-        payload: { op, reason: 'identity_mismatch' },
-      })
+      await fileIdentityMismatch(workspaceId, run, op)
       writeReply(replyPath, refusal(requestId, 'identity_mismatch'))
       return requestId
     }
 
+    // `expectedRunId` is the half this check cannot supply (final review Important 1): the line
+    // above compares two values the WRITER chose, so it catches a mislabelled line and nothing
+    // else. The comparison that actually binds the token to the channel is in
+    // `runBrokeredOperation`, against the run the token resolves to, and this is where the
+    // directory's own run is handed over to be compared against.
     const result = await runBrokeredOperation(
-      { runToken: request.data.runToken, op, params: request.data.params },
+      { runToken: request.data.runToken, op, params: request.data.params, expectedRunId: run.id },
       { execute },
     )
+    // An `identity_mismatch` coming back is a worker in THIS directory that presented a token which
+    // is not this run's -- a sibling's, or nothing at all. Control refuses it silently, because the
+    // run it could name is the victim's and a forger must not be able to write into another
+    // project's history; the run whose directory the line sits in is known, live, in this workspace
+    // and is exactly the worker that wrote the line, so the event is filed HERE, the same way and
+    // against the same run as the mislabelled-line arm above.
+    if (!result.ok && result.error.kind === 'broker_refused' && result.error.reason === 'identity_mismatch') {
+      await fileIdentityMismatch(workspaceId, run, op)
+    }
     writeReply(
       replyPath,
       result.ok
@@ -417,6 +435,32 @@ async function serveOneLine(
   } finally {
     inFlight.delete(requestId)
   }
+}
+
+/**
+ * AND THE TIMELINE HEARS ABOUT IT (fix round 1, review Important 2; final review Important 1).
+ *
+ * This is the single highest-signal security event the design can produce, and until that round its
+ * only record was a file in the attacker's own directory that the attacker could delete. Questions 1
+ * and 2 in `packages/control` refuse silently because the only run they could name is the token's --
+ * the victim's, in a claim like this one -- and a forger must not be able to write a line into
+ * another project's history. This process can: the run whose directory the line sits in is known,
+ * live, in this workspace, and is exactly the worker that wrote the line. Same payload shape control
+ * uses, from both identity arms -- a line that mislabels itself, and a token that is not this run's.
+ */
+async function fileIdentityMismatch(
+  workspaceId: WorkspaceId,
+  run: { readonly id: string; readonly slaveId: string },
+  op: string,
+): Promise<void> {
+  await appendEvent({
+    type: 'broker.refused',
+    workspaceId,
+    slaveId: run.slaveId,
+    runId: run.id,
+    actor: 'slave',
+    payload: { op, reason: 'identity_mismatch' },
+  })
 }
 
 function refusal(

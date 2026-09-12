@@ -90,7 +90,7 @@ afterAll(async (): Promise<void> => {
 describe('runBrokeredOperation', () => {
   it('runs the bound command, names the credential’s VARIABLE and never its value, and returns the bounded output', async (): Promise<void> => {
     const result = await runBrokeredOperation(
-      { runToken: TOKEN, op: 'deploy_release', params: { environment: 'staging', digest: 'a1b2c3d' } },
+      { runToken: TOKEN, op: 'deploy_release', params: { environment: 'staging', digest: 'a1b2c3d' }, expectedRunId: runId },
       { execute: executor },
     )
     expect(result.ok).toBe(true)
@@ -110,7 +110,7 @@ describe('runBrokeredOperation', () => {
 
   it('appends broker.executed with the environment verbatim, the params HASHED, and no output anywhere', async (): Promise<void> => {
     await runBrokeredOperation(
-      { runToken: TOKEN, op: 'deploy_release', params: { environment: 'staging', digest: 'a1b2c3d' } },
+      { runToken: TOKEN, op: 'deploy_release', params: { environment: 'staging', digest: 'a1b2c3d' }, expectedRunId: runId },
       { execute: executor },
     )
     const event = await brokerEvent('broker_executed')
@@ -133,7 +133,7 @@ describe('runBrokeredOperation', () => {
   })
 
   it('refuses an unknown token as identity_mismatch, runs nothing, and records NOTHING', async (): Promise<void> => {
-    const result = await runBrokeredOperation({ runToken: 'a'.repeat(64), op: 'deploy_release', params: PARAMS }, { execute: executor })
+    const result = await runBrokeredOperation({ runToken: 'a'.repeat(64), op: 'deploy_release', params: PARAMS, expectedRunId: runId }, { execute: executor })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'broker_refused', op: 'deploy_release', reason: 'identity_mismatch' })
     expect(executed).toHaveLength(0)
@@ -142,9 +142,41 @@ describe('runBrokeredOperation', () => {
     expect(await prisma.executionEvent.count({ where: { type: 'broker_refused' } })).toBe(0)
   })
 
+  it('refuses a SIBLING’S REAL TOKEN presented on another run’s channel, and records NOTHING', async (): Promise<void> => {
+    // The attack the `expectedRunId` argument exists for (final review Important 1, erratum E15).
+    // Everything here is valid: the token is a live run's own token, the worker holding the grant
+    // is the same worker, the binding and the credential are in place. What is wrong is only that
+    // the request was read out of ANOTHER run's directory -- so the operation would run under the
+    // token's run and deliver its output to the thief, which is the whole of the theft.
+    const siblingToken = '0f'.repeat(32)
+    const sibling = await prisma.slaveRun.create({
+      data: { slaveId, kind: 'implementation', status: 'working', runTokenHash: runTokenHash(siblingToken) },
+      select: { id: true },
+    })
+
+    const result = await runBrokeredOperation(
+      { runToken: siblingToken, op: 'deploy_release', params: PARAMS, expectedRunId: runId },
+      { execute: executor },
+    )
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toEqual({ kind: 'broker_refused', op: 'deploy_release', reason: 'identity_mismatch' })
+    expect(executed).toHaveLength(0)
+    // Silent, like every other question-2 refusal: the only run this could name is the VICTIM's,
+    // and a thief must not be able to write a line into the history of the run it stole from.
+    expect(await prisma.executionEvent.count({ where: { type: 'broker_refused' } })).toBe(0)
+    // And the same token, presented on its OWN channel, is fine -- what was refused is the
+    // directory it arrived in, not the token.
+    const own = await runBrokeredOperation(
+      { runToken: siblingToken, op: 'deploy_release', params: PARAMS, expectedRunId: sibling.id },
+      { execute: executor },
+    )
+    expect(own.ok).toBe(true)
+  })
+
   it('refuses a token whose run is CONCLUDED as run_not_live', async (): Promise<void> => {
     await prisma.slaveRun.update({ where: { id: runId }, data: { status: 'succeeded' } })
-    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS }, { execute: executor })
+    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS, expectedRunId: runId }, { execute: executor })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toMatchObject({ reason: 'run_not_live' })
     expect((await brokerEvent('broker_refused')).payload).toEqual({ op: 'deploy_release', reason: 'run_not_live' })
@@ -152,7 +184,7 @@ describe('runBrokeredOperation', () => {
 
   it('refuses a worker without the grant as permission_denied, and records broker.refused', async (): Promise<void> => {
     await clearSlavePermission(slaveId, 'deploy_release')
-    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS }, { execute: executor })
+    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS, expectedRunId: runId }, { execute: executor })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toMatchObject({ reason: 'permission_denied' })
     expect((await brokerEvent('broker_refused')).payload).toEqual({ op: 'deploy_release', reason: 'permission_denied' })
@@ -160,7 +192,7 @@ describe('runBrokeredOperation', () => {
 
   it('refuses a worker whose grant was taken back with a deny, not only one that never had it', async (): Promise<void> => {
     await setSlavePermission(slaveId, 'deploy_release', 'deny')
-    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS }, { execute: executor })
+    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS, expectedRunId: runId }, { execute: executor })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toMatchObject({ reason: 'permission_denied' })
   })
@@ -168,7 +200,7 @@ describe('runBrokeredOperation', () => {
   it('refuses an op with no binding in THIS project as not_brokered, even when another project has one', async (): Promise<void> => {
     await prisma.brokerBinding.deleteMany({ where: { workspaceId } })
     await bindBrokerOp(otherWorkspaceId, { op: 'deploy_release', command: ['/bin/true'] })
-    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS }, { execute: executor })
+    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS, expectedRunId: runId }, { execute: executor })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toMatchObject({ reason: 'not_brokered' })
     expect(executed).toHaveLength(0)
@@ -176,7 +208,7 @@ describe('runBrokeredOperation', () => {
 
   it('refuses when the bound credential’s variable is unset on this host, and never invents an empty one', async (): Promise<void> => {
     delete process.env['FAKE_DEPLOY_TOKEN']
-    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS }, { execute: executor })
+    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS, expectedRunId: runId }, { execute: executor })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toMatchObject({ reason: 'credential_unset' })
     expect(executed).toHaveLength(0)
@@ -184,7 +216,7 @@ describe('runBrokeredOperation', () => {
 
   it('refuses parameters the manifest does not accept, naming nothing about them', async (): Promise<void> => {
     for (const params of [{ environment: 'https://evil', digest: 'a1b2c3d' }, { environment: 'staging' }, { environment: 'staging', digest: 'a1b2c3d', url: 'x' }]) {
-      const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params }, { execute: executor })
+      const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params, expectedRunId: runId }, { execute: executor })
       expect(result.ok, JSON.stringify(params)).toBe(false)
       if (!result.ok) expect(result.error).toMatchObject({ reason: 'invalid_params' })
     }
@@ -194,7 +226,7 @@ describe('runBrokeredOperation', () => {
   })
 
   it('refuses an op the manifest does not carry, before it reads a single row', async (): Promise<void> => {
-    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'rm_rf', params: {} }, { execute: executor })
+    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'rm_rf', params: {}, expectedRunId: runId }, { execute: executor })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toMatchObject({ reason: 'not_brokered' })
     // Question 1 has no run to file an event against, and did not go looking for one.
@@ -209,7 +241,7 @@ describe('runBrokeredOperation', () => {
     await prisma.workspace.update({ where: { id: workspaceId }, data: { haltedAt: new Date(), haltedReason: 'emergency stop by meren' } })
     await prisma.slaveRun.update({ where: { id: runId }, data: { status: 'pause_requested' } })
 
-    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS }, { execute: executor })
+    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS, expectedRunId: runId }, { execute: executor })
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'broker_refused', op: 'deploy_release', reason: 'run_not_live' })
@@ -221,21 +253,21 @@ describe('runBrokeredOperation', () => {
 
   it('still admits a pause_requested run while the project is NOT halted -- a run is live until it stops', async (): Promise<void> => {
     await prisma.slaveRun.update({ where: { id: runId }, data: { status: 'pause_requested' } })
-    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS }, { execute: executor })
+    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS, expectedRunId: runId }, { execute: executor })
     expect(result.ok).toBe(true)
     expect(executed).toHaveLength(1)
   })
 
   it('refuses an ARCHIVED project as simulation -- nothing crosses, belt and braces', async (): Promise<void> => {
     await prisma.workspace.update({ where: { id: workspaceId }, data: { archivedAt: new Date() } })
-    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS }, { execute: executor })
+    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS, expectedRunId: runId }, { execute: executor })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toMatchObject({ reason: 'simulation' })
     expect((await brokerEvent('broker_refused')).payload).toEqual({ op: 'deploy_release', reason: 'simulation' })
   })
 
   it('records a NON-ZERO exit as an execution, not a refusal -- the operation ran and it failed', async (): Promise<void> => {
-    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS }, {
+    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS, expectedRunId: runId }, {
       execute: async () => ({ exitCode: 3, durationMs: 5, output: 'boom' }),
     })
     expect(result.ok).toBe(true)
@@ -244,9 +276,9 @@ describe('runBrokeredOperation', () => {
   })
 
   it('hashes the params identically for two calls that asked for the same thing, and differently otherwise', async (): Promise<void> => {
-    await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: { environment: 'staging', digest: 'a1b2c3d' } }, { execute: executor })
-    await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: { digest: 'a1b2c3d', environment: 'staging' } }, { execute: executor })
-    await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: { environment: 'prod', digest: 'a1b2c3d' } }, { execute: executor })
+    await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: { environment: 'staging', digest: 'a1b2c3d' }, expectedRunId: runId }, { execute: executor })
+    await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: { digest: 'a1b2c3d', environment: 'staging' }, expectedRunId: runId }, { execute: executor })
+    await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: { environment: 'prod', digest: 'a1b2c3d' }, expectedRunId: runId }, { execute: executor })
     const hashes = (await prisma.executionEvent.findMany({ where: { type: 'broker_executed' }, orderBy: { seq: 'asc' } })).map(
       (event) => (event.payload as { paramsHash: string }).paramsHash,
     )

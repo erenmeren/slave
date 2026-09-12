@@ -3,8 +3,39 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { CONSTRAIN_GRACE_CALLS, steerTextFor } from '@slave-of-ai/domain'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { constrainRun, deliverBreakerSteer, steerRun } from '../../src/breaker.js'
+
+/**
+ * THE PUMP, MADE DETERMINISTIC -- the one seam in this file (M52 final review, the `steerRun` race).
+ *
+ * `steerRun` writes twice and the window between the writes is real: `requestPause` signals a pause
+ * the daemon's pump is already watching for, and the pump can park the run (`paused`) or the run can
+ * conclude before the second statement lands. Neither is reachable from a test that only calls the
+ * verb, so the module boundary `steerRun` itself uses is the place to stand: the ORIGINAL
+ * `requestPause` runs, untouched, and one extra write happens in the window afterwards -- exactly
+ * what the other process would have done. Both flags are null for every other case in this file, so
+ * nothing else here is mocked in any sense that matters.
+ */
+let parkDuringPause: string | null = null
+let concludeDuringPause: string | null = null
+
+vi.mock('../../src/pause.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/pause.js')>()
+  return {
+    ...actual,
+    requestPause: async (...args: Parameters<typeof actual.requestPause>) => {
+      const result = await actual.requestPause(...args)
+      if (parkDuringPause === args[0]) {
+        await prisma.slaveRun.update({ where: { id: args[0] }, data: { status: 'paused' } })
+      }
+      if (concludeDuringPause === args[0]) {
+        await prisma.slaveRun.update({ where: { id: args[0] }, data: { status: 'succeeded', endedAt: new Date() } })
+      }
+      return result
+    },
+  }
+})
 
 /**
  * The CONTROL half of the behavioural breaker (M51 R3), against a real database.
@@ -156,6 +187,49 @@ describe('steerRun (M51 R3, phase A)', () => {
 
   it('refuses a run that does not exist', async (): Promise<void> => {
     expect((await steerRun('nope', 'x')).ok).toBe(false)
+  })
+
+  // THE TWO-STATEMENT RACE, PINNED (M52 final review). `requestPause` claims the pause and signals
+  // it; the pump is watching that flag and can park the run at `paused` before the second statement
+  // runs. With the narrower `status: 'pause_requested'` predicate that update matched NOTHING: the
+  // sentence was dropped, the counter never moved, and the caller was told `run_not_steerable`
+  // about a pause it really had claimed. `parkDuringPause` below is that pump, made deterministic
+  // -- it does exactly what the pump does, in exactly the window the race needs.
+  //
+  // Not a `$transaction`, and that is the point of writing it this way: `requestPause` runs its own
+  // `FOR UPDATE` raw statement on the global client and then writes a file and signals a pid, so
+  // wrapping the pair would hold a row lock across real I/O and a rollback would leave the flag
+  // written. Widening the predicate costs nothing and `deliverBreakerSteer` requires `paused` plus
+  // a `queuedMessage` anyway.
+  it('still queues the sentence when the pump parks the run at paused between the two statements', async (): Promise<void> => {
+    const run = await workingRun()
+    parkDuringPause = run.id
+    try {
+      const result = await steerRun(run.id, 'stop and rethink')
+      expect(result.ok).toBe(true)
+    } finally {
+      parkDuringPause = null
+    }
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.status).toBe('paused')
+    expect(after.queuedMessage).toBe('stop and rethink')
+    expect(after.breakerSteers).toBe(1)
+  })
+
+  it('still refuses a run that CONCLUDED between the two statements -- the widening is two statuses, not all of them', async (): Promise<void> => {
+    const run = await workingRun()
+    concludeDuringPause = run.id
+    try {
+      const result = await steerRun(run.id, 'x')
+      expect(result.ok).toBe(false)
+      expect(result.ok ? null : result.error.kind).toBe('run_not_steerable')
+    } finally {
+      concludeDuringPause = null
+    }
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
+    // A message nobody will ever consume is the thing the predicate exists to refuse.
+    expect(after.queuedMessage).toBeNull()
+    expect(after.breakerSteers).toBe(0)
   })
 
   it('is the SYSTEM asking -- the pause event names the breaker, not a person', async (): Promise<void> => {

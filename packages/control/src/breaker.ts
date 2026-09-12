@@ -85,8 +85,20 @@ export async function steerRun(
   // returning and this line the run can be stopped or concluded by another process, and queuing a
   // sentence onto a run that is over would leave a message nobody consumes and a steer the ladder
   // believes it sent.
+  //
+  // `paused` IS ADMITTED TOO (M52 final review, the cheap half of the two-statement race). The pump
+  // watches the flag `requestPause` just wrote, and it can park the run at `paused` before this
+  // line runs -- in which case the narrower `status: 'pause_requested'` matched nothing, the
+  // sentence was silently dropped, and the caller was told `run_not_steerable` about a pause that
+  // really had been claimed. Writing it on a `paused` run is exactly what the delivery path
+  // already expects: `deliverBreakerSteer` requires `paused` PLUS a `queuedMessage`. The pair is
+  // still NOT a `$transaction` and deliberately so: `requestPause` runs its own `FOR UPDATE` raw
+  // statement on the global client and then does real I/O -- it writes the flag file and signals a
+  // pid -- so wrapping the two would hold a row lock across a file write and a kill, and a
+  // rollback would leave the flag written. The remaining window (a run concluded between the two)
+  // is what `endedAt: null` and the status list refuse.
   const queued = await prisma.slaveRun.updateMany({
-    where: { id: run.id, status: 'pause_requested', endedAt: null },
+    where: { id: run.id, status: { in: ['pause_requested', 'paused'] }, endedAt: null },
     data: { queuedMessage: text, breakerSteers: { increment: 1 } },
   })
   if (queued.count === 0) return err({ kind: 'run_not_steerable', runId, status: run.status })

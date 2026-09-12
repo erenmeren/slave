@@ -139,9 +139,19 @@ export function permissionsFilePathFor(runDir: string): string {
  *
  * What is deliberately NOT here, and asserted so by `runtime-process.test.ts` and by the gate:
  * `DATABASE_URL`, `SLAVEOFAI_SESSION_SECRET`, `SLAVEOFAI_PASSWORD`, and every API key an operator's
- * shell happens to hold. A worker that cannot reach the database cannot rewrite its own
- * permissions, and a worker that holds no key cannot spend one -- which is the whole point of
- * asking the broker for an operation by name instead (R3).
+ * shell happens to hold. The WORKER'S OWN PROCESS therefore cannot reach the database to rewrite
+ * its own permissions, and holds no key it could spend -- which is the whole point of asking the
+ * broker for an operation by name instead (R3).
+ *
+ * SAID EXACTLY, because a stronger sentence stood here and was false (M52 final review, Important
+ * 3): this list governs the worker's own child and nothing else. The verify and setup commands a
+ * project defines still run through `runShellCommand`'s default environment, which is the daemon's
+ * whole `process.env` (`apps/orchestrator/src/verify.ts`, `worktree.ts`'s `setupEnv`) -- and they
+ * execute scripts inside the worktree the worker just wrote, so `npm test` on a repository whose
+ * `package.json` the worker edited is repo-controlled code running with `DATABASE_URL` and every
+ * operator key. That is the next boundary to close, and it is not closed by reusing this list:
+ * this repository's own verify commands need `DATABASE_URL` to run at all. Backlogged as an
+ * allow-listed verify/setup environment.
  */
 export const CHILD_ENV_ALLOW = [
   'PATH',

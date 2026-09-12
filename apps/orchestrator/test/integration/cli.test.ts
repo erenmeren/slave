@@ -3717,6 +3717,23 @@ describe('the orchestrator CLI', () => {
       expect(event.payload).toMatchObject({ kind: 'network_fetch', from: null, to: 'allow' })
     })
 
+    it('`permission list` names the granter and never prints an id, not even for a deleted account (E18)', async (): Promise<void> => {
+      const user = await prisma.user.create({ data: { username: 'meren', passwordHash: 'x' } })
+      await runCli(['permission', 'grant', '--slave', fixture.slaveId, '--kind', 'network_fetch', '--by', 'meren'])
+
+      const named = await runCli(['permission', 'list', '--slave', fixture.slaveId])
+      expect(named.stdout).toContain('by meren')
+      expect(named.stdout).not.toContain(user.id)
+
+      // The account goes and the row keeps the id it recorded -- `grantedBy` is a column, not a
+      // foreign key, so nothing cascades. The CLI then says the words the web says for the same
+      // state rather than putting a uuid in front of a person (plan erratum E18, `docs/ia.md` 3).
+      await prisma.user.delete({ where: { id: user.id } })
+      const orphaned = await runCli(['permission', 'list', '--slave', fixture.slaveId])
+      expect(orphaned.stdout).toContain('by a person no longer on record')
+      expect(orphaned.stdout).not.toContain(user.id)
+    })
+
     it('`permission grant --by` refuses a name no account carries, and writes nothing', async (): Promise<void> => {
       const result = await runCli([
         'permission', 'grant', '--slave', fixture.slaveId, '--kind', 'network_fetch', '--by', 'nobody',

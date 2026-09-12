@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { runId } from '@slave-of-ai/domain'
-import { runFilePaths } from '../src/paths.js'
+import { runDirPathFor, runFilePaths } from '../src/paths.js'
 
 const RUN = runId('11111111-1111-4111-8111-111111111111')
 
@@ -43,6 +43,18 @@ describe('runFilePaths', () => {
     const stateDir = mkdtempSync(join(tmpdir(), 'slaveofai-state-'))
     process.env['SLAVEOFAI_STATE_DIR'] = stateDir
     expect(runFilePaths(repoPath, RUN).runDir).toBe(join(stateDir, 'runs', RUN))
+  })
+
+  // THE TWO MUST NOT DRIFT (final review Minor 4). `runFilePaths` creates the directory and
+  // `runDirPathFor` is the pure half the per-tick broker pass calls instead -- so a reader who
+  // "tidies" one of the two roots into a different shape breaks the pass silently: the daemon would
+  // tail a channel in a directory the adapter never spawned the worker with, which looks exactly
+  // like a worker that never asked for anything.
+  it('computes the SAME directory as runDirPathFor, which is the pure half of itself', () => {
+    const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-control-paths-pure-'))
+    const stateDir = mkdtempSync(join(tmpdir(), 'slaveofai-state-'))
+    process.env['SLAVEOFAI_STATE_DIR'] = stateDir
+    expect(runDirPathFor(RUN)).toBe(runFilePaths(repoPath, RUN).runDir)
   })
 
   it('creates the directory 0700 -- the verdict inside it governs a worker', () => {

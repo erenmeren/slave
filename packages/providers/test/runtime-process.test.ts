@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { dirname } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   CHILD_ENV_ALLOW,
   brokerChannelPathFor,
+  brokerClaimPathFor,
   brokerReplyPathFor,
   buildChildEnv,
   isAlive,
@@ -187,6 +189,18 @@ describe('the run directory\u2019s file channels (M52 R3/R4)', () => {
   it('refuses a request id that is not 32 lowercase hex characters -- the filename IS the id', () => {
     for (const bad of ['', '../escape', 'A'.repeat(32), 'a'.repeat(31), `${'a'.repeat(32)}/x`]) {
       expect(() => brokerReplyPathFor('/tmp/x', bad), JSON.stringify(bad)).toThrow(/bad request id/u)
+    }
+  })
+
+  // The claim file is the other half of at-most-once and it was pinned nowhere (final review Minor
+  // 4): it is named from the same request id, beside the reply, and it re-validates that id in the
+  // process that opens the file -- so a crafted id cannot escape the run directory through THIS
+  // name either.
+  it('names the claim beside the reply, from the same id, and refuses the same bad ids', () => {
+    expect(brokerClaimPathFor('/tmp/x', 'a'.repeat(32))).toBe(`/tmp/x/broker-${'a'.repeat(32)}.claim`)
+    expect(dirname(brokerClaimPathFor('/tmp/x', 'a'.repeat(32)))).toBe(dirname(brokerReplyPathFor('/tmp/x', 'a'.repeat(32))))
+    for (const bad of ['', '../escape', 'A'.repeat(32), 'a'.repeat(31), `${'a'.repeat(32)}/x`]) {
+      expect(() => brokerClaimPathFor('/tmp/x', bad), JSON.stringify(bad)).toThrow(/bad request id/u)
     }
   })
 

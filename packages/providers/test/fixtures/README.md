@@ -353,7 +353,13 @@ A `JSON.parse`/`JSON.stringify` round trip of this file with an **empty** `STAND
 to its input across all 29 lines (checked with `cmp`), so this pass changes only the six fields it
 names — and it touched exactly one line, line 9.
 
-**Stage 3 — rule 1** (M52, plan erratum E10), the one substitution here that is not a redaction. The
+**Stage 3 — rule 1** (M52, plan erratum E10), the one substitution here that is not a redaction, and
+**historical as of M52's final wave**: it belongs to THIS recording, made in M19 against the old
+vocabulary. A recording captured today needs none of it — `scripts/capture-matrix-deny.mjs` seeds
+`run_commands` and the hook prints `run_commands`, so the two agree at the source and the script no
+longer carries a second spelling to reconcile (final review Minor 2). Kept here because the file it
+describes is committed with the substitution already applied, and a reader comparing bytes has to
+know why they differ from a fresh capture. The
 deny reason this recording carries is **our own gate's sentence**, echoed back by the CLI:
 `permission matrix denies '<kind>' (<tool>) for this slave`, spelled by `scripts/lib/permissions.sh`.
 M52 R1 renamed the permission vocabulary, so the quoted slot — which is the KIND (plan erratum E2),
@@ -379,7 +385,7 @@ what the model said as much as to where its lines sit.
 | 5 | `tools` (111 entries, 84 of them `mcp__*`) → `["Read","Bash"]` | **1**, the `init` line. The two tools this recording actually exercises, so the catalog stays consistent with the transcript instead of naming a tool that never appears in it. |
 | 5 | `mcp_servers` (5 entries) → `[{"name":"fixture-mcp-server","status":"connected"}]` | **1**. This is the field the rule exists for: it named the operator's connected Gmail/Notion/Drive/Calendar accounts and their auth status. |
 | 5 | `plugins` (8) → one `fixture-plugin` entry; `slash_commands` (115) → `["fixture-command"]`; `skills` (82) → `["fixture-skill"]`; `agents` (5) → `["fixture-agent"]` | **1 each**, all on the `init` line. Each keeps its real element schema. |
-| 1 | `'run tests'` → `'run_commands'` | **4**. M52 R1 renamed the permission vocabulary; the quoted value in a matrix deny is the KIND (plan erratum E2), and this recording carries our own gate's sentence rather than the CLI's. Two per line on lines 22 and 23 — the `hook_response`'s `output` and its `stdout`, then the `tool_result` and the `tool_use_result` echo. Not a redaction: it is rule 1's mechanical substitution, named here like every other. |
+| 1 | `'run tests'` → `'run_commands'` (**historical**: applied once, to this M19 recording; a fresh capture emits `run_commands` already) | **4**. M52 R1 renamed the permission vocabulary; the quoted value in a matrix deny is the KIND (plan erratum E2), and this recording carries our own gate's sentence rather than the CLI's. Two per line on lines 22 and 23 — the `hook_response`'s `output` and its `stdout`, then the `tool_result` and the `tool_use_result` echo. Not a redaction: it is rule 1's mechanical substitution, named here like every other. |
 
 `terminal_slash_commands` (`["doctor","color"]`) and `capabilities` are **kept**: the first is the
 CLI's own built-in list and the second is its wire-protocol feature set, neither of which says

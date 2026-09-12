@@ -2854,10 +2854,16 @@ export async function main(argv: readonly string[]): Promise<number> {
         for (const grant of grants) {
           // Label first and the key beside it (`docs/ia.md` rule 3): the word is what a person
           // reads, the key is what they copy into `--kind`, and a CLI's "expanded view" is the line.
+          // THE RAW ID IS NEVER VISIBLE TEXT (plan erratum E18). A granter whose `User` row has
+          // been deleted since resolves to no name at all, and printing the uuid there would put
+          // back exactly what this rule removes -- the web says `a person no longer on record` for
+          // that case and the CLI says the same words, so one sentence means one thing on every
+          // surface. `somebody unrecorded` is the other null: no principal at the write (the CLI
+          // and the daemon carry none), which is a different fact and says so.
+          const granter =
+            grant.by === null ? 'somebody unrecorded' : (nameById.get(grant.by) ?? 'a person no longer on record')
           const decided =
-            grant.by === null && grant.at === null
-              ? ''
-              : `\tby ${grant.by === null ? 'somebody' : (nameById.get(grant.by) ?? grant.by)}${grant.at === null ? '' : ` at ${grant.at}`}`
+            grant.by === null && grant.at === null ? '' : `\tby ${granter}${grant.at === null ? '' : ` at ${grant.at}`}`
           process.stdout.write(
             `${PERMISSION_LABEL[grant.kind]}\t${grant.kind}\t${grant.mode ?? 'unset'}\t${grant.source}${decided}\n`,
           )

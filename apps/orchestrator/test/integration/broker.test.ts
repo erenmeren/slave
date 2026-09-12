@@ -325,6 +325,26 @@ describe('serveBrokerRequests', () => {
     expect(readReply(runDir, ID)).toMatchObject({ ok: false, reason: 'internal_error' })
   })
 
+  it('REFUSES a sibling’s real token on this run’s OWN channel -- the attack the runId check cannot see', async (): Promise<void> => {
+    // Final review Important 1. The thief writes into its own directory and names its own run, so
+    // both halves of the `runId` comparison agree and it passes; the only thing that is wrong is
+    // the TOKEN, which belongs to a live sibling. Before `expectedRunId` this line executed the
+    // operation under the sibling's grants and wrote the output here, which is the delivery the
+    // erratum exists to prevent.
+    appendRequest(runDir, { requestId: ID, runId, op: 'deploy_release', params: PARAMS, runToken: OTHER_TOKEN })
+
+    await serveBrokerRequests({ workspaceId: brandWorkspaceId(workspaceId), execute: fakeExecutor })
+
+    expect(readReply(runDir, ID)).toMatchObject({ ok: false, reason: 'identity_mismatch' })
+    expect(executions).toBe(0)
+    // Nothing reached the run whose token was stolen, and the refusal is filed against the run that
+    // wrote the line -- the only run this process is entitled to write history for.
+    expect(existsSync(brokerReplyPathFor(otherRunDir, ID))).toBe(false)
+    const event = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'broker_refused' } })
+    expect(event.runId).toBe(runId)
+    expect(event.payload).toEqual({ op: 'deploy_release', reason: 'identity_mismatch' })
+  })
+
   it('files broker.refused against the directory’s run when a line claims a different one', async (): Promise<void> => {
     appendRequest(runDir, { requestId: ID, runId: otherRunId, op: 'deploy_release', params: PARAMS, runToken: OTHER_TOKEN })
 

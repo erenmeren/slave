@@ -90,11 +90,13 @@ interface BrokerRun {
  *                                        verb must not become a database query a caller can time.
  *   2. Who is asking?                 -- `identity_mismatch`. The token is hashed and looked up on
  *                                        `SlaveRun.runTokenHash` (`@unique`), compared with
- *                                        `timingSafeEqual` over equal-length digests. Identity comes
- *                                        from the ENVIRONMENT THE PARENT SET, never from a field in
- *                                        the request line: a request that carries a `runId` is
- *                                        making a claim, and the claim is discarded in favour of
- *                                        the token's own answer. (The failure this avoids is a
+ *                                        `timingSafeEqual` over equal-length digests, AND the run
+ *                                        it resolves to must be `expectedRunId` -- the run whose
+ *                                        channel the caller is serving. Identity comes from the
+ *                                        ENVIRONMENT THE PARENT SET, never from a field in the
+ *                                        request line: a request that carries a `runId` is making
+ *                                        a claim, and the claim is discarded in favour of the
+ *                                        token's own answer. (The failure this avoids is a
  *                                        measured one elsewhere: a hook shim that let a
  *                                        payload-supplied worker id win over the trusted env var.)
  *                                        The DATABASE is the authority and the only one (plan
@@ -133,9 +135,26 @@ interface BrokerRun {
  *
  * The credential's VALUE is never read here at all: this function asks whether the variable is set
  * and hands its NAME to the executor.
+ *
+ * `expectedRunId` IS THE CHANNEL BINDING (final review Important 1, plan erratum E15), and it is
+ * required rather than optional because a caller that cannot name the run it is serving has no
+ * business asking. The transport is a file in a run's own 0700 directory, and the daemon knows
+ * which run's directory it read a line out of -- but the token is what carries authority here, and
+ * until this argument existed nothing compared the two. The attack that closes: a worker lifts a
+ * sibling's token, writes a request into ITS OWN channel naming ITS OWN run, and the operation runs
+ * under the victim's grants, in the victim's workspace, with the victim's binding and credential,
+ * while the OUTPUT is delivered into the thief's directory. The orchestrator's own check compares
+ * two values the attacker supplies (`request.runId` against the directory), so only this comparison
+ * -- the token's run against the directory's run -- can refuse it.
  */
 export async function runBrokeredOperation(
-  input: { readonly runToken: string; readonly op: string; readonly params: unknown },
+  input: {
+    readonly runToken: string
+    readonly op: string
+    readonly params: unknown
+    /** The run whose channel directory this request was read from. See the paragraph above. */
+    readonly expectedRunId: string
+  },
   deps: { readonly execute: BrokerExecutor },
 ): Promise<Result<BrokerOutcome, ControlRefusal>> {
   const op = input.op
@@ -144,9 +163,13 @@ export async function runBrokeredOperation(
   if (!Object.hasOwn(BROKERED_OPERATIONS, op)) return refused(op, 'not_brokered')
   const operation = BROKERED_OPERATIONS[op as keyof typeof BROKERED_OPERATIONS]
 
-  // 2. Who is asking. The token, never a claim in the request line.
+  // 2. Who is asking. The token, never a claim in the request line -- and the run that token
+  //    resolves to must be the run whose channel this request came off. Both halves are one
+  //    question and both answer `identity_mismatch`: a token that resolves to nothing and a token
+  //    that resolves to SOMEBODY ELSE are the same lie told two ways, and neither has a run to file
+  //    an event against that the liar is entitled to write into.
   const run = await loadRunByToken(input.runToken)
-  if (run === null) return refused(op, 'identity_mismatch')
+  if (run === null || run.id !== input.expectedRunId) return refused(op, 'identity_mismatch')
 
   const record = async (reason: BrokerRefusalReason): Promise<Result<BrokerOutcome, ControlRefusal>> => {
     await appendEvent({

@@ -96,12 +96,14 @@ const WORKER_MODEL = 'sonnet'
 // (`packages/domain/src/permission/kinds.ts`) resolves it to for `claude_code`. Named here so the
 // printed summary and the README provenance quote the same two strings the seed uses.
 //
-// M52 R1 split the two. `DENIED_PERMISSION_KIND` is what the SEED writes -- `SlavePermission.tool`
-// is gone and the column is a closed enum now -- while `DENIED_CAPABILITY` is the vocabulary of the
-// RECORDING this script produces, which still spells the kind the old way. M52 Task 6 redacts the
-// recording and collapses the two back into one.
+// M52 R1 split the two and this script has collapsed them back (final review Minor 2): the seed
+// writes `SlavePermission.kind` -- `tool` is gone and the column is a closed enum now -- and a
+// FRESH capture emits that same kind in `run.tool_denied.payload.capability`, because the hook
+// resolves the tool to a kind and prints the kind. A second constant spelling it `'run tests'` was
+// the M19 recording's vocabulary, not this script's: it would `note()` a divergence on every
+// denial a new capture records. The old spelling survives only in the committed fixture and in the
+// historical substitution row beside it (`packages/providers/test/fixtures/README.md`).
 const DENIED_PERMISSION_KIND = 'run_commands'
-const DENIED_CAPABILITY = 'run tests'
 const EXPECTED_DENIED_TOOL = 'Bash'
 
 // The scenario, mirroring the hand-authored fixture it replaces: one allowed `Read` of a known
@@ -417,7 +419,7 @@ try {
   console.log(`workspace ${workspaceId}; slave ${slave.id}; task ${task.id}`)
   console.log(
     `matrix: deny ${JSON.stringify(DENIED_PERMISSION_KIND)} -> expected vendor tool ${EXPECTED_DENIED_TOOL}` +
-      ` (the recording still spells it ${JSON.stringify(DENIED_CAPABILITY)})`,
+      ` (a fresh recording spells the capability the same way the seed does)`,
   )
 
   // ---- The real daemon, driven exactly as `gate-m12-providers.mjs:493` drives it. The ONLY
@@ -484,10 +486,10 @@ try {
   }
   for (const event of toolDenied) {
     const payload = event.payload
-    if (payload?.tool !== EXPECTED_DENIED_TOOL || payload?.capability !== DENIED_CAPABILITY) {
+    if (payload?.tool !== EXPECTED_DENIED_TOOL || payload?.capability !== DENIED_PERMISSION_KIND) {
       note(
         `a run.tool_denied payload is ${JSON.stringify(payload)}, not ` +
-          `{"tool":"${EXPECTED_DENIED_TOOL}","capability":"${DENIED_CAPABILITY}"}`,
+          `{"tool":"${EXPECTED_DENIED_TOOL}","capability":"${DENIED_PERMISSION_KIND}"}`,
       )
     }
   }

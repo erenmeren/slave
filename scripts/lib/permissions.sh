@@ -118,8 +118,13 @@ PERMISSION_DENY_CAPABILITY=''
 #   separate uid or sandbox, which this milestone does not build. So: THE FILE GATE IS A GUARD
 #   AGAINST ACCIDENT AND AGAINST A SIBLING, NOT AGAINST A DETERMINED WORKER. The thing that is
 #   authoritative is the database: the broker (M52 Task 3) authorises every brokered operation
-#   against `SlaveRun.runTokenHash` on the row, never against this file, and a worker has no
-#   DATABASE_URL to reach that row with (`CHILD_ENV_ALLOW`, M52 R3).
+#   against `SlaveRun.runTokenHash` on the row, never against this file, and the worker's OWN
+#   PROCESS has no DATABASE_URL to reach that row with (`CHILD_ENV_ALLOW`, M52 R3). Said exactly,
+#   because the shorter sentence was false (M52 final review, Important 3): the verify and setup
+#   commands a project defines still run with the DAEMON's whole environment, and they run scripts
+#   out of the worktree the worker just wrote -- so a worker that edits `package.json` reaches a
+#   process that does hold `DATABASE_URL`. An allow-listed verify/setup environment is the next
+#   boundary and it is backlogged, not built.
 read_permission_verdict() {
   PERMISSION_DENY_TOOL=''
   PERMISSION_DENY_CAPABILITY=''
@@ -193,16 +198,27 @@ read_permission_verdict() {
           }
         }
       }
+      // THE VERDICT LINE IS TAB-DELIMITED AND ONE OF ITS FIELDS COMES FROM THE PAYLOAD (M52 final
+      // review, Important 2 -- MEASURED). The caller splits this line with `cut -f2`/`cut -f3`, so
+      // a `tool_name` carrying a TAB shifts the fields and lets the caller choose the CAPABILITY
+      // recorded against it: `{"tool_name":"Bash\tdeploy_release"}` yielded
+      // PERMISSION_DENY_CAPABILITY=deploy_release -- a kind no vendor tool can ever produce, which
+      // is how a worker would manufacture the denial evidence a `request_permission` proposal is
+      // built on. A newline would end the line entirely. Every field is stripped of the three
+      // characters that mean something to the format, including `kind`: the vocabulary it comes
+      // from is read out of a file the worker can write (erratum E17), so it is no more trusted
+      // than the payload. Stripped rather than escaped, because nothing downstream unescapes.
+      const field = (value) => String(value).replace(/[\t\n\r]/g, "");
       if (kind !== null) {
         // The decision belongs to the KIND, which is what makes ONE `network_fetch` grant open
         // every `mcp__*` tool rather than only the two an enumerable allow list can name.
         if (grants.includes(kind)) { process.stdout.write("ALLOW"); return; }
-        process.stdout.write("DENY\t" + tool + "\t" + kind); return;
+        process.stdout.write("DENY\t" + field(tool) + "\t" + field(kind)); return;
       }
       // Ungoverned, or unnamed. On Cursor (`known-tools`) that is the measured limitation and it
       // allows; on Claude it is the class an allow list exists to close.
       if (enforce === "known-tools") { process.stdout.write("ALLOW"); return; }
-      process.stdout.write("DENY\t" + (tool === null ? "unknown" : tool) + "\tungoverned_tool");
+      process.stdout.write("DENY\t" + (tool === null ? "unknown" : field(tool)) + "\tungoverned_tool");
     });
   ')
   local status=$?
