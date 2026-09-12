@@ -5,6 +5,7 @@ import {
   taskId as brandTaskId,
   parseReviewVerdict,
   REVIEW_RETRY_CAP,
+  type GuardrailKind,
   type RunId,
 } from '@slave-of-ai/domain'
 import { admitProvider, refusalText, resolveDenyList, runFilePaths, writePermissionsFile } from '@slave-of-ai/control'
@@ -302,7 +303,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
         taskId: task.id,
         actor: 'system',
         payload: {
-          guardrail: 'review_retry_cap_exhausted',
+          guardrail: 'review_retry_cap_exhausted' satisfies GuardrailKind,
           detail:
             `task "${task.title}" could not be reviewed: ${reviewAttempts} review run(s) in a row ` +
             'produced no usable verdict, and the review retry cap is spent. A human needs to look ' +
@@ -350,7 +351,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
         taskId: task.id,
         actor: 'system',
         payload: {
-          guardrail: 'no_reviewer',
+          guardrail: 'no_reviewer' satisfies GuardrailKind,
           detail: `task "${task.title}" is waiting in reviewing: no reviewer-role slave in this workspace`,
         },
       })

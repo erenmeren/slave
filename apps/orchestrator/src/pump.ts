@@ -4,7 +4,14 @@ import { promisify } from 'node:util'
 import { killWithEscalation } from '@slave-of-ai/control'
 import { toExecutionEvent } from '@slave-of-ai/db'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
-import { estimateCostUsd, type SlaveId, type RunId, type TaskId, type WorkspaceId } from '@slave-of-ai/domain'
+import {
+  estimateCostUsd,
+  type GuardrailKind,
+  type SlaveId,
+  type RunId,
+  type TaskId,
+  type WorkspaceId,
+} from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import {
   classifyGateEvent,
@@ -342,9 +349,14 @@ async function writeCheckpoint(input: {
       // literally zero -- `run.costUsd` is still null mid-run, but `tokensIn`/`tokensOut` are now
       // real by the time a pause happens, and a priced model turns them into a number a person can
       // read. Order is the rule the whole milestone runs on: the ESTIMATE is consulted only because
-      // nothing was reported, and it can never overwrite a reported figure, because a run with a
-      // reported figure is a run that already concluded.
-      cumulativeCostUsd: estimated ?? run.costUsd ?? 0,
+      // nothing was reported, and it can never overwrite a reported figure.
+      //
+      // REPORTED FIRST, in the expression and not only in the argument (final wave, M2). The
+      // reading used to be `estimated ?? run.costUsd ?? 0`, which is the same number today for one
+      // reason and one only -- a paused run has not concluded, so `costUsd` is null. That is an
+      // invariant of another file; R5's rule is local, so the `??` chain here reads in the same
+      // order `costProvenanceOf` does.
+      cumulativeCostUsd: run.costUsd ?? estimated ?? 0,
       cumulativeTokens: (run.tokensIn ?? 0) + (run.tokensOut ?? 0),
       pauseReason: input.pauseReason,
       requestedBy: input.requestedBy,
@@ -362,7 +374,7 @@ async function writeCheckpoint(input: {
       // Settled with the `create` branch above (M12 Task 9, ruling R4): NOT NULL stays, because
       // nothing consumes this figure for a money decision.
       // M51 R5 gives it a real writer here too, identically -- see the `create` branch above.
-      cumulativeCostUsd: estimated ?? run.costUsd ?? 0,
+      cumulativeCostUsd: run.costUsd ?? estimated ?? 0,
       cumulativeTokens: (run.tokensIn ?? 0) + (run.tokensOut ?? 0),
       pauseReason: input.pauseReason,
       requestedBy: input.requestedBy,
@@ -853,7 +865,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         }
         denied.push(event.toolUseId)
         await emit('guardrail.tripped', 'system', {
-          guardrail: 'permission_mode',
+          guardrail: 'permission_mode' satisfies GuardrailKind,
           detail: `${event.toolName} was denied by the permission mode (${event.toolUseId})`,
         })
         break
@@ -1026,7 +1038,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
 
             // Two events, because the run failed *and* a guardrail is what failed it (§13.1).
             await emit('run.failed', 'system', { reason })
-            await emit('guardrail.tripped', 'system', { guardrail: 'pause_gate', detail: reason })
+            await emit('guardrail.tripped', 'system', { guardrail: 'pause_gate' satisfies GuardrailKind, detail: reason })
             break
           }
 

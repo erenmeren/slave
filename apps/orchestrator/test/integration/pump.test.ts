@@ -2185,6 +2185,29 @@ describe('pumpRun and what M51 made it persist', () => {
     expect(checkpoint.cumulativeTokens).toBe(1_000_000)
   })
 
+  it('lets a REPORTED figure stand over the estimate, at the checkpoint too', async (): Promise<void> => {
+    // Final wave, M2. `run.costUsd ?? estimated ?? 0`, not the other way round: the ordering was
+    // defended only by the invariant that a paused run has no reported cost, and R5's rule is
+    // "reported wins, always and first" -- which has to hold at the site, not by argument about
+    // which sites can be reached.
+    await prisma.slaveRun.update({
+      where: { id: ids.runId },
+      data: { model: 'claude-opus-5', costUsd: 2 },
+    })
+    await pumpRun({
+      ...ids,
+      spawn: SPAWN,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'usage', input: 1_000_000, output: 0 },
+        ...pauseSequence(),
+      ]),
+    })
+    const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: ids.runId } })
+    // The $2.00 that was reported, never the $5.00 those tokens would have estimated.
+    expect(checkpoint.cumulativeCostUsd).toBe(2)
+  })
+
   it('falls back to the reported cost, then to zero, when there is nothing to estimate from', async (): Promise<void> => {
     await pumpRun({
       ...ids,

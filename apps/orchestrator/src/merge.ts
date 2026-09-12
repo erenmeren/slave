@@ -3,6 +3,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import {
   nextMergeCandidate,
   taskId as brandTaskId,
+  type GuardrailKind,
   type MergeCandidate,
   type WorkspaceId,
 } from '@slave-of-ai/domain'
@@ -70,7 +71,7 @@ async function failMerge(input: {
       taskId: input.taskId,
       actor: 'system',
       payload: {
-        guardrail: 'merge_failure',
+        guardrail: 'merge_failure' satisfies GuardrailKind,
         detail: `task ${input.taskKey} failed to merge twice: ${input.reason}`,
       },
     })

@@ -18,6 +18,7 @@ import {
   userSupervisorStatus,
   userTaskStatus,
   type CostRow,
+  type RunStatus,
   type SlaveLifecycle,
   type TaskStatus,
   type UserSupervisorState,
@@ -151,8 +152,11 @@ export interface ProjectBrief {
      */
     readonly estimatedUsd: number
     /**
-     * M51 R5, **Upper bound**: `spentUsd` plus every concluded unmeasured RUN at
-     * `RUN_UNMEASURED_CAP_USD`. A DISPLAY figure and nothing charges it -- see
+     * M51 R5, **Upper bound**: `spentUsd` plus, for every row that reported no cost, the LARGER of
+     * the concluded-unmeasured cap and that row's own estimate (final wave, I3/E20). Computed over
+     * exactly the rows `estimatedUsd` sums, which is what makes `upperBoundUsd >= estimatedUsd` a
+     * property of the arithmetic rather than a hope: a bound that is undercut by a figure on the
+     * same tile is not a bound. A DISPLAY figure and nothing charges it -- see
      * `RUN_UNMEASURED_CAP_USD`'s own docstring for why charging it would move the budget guardrail
      * and `gate:m38-supervisor` stage 3 with it.
      */
@@ -345,7 +349,14 @@ export async function buildProjectBrief(
         spend.supervisorUnmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD,
       // A DISPLAY figure, computed HERE and never inside `workspaceSpend` (spec R5): charging an
       // unmeasured run would let a budget halt fire on spending nobody measured.
-      upperBoundUsd: spend.spentUsd + runSpend.unknownRuns * RUN_UNMEASURED_CAP_USD,
+      //
+      // Over the SAME rows `estimatedUsd` sums, one `max` per row (final wave, I3/E20). It used to
+      // be `spentUsd + unknownRuns * cap`, which is a different SET of rows from the estimate
+      // directly above it, and a bound computed over fewer rows than the figure beside it can read
+      // lower than that figure: an unmeasured run whose tokens price above a dollar undercut it,
+      // and a LIVE run's estimate was in no bound at all, because `unknownRuns` counts concluded
+      // runs only. The invariant `upperBoundUsd >= estimatedUsd` is pinned in `brief.test.ts`.
+      upperBoundUsd: spend.spentUsd + spendRows.reduce((total, row) => total + boundOf(row), 0),
       // Two different facts, kept apart: a CALL is charged at the cap and is inside `spentUsd`; a
       // RUN nobody measured is in no total at all (`sumSpend`'s own reading).
       unmeasuredCalls: spend.supervisorUnmeasuredCalls,
@@ -380,6 +391,32 @@ export async function buildProjectBrief(
  */
 function tokensOf(row: CostRow): { readonly input: number; readonly output: number } | null {
   return row.tokensIn === null || row.tokensOut === null ? null : { input: row.tokensIn, output: row.tokensOut }
+}
+
+/**
+ * One run's contribution to the UPPER BOUND (final wave, I3/E20).
+ *
+ * Zero for a row that reported a cost -- that money is already inside `spentUsd` and adding
+ * anything for it would double-count it. For a row that reported nothing, the LARGER of two
+ * readings of the same hole, because a bound is the worst case and not a preference between them:
+ *
+ *   - `RUN_UNMEASURED_CAP_USD`, but only when the run actually SPAWNED and CONCLUDED -- `sumSpend`'s
+ *     own rule, restated here for one row rather than re-derived: a run in flight is unfinished
+ *     rather than unmeasured, and a run that never spawned spent nothing, so neither gets the cap.
+ *   - The row's own token estimate, which a live run has an honest one of and which can be many
+ *     times the cap on a long run.
+ *
+ * This is the whole of I3: the estimate beside it is summed over EVERY row, so a bound that skipped
+ * the live ones, or that took a flat dollar where the tokens said ten, could print lower than the
+ * figure directly above it on the tile.
+ */
+function boundOf(row: CostRow): number {
+  if (row.costUsd !== null) return 0
+  // The cast `sumSpend` uses for the same reason: `NON_TERMINAL_RUN_STATUSES` is narrower than
+  // `RunStatus`, so `includes` refuses the terminal statuses this predicate exists to recognise.
+  const inFlight = (NON_TERMINAL_RUN_STATUSES as readonly RunStatus[]).includes(row.status)
+  const concludedAndSpawned = row.provider !== null && !inFlight
+  return Math.max(concludedAndSpawned ? RUN_UNMEASURED_CAP_USD : 0, estimateCostUsd(row.model, tokensOf(row)) ?? 0)
 }
 
 async function latestVerifiedRows(

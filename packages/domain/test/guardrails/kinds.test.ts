@@ -4,6 +4,9 @@ import { DEFAULT_GUARDRAIL_LIMITS, evaluateGuardrails } from '../../src/guardrai
 
 describe('GUARDRAIL_KINDS', () => {
   it('is the closed list of every spelling this codebase writes, plus M51 behavioural_loop', () => {
+    // Eighteen, not seventeen (final wave, I1/E21): `verify.ts` writes `verify_not_configured` and
+    // the inventory R4 was written from missed it, so the activity card printed the raw key.
+    expect(GUARDRAIL_KINDS).toHaveLength(18)
     expect(GUARDRAIL_KINDS).toEqual([
       'emergency_stop',
       'concurrency',
@@ -22,6 +25,7 @@ describe('GUARDRAIL_KINDS', () => {
       'merge_failure',
       'verify_could_not_run',
       'verify_failed',
+      'verify_not_configured',
     ])
   })
 

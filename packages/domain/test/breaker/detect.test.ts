@@ -227,6 +227,18 @@ describe('detectBehaviour: the progress triple is the CALLER’s beat, never re-
       suppressed: true,
     })
   })
+
+  it('leaves a suppressed beat’s LEVEL exactly where it found it, at the source of the contract', () => {
+    // Final wave, M1. The sweep already refuses to write a level on a suppressed beat
+    // (`!verdict.suppressed`), so the rung was safe -- but the verdict itself carried a
+    // DE-ESCALATED level, which makes the contract a property of the caller rather than of the
+    // function that states it. A beat that measured nothing may not propose a rung.
+    for (const level of ['none', 'steered', 'constrained'] as const) {
+      const verdict = detectBehaviour(WINDOW([call('Bash:aaaa', 'pending')], { level, progress: quiet, quietBeats: 9 }))
+      expect(verdict.suppressed, level).toBe(true)
+      expect(verdict.level, level).toBe(level)
+    }
+  })
 })
 
 describe('detectBehaviour: the ladder', () => {

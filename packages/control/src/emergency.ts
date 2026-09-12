@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { type Result, err, ok } from '@slave-of-ai/domain'
+import { type GuardrailKind, type Result, err, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { pauseActiveRuns } from './pause.js'
 import type { Principal } from './principal.js'
@@ -42,7 +42,7 @@ export async function emergencyStop(
       type: 'guardrail.tripped',
       workspaceId,
       actor: 'human', // an operator did this, not the system
-      payload: { guardrail: 'emergency_stop', detail: `engaged by ${requestedBy}` },
+      payload: { guardrail: 'emergency_stop' satisfies GuardrailKind, detail: `engaged by ${requestedBy}` },
       userId: principal?.userId ?? null,
     })
   }

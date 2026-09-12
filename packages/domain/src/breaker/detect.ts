@@ -170,7 +170,8 @@ export interface BreakerVerdict {
  * earlier in the run would otherwise silence the breaker permanently ({@link isMidCall}).
  *
  * Such a beat is reported `suppressed`, which is neither quiet nor progress: the sweep leaves
- * `breakerQuietBeats` exactly as it found it.
+ * `breakerQuietBeats` exactly as it found it, and the verdict's own `level` is the STORED one,
+ * unchanged -- a beat that measured nothing proposes no rung, up or down (final wave, M1).
  *
  * ## The three arms, in the order they are consulted
  *
@@ -196,7 +197,12 @@ export interface BreakerVerdict {
  */
 export function detectBehaviour(window: BreakerWindow): BreakerVerdict {
   const suppressed = isMidCall(window.rows)
-  if (suppressed) return { level: deEscalate(window.level), trip: null, quiet: false, suppressed: true }
+  // The stored level, UNCHANGED -- never `deEscalate` (final wave, M1). A suppressed beat measured
+  // nothing, and the rung it leaves behind has to be the one it found: the sweep's own
+  // `!verdict.suppressed` guard already refused to write a de-escalated level here, so the contract
+  // held by the caller's grace rather than at the source that states it. Saying it here is what
+  // makes a second caller safe.
+  if (suppressed) return { level: window.level, trip: null, quiet: false, suppressed: true }
   const quiet = !window.progress.distinctKey && !window.progress.worktreeChanged && !window.progress.output
   const trip = tripOf(window, quiet)
   if (trip === null) return { level: deEscalate(window.level), trip: null, quiet, suppressed: false }

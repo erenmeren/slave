@@ -166,6 +166,7 @@ describe('buildProjectBrief', () => {
     expect(withCall.cost.upperBoundUsd - withCall.cost.spentUsd).toBeCloseTo(RUN_UNMEASURED_CAP_USD, 10)
     // Nothing is priceable yet, so the estimate is the total with no hole filled in.
     expect(withCall.cost.estimatedUsd).toBeCloseTo(withCall.cost.spentUsd, 10)
+    expect(withCall.cost.upperBoundUsd).toBeGreaterThanOrEqual(withCall.cost.estimatedUsd)
   })
 
   /**
@@ -194,6 +195,15 @@ describe('buildProjectBrief', () => {
     await prisma.slaveRun.create({
       data: { slaveId, status: 'failed', costUsd: null, provider: 'claude_code', terminalAt: new Date(), endedAt: new Date() },
     })
+    // LIVE, and already expensive: two megatokens = $10.00. It is in the ESTIMATE (a run in flight
+    // has an honest estimate) and in NO version of `unknownRuns`, which counts concluded runs only
+    // -- so before the final wave's I3 it was a figure the "upper bound" beside it did not cover.
+    await prisma.slaveRun.create({
+      data: {
+        slaveId, status: 'working', costUsd: null, provider: 'claude_code', model: 'claude-opus-5',
+        tokensIn: 2_000_000, tokensOut: 0,
+      },
+    })
 
     const brief = await buildProjectBrief(workspaceId)
     expect(brief).not.toBeNull()
@@ -203,13 +213,19 @@ describe('buildProjectBrief', () => {
     expect(brief.cost.spentUsd).toBe(2)
     expect(brief.cost.actualUsd).toBe(2)
     expect(brief.cost.measuredUsd).toBe(2)
-    // $2.00 reported + $5.00 priced + $0 for the run nobody can price. The reported run contributes
-    // its REPORTED figure, not the $10.00 its tokens would have estimated.
-    expect(brief.cost.estimatedUsd).toBeCloseTo(7, 10)
-    // One concluded run nobody measured, at its display cap -- and the run that was ESTIMATED is
-    // not one of them, because `sumSpend` counts a null `costUsd`, not a null estimate.
+    // $2.00 reported + $5.00 priced + $0 for the run nobody can price + $10.00 for the live one. The
+    // reported run contributes its REPORTED figure, not the $10.00 its own tokens would estimate.
+    expect(brief.cost.estimatedUsd).toBeCloseTo(17, 10)
+    // TWO concluded runs nobody measured (final wave, M6): `sumSpend` counts a null `costUsd` on a
+    // spawned, concluded run, and being priceable is not being measured -- so the estimable run is
+    // one of them too. The live run is not: a run in flight is unfinished, not unmeasured.
     expect(brief.cost.unmeasuredRuns).toBe(2)
-    expect(brief.cost.upperBoundUsd).toBeCloseTo(2 + 2 * RUN_UNMEASURED_CAP_USD, 10)
+    // The bound, over the SAME rows the estimate sums (final wave, I3/E20): per row with no
+    // reported cost, whichever is larger of the concluded-unmeasured cap and the row's own
+    // estimate. $2.00 reported + max($1, $5) + max($1, $0) + max($0, $10).
+    expect(brief.cost.upperBoundUsd).toBeCloseTo(2 + 5 + RUN_UNMEASURED_CAP_USD + 10, 10)
+    // The invariant the whole fix exists for: no figure on this tile may exceed the bound beside it.
+    expect(brief.cost.upperBoundUsd).toBeGreaterThanOrEqual(brief.cost.estimatedUsd)
   })
 
   it('answers null for a project that does not exist', async (): Promise<void> => {

@@ -6,6 +6,7 @@ import {
   measureAdherence,
   parsePlanGraph,
   type CapabilityRecord,
+  type GuardrailKind,
   type RunId,
   type Runbook,
 } from '@slave-of-ai/domain'
@@ -449,7 +450,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
         workspaceId: deps.workspaceId,
         actor: 'system',
         payload: {
-          guardrail: 'no_planner',
+          guardrail: 'no_planner' satisfies GuardrailKind,
           detail: 'workspace has a goal and no tasks: no manager-role slave to plan it',
         },
       })

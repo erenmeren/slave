@@ -2,7 +2,14 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { runbookForWorkspace } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { parseHandoffContract, runId as brandRunId, taskId as brandTaskId, type RunId, type TaskId } from '@slave-of-ai/domain'
+import {
+  parseHandoffContract,
+  runId as brandRunId,
+  taskId as brandTaskId,
+  type GuardrailKind,
+  type RunId,
+  type TaskId,
+} from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { promote } from './memory.js'
 import { concludePlanning } from './planning.js'
@@ -578,7 +585,12 @@ export async function advance(input: AdvanceInput): Promise<void> {
   // task's budget on the orchestrator's problem, and with `maxAttempts` full slave runs per task it
   // would spend the workspace's too.
   if (input.result.kind !== 'failed') {
-    const guardrail = input.result.kind === 'not_configured' ? 'verify_not_configured' : 'verify_could_not_run'
+    // `satisfies GuardrailKind`, like every other `guardrail.tripped` producer (final wave, I2).
+    // `verify_not_configured` was written here for a whole milestone without being in the closed
+    // list, which is exactly the mistake this clause turns into a build error.
+    const guardrail = (
+      input.result.kind === 'not_configured' ? 'verify_not_configured' : 'verify_could_not_run'
+    ) satisfies GuardrailKind
     await prisma.task.update({
       where: { id: task.id },
       data: { status: 'blocked', activeRunId: null },

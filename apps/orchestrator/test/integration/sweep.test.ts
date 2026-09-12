@@ -9,6 +9,7 @@ import type { WorktreeProbe } from '@slave-of-ai/control'
 import {
   BREAKER_BEAT_MS,
   CONSTRAIN_GRACE_CALLS,
+  NO_PROGRESS_BEATS,
   REPEAT_TRIP_COUNT,
   workspaceId as brandWorkspaceId,
 } from '@slave-of-ai/domain'
@@ -1211,6 +1212,75 @@ describe('the breaker beat (M51 R2)', () => {
     })
     await sweep(deps)
     expect((await reload(run)).resumeRequestedAt).not.toBeNull()
+  })
+
+  /**
+   * The run a steer parked and never got out of (final wave, I4/E22).
+   *
+   * `steerRun` claims `pause_requested` and the pause lands at the run's NEXT tool call -- which a
+   * `no_progress` run is by definition not making. Without this arm the ladder's own first rung
+   * strands the trip that means "the worker has stopped", and only `run_timeout` ever ends it.
+   */
+  const givenStrandedSteer = async (over: { readonly pausedAgo: number }): Promise<{ id: string }> => {
+    const run = await givenBreakerRun({
+      status: 'pause_requested',
+      breakerLevel: 'steered',
+      breakerTrips: 1,
+      breakerSteers: 1,
+      pauseReason: 'guardrail',
+      queuedMessage: 'stop and rethink',
+      worktreePath: repoPath,
+    })
+    await appendEvent({
+      type: 'run.pause_requested',
+      workspaceId: fixture.workspaceId,
+      taskId: fixture.taskId,
+      slaveId: fixture.slaveId,
+      runId: run.id,
+      actor: 'system',
+      payload: { requestedBy: 'circuit breaker' },
+    })
+    await prisma.executionEvent.updateMany({
+      where: { runId: run.id, type: 'run_pause_requested' },
+      data: { ts: new Date(Date.now() - over.pausedAgo) },
+    })
+    return run
+  }
+
+  it('STOPS a steer that never landed, rather than leaving the ladder stranded', async (): Promise<void> => {
+    // The pause was asked for two beats ago and the run has made no tool call since, so the gate it
+    // rides on is never going to fire. Through the EXISTING behavioural stop path: claim
+    // `stopping`, cancel, `guardrail.tripped` -- and no terminal row, so the pump concludes it
+    // `failed` and the failure streak counts it, exactly as every other rung of this ladder does.
+    const run = await givenStrandedSteer({ pausedAgo: NO_PROGRESS_BEATS * BREAKER_BEAT_MS + 1_000 })
+
+    const report = await sweep(deps)
+
+    expect(report.breakerStopped).toEqual([run.id])
+    const after = await reload(run)
+    expect(after.status).toBe('stopping')
+    expect(after.terminalAt).toBeNull()
+    expect(cancelled).toEqual([run.id])
+    const [tripped] = await eventsOfType(run.id, 'guardrail_tripped')
+    expect((tripped?.payload as { guardrail: string }).guardrail).toBe('behavioural_loop')
+    // The trip and its detail, through `stopForBehaviour`'s own unchanged sentence -- one stop path
+    // for the whole ladder, so the wording is that path's and not this arm's.
+    expect((tripped?.payload as { detail: string }).detail).toContain('no_progress, the pause never landed')
+  })
+
+  it('leaves a steered run alone while it is still making tool calls', async (): Promise<void> => {
+    // The negative control, and the reason the arm reads the call log at all: a run that is still
+    // calling tools is one whose PreToolUse gate is about to fire, so the pause IS landing and the
+    // aged timestamp says nothing.
+    const run = await givenStrandedSteer({ pausedAgo: NO_PROGRESS_BEATS * BREAKER_BEAT_MS + 1_000 })
+    await call(run.id, { tool: 'Bash', args: 'npm test' }, 'toolu_after_pause')
+
+    const report = await sweep(deps)
+
+    expect(report.breakerStopped).toEqual([])
+    expect((await reload(run)).status).toBe('pause_requested')
+    expect(cancelled).toEqual([])
+    expect(await eventsOfType(run.id, 'guardrail_tripped')).toHaveLength(0)
   })
 
   it('leaves the level exactly as it found it on a SUPPRESSED beat', async (): Promise<void> => {

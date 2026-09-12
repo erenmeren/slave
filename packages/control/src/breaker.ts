@@ -178,6 +178,13 @@ export async function constrainRun(
 
   // The sentence first, its refusal swallowed: `steerRun` refuses a run that moved under it, and
   // this rung's job -- taking the budget away -- must happen either way.
+  //
+  // It goes through `steerRun`, so it INCREMENTS `breakerSteers` and spends one of the run's
+  // `STEERS_PER_RUN_MAX` (final wave, M3). Deliberate, and the cap's own docstring now says so: the
+  // cap bounds how many sentences this run has been sent, not how many times the STEER rung was
+  // climbed. The worker has been interrupted twice by the time it reaches here, which is exactly
+  // what the cap is counting -- and a relapse after that skips straight to this rung, which is the
+  // ladder working rather than a rung being lost.
   if (text !== null) await steerRun(run.id, text)
 
   const capped = await prisma.$executeRaw`

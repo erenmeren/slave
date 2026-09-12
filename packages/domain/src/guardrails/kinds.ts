@@ -1,15 +1,23 @@
 /**
  * Every guardrail this codebase can trip, as data (M51 R4).
  *
- * Until this milestone `GuardrailBreach.guardrail` was a bare `string` and sixteen spellings lived
- * as literals across nine production files -- `evaluate.ts` (six), `apps/orchestrator/src/sweep.ts`
- * (`run_timeout`, `tool_call_ceiling`), `pump.ts` (`pause_gate`, `permission_mode`), `planning.ts`
- * (`no_planner`), `review.ts` (`no_reviewer`, `review_retry_cap_exhausted`), `merge.ts`
- * (`merge_failure`), `tick.ts` (`budget_warning`), `packages/control/src/emergency.ts`
- * (`emergency_stop`) and `scripts/gate-m38-supervisor.mjs` (`verify_could_not_run`,
- * `verify_failed`). One typo among them produced a breach nobody could filter for and nobody could
- * label, and `REVIEW_CAP_GUARDRAIL` (`../supervisor/constants.ts`) was the only one of the sixteen
- * that had ever been given a name.
+ * Until this milestone `GuardrailBreach.guardrail` was a bare `string` and seventeen spellings
+ * lived as literals across ten production files -- `evaluate.ts` (six),
+ * `apps/orchestrator/src/sweep.ts` (`run_timeout`, `tool_call_ceiling`), `pump.ts` (`pause_gate`,
+ * `permission_mode`), `planning.ts` (`no_planner`), `review.ts` (`no_reviewer`,
+ * `review_retry_cap_exhausted`), `merge.ts` (`merge_failure`), `tick.ts` (`budget_warning`),
+ * `verify.ts` (`verify_could_not_run`, `verify_not_configured`) and
+ * `packages/control/src/emergency.ts` (`emergency_stop`), with `verify_failed` spelled only in
+ * `scripts/gate-m38-supervisor.mjs`. One typo among them produced a breach nobody could filter for
+ * and nobody could label, and `REVIEW_CAP_GUARDRAIL` (`../supervisor/constants.ts`) was the only
+ * one of them that had ever been given a name.
+ *
+ * The first cut of this list was written from an inventory that MISSED `verify_not_configured`
+ * (final wave, I1/E21): a live spelling outside the list is one the activity card prints raw and
+ * `gate:m44`'s derived blocklist cannot see, because the blocklist is derived from this list. The
+ * remedy that makes the omission impossible to repeat is not vigilance but `satisfies
+ * GuardrailKind` at every `guardrail.tripped` payload site, which is now there -- see the note
+ * below about typing WRITERS rather than the log.
  *
  * The order is the one a reader meets them in: the workspace-wide stops first, then the two
  * breakers, then the per-run ceilings, then the gate and the staffing holes, then verify.
@@ -43,6 +51,11 @@ export const GUARDRAIL_KINDS = [
   'merge_failure',
   'verify_could_not_run',
   'verify_failed',
+  /** The eighteenth (final wave, I1): `apps/orchestrator/src/verify.ts` writes it when the
+   *  WORKSPACE configured no verify commands at all -- a halt that affects every task here, not
+   *  this run's environment, which is what `verify_could_not_run` above means. Last in the list
+   *  because it was added last; the order is the one a reader met them in. */
+  'verify_not_configured',
 ] as const
 
 export type GuardrailKind = (typeof GUARDRAIL_KINDS)[number]
@@ -50,7 +63,7 @@ export type GuardrailKind = (typeof GUARDRAIL_KINDS)[number]
 /**
  * What each guardrail is called when a person reads it (`docs/ia.md` rule 3).
  *
- * `Record<GuardrailKind, string>` is load-bearing: an eighteenth kind fails the build here rather
+ * `Record<GuardrailKind, string>` is load-bearing: a nineteenth kind fails the build here rather
  * than turning up on the activity feed as an identifier. Every label is a SENTENCE FRAGMENT about
  * what happened, not a restatement of the key -- the breach's own `detail` carries the numbers.
  */
@@ -72,4 +85,5 @@ export const GUARDRAIL_LABEL: Record<GuardrailKind, string> = {
   merge_failure: 'Merge failed',
   verify_could_not_run: 'Verify could not run',
   verify_failed: 'Verify failed',
+  verify_not_configured: 'Verify not configured',
 }

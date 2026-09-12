@@ -10,9 +10,11 @@ import {
   BREAKER_BEAT_MS,
   BREAKER_WINDOW,
   CONSTRAIN_GRACE_CALLS,
+  NO_PROGRESS_BEATS,
   type BreakerRow,
   type BreakerVerdict,
   detectBehaviour,
+  type GuardrailKind,
   runId as brandRunId,
   steerTextFor,
   type RunId,
@@ -536,7 +538,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
       runId: run.id,
       actor: 'system',
       payload: {
-        guardrail: timedOutNow ? 'run_timeout' : 'tool_call_ceiling',
+        guardrail: (timedOutNow ? 'run_timeout' : 'tool_call_ceiling') satisfies GuardrailKind,
         detail:
           `cancelling this run: ${breaches.join('; ')}` +
           (cancelError === null
@@ -618,6 +620,9 @@ async function deliverBreakerSteers(deps: SweepDeps): Promise<number> {
  *
  * ## The order, and why each step is where it is
  *
+ * 0. **The stranded steer** ({@link stopStrandedSteer}), ahead of everything including the
+ *    `working` filter, because the run it is for is the one no other line here will look at: a
+ *    steer whose pause never landed. Final wave, I4/E22.
  * 1. **The beat gate.** `breakerBeatAt` within {@link BREAKER_BEAT_MS} returns immediately, before
  *    any query and before any probe. Without it a tripping run would climb steer -> constrain ->
  *    stop in three seconds, which is a kill with two extra events rather than a ladder.
@@ -653,6 +658,9 @@ async function beatBreaker(
     readonly taskId: string | null
     readonly slaveId: string
     readonly status: RunStatus
+    /** `SlaveRun.pauseReason`, as a bare string: only `'guardrail'` is read here, and
+     *  {@link stopStrandedSteer} is the one place that reads it. */
+    readonly pauseReason: string | null
     readonly provider: string | null
     readonly worktreePath: string | null
     readonly startedAt: Date
@@ -663,6 +671,10 @@ async function beatBreaker(
     readonly breakerQuietBeats: number
   },
 ): Promise<BreakerMove | null> {
+  // BEFORE the `working` filter, and the only thing that runs before it (final wave, I4/E22): the
+  // run this arm is for is by definition NOT working, and every line below this one refuses it.
+  if (await stopStrandedSteer(deps, run)) return 'breakerStopped'
+
   // `working` and nothing else (fix round 1, Critical 2). `SWEEPABLE` also holds `starting`,
   // `pause_requested` and `resuming`, and a run in any of them is not producing evidence about
   // anything -- but the one that MATTERS is `pause_requested`, which is where `steerRun` has just
@@ -800,6 +812,81 @@ async function appendBreakerEvent(
 const BREAKER_DETAIL_MAX = 200
 
 /**
+ * How long a steer may sit in `pause_requested` before the ladder gives up on it (final wave,
+ * I4/E22).
+ *
+ * `NO_PROGRESS_BEATS * BREAKER_BEAT_MS` and not a number of its own, because it is the same
+ * judgement `no_progress` already makes: two beats of silence is a worker that has stopped. The run
+ * this measures has been silent for at least that long BY CONSTRUCTION -- it was steered, and the
+ * pause has not landed since.
+ */
+const STRANDED_STEER_MS = NO_PROGRESS_BEATS * BREAKER_BEAT_MS
+
+/**
+ * The steer that never landed, stopped rather than left to `run_timeout` (final wave, I4/E22).
+ *
+ * ## The hole this closes
+ *
+ * A steer pauses the run through the PreToolUse gate, and the gate fires on the run's next TOOL
+ * CALL. A `no_progress` run is, by definition, making none. So the trip that means "the worker has
+ * stopped" parks the run in `pause_requested` -- where {@link beatBreaker} deliberately refuses to
+ * beat it (a beat there would de-escalate a `steered` run to `none` and strand its queued sentence)
+ * -- and CONSTRAIN and STOP become unreachable for the one trip that most needs them. Only the
+ * workspace's `runTimeoutMs`, which is hours, ever ends such a run.
+ *
+ * ## The reading, and why each clause is in it
+ *
+ * `pause_requested` with `pauseReason: 'guardrail'` and a breaker level above `none` is this
+ * ladder's own pause and can be nothing else: a person's pause is `'human'`, and `tick.ts`'s budget
+ * fan-out is the only other `'guardrail'` pause and never touches `breakerLevel`. The CLOCK is the
+ * `run.pause_requested` event's `ts`, because `SlaveRun` has no `pauseRequestedAt` column and this
+ * arm is not worth one: `requestPause` writes that event in the same call that claims the status,
+ * so it is always there for a steer. A run with NO such event is left alone -- no evidence is never
+ * evidence, the rule the worktree clock already runs on (D17).
+ *
+ * A `run.tool_call` written SINCE the pause was asked for means the gate is about to fire, so the
+ * pause IS landing and the aged timestamp says nothing. That is the negative, and it is what keeps
+ * this arm from shooting a run whose sentence is one call away from being delivered.
+ *
+ * ## The act is the EXISTING one
+ *
+ * {@link stopForBehaviour}, unchanged: claim `stopping`, cancel the child, write
+ * `guardrail.tripped { behavioural_loop }` and NO terminal row, so the pump concludes it `failed`,
+ * `verify.ts` reworks the task and the `circuit_breaker` streak counts it. A second terminal writer
+ * in this file is exactly what the stop rung was designed not to be.
+ */
+async function stopStrandedSteer(
+  deps: SweepDeps,
+  run: {
+    readonly id: string
+    readonly taskId: string | null
+    readonly slaveId: string
+    readonly status: RunStatus
+    readonly pauseReason: string | null
+    readonly provider: string | null
+    readonly breakerLevel: 'none' | 'steered' | 'constrained'
+  },
+): Promise<boolean> {
+  if (run.status !== 'pause_requested' || run.pauseReason !== 'guardrail' || run.breakerLevel === 'none') return false
+
+  const pause = await db.executionEvent.findFirst({
+    where: { runId: run.id, type: 'run_pause_requested' },
+    orderBy: { seq: 'desc' },
+    select: { ts: true },
+  })
+  if (pause === null) return false
+  if (Date.now() - pause.ts.getTime() < STRANDED_STEER_MS) return false
+
+  const called = await db.executionEvent.findFirst({
+    where: { runId: run.id, type: 'run_tool_call', ts: { gt: pause.ts } },
+    select: { seq: true },
+  })
+  if (called !== null) return false
+
+  return stopForBehaviour(deps, run, 'no_progress', 'the pause never landed')
+}
+
+/**
  * The STOP rung: the sweep's own claim/cancel shape, verbatim from the hard-limit path above.
  *
  * **No terminal row**, for `run_timeout`'s exact reason: `pump.ts` concludes a run claimed into
@@ -850,7 +937,7 @@ async function stopForBehaviour(
     runId: run.id,
     actor: 'system',
     payload: {
-      guardrail: 'behavioural_loop',
+      guardrail: 'behavioural_loop' satisfies GuardrailKind,
       detail:
         `cancelling this run: it is going in circles (${trip}, ${detail})` +
         (cancelError === null

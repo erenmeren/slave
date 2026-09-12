@@ -16,6 +16,7 @@ import {
   runId as brandRunId,
   taskId as brandTaskId,
   slaveId as brandSlaveId,
+  type GuardrailKind,
   type SlaveId,
   type RunId,
   type TaskId,
@@ -299,7 +300,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
         type: 'guardrail.tripped',
         workspaceId: deps.workspaceId,
         actor: 'system',
-        payload: { guardrail: 'budget_warning', detail: warning.detail },
+        payload: { guardrail: 'budget_warning' satisfies GuardrailKind, detail: warning.detail },
       })
     }
   }

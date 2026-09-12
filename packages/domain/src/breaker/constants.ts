@@ -68,12 +68,20 @@ export const BREAKER_COOLDOWN_MS = 120_000
 export const CONSTRAIN_GRACE_CALLS = 30
 
 /**
- * How many times one run may be STEERED, ever.
+ * How many SENTENCES one run may be sent, ever.
  *
  * De-escalation is what makes this cap necessary rather than decorative: a run that trips, is
  * steered, recovers for a beat and trips again is back at level `none` with a fresh rung available.
  * `SlaveRun.breakerSteers` does not reset on the way down, so the third trip skips the sentence it
  * has already been told twice and constrains instead.
+ *
+ * **A CONSTRAIN rung spends one too** (final wave, M3). `constrainRun` sends the same sentence
+ * before it writes the cap -- spec R3: a constrained worker that was never told why would hit the
+ * ceiling in silence -- and it sends it through `steerRun`, which increments the counter. So this
+ * is a bound on what the run has been TOLD and not on how many times the STEER rung was climbed,
+ * and a run that trips three times can legitimately reach `constrained` on the second. That is the
+ * behaviour, said out loud here rather than left as an inference from two files: the worker really
+ * has been interrupted twice, and a third interruption is the one this cap exists to refuse.
  */
 export const STEERS_PER_RUN_MAX = 2
 
