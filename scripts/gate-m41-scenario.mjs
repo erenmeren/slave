@@ -437,21 +437,25 @@ try {
     console.log(`slave ${slave.name} ${slave.id} runtimeRoles ${JSON.stringify(slave.runtimeRoles)}`)
   }
 
-  /** The environment a child of this gate gets. `--ask-on-task` and `--replan-cancel` ride on
-   *  `SLAVEOFAI_CLAUDE_ARGS`, i.e. on ARGV -- `claudeCommandFrom` splits it into `extraArgs`, which
-   *  `ClaudeCodeAdapter.spawnRun`/`resume` put FIRST on every run's argv and `decisionArgs` puts
-   *  first on every decision call's. `FAKE_CLAUDE_ASK_JSON` is an env var because a RUN inherits the
-   *  daemon's environment (a DECISION child does not -- `buildDecisionEnv()` gives it PATH, HOME,
-   *  LANG and TERM and nothing else, M31a §4 R1 -- which is exactly why the two flags are argv). */
+  /** The environment a child of this gate gets. `--ask-on-task`, `--replan-cancel` and the ask
+   *  envelope all ride on `SLAVEOFAI_CLAUDE_ARGS`, i.e. on ARGV -- `claudeCommandFrom` splits it
+   *  into `extraArgs`, which `ClaudeCodeAdapter.spawnRun`/`resume` put FIRST on every run's argv
+   *  and `decisionArgs` puts first on every decision call's.
+   *
+   *  The envelope used to be an env var, because a RUN inherited the daemon's environment while a
+   *  DECISION child never did (`buildDecisionEnv()` gives it PATH, HOME, LANG and TERM and nothing
+   *  else, M31a §4 R1). M52 R3 closed that difference: `buildChildEnv` hands a run's child an
+   *  explicit `CHILD_ENV_ALLOW` list too, so ARGV is now the only channel either kind of child can
+   *  be reached on. Base64, because this variable is split on SPACES and a question is prose. */
   const childEnv = ({ askOnTask, askJson, replanCancelTaskId } = {}) =>
     loopbackChildEnv({
       SLAVEOFAI_CLAUDE_BIN: 'node',
       SLAVEOFAI_CLAUDE_ARGS:
         `${FAKE_CLAUDE} --fixture m41-flow` +
         (askOnTask === undefined ? '' : ` --ask-on-task ${askOnTask}`) +
-        (replanCancelTaskId === undefined ? '' : ` --replan-cancel ${replanCancelTaskId}`),
+        (replanCancelTaskId === undefined ? '' : ` --replan-cancel ${replanCancelTaskId}`) +
+        (askJson === undefined ? '' : ` --ask-json-base64 ${Buffer.from(askJson, 'utf8').toString('base64')}`),
       SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
-      ...(askJson === undefined ? {} : { FAKE_CLAUDE_ASK_JSON: askJson }),
     })
 
   /** The `--ask-on-task` token. `SLAVEOFAI_CLAUDE_ARGS` is split on a single space

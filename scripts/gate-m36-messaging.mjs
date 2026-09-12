@@ -31,7 +31,7 @@
 // real binary), the same wiring `gate-m8a-estop.mjs` and `gate-m10-org.mjs` use. `m36-flow` is a
 // synthetic mode added to the fake for this gate, and it splits the two legs on ARGV, not on
 // wording: a spawn WITHOUT `--resume` is the asking leg and carries the `<slave-ask>` envelope from
-// `FAKE_CLAUDE_ASK_JSON` (appended to the real `complete` capture's last assistant text block, so
+// `--ask-json-base64` (appended to the real `complete` capture's last assistant text block, so
 // the pump reads it out of the exact stream shape a real run produces); a spawn WITH `--resume` is
 // the SAME session continuing, and replays `complete` unmodified after leaving a real commit in the
 // worktree. `--resume <sessionId>` is what `ClaudeCodeAdapter.resume` itself appends, so the fake
@@ -220,14 +220,21 @@ try {
 
   /** The environment every child of this gate gets: the fake CLI, the refusal that guards it, and
    *  the ask envelope the asking leg writes. The recipient is a real slave id, so the envelope
-   *  cannot be built anywhere but here -- see `ask.ts`'s `recipientCanAnswer`. */
+   *  cannot be built anywhere but here -- see `ask.ts`'s `recipientCanAnswer`.
+   *
+   *  THE ENVELOPE RIDES ON ARGV (M52 R3). It used to be an environment variable, because a run's
+   *  child inherited the daemon's environment; `buildChildEnv` hands it an explicit
+   *  `CHILD_ENV_ALLOW` list now, so an exported `FAKE_CLAUDE_ASK_JSON` would reach the daemon and
+   *  stop there, and the asking leg would exit 2 with nothing to patch into the stream. Base64
+   *  because `claudeCommandFrom` splits `SLAVEOFAI_CLAUDE_ARGS` on SPACES and the question is
+   *  prose; the decoded envelope is logged below, so nothing a person reads is encoded. */
   const askEnvelope = JSON.stringify({ slaveId: answerer.id, question: QUESTION })
+  const askJsonBase64 = Buffer.from(askEnvelope, 'utf8').toString('base64')
   const childEnv = () =>
     loopbackChildEnv({
       SLAVEOFAI_CLAUDE_BIN: 'node',
-      SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture m36-flow`,
+      SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture m36-flow --ask-json-base64 ${askJsonBase64}`,
       SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
-      FAKE_CLAUDE_ASK_JSON: askEnvelope,
     })
   console.log(`ask envelope handed to the fake CLI: ${askEnvelope}`)
 

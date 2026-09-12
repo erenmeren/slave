@@ -10,8 +10,16 @@ import type { RunId } from '@slave-of-ai/domain'
  * edits. `scripts/lib/permissions.sh` recorded the consequence in its own header: "A run that
  * deletes its own permissions file disarms the matrix for its remaining tool calls." Under
  * default-deny that stops being a hole and becomes a bypass of everything, so the directory moves
- * somewhere a worker cannot see: `$SLAVEOFAI_STATE_DIR`, else `$XDG_STATE_HOME/slaveofai`, else
+ * out of the repository: `$SLAVEOFAI_STATE_DIR`, else `$XDG_STATE_HOME/slaveofai`, else
  * `~/.local/state/slaveofai`, then `runs/<runId>`, created 0700.
+ *
+ * WHAT THE MOVE BUYS, EXACTLY. No run file is inside the tree a verify runs in or a merge cleans,
+ * and no repo-scoped delete, `git clean` or branch switch can take a verdict with it. It is NOT a
+ * boundary the worker cannot cross: the child is handed the absolute path of its own
+ * `permissions.json` and runs under the uid that owns this 0700 directory, so a worker granted
+ * `run_commands` can still rewrite its own verdict. `scripts/lib/permissions.sh`'s exit-2 arm
+ * states that residual in full; the authority a worker cannot forge is the database row
+ * (`SlaveRun.runTokenHash`), which is what the broker authorises against.
  *
  * The pause flag, the permissions file, the tool-results tap and the broker channel all move with
  * it -- every one of them is derived from `runDir` by a single helper, and none of them was ever a

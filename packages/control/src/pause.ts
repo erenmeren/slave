@@ -34,7 +34,9 @@ export async function requestPause(
   // derivation `pauseActiveRuns` below uses to find it in the first place.
   const run = await prisma.slaveRun.findUnique({
     where: { id: runId },
-    include: { slave: { include: { team: true } } },
+    // The checkpoint comes along for its `pauseFlagPath` -- see the derivation below for why a
+    // RECORDED path beats a re-derived one now. One include, not a second query.
+    include: { slave: { include: { team: true } }, checkpoint: true },
   })
   if (run === null) return err({ kind: 'run_not_found', runId })
 
@@ -73,11 +75,28 @@ export async function requestPause(
     return err({ kind: 'wrong_status', runId: run.id, status: run.status, needed: PAUSABLE_STATUSES })
   }
 
-  // The same derivation the tick used to tell the child where its flag is -- re-deriving it as
-  // a second literal is how the two come to disagree, and a gate reading a path nobody writes
-  // means an operator watches a "pausing" run keep working (spec §5.5's named failure).
-  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.slave.team.workspaceId } })
-  const { pauseFlagPath } = runFilePaths(workspace.repoPath, brandRunId(run.id))
+  // WHAT WAS RECORDED BEATS WHAT THIS PROCESS WOULD DERIVE (M52 review fix round 1, Important 3).
+  //
+  // This function runs in the CLI, in a web request and in the daemon alike, and it has always
+  // re-derived the flag path rather than spelling a second literal -- a gate reading a path nobody
+  // writes means an operator watches a "pausing" run keep working (spec §5.5's named failure).
+  // Until M52 that re-derivation could not disagree with the tick's: the answer came only from
+  // `repoPath` and the run id. `runFilePaths` now reads `SLAVEOFAI_STATE_DIR`, `XDG_STATE_HOME` and
+  // `homedir()`, so a daemon under systemd and an operator's shell that exports one of them compute
+  // DIFFERENT paths, and the same sentence about §5.5 comes true by a new route.
+  //
+  // The checkpoint's `pauseFlagPath` is the path the child was actually spawned with -- absolute,
+  // written by the pump at the last pause, and the same field both adapters' `resume()` re-derive
+  // `runDir` from. Preferring it makes the two processes agree by RECORD rather than by
+  // environment. The derivation stays for the case nothing has recorded yet: a run that has never
+  // paused has no checkpoint row (`pump.ts` writes one at pause time), and that first pause is
+  // still exposed to a mismatched state root -- the full fix is for the dispatch to record the
+  // path, which is a column this milestone does not add.
+  let pauseFlagPath = run.checkpoint?.pauseFlagPath ?? ''
+  if (pauseFlagPath === '') {
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.slave.team.workspaceId } })
+    pauseFlagPath = runFilePaths(workspace.repoPath, brandRunId(run.id)).pauseFlagPath
+  }
   // The run's OWN provider (M12 Task 8), not a process-wide constant: `run` is already loaded
   // above, so this is a lookup, not a new query. `?? 'claude_code'` is a historical-fact backfill
   // for runs recorded before `SlaveRun.provider` existed to be written, not a guess among live

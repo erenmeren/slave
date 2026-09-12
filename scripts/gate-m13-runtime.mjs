@@ -780,7 +780,13 @@ try {
   )
 
   // ---- Stage 4b: the operator clears the budget THROUGH THE CARD, and the same task dispatches.
-  await page.goto(`${baseUrl}/w/${budgeted.id}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  // THE RUNTIME CARD LIVES ON THE SETTINGS TAB. This gate was last touched at M37 and navigated to
+  // `/w/<id>`, which was the whole project page then; the tabbed IA that followed moved
+  // `RuntimePanel` behind `/w/<id>/settings` (`ProjectSettingsClient.tsx` is its only mount), and
+  // `/w/<id>` has rendered Overview ever since -- so both `page.goto`s in this file waited for a
+  // control that is no longer on the page they opened. `gate-m14-fidelity.mjs` and
+  // `gate-m44-ux-foundation.mjs` already spell the same route.
+  await page.goto(`${baseUrl}/w/${budgeted.id}/settings`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
   await waitVisible(page.getByTestId('runtime-budget-input'), "the budgeted workspace's Runtime card")
   await setCheckboxReliably(page.getByLabel('not budgeted'), true, 'the "not budgeted" checkbox')
   await clickUntil(
@@ -861,7 +867,8 @@ try {
   unbudgetedWorkspaceId = workspace.id
   console.log(`unbudgeted workspace: ${workspace.id} (budgetUsd=${String(workspace.budgetUsd)} at creation)`)
 
-  await page.goto(`${baseUrl}/w/${workspace.id}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  // The Settings tab, for the reason spelled at stage 4b's own navigation above.
+  await page.goto(`${baseUrl}/w/${workspace.id}/settings`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
   await waitVisible(page.getByTestId('runtime-provider'), 'the Runtime card')
 
   await selectReliably(page.getByLabel('workspace provider'), 'cursor', 'the workspace provider select')

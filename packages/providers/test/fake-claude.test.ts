@@ -261,6 +261,61 @@ describe('fake-claude', () => {
     })
   })
 
+  /**
+   * M52 R3: the two knobs that used to arrive in the ENVIRONMENT and now have to arrive on ARGV.
+   *
+   * `buildChildEnv` hands a run's child an explicit `CHILD_ENV_ALLOW` list instead of the daemon's
+   * whole environment, so a gate that exports `FAKE_CLAUDE_ASK_JSON` or `FAKE_CLAUDE_LINE_DELAY_MS`
+   * reaches the daemon and stops there. Five gates did exactly that (m8a, m36, m39, m41, m51) and
+   * all five now pass the value through `SLAVEOFAI_CLAUDE_ARGS`. The env vars stay supported for a
+   * caller that spawns this script directly -- which is what the cases around this one do.
+   */
+  describe('the ARGV knobs (M52 R3)', () => {
+    const ASK_ON_ARGV = JSON.stringify({ slaveId: 'slave-argv', question: 'Which port is the database on?' })
+    /** The child's environment with both knobs REMOVED, so a case that passes argv proves argv. */
+    function envWithoutKnobs(): NodeJS.ProcessEnv {
+      const env = { ...process.env }
+      delete env['FAKE_CLAUDE_ASK_JSON']
+      delete env['FAKE_CLAUDE_LINE_DELAY_MS']
+      return env
+    }
+
+    it('takes the ask envelope from --ask-json-base64 with no env var in sight', async (): Promise<void> => {
+      const encoded = Buffer.from(ASK_ON_ARGV, 'utf8').toString('base64')
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm36-flow', '--ask-json-base64', encoded, '-p', 'work'], {
+        env: envWithoutKnobs(),
+      })
+      expect(stdout).toContain('<slave-ask>')
+      // The envelope as it is escaped inside the assistant text block -- the only place the pump
+      // ever reads it from. Base64 is the transport and nothing else: what lands in the stream is
+      // the plain JSON.
+      expect(stdout).toContain(JSON.stringify(`<slave-ask>\n${ASK_ON_ARGV}\n</slave-ask>`).slice(1, -1))
+    })
+
+    it('refuses the asking leg, naming the flag, when neither channel carries an envelope', async (): Promise<void> => {
+      await expect(
+        run('node', [FAKE, '--fixture', 'm36-flow', '-p', 'work'], { env: envWithoutKnobs() }),
+      ).rejects.toMatchObject({ code: 2, stderr: expect.stringContaining('--ask-json-base64') })
+    })
+
+    it('takes the line delay from --line-delay-ms, and ARGV beats the environment', async (): Promise<void> => {
+      // The env var is set to a delay the `complete` fixture could not finish under inside this
+      // assertion's budget; argv says 0. If argv were ignored the replay alone would take >4s.
+      const env = { ...envWithoutKnobs(), FAKE_CLAUDE_LINE_DELAY_MS: '400' }
+      const started = Date.now()
+      const { stdout } = await run('node', [FAKE, '--fixture', 'complete', '--line-delay-ms', '0'], { env })
+      const elapsed = Date.now() - started
+      expect(parseLines(stdout).length).toBeGreaterThan(8)
+      expect(elapsed).toBeLessThan(3_000)
+    })
+
+    it('still reads the environment when no flag is passed, for a caller that spawns it directly', async (): Promise<void> => {
+      const env = { ...envWithoutKnobs(), FAKE_CLAUDE_ASK_JSON: ASK_ON_ARGV }
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm36-flow', '-p', 'work'], { env })
+      expect(stdout).toContain('<slave-ask>')
+    })
+  })
+
   describe('--work-fixture (M51 E16)', () => {
     /** A work prompt: none of the literals the decision, answer, re-plan, planning or review arms
      *  sniff for, so every mode below falls through to its WORK body. */

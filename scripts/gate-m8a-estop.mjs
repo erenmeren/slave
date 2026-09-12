@@ -4,7 +4,7 @@
 // CLI's `hook-deny` fixture, the same one `apps/orchestrator`'s milestone-gate test uses to
 // produce a real pause.
 //
-// Driving a run that is genuinely mid-flight when the stop lands: `FAKE_CLAUDE_LINE_DELAY_MS`
+// Driving a run that is genuinely mid-flight when the stop lands: `--line-delay-ms 150`
 // slows the fixture's replay to 150ms/line so the run is still `starting`/`working` by the time
 // this script polls it, rather than already concluded to `paused` on its own by the time
 // `emergency-stop` runs (`fake-claude.mjs` never reads the pause flag -- see that file's own
@@ -38,11 +38,16 @@ const FAKE_CLAUDE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
 // here rather than threaded through each spawn/execFileSync call, because `resume` has to reach
 // the same fake CLI the daemon used without this script repeating the wiring at every call site.
 process.env.SLAVEOFAI_CLAUDE_BIN = 'node'
-process.env.SLAVEOFAI_CLAUDE_ARGS = `${FAKE_CLAUDE} --fixture hook-deny`
+// The line delay rides on ARGV, not in the environment (M52 R3). `buildChildEnv` hands a RUN's
+// child an explicit `CHILD_ENV_ALLOW` list now instead of the daemon's whole environment, so an
+// exported `FAKE_CLAUDE_LINE_DELAY_MS` reaches the daemon and stops there -- the fake would take
+// its 2ms default and the run would be over before the stop landed, which is the one thing this
+// gate cannot measure without. `SLAVEOFAI_CLAUDE_ARGS` is split into `extraArgs` and put first on
+// every spawn, which is already how `--fixture` arrives.
+process.env.SLAVEOFAI_CLAUDE_ARGS = `${FAKE_CLAUDE} --fixture hook-deny --line-delay-ms 150`
 // M32 item 7: and every one of those children refuses to start if the two lines above are ever
 // lost, instead of falling back to the real `claude`.
 process.env.SLAVEOFAI_REQUIRE_FAKE_CLI = '1'
-process.env.FAKE_CLAUDE_LINE_DELAY_MS = '150'
 
 /** Same as `milestone-gate.test.ts`'s `makeRepo` -- a real repository, because the orchestrator's
  *  tick provisions a real worktree in it regardless of which CLI it spawns. */

@@ -11,7 +11,7 @@
 // `SLAVEOFAI_REQUIRE_FAKE_CLI=1` (M32 item 7: lose the first two and the daemon refuses to start
 // rather than falling back to the real binary) -- the same wiring `gate-m36-messaging.mjs` and
 // `gate-m38-supervisor.mjs` use. `m36-flow` runs the asking leg (a `<slave-ask>` block patched in
-// from `FAKE_CLAUDE_ASK_JSON`) and the resumed leg (a real commit, then `complete`), and every
+// from `--ask-json-base64`) and the resumed leg (a real commit, then `complete`), and every
 // flow mode also carries the two Supervisor arms: a prompt containing `"candidateIndex"` replays
 // `supervisor-decision` (index 0, $0.01) and one containing `"sources"` replays the fixture named
 // by `--answer-fixture` (errata E3 and E6), which is how one gate gets both a sourced answer
@@ -312,8 +312,12 @@ try {
   /**
    * The environment a child of this gate gets: the fake CLI, the refusal that guards it, and
    * whatever the current stage's daemon needs on top -- the ask envelope its asking leg patches
-   * into the stream (`FAKE_CLAUDE_ASK_JSON`, read by a RUN, which does inherit the daemon's
-   * environment) and the answer fixture its `"sources"` arm replays.
+   * into the stream and the answer fixture its `"sources"` arm replays. BOTH ride on
+   * `SLAVEOFAI_CLAUDE_ARGS`, and since M52 R3 that is the only channel either could ride: a run's
+   * child is given an explicit `CHILD_ENV_ALLOW` list by `buildChildEnv` rather than the daemon's
+   * environment, so the `FAKE_CLAUDE_ASK_JSON` this gate used to export would now reach the daemon
+   * and stop there. The envelope is base64 because `claudeCommandFrom` splits that variable on
+   * SPACES and a question is prose.
    *
    * The answer fixture rides on `SLAVEOFAI_CLAUDE_ARGS`, NOT on `FAKE_CLAUDE_ANSWER_FIXTURE`
    * (erratum E6). A decision call's child is spawned with `buildDecisionEnv()` -- PATH, HOME, LANG,
@@ -328,9 +332,9 @@ try {
       SLAVEOFAI_CLAUDE_BIN: 'node',
       SLAVEOFAI_CLAUDE_ARGS:
         `${FAKE_CLAUDE} --fixture m36-flow` +
-        (answerFixture === undefined ? '' : ` --answer-fixture ${answerFixture}`),
+        (answerFixture === undefined ? '' : ` --answer-fixture ${answerFixture}`) +
+        (askJson === undefined ? '' : ` --ask-json-base64 ${Buffer.from(askJson, 'utf8').toString('base64')}`),
       SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
-      ...(askJson === undefined ? {} : { FAKE_CLAUDE_ASK_JSON: askJson }),
     })
 
   /** Runs the real orchestrator CLI as a subprocess, exactly as an operator's shell would. */

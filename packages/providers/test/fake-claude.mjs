@@ -51,8 +51,8 @@
 //   m36-flow       synthetic, selected by ARGV rather than by prompt content:
 //                  the two legs of M36's ask/answer round trip. A run spawned
 //                  WITHOUT `--resume` is the asking leg -- it replays
-//                  `complete` with the ask envelope in
-//                  `FAKE_CLAUDE_ASK_JSON` appended to that fixture's last
+//                  `complete` with the ask envelope from
+//                  `--ask-json-base64` appended to that fixture's last
 //                  assistant text block, which is what the orchestrator's
 //                  pump reads its `<slave-ask>` block out of. A run spawned
 //                  WITH `--resume <sessionId>` is the resumed leg: it is the
@@ -111,7 +111,7 @@
 //                  cites (`PostgreSQL on port 5433`), and editing the stock
 //                  fixture would silently change what m8 and m40 measure.
 //                  A work run is the ASKING leg -- the m36-flow body,
-//                  `complete` with the `FAKE_CLAUDE_ASK_JSON` envelope
+//                  `complete` with the `--ask-json-base64` envelope
 //                  appended to its last assistant text block -- only when
 //                  ALL THREE hold: `--ask-on-task <token>` (one word) is in ARGV,
 //                  the prompt carries the literal `Task: <that title>`, and
@@ -157,7 +157,32 @@ if (fixtureName === undefined) {
   process.exit(2)
 }
 
-const lineDelayMs = Number(process.env.FAKE_CLAUDE_LINE_DELAY_MS ?? 2)
+/**
+ * One flag's value from ARGV, or `undefined` when the flag is absent or is followed by another
+ * flag rather than a value. The shape `--fixture` has always been read with, factored out here
+ * because M52 R3 turned ARGV into the ONLY channel a gate can reach a run's child on.
+ */
+function flagValue(name) {
+  const index = args.indexOf(name)
+  const value = index === -1 ? undefined : args[index + 1]
+  return value === undefined || value.startsWith('-') ? undefined : value
+}
+
+/**
+ * How long this script waits between fixture lines -- `--line-delay-ms <n>` from ARGV first, then
+ * `FAKE_CLAUDE_LINE_DELAY_MS` from the environment, then 2ms.
+ *
+ * ARGV LEADS, AND SINCE M52 R3 IT IS THE ONLY CHANNEL THAT ARRIVES. `buildChildEnv`
+ * (`packages/providers/src/runtime/process.ts`) hands a worker's child an explicit
+ * `CHILD_ENV_ALLOW` list instead of the daemon's whole environment, so a gate that exports a knob
+ * on the daemon no longer reaches the run's child at all: it would silently get the 2ms default
+ * and measure a run that was over before the assertion ran -- which is exactly what this delay
+ * exists to prevent (`gate-m8a-estop`, `gate-m51-breaker`). `SLAVEOFAI_CLAUDE_ARGS` rides through
+ * as `extraArgs`, the same way `--fixture` has always arrived. The environment variable stays
+ * supported for a caller that spawns this script DIRECTLY, which is what `fake-claude.test.ts`
+ * does and what a person debugging by hand does.
+ */
+const lineDelayMs = Number(flagValue('--line-delay-ms') ?? process.env.FAKE_CLAUDE_LINE_DELAY_MS ?? 2)
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -244,6 +269,29 @@ function answerFixtureName() {
   const named = index === -1 ? undefined : args[index + 1]
   if (named !== undefined && !named.startsWith('-')) return named
   return process.env.FAKE_CLAUDE_ANSWER_FIXTURE ?? 'supervisor-answer'
+}
+
+/**
+ * The `<slave-ask>` envelope the m36 and m41 asking legs patch into the stream --
+ * `--ask-json-base64 <base64 of the JSON>` from ARGV first, then `FAKE_CLAUDE_ASK_JSON` from the
+ * environment. Returns `undefined` when neither channel carries one; the caller decides whether
+ * that is fatal for its arm.
+ *
+ * ARGV leads for `answerFixtureName`'s reason, which M52 R3 made true of a RUN as well: a run's
+ * child gets `CHILD_ENV_ALLOW` and not the daemon's environment, so an env var exported by a gate
+ * reaches neither a decision call nor a run any more.
+ *
+ * BASE64, not the raw JSON, and that is forced rather than chosen: `claudeCommandFrom`
+ * (`apps/orchestrator/src/claude-command.ts`) splits `SLAVEOFAI_CLAUDE_ARGS` on SPACES, and an
+ * envelope carries a question written in prose. Encoding it is one flag with no quoting rules and
+ * no temp file to clean up; the gates log the decoded envelope themselves, so nothing a person
+ * reads becomes less readable. The environment variable stays supported for a caller that spawns
+ * this script directly.
+ */
+function askEnvelope() {
+  const encoded = flagValue('--ask-json-base64')
+  if (encoded !== undefined) return Buffer.from(encoded, 'base64').toString('utf8')
+  return process.env.FAKE_CLAUDE_ASK_JSON
 }
 
 /**
@@ -477,11 +525,11 @@ async function main() {
       await replayFixture('complete')
       return
     }
-    // The asking leg. The envelope comes from the environment, not from this file: the recipient
-    // is a slave id (or a role) that only the caller seeding the workspace knows.
-    const askJson = process.env.FAKE_CLAUDE_ASK_JSON
+    // The asking leg. The envelope comes from the caller, not from this file: the recipient is a
+    // slave id (or a role) that only the caller seeding the workspace knows.
+    const askJson = askEnvelope()
     if (askJson === undefined || askJson.trim() === '') {
-      process.stderr.write('fake-claude: m36-flow needs FAKE_CLAUDE_ASK_JSON (the <slave-ask> envelope) in the environment\n')
+      process.stderr.write('fake-claude: m36-flow needs the <slave-ask> envelope -- pass --ask-json-base64 <base64> (or set FAKE_CLAUDE_ASK_JSON when spawning this script directly)\n')
       process.exit(2)
     }
     // Appended to the LAST assistant text block of the real `complete` capture rather than emitted
@@ -548,13 +596,13 @@ async function main() {
       return
     }
     if (isAskingLeg(prompt)) {
-      // The asking leg, verbatim from m36-flow. The envelope comes from the environment, not from
-      // this file: the recipient is a role (or a slave id) that only the caller seeding the
-      // workspace knows. A RUN inherits the daemon's environment, which is why this one channel is
-      // an env var while `--ask-on-task` has to be argv.
-      const askJson = process.env.FAKE_CLAUDE_ASK_JSON
+      // The asking leg, verbatim from m36-flow. The envelope comes from the caller, not from this
+      // file: the recipient is a role (or a slave id) that only the caller seeding the workspace
+      // knows. It rides on ARGV beside `--ask-on-task`: M52 R3 gave a run's child an explicit
+      // environment allow list, so the env var this used to read no longer arrives from a daemon.
+      const askJson = askEnvelope()
       if (askJson === undefined || askJson.trim() === '') {
-        process.stderr.write('fake-claude: m41-flow was told to ask on this task but has no FAKE_CLAUDE_ASK_JSON (the <slave-ask> envelope) in the environment\n')
+        process.stderr.write('fake-claude: m41-flow was told to ask on this task but has no <slave-ask> envelope -- pass --ask-json-base64 <base64> (or set FAKE_CLAUDE_ASK_JSON when spawning this script directly)\n')
         process.exit(2)
       }
       // Appended to the LAST assistant text block of the real `complete` capture rather than

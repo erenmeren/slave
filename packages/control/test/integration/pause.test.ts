@@ -78,6 +78,53 @@ describe('requestPause', () => {
     expect(existsSync(pauseFlagPath)).toBe(false)
   })
 
+  /**
+   * M52 review fix round 1, Important 3: the two processes must not be able to derive different
+   * paths. `runFilePaths` reads `SLAVEOFAI_STATE_DIR`/`XDG_STATE_HOME`/`homedir()` since M52 R4, so
+   * a daemon under systemd and an operator's shell that exports one of them would compute
+   * different answers -- and `requestPause` runs in the CLI while the child was spawned by the
+   * daemon. The checkpoint's `pauseFlagPath` is what the child was actually spawned with, so it
+   * wins; the derivation is only for a run that has never paused and therefore has no checkpoint.
+   *
+   * The divergence is MADE here rather than assumed: the checkpoint records one root, and the
+   * state root is then moved somewhere else before the pause, so a re-derivation would write a
+   * flag into a directory the worker has never looked at.
+   */
+  it('writes the flag at the checkpoint’s recorded path, not at one this process would re-derive', async () => {
+    const { run } = fixture
+    const recordedDir = mkdtempSync(join(tmpdir(), 'slaveofai-control-pause-recorded-'))
+    const recordedFlag = join(recordedDir, 'pause.flag')
+    await prisma.checkpoint.create({
+      data: {
+        runId: run.id,
+        sessionId: 'session-m52',
+        worktreePath: recordedDir,
+        pauseFlagPath: recordedFlag,
+        settingsPath: join(recordedDir, 'settings.json'),
+        hookPath: join(recordedDir, 'pause-gate.sh'),
+        gitAuthorName: 'Alex',
+        gitAuthorEmail: 'alex@example.com',
+        headCommit: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+      },
+    })
+
+    // The state root MOVES between the spawn and the pause -- an operator's shell that exports
+    // `SLAVEOFAI_STATE_DIR` where the daemon had none, or the other way round.
+    const elsewhere = mkdtempSync(join(tmpdir(), 'slaveofai-control-pause-elsewhere-'))
+    const previous = process.env['SLAVEOFAI_STATE_DIR']
+    process.env['SLAVEOFAI_STATE_DIR'] = elsewhere
+    try {
+      const result = await requestPause(run.id, 'meren')
+      expect(result.ok).toBe(true)
+      expect(readFileSync(recordedFlag, 'utf8')).toBe('meren\n')
+      // And nothing was written where this process would have derived it.
+      expect(existsSync(join(elsewhere, 'runs', run.id, 'pause.flag'))).toBe(false)
+    } finally {
+      if (previous === undefined) delete process.env['SLAVEOFAI_STATE_DIR']
+      else process.env['SLAVEOFAI_STATE_DIR'] = previous
+    }
+  })
+
   it('refuses an unknown run id', async () => {
     const result = await requestPause('00000000-0000-4000-8000-000000000000', 'meren')
     expect(result.ok).toBe(false)

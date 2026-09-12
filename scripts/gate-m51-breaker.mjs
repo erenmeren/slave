@@ -384,9 +384,13 @@ try {
       // `SLAVEOFAI_CLAUDE_ARGS` rides through as `extraArgs` on every spawn, which is already how
       // `--fixture` itself arrives -- and it is the ONE per-daemon channel a gate can count on
       // (M39 erratum E6, M51 erratum E16).
-      SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture m8-flow --work-fixture ${workFixture}`,
+      // M52 R3: the line delay rides here too. A RUN's child no longer inherits the daemon's
+      // environment (`buildChildEnv`'s `CHILD_ENV_ALLOW`), so an exported
+      // `FAKE_CLAUDE_LINE_DELAY_MS` would stop at the daemon and the fixture's idle tail would
+      // stop being time.
+      SLAVEOFAI_CLAUDE_ARGS:
+        `${FAKE_CLAUDE} --fixture m8-flow --work-fixture ${workFixture} --line-delay-ms ${String(LINE_DELAY_MS)}`,
       SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
-      FAKE_CLAUDE_LINE_DELAY_MS: String(LINE_DELAY_MS),
     })
 
   /** Runs the real orchestrator CLI as a subprocess, exactly as an operator's shell would. */

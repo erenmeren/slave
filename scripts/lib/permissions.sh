@@ -75,10 +75,11 @@
 #
 # IDENTITY, NOT A PATH (M52 R4). SLAVEOFAI_RUN_TOKEN is 32 random bytes minted at spawn, put in
 # exactly one child's environment and written down nowhere: the row and the file hold only its
-# sha256. Pointing SLAVEOFAI_PERMISSIONS_FILE at a sibling run's verdict therefore buys nothing --
-# the sibling's `tokenHash` will not match this child's token, and the mismatch fails closed. The
-# run directory left the repository in the same milestone, so a worker can no longer reach its own
-# verdict either; the two locks are independent on purpose.
+# sha256. Pointing SLAVEOFAI_PERMISSIONS_FILE at a SIBLING run's verdict therefore buys nothing --
+# the sibling's `tokenHash` will not match this child's token, and the mismatch fails closed. In
+# the same milestone the run directory left the repository the worker edits, so no repo-scoped
+# delete, `git clean` or branch switch can reach a verdict any more. The two locks are independent
+# on purpose, and neither is a sandbox: see the exit-2 arm below for what a worker CAN still do.
 
 PERMISSION_DENY_TOOL=''
 PERMISSION_DENY_CAPABILITY=''
@@ -104,9 +105,21 @@ PERMISSION_DENY_CAPABILITY=''
 #                 verdict: missing, unreadable, malformed, not version 2, no `allow` array, no
 #                 `grants` array, no `tokenHash`; the payload is not JSON at all; or the identity
 #                 does not match -- SLAVEOFAI_RUN_TOKEN's sha256 is not the file's `tokenHash`. A
-#                 run that deletes its own permissions file no longer disarms itself: it stops. (It
-#                 can no longer reach the file either -- M52 R4 moved the run directory out of the
-#                 worktree -- but the two locks are independent on purpose.)
+#                 run that deletes its own permissions file no longer disarms itself: it stops, and
+#                 M52 R4 moved the directory out of the worktree so that no repo-scoped delete can
+#                 do it by accident.
+#
+#   WHAT THIS FILE DOES NOT PROTECT AGAINST, stated plainly because this comment is the threat
+#   model of record. A worker granted `run_commands` holds the absolute path (its own
+#   SLAVEOFAI_PERMISSIONS_FILE) and the plaintext token (its own SLAVEOFAI_RUN_TOKEN) and runs
+#   under the uid that owns the 0700 directory, so it can WRITE a fresh v2 body granting itself
+#   all six kinds with a `tokenHash` it computes from its own token, and this gate will read that
+#   as a valid verdict about itself. Only a boundary the child does not hold can close that -- a
+#   separate uid or sandbox, which this milestone does not build. So: THE FILE GATE IS A GUARD
+#   AGAINST ACCIDENT AND AGAINST A SIBLING, NOT AGAINST A DETERMINED WORKER. The thing that is
+#   authoritative is the database: the broker (M52 Task 3) authorises every brokered operation
+#   against `SlaveRun.runTokenHash` on the row, never against this file, and a worker has no
+#   DATABASE_URL to reach that row with (`CHILD_ENV_ALLOW`, M52 R3).
 read_permission_verdict() {
   PERMISSION_DENY_TOOL=''
   PERMISSION_DENY_CAPABILITY=''
