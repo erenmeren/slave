@@ -18,6 +18,7 @@ import {
   backfillSlaveCapabilities,
   cancelTask,
   clearSlavePermission,
+  clearStaffingPreference,
   assignCompany,
   CREDENTIAL_KINDS,
   CREDENTIAL_KIND_LABEL,
@@ -48,11 +49,13 @@ import {
   listCatalogImports,
   listCapabilities,
   listCredentials,
+  listEvidence,
   listDecisions,
   listMemories,
   listGoalVersions,
   listPendingQuestions,
   listRunbooks,
+  listStaffingPreferences,
   listUsers,
   loadSimulation,
   loadSupervisorWorld,
@@ -79,6 +82,7 @@ import {
   setProfile,
   setRuntimeRoles,
   setSlavePermission,
+  setStaffingPreference,
   setSlaveCapabilities,
   setSlaveModel,
   setSlaveRole,
@@ -111,11 +115,14 @@ import {
   BROKERED_OPERATIONS,
   BROKER_CLIENT_TIMEOUT_MS,
   BROKER_OP_LABEL,
+  COST_PROVENANCE_WORD,
+  EVIDENCE_OUTCOME_LABEL,
   MEMORY_SCOPE_LABEL,
   MEMORY_STATUSES,
   MEMORY_STATUS_LABEL,
   MEMORY_TYPES,
   MEMORY_TYPE_LABEL,
+  MODEL_NOT_RECORDED_LABEL,
   PERMISSION_LABEL,
   PERMISSION_RUN_KINDS,
   SLAVE_LIFECYCLES,
@@ -126,6 +133,7 @@ import {
   candidates,
   chooseByRules,
   displayName,
+  domainLabel,
   filterFresh,
   grantsFor,
   observe,
@@ -543,6 +551,34 @@ const USAGE = `usage: orchestrator <command> [options]
                                        channel and waits for the reply beside it. It only works
                                        inside a run the orchestrator started, and it exits with
                                        the operation's own exit code.
+
+  the record, and who is asked for (M53)
+  evidence list [--workspace <id>] [--domain <d>]
+                                       every concluded run as one line: the profile's name and its
+                                       key, the model it ran on, the domains its task asked for,
+                                       what happened, which attempt it was, where the money figure
+                                       came from, and when the fact was written. READ ONLY -- there
+                                       is no evidence record and no evidence delete: the pipeline is
+                                       the only writer and a row is never deleted. --workspace
+                                       narrows to one project and omitting it is every project,
+                                       because a profile works on more than one; --domain narrows by
+                                       containment, so a run whose task asked for two domains shows
+                                       under either. History from before this milestone is filled in
+                                       by npm run backfill:evidence, never from here.
+  staffing prefer --capability <key> [--template <id>] [--model <m>] [--workspace <id>] [--by <username>]
+                                       say who -- or what model -- should take one capability on
+                                       this project. Name a profile, a model, or both; naming
+                                       neither is refused. One decision per capability per project:
+                                       this replaces in place. ADVISORY -- the ranker reads it at
+                                       step 3 of seven, so it never beats a permission a person
+                                       refused (step 2) and it carries no weight for a worker who is
+                                       busy (step 4). --by must name a real account.
+  staffing clear --capability <key> [--workspace <id>] [--by <username>]
+                                       take the decision back. Clearing a decision nobody took
+                                       succeeds and records nothing.
+  staffing list [--workspace <id>]     every decision on this project: the capability's label and
+                                       its key, the profile, the model, when it was taken and who
+                                       took it.
 
   users
   create-user --name <u>                create a local account. The password is never a
@@ -2980,6 +3016,98 @@ export async function main(argv: readonly string[]): Promise<number> {
         return 0
       }
       throw new Error('broker takes run, bind or list')
+    }
+
+    /**
+     * M53 R12: the fact table, as lines. A READ ONLY -- there is no `evidence record` and no
+     * `evidence delete`: the pipeline is the only writer (R3) and a row is never deleted, so a verb
+     * that wrote one by hand would be a second derivation with a person's hand in it. Filling in
+     * history is `npm run backfill:evidence`, a script an operator runs deliberately, and not a
+     * subcommand somebody reaches by tab completion (plan decision D30).
+     */
+    case 'evidence': {
+      const sub = argv[1] ?? 'list'
+      if (sub !== 'list') throw new Error('evidence takes list')
+      // `--workspace` NARROWS; omitting it is every project. Unlike every other verb in this file
+      // this one does not resolve a single project by default: a record is a claim about a
+      // PROFILE, and a profile works on more than one project.
+      const workspaceId = flagText(flags, 'workspace') === undefined ? null : await resolveWorkspace(flags)
+      const domain = flagText(flags, 'domain') ?? null
+      for (const row of await listEvidence({ workspaceId, domain })) {
+        // The WORDS first and the keys beside them (`docs/ia.md` rule 3): the label is what a person
+        // reads, the key is what they paste into `--domain`, and a CLI's "expanded view" is the line.
+        // A null `model` is `Model not recorded` and never a blank column -- every pre-M51 run
+        // recorded none, and a blank reads as a model called nothing (R1).
+        process.stdout.write(
+          `${row.profileName}\t${row.profileKey}\t${row.model ?? MODEL_NOT_RECORDED_LABEL}\t` +
+            `${row.domains.map(domainLabel).join(', ')}\t${EVIDENCE_OUTCOME_LABEL[row.outcome]}\t` +
+            `attempt ${String(row.attempt)}\t${COST_PROVENANCE_WORD[row.costProvenance]}\t` +
+            `${row.recordedAt.toISOString()}\n`,
+        )
+      }
+      return 0
+    }
+
+    /** M53 R9: who -- or what model -- should take a capability on this project. */
+    case 'staffing': {
+      const sub = argv[1] ?? 'list'
+      const workspaceId = await resolveWorkspace(flags)
+      if (sub === 'list') {
+        const rows = await listStaffingPreferences(workspaceId)
+        // Names, not ids, for whoever decided -- one query for every author on the table, never one
+        // per row. `StaffingPreference.setBy` is a `User.id` and control deliberately leaves it one
+        // ("resolving it to a username is each surface's own boundary"); THIS is that boundary.
+        const authors = await prisma.user.findMany({
+          where: { id: { in: rows.map((one) => one.setBy).filter((id): id is string => id !== null) } },
+          select: { id: true, username: true },
+        })
+        const nameById = new Map(authors.map((user) => [user.id, user.username]))
+        for (const one of rows) {
+          // THE RAW ID IS NEVER VISIBLE TEXT (M52 erratum E18). An account deleted since resolves to
+          // no name at all, and printing the uuid there would put back exactly what this rule
+          // removes -- so the CLI says the words the web says for that state. `somebody unrecorded`
+          // is the other null: no principal at the write, which is a different fact.
+          const setter =
+            one.setBy === null ? 'somebody unrecorded' : (nameById.get(one.setBy) ?? 'a person no longer on record')
+          process.stdout.write(
+            `${one.capabilityLabel}\t${one.capability}\t${one.templateName ?? '-'}\t${one.model ?? '-'}\t` +
+              `${one.setAt.toISOString()}\tby ${setter}\n`,
+          )
+        }
+        return 0
+      }
+      const capability = requireFlag(flags, 'capability')
+      // BEFORE the write, so a `--by` nobody carries refuses instead of leaving a row behind.
+      const principal = await resolvePrincipal(flags)
+      if (sub === 'prefer') {
+        const templateId = flagText(flags, 'template')
+        const model = flagText(flags, 'model')
+        const result = await setStaffingPreference(
+          workspaceId,
+          { capability, ...(templateId === undefined ? {} : { templateId }), ...(model === undefined ? {} : { model }) },
+          principal,
+        )
+        if (!result.ok) throw new Error(refusalText(result.error))
+        process.stdout.write(
+          `${result.value.capabilityLabel} (${capability}) goes to ` +
+            `${result.value.templateName ?? 'whoever is free'}${result.value.model === null ? '' : ` on ${result.value.model}`}\n`,
+        )
+        return 0
+      }
+      if (sub === 'clear') {
+        // The LABEL read BEFORE the clear, because `clearStaffingPreference` answers `void` and a
+        // line naming only the key would be the one line of this verb without a word on it
+        // (`docs/ia.md` rule 3). One row, and the fallback is `capabilityLabel`'s own: a key this
+        // taxonomy does not carry prints as itself, which is the honest thing to show for it.
+        const known = await prisma.capability.findUnique({ where: { key: capability }, select: { label: true } })
+        const result = await clearStaffingPreference(workspaceId, capability, principal)
+        if (!result.ok) throw new Error(refusalText(result.error))
+        process.stdout.write(
+          `nobody in particular is asked for on ${known?.label ?? capability} (${capability}) any more\n`,
+        )
+        return 0
+      }
+      throw new Error('staffing takes prefer, clear or list')
     }
 
     case 'help':

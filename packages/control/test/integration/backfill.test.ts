@@ -1,0 +1,252 @@
+import { prisma } from '@slave-of-ai/db/client'
+import { appendEvent } from '@slave-of-ai/events'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { backfillEvidence } from '../../../../scripts/backfill-evidence.mjs'
+import { EVIDENCE_MODEL, seedEvidenceFixture, type EvidenceFixture } from './fixtures/evidence.js'
+
+/**
+ * `scripts/backfill-evidence.mjs`, driven as a FUNCTION (plan decision D28).
+ *
+ * No child process, no `--env-file`, no output parsing: a failure here names a line rather than an
+ * exit code, and the pass runs against the same database fixture every other integration file uses.
+ * The properties below are the ones nothing in Task 3 exercises -- idempotence, batch-size
+ * independence, an incomplete event history, and a refusal that must not stop the pass.
+ *
+ * This file also RUNS THE BACKFILL FOR REAL, twice, against a real database. That is the only way
+ * "running it again adds nothing" can be a measurement rather than a claim about an upsert.
+ */
+
+/** The same known span the shared fixture uses, so `durationMs` is a fact and never a clock. */
+const RUN_STARTED_AT = new Date('2026-09-12T09:00:00.000Z')
+const RUN_ENDED_AT = new Date('2026-09-12T09:00:03.500Z')
+
+let fixture: EvidenceFixture
+
+beforeEach(async (): Promise<void> => {
+  fixture = await seedEvidenceFixture()
+  // The fixture seeds ONE concluded run. Every case below states its own world in whole numbers,
+  // so it starts from a project with no runs at all rather than from a project with one.
+  await prisma.slaveRun.deleteMany({})
+})
+
+/** One concluded run, with the `run.started` event a real one leaves behind. */
+async function seedTerminalRun(
+  target: EvidenceFixture,
+  status: 'succeeded' | 'failed' | 'stopped' = 'succeeded',
+): Promise<string> {
+  const run = await prisma.slaveRun.create({
+    data: {
+      taskId: target.taskId,
+      slaveId: target.slaveId,
+      kind: 'implementation',
+      status,
+      model: EVIDENCE_MODEL,
+      provider: 'claude_code',
+      costUsd: 0.42,
+      tokensIn: 1_000,
+      tokensOut: 2_000,
+      startedAt: RUN_STARTED_AT,
+      terminalAt: RUN_ENDED_AT,
+      endedAt: RUN_ENDED_AT,
+    },
+  })
+  await appendEvent({
+    type: 'run.started',
+    workspaceId: target.workspaceId,
+    taskId: target.taskId,
+    slaveId: target.slaveId,
+    runId: run.id,
+    actor: 'system',
+    payload: { sessionId: 's' },
+  })
+  return run.id
+}
+
+/** A run that has not concluded: `terminalAt` null, which is the walk's whole `where`. */
+async function seedLiveRun(target: EvidenceFixture): Promise<string> {
+  const run = await prisma.slaveRun.create({
+    data: {
+      taskId: target.taskId,
+      slaveId: target.slaveId,
+      kind: 'implementation',
+      status: 'working',
+      model: EVIDENCE_MODEL,
+      provider: 'claude_code',
+      startedAt: RUN_STARTED_AT,
+    },
+  })
+  return run.id
+}
+
+async function seedRuns(
+  target: EvidenceFixture,
+  counts: { readonly terminal?: number; readonly live?: number },
+): Promise<readonly string[]> {
+  const ids: string[] = []
+  for (let i = 0; i < (counts.terminal ?? 0); i += 1) ids.push(await seedTerminalRun(target))
+  for (let i = 0; i < (counts.live ?? 0); i += 1) await seedLiveRun(target)
+  return ids
+}
+
+describe('backfillEvidence (M53 R7)', () => {
+  it('records every terminal run and skips every live one', async (): Promise<void> => {
+    await seedRuns(fixture, { terminal: 3, live: 2 })
+
+    const report = await backfillEvidence({ batchSize: 2 })
+
+    expect(report.recorded).toBe(3)
+    // The live runs are not "skipped" by a branch: `terminalAt IS NOT NULL` is the walk's own
+    // `where`, so they are never scanned at all. A run still moving is evidence about nothing.
+    expect(report.scanned).toBe(3)
+    expect(await prisma.evidenceRecord.count()).toBe(3)
+  })
+
+  it('is IDEMPOTENT to the byte, `recordedAt` included (stage 5, erratum E15)', async (): Promise<void> => {
+    await seedRuns(fixture, { terminal: 4 })
+
+    const first = await backfillEvidence({ batchSize: 2 })
+    const firstRows = await prisma.evidenceRecord.findMany({ orderBy: { runId: 'asc' } })
+    const second = await backfillEvidence({ batchSize: 2 })
+    const secondRows = await prisma.evidenceRecord.findMany({ orderBy: { runId: 'asc' } })
+
+    expect(secondRows).toEqual(firstRows)
+    // Idempotence is a property of the WRITER and not of a skip branch: the second pass calls
+    // `recordRunEvidence` for all four runs again and writes the same bytes. A `notIn` branch would
+    // make this case pass by construction and prove nothing about the thing an operator trusts.
+    expect(first.created).toBe(4)
+    expect(second.created).toBe(0)
+    expect(second.alreadyPresent).toBe(4)
+    expect(second.recorded).toBe(4)
+    expect(await prisma.evidenceRecord.count()).toBe(4)
+  })
+
+  it('walks in `id` order in bounded batches, so the order it walks cannot change the result', async (): Promise<void> => {
+    await seedRuns(fixture, { terminal: 5 })
+
+    const wide = await backfillEvidence({ batchSize: 100 })
+    const rowsWide = await prisma.evidenceRecord.findMany({ orderBy: { runId: 'asc' } })
+    await prisma.evidenceRecord.deleteMany({})
+    const narrow = await backfillEvidence({ batchSize: 1 })
+
+    expect(narrow.recorded).toBe(wide.recorded)
+    expect((await prisma.evidenceRecord.findMany({ orderBy: { runId: 'asc' } })).map((r) => r.runId)).toEqual(
+      rowsWide.map((r) => r.runId),
+    )
+  })
+
+  it('records a run whose `run.started` event has been REMOVED, with zeros and nulls (R7)', async (): Promise<void> => {
+    const runId = await seedTerminalRun(fixture)
+    await prisma.executionEvent.deleteMany({ where: { runId } })
+
+    await backfillEvidence({})
+
+    const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId } })
+    // A count over nothing IS zero, so the event-derived counters record zero honestly...
+    expect(row.attempt).toBe(1)
+    expect(row.reworkCycles).toBe(0)
+    expect(row.humanInterventions).toBe(0)
+    expect(row.recoveries).toBe(0)
+    // ...and the three JUDGEMENT columns stay null. Settling `false` here would manufacture a
+    // failure out of a missing record, and E1 makes a judgement column irreversible.
+    expect(row.verifiedFirstPass).toBeNull()
+    expect(row.reviewRejected).toBeNull()
+    expect(row.integrated).toBeNull()
+    // The run-local columns come from the ROW, which always exists.
+    expect(row.outcome).toBe('succeeded')
+    expect(row.repositoryKey).toBe(fixture.repoPath)
+  })
+
+  it('REPORTS the runs it could not record rather than failing the pass', async (): Promise<void> => {
+    await seedRuns(fixture, { terminal: 2 })
+
+    const report = await backfillEvidence({
+      batchSize: 1,
+      recordOne: async () => ({ ok: false, error: { kind: 'run_not_found', runId: 'x' } }),
+    })
+
+    expect(report.recorded).toBe(0)
+    expect(report.skipped).toBe(2)
+    // `run_not_found` is the BOUNDARY refusal (R13, erratum E3) -- the one a simulated id meets --
+    // so it is counted apart from every other reason a row could not be recorded. One unreadable
+    // row must not stop an operator filling in five years of history.
+    expect(report.skippedSimulation).toBe(2)
+    expect(report.skippedIncomplete).toBe(0)
+    expect(await prisma.evidenceRecord.count()).toBe(0)
+  })
+
+  it('counts a refusal that is NOT the boundary apart from one that is', async (): Promise<void> => {
+    await seedRuns(fixture, { terminal: 2 })
+
+    const report = await backfillEvidence({
+      batchSize: 2,
+      recordOne: async () => ({ ok: false, error: { kind: 'workspace_not_found', workspaceId: 'x' } }),
+    })
+
+    expect(report.skipped).toBe(2)
+    expect(report.skippedSimulation).toBe(0)
+    expect(report.skippedIncomplete).toBe(2)
+  })
+
+  it('never settles a judgement column -- history is filled in, never judged', async (): Promise<void> => {
+    const runId = await seedTerminalRun(fixture)
+
+    await backfillEvidence({})
+
+    const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId } })
+    expect(row.settledAt).toBeNull()
+    expect(row.verifiedFirstPass).toBeNull()
+  })
+
+  it('leaves a verdict somebody already reached exactly where it is, and counts it', async (): Promise<void> => {
+    const runId = await seedTerminalRun(fixture)
+    // The pipeline's own pair: the terminal write, then a verdict settling one column.
+    await backfillEvidence({})
+    const { recordRunEvidence } = await import('../../src/evidence.js')
+    await recordRunEvidence(runId, { settle: { kind: 'verify', verdict: 'passed' } })
+    const settled = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId } })
+
+    // The repair pass runs again over history that has already been judged.
+    const report = await backfillEvidence({})
+
+    const after = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId } })
+    expect(after.verifiedFirstPass).toBe(true)
+    expect(after.settledAt).toEqual(settled.settledAt)
+    expect(report.alreadySettled).toBe(1)
+    expect(report.created).toBe(0)
+  })
+
+  it('--dry-run says what it WOULD do and writes nothing at all', async (): Promise<void> => {
+    await seedRuns(fixture, { terminal: 3 })
+
+    const dry = await backfillEvidence({ dryRun: true })
+
+    expect(dry.scanned).toBe(3)
+    expect(dry.created).toBe(3)
+    expect(dry.recorded).toBe(3)
+    expect(await prisma.evidenceRecord.count()).toBe(0)
+
+    // And the same flag over history that is already filled in reports nothing to create.
+    await backfillEvidence({})
+    const again = await backfillEvidence({ dryRun: true })
+    expect(again.created).toBe(0)
+    expect(again.alreadyPresent).toBe(3)
+    expect(await prisma.evidenceRecord.count()).toBe(3)
+  })
+
+  it('nothing simulated crosses into the record (R6, R13)', async (): Promise<void> => {
+    const company = await prisma.company.create({ data: { name: 'Simulated Co' } })
+    await prisma.simulationRun.create({
+      data: { companyId: company.id, name: 'a run of a company that does not exist', sector: 'software', seed: 1, definition: {}, state: {} },
+    })
+    await seedRuns(fixture, { terminal: 2 })
+
+    const report = await backfillEvidence({})
+
+    // The boundary is structural rather than a filter: a simulated role is not a `Slave` and a
+    // simulated step is not a `SlaveRun`, and `SlaveRun` is the only table this walk reads. So the
+    // simulation is not skipped -- it is never scanned, and nothing had to be refused.
+    expect(report.scanned).toBe(2)
+    expect(report.skippedSimulation).toBe(0)
+    expect(await prisma.evidenceRecord.count()).toBe(2)
+  })
+})

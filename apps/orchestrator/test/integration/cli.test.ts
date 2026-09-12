@@ -1,5 +1,5 @@
 import { execFile, execFileSync, spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -10,6 +10,7 @@ import {
   loadSimulation,
   recordDecision,
   runFilePaths,
+  setStaffingPreference,
   startAutoRun,
   verifyCredentials,
 } from '@slave-of-ai/control'
@@ -4025,5 +4026,204 @@ describe('the orchestrator CLI', () => {
       expect(result.stderr).toContain('rm_minus_rf')
       expect(existsSync(brokerChannelPathFor(runDir))).toBe(false)
     }, 30_000)
+  })
+
+  /**
+   * M53 R12 and R9: the two verbs a person types.
+   *
+   * `evidence list` is a READ and nothing else -- there is no `evidence record` and no
+   * `evidence delete` (plan decision D30) -- and every line it prints leads with the WORDS
+   * (`docs/ia.md` rule 3). `staffing` is the CLI half of a decision a person takes, and the person
+   * who took it is named by their USERNAME, never by a `User.id` (M52 erratum E18).
+   */
+  describe('evidence list and staffing (M53 R9, R12)', () => {
+    /** What a case may vary about one fact row. Written DIRECTLY, like `seedEvidenceRows` in
+     *  control's own fixture: these cases are about what the CLI PRINTS, and driving them through
+     *  the pipeline would make each one a test of the writer as well. */
+    interface EvidenceSeed {
+      readonly outcome?: 'succeeded' | 'failed' | 'stopped'
+      readonly costProvenance?: 'reported' | 'estimated' | 'unmeasured'
+      readonly domains?: readonly string[]
+      readonly model?: string | null
+      readonly profileName?: string
+    }
+
+    async function seedEvidence(target: Fixture, seed: EvidenceSeed = {}): Promise<void> {
+      await prisma.evidenceRecord.create({
+        data: {
+          // A fresh uuid rather than a real run: `runId` is `@unique` and carries no foreign key,
+          // exactly so a record outlives the run it is about (plan erratum E4).
+          runId: randomUUID(),
+          workspaceId: target.workspaceId,
+          slaveId: target.slaveId,
+          taskId: target.taskId,
+          profileKey: `slave:${target.slaveId}`,
+          profileName: seed.profileName ?? 'Backend Developer',
+          model: seed.model === undefined ? 'claude-sonnet-4-20250514' : seed.model,
+          repositoryKey: target.repoPath,
+          domains: [...(seed.domains ?? ['backend'])],
+          runKind: 'implementation',
+          attempt: 1,
+          outcome: seed.outcome ?? 'succeeded',
+          actualCostUsd: 0.42,
+          costProvenance: seed.costProvenance ?? 'reported',
+        },
+      })
+    }
+
+    /** A catalog template `staffing prefer --template` can name. The CLI fixture hires nobody, so
+     *  each staffing case brings its own rather than widening a seed fourteen other describes read. */
+    async function seedTemplate(name = 'Backend Developer'): Promise<string> {
+      const template = await prisma.slaveTemplate.create({
+        data: { name, role: 'backend', capabilityKeys: ['backend.services'] },
+      })
+      return template.id
+    }
+
+    it('prints one line per row with the WORDS beside the keys', async (): Promise<void> => {
+      await seedEvidence(fixture, { outcome: 'succeeded', costProvenance: 'reported', domains: ['backend', 'qa'] })
+
+      const result = await runCli(['evidence', 'list', '--workspace', fixture.workspaceId])
+
+      expect(result.code).toBe(0)
+      // The profile's NAME, the outcome's WORD, the provenance's WORD and the domains' LABELS --
+      // `EVIDENCE_OUTCOME_LABEL`, `COST_PROVENANCE_WORD` and `domainLabel`, all from the domain's
+      // own tables. A row that printed `succeeded` would be printing an enum member at a person.
+      expect(result.stdout).toContain('Backend Developer')
+      expect(result.stdout).toContain('Finished')
+      expect(result.stdout).not.toContain('succeeded')
+      expect(result.stdout).toContain('reported')
+      expect(result.stdout).toContain('Backend, QA')
+      // The keys stay on the line beside the words, because `--domain` and the web both take them.
+      expect(result.stdout).toContain(`slave:${fixture.slaveId}`)
+    })
+
+    it('filters by domain, and a two-domain row shows under either', async (): Promise<void> => {
+      await seedEvidence(fixture, { domains: ['backend', 'qa'] })
+
+      expect((await runCli(['evidence', 'list', '--domain', 'backend'])).stdout).toContain('Backend Developer')
+      expect((await runCli(['evidence', 'list', '--domain', 'qa'])).stdout).toContain('Backend Developer')
+      // Containment, not equality: the filtered counts deliberately do not sum to the unfiltered
+      // total, and a domain nobody asked for shows nothing at all.
+      expect((await runCli(['evidence', 'list', '--domain', 'design'])).stdout).not.toContain('Backend Developer')
+    })
+
+    it('says a null model in WORDS rather than leaving the column blank', async (): Promise<void> => {
+      await seedEvidence(fixture, { model: null })
+
+      const result = await runCli(['evidence', 'list'])
+
+      expect(result.code).toBe(0)
+      // Every pre-M51 run recorded no model. `Model not recorded` is a real state with a word for
+      // it (R1); a blank column would read as a model called nothing.
+      expect(result.stdout).toContain('Model not recorded')
+    })
+
+    it('records a preference and says what it recorded, in words', async (): Promise<void> => {
+      const templateId = await seedTemplate()
+
+      const result = await runCli([
+        'staffing', 'prefer', '--workspace', fixture.workspaceId,
+        '--capability', 'backend.services', '--template', templateId,
+      ])
+
+      expect(result.code).toBe(0)
+      // The capability's SEEDED label and the template's NAME -- the two words a person recognises.
+      expect(result.stdout).toContain('Service implementation')
+      expect(result.stdout).toContain('Backend Developer')
+      expect(await prisma.staffingPreference.count()).toBe(1)
+    })
+
+    it('refuses a preference naming neither a profile nor a model, with the refusal’s own sentence', async (): Promise<void> => {
+      const result = await runCli([
+        'staffing', 'prefer', '--workspace', fixture.workspaceId, '--capability', 'backend.services',
+      ])
+
+      expect(result.code).not.toBe(0)
+      // `refusalText(result.error)` verbatim: the CLI is the third home of the three-homes rule and
+      // it does not paraphrase.
+      expect(result.stderr).toMatch(/must name a profile, a model, or both/u)
+      expect(await prisma.staffingPreference.count()).toBe(0)
+    })
+
+    it('refuses a model that is not one word, and says the RULE rather than the pattern', async (): Promise<void> => {
+      const result = await runCli([
+        'staffing', 'prefer', '--workspace', fixture.workspaceId, '--capability', 'backend.services',
+        '--model', 'gpt 4o',
+      ])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('a model must be one word')
+      expect(await prisma.staffingPreference.count()).toBe(0)
+    })
+
+    it('lists the decisions with the LABEL first and the key beside it', async (): Promise<void> => {
+      await setStaffingPreference(fixture.workspaceId, { capability: 'backend.services', model: 'opus' })
+
+      const result = await runCli(['staffing', 'list', '--workspace', fixture.workspaceId])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(/Service implementation\tbackend\.services/u)
+    })
+
+    it('names who decided by USERNAME, and never prints an id -- not even for a deleted account', async (): Promise<void> => {
+      const user = await prisma.user.create({ data: { username: 'meren', passwordHash: 'x' } })
+      await runCli([
+        'staffing', 'prefer', '--workspace', fixture.workspaceId, '--capability', 'backend.services',
+        '--model', 'opus', '--by', 'meren',
+      ])
+
+      const named = await runCli(['staffing', 'list', '--workspace', fixture.workspaceId])
+      expect(named.stdout).toContain('by meren')
+      expect(named.stdout).not.toContain(user.id)
+
+      // `StaffingPreference.setBy` is a column and not a foreign key, so the row keeps the id it
+      // recorded. The CLI then says the words the web says for the same state (M52 erratum E18)
+      // rather than putting a uuid in front of a person.
+      await prisma.user.delete({ where: { id: user.id } })
+      const orphaned = await runCli(['staffing', 'list', '--workspace', fixture.workspaceId])
+      expect(orphaned.stdout).toContain('by a person no longer on record')
+      expect(orphaned.stdout).not.toContain(user.id)
+    })
+
+    it('`staffing prefer --by` refuses a name no account carries, and writes nothing', async (): Promise<void> => {
+      const result = await runCli([
+        'staffing', 'prefer', '--workspace', fixture.workspaceId, '--capability', 'backend.services',
+        '--model', 'opus', '--by', 'nobody',
+      ])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('no user named nobody')
+      expect(await prisma.staffingPreference.count()).toBe(0)
+    })
+
+    it('clears a decision, and clearing nothing succeeds', async (): Promise<void> => {
+      await setStaffingPreference(fixture.workspaceId, { capability: 'backend.services', model: 'opus' })
+
+      const cleared = await runCli([
+        'staffing', 'clear', '--capability', 'backend.services', '--workspace', fixture.workspaceId,
+      ])
+      expect(cleared.code).toBe(0)
+      // The WORD here too: this is the one line of the verb whose sentence has no view behind it,
+      // and a line naming only the key would be the only bare key the two verbs print.
+      expect(cleared.stdout).toContain('Service implementation')
+      expect(cleared.stdout).toContain('backend.services')
+      expect(await prisma.staffingPreference.count()).toBe(0)
+
+      // Deleting nothing is `ok` with no event: clearing a decision nobody took is what an operator
+      // asked for, and refusing it would be a refusal over a state that already reads right.
+      const again = await runCli([
+        'staffing', 'clear', '--capability', 'backend.services', '--workspace', fixture.workspaceId,
+      ])
+      expect(again.code).toBe(0)
+    })
+
+    it('`help` offers both verbs', async (): Promise<void> => {
+      const result = await runCli(['help'])
+
+      const printed = `${result.stdout}${result.stderr}`
+      expect(printed).toContain('evidence list')
+      expect(printed).toContain('staffing prefer')
+    })
   })
 })

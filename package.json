@@ -24,6 +24,7 @@
     "web:exposed": "node --env-file=.env scripts/web-exposed.mjs",
     "web:build": "next build apps/web",
     "demo": "tsc --build && node --env-file=.env scripts/demo-live.mjs",
+    "backfill:evidence": "tsc --build && node --env-file=.env scripts/backfill-evidence.mjs",
     "gate:m8a-merge": "tsc --build && node --env-file=.env scripts/gate-m8a-merge.mjs",
     "gate:m8a-estop": "tsc --build && node --env-file=.env scripts/gate-m8a-estop.mjs",
     "gate:m8-plan": "tsc --build && node --env-file=.env scripts/gate-m8-plan.mjs",
