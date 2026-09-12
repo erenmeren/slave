@@ -48,6 +48,21 @@
 //                  moves the behavioural breaker's worktree clock on every
 //                  single run, which suppresses the very `no_progress` arm a
 //                  breaker gate exists to measure.
+//   M52 R8 hangs three optional side effects off the `--work-fixture` arm,
+//   so they reach every mode that has one and change nothing in any mode
+//   that is not asked for them. `--env-out <path>` appends this child's own
+//   `process.env` as one JSON line -- the only honest way to prove an
+//   ABSENCE (no `DATABASE_URL`, no deploy credential) is from inside the
+//   process that is supposed not to hold it. `--broker-op <op>` (with
+//   `--broker-environment`, `--broker-digest`, `--broker-out`) really
+//   spawns `node "$SLAVEOFAI_BROKER_CLI" broker run <op> ...`, so the
+//   request travels the channel the daemon is tailing under the identity
+//   the daemon issued. `--gate-tool <ToolName>` (with `--gate-out`) runs
+//   the REAL `PreToolUse` hook named by the `--settings` file and puts its
+//   verdict back into the stream as a `tool_use`/`hook_started`/
+//   `hook_response`/`tool_result` quartet -- which is the only way to
+//   measure a refusal nobody recorded, because the interesting one is a
+//   tool nobody ever denied.
 //   m36-flow       synthetic, selected by ARGV rather than by prompt content:
 //                  the two legs of M36's ask/answer round trip. A run spawned
 //                  WITHOUT `--resume` is the asking leg -- it replays
@@ -134,8 +149,9 @@
 //                  captures show process exit code 0 even for hook-crash,
 //                  hook-deny, and permission-denied runs, so the fake matches
 //                  that rather than inventing a nonzero exit for them.
-import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
@@ -202,10 +218,32 @@ async function writeLines(lines) {
 }
 
 /** Replays `fixtures/<name>.ndjson` verbatim and exits 0 -- the default-branch body, factored out
- * so the `m8a-flow` synthetic mode can delegate to it after doing its own side effect. */
-async function replayFixture(name) {
+ * so the `m8a-flow` synthetic mode can delegate to it after doing its own side effect.
+ *
+ * `extraAfterInit` (M52 R8) is the ONE thing that may be interleaved, and it goes AFTER the
+ * fixture's first `system`/`init` line rather than in front of the stream: a `tool_use` that
+ * arrived before a session id is a shape no real CLI produces, and the pump reads the session id
+ * off that line to write its checkpoint. Everything else about the recording -- order, content,
+ * the terminal `result` and the routine `Stop` -- is untouched. */
+async function replayFixture(name, extraAfterInit = []) {
   const lines = readFixtureLines(name)
-  await writeLines(lines)
+  if (extraAfterInit.length === 0) {
+    await writeLines(lines)
+    process.exit(0)
+  }
+  const initIndex = lines.findIndex((line) => {
+    try {
+      const parsed = JSON.parse(line)
+      return parsed.type === 'system' && parsed.subtype === 'init'
+    } catch {
+      return false
+    }
+  })
+  if (initIndex === -1) {
+    process.stderr.write(`fake-claude: ${name}.ndjson has no system/init line to inject after\n`)
+    process.exit(2)
+  }
+  await writeLines([...lines.slice(0, initIndex + 1), ...extraAfterInit, ...lines.slice(initIndex + 1)])
   process.exit(0)
 }
 
@@ -346,12 +384,248 @@ function workFixtureName() {
 
 /** The WORK fall-through's first line in every prompt-sniffing mode: replays `--work-fixture
  *  <name>` and exits when the flag is there, and returns false when it is not, so each mode reads
- *  as `if (await workFixtureArm()) return` in front of its own work body. */
+ *  as `if (await workFixtureArm()) return` in front of its own work body.
+ *
+ *  M52 R8 hangs three things off it, in this order and for a reason: the environment dump first
+ *  (it is a fact about THIS process and must be recorded whatever the rest does), then the broker
+ *  call (a real round trip through the orchestrator, which has to finish before the stream ends or
+ *  the run would conclude with its own request unanswered), then the gate lines, which are part of
+ *  the replay itself. Every one of them is a no-op unless its flag is on argv, so every existing
+ *  caller of this arm behaves exactly as it did. */
 async function workFixtureArm() {
   const work = workFixtureName()
   if (work === null) return false
-  await replayFixture(work)
+  dumpChildEnv()
+  runBrokerOp()
+  await replayFixture(work, gateLinesFor(fixtureSessionId(work)))
   return true
+}
+
+/**
+ * M52 R8: this process's OWN environment, appended as one JSON line to `--env-out <path>`.
+ *
+ * This is how a gate asserts an ABSENCE, which is the only interesting way to assert one: from
+ * inside the child that is supposed not to hold the thing. `buildChildEnv`
+ * (`packages/providers/src/runtime/process.ts`) hands a worker an explicit `CHILD_ENV_ALLOW` list
+ * rather than the daemon's environment, so `DATABASE_URL` and the deploy credential are supposed
+ * to be missing here -- and a dump taken by the child itself is the only evidence of that which
+ * does not simply restate the code that built it.
+ *
+ * ARGV, not an environment variable, for the reason `--line-delay-ms` moved there: a name a gate
+ * exported on the daemon does not reach this child at all any more. `FAKE_ENV_OUT` stays supported
+ * for a caller that spawns this script directly.
+ *
+ * NDJSON and APPENDED, because a daemon runs several work runs into the same file and the gate
+ * wants all of them -- keyed by `SLAVEOFAI_RUN_ID`, which is how it tells one run's child from
+ * another's.
+ */
+function dumpChildEnv() {
+  const out = flagValue('--env-out') ?? process.env.FAKE_ENV_OUT
+  if (out === undefined || out === '') return
+  appendFileSync(
+    out,
+    `${JSON.stringify({ runId: process.env.SLAVEOFAI_RUN_ID ?? null, cwd: process.cwd(), env: process.env })}\n`,
+  )
+}
+
+/**
+ * M52 R8: a WORK run that calls the broker for real before it replays its fixture.
+ *
+ * `--broker-op deploy_release` makes the work arm spawn the orchestrator's own thin client --
+ * `node "$SLAVEOFAI_BROKER_CLI" broker run deploy_release --environment <--broker-environment>
+ * --digest <--broker-digest>` -- with the child's own environment, exactly as a worker's `Bash`
+ * tool call would, and records its stdout, stderr and exit code into `--broker-out` before
+ * replaying.
+ *
+ * REALLY spawned, not simulated: the point of the stage is that the request travels through the
+ * channel the daemon is tailing, under the identity the daemon issued, with no database in the
+ * child. A fake that wrote the reply file itself would prove nothing at all.
+ *
+ * SYNCHRONOUS, and deliberately: the client blocks until the daemon's broker pass answers it, and
+ * a run whose stream ended first would conclude with its own request still outstanding -- the reply
+ * would land in a directory nobody was reading. The `spawnSync` is the same "the worker waits for
+ * its tool call" shape a real `Bash` call has.
+ *
+ * The parameters ride on argv rather than in the environment for `--line-delay-ms`'s reason (M52
+ * R3): a name exported on the daemon no longer reaches a run's child. `FAKE_BROKER_*` stay
+ * supported for a caller that spawns this script directly.
+ */
+function runBrokerOp() {
+  const op = flagValue('--broker-op')
+  if (op === undefined) return
+  const cli = process.env.SLAVEOFAI_BROKER_CLI
+  const environment = flagValue('--broker-environment') ?? process.env.FAKE_BROKER_ENVIRONMENT
+  const digest = flagValue('--broker-digest') ?? process.env.FAKE_BROKER_DIGEST
+  const out = flagValue('--broker-out') ?? process.env.FAKE_BROKER_OUT
+  const record = (entry) => {
+    if (out === undefined || out === '') return
+    appendFileSync(out, `${JSON.stringify({ runId: process.env.SLAVEOFAI_RUN_ID ?? null, op, ...entry })}\n`)
+  }
+  if (cli === undefined || cli === '') {
+    // Recorded rather than thrown: "the orchestrator never told this child where its client is" is
+    // itself a finding the gate must be able to read, and a child that died here would look to the
+    // pump like a crashed run instead.
+    record({ spawned: false, detail: 'SLAVEOFAI_BROKER_CLI is not set on this child' })
+    return
+  }
+  const argv = [
+    cli,
+    'broker',
+    'run',
+    op,
+    ...(environment === undefined ? [] : ['--environment', environment]),
+    ...(digest === undefined ? [] : ['--digest', digest]),
+  ]
+  const run = spawnSync('node', argv, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  record({
+    spawned: true,
+    status: run.status,
+    stdout: run.stdout ?? '',
+    stderr: run.stderr ?? '',
+    ...(run.error === undefined ? {} : { detail: String(run.error) }),
+  })
+}
+
+/**
+ * M52 R8: the real `PreToolUse` hook, run for real, on a tool the gate names -- and its verdict
+ * put back into the stream in the exact shape the CLI reports one.
+ *
+ * `--gate-tool WebFetch` is what makes default-deny provable end to end. A RECORDING cannot prove
+ * it: the interesting case is a tool nobody ever denied, refused because nobody granted it, and no
+ * capture of that exists or could -- the sentence a recording carries was produced by the matrix
+ * that existed the day it was recorded. So this arm reads the hook command out of the settings
+ * file the adapter wrote (`--settings <path>`, which `claudeFlags` always passes), spawns it with
+ * a `PreToolUse` payload naming the tool, and emits what came back. The hook then reads THIS
+ * process's own `SLAVEOFAI_PERMISSIONS_FILE` and `SLAVEOFAI_RUN_TOKEN`, which is the whole point:
+ * the verdict is the one a real tool call would have got, hashed against the same token.
+ *
+ * Four lines, in the order `permission-matrix-deny.ndjson` really carries them: the `tool_use`, the
+ * `hook_started` that announces the hook and its id, the `hook_response` carrying the hook's stdout
+ * DOUBLE-ENCODED (a JSON string inside the line, which is what `extractDenyReason` parses back),
+ * and the `tool_result` the CLI echoes. A deny and an allow differ only in the body and in whether
+ * the result is an error -- this arm asserts nothing itself, it reports.
+ *
+ * `--gate-out <path>` records the raw verdict (exit code, stdout, stderr) as NDJSON, so the gate
+ * can read what the hook said without parsing it back out of the stream.
+ */
+function gateLinesFor(sessionId) {
+  const tool = flagValue('--gate-tool')
+  if (tool === undefined) return []
+  const settingsPath = flagValue('--settings')
+  if (settingsPath === undefined) {
+    process.stderr.write('fake-claude: --gate-tool needs the --settings <path> the adapter passes, and there is none on this argv\n')
+    process.exit(2)
+  }
+  let hookPath
+  try {
+    hookPath = JSON.parse(readFileSync(settingsPath, 'utf8'))?.hooks?.PreToolUse?.[0]?.hooks?.[0]?.command
+  } catch (error) {
+    process.stderr.write(`fake-claude: could not read the PreToolUse hook out of ${settingsPath}: ${String(error)}\n`)
+    process.exit(2)
+  }
+  if (typeof hookPath !== 'string' || hookPath === '') {
+    process.stderr.write(`fake-claude: ${settingsPath} registers no PreToolUse hook command\n`)
+    process.exit(2)
+  }
+
+  const suffix = randomBytes(6).toString('hex')
+  const toolUseId = `toolu_fake_gate_${suffix}`
+  const hookId = `hook_fake_gate_${suffix}`
+  // `tool_name` is the ONE key the hook reads (`scripts/lib/permissions.sh`'s node one-liner, and
+  // the measurement quoted in its header). The rest is the payload's real shape, so a hook that
+  // ever starts reading more of it finds it.
+  const payload = JSON.stringify({
+    session_id: sessionId,
+    cwd: process.cwd(),
+    hook_event_name: 'PreToolUse',
+    tool_name: tool,
+    tool_input: GATE_TOOL_INPUT[tool] ?? {},
+  })
+  const run = spawnSync(hookPath, [], { input: payload, encoding: 'utf8' })
+  const stdout = run.stdout ?? ''
+  const stderr = run.stderr ?? ''
+  const exitCode = run.status ?? 2
+  const gateOut = flagValue('--gate-out') ?? process.env.FAKE_GATE_OUT
+  if (gateOut !== undefined && gateOut !== '') {
+    appendFileSync(
+      gateOut,
+      `${JSON.stringify({ runId: process.env.SLAVEOFAI_RUN_ID ?? null, tool, toolUseId, exitCode, stdout, stderr })}\n`,
+    )
+  }
+  const denied = stdout.includes('"permissionDecision":"deny"')
+  return [
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        model: 'fake-claude',
+        id: `msg_${suffix}`,
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: toolUseId, name: tool, input: GATE_TOOL_INPUT[tool] ?? {} }],
+      },
+      session_id: sessionId,
+    }),
+    JSON.stringify({
+      type: 'system',
+      subtype: 'hook_started',
+      hook_id: hookId,
+      hook_name: `PreToolUse:${tool}`,
+      hook_event: 'PreToolUse',
+      session_id: sessionId,
+    }),
+    JSON.stringify({
+      type: 'system',
+      subtype: 'hook_response',
+      hook_id: hookId,
+      hook_name: `PreToolUse:${tool}`,
+      hook_event: 'PreToolUse',
+      output: stdout.trim(),
+      stdout: stdout.trim(),
+      stderr,
+      exit_code: exitCode,
+      outcome: 'success',
+      session_id: sessionId,
+    }),
+    JSON.stringify({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: toolUseId,
+            content: denied ? 'the gate refused this call' : 'ok',
+            is_error: denied,
+          },
+        ],
+      },
+      session_id: sessionId,
+    }),
+  ]
+}
+
+/** What each `--gate-tool` name is called WITH. The hook reads only `tool_name`, so this exists so
+ *  the emitted `tool_use` line is a shape a real transcript could carry rather than an empty
+ *  object. A tool with no entry is called with `{}`, which is still a legal tool_use block. */
+const GATE_TOOL_INPUT = {
+  WebFetch: { url: 'https://example.invalid/m52', prompt: 'what does this page say' },
+  Read: { file_path: 'README.md' },
+  Bash: { command: 'true', description: 'a call the gate makes the hook judge' },
+}
+
+/** The `session_id` on a fixture's own `system`/`init` line, so injected lines belong to the same
+ *  session the recording does. `null` (never an invented id) when the fixture has none -- the
+ *  injected lines then carry `null` and a reader sees that they did. */
+function fixtureSessionId(name) {
+  for (const line of readFixtureLines(name)) {
+    try {
+      const parsed = JSON.parse(line)
+      if (parsed.type === 'system' && parsed.subtype === 'init') return parsed.session_id ?? null
+    } catch {
+      /* a fixture line that is not JSON is not an init line */
+    }
+  }
+  return null
 }
 
 /**

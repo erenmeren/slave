@@ -21,7 +21,7 @@
 // because the override below always wins for the one dispatch this gate drives.
 //
 // The three proof stages (Task 13 brief):
-//   1. Enforcement: a `SlavePermission` deny on 'run tests', a dispatched run that replays the
+//   1. Enforcement: a `SlavePermission` deny on `run_commands`, a dispatched run that replays the
 //      matrix-deny fixture, and the database proving the run survived it -- one `run.tool_denied`,
 //      zero `guardrail.tripped`, never `paused` -- plus the Activity page rendering the denial card.
 //   2. Skill tab: two runs' worth of ordered `Skill` events, the aggregate canvas, the Focus click
@@ -501,9 +501,11 @@ try {
   ).id
   // Stage 1's deny. M52 R1: `run tests` is `run_commands`, and it still resolves to `Bash` for
   // claude_code (`TOOLS_BY_KIND`, `packages/domain/src/permission/kinds.ts`) -- the same tool the
-  // fixture's canned `hook_response` reason names. The payload assertion below still reads
-  // `'run tests'` because the replayed RECORDING still says so; M52 Task 6 redacts the fixture and
-  // moves that assertion in the same commit.
+  // fixture's canned `hook_response` reason names. The recording now says `run_commands` too (M52
+  // Task 6, plan erratum E10: one documented substitution on a genuine capture,
+  // `packages/providers/test/fixtures/README.md`'s stage 3), so the two assertions below moved WITH
+  // it, in that same commit and not before -- the payload reads the KIND and the card reads the
+  // LABEL, which is erratum E2's two halves asserted in one stage.
   await prisma.slavePermission.create({ data: { slaveId, kind: 'run_commands', mode: 'deny' } })
   const enforcementTask = await prisma.task.create({
     data: {
@@ -705,8 +707,8 @@ try {
     await fail(`stage 1: expected exactly one run.tool_denied event, found ${String(toolDeniedEvents.length)}`)
   }
   const toolDeniedPayload = toolDeniedEvents[0].payload
-  if (toolDeniedPayload?.tool !== 'Bash' || toolDeniedPayload?.capability !== 'run tests') {
-    await fail(`stage 1: run.tool_denied payload is ${JSON.stringify(toolDeniedPayload)}, expected {tool:'Bash', capability:'run tests'}`)
+  if (toolDeniedPayload?.tool !== 'Bash' || toolDeniedPayload?.capability !== 'run_commands') {
+    await fail(`stage 1: run.tool_denied payload is ${JSON.stringify(toolDeniedPayload)}, expected {tool:'Bash', capability:'run_commands'}`)
   }
   console.log(`stage 1: exactly one run.tool_denied event, payload ${JSON.stringify(toolDeniedPayload)}`)
 
@@ -733,8 +735,8 @@ try {
   await waitVisible(page.getByTestId('timeline-viewport'), "the Activity page's timeline")
   await waitVisible(page.getByTestId('tool-denied-text'), 'the denial card')
   const deniedCardText = (await page.getByTestId('tool-denied-text').first().textContent())?.trim()
-  if (deniedCardText !== 'Bash denied — run tests') {
-    await fail(`stage 1: the denial card reads ${JSON.stringify(deniedCardText)}, expected "Bash denied — run tests"`)
+  if (deniedCardText !== 'Bash denied — Run commands') {
+    await fail(`stage 1: the denial card reads ${JSON.stringify(deniedCardText)}, expected "Bash denied — Run commands"`)
   }
   console.log('stage 1 PASSED: one run.tool_denied, zero guardrail.tripped, never paused, and the Activity page renders the denial card')
 

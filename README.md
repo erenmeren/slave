@@ -832,7 +832,7 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m39-supervisor-mailbox`, `gate:m40-requirement-versioning`, `gate:m41-scenario`,
 `gate:m42-catalog-import`, `gate:m44-ux-foundation`, `gate:m45-project-experience`,
 `gate:m46-workforce-catalog`, `gate:m47-team-formation`, `gate:m48-runbooks`, `gate:m49-memory`,
-`gate:m50-ephemeral` and `gate:m51-breaker` on every push — `m36` stops the orchestrator and starts it again
+`gate:m50-ephemeral`, `gate:m51-breaker` and `gate:m52-broker` on every push — `m36` stops the orchestrator and starts it again
 mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was
 given the persona and the skills it was assigned, `m38` drives a real daemon until the Supervisor
 proposes the staffing a reviewer-less project needs, waits for a human to approve it, unblocks a
@@ -904,8 +904,11 @@ and `m51` drives one until a worker repeating the same byte-identical command is
 system's own words, then has its remaining tool budget taken away, then is stopped — with the
 thirteenth call, one argument different, hashing differently from the twelve before it, and a run
 whose one tool call has simply not come back yet trips nothing at all, because a quiet twenty-minute
-build is not a loop. That is
-26 gates. Tests and gates share one Postgres --
+build is not a loop,
+and `m52` drives one until a worker is refused a tool nobody granted it and keeps working, a person
+grants it and the next run is not refused, and a deployment runs with a credential the worker's own
+environment does not contain — asserted from both sides. That is
+27 gates. Tests and gates share one Postgres --
 run one at a time.
 
 ## Learn more

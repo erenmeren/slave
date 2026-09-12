@@ -70,7 +70,7 @@ should be brought in line the next time they are touched.
 | `plan-graph.ndjson` | `e8f2bb0` | Same base, with `result.result` carrying a planning task graph. Drives `m8-flow`'s planning arm. |
 | `replan-delta.ndjson` | M40 Task 3 | `plan-graph`'s transcript with its final assistant text block and `result.result` replaced by a re-plan DELTA (one `docs` addition, one `cancel` id, an empty `keep`) and `total_cost_usd` at 0.03. The `$CANCEL_ID` token is a placeholder, not JSON a model wrote: the id to cancel is a row the caller seeded, so `fake-claude.mjs`'s re-plan arm substitutes it from `--replan-cancel <id>` in argv, or removes the element entirely when no flag is passed. |
 | `plan-graph-scenario.ndjson` | M41 Task 2 | `plan-graph`'s transcript with its three task DESCRIPTIONS rewritten and nothing else — same three titles, same `backend` roles, same `core → api → polish` chain, same `total_cost_usd` (0.209). The `core` description carries the sentence `supervisor-answer.ndjson` cites (`PostgreSQL on port 5433`) verbatim, which is what lets the M41 scenario's Supervisor answer a question from the asking task's own text; the stock `plan-graph` descriptions carry no such sentence, and editing that file instead would have silently changed what `gate-m8-plan` and `gate-m40-requirement-versioning` measure. Drives `m41-flow`'s planning arm. |
-| `permission-matrix-deny.ndjson` | M18 Task 6 fix round 1; **re-recorded from the real CLI in M19 Task A1** | A real orchestrator-driven run against a real permission matrix — see the section below for its full provenance. `Read` allowed, then `Bash` (`npm test`) met this repo's own `PreToolUse` hook denying with the M18 grammar (`permission matrix denies 'run tests' (Bash) for this slave`), the agent adapted and reported instead of retrying, and the `result` line is honest about the denial: `is_error: false` but `permission_denials` carries the denied `toolu_01LiQfhzhqKJPfrr4pAD1Xjs`, exactly as `hook-deny.ndjson` measures the real CLI doing for a hook deny of any kind. |
+| `permission-matrix-deny.ndjson` | M18 Task 6 fix round 1; **re-recorded from the real CLI in M19 Task A1** | A real orchestrator-driven run against a real permission matrix — see the section below for its full provenance. `Read` allowed, then `Bash` (`npm test`) met this repo's own `PreToolUse` hook denying with the M18 grammar (`permission matrix denies 'run_commands' (Bash) for this slave` — the kind is M52's, by the stage-3 substitution below), the agent adapted and reported instead of retrying, and the `result` line is honest about the denial: `is_error: false` but `permission_denials` carries the denied `toolu_01LiQfhzhqKJPfrr4pAD1Xjs`, exactly as `hook-deny.ndjson` measures the real CLI doing for a hook deny of any kind. |
 
 The three review fixtures, `plan-graph`, `plan-graph-scenario` and `replan-delta` share `complete`'s
 `session_id` (`fake-session-complete`) because they are edits of it, not separate captures.
@@ -311,7 +311,7 @@ appended to it.
 ### Redaction
 
 The stream is byte for byte the CLI's stdout except for the mechanical substitutions below, applied
-in two stages (`<operator>` was the recording operator's home-directory name).
+in three stages (`<operator>` was the recording operator's home-directory name).
 
 **Stage 1 — rule 3**, paths carrying a home directory, a UID or a PID:
 
@@ -353,6 +353,22 @@ A `JSON.parse`/`JSON.stringify` round trip of this file with an **empty** `STAND
 to its input across all 29 lines (checked with `cmp`), so this pass changes only the six fields it
 names — and it touched exactly one line, line 9.
 
+**Stage 3 — rule 1** (M52, plan erratum E10), the one substitution here that is not a redaction. The
+deny reason this recording carries is **our own gate's sentence**, echoed back by the CLI:
+`permission matrix denies '<kind>' (<tool>) for this slave`, spelled by `scripts/lib/permissions.sh`.
+M52 R1 renamed the permission vocabulary, so the quoted slot — which is the KIND (plan erratum E2),
+the value stored in `run.tool_denied.payload.capability` — moves with it. Applied as a mechanical
+substitution under rule 1, never a rewrite of the recording:
+
+```bash
+sed -i "s/'run tests'/'run_commands'/g" packages/providers/test/fixtures/permission-matrix-deny.ndjson
+```
+
+The `\"run tests\"` in the assistant's own markdown summary (lines 26 and 28, double quotes, the
+model paraphrasing what it was told) is deliberately **left alone**: that is the model's prose, not
+our sentence, and rule 4's posture — the fixture is right and its placement is wrong — applies to
+what the model said as much as to where its lines sit.
+
 **Where each one lands:**
 
 | Rule | Substitution | Sites |
@@ -363,6 +379,7 @@ names — and it touched exactly one line, line 9.
 | 5 | `tools` (111 entries, 84 of them `mcp__*`) → `["Read","Bash"]` | **1**, the `init` line. The two tools this recording actually exercises, so the catalog stays consistent with the transcript instead of naming a tool that never appears in it. |
 | 5 | `mcp_servers` (5 entries) → `[{"name":"fixture-mcp-server","status":"connected"}]` | **1**. This is the field the rule exists for: it named the operator's connected Gmail/Notion/Drive/Calendar accounts and their auth status. |
 | 5 | `plugins` (8) → one `fixture-plugin` entry; `slash_commands` (115) → `["fixture-command"]`; `skills` (82) → `["fixture-skill"]`; `agents` (5) → `["fixture-agent"]` | **1 each**, all on the `init` line. Each keeps its real element schema. |
+| 1 | `'run tests'` → `'run_commands'` | **4**. M52 R1 renamed the permission vocabulary; the quoted value in a matrix deny is the KIND (plan erratum E2), and this recording carries our own gate's sentence rather than the CLI's. Two per line on lines 22 and 23 — the `hook_response`'s `output` and its `stdout`, then the `tool_result` and the `tool_use_result` echo. Not a redaction: it is rule 1's mechanical substitution, named here like every other. |
 
 `terminal_slash_commands` (`["doctor","color"]`) and `capabilities` are **kept**: the first is the
 CLI's own built-in list and the second is its wire-protocol feature set, neither of which says
@@ -378,7 +395,8 @@ end:
 | --- | --- | --- |
 | raw capture | 34875 | — |
 | after stage 1 | 34935 | **+60** = `9 × 7 − 3` (nine `/home/<operator>` sites grow by 7 each; the socket path shrinks by 3) |
-| after stage 2 (committed) | 25041 | **−9894**, entirely on line 9, whose `init` line goes from 11046 to 1152 bytes |
+| after stage 2 | 25041 | **−9894**, entirely on line 9, whose `init` line goes from 11046 to 1152 bytes |
+| after stage 3 (committed) | 25053 | **+12** = `4 × 3` (four `'run tests'` sites grow by 3 each), on lines 22 and 23 only |
 
 The capture contains **no email address** (grep for `@`-shaped tokens: zero matches) and no
 transcript path. `session_id` and `uuid` values are kept: they are random UUIDs, they identify

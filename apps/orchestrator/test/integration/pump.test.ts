@@ -1522,9 +1522,15 @@ describe('pumpRun', () => {
         const toolDenied = await prisma.executionEvent.findFirstOrThrow({
           where: { runId: ids.runId, type: 'run_tool_denied' },
         })
+        // M52 Task 6: the recording's own quoted slot moved from `'run tests'` to `'run_commands'`
+        // in the same commit that substituted it (plan erratum E10, `fixtures/README.md`'s stage 3).
+        // This assertion reads the FIXTURE through the real parser, so it is one of the three the
+        // substitution earns -- the other two are `gate:m18`'s payload and card assertions. Every
+        // other `'run tests'` in this file is a HAND-BUILT reason string exercising the parser on an
+        // arbitrary capability, and is deliberately left alone.
         expect(toolDenied.payload).toEqual({
           tool: 'Bash',
-          capability: 'run tests',
+          capability: 'run_commands',
           toolUseId: 'toolu_01LiQfhzhqKJPfrr4pAD1Xjs',
         })
 
