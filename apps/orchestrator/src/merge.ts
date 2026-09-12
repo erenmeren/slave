@@ -47,6 +47,22 @@ async function failMerge(input: {
   readonly workspaceId: string
   readonly taskKey: string
   readonly reason: string
+  /**
+   * M53 R4, fix round 1: did somebody JUDGE the work, or did the pass simply fail to run?
+   *
+   * `true` only where the branch itself is what went wrong -- it would not rebase, it would not
+   * merge, or the post-rebase gate RAN and said no. `false` for a verify that could not run at all
+   * (`not_configured` / `could_not_run`) and for a primary checkout somebody left dirty: those are
+   * the orchestrator's problems and the project's, and `verify.ts`'s own failed arm refuses to
+   * charge a task an attempt for exactly them. Charging the WORKER's record would be the same
+   * mistake in a new column -- and a worse one, because `integrated` feeds the ranker's third rate,
+   * so a workspace with no verify commands would mark down every worker whose task reached this
+   * pass.
+   *
+   * Required rather than defaulted: the four callers are the whole question, and a default is how
+   * the fifth one gets it wrong silently.
+   */
+  readonly judged: boolean
 }): Promise<void> {
   await appendEvent({
     type: 'task.merge_failed',
@@ -56,10 +72,13 @@ async function failMerge(input: {
     payload: { reason: input.reason },
   })
 
-  // M53 R4: the work did not reach the base branch, and the reason is the work -- a conflicted
-  // rebase, a post-rebase gate that said no, a merge git refused. Before the escalation count,
-  // which is about the WORKSPACE rather than about this attempt.
-  await settleTaskEvidence(input.taskId, { kind: 'integration', integrated: false })
+  // M53 R4: `false` means somebody looked at this work and it did not land -- a rebase that
+  // conflicted, a post-rebase gate that ran and said no, a merge git refused. It does NOT mean
+  // "this pass ended badly": a verify that could not run and a dirty shared checkout leave the
+  // column null, because nobody judged the work and E1's rule is that a judgement column moves off
+  // null exactly once, so a false written here can never be corrected later. Before the escalation
+  // count, which is about the WORKSPACE rather than about this attempt.
+  if (input.judged) await settleTaskEvidence(input.taskId, { kind: 'integration', integrated: false })
 
   const failureCount = await prisma.executionEvent.count({
     where: { taskId: input.taskId, type: 'task_merge_failed' },
@@ -191,6 +210,8 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       workspaceId,
       taskKey,
       reason: `rebase onto ${workspace.baseBranch} conflicted: ${message}`,
+      // The branch no longer applies to the base branch. That is the work.
+      judged: true,
     })
     return
   }
@@ -225,7 +246,10 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       result.stage === null ? String(result.failedCommand) : `stage "${result.stage}" gate ${String(result.failedCommand)}`
     const reason =
       result.kind === 'failed' ? `post-rebase verify failed: ${failed} exited ${String(result.exitCode)}` : result.output
-    await failMerge({ taskId: task.id, workspaceId, taskKey, reason })
+    // `failed` is a gate that RAN and said no -- a verdict on the rebased tree. `not_configured`
+    // and `could_not_run` are this project's configuration and this machine's, and settle nothing
+    // (the same two kinds `verify.ts`'s `advance` refuses to charge an attempt for).
+    await failMerge({ taskId: task.id, workspaceId, taskKey, reason, judged: result.kind === 'failed' })
     return
   }
 
@@ -240,6 +264,9 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       workspaceId,
       taskKey,
       reason: `primary checkout is not clean on ${workspace.baseBranch}`,
+      // Somebody left the shared repository dirty, or it is on the wrong branch. Nothing here is
+      // about the work, and no worker did it.
+      judged: false,
     })
     return
   }
@@ -260,6 +287,8 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       workspaceId,
       taskKey,
       reason: `merge of ${branch} onto ${workspace.baseBranch} failed: ${message}`,
+      // The same class as the rebase above: the branch would not go onto the base branch.
+      judged: true,
     })
     return
   }

@@ -1,6 +1,7 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { type Result, err, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { recordRunEvidence } from './evidence.js'
 import { killWithEscalation } from './kill.js'
 import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
@@ -82,6 +83,19 @@ export async function requestStop(
       },
       userId: principal?.userId ?? null,
     })
+    // M53 R3/R5(b), plan erratum E22 -- the SEVENTH write site, and the one the pipeline's other
+    // six could not cover. `pump.ts`'s own stop arm writes the fact when the pump wins this race;
+    // this function usually wins it instead ("In the CLI, `requestStop` owns this pump and always
+    // reaches its own `stopped` write first", `pump.ts:1180-1184`), and before this the same
+    // operator action left a row or left nothing depending on which side got there first.
+    //
+    // Control calling its own verb, which is why this is the one write site outside the
+    // orchestrator: `requestStop` is the terminal transition here, and a fact written anywhere else
+    // would be a second derivation of it. Inside the `concluded.count > 0` guard and after the
+    // event, exactly like the other six: the fact belongs to whoever actually concluded the run,
+    // and `recordRunEvidence` is idempotent on `runId`, so the pump winning or losing the race is
+    // harmless either way -- one row, `outcome: 'stopped'`, one human intervention counted.
+    await recordRunEvidence(run.id)
   }
   return ok(undefined)
 }

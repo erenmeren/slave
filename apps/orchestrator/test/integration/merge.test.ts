@@ -623,9 +623,10 @@ describe('integration settles only where work actually reached the base branch (
     expect(row.settledAt).toBeNull()
   })
 
-  it('settles FALSE on `task.merge_failed`', async (): Promise<void> => {
-    // A post-rebase verify that says no: the commits did not reach the base branch, and the reason
-    // they did not is the work itself.
+  it('settles FALSE on a post-rebase gate that RAN and said no', async (): Promise<void> => {
+    // `failMerge` caller 2, `result.kind === 'failed'`: the gate ran against the rebased tree and
+    // turned it down. The commits did not reach the base branch and the reason they did not is the
+    // work itself.
     const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: ['exit 7'] })
     const { taskId } = await seedMergingTask(workspace)
     const implRunId = await implEvidenceFor(taskId)
@@ -634,6 +635,59 @@ describe('integration settles only where work actually reached the base branch (
 
     expect(await eventTypesFor(workspace.id)).toContain('task.merge_failed')
     expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })).integrated).toBe(false)
+  })
+
+  it('settles FALSE on a rebase that CONFLICTED -- the branch no longer applies', async (): Promise<void> => {
+    // `failMerge` caller 1. The base branch moved under the task: `main` now touches the same line
+    // the task's own commit does, so the rebase cannot replay it. Nobody ran a command to decide
+    // that; the work itself is what does not fit.
+    const workspace = await seedWorkspace({ autoMerge: true })
+    const { taskId } = await seedMergingTask(workspace, { fileName: 'clash.txt', content: 'from the task\n' })
+    const implRunId = await implEvidenceFor(taskId)
+    writeFileSync(join(workspace.repoPath, 'clash.txt'), 'from main\n')
+    git(['add', '-A'], workspace.repoPath)
+    git(['commit', '-q', '-m', 'main touched the same file'], workspace.repoPath)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const failure = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_merge_failed' } })
+    expect((failure.payload as { reason: string }).reason).toMatch(/conflicted/u)
+    expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })).integrated).toBe(false)
+  })
+
+  it('settles NOTHING when the post-rebase verify could not RUN -- that is not the worker being judged', async (): Promise<void> => {
+    // `failMerge` caller 2, `result.kind === 'not_configured'`: a workspace with no verify commands
+    // has proved nothing about this branch, and `runVerify` refuses to read that as a pass. Before
+    // this round the merge pass settled `false` for it -- which, because `integrated` feeds the
+    // ranker's third rate and a judgement column can never move back off a verdict, would have
+    // marked down EVERY worker in a misconfigured project, permanently.
+    const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: [] })
+    const { taskId } = await seedMergingTask(workspace)
+    const implRunId = await implEvidenceFor(taskId)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    expect(await eventTypesFor(workspace.id)).toContain('task.merge_failed')
+    const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })
+    expect(row.integrated).toBeNull()
+    expect(row.settledAt).toBeNull()
+  })
+
+  it('settles NOTHING when the shared checkout is dirty -- no worker did that', async (): Promise<void> => {
+    // `failMerge` caller 3. The primary checkout is shared by every task in the workspace; somebody
+    // left a file in it, or left it on another branch. The task's branch was never even looked at.
+    const workspace = await seedWorkspace({ autoMerge: true })
+    const { taskId } = await seedMergingTask(workspace)
+    const implRunId = await implEvidenceFor(taskId)
+    writeFileSync(join(workspace.repoPath, 'somebody-left-this.txt'), 'uncommitted\n')
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    const failure = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_merge_failed' } })
+    expect((failure.payload as { reason: string }).reason).toMatch(/primary checkout is not clean/u)
+    const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })
+    expect(row.integrated).toBeNull()
+    expect(row.settledAt).toBeNull()
   })
 
   it('settles true when a person confirms a hand merge, days later', async (): Promise<void> => {

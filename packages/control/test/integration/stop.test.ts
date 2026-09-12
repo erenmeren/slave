@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
+import { recordRunEvidence } from '../../src/evidence.js'
 import { isAlive } from '../../src/kill.js'
 import { requestStop } from '../../src/stop.js'
 
@@ -132,5 +133,67 @@ describe('requestStop', () => {
     expect(taskAfter.status).toBe('blocked')
     const events = await prisma.executionEvent.findMany({ where: { runId: run.id, type: 'run_stopped' } })
     expect(events).toHaveLength(1)
+  })
+
+  /**
+   * M53 R3/R5(b), plan erratum E22 -- the seventh write site.
+   *
+   * `pump.ts` has an arm that concludes an operator stop too, and it writes the fact when it wins
+   * the race. This function usually wins it instead, and before this round the SAME operator action
+   * left a row or left nothing depending on which side got there first.
+   */
+  describe('the fact an operator stop leaves behind (M53 R3, erratum E22)', () => {
+    it('writes exactly one row, with the stop counted as a human intervention', async () => {
+      const { run } = fixture
+
+      // No pump alive: this function is the only writer of this run's terminal row, which is the
+      // common case the pump's own arm cannot cover.
+      const result = await requestStop(run.id, 'meren')
+
+      expect(result.ok).toBe(true)
+      const rows = await prisma.evidenceRecord.findMany({ where: { runId: run.id } })
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.outcome).toBe('stopped')
+      // R5(b): somebody reached in and stopped this run. `recoveries` stays 0 -- a person is not a
+      // recovery, and no sweep concluded anything here.
+      expect(rows[0]?.humanInterventions).toBeGreaterThanOrEqual(1)
+      expect(rows[0]?.recoveries).toBe(0)
+    })
+
+    it('still writes exactly one when the stop is asked for twice', async () => {
+      const { run } = fixture
+      await requestStop(run.id, 'meren')
+      const first = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: run.id } })
+
+      // The second call finds the run already terminal, so `concluded.count` is 0 and this site does
+      // not even run -- and if it did, the writer is keyed on `runId` and would upsert onto the row
+      // it already wrote. Both halves are asserted, because only one of them is about this site.
+      const again = await requestStop(run.id, 'meren')
+
+      expect(again.ok).toBe(true)
+      const rows = await prisma.evidenceRecord.findMany({ where: { runId: run.id } })
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.recordedAt).toEqual(first.recordedAt)
+    })
+
+    it('leaves the PUMP\'s own row alone when the pump won the race', async () => {
+      // `concluded.count === 0`: the pump concluded this run and wrote its own fact a moment ago.
+      // This function announces nothing and records nothing -- the fact belongs to whoever actually
+      // concluded the run, which is the rule all seven sites share.
+      const { run } = fixture
+      const terminal = new Date()
+      await prisma.slaveRun.update({
+        where: { id: run.id },
+        data: { status: 'stopped', terminalAt: terminal, endedAt: terminal, stopRequestedBy: 'meren' },
+      })
+      await recordRunEvidence(run.id)
+      const pumps = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: run.id } })
+
+      await requestStop(run.id, 'meren')
+
+      const rows = await prisma.evidenceRecord.findMany({ where: { runId: run.id } })
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.recordedAt).toEqual(pumps.recordedAt)
+    })
   })
 })

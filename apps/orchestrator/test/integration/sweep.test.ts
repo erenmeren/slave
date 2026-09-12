@@ -15,7 +15,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { SlaveRuntimeAdapter } from '@slave-of-ai/providers'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { noteTickRan, reconcileOrphans, resetTickObservation, sweep, type SweepDeps } from '../../src/sweep.js'
 
 /**
@@ -826,26 +826,49 @@ describe('sweep and reconcileOrphans', () => {
     await prisma.slaveRun.update({ where: { id: run.id }, data: { terminalAt: hoursAgo(1), endedAt: hoursAgo(1) } })
     await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'running', activeRunId: run.id } })
 
+    // ASSIGNED and restored in a `finally`, never `vi.spyOn` (M53 t3 fix round 1, review item 3).
+    // `prisma.task.updateMany` is a lazy delegate accessor rather than an own property, so
+    // `vi.spyOn` captures `undefined` as the "original" and `mockRestore` puts THAT back -- which
+    // is what this case used to do, twice, leaving the delegate undefined for every test declared
+    // below it in this file. A plain assignment with an explicit restore has neither hazard, and it
+    // is the same substitution: the arm only ever awaits the call and reads `count`.
     const realUpdateMany = prisma.task.updateMany.bind(prisma.task)
-    const spy = vi.spyOn(prisma.task, 'updateMany')
+    let intercepted = false
     // Cast because `updateMany` is declared to return Prisma's own branded promise, which nothing
-    // outside the client can construct; the arm only ever awaits it and reads `count`.
-    spy.mockImplementation(((args: Parameters<typeof realUpdateMany>[0]) => {
-      spy.mockRestore()
+    // outside the client can construct.
+    prisma.task.updateMany = ((args: Parameters<typeof realUpdateMany>[0]) => {
+      // ONCE: the arm's own write is the one this race is about, and every later `updateMany` in
+      // this sweep must go straight through.
+      if (intercepted) return realUpdateMany(args)
+      intercepted = true
       return (async (): Promise<{ readonly count: number }> => {
         await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'cancelled' } })
         return realUpdateMany(args)
       })()
-    }) as unknown as typeof prisma.task.updateMany)
+    }) as unknown as typeof prisma.task.updateMany
 
-    const report = await sweep(deps)
-    spy.mockRestore()
+    let report
+    try {
+      report = await sweep(deps)
+    } finally {
+      prisma.task.updateMany = realUpdateMany as typeof prisma.task.updateMany
+    }
 
     expect(report.strandedClaims).toEqual([])
     const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(task.status).toBe('cancelled')
     expect(task.activeRunId).toBe(run.id)
     expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
+  })
+
+  it('leaves the Prisma client usable for every case declared after it', async (): Promise<void> => {
+    // The regression test for the landmine above, and the reason this file can be appended to
+    // again: for two milestones the case before this one left `prisma.task.updateMany` undefined
+    // for the rest of the file, and the next person to add a test here would have spent an hour on
+    // `TypeError: prisma.task.updateMany is not a function` in code they had not touched.
+    expect(typeof prisma.task.updateMany).toBe('function')
+    const touched = await prisma.task.updateMany({ where: { id: fixture.taskId }, data: {} })
+    expect(touched.count).toBe(1)
   })
 })
 
