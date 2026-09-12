@@ -360,6 +360,10 @@ describe('WorkforceClient row click opens the panel', () => {
                 // `runtimeRoles.length` -- `undefined` there is a crash, not an empty set.
                 profile: null,
                 runtimeRoles: [],
+                // M52 R7, the same reason a third time: the panel's permissions group maps over
+                // this array, and `undefined.map` is the crash `waitingFor`'s comment describes.
+                permissions: [],
+                permissionsRunKind: 'implementation',
               },
             ],
           }),

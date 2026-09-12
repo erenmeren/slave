@@ -105,9 +105,9 @@ describe('the Settings query module', () => {
       const sections = await buildPermissionMatrix()
       const cells = sections[0]?.rows[0]?.cells ?? []
 
-      // All six, in the README's order, every time — a tool with no row is `null`, which is
-      // UNSET and not the same statement as `deny`.
-      expect(cells.map((c) => c.tool)).toEqual([
+      // All six, in `PERMISSION_KINDS` order, every time — an operation with no row is `null`,
+      // which is UNSET and not the same statement as `deny`.
+      expect(cells.map((c) => c.kind)).toEqual([
         'read_repo',
         'write_repo',
         'run_commands',

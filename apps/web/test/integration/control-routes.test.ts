@@ -38,6 +38,10 @@ import { PATCH as profilePATCH } from '../../src/app/api/w/[workspaceId]/slaves/
 import { PATCH as runtimeRolesPATCH } from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/runtime-roles/route.js'
 import { POST as releasePOST } from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/release/route.js'
 import { POST as lifecyclePOST } from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/lifecycle/route.js'
+import {
+  PUT as permissionPUT,
+  DELETE as permissionDELETE,
+} from '../../src/app/api/w/[workspaceId]/slaves/[slaveId]/permissions/[kind]/route.js'
 import { GET as runContextGET } from '../../src/app/api/w/[workspaceId]/runs/[runId]/context/route.js'
 import { GET as supervisorGET } from '../../src/app/api/w/[workspaceId]/supervisor/route.js'
 import { POST as approvePOST } from '../../src/app/api/w/[workspaceId]/supervisor/decisions/[decisionId]/approve/route.js'
@@ -570,6 +574,118 @@ describe('the control routes', () => {
   // M37 t4: what a run was told, read back. The row is written before the spawn (Task 2), so a
   // run that started always has one -- and a run without one is indistinguishable from a run that
   // does not exist as far as this read is concerned.
+  /**
+   * M52 R7. One operation's answer for one worker: a PUT sets the cell and a DELETE takes the
+   * decision back, with the KIND in the path. The verb moved here from the unscoped
+   * `/api/slaves/[slaveId]/permission` (deleted in the same commit), so these cases are the ones
+   * `org-routes.test.ts` used to hold plus the three the move itself earns -- the cross-project
+   * 404, the revoke, and the granter's name on the row.
+   */
+  describe('permissions', () => {
+    const PERMISSION_SECRET = '0123456789abcdef0123456789abcdef'
+
+    const put = (workspaceId: string, slaveId: string, kind: string, body: unknown): Promise<Response> =>
+      permissionPUT(
+        new Request('http://x', { method: 'PUT', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId, slaveId, kind }) },
+      )
+
+    const del = (workspaceId: string, slaveId: string, kind: string): Promise<Response> =>
+      permissionDELETE(new Request('http://x', { method: 'DELETE' }), {
+        params: Promise.resolve({ workspaceId, slaveId, kind }),
+      })
+
+    it('writes the cell, returns 200 and records one permission.changed', async (): Promise<void> => {
+      const response = await put(fixture.workspace.id, fixture.slave.id, 'network_fetch', { mode: 'allow' })
+
+      expect(response.status).toBe(200)
+      expect(await response.json()).toEqual({ ok: true })
+      const row = await prisma.slavePermission.findUniqueOrThrow({
+        where: { slaveId_kind: { slaveId: fixture.slave.id, kind: 'network_fetch' } },
+      })
+      expect(row.mode).toBe('allow')
+      const events = await prisma.executionEvent.findMany({ where: { type: 'permission_changed' } })
+      expect(events).toHaveLength(1)
+      expect(events[0]?.payload).toMatchObject({ kind: 'network_fetch', kindLabel: 'Fetch over the network', from: null, to: 'allow' })
+    })
+
+    // The T3 review's minor: this route passed NO principal, so every grant the web made was
+    // authored by nobody and the panel's "Granted by X" had nothing to print.
+    it('names the signed-in user as the granter, on the row and in the event', async (): Promise<void> => {
+      vi.stubEnv('SLAVEOFAI_SESSION_SECRET', PERMISSION_SECRET)
+      const user = await prisma.user.create({ data: { username: 'ada', passwordHash: 'irrelevant-for-this-test' } })
+      cookieValue.current = await mintSession(PERMISSION_SECRET, user.id, new Date())
+
+      expect((await put(fixture.workspace.id, fixture.slave.id, 'read_secret', { mode: 'allow' })).status).toBe(200)
+
+      const row = await prisma.slavePermission.findUniqueOrThrow({
+        where: { slaveId_kind: { slaveId: fixture.slave.id, kind: 'read_secret' } },
+      })
+      expect(row.grantedBy).toBe(user.id)
+      const event = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'permission_changed' } })
+      expect(event.userId).toBe(user.id)
+      expect(event.payload).toMatchObject({ by: user.id })
+    })
+
+    it('DELETE takes the decision back to never-asked, and records the change', async (): Promise<void> => {
+      await put(fixture.workspace.id, fixture.slave.id, 'network_fetch', { mode: 'deny' })
+
+      const response = await del(fixture.workspace.id, fixture.slave.id, 'network_fetch')
+
+      expect(response.status).toBe(200)
+      expect(await prisma.slavePermission.count({ where: { slaveId: fixture.slave.id } })).toBe(0)
+      const events = await prisma.executionEvent.findMany({ where: { type: 'permission_changed' }, orderBy: { seq: 'asc' } })
+      expect(events).toHaveLength(2)
+      expect(events[1]?.payload).toMatchObject({ from: 'deny', to: null })
+    })
+
+    // DELETE is idempotent: "there was nothing to take back" is the caller's desired end state.
+    it('DELETE on a kind nobody decided is 200 and writes no event', async (): Promise<void> => {
+      const response = await del(fixture.workspace.id, fixture.slave.id, 'deploy_release')
+
+      expect(response.status).toBe(200)
+      expect(await prisma.executionEvent.count({ where: { type: 'permission_changed' } })).toBe(0)
+    })
+
+    // The whole reason the route moved: `slaveControlResponse` answers before the verb is called,
+    // so a cross-project id reads back as "no such slave" rather than as a permission somebody
+    // else's worker now has.
+    it("404s a worker in another project and an unknown worker, on both verbs, writing nothing", async (): Promise<void> => {
+      const crossWorkspace = await put(fixture.otherWorkspace.id, fixture.slave.id, 'network_fetch', { mode: 'allow' })
+      expect(crossWorkspace.status).toBe(404)
+      expect((await crossWorkspace.json()).error).toBe('no such slave in this workspace')
+
+      expect((await del(fixture.otherWorkspace.id, fixture.slave.id, 'network_fetch')).status).toBe(404)
+      expect((await put(fixture.workspace.id, '00000000-0000-4000-8000-000000000000', 'network_fetch', { mode: 'allow' })).status).toBe(404)
+
+      expect(await prisma.slavePermission.count()).toBe(0)
+      expect(await prisma.executionEvent.count({ where: { type: 'permission_changed' } })).toBe(0)
+    })
+
+    it('400s a body that is not { mode }, and unparseable JSON', async (): Promise<void> => {
+      expect((await put(fixture.workspace.id, fixture.slave.id, 'network_fetch', {})).status).toBe(400)
+      expect((await put(fixture.workspace.id, fixture.slave.id, 'network_fetch', { mode: 'maybe' })).status).toBe(400)
+      // The old body's shape is a 400 now: the kind is in the path, and a `tool` key is a caller
+      // written against the route this one replaced.
+      expect((await put(fixture.workspace.id, fixture.slave.id, 'network_fetch', { tool: 'network_fetch', mode: 'allow' })).status).toBe(400)
+
+      const malformed = await permissionPUT(
+        new Request('http://x', { method: 'PUT', body: 'not json', headers: { 'content-type': 'application/json' } }),
+        { params: Promise.resolve({ workspaceId: fixture.workspace.id, slaveId: fixture.slave.id, kind: 'network_fetch' }) },
+      )
+      expect(malformed.status).toBe(400)
+      expect(await prisma.slavePermission.count()).toBe(0)
+    })
+
+    it('409s with the verb\u2019s verbatim refusal on a kind outside the six', async (): Promise<void> => {
+      const response = await put(fixture.workspace.id, fixture.slave.id, 'rm-minus-rf', { mode: 'allow' })
+
+      expect(response.status).toBe(409)
+      expect(await response.json()).toEqual({ error: 'a permission must name one of the six operations' })
+      expect((await del(fixture.workspace.id, fixture.slave.id, 'rm-minus-rf')).status).toBe(409)
+    })
+  })
+
   describe('run context', () => {
     const manifest = {
       kind: 'implementation',

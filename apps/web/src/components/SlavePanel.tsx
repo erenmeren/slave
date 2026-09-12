@@ -2,7 +2,15 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { userSlaveStatus } from '@slave-of-ai/domain'
+import {
+  PERMISSION_LABEL,
+  PERMISSION_PROVIDERS,
+  TOOLS_BY_KIND,
+  userSlaveStatus,
+  type KindGrant,
+  type PermissionKind,
+  type PermissionRunKind,
+} from '@slave-of-ai/domain'
 import type { SlaveFeedEvent } from '../lib/feedSummary'
 import { formatUsd } from '../lib/realMoney'
 import { providerLabel } from '../lib/providerLabel'
@@ -43,6 +51,72 @@ const GATE_TEXT: Record<'all-tools' | 'shell-only' | 'none', string> = {
   'all-tools': 'every tool this runtime has',
   'shell-only': 'a shell, and nothing else',
   none: 'no tools at all',
+}
+
+/**
+ * The three marks the matrix has drawn since M14 -- one vocabulary, two surfaces (M52 R7).
+ *
+ * Spelled here rather than imported from `PermissionMatrix`: that component is the SETTINGS grid,
+ * it owns a button per cell and a write per click, and a panel that imported it to borrow two
+ * `Record`s would be importing a writer to draw a read.
+ */
+const GLYPH: Record<'allow' | 'deny' | 'unset', string> = { allow: '\u2713', deny: '\u2715', unset: '\u2013' }
+
+const GLYPH_CLASS: Record<'allow' | 'deny' | 'unset', string> = {
+  allow: 'text-tone-working',
+  deny: 'text-tone-blocked',
+  unset: 'text-text-3',
+}
+
+/** A BASELINE is a ✓ (the run really may do it) and `never` is a `–`. Three glyphs, the same three
+ *  `PermissionMatrix` has drawn since M14 -- one vocabulary, two surfaces. */
+function glyphFor(grant: KindGrant): 'allow' | 'deny' | 'unset' {
+  if (grant.mode === 'deny') return 'deny'
+  return grant.mode === 'allow' || grant.source === 'baseline' ? 'allow' : 'unset'
+}
+
+/**
+ * A kind that names NO vendor tool on either provider is a BROKER grant rather than a tool grant
+ * (M52 R3): what it permits is the orchestrator acting for this worker, in its own process, and the
+ * worker never holds the credential.
+ *
+ * DERIVED from `TOOLS_BY_KIND` rather than a second list of the two, so a third broker grant says
+ * so here by construction instead of quietly reading as a tool nobody granted.
+ */
+function isBrokeredGrant(kind: PermissionKind): boolean {
+  return PERMISSION_PROVIDERS.every((provider) => TOOLS_BY_KIND[kind][provider].length === 0)
+}
+
+const MONTH = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/** `2026-09-12T10:00:00.000Z` -> `12 Sep 2026`, read off the ISO STRING rather than through a
+ *  `Date`: `grantedAt` crosses the server/client boundary as UTC, and a `toLocaleDateString` in a
+ *  browser west of Greenwich would print the day before the one the event log records. */
+function onDate(at: string | null): string {
+  const [year, month, day] = (at ?? '').slice(0, 10).split('-')
+  const name = MONTH[Number(month) - 1]
+  if (year === undefined || day === undefined || name === undefined) return 'an unrecorded date'
+  return `${String(Number(day))} ${name} ${year}`
+}
+
+/**
+ * The policy sentence, and the one place this panel says anything a person did not do (M52 R7).
+ *
+ * The two broker grants say what they are, because a ✕ on a row that names no tool would otherwise
+ * read as a tool this worker cannot use.
+ */
+function sourceSentence(grant: KindGrant, runKind: PermissionRunKind): string {
+  const brokered = isBrokeredGrant(grant.kind) ? ' \u2014 a brokered operation, not a tool' : ''
+  switch (grant.source) {
+    case 'baseline':
+      return `Baseline (${runKind} runs)${brokered}`
+    case 'granted':
+      return `Granted by ${grant.by ?? 'somebody unrecorded'} on ${onDate(grant.at)}${brokered}`
+    case 'refused':
+      return `Refused by ${grant.by ?? 'somebody unrecorded'} on ${onDate(grant.at)}${brokered}`
+    case 'never':
+      return `Never granted${brokered}`
+  }
 }
 
 /** The one parse of a typed role set, mirroring `set-runtime-roles`'s own (`cli.ts`): an empty
@@ -367,6 +441,51 @@ export function SlavePanel({
             Workforce → Skills
           </Link>
         </p>
+      </DetailsGroup>
+
+      {/* M52 R7. The list is what a person needs at a glance; WHO decided and WHEN is a raw value,
+        * so it lives under Advanced -- `docs/ia.md` rule 5, and `OverviewAdvanced`'s own rule that
+        * a closed disclosure must cost nothing. NESTED rather than a sibling group, because the
+        * sentences are about these six lines and nothing else on this panel.
+        *
+        * Every glyph here is `grantsFor`'s answer, computed server-side by the same function the
+        * gate's own `permissions.json` is built by: this surface cannot claim a permission the hook
+        * does not honour, because it is not deciding anything. */}
+      <DetailsGroup group="permissions" title="Permissions">
+        <ul className="flex flex-col gap-1">
+          {slave.permissions.map((grant) => (
+            <li
+              key={grant.kind}
+              data-testid={`panel-permission-${grant.kind}`}
+              data-kind={grant.kind}
+              data-mode={grant.mode ?? 'unset'}
+              data-source={grant.source}
+              title={grant.kind}
+              className="flex items-baseline gap-2 text-xs"
+            >
+              <span aria-hidden className={GLYPH_CLASS[glyphFor(grant)]}>
+                {GLYPH[glyphFor(grant)]}
+              </span>
+              <span className="text-text-2">{PERMISSION_LABEL[grant.kind]}</span>
+            </li>
+          ))}
+        </ul>
+        <DetailsGroup group="advanced" title="Advanced">
+          <ul className="flex flex-col gap-1">
+            {slave.permissions.map((grant) => (
+              <li key={grant.kind} className="flex flex-col text-[10.5px] text-text-3">
+                <span className="text-text-2">{PERMISSION_LABEL[grant.kind]}</span>
+                <span data-testid={`panel-permission-source-${grant.kind}`} data-source={grant.source}>
+                  {sourceSentence(grant, slave.permissionsRunKind)}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-[10.5px] text-text-3">
+            an edit reaches this worker the next time a run starts or resumes, never one already in
+            flight
+          </p>
+        </DetailsGroup>
       </DetailsGroup>
 
       {/* Messages holds BOTH writes, and the runtime roles belong here rather than ungrouped above:

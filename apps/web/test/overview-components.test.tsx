@@ -56,6 +56,9 @@ const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
   // ordinary hire and prints no chip at all, so the cases that want one state their own.
   lifecycle: 'project',
   released: null,
+  // M52 R7: what this worker may do. The card shows none of it; `SlavePanel` is the surface.
+  permissions: [],
+  permissionsRunKind: 'implementation',
   // M51 R7: the rung the behavioural breaker has this worker's live run on. `none` is every
   // healthy worker, and it is what the card says nothing about.
   breakerLevel: 'none',

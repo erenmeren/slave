@@ -51,8 +51,8 @@ before adding a surface.
 | `/w/:id/tasks` Tasks | What work exists, in what state | keep (tab 2) | Untouched | M45 adds progressive disclosure |
 | `/w/:id/organization` Organization | Who works on this, why they were chosen, and what is missing | **new** (tab 3) | — | M47: one row per worker — their lifecycle, the capabilities they provide, why they are here and what they are doing — plus a Needs section whose proposals are answered in place, and the advisory edges a persona's profile carries. M50 marks each worker's lifecycle — Permanent, Project or Ephemeral — as a chip beside their name, and a worker brought in for one assignment and since released keeps their row, greyed and sorted last, with the date the engagement ended |
 | `/w/:id/knowledge` Knowledge | What this project has learnt, and who says it is true | **new** (tab 4) | — | M49: one row per memory — what kind of knowledge, its scope, the provenance sentence that says where it came from and who verified it — with filters by scope, type and status, a search on the title, and Verify / Correct / Remove in place; the expanded row shows the chain (what it replaced, what replaced it, what it summarises) |
-| `/w/:id/activity` Activity | What happened, in order | keep (tab 5) | The event-type rail reads words; the raw prefix is on `data-prefix` and in `title` | — |
-| `/w/:id/settings` Settings | Goal, runtime, permissions, danger | keep (tab 6) | Emergency stop uses the one destructive recipe | — |
+| `/w/:id/activity` Activity | What happened, in order | keep (tab 5) | The event-type rail reads words; the raw prefix is on `data-prefix` and in `title` | M52 adds the two brokered-operation cards and the permission change, and the tool-denial card finally prints the operation's name instead of its key |
+| `/w/:id/settings` Settings | Goal, runtime, permissions, danger | keep (tab 6) | Emergency stop uses the one destructive recipe | M52 turns the permission matrix into six OPERATIONS with words for column headers, a third click that takes a decision back, and copy that says what is enforced where instead of saying it is not enforced at all |
 | `/w/:id/graph` Graph | Five structural views of the project | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Graph` and by URL; all five modes intact; the mode nav is a real tablist now | M47 lifted the org mode's content into an Organization tab; Graph stays |
 | `/w/:id/office` Office | The team as a pixel office | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Office` and by URL; the canvas gains a label and a text line saying what it shows | — |
 | `/analytics?workspace=:id` Analytics | Spend and throughput for THIS project | **reached from the project** | The third item in `Advanced ▾`, carrying the project's `?workspace=` scope; the route and the scope are the global page's, unchanged and bookmarkable | M53 replaces the tiles with per-profile evidence |
@@ -61,7 +61,10 @@ before adding a surface.
 
 - `SlavePanel`, `GraphDrawer` and `TaskDetailPanel` are persistent side panels, not modals: they do
   not close on Escape and do not trap focus, because a person reads them while working in the page
-  behind them. `Dialog`/`Drawer` are for the six things that ARE modal.
+  behind them. `Dialog`/`Drawer` are for the six things that ARE modal. M52 gives `SlavePanel` a
+  `Permissions` group between Skills and Messages — one line per operation, in the operation's
+  words, with the three marks the Settings matrix draws; who decided each one and when is a raw
+  value and lives under a nested `Advanced`, beside the sentence that says a run kind granted it.
 - `HaltBanner` keeps its own component rather than becoming an `Alert`: four gates key off it.
 - The Tasks board's pill keeps its board vocabulary in M44. `userTaskStatus` is the domain's task
   word and is wired to one thing here — the "needs you" count on a project card.

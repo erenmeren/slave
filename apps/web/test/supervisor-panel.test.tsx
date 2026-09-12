@@ -169,6 +169,22 @@ describe('actionText', () => {
     )
   })
 
+  // M52 R5: the worker's NAME and the operation's LABEL, both carried on the action. This function
+  // runs in the browser and may not import the domain's label table through control's barrel, which
+  // is the same reason `capabilityLabel` rides on `assign_capability`.
+  it('asks for a permission by the worker’s name and the operation’s word, never the key', () => {
+    expect(
+      actionText({
+        kind: 'request_permission',
+        slaveId: 'a1',
+        name: 'Alex',
+        permissionKind: 'network_fetch',
+        kindLabel: 'Fetch over the network',
+        why: 'three calls were refused in the last half hour',
+      }),
+    ).toBe('ask a person to let Alex fetch over the network')
+  })
+
   it('falls back to the id for a task the world no longer holds', () => {
     // Findable, rather than a name this function would have to invent.
     expect(actionText({ kind: 'cancel_task', taskId: 't-9', reason: 'no longer needed' }, {})).toBe(

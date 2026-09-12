@@ -69,7 +69,9 @@ function card(over: Partial<SlaveCardData>): SlaveCardData {
     stepLabel: null, skill: null, actionLine: null, runId: null, queuedMessage: null, resumeRequestedAt: null, recentEvents: [], costUsd: null,
     toolCalls: 0, pausedAtStep: null, waitingFor: null, profile: null, runtimeRoles: [],
     // M50 R1/R3: why this worker is here, and whether the engagement is over.
-    lifecycle: 'project', released: null, ...over,
+    lifecycle: 'project', released: null,
+    // M52 R7: what this worker may do. The office draws none of it; `SlavePanel` is the surface.
+    permissions: [], permissionsRunKind: 'implementation', ...over,
   }
 }
 

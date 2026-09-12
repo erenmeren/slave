@@ -31,7 +31,9 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'task.rework': { reason: 'tests failed on attempt 1', attempt: 2 },
   'run.started': { sessionId: 's1' },
   'run.tool_call': { name: 'Read', summary: 'apps/web/src/index.ts' },
-  'run.tool_denied': { tool: 'Bash', capability: 'run tests' },
+  // M52 R1: `capability` carries a `PermissionKind` now -- the hook names the OPERATION that
+  // governs the refused tool, where the six prose rows used to collapse three ways onto `Bash`.
+  'run.tool_denied': { tool: 'Bash', capability: 'run_commands' },
   'run.paused': { atStep: 4 },
   'run.resumed': { sessionId: 's1' },
   'slave.message_sent': { category: 'instruction', body: 'Please retry with the other approach.' },
@@ -208,9 +210,26 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('tool-name').textContent).toBe('Read')
   })
 
-  it('run.tool_denied shows the tool and the denied capability', () => {
+  // M52 R7 / erratum E2: the operation's NAME, with the key one hover away. The payload is a
+  // forgiving `z.string()`, so the two cases below are both real -- a kind this build knows, and a
+  // pre-M52 row spelling `run tests`, which prints itself rather than crashing the feed.
+  it('run.tool_denied shows the tool and the denied operation in WORDS', () => {
     const Card = ACTIVITY_CARDS['run.tool_denied']
     render(<Card event={fixtureFor('run.tool_denied')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('tool-denied-text').textContent).toBe('Bash denied — Run commands')
+    expect(screen.getByTestId('tool-denied-text').getAttribute('title')).toBe('run_commands')
+    expect(screen.getByTestId('tool-denied-text').getAttribute('data-capability')).toBe('run_commands')
+  })
+
+  it('run.tool_denied names a tool nobody governs, which is a reason and not a kind', () => {
+    const Card = ACTIVITY_CARDS['run.tool_denied']
+    render(<Card event={baseEvent('run.tool_denied', { tool: 'Workflow', capability: 'ungoverned_tool' })} {...CARD_PROPS} />)
+    expect(screen.getByTestId('tool-denied-text').textContent).toBe('Workflow denied — A tool nobody governs')
+  })
+
+  it('run.tool_denied prints a pre-M52 free-text capability as itself', () => {
+    const Card = ACTIVITY_CARDS['run.tool_denied']
+    render(<Card event={baseEvent('run.tool_denied', { tool: 'Bash', capability: 'run tests' })} {...CARD_PROPS} />)
     expect(screen.getByTestId('tool-denied-text').textContent).toBe('Bash denied — run tests')
   })
 
@@ -221,13 +240,29 @@ describe('targeted card bodies', () => {
     render(<Card event={fixtureFor('broker.executed')} {...CARD_PROPS} />)
     expect(screen.getByTestId('broker-executed-text').textContent).toBe('Deploy a release \u2192 staging \u00b7 exit 0')
     expect(screen.getByTestId('broker-executed-text').getAttribute('data-op')).toBe('deploy_release')
+    // One coloured word for both broker cards: what separates them is what happened, which each
+    // says in its own text.
+    expect(screen.getByTestId('transition-label').textContent).toBe('brokered')
+  })
+
+  it('broker.executed reads an operation with no exit status as unknown, not as a zero', () => {
+    const Card = ACTIVITY_CARDS['broker.executed']
+    const event = baseEvent('broker.executed', {
+      op: 'deploy_release',
+      environment: 'staging',
+      paramsHash: 'a'.repeat(64),
+      exitCode: null,
+      durationMs: 120_000,
+    })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('broker-executed-text').textContent).toBe('Deploy a release \u2192 staging \u00b7 exit \u2014')
   })
 
   it('broker.refused prints the reason\u2019s WORDS and keeps the key on the element', () => {
     const Card = ACTIVITY_CARDS['broker.refused']
     render(<Card event={fixtureFor('broker.refused')} {...CARD_PROPS} />)
     expect(screen.getByTestId('broker-refused-text').textContent).toBe(
-      'Deploy a release \u2014 This worker was not granted that',
+      'Deploy a release refused \u2014 This worker was not granted that',
     )
     expect(screen.getByTestId('broker-refused-text').getAttribute('data-reason')).toBe('permission_denied')
   })
@@ -236,14 +271,14 @@ describe('targeted card bodies', () => {
     const Card = ACTIVITY_CARDS['broker.refused']
     const event = baseEvent('broker.refused', { op: 'deploy_release', reason: 'from_the_future' })
     render(<Card event={event} {...CARD_PROPS} />)
-    expect(screen.getByTestId('broker-refused-text').textContent).toBe('Deploy a release \u2014 from_the_future')
+    expect(screen.getByTestId('broker-refused-text').textContent).toBe('Deploy a release refused \u2014 from_the_future')
   })
 
   it('permission.changed reads the grant in words, with the kind key one hover away', () => {
     const Card = ACTIVITY_CARDS['permission.changed']
     render(<Card event={fixtureFor('permission.changed')} {...CARD_PROPS} />)
     expect(screen.getByTestId('permission-changed-text').textContent).toBe(
-      'Alex \u00b7 Fetch over the network \u00b7 never asked \u2192 granted',
+      'Alex \u00b7 Fetch over the network \u00b7 granted',
     )
     expect(screen.getByTestId('permission-changed-text').getAttribute('data-kind')).toBe('network_fetch')
     expect(screen.getByTestId('permission-changed-by').textContent).toBe(' \u00b7 by meren')
@@ -262,7 +297,7 @@ describe('targeted card bodies', () => {
     })
     render(<Card event={event} {...CARD_PROPS} />)
     expect(screen.getByTestId('permission-changed-text').textContent).toBe(
-      'Alex \u00b7 Fetch over the network \u00b7 granted \u2192 never asked',
+      'Alex \u00b7 Fetch over the network \u00b7 revoked',
     )
   })
 

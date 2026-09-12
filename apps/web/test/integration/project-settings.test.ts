@@ -72,7 +72,7 @@ describe('buildProjectSettings', () => {
 
     expect(settings?.permissions?.workspaceId).toBe(fixture.workspaceId)
     expect(settings?.permissions?.rows[0]?.slaveId).toBe(fixture.slaveId)
-    expect(settings?.permissions?.rows[0]?.cells.find((c) => c.tool === 'read_repo')?.mode).toBe('allow')
+    expect(settings?.permissions?.rows[0]?.cells.find((c) => c.kind === 'read_repo')?.mode).toBe('allow')
   })
 
   it('never leaks a second workspace’s permissions into this one’s section', async (): Promise<void> => {

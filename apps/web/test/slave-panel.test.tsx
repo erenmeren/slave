@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { PERMISSION_KINDS } from '@slave-of-ai/domain'
 import { SlavePanel } from '../src/components/SlavePanel.js'
 import type { SlaveCardData, SlaveFeedEvent } from '../src/server/overview.js'
 
@@ -45,6 +46,11 @@ const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
   // M51 R7: the rung the breaker has this worker's live run on. The panel shows no word off it --
   // the CARD does -- so every case here is the healthy default.
   breakerLevel: 'none' as const,
+  // M52 R7: what this worker may do, and the run kind the baselines below were answered for. The
+  // empty list is what a panel gets before anything is granted; the permissions describe at the
+  // bottom of this file states all six.
+  permissions: [],
+  permissionsRunKind: 'implementation' as const,
   ...over,
 })
 
@@ -764,6 +770,9 @@ describe('SlavePanel', () => {
         'model',
         'profile',
         'skills',
+        // M52 R7: the eighth group, between Skills (what a worker is FOR) and Messages -- two words
+        // for two things, and the closed `advanced` group nested inside it renders nothing yet.
+        'permissions',
         'messages',
         'cost',
         'events',
@@ -841,5 +850,130 @@ describe('SlavePanel', () => {
       openGroup('events')
       expect(screen.getByTestId('feed-event').textContent).toContain('seed one')
     })
+  })
+})
+
+/**
+ * M52 R7: the eighth group, and the first that answers "what may this one DO".
+ *
+ * Every glyph and every sentence here is `grantsFor`'s answer, computed server-side by the same
+ * function the gate's own `permissions.json` is built by -- so a case that asserts a ✓ is asserting
+ * the hook would allow it, not that a component decided to draw one.
+ */
+describe('SlavePanel permissions (M52 R7)', () => {
+  const governed = slave({
+    permissions: [
+      { kind: 'read_repo', mode: null, source: 'baseline', by: null, at: null },
+      { kind: 'write_repo', mode: null, source: 'baseline', by: null, at: null },
+      { kind: 'run_commands', mode: 'deny', source: 'refused', by: 'meren', at: '2026-09-12T09:00:00.000Z' },
+      { kind: 'network_fetch', mode: 'allow', source: 'granted', by: 'meren', at: '2026-09-12T10:00:00.000Z' },
+      { kind: 'read_secret', mode: null, source: 'never', by: null, at: null },
+      { kind: 'deploy_release', mode: null, source: 'never', by: null, at: null },
+    ],
+  })
+
+  function openPermissions(): void {
+    render(<SlavePanel slave={governed} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />)
+    openGroup('permissions')
+  }
+
+  it('renders one line per operation, in the domain’s order, once the group is open', () => {
+    openPermissions()
+    const lines = screen.getAllByTestId(/^panel-permission-/u)
+    expect(lines.map((line) => line.getAttribute('data-kind'))).toEqual([...PERMISSION_KINDS])
+  })
+
+  it('prints the WORD and keeps the key on data-kind and in title (docs/ia.md rule 3)', () => {
+    openPermissions()
+    const line = screen.getByTestId('panel-permission-network_fetch')
+    expect(line.textContent).toContain('Fetch over the network')
+    expect(line.textContent).not.toContain('network_fetch')
+    expect(line.getAttribute('title')).toBe('network_fetch')
+    expect(line.getAttribute('data-kind')).toBe('network_fetch')
+  })
+
+  it('draws the three glyphs the matrix has always drawn, and a baseline reads as granted', () => {
+    openPermissions()
+    expect(screen.getByTestId('panel-permission-network_fetch').textContent).toContain('✓')
+    expect(screen.getByTestId('panel-permission-run_commands').textContent).toContain('✕')
+    expect(screen.getByTestId('panel-permission-read_secret').textContent).toContain('–')
+    // A baseline is a ✓: the run really may do it, and a glyph that said otherwise would be the
+    // surface disagreeing with the gate.
+    expect(screen.getByTestId('panel-permission-read_repo').textContent).toContain('✓')
+    expect(screen.getByTestId('panel-permission-read_repo').getAttribute('data-mode')).toBe('unset')
+    expect(screen.getByTestId('panel-permission-read_repo').getAttribute('data-source')).toBe('baseline')
+  })
+
+  it('says WHO and WHEN under Advanced, and nothing at all until it is opened', () => {
+    openPermissions()
+    expect(screen.queryByTestId('panel-permission-source-network_fetch')).toBeNull()
+    openGroup('advanced')
+    expect(screen.getByTestId('panel-permission-source-network_fetch').textContent).toBe(
+      'Granted by meren on 12 Sep 2026',
+    )
+    expect(screen.getByTestId('panel-permission-source-run_commands').textContent).toBe(
+      'Refused by meren on 12 Sep 2026',
+    )
+    expect(screen.getByTestId('panel-permission-source-read_repo').textContent).toBe(
+      'Baseline (implementation runs)',
+    )
+    expect(screen.getByTestId('panel-permission-source-read_secret').textContent).toContain('Never granted')
+  })
+
+  it('names the run kind the baseline was answered FOR, because a baseline is a fact about a run', () => {
+    render(
+      <SlavePanel
+        slave={slave({
+          permissionsRunKind: 'review',
+          permissions: [
+            { kind: 'read_repo', mode: null, source: 'baseline', by: null, at: null },
+            { kind: 'write_repo', mode: null, source: 'never', by: null, at: null },
+            { kind: 'run_commands', mode: null, source: 'baseline', by: null, at: null },
+            { kind: 'network_fetch', mode: null, source: 'never', by: null, at: null },
+            { kind: 'read_secret', mode: null, source: 'never', by: null, at: null },
+            { kind: 'deploy_release', mode: null, source: 'never', by: null, at: null },
+          ],
+        })}
+        liveEvents={[]}
+        workspaceId="w1"
+        haltedReason={null}
+        onClose={() => {}}
+      />,
+    )
+    openGroup('permissions')
+    openGroup('advanced')
+    expect(screen.getByTestId('panel-permission-source-read_repo').textContent).toBe('Baseline (review runs)')
+  })
+
+  it('says the two broker grants are not tools', () => {
+    openPermissions()
+    openGroup('advanced')
+    expect(screen.getByTestId('panel-permission-source-deploy_release').textContent).toContain(
+      'a brokered operation, not a tool',
+    )
+    expect(screen.getByTestId('panel-permission-source-read_secret').textContent).toContain(
+      'a brokered operation, not a tool',
+    )
+    // …and the four that DO name tools say nothing of the sort.
+    expect(screen.getByTestId('panel-permission-source-run_commands').textContent).not.toContain('brokered')
+  })
+
+  it('never prints a granter or a date on the line itself -- a raw value lives under Advanced', () => {
+    openPermissions()
+    expect(screen.getByTestId('panel-permission-network_fetch').textContent).not.toContain('meren')
+    expect(screen.getByTestId('panel-permission-network_fetch').textContent).not.toContain('2026')
+  })
+
+  it('sits between Skills and Messages, and arrives CLOSED like every group but Run', () => {
+    render(<SlavePanel slave={governed} liveEvents={[]} workspaceId="w1" haltedReason={null} onClose={() => {}} />)
+    const groups = screen.getAllByTestId('details-group').map((node) => node.getAttribute('data-group'))
+    expect(groups.slice(groups.indexOf('skills'), groups.indexOf('messages') + 1)).toEqual([
+      'skills',
+      'permissions',
+      'messages',
+    ])
+    const section = document.querySelector('[data-testid="details-group"][data-group="permissions"]')
+    expect(section?.getAttribute('data-open')).toBe('false')
+    expect(screen.queryByTestId('panel-permission-read_repo')).toBeNull()
   })
 })

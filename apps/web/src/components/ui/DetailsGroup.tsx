@@ -50,6 +50,11 @@ export type DetailsGroupName =
   // rather than about what it did.
   | 'provenance'
   | 'memories'
+  // M52 R7: what this worker MAY DO. The seventeenth of R6's groups, and deliberately not
+  // `capabilities` (which is already a member, and which answers what a worker is FOR): two words
+  // for two things, because a taxonomy key and a permission kind are different objects and the one
+  // surface where a person meets both must not call them one.
+  | 'permissions'
 
 /**
  * One `Details ▾` group (M45 R4).

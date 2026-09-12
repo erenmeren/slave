@@ -4,10 +4,13 @@ import { capabilitiesOf, listDecisions, workspaceDefaultProvider, workspaceSpend
 import {
   deriveSlaveStatus,
   effectiveProfile,
+  grantsFor,
   mergeQueueOrder,
   sumSpend,
   NON_TERMINAL_RUN_STATUSES,
   type BreakerLevel,
+  type KindGrant,
+  type PermissionRunKind,
   type SlaveLifecycle,
   type SlaveStatus,
   type TaskStatus,
@@ -76,6 +79,27 @@ export interface SlaveCardData {
    * absent chip row.
    */
   readonly runtimeRoles: readonly string[]
+  /**
+   * What this worker may do, per operation, with where each answer CAME FROM (M52 R7).
+   *
+   * `grantsFor(rows, runKind)` -- the projection beside the resolver the gate's own
+   * `permissions.json` is built by, so the panel cannot show a ✓ on something the hook refuses.
+   *
+   * The run kind is the LIVE run's when there is one and `implementation` otherwise, and that
+   * choice is visible in the sentence the panel prints ("Baseline (implementation runs)"): a
+   * baseline is a fact about a run, not about a worker, and a panel that showed a worker's
+   * permissions with no run in sight has to say which kind of run it is answering for.
+   */
+  readonly permissions: readonly KindGrant[]
+  /**
+   * The run kind {@link SlaveCardData.permissions} was answered FOR (M52 R7).
+   *
+   * A second field rather than a word baked into the projection, because the panel's own sentence
+   * names it and `KindGrant` carries no run: a `review` run's `write_repo` is `never` and its
+   * `read_repo` is `baseline`, and a panel that said "(implementation runs)" over a review run's
+   * baseline would be stating the wrong fact about the right glyph.
+   */
+  readonly permissionsRunKind: PermissionRunKind
   /** M50 R1: WHY this worker is here, off `Slave.lifecycle`. A column, never a derivation -- the
    *  card can finally say "temporary", which `companySlaveId !== null` never could. */
   readonly lifecycle: SlaveLifecycle
@@ -361,7 +385,13 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
     // The roster/template legs of the profile override chain (M37 t4), included rather than
     // queried per worker: `effectiveProfile` needs both levels below the worker's own column, and
     // a second round trip per row is how a roster of thirty becomes thirty-one queries.
-    include: { companySlave: { select: { profile: true, template: { select: { profile: true } } } } },
+    include: {
+      companySlave: { select: { profile: true, template: { select: { profile: true } } } },
+      // M52 R7: the worker's own permission rows, on the `include` that is already here rather
+      // than a query per worker -- `grantsFor` needs the rows and nothing else, and a roster of
+      // thirty would otherwise be thirty-one round trips (`workspaceStats`' one-reading rule).
+      permissions: { select: { kind: true, mode: true, grantedBy: true, grantedAt: true } },
+    },
   })
 
   // One live run per slave at most (the scheduler enforces it); latest by startedAt breaks any
@@ -666,6 +696,19 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         // Walked by the domain's own function, not restated here (M37 t4): this is the same call
         // `buildRunContext` makes, so what the panel shows is what the next dispatch will send.
         profile: effectiveProfile(slave),
+        // M52 R7. The domain's own projection, off the rows the `include` already carried in, for
+        // the LIVE run's kind -- `implementation` with no run in sight, which is the kind a worker
+        // is next dispatched as and the one the sentence beside each baseline then names.
+        permissions: grantsFor(
+          slave.permissions.map((row) => ({
+            kind: row.kind,
+            mode: row.mode,
+            grantedBy: row.grantedBy,
+            grantedAt: row.grantedAt.toISOString(),
+          })),
+          run?.kind ?? 'implementation',
+        ),
+        permissionsRunKind: (run?.kind ?? 'implementation') satisfies PermissionRunKind,
         runtimeRoles: slave.runtimeRoles,
         // Straight off the row the `include` above already loads in full -- no `select` to widen.
         lifecycle: slave.lifecycle,

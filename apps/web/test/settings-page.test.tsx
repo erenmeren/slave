@@ -5,7 +5,6 @@ import type { ProviderKind } from '@slave-of-ai/control'
 import { CompanyManager } from '../src/components/CompanyManager.js'
 import { DangerZone } from '../src/components/DangerZone.js'
 import { clearModelSelectCache } from '../src/components/ModelSelect.js'
-import { PermissionMatrix } from '../src/components/PermissionMatrix.js'
 import { ProviderAdapterCards } from '../src/components/ProviderAdapterCards.js'
 import { SettingsClient } from '../src/components/SettingsClient.js'
 import type { RosterCompany, RosterMemberRow } from '../src/server/org.js'
@@ -683,134 +682,10 @@ describe('provider adapter cards', () => {
   })
 })
 
-describe('the permission matrix', () => {
-  // M52 R1: the six OPERATIONS, which is what `buildPermissionMatrix` puts in `cell.tool` now.
-  // The FIELD is still called `tool` for exactly one task (see `PermissionRow`'s own docstring),
-  // and the component still prints the raw string -- M52 Task 5 renames the field and swaps the
-  // header for `PERMISSION_LABEL` together with the copy.
-  function cells(over: Partial<Record<string, 'allow' | 'deny' | null>> = {}) {
-    return ['read_repo', 'write_repo', 'run_commands', 'network_fetch', 'read_secret', 'deploy_release'].map(
-      (tool) => ({ tool, mode: over[tool] ?? null }),
-    )
-  }
-
-  const rows = [
-    {
-      workspaceId: 'w1',
-      workspaceName: 'Checkout Platform',
-      rows: [
-        {
-          slaveId: 'a1',
-          name: 'Alex',
-          role: 'backend',
-          cells: cells({ read_repo: 'allow', write_repo: 'deny' }),
-        },
-      ],
-    },
-  ]
-
-  it('renders the six README columns and a glyph per cell', () => {
-    render(<PermissionMatrix sections={rows} />)
-    expect(screen.getAllByTestId('perm-column').map((c) => c.textContent)).toEqual([
-      'read_repo', 'write_repo', 'run_commands', 'network_fetch', 'read_secret', 'deploy_release',
-    ])
-    expect(screen.getByTestId('perm-cell-a1-read_repo').textContent).toBe('✓')
-    expect(screen.getByTestId('perm-cell-a1-write_repo').textContent).toBe('✕')
-    expect(screen.getByTestId('perm-cell-a1-run_commands').textContent).toBe('–')
-  })
-
-  it('distinguishes an unset cell from an explicit deny in its title', () => {
-    render(<PermissionMatrix sections={rows} />)
-    expect(screen.getByTestId('perm-cell-a1-run_commands').getAttribute('title')).toBe('not set')
-    expect(screen.getByTestId('perm-cell-a1-write_repo').getAttribute('title')).toBe('denied')
-  })
-
-  it('captions the whole matrix as not yet enforced', () => {
-    render(<PermissionMatrix sections={rows} />)
-    expect(screen.getByTestId('perm-caption').textContent).toBe('not yet enforced at runtime')
-  })
-
-  // Fix round 1, finding 2: the matrix used to list every Slave in the database with nothing to
-  // say which project each belonged to -- two projects materialized from one roster produced
-  // indistinguishable duplicate "Alex · backend" rows.
-  it('renders one section per workspace, so same-named slaves in two projects stay apart', () => {
-    render(
-      <PermissionMatrix
-        sections={[
-          { workspaceId: 'w1', workspaceName: 'Checkout Platform', rows: [{ slaveId: 'a1', name: 'Alex', role: 'backend', cells: cells({ read_repo: 'allow' }) }] },
-          { workspaceId: 'w2', workspaceName: 'Ledger', rows: [{ slaveId: 'a2', name: 'Alex', role: 'backend', cells: cells({ read_repo: 'deny' }) }] },
-        ]}
-      />,
-    )
-
-    const first = screen.getByTestId('permission-matrix-w1')
-    const second = screen.getByTestId('permission-matrix-w2')
-    expect(within(first).getByText('Checkout Platform')).toBeTruthy()
-    expect(within(second).getByText('Ledger')).toBeTruthy()
-
-    // The two same-named slaves are distinct rows under distinct sections, and each cell carries
-    // its OWN slave's mode.
-    expect(within(first).getByTestId('perm-cell-a1-read_repo').textContent).toBe('✓')
-    expect(within(second).getByTestId('perm-cell-a2-read_repo').textContent).toBe('✕')
-    expect(within(first).queryByTestId('perm-cell-a2-read_repo')).toBeNull()
-  })
-
-  it('says which workspace has no slaves rather than dropping its section', () => {
-    render(<PermissionMatrix sections={[{ workspaceId: 'w9', workspaceName: 'Fresh', rows: [] }]} />)
-    expect(screen.getByTestId('permission-matrix-w9')).toBeTruthy()
-    expect(screen.getByTestId('perm-empty').textContent).toBe('no slaves yet')
-    expect(screen.getByTestId('perm-caption').textContent).toBe('not yet enforced at runtime')
-  })
-
-  describe('writing a cell', () => {
-    let fetchMock: ReturnType<typeof vi.fn>
-
-    beforeEach(() => {
-      fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
-      vi.stubGlobal('fetch', fetchMock)
-    })
-
-    afterEach(() => {
-      vi.unstubAllGlobals()
-    })
-
-    it('PUTs the flipped mode on a cell click', async (): Promise<void> => {
-      render(<PermissionMatrix sections={rows} />)
-      await act(async () => {
-        fireEvent.click(screen.getByTestId('perm-cell-a1-read_repo'))
-      })
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/slaves/a1/permission',
-        expect.objectContaining({ method: 'PUT', body: JSON.stringify({ tool: 'read_repo', mode: 'deny' }) }),
-      )
-    })
-
-    // An UNSET cell is not a deny: clicking it must ask for `allow`, not flip an unmade decision
-    // into its opposite.
-    it('PUTs allow on an unset cell, the same as on a denied one', async (): Promise<void> => {
-      render(<PermissionMatrix sections={rows} />)
-      await act(async () => {
-        fireEvent.click(screen.getByTestId('perm-cell-a1-run_commands'))
-      })
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/slaves/a1/permission',
-        expect.objectContaining({ body: JSON.stringify({ tool: 'run_commands', mode: 'allow' }) }),
-      )
-    })
-
-    it('shows a refusal verbatim without refreshing', async (): Promise<void> => {
-      fetchMock.mockImplementationOnce(
-        async () => new Response(JSON.stringify({ error: 'a permission must name one of the six operations' }), { status: 409 }),
-      )
-      render(<PermissionMatrix sections={rows} />)
-      await act(async () => {
-        fireEvent.click(screen.getByTestId('perm-cell-a1-read_repo'))
-      })
-      expect(screen.getByRole('alert').textContent).toBe('a permission must name one of the six operations')
-      expect(routerRefresh).not.toHaveBeenCalled()
-    })
-  })
-})
+// M52 Task 5: `describe('the permission matrix')` moved OUT of this file, whole, into
+// `apps/web/test/permission-matrix.test.tsx`. The component gained a three-state write against a
+// workspace-scoped route with the kind in its path, and its cases outgrew a shared file that also
+// renders `CompanyManager`, `DangerZone`, `ProviderAdapterCards` and `SettingsClient`.
 
 describe('the danger zone', () => {
   it('offers reset demo data only when the server said it is available', () => {

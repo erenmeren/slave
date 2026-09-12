@@ -8,7 +8,6 @@ import { GET as workersGET } from '../../src/app/api/org/workers/route.js'
 import { GET as catalogImportsGET } from '../../src/app/api/org/catalog-imports/route.js'
 import { POST as companyPOST } from '../../src/app/api/w/[workspaceId]/company/route.js'
 import { POST as modelPOST } from '../../src/app/api/slaves/[slaveId]/model/route.js'
-import { PUT as permissionPUT } from '../../src/app/api/slaves/[slaveId]/permission/route.js'
 import { PUT as slaveNamePUT } from '../../src/app/api/slaves/[slaveId]/name/route.js'
 import { PUT as slaveRolePUT } from '../../src/app/api/slaves/[slaveId]/role/route.js'
 import { DELETE as slaveDELETE } from '../../src/app/api/slaves/[slaveId]/route.js'
@@ -35,8 +34,9 @@ function malformedRequest(): Request {
   return new Request('http://x', { method: 'POST', body: 'not json', headers: { 'content-type': 'application/json' } })
 }
 
-// M14 Task 14: the permission route is a PUT (a cell is set to a value, not appended to), so it
-// needs its own trio rather than reusing the POST helpers above.
+// M14 Task 14: the roster-editing routes are PUTs (a field is set to a value, not appended to), so
+// they need their own trio rather than reusing the POST helpers above. (Written for the permission
+// route, which left this file in M52 Task 5; the five roster PUTs below still use them.)
 function jsonPutRequest(body: unknown): Request {
   return new Request('http://x', { method: 'PUT', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } })
 }
@@ -431,38 +431,10 @@ describe('the org routes', () => {
     })
   })
 
-  describe('PUT /api/slaves/[slaveId]/permission', () => {
-    async function seedPermissionSlave(): Promise<string> {
-      const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Permissions' } })
-      const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-      return slave.id
-    }
-
-    it('writes the cell and returns 200', async (): Promise<void> => {
-      const slaveId = await seedPermissionSlave()
-      const response = await permissionPUT(jsonPutRequest({ tool: 'read_repo', mode: 'allow' }), slaveParams(slaveId))
-      expect(response.status).toBe(200)
-      expect(await prisma.slavePermission.count({ where: { slaveId } })).toBe(1)
-    })
-
-    it('409s with the verbatim refusal on a kind outside the six', async (): Promise<void> => {
-      const response = await permissionPUT(jsonPutRequest({ tool: 'rm -rf', mode: 'allow' }), slaveParams(await seedPermissionSlave()))
-      expect(response.status).toBe(409)
-      expect(await response.json()).toEqual({ error: 'a permission must name one of the six operations' })
-    })
-
-    it('400s on a malformed body and on a missing mode', async (): Promise<void> => {
-      const slaveId = await seedPermissionSlave()
-      expect((await permissionPUT(malformedPutRequest(), slaveParams(slaveId))).status).toBe(400)
-      expect((await permissionPUT(jsonPutRequest({ tool: 'read_repo' }), slaveParams(slaveId))).status).toBe(400)
-    })
-
-    it('404s with the slave-not-found refusal on an unknown slave', async (): Promise<void> => {
-      const response = await permissionPUT(jsonPutRequest({ tool: 'read_repo', mode: 'allow' }), slaveParams('00000000-0000-4000-8000-000000000000'))
-      expect(response.status).toBe(404)
-      expect((await response.json()).error).toBe('no slave with id 00000000-0000-4000-8000-000000000000')
-    })
-  })
+  // M52 Task 5: `PUT /api/slaves/[slaveId]/permission` is GONE. The verb moved into the
+  // workspace-scoped per-worker family (`/api/w/:id/slaves/:id/permissions/:kind`, PUT and DELETE)
+  // and its coverage moved with it, into `control-routes.test.ts` beside `profile`,
+  // `runtime-roles`, `lifecycle` and `release` -- the four routes it now shares a shell with.
 
   // M23 D2/D3 fix round 1: route-level coverage for the five roster-editing routes, following the
   // model/permission routes' own trio (200 proving the verb ran, 409 carrying the refusal text,

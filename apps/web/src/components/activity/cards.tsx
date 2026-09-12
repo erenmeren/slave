@@ -9,6 +9,7 @@ import {
   MEMORY_SOURCE_KIND_LABEL,
   MEMORY_STATUS_LABEL,
   MEMORY_TYPE_LABEL,
+  TOOL_DENIED_LABEL,
   type BreakerTripKind,
   type BrokerOp,
   type BrokerRefusalReason,
@@ -376,12 +377,26 @@ function RunOutputCard(props: ActivityCardProps): ReactElement {
 // as a warning, not a failure: `warn` is the tone the guardrail/rework/review-rejected cards
 // already use for "something was refused but nothing stopped".
 
+/**
+ * M52 R7 / erratum E2: the operation's NAME, where this printed its key.
+ *
+ * `?? payload.capability` is not decoration, it is the asymmetry the schema chose. The payload's
+ * `capability` is a `z.string()` so the log stays readable when the vocabulary changes, and a
+ * pre-M52 row spelling `run tests` prints itself rather than crashing the feed. `TOOL_DENIED_LABEL`
+ * covers the six kinds AND `ungoverned_tool`, which is a REASON rather than a kind: a tool nobody
+ * governs, denied under `all-tools`, which a person now meets in words like the six.
+ *
+ * The key stays on the node (`title`, `data-capability`) -- `docs/ia.md` rule 3.
+ */
 function RunToolDeniedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as { tool: string; capability: string }
+  const label = (TOOL_DENIED_LABEL as Readonly<Record<string, string | undefined>>)[payload.capability]
   return (
     <ActivityCard {...props}>
       <Transition tone="warn" label="tool denied">
-        <span data-testid="tool-denied-text">{`${payload.tool} denied — ${payload.capability}`}</span>
+        <span data-testid="tool-denied-text" title={payload.capability} data-capability={payload.capability}>
+          {`${payload.tool} denied — ${label ?? payload.capability}`}
+        </span>
       </Transition>
     </ActivityCard>
   )
@@ -1206,15 +1221,20 @@ function SlaveReleasedCard(props: ActivityCardProps): ReactElement {
 }
 
 // ---- broker.executed / broker.refused / permission.changed (schema.ts, M52 R3/R5) --------------
-// Registered HERE, in the task that adds the event types, because `ACTIVITY_CARDS`' `satisfies`
-// is exhaustive over `DomainEventType` -- a type with no card fails the build. M52 Task 5 owns the
-// copy, the tones the spec names and the testids' final shape; these three are the honest minimum
-// that prints what the payload carries and never a key.
+// Registered in Task 1, because `ACTIVITY_CARDS`' `satisfies` is exhaustive over `DomainEventType`
+// and a type with no card fails the build; M52 Task 5 owns the copy and the tones below.
+//
+// The spec names the tones `ok` / `blocked` / `dim`, which `TRANSITION_COLOR` does not have under
+// those words: its members are the run-status vocabulary every other card in this file already
+// reads. They map one to one -- `ok` is `working` (`text-tone-working`), `blocked` is `danger`
+// (`text-tone-blocked`, literally the blocked tone) and `dim` is `idle` -- so the spec's three
+// colours are what renders, spelled in the palette this file has always used.
 
 /** M52 R3: an operation the orchestrator ran on a worker's behalf. The environment is the audit
  *  value and is on the payload verbatim; the credential, the command and the output are not in the
- *  row at all and so cannot be printed. A non-zero exit is `danger` -- a deploy that failed is an
- *  outcome, not a warning. */
+ *  row at all and so cannot be printed. A non-zero exit is `warn` rather than `danger`: the
+ *  operation RAN and reported a status, which is an outcome the worker is expected to read and
+ *  route around, exactly as `run.tool_denied` beside it is. */
 function BrokerExecutedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
     op: string
@@ -1223,21 +1243,21 @@ function BrokerExecutedCard(props: ActivityCardProps): ReactElement {
     exitCode: number | null
     durationMs: number
   }
-  const failed = payload.exitCode !== 0
   const label = BROKER_OP_LABEL[payload.op as BrokerOp] ?? payload.op
   return (
     <ActivityCard {...props}>
-      <Transition tone={failed ? 'danger' : 'idle'} label="ran for a worker">
+      <Transition tone={payload.exitCode === 0 ? 'working' : 'warn'} label="brokered">
         <span data-testid="broker-executed-text" title={payload.paramsHash} data-op={payload.op}>
-          {`${label} \u2192 ${payload.environment} \u00b7 exit ${payload.exitCode === null ? 'unknown' : String(payload.exitCode)}`}
+          {`${label} → ${payload.environment} · exit ${payload.exitCode === null ? '—' : String(payload.exitCode)}`}
         </span>
       </Transition>
     </ActivityCard>
   )
 }
 
-/** M52 R3: a brokered call the authoriser refused. `warn`, for `RunToolDeniedCard`'s reason: the
- *  worker is expected to route around it and the run continues.
+/** M52 R3: a brokered call the authoriser refused. The `blocked` tone the spec names -- and the
+ *  card says `refused` in its own text rather than only in the coloured word, because the two
+ *  broker cards share one label and what separates them is what happened.
  *
  *  The reason is a KEY on the wire (a forgiving `z.string()`, so a database holding an eighth
  *  reason still reads), so it rides `title`/`data-reason` and the LABEL is what is printed -- and a
@@ -1247,19 +1267,31 @@ function BrokerRefusedCard(props: ActivityCardProps): ReactElement {
   const label = BROKER_OP_LABEL[payload.op as BrokerOp] ?? payload.op
   return (
     <ActivityCard {...props}>
-      <Transition tone="warn" label="refused">
+      <Transition tone="danger" label="brokered">
         <span data-testid="broker-refused-text" title={payload.reason} data-reason={payload.reason}>
-          {`${label} \u2014 ${BROKER_REFUSAL_LABEL[payload.reason as BrokerRefusalReason] ?? payload.reason}`}
+          {`${label} refused — ${BROKER_REFUSAL_LABEL[payload.reason as BrokerRefusalReason] ?? payload.reason}`}
         </span>
       </Transition>
     </ActivityCard>
   )
 }
 
+/** What a `permission.changed` row's `to` DID, as a verb. `null` is a REVOKE and not a refusal:
+ *  the row was deleted and the kind went back to "never asked", which is a real change and a
+ *  different one from a considered `deny`. */
+const PERMISSION_VERB: Record<'allow' | 'deny' | 'revoke', string> = {
+  allow: 'granted',
+  deny: 'refused',
+  revoke: 'revoked',
+}
+
 /** M52 R5: a person granted, refused or revoked one operation for one worker. `kindLabel` is on the
  *  payload rather than looked up here for `assign_capability`'s reason -- a row read a year from
- *  now must still say what it was about in the vocabulary of the day it was written. `to: null` is
- *  a REVOKE, which is a real change and reads as "never asked". */
+ *  now must still say what it was about in the vocabulary of the day it was written.
+ *
+ *  Three tones for three outcomes (the spec's `ok`/`warn`/`dim`): a grant is something a worker
+ *  gained, a refusal is a wall somebody put up, and a revoke is neither -- it is the decision
+ *  itself going away. */
 function PermissionChangedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
     slaveId: string
@@ -1270,15 +1302,17 @@ function PermissionChangedCard(props: ActivityCardProps): ReactElement {
     to: 'allow' | 'deny' | null
     by: string | null
   }
-  const word = (mode: 'allow' | 'deny' | null): string =>
-    mode === 'allow' ? 'granted' : mode === 'deny' ? 'refused' : 'never asked'
+  const outcome = payload.to ?? 'revoke'
   return (
     <ActivityCard {...props}>
-      <Transition tone="idle" label="permission changed">
+      <Transition
+        tone={outcome === 'allow' ? 'working' : outcome === 'deny' ? 'warn' : 'idle'}
+        label="permission changed"
+      >
         <span data-testid="permission-changed-text" title={payload.kind} data-kind={payload.kind}>
-          {`${payload.name} \u00b7 ${payload.kindLabel} \u00b7 ${word(payload.from)} \u2192 ${word(payload.to)}`}
+          {`${payload.name} · ${payload.kindLabel} · ${PERMISSION_VERB[outcome]}`}
         </span>
-        {payload.by !== null && <span data-testid="permission-changed-by">{` \u00b7 by ${payload.by}`}</span>}
+        {payload.by !== null && <span data-testid="permission-changed-by">{` · by ${payload.by}`}</span>}
       </Transition>
     </ActivityCard>
   )
