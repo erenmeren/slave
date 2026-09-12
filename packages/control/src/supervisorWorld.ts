@@ -337,14 +337,24 @@ async function loadLatestBreakerTrips(
  * and `ungoverned_tool` in a row no grant can fix. All three come back and `observe` filters the
  * last two: this query's job is counting, not judging.
  *
- * NOT CALLED AT ALL when the project has no live run, which is every tick of a project nobody is
- * working on -- {@link loadLatestBreakerTrips}' gate, for its reason. A wall is something a worker
- * is standing at now: a run that has already concluded is not blocked by a permission, and the
- * proposal this feeds ("only a person can grant it") would be about nothing.
+ * BOUNDED TO THE CALLER'S LIVE RUN IDS (fix round 1, Important 1), for the reason
+ * {@link loadStatusSince} gives and by the same mechanism {@link loadLatestBreakerTrips} uses:
+ * `ExecutionEvent` is indexed on `(runId, seq)` and on nothing that could serve a `type` or a `ts`
+ * predicate, so a query filtered on `workspaceId` + `type` + `ts` alone reads every event the
+ * project has ever written -- per Supervisor tick, inside the world's 15 s `RepeatableRead`
+ * transaction. The 30-minute window stays as the second bound; it is the id list that makes the
+ * read an index probe.
+ *
+ * The narrowing this buys is the docstring's own argument, made exact: a denial recorded by a run
+ * that has since concluded no longer counts. A wall is something a worker is standing at NOW, the
+ * proposal this feeds says "only a person can grant it", and a finished run has nobody waiting on
+ * that grant. NOT CALLED AT ALL when the project has no live run, which is every tick of a project
+ * nobody is working on.
  */
 async function loadDenials(
   tx: Prisma.TransactionClient,
   workspaceId: string,
+  runIds: readonly string[],
   since: Date,
 ): Promise<readonly SupervisorDenial[]> {
   const rows = await tx.$queryRaw<
@@ -355,7 +365,8 @@ async function loadDenials(
            COUNT(*) AS count,
            (ARRAY_AGG(e."runId" ORDER BY e.seq DESC))[1] AS "latestRunId"
     FROM "ExecutionEvent" e
-    WHERE e."workspaceId" = ${workspaceId}
+    WHERE e."runId" = ANY(${[...runIds]}::text[])
+      AND e."workspaceId" = ${workspaceId}
       AND e.type::text = 'run.tool_denied'
       AND e.ts >= ${since}
       AND e."slaveId" IS NOT NULL
@@ -694,13 +705,19 @@ export async function loadSupervisorWorld(
         ? await loadLatestBreakerTrips(tx, workspaceId, runRows.map((row) => row.id))
         : new Map<string, { readonly trip: string; readonly detail: string; readonly count: number }>()
 
-      // M52 R5 / plan erratum E9. ONLY when something is running here, for the reason above: a
-      // permission wall is a live worker standing at it, and a project with no run has nobody to
-      // unblock. One grouped query for the whole board, never one per worker.
+      // M52 R5 / plan erratum E9. ONLY when something is running here, and bounded to THOSE runs:
+      // a permission wall is a live worker standing at it, and a project with no run has nobody to
+      // unblock. One grouped query for the whole board, never one per worker, and an index probe
+      // rather than a scan (fix round 1, Important 1).
       const denials =
         runRows.length === 0
           ? []
-          : await loadDenials(tx, workspaceId, new Date(now.getTime() - PERMISSION_DENIAL_WINDOW_MS))
+          : await loadDenials(
+              tx,
+              workspaceId,
+              runRows.map((row) => row.id),
+              new Date(now.getTime() - PERMISSION_DENIAL_WINDOW_MS),
+            )
 
       const slaveRows = await tx.slave.findMany({
         where: { team: { workspaceId } },

@@ -76,6 +76,7 @@ interface BrokerRun {
   readonly slaveId: string
   readonly workspaceId: string
   readonly archivedAt: Date | null
+  readonly haltedAt: Date | null
   /** The worker's own rows, in `grantsFor`'s input shape -- the Prisma `PermissionKind` enum is
    *  exactly `PERMISSION_KINDS`, so the six are the only values a column can hold. */
   readonly permissions: readonly PermissionRowInput[]
@@ -102,7 +103,10 @@ interface BrokerRun {
  *                                        anything holding `run_commands`, and nothing here reads it.
  *   3. Is that run still live?        -- `run_not_live`. A concluded run has no worker to act for,
  *                                        and a token recovered afterwards is exactly what R4's
- *                                        rotation exists to kill.
+ *                                        rotation exists to kill. A HALTED project answers this one
+ *                                        too (fix round 1): `emergencyStop` sets `haltedAt` and only
+ *                                        REQUESTS pauses, so without it an operator's stop leaves a
+ *                                        window in which a real deploy still runs.
  *   4. Is this real?                  -- `simulation`. Belt and braces: a simulated role is not a
  *                                        `Slave`, holds no `SlavePermission` and can reach no
  *                                        `SlaveRun`, so this arm should be unreachable -- and an
@@ -156,8 +160,22 @@ export async function runBrokeredOperation(
     return refused(op, reason)
   }
 
-  // 3. A concluded run has nobody to act for.
-  if (!(NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status)) return record('run_not_live')
+  // 3. A concluded run has nobody to act for -- and neither does a run in a HALTED project.
+  //
+  // The halt belongs to this question and not to a new one (fix round 1, Important 2): the refusal
+  // vocabulary is closed at seven, and "this run is not live, the project is halted" is true.
+  // `emergencyStop` sets `Workspace.haltedAt` and then REQUESTS pauses, and M50's pause is
+  // cooperative -- a worker sits at `pause_requested` with its process still alive until its next
+  // checkpoint. Without this line, an operator's "stop everything now" leaves a window in which a
+  // worker holding a valid token can still have a real deploy executed, which is the one place in
+  // this system where a halted project could take an irreversible external action.
+  //
+  // `pause_requested`, `paused` and `stopping` STAY admitted on their own: a run is live until it
+  // actually stops, and a paused worker waiting on a reply it asked for before the pause is not a
+  // forgery.
+  if (!(NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status) || run.haltedAt !== null) {
+    return record('run_not_live')
+  }
 
   // 4. Nothing crosses the simulation boundary (R6).
   if (run.archivedAt !== null) return record('simulation')
@@ -254,7 +272,14 @@ async function loadRunByToken(runToken: string): Promise<BrokerRun | null> {
       slave: {
         select: {
           permissions: { select: { kind: true, mode: true } },
-          team: { select: { workspaceId: true, workspace: { select: { archivedAt: true } } } },
+          team: {
+            select: {
+              workspaceId: true,
+              // `haltedAt` rides in the read the archive check already pays for (fix round 1,
+              // Important 2). No extra query.
+              workspace: { select: { archivedAt: true, haltedAt: true } },
+            },
+          },
         },
       },
     },
@@ -268,6 +293,7 @@ async function loadRunByToken(runToken: string): Promise<BrokerRun | null> {
     slaveId: row.slaveId,
     workspaceId: row.slave.team.workspaceId,
     archivedAt: row.slave.team.workspace.archivedAt,
+    haltedAt: row.slave.team.workspace.haltedAt,
     permissions: row.slave.permissions,
   }
 }

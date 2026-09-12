@@ -201,6 +201,31 @@ describe('runBrokeredOperation', () => {
     expect(await prisma.executionEvent.count({ where: { type: 'broker_refused' } })).toBe(0)
   })
 
+  it('refuses a HALTED project as run_not_live -- an emergency stop stops a deploy too', async (): Promise<void> => {
+    // The window `emergencyStop` leaves open: it sets `haltedAt` and only REQUESTS pauses, and M50's
+    // pause is cooperative, so the worker below is at `pause_requested` with its process still
+    // alive and a valid token in its environment. Everything else about this call is in order --
+    // live run, binding, grant, credential set -- and it must still be refused.
+    await prisma.workspace.update({ where: { id: workspaceId }, data: { haltedAt: new Date(), haltedReason: 'emergency stop by meren' } })
+    await prisma.slaveRun.update({ where: { id: runId }, data: { status: 'pause_requested' } })
+
+    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS }, { execute: executor })
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toEqual({ kind: 'broker_refused', op: 'deploy_release', reason: 'run_not_live' })
+    expect(executed).toHaveLength(0)
+    expect(await prisma.executionEvent.count({ where: { type: 'broker_executed' } })).toBe(0)
+    // The refusal itself is recorded -- question 3 knows which run asked.
+    expect((await brokerEvent('broker_refused')).payload).toEqual({ op: 'deploy_release', reason: 'run_not_live' })
+  })
+
+  it('still admits a pause_requested run while the project is NOT halted -- a run is live until it stops', async (): Promise<void> => {
+    await prisma.slaveRun.update({ where: { id: runId }, data: { status: 'pause_requested' } })
+    const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS }, { execute: executor })
+    expect(result.ok).toBe(true)
+    expect(executed).toHaveLength(1)
+  })
+
   it('refuses an ARCHIVED project as simulation -- nothing crosses, belt and braces', async (): Promise<void> => {
     await prisma.workspace.update({ where: { id: workspaceId }, data: { archivedAt: new Date() } })
     const result = await runBrokeredOperation({ runToken: TOKEN, op: 'deploy_release', params: PARAMS }, { execute: executor })

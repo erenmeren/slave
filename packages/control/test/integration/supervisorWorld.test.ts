@@ -1488,6 +1488,27 @@ describe('loadSupervisorWorld -- the denials (M52 R5)', () => {
     ])
   })
 
+  it('does not count a denial from a run that has since CONCLUDED, even for a worker still working', async (): Promise<void> => {
+    // The bound the query is built on (fix round 1, Important 1): `ExecutionEvent` is indexed on
+    // `(runId, seq)` and on nothing that could serve `type` or `ts`, so the read is keyed on the
+    // live run ids the loader already holds. The narrowing that buys is exactly this case, and it
+    // is the docstring's own argument: a wall is one a worker is standing at now.
+    const fixture = await seed()
+    const alex = await liveRun(fixture, 'Alex')
+    const finished = await prisma.slaveRun.create({
+      data: { slaveId: alex.slaveId, status: 'failed', kind: 'implementation' },
+    })
+    await deny(fixture, alex.slaveId, finished.id, 'network_fetch', PERMISSION_TRIP_COUNT)
+    await deny(fixture, alex.slaveId, alex.runId, 'network_fetch', 1)
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+    expect(world.denials).toEqual([
+      { slaveId: alex.slaveId, kind: 'network_fetch', count: 1, latestRunId: alex.runId },
+    ])
+    // And so the wall is not raised off a run nobody is waiting on.
+    expect(observe(world).filter((situation) => situation.kind === 'permission_blocked')).toEqual([])
+  })
+
   it('asks the event log NOTHING while no run is live', async (): Promise<void> => {
     // The gate the loader is built on, proved the way the breaker's is: the rows are there, the
     // run that wrote them has concluded, and the count does not appear.
