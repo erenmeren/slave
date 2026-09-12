@@ -1,9 +1,12 @@
-import { accessSync, constants, readFileSync, realpathSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { accessSync, appendFileSync, constants, existsSync, readFileSync, realpathSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   addCompanySlave,
   addCompanyTeam,
+  addCredential,
+  bindBrokerOp,
   adoptSimulation,
   answerQuestion,
   approveDecision,
@@ -14,7 +17,9 @@ import {
   archiveWorkspace,
   backfillSlaveCapabilities,
   cancelTask,
+  clearSlavePermission,
   assignCompany,
+  CREDENTIAL_KINDS,
   claimResume,
   cloneSimulation,
   compareSimulations,
@@ -38,8 +43,10 @@ import {
   hireFromTemplate,
   importCatalog,
   injectExternalEvent,
+  listBrokerBindings,
   listCatalogImports,
   listCapabilities,
+  listCredentials,
   listDecisions,
   listMemories,
   listGoalVersions,
@@ -70,6 +77,7 @@ import {
   runbookStatus,
   setProfile,
   setRuntimeRoles,
+  setSlavePermission,
   setSlaveCapabilities,
   setSlaveModel,
   setSlaveRole,
@@ -91,17 +99,24 @@ import {
   plural,
   unblockTask,
   verifyMemory,
+  type CredentialKind,
   type ImportReport,
   type ModelDecider,
+  type Principal,
   type ProfileTarget,
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  BROKERED_OPERATIONS,
+  BROKER_CLIENT_TIMEOUT_MS,
+  BROKER_OP_LABEL,
   MEMORY_SCOPE_LABEL,
   MEMORY_STATUSES,
   MEMORY_STATUS_LABEL,
   MEMORY_TYPES,
   MEMORY_TYPE_LABEL,
+  PERMISSION_LABEL,
+  PERMISSION_RUN_KINDS,
   SLAVE_LIFECYCLES,
   SLAVE_LIFECYCLE_LABEL,
   SUPERVISOR_DEFAULT_MODEL,
@@ -111,18 +126,30 @@ import {
   chooseByRules,
   displayName,
   filterFresh,
+  grantsFor,
   observe,
   provenanceLine,
   runContextManifestSchema,
   stageOrder,
   workspaceId as brandWorkspaceId,
+  type BrokerOp,
   type BreakerTripKind,
   type MemoryStatus,
   type MemoryType,
+  type PermissionKind,
+  type PermissionRunKind,
   type WorkspaceId,
 } from '@slave-of-ai/domain'
 import { sectors } from '@slave-of-ai/simulation'
-import { DEFAULT_MODEL_TIMEOUT_MS, buildRegistry, decideWithModel, type AdapterRegistry, type ProviderKind } from '@slave-of-ai/providers'
+import {
+  DEFAULT_MODEL_TIMEOUT_MS,
+  brokerReplyPathFor,
+  buildRegistry,
+  decideWithModel,
+  type AdapterRegistry,
+  type ProviderKind,
+} from '@slave-of-ai/providers'
+import { REQUEST_LINE_MAX_BYTES, brokerReplySchema, isBrokerRefusalReason, type BrokerReplyRead } from './broker.js'
 import { readCatalogDirectory } from './catalog.js'
 import { runDaemon } from './daemon.js'
 import { PLANNING_RETRY_CAP } from './planning.js'
@@ -481,6 +508,41 @@ const USAGE = `usage: orchestrator <command> [options]
                                        both runs' metrics, b − a deltas and whether they share a
                                        world, as JSON — no verdict
 
+  permissions and the broker (M52)
+  permission list --slave <id> [--run-kind implementation|review|planning]
+                                       all six operations for one worker: the word, the key, the
+                                       stored decision, where the effective answer came from
+                                       (baseline / granted / refused / never) and who decided.
+                                       The run kind is a flag because the BASELINE is: the same
+                                       worker reads baseline for run_commands on an implementation
+                                       run and never on a planning one.
+  permission grant|deny --slave <id> --kind <k> [--by <username>]
+                                       decide one operation for one worker. --by must name a real
+                                       account: it is recorded on the row and on the event.
+  permission revoke --slave <id> --kind <k> [--by <username>]
+                                       take the decision back -- the row is DELETED and the kind
+                                       returns to "nobody has ever been asked", which is not the
+                                       same as deny.
+  credential add --name <n> --kind deploy_token|git_token|api_key --env-var <VAR> [--workspace <id>]
+                                       register a secret's NAME and the environment variable the
+                                       orchestrator reads it from at execution time. The value is
+                                       never stored, never printed and never asked for -- and this
+                                       verb does not tell you whether the variable is set.
+  credential list [--workspace <id>]   name, kind, variable name, when it was registered
+  broker bind --op <op> --command <argv> [--command <argv> ...] [--credential <n>] [--workspace <id>]
+                                       say what one brokered operation RUNS here. --command is
+                                       repeated once per argv element, so a path with a space in
+                                       it stays one argument. One binding per operation: this
+                                       rebinds in place.
+  broker list [--workspace <id>]       every bound operation, its command and the variable its
+                                       credential names
+  broker run <op> [--<parameter> <value> ...]
+                                       THE WORKER'S OWN verb, and the only one here that touches
+                                       no database: it appends one line to its run's broker
+                                       channel and waits for the reply beside it. It only works
+                                       inside a run the orchestrator started, and it exits with
+                                       the operation's own exit code.
+
   users
   create-user --name <u>                create a local account. The password is never a
                                        command-line argument -- it would land in shell history
@@ -510,8 +572,16 @@ interface Args {
 
 type Flags = Readonly<Record<string, string | readonly string[] | undefined>>
 
-/** Flags that repeat: every occurrence is collected, in order, rather than the usual last-wins. */
-const REPEATABLE: ReadonlySet<string> = new Set(['verify', 'setup'])
+/**
+ * Flags that repeat: every occurrence is collected, in order, rather than the usual last-wins.
+ *
+ * `command` joins the two workspace command lists (M52 R3) and is the one whose repetitions are not
+ * separate commands but the ARGV OF ONE: `broker bind --command /opt/deploy.sh --command --now`
+ * binds `['/opt/deploy.sh', '--now']`. Spelled one element per flag rather than as a single string
+ * this file would have to split, because splitting is where a path with a space in it becomes two
+ * arguments -- and a binding is the operator's own command line, not a guess about it.
+ */
+const REPEATABLE: ReadonlySet<string> = new Set(['verify', 'setup', 'command'])
 
 /**
  * Flags that carry no value at all, so they may be written ANYWHERE in the command (M50 t3).
@@ -620,6 +690,25 @@ function tapPath(): string | undefined {
     )
     return undefined
   }
+}
+
+/**
+ * The CLI a worker's thin broker client runs (M52 erratum E6).
+ *
+ * THIS FILE: `import.meta.url` is `dist/cli.js`, which is precisely the entry `node` must be given
+ * -- there is no `orchestrator` binary on anybody's PATH, and `package.json`'s `orchestrator` script
+ * is an npm alias for this same path. Overridable for {@link hookPath}'s reason: an installed
+ * daemon's layout is not this one.
+ *
+ * A fact about the RUNTIME and never a per-run input, which is why it is read here and passed to
+ * the registry once (M52 Task 2's carried C3): it becomes every child's `SLAVEOFAI_BROKER_CLI`, and
+ * a value that could differ between two runs of the same daemon would mean two workers on one host
+ * talking to two different orchestrators.
+ */
+function brokerCliPath(): string {
+  const fromEnv = process.env['SLAVEOFAI_BROKER_CLI']
+  if (fromEnv !== undefined && fromEnv !== '') return resolve(fromEnv)
+  return fileURLToPath(import.meta.url)
 }
 
 /**
@@ -734,6 +823,10 @@ function buildAdapterRegistry(): AdapterRegistry {
       // as we did before M51" means to the adapter: no registration, no tailer, no env var, no
       // pre-flight.
       ...(tap === undefined ? {} : { tapPath: tap }),
+      // M52 erratum E6 / Task 2's carried C3: the ONE place `brokerCliPath` is set. Nothing set it
+      // before this task, so `SLAVEOFAI_BROKER_CLI` was absent from every child and a worker had no
+      // way to find an orchestrator CLI at all.
+      brokerCliPath: brokerCliPath(),
     },
     cursor: {
       // Injectable through the environment for the same reason `SLAVEOFAI_CLAUDE_BIN` is: the gate
@@ -742,6 +835,9 @@ function buildAdapterRegistry(): AdapterRegistry {
       command: process.env['SLAVEOFAI_CURSOR_BIN'] ?? 'cursor-agent',
       ...(cursorExtra === undefined || cursorExtra === '' ? {} : { extraArgs: cursorExtra.split(' ') }),
       gatePath: cursorGatePath(),
+      // Both runtimes, from the same reading: a worker's broker client is the orchestrator's own
+      // CLI whichever vendor is driving the worker.
+      brokerCliPath: brokerCliPath(),
     },
   })
 }
@@ -875,6 +971,171 @@ async function readSecretLine(): Promise<string> {
 
 const STDIN_PASSWORD_ERROR =
   'the password is read from stdin: printf "%s\\n" "$PW" | orchestrator create-user --name ada'
+
+/**
+ * `--by <username>` as a {@link Principal}, or nothing at all.
+ *
+ * RESOLVED TO A ROW, never passed through as a name (M52 Task 3's trap R2). `Principal.userId` is a
+ * foreign key: `setSlavePermission` puts it on `SlavePermission.grantedBy` and hands it to
+ * `appendEvent`, where `ExecutionEvent.userId` references `User`. A name that is not an account
+ * would write the row and then throw on the append -- a non-zero exit over work that had already
+ * happened, which is the failure `operatorName` was written for in the other direction.
+ *
+ * Omitting `--by` is not an error: the CLI has always been allowed to act with no user
+ * (`approve-decision`'s own comment), and the row then records no author.
+ */
+async function resolvePrincipal(flags: Flags): Promise<Principal | undefined> {
+  const username = flagText(flags, 'by')
+  if (username === undefined || username.trim() === '') return undefined
+  const user = await prisma.user.findUnique({ where: { username }, select: { id: true } })
+  if (user === null) throw new Error(refusalText({ kind: 'user_not_found', username }))
+  return { userId: user.id }
+}
+
+/** A brokered op's WORD, with the key left to the caller's own column (`docs/ia.md` rule 3). A
+ *  binding row carries a plain `String`, so an op this version does not know prints as itself. */
+function brokerOpLabel(op: string): string {
+  return BROKER_OP_LABEL[op as BrokerOp] ?? op
+}
+
+/** How often the thin client looks for its reply. Two hundred milliseconds against a 150-second
+ *  ceiling: 750 `stat` calls in the worst case, and a deploy that finished is noticed within a
+ *  fifth of a second. */
+const BROKER_POLL_MS = 200
+
+/**
+ * One of the three environment variables the orchestrator sets on a brokered child, or a refusal
+ * that names it.
+ *
+ * The message says WHERE the variable comes from, because the person who meets this is almost
+ * always an operator who typed `broker run` in their own shell: this verb is the worker's, it is
+ * spawned by the orchestrator, and outside a run there is no channel to write to and no identity
+ * to write with.
+ */
+function requireChildEnv(name: string): string {
+  const value = process.env[name]
+  if (value === undefined || value === '') {
+    throw new Error(
+      `${name} is not set: \`broker run\` is the worker's own verb and only works inside a run the ` +
+        'orchestrator started, which is what sets it',
+    )
+  }
+  return value
+}
+
+/**
+ * The WORKER'S OWN verb (M52 R3), and the only command in this file that touches no database.
+ *
+ * It writes one bounded line to `SLAVEOFAI_BROKER_CHANNEL` with `O_APPEND` -- atomic below
+ * PIPE_BUF, which is why the line is capped -- then polls for `broker-<requestId>.json` up to
+ * `BROKER_CLIENT_TIMEOUT_MS`, prints the bounded output and exits with the operation's own status.
+ * It needs no secret, no port and no server, and it CANNOT reach the database: M52's
+ * `CHILD_ENV_ALLOW` removes `DATABASE_URL` from every worker's environment, which is what makes a
+ * database client impossible here and a file client sufficient.
+ *
+ * The client waits LONGER than the server runs (`BROKER_CLIENT_TIMEOUT_MS` > `BROKER_TIMEOUT_MS`,
+ * pinned by a domain test): a client that gave up first would report "no answer" for an operation
+ * that had in fact run, which is the one failure an audit trail cannot recover from.
+ *
+ * THE FLAGS ARE THE MANIFEST'S, not a list spelled here: the parameters a worker may pass are the
+ * keys of `BROKERED_OPERATIONS[op].params`, so a second operation gets its flags the moment it is
+ * added to the registry and this function keeps not knowing what a deploy is. Nothing is validated
+ * here beyond the op's existence -- the strict schema on the daemon's side is the one authority,
+ * and a client that pre-validated would be a second copy of a rule that must not drift.
+ *
+ * No hook rule is needed for the `Bash` call that invokes this: `run_commands` is in the
+ * implementer baseline, so the call is already allowed, and command-string inspection stays out of
+ * scope exactly as M18 ruled.
+ */
+async function runBrokerClient(argv: readonly string[], flags: Flags): Promise<number> {
+  const channelPath = requireChildEnv('SLAVEOFAI_BROKER_CHANNEL')
+  const runId = requireChildEnv('SLAVEOFAI_RUN_ID')
+  const runToken = requireChildEnv('SLAVEOFAI_RUN_TOKEN')
+
+  const op = argv[2]
+  if (op === undefined) {
+    throw new Error(`broker run needs an operation: ${Object.keys(BROKERED_OPERATIONS).join(', ')}`)
+  }
+  // Refused here rather than on the channel: an op the manifest does not carry has no parameters to
+  // read either, so there is nothing to send. The sentence is `refusalText`'s own, so the worker
+  // reads the same words whichever side refused.
+  if (!Object.hasOwn(BROKERED_OPERATIONS, op)) {
+    throw new Error(refusalText({ kind: 'broker_refused', op, reason: 'not_brokered' }))
+  }
+  const params: Record<string, string> = {}
+  for (const key of Object.keys(BROKERED_OPERATIONS[op as BrokerOp].params.shape)) {
+    const value = flagText(flags, key)
+    if (value !== undefined) params[key] = value
+  }
+
+  const requestId = randomBytes(16).toString('hex')
+  const line = `${JSON.stringify({ requestId, runId, runToken, op, params })}\n`
+  // The same cap the server drops a line at. Refusing here turns "the daemon silently ignored me"
+  // into a sentence the worker can act on, and it is the only thing this client checks about its
+  // own request.
+  if (Buffer.byteLength(line, 'utf8') > REQUEST_LINE_MAX_BYTES) {
+    throw new Error(`${op}: that request is larger than the ${String(REQUEST_LINE_MAX_BYTES)}-byte limit for one line`)
+  }
+  appendFileSync(channelPath, line, { mode: 0o600 })
+
+  // Beside the channel, from the same helper the daemon writes with -- never a filename spelled
+  // twice.
+  const replyPath = brokerReplyPathFor(dirname(channelPath), requestId)
+  const deadline = Date.now() + BROKER_CLIENT_TIMEOUT_MS
+  for (;;) {
+    const reply = readBrokerReply(replyPath)
+    if (reply !== null) {
+      if (reply.requestId !== requestId) throw new Error(`${op}: the reply beside this request answers a different one`)
+      return reportBrokerReply(op, reply)
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`${op}: no answer from the orchestrator after ${String(BROKER_CLIENT_TIMEOUT_MS)}ms`)
+    }
+    await new Promise<void>((settle) => setTimeout(settle, BROKER_POLL_MS))
+  }
+}
+
+/** The reply, or `null` for "not yet". A file that does not fit the schema is "not yet" too: it is
+ *  in a directory the worker can write, so the only safe reading of a malformed one is that the
+ *  answer has not arrived, and the wait ends at the client's own deadline. */
+function readBrokerReply(replyPath: string): BrokerReplyRead | null {
+  if (!existsSync(replyPath)) return null
+  try {
+    const parsed = brokerReplySchema.safeParse(JSON.parse(readFileSync(replyPath, 'utf8')))
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * What the worker sees, and what this process exits with.
+ *
+ * `ok` says the operation RAN, never that it succeeded: a bound script that exits 3 is an execution,
+ * and 3 is what this returns -- the worker's shell then sees exactly what it would have seen had it
+ * been allowed to run the command itself. Every other outcome is a thrown sentence and `main`'s own
+ * catch turns it into stderr and exit 1, which is this file's rule for every verb: the distinction
+ * lives in the WORDS, because that is what a worker (and the person reading its transcript) reads.
+ */
+function reportBrokerReply(op: string, reply: BrokerReplyRead): number {
+  if (!reply.ok) {
+    throw new Error(
+      isBrokerRefusalReason(reply.reason)
+        ? refusalText({ kind: 'broker_refused', op, reason: reply.reason })
+        : `${op}: the orchestrator could not answer (${reply.reason ?? 'no reason given'})`,
+    )
+  }
+  if (reply.output !== '') process.stdout.write(reply.output.endsWith('\n') ? reply.output : `${reply.output}\n`)
+  // Bounded to what an exit status can actually be. A real child's code is always in range; this
+  // file is parsed out of a directory the WORKER can write, and a number outside it would be masked
+  // by Node into an unrelated one -- 256 would exit 0, which is the one value it must never become.
+  if (reply.exitCode !== null && reply.exitCode >= 0 && reply.exitCode <= 255) return reply.exitCode
+  if (reply.exitCode !== null) return 1
+  // A killed or timed-out operation has no exit status to report, and silence here would read as
+  // success.
+  process.stderr.write(`${op}: the operation reported no exit status -- it was killed or it timed out\n`)
+  return 1
+}
 
 async function mustGetRun(runId: string) {
   // `slave -> team`, not `task`: a `planning` run (M8b) has no `Task` row, and `slave -> team ->
@@ -2550,6 +2811,158 @@ export async function main(argv: readonly string[]): Promise<number> {
         process.stdout.write(`${user.username}  ${user.createdAt.toISOString()}\n`)
       }
       return 0
+    }
+
+    /**
+     * M52 R1/R5: the six operations, for one worker.
+     *
+     * `list` prints all six every time -- a matrix that showed only the decided rows would read as a
+     * matrix with four operations in it, and the whole point of default-deny is that "nobody ever
+     * asked" is a state a person has to be able to see. `revoke` is the third state's own verb: it
+     * DELETES the row, which is the way back from a decision taken in error, where `deny` is a
+     * considered refusal.
+     */
+    case 'permission': {
+      const sub = argv[1] ?? 'list'
+      const slaveId = requireFlag(flags, 'slave')
+
+      if (sub === 'list') {
+        // The run kind is a parameter because the BASELINE is: the same worker reads `baseline` for
+        // `run_commands` on an implementation run and `never` on a planning one, and both are true.
+        const runKind = oneOfFlag<PermissionRunKind>(flags, 'run-kind', PERMISSION_RUN_KINDS) ?? 'implementation'
+        const rows = await prisma.slavePermission.findMany({
+          where: { slaveId },
+          select: { kind: true, mode: true, grantedBy: true, grantedAt: true },
+        })
+        // Names, not ids, for whoever decided -- an operator reading `by <uuid>` learns nothing.
+        // One query for every author on the matrix, never one per row.
+        const authors = await prisma.user.findMany({
+          where: { id: { in: rows.map((row) => row.grantedBy).filter((id): id is string => id !== null) } },
+          select: { id: true, username: true },
+        })
+        const nameById = new Map(authors.map((user) => [user.id, user.username]))
+        const grants = grantsFor(
+          rows.map((row) => ({
+            kind: row.kind,
+            mode: row.mode,
+            grantedBy: row.grantedBy,
+            grantedAt: row.grantedAt === null ? null : row.grantedAt.toISOString(),
+          })),
+          runKind,
+        )
+        for (const grant of grants) {
+          // Label first and the key beside it (`docs/ia.md` rule 3): the word is what a person
+          // reads, the key is what they copy into `--kind`, and a CLI's "expanded view" is the line.
+          const decided =
+            grant.by === null && grant.at === null
+              ? ''
+              : `\tby ${grant.by === null ? 'somebody' : (nameById.get(grant.by) ?? grant.by)}${grant.at === null ? '' : ` at ${grant.at}`}`
+          process.stdout.write(
+            `${PERMISSION_LABEL[grant.kind]}\t${grant.kind}\t${grant.mode ?? 'unset'}\t${grant.source}${decided}\n`,
+          )
+        }
+        return 0
+      }
+
+      const kind = requireFlag(flags, 'kind')
+      // BEFORE the write, so a `--by` nobody carries refuses instead of leaving a row behind.
+      const principal = await resolvePrincipal(flags)
+
+      if (sub === 'grant' || sub === 'deny') {
+        const mode = sub === 'grant' ? 'allow' : 'deny'
+        const result = await setSlavePermission(slaveId, kind, mode, principal)
+        if (!result.ok) throw new Error(refusalText(result.error))
+        process.stdout.write(
+          `${PERMISSION_LABEL[kind as PermissionKind]} (${kind}) is ${mode === 'allow' ? 'allowed' : 'denied'} for slave ${slaveId}\n`,
+        )
+        return 0
+      }
+      if (sub === 'revoke') {
+        const result = await clearSlavePermission(slaveId, kind, principal)
+        if (!result.ok) throw new Error(refusalText(result.error))
+        process.stdout.write(
+          `${PERMISSION_LABEL[kind as PermissionKind]} (${kind}) is back to nobody-has-decided for slave ${slaveId}\n`,
+        )
+        return 0
+      }
+      throw new Error('permission takes list, grant, deny or revoke')
+    }
+
+    /**
+     * M52 R3: what a brokered operation may be run WITH -- a name and a variable, never a value.
+     *
+     * There is no `credential show` and no way to ask whether a variable is set: that question is
+     * an enumeration oracle pointed at the daemon's own environment, and the broker's
+     * `credential_unset` refusal is the one place it is answered, about one operation, at the
+     * moment it matters.
+     */
+    case 'credential': {
+      const sub = argv[1] ?? 'list'
+      const workspaceId = await resolveWorkspace(flags)
+      if (sub === 'add') {
+        const kind = oneOfFlag<CredentialKind>(flags, 'kind', CREDENTIAL_KINDS)
+        if (kind === undefined) throw new Error(`--kind must be one of ${CREDENTIAL_KINDS.join(', ')}`)
+        const result = await addCredential(
+          workspaceId,
+          { name: requireFlag(flags, 'name'), kind, envVar: requireFlag(flags, 'env-var') },
+          await resolvePrincipal(flags),
+        )
+        if (!result.ok) throw new Error(refusalText(result.error))
+        process.stdout.write(
+          `credential ${result.value.name} (${result.value.kind}) registered: the orchestrator reads ` +
+            `${result.value.envVar} from its own environment when an operation bound to it runs\n`,
+        )
+        return 0
+      }
+      if (sub === 'list') {
+        for (const credential of await listCredentials(workspaceId)) {
+          process.stdout.write(
+            `${credential.name}\t${credential.kind}\t${credential.envVar}\t${credential.createdAt.toISOString()}\n`,
+          )
+        }
+        return 0
+      }
+      throw new Error('credential takes add or list')
+    }
+
+    case 'broker': {
+      const sub = argv[1] ?? 'list'
+      // The worker's own verb comes first and returns before a workspace is ever resolved: it has
+      // no database to resolve one against. Every other subcommand below is an ordinary operator
+      // verb in the shape this file has fifty of.
+      if (sub === 'run') return await runBrokerClient(argv, flags)
+
+      const workspaceId = await resolveWorkspace(flags)
+      if (sub === 'bind') {
+        const credentialName = flagText(flags, 'credential')
+        const result = await bindBrokerOp(
+          workspaceId,
+          {
+            op: requireFlag(flags, 'op'),
+            command: flagList(flags, 'command'),
+            ...(credentialName === undefined ? {} : { credentialName }),
+          },
+          await resolvePrincipal(flags),
+        )
+        if (!result.ok) throw new Error(refusalText(result.error))
+        process.stdout.write(
+          `${brokerOpLabel(result.value.op)} (${result.value.op}) runs ${result.value.command.join(' ')}\n` +
+            (result.value.envVar === null
+              ? '  with no credential\n'
+              : `  with ${result.value.envVar} (credential ${result.value.credentialName ?? ''})\n`),
+        )
+        return 0
+      }
+      if (sub === 'list') {
+        for (const binding of await listBrokerBindings(workspaceId)) {
+          process.stdout.write(
+            `${brokerOpLabel(binding.op)}\t${binding.op}\t${binding.command.join(' ')}\t` +
+              `${binding.credentialName ?? '-'}\t${binding.envVar ?? '-'}\n`,
+          )
+        }
+        return 0
+      }
+      throw new Error('broker takes run, bind or list')
     }
 
     case 'help':

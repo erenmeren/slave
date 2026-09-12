@@ -1,5 +1,5 @@
 import { execFile, execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -15,6 +15,7 @@ import {
 import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, type Candidate, type Situation } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { brokerChannelPathFor, brokerReplyPathFor } from '@slave-of-ai/providers'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 
 const execFileAsync = promisify(execFile)
@@ -3608,5 +3609,319 @@ describe('the orchestrator CLI', () => {
       expect(missing.code).not.toBe(0)
       expect(missing.stderr).toContain('11111111-1111-1111-1111-111111111111')
     })
+  })
+
+  /**
+   * M52 R3/R5: the four verb families this milestone adds, and the one of them that is not like
+   * the others.
+   *
+   * `permission`, `credential` and `broker bind|list` are ordinary database-backed control verbs.
+   * `broker run` is the WORKER'S own client: it is driven here with the three environment variables
+   * a real child would have and NO `DATABASE_URL`, because that absence is the whole reason the
+   * verb is a file client and not a database one (`CHILD_ENV_ALLOW` takes `DATABASE_URL` off every
+   * child).
+   *
+   * `TOKEN` is 64 hex characters of one repeated pair and `CREDENTIAL_PLACEHOLDER` says what it is:
+   * neither is a value anything real ever held, and both are asserted ABSENT from the surfaces that
+   * must never carry them.
+   */
+  describe('the broker verbs (M52)', () => {
+    const TOKEN = 'f0'.repeat(32)
+    const CREDENTIAL_PLACEHOLDER = 'not-a-real-secret'
+
+    /**
+     * Runs the built CLI with EXACTLY this environment -- no `...process.env` -- and, when asked,
+     * answers the request it finds on the channel the way the daemon's pass would.
+     *
+     * The reply cannot be written up front: its filename is the request id, and the request id is
+     * minted by the client. So the answer is a watcher, which is also what the daemon is.
+     */
+    async function runCliWithEnv(
+      args: readonly string[],
+      env: NodeJS.ProcessEnv,
+      answer?: { readonly runDir: string; readonly reply: (requestId: string) => Record<string, unknown> },
+    ): Promise<CliResult> {
+      const child = spawn('node', [CLI, ...args], { env })
+      let stdout = ''
+      let stderr = ''
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString()
+      })
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString()
+      })
+      let answered = false
+      const watcher =
+        answer === undefined
+          ? null
+          : setInterval((): void => {
+              if (answered) return
+              const channel = brokerChannelPathFor(answer.runDir)
+              if (!existsSync(channel)) return
+              const [line] = readFileSync(channel, 'utf8').split('\n')
+              if (line === undefined || line === '') return
+              try {
+                const { requestId } = JSON.parse(line) as { requestId: string }
+                answered = true
+                writeFileSync(brokerReplyPathFor(answer.runDir, requestId), JSON.stringify(answer.reply(requestId)))
+              } catch {
+                // A half-written line. The next tick of this watcher finds it whole.
+              }
+            }, 25)
+      const code = await new Promise<number>((res) => child.on('close', (exit) => res(exit ?? 1)))
+      if (watcher !== null) clearInterval(watcher)
+      return { stdout, stderr, code }
+    }
+
+    /** A run directory outside every repository, exactly where `runFilePaths` puts one. */
+    function makeRunDir(): string {
+      const dir = mkdtempSync(join(tmpdir(), 'slaveofai-cli-broker-'))
+      repos.push(dir)
+      return dir
+    }
+
+    it('`permission list` prints every operation, its word, and where its answer came from', async (): Promise<void> => {
+      const result = await runCli(['permission', 'list', '--slave', fixture.slaveId])
+
+      expect(result.code).toBe(0)
+      // The label a person reads...
+      expect(result.stdout).toContain('Fetch over the network')
+      // ...where the answer came from...
+      expect(result.stdout).toContain('baseline')
+      // ...and the key, which is what an operator copies into `--kind`. `docs/ia.md` rule 3 keeps
+      // the raw value available, and a CLI's "expanded view" is the line itself.
+      expect(result.stdout).toContain('network_fetch')
+      // All six, every time: a matrix that printed only the decided rows would read as a matrix
+      // with four operations in it.
+      expect(result.stdout.trim().split('\n')).toHaveLength(6)
+    })
+
+    it('`permission grant` writes the row and the event, and names the operator', async (): Promise<void> => {
+      const user = await prisma.user.create({ data: { username: 'meren', passwordHash: 'x' } })
+
+      const result = await runCli([
+        'permission', 'grant', '--slave', fixture.slaveId, '--kind', 'network_fetch', '--by', 'meren',
+      ])
+
+      expect(result.code).toBe(0)
+      expect(
+        await prisma.slavePermission.count({ where: { slaveId: fixture.slaveId, kind: 'network_fetch', mode: 'allow' } }),
+      ).toBe(1)
+      // R2's trap: `Principal.userId` is a foreign key through `ExecutionEvent.userId`, so `--by`
+      // is RESOLVED to a row and never passed through as a name.
+      const row = await prisma.slavePermission.findFirstOrThrow({ where: { slaveId: fixture.slaveId } })
+      expect(row.grantedBy).toBe(user.id)
+      const event = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'permission_changed' } })
+      expect(event.userId).toBe(user.id)
+      expect(event.payload).toMatchObject({ kind: 'network_fetch', from: null, to: 'allow' })
+    })
+
+    it('`permission grant --by` refuses a name no account carries, and writes nothing', async (): Promise<void> => {
+      const result = await runCli([
+        'permission', 'grant', '--slave', fixture.slaveId, '--kind', 'network_fetch', '--by', 'nobody',
+      ])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('no user named nobody')
+      expect(await prisma.slavePermission.count()).toBe(0)
+    })
+
+    it('`permission deny` and `permission revoke` take a decision back to unset', async (): Promise<void> => {
+      await runCli(['permission', 'deny', '--slave', fixture.slaveId, '--kind', 'run_commands'])
+      expect(await prisma.slavePermission.count({ where: { mode: 'deny' } })).toBe(1)
+
+      const result = await runCli(['permission', 'revoke', '--slave', fixture.slaveId, '--kind', 'run_commands'])
+
+      expect(result.code).toBe(0)
+      // Deleted, not flipped: "nobody has ever been asked" is a third state, and it is the one a
+      // person who granted something in error needs to get back to.
+      expect(await prisma.slavePermission.count()).toBe(0)
+    })
+
+    it('`permission grant --kind nonsense` refuses with the verb’s own sentence', async (): Promise<void> => {
+      const result = await runCli(['permission', 'grant', '--slave', fixture.slaveId, '--kind', 'nonsense'])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('a permission must name one of the six operations')
+    })
+
+    it('`credential add` stores a name and a variable, and prints neither a value nor whether one is set', async (): Promise<void> => {
+      process.env['FAKE_DEPLOY_TOKEN'] = CREDENTIAL_PLACEHOLDER
+      try {
+        const result = await runCli([
+          'credential', 'add', '--workspace', fixture.workspaceId,
+          '--name', 'deploy', '--kind', 'deploy_token', '--env-var', 'FAKE_DEPLOY_TOKEN',
+        ])
+
+        expect(result.code).toBe(0)
+        expect(result.stdout).toContain('FAKE_DEPLOY_TOKEN')
+        expect(result.stdout).not.toContain(CREDENTIAL_PLACEHOLDER)
+        const row = await prisma.credential.findFirstOrThrow()
+        expect({ name: row.name, kind: row.kind, envVar: row.envVar }).toEqual({
+          name: 'deploy', kind: 'deploy_token', envVar: 'FAKE_DEPLOY_TOKEN',
+        })
+      } finally {
+        delete process.env['FAKE_DEPLOY_TOKEN']
+      }
+    })
+
+    it('`credential list` prints the variable NAME and never reads it', async (): Promise<void> => {
+      process.env['FAKE_DEPLOY_TOKEN'] = CREDENTIAL_PLACEHOLDER
+      try {
+        await runCli([
+          'credential', 'add', '--workspace', fixture.workspaceId,
+          '--name', 'deploy', '--kind', 'deploy_token', '--env-var', 'FAKE_DEPLOY_TOKEN',
+        ])
+
+        const result = await runCli(['credential', 'list', '--workspace', fixture.workspaceId])
+
+        expect(result.code).toBe(0)
+        expect(result.stdout).toContain('deploy')
+        expect(result.stdout).toContain('FAKE_DEPLOY_TOKEN')
+        expect(result.stdout).not.toContain(CREDENTIAL_PLACEHOLDER)
+      } finally {
+        delete process.env['FAKE_DEPLOY_TOKEN']
+      }
+    })
+
+    it('`broker bind` refuses an op the manifest does not carry', async (): Promise<void> => {
+      const result = await runCli([
+        'broker', 'bind', '--workspace', fixture.workspaceId, '--op', 'rm_minus_rf', '--command', '/bin/true',
+      ])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('rm_minus_rf')
+      expect(await prisma.brokerBinding.count()).toBe(0)
+    })
+
+    it('`broker bind` then `broker list` names the command and the VARIABLE, never a value', async (): Promise<void> => {
+      process.env['FAKE_DEPLOY_TOKEN'] = CREDENTIAL_PLACEHOLDER
+      try {
+        await runCli([
+          'credential', 'add', '--workspace', fixture.workspaceId,
+          '--name', 'deploy', '--kind', 'deploy_token', '--env-var', 'FAKE_DEPLOY_TOKEN',
+        ])
+        const bound = await runCli([
+          'broker', 'bind', '--workspace', fixture.workspaceId, '--op', 'deploy_release',
+          '--command', '/opt/deploy/release.sh', '--command', '--now', '--credential', 'deploy',
+        ])
+        expect(bound.code).toBe(0)
+
+        const listed = await runCli(['broker', 'list', '--workspace', fixture.workspaceId])
+
+        expect(listed.code).toBe(0)
+        // The op's WORD and its key, the whole argv, the credential's name and its variable.
+        expect(listed.stdout).toContain('Deploy a release')
+        expect(listed.stdout).toContain('deploy_release')
+        expect(listed.stdout).toContain('/opt/deploy/release.sh --now')
+        expect(listed.stdout).toContain('FAKE_DEPLOY_TOKEN')
+        expect(listed.stdout).not.toContain(CREDENTIAL_PLACEHOLDER)
+        expect((await prisma.brokerBinding.findFirstOrThrow()).command).toEqual(['/opt/deploy/release.sh', '--now'])
+      } finally {
+        delete process.env['FAKE_DEPLOY_TOKEN']
+      }
+    })
+
+    it('`broker run` writes ONE request line carrying no secret but the token, and exits on the reply', async (): Promise<void> => {
+      const runDir = makeRunDir()
+      const channelPath = brokerChannelPathFor(runDir)
+
+      const result = await runCliWithEnv(
+        ['broker', 'run', 'deploy_release', '--environment', 'staging', '--digest', 'a1b2c3d'],
+        {
+          SLAVEOFAI_BROKER_CHANNEL: channelPath,
+          SLAVEOFAI_RUN_ID: '11111111-1111-1111-1111-111111111111',
+          SLAVEOFAI_RUN_TOKEN: TOKEN,
+          PATH: process.env['PATH'] ?? '',
+        },
+        {
+          runDir,
+          reply: (requestId) => ({ requestId, ok: true, exitCode: 0, output: 'deployed', reason: null }),
+        },
+      )
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('deployed')
+      const lines = readFileSync(channelPath, 'utf8').trim().split('\n')
+      expect(lines).toHaveLength(1)
+      const line = JSON.parse(lines[0] as string) as Record<string, unknown>
+      expect(Object.keys(line).sort()).toEqual(['op', 'params', 'requestId', 'runId', 'runToken'])
+      expect(line['op']).toBe('deploy_release')
+      expect(line['params']).toEqual({ environment: 'staging', digest: 'a1b2c3d' })
+      // The request id names the reply file, and is 32 hex characters so it can never escape the
+      // run directory (`brokerReplyPathFor` refuses anything else).
+      expect(line['requestId']).toMatch(/^[a-f0-9]{32}$/)
+    }, 30_000)
+
+    it('`broker run` exits NON-ZERO with the refusal’s word when the reply refuses', async (): Promise<void> => {
+      const runDir = makeRunDir()
+
+      const result = await runCliWithEnv(
+        ['broker', 'run', 'deploy_release', '--environment', 'staging', '--digest', 'a1b2c3d'],
+        {
+          SLAVEOFAI_BROKER_CHANNEL: brokerChannelPathFor(runDir),
+          SLAVEOFAI_RUN_ID: '11111111-1111-1111-1111-111111111111',
+          SLAVEOFAI_RUN_TOKEN: TOKEN,
+          PATH: process.env['PATH'] ?? '',
+        },
+        {
+          runDir,
+          reply: (requestId) => ({
+            requestId, ok: false, exitCode: null, output: '', reason: 'permission_denied',
+          }),
+        },
+      )
+
+      expect(result.code).not.toBe(0)
+      // `refusalText`'s own sentence for `broker_refused`, so the worker, the activity card and the
+      // API all say the same thing about one refusal.
+      expect(result.stderr).toContain('deploy_release: this worker was not granted that')
+    }, 30_000)
+
+    it('`broker run` carries the operation’s OWN exit code back, and a non-zero one is not a refusal', async (): Promise<void> => {
+      const runDir = makeRunDir()
+
+      const result = await runCliWithEnv(
+        ['broker', 'run', 'deploy_release', '--environment', 'staging', '--digest', 'a1b2c3d'],
+        {
+          SLAVEOFAI_BROKER_CHANNEL: brokerChannelPathFor(runDir),
+          SLAVEOFAI_RUN_ID: '11111111-1111-1111-1111-111111111111',
+          SLAVEOFAI_RUN_TOKEN: TOKEN,
+          PATH: process.env['PATH'] ?? '',
+        },
+        {
+          runDir,
+          reply: (requestId) => ({ requestId, ok: true, exitCode: 3, output: 'the rollout failed', reason: null }),
+        },
+      )
+
+      expect(result.code).toBe(3)
+      expect(result.stdout).toContain('the rollout failed')
+    }, 30_000)
+
+    it('`broker run` refuses to start with no channel in its environment, naming the variable', async (): Promise<void> => {
+      const result = await runCliWithEnv(
+        ['broker', 'run', 'deploy_release', '--environment', 'staging', '--digest', 'a1b2c3d'],
+        { PATH: process.env['PATH'] ?? '' },
+      )
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('SLAVEOFAI_BROKER_CHANNEL')
+    }, 30_000)
+
+    it('`broker run` refuses an op the manifest does not carry, without writing a line', async (): Promise<void> => {
+      const runDir = makeRunDir()
+
+      const result = await runCliWithEnv(['broker', 'run', 'rm_minus_rf'], {
+        SLAVEOFAI_BROKER_CHANNEL: brokerChannelPathFor(runDir),
+        SLAVEOFAI_RUN_ID: '11111111-1111-1111-1111-111111111111',
+        SLAVEOFAI_RUN_TOKEN: TOKEN,
+        PATH: process.env['PATH'] ?? '',
+      })
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('rm_minus_rf')
+      expect(existsSync(brokerChannelPathFor(runDir))).toBe(false)
+    }, 30_000)
   })
 })

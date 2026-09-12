@@ -1,4 +1,14 @@
 export { noteTickRan, reconcileOrphans, resetTickObservation, sweep, type SweepDeps, type SweepReport } from './sweep.js'
+export {
+  REQUEST_LINE_MAX_BYTES,
+  brokerReplySchema,
+  isBrokerRefusalReason,
+  realBrokerExecutor,
+  resetBrokerCursors,
+  serveBrokerRequests,
+  type BrokerReply,
+  type BrokerReplyRead,
+} from './broker.js'
 export { advance, runVerify, type AdvanceInput, type RunVerifyInput, type VerifyResult } from './verify.js'
 export { COMMAND_OUTPUT_LIMIT, DEFAULT_COMMAND_TIMEOUT_MS, commandFailure, runShellCommand, type CommandOutcome } from './shell.js'
 export { drainPumps, tick, type TickDeps, type TickReport } from './tick.js'

@@ -208,7 +208,12 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
         swept.strandedClaims.length > 0 ||
         swept.breakerSteered.length > 0 ||
         swept.breakerConstrained.length > 0 ||
-        swept.breakerStopped.length > 0
+        swept.breakerStopped.length > 0 ||
+        // M52 R3, and the same argument as the breaker rungs directly above: a tick whose only
+        // action was running a deploy on a worker's behalf must leave a mark an operator can find.
+        // The ids are REQUEST ids -- what the reply file beside the run's channel is named -- so
+        // the line points at the artefact rather than only saying that something happened.
+        swept.brokerServed.length > 0
       ) {
         process.stdout.write(`${JSON.stringify({ sweep: swept })}\n`)
       }

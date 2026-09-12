@@ -22,6 +22,7 @@ import {
   type WorkspaceId,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { serveBrokerRequests } from './broker.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import type { AdapterRegistry } from '@slave-of-ai/providers'
 import { resolveAdapter } from './provider.js'
@@ -60,6 +61,11 @@ export interface SweepReport {
   readonly breakerSteered: readonly RunId[]
   readonly breakerConstrained: readonly RunId[]
   readonly breakerStopped: readonly RunId[]
+  /** M52 R3: the broker request ids this pass served -- request ids, not run ids, because one run
+   *  may ask for several things in one turn and the id is what names the reply the worker is
+   *  waiting on. Empty on every tick of a project that has never used the broker, which is nearly
+   *  all of them. */
+  readonly brokerServed: readonly string[]
 }
 
 /**
@@ -430,6 +436,13 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     breakerStopped: [],
   }
 
+  // M52 R3: the broker's pass. Before the per-run loop rather than inside it -- it reads every live
+  // run's channel in one go, and a worker waiting on a reply must not be made to wait for a
+  // breaker beat or a worktree probe. It never throws (its own docstring), so it is not wrapped.
+  // It is also the one thing in this function that reads a PAUSED run's channel: a worker that
+  // asked for something and was then parked is still owed its answer.
+  const brokerServed = await serveBrokerRequests({ workspaceId: deps.workspaceId })
+
   // BEFORE the per-run loop, and on every tick rather than on the beat (M51 R3, erratum E8). The
   // loop cannot do this: `paused` is not in `SWEEPABLE`, so a parked run is not even in `runs`
   // above, and the loop skips a run with no pid -- which a paused run never has, because pausing IS
@@ -552,7 +565,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   // and running this first would look at claims it is about to make current.
   const strandedClaims = await reconcileStrandedClaims(deps, workspace)
 
-  return { timedOut, overToolCap, deadPids, strandedClaims, ...breakerMoves }
+  return { timedOut, overToolCap, deadPids, strandedClaims, brokerServed, ...breakerMoves }
 }
 
 /** Which rung a beat climbed -- the three `SweepReport` keys, so the push site cannot misspell one. */

@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
@@ -159,6 +159,32 @@ describe('sweep and reconcileOrphans', () => {
     expect(run.terminalAt).not.toBeNull()
     expect(run.endedAt).not.toBeNull()
     expect(await eventTypesFor(fixture.workspaceId)).toEqual(['run.failed'])
+  })
+
+  it('serves no broker request for a project that has never used one, and writes no file for it', async (): Promise<void> => {
+    // M52 R3. `paused` rather than `working`: it is excluded from `SWEEPABLE`, so the per-run loop
+    // below never sees this run and what is measured here is the BROKER pass alone -- which does
+    // read a paused run's channel, because a worker that asked for something before it was parked
+    // is still owed its answer.
+    const stateDir = mkdtempSync(join(tmpdir(), 'slaveofai-sweep-state-'))
+    const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-sweep-repo-'))
+    dirs.push(stateDir, repoPath)
+    const previous = process.env['SLAVEOFAI_STATE_DIR']
+    process.env['SLAVEOFAI_STATE_DIR'] = stateDir
+    try {
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { repoPath } })
+      const run = await givenRun({ status: 'paused', pid: null })
+
+      const report = await sweep(deps)
+
+      expect(report.brokerServed).toEqual([])
+      // And not one file the pass did not have to write: a run that never asked for anything has
+      // no channel, so the pass stats one path and is done with it.
+      expect(readdirSync(join(stateDir, 'runs', run.id))).toEqual([])
+    } finally {
+      if (previous === undefined) delete process.env['SLAVEOFAI_STATE_DIR']
+      else process.env['SLAVEOFAI_STATE_DIR'] = previous
+    }
   })
 
   it('reconciles a run that never got a pid at all', async (): Promise<void> => {
@@ -326,6 +352,7 @@ describe('sweep and reconcileOrphans', () => {
       breakerSteered: [],
       breakerConstrained: [],
       breakerStopped: [],
+      brokerServed: [],
     })
     expect(cancelled).toEqual([])
     expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
@@ -429,6 +456,7 @@ describe('sweep and reconcileOrphans', () => {
       breakerSteered: [],
       breakerConstrained: [],
       breakerStopped: [],
+      brokerServed: [],
     })
     expect(cancelled).toEqual([])
     expect(await eventTypesFor(fixture.workspaceId)).toEqual([])
@@ -509,6 +537,7 @@ describe('sweep and reconcileOrphans', () => {
       breakerSteered: [],
       breakerConstrained: [],
       breakerStopped: [],
+      brokerServed: [],
     })
   })
 
@@ -590,6 +619,7 @@ describe('sweep and reconcileOrphans', () => {
       breakerSteered: [],
       breakerConstrained: [],
       breakerStopped: [],
+      brokerServed: [],
     })
     expect(cancelled).toEqual([])
   })
