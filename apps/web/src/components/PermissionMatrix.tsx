@@ -205,11 +205,23 @@ export function PermissionMatrix({ sections }: { readonly sections: readonly Per
         Anything not granted is refused. A run&rsquo;s own kind grants the basics &mdash; reading, and for
         implementation runs writing and commands &mdash; and everything else is a decision.
       </p>
+      {/* The third sentence is the caveat the pre-M52 copy carried and this milestone nearly
+        * dropped (fix round 1). Its old wording — "the three shell-backed capabilities deny the
+        * shell tool as a whole" — is obsolete: the six kinds map to distinct tool names now. What
+        * it was WARNING about is not, and the caption above makes the warning sharper rather than
+        * unnecessary: "anything not granted is refused" is true at TOOL DISPATCH, which is the
+        * only place the hook stands. `run_commands` still grants `Bash`, command strings are not
+        * inspected (M18's ruling, which M52 §"Out of scope" leaves untouched), and a script run
+        * there can do what the rows beside it govern. Saying so is what keeps the caption from
+        * reading as a promise about effect. */}
       <p data-testid="perm-note" className="text-[10.5px] text-text-3">
         Edits reach a run the next time it starts or resumes, never one already in flight. On Cursor
-        only the shell is enforced, so a mark on any other row is advisory there. &lsquo;Read a
-        secret&rsquo; and &lsquo;Deploy a release&rsquo; each name a brokered operation, not a tool: they let
-        the orchestrator act for this worker, and the worker never holds the credential.
+        only the shell is enforced, so a mark on any other row is advisory there. &lsquo;Run
+        commands&rsquo; is the coarse one: it grants the shell, and what a command does there is not
+        inspected, so a script run under it can reach the network or a release whatever the marks
+        beside it say. &lsquo;Read a secret&rsquo; and &lsquo;Deploy a release&rsquo; each name a brokered
+        operation, not a tool: they let the orchestrator act for this worker, and the worker never
+        holds the credential.
       </p>
     </div>
   )

@@ -174,7 +174,8 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     kindLabel: 'Fetch over the network',
     from: null,
     to: 'allow',
-    by: 'meren',
+    // A `User.id`, which is what `setSlavePermission` writes -- never a username.
+    by: 'u-9f3c',
   },
 }
 
@@ -189,7 +190,10 @@ const CARD_PROPS = {
   workspaceId: 'w1',
   slaveName: 'Alex',
   taskTitle: 'Add the thing',
-  userName: null,
+  // The name `ActivityClient` resolved for `event.userId` off the page's one `users` listing
+  // (`server/activity.ts:224`). `permission.changed`'s `by` IS that same id -- both are written
+  // from `principal.userId` -- so this is what its card prints too (fix round 1, Important 1).
+  userName: 'ada',
   dimmed: false,
 } as const
 
@@ -281,7 +285,36 @@ describe('targeted card bodies', () => {
       'Alex \u00b7 Fetch over the network \u00b7 granted',
     )
     expect(screen.getByTestId('permission-changed-text').getAttribute('data-kind')).toBe('network_fetch')
-    expect(screen.getByTestId('permission-changed-by').textContent).toBe(' \u00b7 by meren')
+    // Fix round 1, review Important 1: `payload.by` is a `User.id` (it is `principal.userId`), so
+    // the card printed ` · by 9f3c1b2e-…`. The NAME comes from the page's own batched user lookup
+    // -- the same `userNameById` map `ActivityCard` already resolves `event.userId` through -- and
+    // the id stays in `title`.
+    expect(screen.getByTestId('permission-changed-by').textContent).toBe(' \u00b7 by ada')
+    expect(screen.getByTestId('permission-changed-by').getAttribute('title')).toBe('u-9f3c')
+  })
+
+  it('permission.changed says a person is no longer on record rather than printing their id', () => {
+    const Card = ACTIVITY_CARDS['permission.changed']
+    render(<Card event={fixtureFor('permission.changed')} {...CARD_PROPS} userName={null} />)
+    expect(screen.getByTestId('permission-changed-by').textContent).toBe(
+      ' \u00b7 by a person no longer on record',
+    )
+    expect(screen.getByTestId('permission-changed-by').textContent).not.toContain('u-9f3c')
+  })
+
+  it('permission.changed names nobody when nobody was named -- the CLI carries no principal', () => {
+    const Card = ACTIVITY_CARDS['permission.changed']
+    const event = baseEvent('permission.changed', {
+      slaveId: 'ag-1',
+      name: 'Alex',
+      kind: 'network_fetch',
+      kindLabel: 'Fetch over the network',
+      from: null,
+      to: 'allow',
+      by: null,
+    })
+    render(<Card event={event} {...CARD_PROPS} userName={null} />)
+    expect(screen.queryByTestId('permission-changed-by')).toBeNull()
   })
 
   it('permission.changed reads a REVOKE as going back to never asked', () => {

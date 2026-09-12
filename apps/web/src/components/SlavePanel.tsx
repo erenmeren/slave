@@ -7,14 +7,13 @@ import {
   PERMISSION_PROVIDERS,
   TOOLS_BY_KIND,
   userSlaveStatus,
-  type KindGrant,
   type PermissionKind,
   type PermissionRunKind,
 } from '@slave-of-ai/domain'
 import type { SlaveFeedEvent } from '../lib/feedSummary'
 import { formatUsd } from '../lib/realMoney'
 import { providerLabel } from '../lib/providerLabel'
-import type { SlaveCardData } from '../server/overview'
+import type { SlaveCardData, SlaveGrant } from '../server/overview'
 import { sendControl } from '../lib/postControl'
 import { RuntimeRoleChips } from './RuntimeRoleChips'
 import { DOT } from './SlaveCard'
@@ -68,9 +67,24 @@ const GLYPH_CLASS: Record<'allow' | 'deny' | 'unset', string> = {
   unset: 'text-text-3',
 }
 
+/**
+ * The same three answers IN WORDS, for a reader who cannot see a glyph (fix round 1, review
+ * Important 3).
+ *
+ * `refused` rather than the matrix's `denied` on purpose: a matrix cell shows the stored ROW, whose
+ * mode really is `deny`, and this line shows the effective ANSWER, whose `GrantSource` really is
+ * `refused` -- and the sentence one disclosure below already says "Refused by <name>". Two words
+ * for two facts, not two spellings of one.
+ */
+const MODE_WORD: Record<'allow' | 'deny' | 'unset', string> = {
+  allow: 'allowed',
+  deny: 'refused',
+  unset: 'not set',
+}
+
 /** A BASELINE is a ✓ (the run really may do it) and `never` is a `–`. Three glyphs, the same three
  *  `PermissionMatrix` has drawn since M14 -- one vocabulary, two surfaces. */
-function glyphFor(grant: KindGrant): 'allow' | 'deny' | 'unset' {
+function glyphFor(grant: SlaveGrant): 'allow' | 'deny' | 'unset' {
   if (grant.mode === 'deny') return 'deny'
   return grant.mode === 'allow' || grant.source === 'baseline' ? 'allow' : 'unset'
 }
@@ -100,20 +114,33 @@ function onDate(at: string | null): string {
 }
 
 /**
+ * WHO decided, in words (fix round 1, review Important 1).
+ *
+ * Three answers, and the two nulls are not the same null. `byName` is the username
+ * `buildOverviewSnapshot` resolved; `by === null` means nobody was named at the write at all (the
+ * CLI and the daemon carry no `Principal`); `by !== null` with no name means the account was
+ * deleted since. The raw id is never what this returns -- it rides the sentence's `title`.
+ */
+function granterName(grant: SlaveGrant): string {
+  if (grant.byName !== null) return grant.byName
+  return grant.by === null ? 'somebody unrecorded' : 'a person no longer on record'
+}
+
+/**
  * The policy sentence, and the one place this panel says anything a person did not do (M52 R7).
  *
  * The two broker grants say what they are, because a ✕ on a row that names no tool would otherwise
  * read as a tool this worker cannot use.
  */
-function sourceSentence(grant: KindGrant, runKind: PermissionRunKind): string {
+function sourceSentence(grant: SlaveGrant, runKind: PermissionRunKind): string {
   const brokered = isBrokeredGrant(grant.kind) ? ' \u2014 a brokered operation, not a tool' : ''
   switch (grant.source) {
     case 'baseline':
       return `Baseline (${runKind} runs)${brokered}`
     case 'granted':
-      return `Granted by ${grant.by ?? 'somebody unrecorded'} on ${onDate(grant.at)}${brokered}`
+      return `Granted by ${granterName(grant)} on ${onDate(grant.at)}${brokered}`
     case 'refused':
-      return `Refused by ${grant.by ?? 'somebody unrecorded'} on ${onDate(grant.at)}${brokered}`
+      return `Refused by ${granterName(grant)} on ${onDate(grant.at)}${brokered}`
     case 'never':
       return `Never granted${brokered}`
   }
@@ -466,6 +493,13 @@ export function SlavePanel({
               <span aria-hidden className={GLYPH_CLASS[glyphFor(grant)]}>
                 {GLYPH[glyphFor(grant)]}
               </span>
+              {/* The glyph is `aria-hidden` -- a ✓ read aloud is noise -- so without this word all
+                * six lines would have the SAME accessible name, the operation and nothing about
+                * the answer. `PermissionMatrix` solves the identical problem on its cell with an
+                * `aria-label`, for the identical reason: the visible content is one mark. */}
+              <span data-testid="permission-mode-word" className="sr-only">
+                {MODE_WORD[glyphFor(grant)]}
+              </span>
               <span className="text-text-2">{PERMISSION_LABEL[grant.kind]}</span>
             </li>
           ))}
@@ -475,7 +509,13 @@ export function SlavePanel({
             {slave.permissions.map((grant) => (
               <li key={grant.kind} className="flex flex-col text-[10.5px] text-text-3">
                 <span className="text-text-2">{PERMISSION_LABEL[grant.kind]}</span>
-                <span data-testid={`panel-permission-source-${grant.kind}`} data-source={grant.source}>
+                {/* The granter's `User.id` in `title`, never in the sentence (`docs/ia.md` rule 3
+                  * -- the raw value stays reachable and no surface prints it as its visible text). */}
+                <span
+                  data-testid={`panel-permission-source-${grant.kind}`}
+                  data-source={grant.source}
+                  title={grant.by ?? undefined}
+                >
                   {sourceSentence(grant, slave.permissionsRunKind)}
                 </span>
               </li>

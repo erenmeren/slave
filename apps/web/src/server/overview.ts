@@ -35,6 +35,26 @@ const RECENT_EVENTS_LIMIT = 20
 /** The 340px live-events panel shows the workspace's last 8 (design README §3a.1). */
 const LIVE_EVENTS_LIMIT = 8
 
+/**
+ * One operation's answer for one worker, with the granter's NAME resolved (M52 t5 fix round 1,
+ * review Important 1).
+ *
+ * `KindGrant.by` is `SlavePermission.grantedBy`, which `setSlavePermission` writes as
+ * `principal.userId` -- a `User.id`, not a name. Printed as-is the panel read
+ * `Granted by 9f3c1b2e-… on 12 Sep 2026`, which is a database identifier shown to a person as
+ * their colleague's name. `packages/control`'s `Principal` carries only the id, so the name cannot
+ * come from the write; the WEB boundary is where it is known (`server/principal.ts`'s own
+ * `Principal` is `{ userId, username }`) and this is that boundary.
+ *
+ * `byName` is `null` in two different situations and the panel says which: no principal at all
+ * (the CLI and the daemon have none, so `by` is null too) and a granter whose `User` row has since
+ * been deleted (`by` is a real id that resolves to nothing). The id is never visible text; it
+ * stays in `title`.
+ */
+export interface SlaveGrant extends KindGrant {
+  readonly byName: string | null
+}
+
 export interface SlaveCardData {
   readonly id: string
   readonly name: string
@@ -90,7 +110,7 @@ export interface SlaveCardData {
    * baseline is a fact about a run, not about a worker, and a panel that showed a worker's
    * permissions with no run in sight has to say which kind of run it is answering for.
    */
-  readonly permissions: readonly KindGrant[]
+  readonly permissions: readonly SlaveGrant[]
   /**
    * The run kind {@link SlaveCardData.permissions} was answered FOR (M52 R7).
    *
@@ -393,6 +413,26 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       permissions: { select: { kind: true, mode: true, grantedBy: true, grantedAt: true } },
     },
   })
+
+  /**
+   * Every granter named by a permission row on this project's roster, resolved to a username
+   * ONCE (M52 t5 fix round 1, review Important 1).
+   *
+   * One query for the whole page, and none at all for a project nobody has decided anything about
+   * -- not the per-worker round trip the permission rows themselves were kept off. `grantedBy` is
+   * a plain `String?` column rather than a declared relation, so Prisma cannot join it from the
+   * `include` above and this is the only way to have the name at all.
+   */
+  const granterIds = [...new Set(slaves.flatMap((slave) => slave.permissions.map((row) => row.grantedBy)))].filter(
+    (id): id is string => id !== null,
+  )
+  const granterNames = new Map(
+    granterIds.length === 0
+      ? []
+      : (await prisma.user.findMany({ where: { id: { in: granterIds } }, select: { id: true, username: true } })).map(
+          (user) => [user.id, user.username] as const,
+      ),
+  )
 
   // One live run per slave at most (the scheduler enforces it); latest by startedAt breaks any
   // fixture-made tie deterministically.
@@ -707,7 +747,10 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
             grantedAt: row.grantedAt.toISOString(),
           })),
           run?.kind ?? 'implementation',
-        ),
+          // The NAME beside the id, off the one lookup above. `?? null` is a granter whose account
+          // has been deleted since -- a real id that resolves to nothing, which the panel says in
+          // words rather than by printing the id.
+        ).map((grant): SlaveGrant => ({ ...grant, byName: grant.by === null ? null : (granterNames.get(grant.by) ?? null) })),
         permissionsRunKind: (run?.kind ?? 'implementation') satisfies PermissionRunKind,
         runtimeRoles: slave.runtimeRoles,
         // Straight off the row the `include` above already loads in full -- no `select` to widen.

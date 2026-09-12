@@ -160,6 +160,20 @@ describe('PermissionMatrix (M52 R7)', () => {
     expect(caption.textContent).toContain('Anything not granted is refused')
   })
 
+  // Fix round 1, review Minor 5 / the plan's dropped caveat. The deleted per-section paragraph said
+  // "The three shell-backed capabilities deny the shell tool as a whole" -- obsolete as written
+  // (the six kinds map to distinct tool names now) but true in what it was warning about: the
+  // caption asserts "Anything not granted is refused", which holds at TOOL DISPATCH and not at
+  // EFFECT, because `run_commands` still grants `Bash` and command strings are not inspected
+  // (M18's ruling, unchanged by this milestone).
+  it('says the shell grant is the coarse one, so the caption is not read as a promise about effect', () => {
+    render(<PermissionMatrix sections={SECTIONS} />)
+    const note = screen.getByTestId('perm-note').textContent ?? ''
+    expect(note).toContain('is the coarse one')
+    expect(note).toContain('what a command does there is not inspected')
+    expect(note).toContain('Run commands')
+  })
+
   it('says the Cursor limitation and the brokered-operation fact, in the copy rather than implicitly', () => {
     render(<PermissionMatrix sections={SECTIONS} />)
     expect(screen.getByTestId('perm-note').textContent).toContain('On Cursor only the shell is enforced')

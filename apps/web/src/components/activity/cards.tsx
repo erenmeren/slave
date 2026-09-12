@@ -1312,7 +1312,17 @@ function PermissionChangedCard(props: ActivityCardProps): ReactElement {
         <span data-testid="permission-changed-text" title={payload.kind} data-kind={payload.kind}>
           {`${payload.name} · ${payload.kindLabel} · ${PERMISSION_VERB[outcome]}`}
         </span>
-        {payload.by !== null && <span data-testid="permission-changed-by">{` · by ${payload.by}`}</span>}
+        {/* `payload.by` is a `User.id` -- `principal.userId`, the same value the envelope's own
+          * `userId` carries -- so the NAME is `props.userName`, which `ActivityClient` already
+          * resolved through the page's one `users` listing (`server/activity.ts:224`), never a
+          * lookup per card. Until fix round 1 this printed the id itself. A granter whose account
+          * was deleted since resolves to nothing, and is said in words; a row written with no
+          * principal at all names nobody, and this span does not render. */}
+        {payload.by !== null && (
+          <span data-testid="permission-changed-by" title={payload.by}>
+            {` · by ${props.userName ?? 'a person no longer on record'}`}
+          </span>
+        )}
       </Transition>
     </ActivityCard>
   )

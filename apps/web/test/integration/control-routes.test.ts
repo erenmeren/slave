@@ -48,6 +48,7 @@ import { POST as approvePOST } from '../../src/app/api/w/[workspaceId]/superviso
 import { POST as rejectPOST } from '../../src/app/api/w/[workspaceId]/supervisor/decisions/[decisionId]/reject/route.js'
 import { PATCH as supervisorSettingsPATCH } from '../../src/app/api/w/[workspaceId]/supervisor/settings/route.js'
 import { mintSession } from '../../src/lib/session.js'
+import { buildOverviewSnapshot } from '../../src/server/overview.js'
 
 interface Fixture {
   readonly workspace: { readonly id: string; readonly repoPath: string }
@@ -625,6 +626,51 @@ describe('the control routes', () => {
       const event = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'permission_changed' } })
       expect(event.userId).toBe(user.id)
       expect(event.payload).toMatchObject({ by: user.id })
+    })
+
+    /**
+     * Fix round 1, review Important 1 — the case the unit fixtures could not be.
+     *
+     * `setSlavePermission` writes `principal.userId`, so `SlavePermission.grantedBy` is a `User.id`
+     * and the panel read `Granted by 9f3c1b2e-… on 12 Sep 2026`. Every component fixture stated
+     * `by: 'meren'`, a value production never holds, which is exactly why the suite was blind to
+     * it. This one creates a REAL `User`, grants through the REAL route with that session, and
+     * then asks the REAL snapshot builder what the panel would print.
+     */
+    it('resolves the granter to a username for the panel, off a real User row', async (): Promise<void> => {
+      vi.stubEnv('SLAVEOFAI_SESSION_SECRET', PERMISSION_SECRET)
+      const user = await prisma.user.create({ data: { username: 'ada', passwordHash: 'irrelevant-for-this-test' } })
+      cookieValue.current = await mintSession(PERMISSION_SECRET, user.id, new Date())
+
+      expect((await put(fixture.workspace.id, fixture.slave.id, 'network_fetch', { mode: 'allow' })).status).toBe(200)
+
+      const snapshot = await buildOverviewSnapshot(fixture.workspace.id)
+      const grant = snapshot?.slaves
+        .find((slave) => slave.id === fixture.slave.id)
+        ?.permissions.find((one) => one.kind === 'network_fetch')
+      expect(grant?.source).toBe('granted')
+      // The id is still there for anyone who needs it -- it is what the panel puts in `title`.
+      expect(grant?.by).toBe(user.id)
+      // …and this is what the sentence prints.
+      expect(grant?.byName).toBe('ada')
+    })
+
+    it('leaves byName null when the granter’s account is gone, rather than inventing one', async (): Promise<void> => {
+      vi.stubEnv('SLAVEOFAI_SESSION_SECRET', PERMISSION_SECRET)
+      const user = await prisma.user.create({ data: { username: 'ada', passwordHash: 'irrelevant-for-this-test' } })
+      cookieValue.current = await mintSession(PERMISSION_SECRET, user.id, new Date())
+      await put(fixture.workspace.id, fixture.slave.id, 'network_fetch', { mode: 'allow' })
+
+      // The one revocation story (spec §7 F4): the row outlives the account.
+      await prisma.executionEvent.deleteMany({ where: { userId: user.id } })
+      await prisma.user.delete({ where: { id: user.id } })
+
+      const snapshot = await buildOverviewSnapshot(fixture.workspace.id)
+      const grant = snapshot?.slaves
+        .find((slave) => slave.id === fixture.slave.id)
+        ?.permissions.find((one) => one.kind === 'network_fetch')
+      expect(grant?.by).toBe(user.id)
+      expect(grant?.byName).toBeNull()
     })
 
     it('DELETE takes the decision back to never-asked, and records the change', async (): Promise<void> => {

@@ -863,12 +863,16 @@ describe('SlavePanel', () => {
 describe('SlavePanel permissions (M52 R7)', () => {
   const governed = slave({
     permissions: [
-      { kind: 'read_repo', mode: null, source: 'baseline', by: null, at: null },
-      { kind: 'write_repo', mode: null, source: 'baseline', by: null, at: null },
-      { kind: 'run_commands', mode: 'deny', source: 'refused', by: 'meren', at: '2026-09-12T09:00:00.000Z' },
-      { kind: 'network_fetch', mode: 'allow', source: 'granted', by: 'meren', at: '2026-09-12T10:00:00.000Z' },
-      { kind: 'read_secret', mode: null, source: 'never', by: null, at: null },
-      { kind: 'deploy_release', mode: null, source: 'never', by: null, at: null },
+      { kind: 'read_repo', mode: null, source: 'baseline', by: null, byName: null, at: null },
+      { kind: 'write_repo', mode: null, source: 'baseline', by: null, byName: null, at: null },
+      // `by` is a `User.id` -- that is what `setSlavePermission` writes (fix round 1, review
+      // Important 1) -- and `byName` is what `buildOverviewSnapshot` resolved it to. The old
+      // fixture stated `by: 'meren'`, a value production never holds, which is precisely why the
+      // suite could not see the defect.
+      { kind: 'run_commands', mode: 'deny', source: 'refused', by: 'u-9f3c', byName: 'meren', at: '2026-09-12T09:00:00.000Z' },
+      { kind: 'network_fetch', mode: 'allow', source: 'granted', by: 'u-9f3c', byName: 'meren', at: '2026-09-12T10:00:00.000Z' },
+      { kind: 'read_secret', mode: null, source: 'never', by: null, byName: null, at: null },
+      { kind: 'deploy_release', mode: null, source: 'never', by: null, byName: null, at: null },
     ],
   })
 
@@ -926,12 +930,12 @@ describe('SlavePanel permissions (M52 R7)', () => {
         slave={slave({
           permissionsRunKind: 'review',
           permissions: [
-            { kind: 'read_repo', mode: null, source: 'baseline', by: null, at: null },
-            { kind: 'write_repo', mode: null, source: 'never', by: null, at: null },
-            { kind: 'run_commands', mode: null, source: 'baseline', by: null, at: null },
-            { kind: 'network_fetch', mode: null, source: 'never', by: null, at: null },
-            { kind: 'read_secret', mode: null, source: 'never', by: null, at: null },
-            { kind: 'deploy_release', mode: null, source: 'never', by: null, at: null },
+            { kind: 'read_repo', mode: null, source: 'baseline', by: null, byName: null, at: null },
+            { kind: 'write_repo', mode: null, source: 'never', by: null, byName: null, at: null },
+            { kind: 'run_commands', mode: null, source: 'baseline', by: null, byName: null, at: null },
+            { kind: 'network_fetch', mode: null, source: 'never', by: null, byName: null, at: null },
+            { kind: 'read_secret', mode: null, source: 'never', by: null, byName: null, at: null },
+            { kind: 'deploy_release', mode: null, source: 'never', by: null, byName: null, at: null },
           ],
         })}
         liveEvents={[]}
@@ -956,6 +960,71 @@ describe('SlavePanel permissions (M52 R7)', () => {
     )
     // …and the four that DO name tools say nothing of the sort.
     expect(screen.getByTestId('panel-permission-source-run_commands').textContent).not.toContain('brokered')
+  })
+
+  // Fix round 1, review Important 3: the glyph is `aria-hidden` (a `\u2713` read aloud is noise), so
+  // without a word beside it all six lines had the SAME accessible name -- the operation, and
+  // nothing about the answer. `PermissionMatrix` solves the identical problem on its cell with an
+  // `aria-label`, in this same commit, and says so in a comment.
+  it('says the answer to a screen reader, not only to an eye', () => {
+    openPermissions()
+    expect(screen.getByTestId('panel-permission-network_fetch').textContent).toContain('allowed')
+    expect(screen.getByTestId('panel-permission-run_commands').textContent).toContain('refused')
+    expect(screen.getByTestId('panel-permission-read_secret').textContent).toContain('not set')
+    // A baseline is `allowed`: the glyph and the word must agree, or the two readings of this line
+    // disagree about what the gate will do.
+    expect(screen.getByTestId('panel-permission-read_repo').textContent).toContain('allowed')
+    // …and the word is for a screen reader alone -- an eye reads the glyph.
+    const word = screen.getByTestId('panel-permission-read_repo').querySelector('[data-testid="permission-mode-word"]')
+    expect(word?.className).toContain('sr-only')
+    // The testid deliberately does NOT start with `panel-permission-`: the first case in this
+    // describe matches that prefix as a REGEX to count the lines, and a span inside each line
+    // sharing the prefix would double every row it counts.
+    expect(screen.getAllByTestId('permission-mode-word')).toHaveLength(6)
+  })
+
+  // Fix round 1, review Important 1. `SlavePermission.grantedBy` holds a `User.id`, so the sentence
+  // read `Granted by 9f3c1b2e-… on 12 Sep 2026` in production while every fixture stated `meren`.
+  // The NAME is resolved once per snapshot in `buildOverviewSnapshot`; the id stays in `title`.
+  it('prints the granter’s NAME, and keeps the id one hover away', () => {
+    openPermissions()
+    openGroup('advanced')
+    const line = screen.getByTestId('panel-permission-source-network_fetch')
+    expect(line.textContent).toBe('Granted by meren on 12 Sep 2026')
+    expect(line.textContent).not.toContain('u-9f3c')
+    expect(line.getAttribute('title')).toBe('u-9f3c')
+  })
+
+  it('says a person is no longer on record rather than printing their id', () => {
+    render(
+      <SlavePanel
+        slave={slave({
+          permissions: [
+            { kind: 'read_repo', mode: null, source: 'baseline', by: null, byName: null, at: null },
+            { kind: 'write_repo', mode: null, source: 'baseline', by: null, byName: null, at: null },
+            { kind: 'run_commands', mode: null, source: 'baseline', by: null, byName: null, at: null },
+            // A row whose granter was deleted since: the id is real, the `User` row is gone.
+            { kind: 'network_fetch', mode: 'allow', source: 'granted', by: 'u-gone', byName: null, at: '2026-09-12T10:00:00.000Z' },
+            // A row written with no principal at all -- the CLI and the daemon have none.
+            { kind: 'read_secret', mode: 'allow', source: 'granted', by: null, byName: null, at: '2026-09-12T10:00:00.000Z' },
+            { kind: 'deploy_release', mode: null, source: 'never', by: null, byName: null, at: null },
+          ],
+        })}
+        liveEvents={[]}
+        workspaceId="w1"
+        haltedReason={null}
+        onClose={() => {}}
+      />,
+    )
+    openGroup('permissions')
+    openGroup('advanced')
+    const deleted = screen.getByTestId('panel-permission-source-network_fetch')
+    expect(deleted.textContent).toBe('Granted by a person no longer on record on 12 Sep 2026')
+    expect(deleted.textContent).not.toContain('u-gone')
+    expect(deleted.getAttribute('title')).toBe('u-gone')
+    expect(screen.getByTestId('panel-permission-source-read_secret').textContent).toContain(
+      'Granted by somebody unrecorded on 12 Sep 2026',
+    )
   })
 
   it('never prints a granter or a date on the line itself -- a raw value lives under Advanced', () => {
