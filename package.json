@@ -60,7 +60,8 @@
     "gate:m47-team-formation": "tsc --build && node --env-file=.env scripts/gate-m47-team-formation.mjs",
     "gate:m48-runbooks": "tsc --build && node --env-file=.env scripts/gate-m48-runbooks.mjs",
     "gate:m49-memory": "tsc --build && node --env-file=.env scripts/gate-m49-memory.mjs",
-    "gate:m50-ephemeral": "tsc --build && node --env-file=.env scripts/gate-m50-ephemeral.mjs"
+    "gate:m50-ephemeral": "tsc --build && node --env-file=.env scripts/gate-m50-ephemeral.mjs",
+    "gate:m51-breaker": "tsc --build && node --env-file=.env scripts/gate-m51-breaker.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",

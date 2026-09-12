@@ -41,7 +41,13 @@
 //                  E8), defaulting to `review-approve` -- so one gate can run
 //                  an approving project and a rejecting one side by side, each
 //                  with its own daemon. Any other prompt is a work run and
-//                  reuses the m8a-flow work body verbatim.
+//                  reuses the m8a-flow work body verbatim -- unless
+//                  `--work-fixture <name>` is in ARGV (M51 erratum E16), in
+//                  which case every work run in EVERY mode here REPLAYS that
+//                  fixture and does nothing else: no file, no commit. A commit
+//                  moves the behavioural breaker's worktree clock on every
+//                  single run, which suppresses the very `no_progress` arm a
+//                  breaker gate exists to measure.
 //   m36-flow       synthetic, selected by ARGV rather than by prompt content:
 //                  the two legs of M36's ask/answer round trip. A run spawned
 //                  WITHOUT `--resume` is the asking leg -- it replays
@@ -273,6 +279,34 @@ function reviewFixtureName() {
 }
 
 /**
+ * M51 (plan erratum E16): which fixture a WORK run replays -- `--work-fixture <name>` from ARGV, or
+ * `null` for "do the ordinary work body".
+ *
+ * `--plan-fixture`/`--review-fixture`'s shape, for their reason: `SLAVEOFAI_CLAUDE_ARGS` rides
+ * through as `extraArgs` on every spawn and is the one per-daemon channel a gate can count on.
+ *
+ * When it IS given, the arm REPLAYS ONLY -- no file written, no commit. That is not an oversight:
+ * M51's breaker reads a worktree clock, and the ordinary work body's commit would move it on every
+ * single run, which would suppress the very `no_progress` arm the gate exists to measure. A gate
+ * that wants both a loop and a commit runs two projects.
+ */
+function workFixtureName() {
+  const index = args.indexOf('--work-fixture')
+  const named = index === -1 ? undefined : args[index + 1]
+  return named === undefined || named.startsWith('-') ? null : named
+}
+
+/** The WORK fall-through's first line in every prompt-sniffing mode: replays `--work-fixture
+ *  <name>` and exits when the flag is there, and returns false when it is not, so each mode reads
+ *  as `if (await workFixtureArm()) return` in front of its own work body. */
+async function workFixtureArm() {
+  const work = workFixtureName()
+  if (work === null) return false
+  await replayFixture(work)
+  return true
+}
+
+/**
  * M40 (erratum E3): the RE-PLAN arm -- a planning run whose goal changed under a board that
  * already exists, recognised by the one literal `REPLAN_INSTRUCTIONS` guarantees.
  *
@@ -436,6 +470,7 @@ async function main() {
       // The resumed leg: the same session, continuing with its answer in hand. The m8a-flow work
       // body verbatim -- a real commit in the worktree (cwd) -- and then `complete` UNmodified, so
       // this leg carries no ask block and concludes for real.
+      if (await workFixtureArm()) return
       writeFileSync(path.join(process.cwd(), 'm36-work.txt'), `${prompt.slice(0, 80)}\n`)
       execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
       execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '-m', 'fake work after the answer'], { cwd: process.cwd() })
@@ -489,6 +524,7 @@ async function main() {
     }
     // A work run: the m8a-flow work body verbatim -- leave a real commit in the worktree
     // (cwd), then replay success.
+    if (await workFixtureArm()) return
     writeFileSync(path.join(process.cwd(), 'm8a-work.txt'), `${prompt.slice(0, 80)}\n`)
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '-m', 'fake work'], { cwd: process.cwd() })
@@ -546,6 +582,7 @@ async function main() {
     // Any other work run, the RESUMED leg included: the m8a-flow work body verbatim -- a real
     // commit in the worktree (cwd) -- and then `complete` UNmodified, so this leg carries no ask
     // block and concludes for real.
+    if (await workFixtureArm()) return
     writeFileSync(path.join(process.cwd(), 'm41-work.txt'), `${prompt.slice(0, 80)}\n`)
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '-m', 'fake work'], { cwd: process.cwd() })
@@ -562,6 +599,7 @@ async function main() {
       return
     }
     // A work run: leave a real commit in the worktree (cwd), then replay success.
+    if (await workFixtureArm()) return
     writeFileSync(path.join(process.cwd(), 'm8a-work.txt'), `${prompt.slice(0, 80)}\n`)
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '-m', 'fake work'], { cwd: process.cwd() })

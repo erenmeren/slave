@@ -106,6 +106,88 @@ fs.writeFileSync("packages/providers/test/fixtures/plan-graph-scenario.ndjson", 
 Nothing else was altered: line count, ordering, `session_id`, `total_cost_usd` and every other field
 are `plan-graph`'s own.
 
+## `loop.ndjson`, `error-storm.ndjson`, `quiet-build.ndjson` — the three M51 breaker fixtures
+
+**Synthetic by necessity** — no real capture contains a worker repeating one byte-identical tool
+call twelve times, because a real worker that did that is the failure this milestone exists to stop.
+Derived from `complete.ndjson`'s own line shapes (the `system`/`init` envelope, the
+`assistant`/`tool_use` block, the `user`/`tool_result` block, the `result` line and the routine
+`Stop` hook line), with only the repeated payload authored by hand. Rules 2, 3 and 5 below bind them
+like everything else; rules 1 and 4 cannot, for the reason the retired hand-authored
+`permission-matrix-deny.ndjson` gave and this one gives again — there is no recording to keep byte
+for byte or to defer to, and there is no way to make one without building the failure first.
+
+| File | What it is |
+| --- | --- |
+| `loop.ndjson` | Thirteen `Bash` calls of ONE command. The first differs from the twelve behind it in `description` alone — an argument `summaryFor` never shows, since `command` comes first in `CLAUDE_SUMMARY_ARG_KEYS` — so all thirteen carry a byte-identical `summary` and the first hashes differently. That is munder-difflin #377 in the fixture itself: a detector keyed on the human summary calls all thirteen the same call, and `argsHash` does not. The odd one is FIRST because `detectBehaviour`'s repeat arm reads the TRAILING run of identical keys; at the end it would leave a trailing run of one, and the fixture could never trip the arm it exists to measure. |
+| `error-storm.ndjson` | Six calls, six DIFFERENT commands, every `tool_result` carrying `is_error: true` and `API Error: 529 overloaded` (which `classifyToolError` reads as `api_error`). Different commands are what make it an independent measurement rather than a second reading of `loop`: the repeat arm is consulted first and can never fire here, so a trip on this fixture is the error-storm arm and nothing else. |
+| `quiet-build.ndjson` | ONE call and no result for it. A twenty-minute `npm run build`, from outside: no new calls, no output, no worktree change, and the one thing that tells it from a wedged worker is that its last call has not come back. The fixture `gate:m51-breaker`'s NEGATIVE stage replays. |
+
+All three end with an **idle tail** of 90 `{"type":"fixture_idle"}` lines between the last tool call
+and the terminal `result`. The fake CLI sleeps `FAKE_CLAUDE_LINE_DELAY_MS` between lines, so the
+tail is how long the run stays `working` after its evidence is complete — which is what a gate needs
+in order to beat the breaker (`BREAKER_BEAT_MS`) three times against a live run with a live pump.
+The type is deliberately one no runtime emits rather than an invented shape for one that does:
+`parseStreamLine`'s `default` arm answers an unrecognised top-level `type` with `ignored`, exactly as
+it was written to, so not one of these lines becomes an `ExecutionEvent` row and the detector's
+sixty-row window holds nothing but the calls, the results and their order.
+
+### The three files, as a runnable command
+
+Written by a script rather than by hand so the twelve repeats cannot drift from each other:
+
+```bash
+node -e '
+const { writeFileSync, readFileSync } = require("node:fs")
+const DIR = "packages/providers/test/fixtures"
+const src = readFileSync(`${DIR}/complete.ndjson`, "utf8").split("\n").filter(Boolean).map(JSON.parse)
+const init = src.find((r) => r.type === "system" && r.subtype === "init")
+const stop = src.at(-1)
+const IDLE_LINES = 90
+const usage = { input_tokens: 2, cache_creation_input_tokens: 100, cache_read_input_tokens: 900, output_tokens: 5 }
+const call = (session, id, name, input) => ({ type: "assistant", message: { model: "claude-opus-5", content: [{ type: "tool_use", id, name, input }], usage }, session_id: session })
+const result = (session, id, content, isError) => ({ type: "user", message: { content: [{ tool_use_id: id, type: "tool_result", content, is_error: isError }] }, session_id: session })
+const idle = (session) => ({ type: "fixture_idle", session_id: session })
+const terminal = (session, turns, cost) => ({ type: "result", subtype: "success", is_error: false, terminal_reason: "completed", stop_reason: "end_turn", num_turns: turns, total_cost_usd: cost, session_id: session, usage: { input_tokens: 26, cache_creation_input_tokens: 1300, cache_read_input_tokens: 11700, output_tokens: 65 } })
+const write = (name, lines) => { writeFileSync(`${DIR}/${name}.ndjson`, lines.map((r) => JSON.stringify(r)).join("\n") + "\n"); console.log("wrote " + name + ".ndjson " + lines.length + " lines") }
+{
+  const SESSION = "fake-session-loop", COMMAND = "npm run build --workspace=@fixture/app"
+  const lines = [{ ...init, session_id: SESSION }]
+  lines.push(call(SESSION, "toolu_loop_odd", "Bash", { command: COMMAND, description: "build the app once more" }))
+  lines.push(result(SESSION, "toolu_loop_odd", "still failing", false))
+  for (let i = 0; i < 12; i += 1) {
+    const id = `toolu_loop_${String(i).padStart(2, "0")}`
+    lines.push(call(SESSION, id, "Bash", { command: COMMAND, description: "build the app" }))
+    lines.push(result(SESSION, id, "still failing", false))
+  }
+  for (let i = 0; i < IDLE_LINES; i += 1) lines.push(idle(SESSION))
+  lines.push(terminal(SESSION, 13, 0.42)); lines.push({ ...stop, session_id: SESSION }); write("loop", lines)
+}
+{
+  const SESSION = "fake-session-error-storm"
+  const COMMANDS = ["npm run build --workspace=@fixture/app", "npm test --workspace=@fixture/app", "npx tsc --build", "git status --porcelain", "npm run lint --workspace=@fixture/app", "node scripts/check.mjs"]
+  const lines = [{ ...init, session_id: SESSION }]
+  COMMANDS.forEach((command, i) => {
+    const id = `toolu_storm_${String(i).padStart(2, "0")}`
+    lines.push(call(SESSION, id, "Bash", { command, description: "try the next thing" }))
+    lines.push(result(SESSION, id, "API Error: 529 overloaded", true))
+  })
+  for (let i = 0; i < IDLE_LINES; i += 1) lines.push(idle(SESSION))
+  lines.push(terminal(SESSION, 6, 0.19)); lines.push({ ...stop, session_id: SESSION }); write("error-storm", lines)
+}
+{
+  const SESSION = "fake-session-quiet-build"
+  const lines = [{ ...init, session_id: SESSION }]
+  lines.push(call(SESSION, "toolu_quiet_00", "Bash", { command: "npm run build --workspace=@fixture/app", description: "build the app" }))
+  for (let i = 0; i < IDLE_LINES; i += 1) lines.push(idle(SESSION))
+  lines.push(terminal(SESSION, 1, 0.05)); lines.push({ ...stop, session_id: SESSION }); write("quiet-build", lines)
+}
+'
+```
+
+Expected: `wrote loop.ndjson 119 lines`, `wrote error-storm.ndjson 105 lines`, `wrote
+quiet-build.ndjson 94 lines`.
+
 ## `permission-matrix-deny.ndjson` — the M19 capture that retired the hand-authored one
 
 The raw stdout of **one** `claude` run made on **2026-09-01** for M19 Task A1. It replaces the

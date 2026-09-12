@@ -59,7 +59,10 @@ import { prisma } from '../packages/db/dist/client.js'
 import { CAPABILITY_SEED } from '../packages/db/dist/capabilities.js'
 import { EVENT_TYPE_BY_DOMAIN_TYPE, RUN_STATUSES, TASK_STATUSES } from '../packages/db/dist/enums.js'
 import {
+  BREAKER_LEVELS,
+  BREAKER_TRIP_KINDS,
   DECISION_STATUSES,
+  GUARDRAIL_KINDS,
   MEMORY_SCOPES,
   MEMORY_SOURCE_KINDS,
   MEMORY_STATUSES,
@@ -171,6 +174,21 @@ const RAW_TOKENS = [
   // the blocklist with no edit here, and the real protection is `SLAVE_LIFECYCLE_LABEL`, pinned by
   // `organization-page.test.tsx`.
   ...SLAVE_LIFECYCLES,
+  // M51 R4: the seventeen guardrail spellings. UNLIKE the three lifecycles above, this line
+  // contributes REAL tokens today -- sixteen of the seventeen carry a `_` and survive the filter
+  // below (`behavioural_loop`, `budget_exhausted`, `tool_call_ceiling`, ...) -- and one of them was
+  // visible text on the activity feed until this milestone, printed raw by `GuardrailTrippedCard`.
+  // `GUARDRAIL_LABEL` is what stands between them and a page now.
+  ...GUARDRAIL_KINDS,
+  // The three breaker levels. Bare English words, so the filter drops all three and this adds
+  // nothing today -- the M49/E10 shape: a fourth member a later milestone spells `hard_stopped`
+  // joins the blocklist with no edit here, and `BREAKER_LEVEL_LABEL`/`USER_CARD_LABEL` are the real
+  // protection.
+  ...BREAKER_LEVELS,
+  // The three trip kinds, which DO contribute: `repeated_call`, `error_storm` and `no_progress` all
+  // carry a `_`. `BREAKER_TRIP_LABEL` is what keeps them off a page, with the key on `title` and
+  // `data-breaker-trip` beside it (M51 R4, `docs/ia.md` rule 3).
+  ...BREAKER_TRIP_KINDS,
 ].filter((token) => token.includes('_') || token.includes('.'))
 
 /**
@@ -347,6 +365,11 @@ try {
   assert(RAW_TOKENS.includes('no_reviewer'), 'the derived blocklist lost the SituationKind members')
   assert(RAW_TOKENS.includes('backend.api-design'), 'the derived blocklist lost the capability keys (M47)')
   assert(RAW_TOKENS.includes('run.tool_call') && RAW_TOKENS.includes('run_tool_call'), 'the derived blocklist lost the event types')
+  // M51: the two unions that really contribute. `BREAKER_LEVELS` is deliberately NOT asserted here
+  // -- all three of its members are bare English words and the filter drops them, which is the whole
+  // point of enumerating it (the M49/E10 shape).
+  assert(RAW_TOKENS.includes('behavioural_loop'), 'the derived blocklist lost the GuardrailKind members (M51)')
+  assert(RAW_TOKENS.includes('repeated_call'), 'the derived blocklist lost the BreakerTripKind members (M51)')
   // Both halves, and both bite: the first fails if `MEMORY_SOURCE_KINDS` stops being spread into
   // `MEMORY_UNIONS`, the second if `MEMORY_UNIONS` stops being spread into `RAW_TOKENS` -- the
   // event types supply a `run_output` of their own, so only the COUNT can tell the two apart.

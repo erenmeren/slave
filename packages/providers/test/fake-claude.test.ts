@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
@@ -258,6 +258,54 @@ describe('fake-claude', () => {
         const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
         expect(result?.result).toContain('"verdict":"approve"')
       }
+    })
+  })
+
+  describe('--work-fixture (M51 E16)', () => {
+    /** A work prompt: none of the literals the decision, answer, re-plan, planning or review arms
+     *  sniff for, so every mode below falls through to its WORK body. */
+    const PROMPT = 'Task: build the thing'
+
+    let repoDir: string
+
+    beforeEach(() => {
+      repoDir = mkdtempSync(path.join(tmpdir(), 'fake-claude-work-fixture-'))
+      execFileSync('git', ['init', '-q'], { cwd: repoDir })
+      execFileSync(
+        'git',
+        ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'initial commit'],
+        { cwd: repoDir },
+      )
+    })
+
+    afterEach(() => {
+      rmSync(repoDir, { recursive: true, force: true })
+    })
+
+    it('replays loop.ndjson and writes NO file into the cwd', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'm8-flow', '--work-fixture', 'loop', '-p', PROMPT], {
+        cwd: repoDir,
+      })
+      const lines = parseLines(stdout)
+      const calls = lines.filter(
+        (l) => l.type === 'assistant' && (l.message as { content?: { type?: string }[] }).content?.[0]?.type === 'tool_use',
+      )
+      expect(calls).toHaveLength(13)
+      expect((lines.at(-1) as Line).hook_event).toBe('Stop')
+      // The whole reason the knob exists (plan erratum E16): the ordinary work body writes a file
+      // and COMMITS it, which moves the breaker's worktree clock on every single run.
+      expect(readdirSync(repoDir).filter((name) => name !== '.git')).toEqual([])
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: repoDir, encoding: 'utf8' })).toBe('')
+    })
+
+    it('does the ordinary work body when no --work-fixture is given', async (): Promise<void> => {
+      await run('node', [FAKE, '--fixture', 'm8-flow', '-p', PROMPT], { cwd: repoDir })
+      expect(readdirSync(repoDir).filter((name) => name !== '.git')).toEqual(['m8a-work.txt'])
+    })
+
+    it('ignores a --work-fixture whose value is another flag', async (): Promise<void> => {
+      await run('node', [FAKE, '--fixture', 'm8-flow', '--work-fixture', '--verbose', '-p', PROMPT], { cwd: repoDir })
+      expect(readdirSync(repoDir).filter((name) => name !== '.git')).toEqual(['m8a-work.txt'])
     })
   })
 
