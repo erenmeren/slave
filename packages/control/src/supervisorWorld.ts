@@ -237,19 +237,21 @@ async function loadStaffingPreferences(
  * index probe on `(profileKey, model, repositoryKey)`. `evidenceForProfiles` asks nothing at all for
  * an empty set, so a project with no candidates pays no query.
  *
- * NOT on `tx`: this is the one read in the loader that goes through another module's verb rather
- * than through the transaction client, and it is deliberate. `evidenceForProfiles` is ALSO the
- * Evidence tab's read and the ranker's read, and giving it a `tx` parameter for one caller would
- * make every other caller decide something it has no opinion about. The cost is that these counts
- * come from a moment just outside the snapshot the rest of the world was read in -- which is
- * harmless here in a way it is not for the roster: an evidence count is a property of history, it
- * only ever grows, and a run concluding between the two reads changes a denominator by one rather
- * than making a proposal true that was false.
+ * ON `tx`, like every other cross-module read this loader makes -- `workspaceStats`,
+ * `staleCandidateCount` and `waitingSenderRunIds` all take an optional client defaulting to
+ * `prisma`, and `evidenceForProfiles` now does too. Two things follow, and both are the point: this
+ * count is read inside the same `RepeatableRead` snapshot as the roster it is about, which is what
+ * `SupervisorWorld`'s own docstring means by "at one instant"; and no second pooled connection is
+ * acquired while the loader's is pinned, which is the doctrine `apps/orchestrator/src/world.ts:165-167`
+ * states in this codebase's own words. A nested acquisition inside an open 15 s transaction, on a
+ * pool shared by the daemon, the web app and the CLI, is the shape that becomes an intermittent
+ * acquire timeout under load rather than a clean failure.
  */
 async function loadProfileEvidence(
+  tx: Prisma.TransactionClient,
   profileKeys: readonly string[],
 ): Promise<readonly SupervisorProfileEvidence[]> {
-  const byProfile = await evidenceForProfiles(profileKeys)
+  const byProfile = await evidenceForProfiles(profileKeys, tx)
   return [...byProfile.entries()].map(([profileKey, evidence]) => ({ profileKey, ...evidence }))
 }
 
@@ -901,7 +903,7 @@ export async function loadSupervisorWorld(
         ? await loadStaffingPreferences(tx, workspaceId, taxonomy)
         : []
       const evidence = asksForCapabilities
-        ? await loadProfileEvidence([
+        ? await loadProfileEvidence(tx, [
             ...new Set([
               ...slaveRows.map((row) => profileKeyOf({ slaveId: row.id, hiredFromTemplateId: row.hiredFromTemplateId })),
               ...companyRows.map((row) => `template:${row.templateId}`),

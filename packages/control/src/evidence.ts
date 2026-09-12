@@ -484,6 +484,16 @@ export async function evidenceByModel(filter: EvidenceFilter): Promise<readonly 
  * (plan erratum E8) -- and it ASKS NOTHING AT ALL for an empty list, the bounded-loader rule M52
  * erratum E9 already applied to `denials`. A query whose `IN` list is empty is a query for nothing.
  *
+ * `tx` DEFAULTS TO `prisma` and is the shape every other cross-module read the Supervisor's loader
+ * makes already has -- `workspaceStats(workspaceId, client = prisma)` (`stats.ts:88-91`),
+ * `staleCandidateCount(workspaceId, now, tx = prisma)` (`memory.ts:676-680`),
+ * `waitingSenderRunIds(workspaceId, tx)` (fix round 1, Important 2). The Evidence tab and the CLI
+ * pass nothing and are unchanged; `loadProfileEvidence` passes the world's transaction client, so
+ * this count is read inside the same `RepeatableRead` snapshot as the roster it is about --
+ * `SupervisorWorld`'s own contract is "at one instant" -- and no second pooled connection is
+ * acquired while the loader's is pinned, which is the doctrine `apps/orchestrator/src/world.ts:165-167`
+ * states.
+ *
  * The cost median reads `FILTER (WHERE "costProvenance" <> 'unmeasured')`, which is what makes
  * "unmeasured is not cheap" (R8) a property of the SQL: a run nobody measured is excluded from the
  * figure rather than counted as a zero, and `rankCandidates` then puts a profile with no figure at
@@ -497,9 +507,10 @@ export async function evidenceByModel(filter: EvidenceFilter): Promise<readonly 
  */
 export async function evidenceForProfiles(
   profileKeys: readonly string[],
+  tx: Prisma.TransactionClient = prisma,
 ): Promise<ReadonlyMap<string, RankEvidence>> {
   if (profileKeys.length === 0) return new Map()
-  const rows = await prisma.$queryRaw<
+  const rows = await tx.$queryRaw<
     (GroupCountersRow & { readonly profileKey: string; readonly medianCostUsd: number | null })[]
   >(Prisma.sql`
     SELECT "profileKey",

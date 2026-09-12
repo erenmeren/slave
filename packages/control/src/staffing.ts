@@ -35,6 +35,22 @@ import type { ControlRefusal } from './refusal.js'
  *  does not own the list of model names and must not pretend to. */
 export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/
 
+/**
+ * The RULE above, in words, for the `invalid_model` sentence (fix round 1, Important 1).
+ *
+ * `invalid_model`'s default sentence is "a model must be a non-empty text", which was written for
+ * `setSlaveModel`'s only check and is simply untrue of this caller: an operator who types `gpt 4o`
+ * would be told a non-empty value is empty, and given no hint of the rule they actually broke. The
+ * kind is still the right one -- a new kind costs three homes to say what this one says -- so it
+ * takes `invalid_name`'s optional `detail` (M52's precedent, one line above it in the union) and
+ * this is the detail.
+ *
+ * The RULE in plain words and never the pattern as prose: a regular expression in a sentence is a
+ * thing an operator has to decode before they can fix their own typo.
+ */
+const MODEL_SHAPE_DETAIL =
+  'a model must be one word: a letter or digit, then any of . _ - : @ / — and no spaces'
+
 /** One staffing decision, as every surface reads it -- the LABEL and the template's NAME beside the
  *  two keys, because a decision row is read a year later (`docs/ia.md` rule 3) and neither a key nor
  *  an id is a word. `setBy` is a `User.id` and stays one (M52 erratum E18): resolving it to a
@@ -129,7 +145,9 @@ export async function setStaffingPreference(
       ? null
       : await prisma.slaveTemplate.findUnique({ where: { id: templateId }, select: { id: true, name: true } })
   if (templateId !== null && template === null) return err({ kind: 'template_not_found', templateId })
-  if (model !== null && !MODEL_ID_PATTERN.test(model)) return err({ kind: 'invalid_model' })
+  if (model !== null && !MODEL_ID_PATTERN.test(model)) {
+    return err({ kind: 'invalid_model', detail: MODEL_SHAPE_DETAIL })
+  }
 
   // The read-before-write is the EVENT's, not a race guard -- `permission.ts`'s own note on why two
   // writers meeting here produce two honest events rather than a lock applies unchanged.

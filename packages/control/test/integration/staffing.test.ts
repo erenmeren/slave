@@ -60,9 +60,22 @@ describe('setStaffingPreference (M53 R9)', () => {
     expect(result.ok === false && result.error.kind).toBe('template_not_found')
   })
 
-  it('refuses a model whose shape is not a model name, with the existing kind', async (): Promise<void> => {
+  it('refuses a model whose shape is not a model name, with the existing kind and a TRUE sentence', async (): Promise<void> => {
     const result = await setStaffingPreference(fixture.workspaceId, { capability: 'backend.services', model: 'not a model!' })
     expect(result.ok === false && result.error.kind).toBe('invalid_model')
+    // Fix round 1, Important 1: the kind is reused, so the SENTENCE has to carry the rule. The
+    // default one ("a model must be a non-empty text") was written for `setSlaveModel` and would
+    // tell an operator that `gpt 4o` is empty.
+    expect(result.ok === false && refusalText(result.error)).toBe(
+      'a model must be one word: a letter or digit, then any of . _ - : @ / — and no spaces',
+    )
+  })
+
+  it('accepts every model id shape this product actually dispatches with', async (): Promise<void> => {
+    for (const model of ['opus', 'claude-sonnet-4-20250514', 'us.anthropic.claude-opus-4:1', 'gpt-4o']) {
+      const result = await setStaffingPreference(fixture.workspaceId, { capability: 'backend.services', model })
+      expect(result.ok, model).toBe(true)
+    }
   })
 
   it('refuses a project that is not there', async (): Promise<void> => {

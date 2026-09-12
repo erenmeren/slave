@@ -174,7 +174,13 @@ export type ControlRefusal =
    *  sentence stays exactly what the nine callers before it said; `detail` REPLACES it, so a verb
    *  with a rule of its own can state the rule rather than leave an operator guessing at it. */
   | { readonly kind: 'invalid_name'; readonly detail?: string }
-  | { readonly kind: 'invalid_model' }
+  /** A model that is blank, or -- with `detail` -- one that has a SHAPE to meet and does not
+   *  (M53 R9: a staffing preference names a model that is stored and read back months later, so
+   *  "it is not empty" is not enough of a check to put a person's decision behind). `invalid_name`'s
+   *  own precedent one line above, for the same reason and with the same rule: the default sentence
+   *  stays exactly what the three callers before it said, and `detail` REPLACES it so a verb with a
+   *  rule of its own states the rule rather than telling an operator that `gpt 4o` is empty. */
+  | { readonly kind: 'invalid_model'; readonly detail?: string }
   /** A budget was set to something that is neither a non-negative number nor `null` (M13 §6.1). */
   | { readonly kind: 'invalid_budget' }
   /** A model was set (or cleared) with no provider to match it, or vice versa (M12 Task 7). */
@@ -501,7 +507,7 @@ export function refusalText(refusal: ControlRefusal): string {
     case 'invalid_name':
       return refusal.detail ?? 'a name must be a non-empty text'
     case 'invalid_model':
-      return 'a model must be a non-empty text'
+      return refusal.detail ?? 'a model must be a non-empty text'
     case 'invalid_budget':
       return 'a budget must be a non-negative amount or absent'
     case 'model_without_provider':

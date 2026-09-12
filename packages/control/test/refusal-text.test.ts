@@ -78,3 +78,27 @@ describe('refusalText for the messaging verbs (M36 t1)', () => {
     )
   })
 })
+
+/**
+ * M53 R9, fix round 1 (Important 1). `invalid_model` is REUSED by `setStaffingPreference` for a
+ * SHAPE failure, and its default sentence -- written for `setSlaveModel`, whose only check is
+ * `trim() === ''` -- was then false about the input: an operator typing `gpt 4o` was told a
+ * non-empty value was empty. The kind keeps its name and takes `invalid_name`'s optional `detail`,
+ * and this is the case that would have caught the mismatch: the two sentences are asserted
+ * VERBATIM, so neither caller's wording can drift into the other's.
+ */
+describe('refusalText for invalid_model (M53 R9)', () => {
+  it('keeps the blank-value sentence the three callers before M53 rely on', () => {
+    expect(refusalText({ kind: 'invalid_model' })).toBe('a model must be a non-empty text')
+  })
+
+  it('states the RULE when a verb has one, in words and never as a pattern', () => {
+    const sentence = refusalText({
+      kind: 'invalid_model',
+      detail: 'a model must be one word: a letter or digit, then any of . _ - : @ / — and no spaces',
+    })
+    expect(sentence).toBe('a model must be one word: a letter or digit, then any of . _ - : @ / — and no spaces')
+    // The sentence a person reads is prose, not a regular expression they have to decode first.
+    expect(sentence).not.toMatch(/[\^$\\[\]*+]/)
+  })
+})
