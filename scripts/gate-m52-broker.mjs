@@ -19,11 +19,17 @@
 //     on this process too. That variable exists because of Task 2 (`packages/control/src/paths.ts`):
 //     a run's directory now lives under `$SLAVEOFAI_STATE_DIR ?? $XDG_STATE_HOME ?? ~/.local/state`
 //     and escapes every repo-scoped cleanup, so a gate that did not set it would leave its run
-//     directories in the operator's own `$HOME` forever. This is the first thing to use it, and the
-//     `finally` removes the whole tree.
+//     directories in the operator's own `$HOME` forever. This is the first thing to use it, the
+//     `finally` removes the whole tree, and the gate COUNTS the operator's own `runs` directory
+//     before and after itself and fails if it gained one -- "we set the variable" is a claim, and a
+//     before/after count is a measurement. (Fix round 1 put the same root behind every OTHER gate
+//     too, through `scripts/lib/state-dir.mjs`, and behind the test suite, through
+//     `test-setup/state-dir.ts`.)
 //   - `FAKE_DEPLOY_LOG` and `FAKE_DEPLOY_TOKEN` are set on the DAEMON's environment and on nothing
-//     else. The token's value is a literal here (`m52-fake-deploy-token`) and is what stage 4 greps
-//     the event log and the child's own environment dump for.
+//     else. The token's value is a literal here (`m52-fake-deploy-token`) and is what stage 4
+//     searches the event log for. NOTHING PRINTS IT: every assertion about where the credential
+//     lives is made on the NAME, because `assertEqual` logs what it measures and a gate that logged
+//     a credential would put it in its own log and in CI's transcript.
 //
 // The eleven stages, each measuring one thing the milestone claims:
 //   1.  The baseline is what a fresh worker gets: `permissions.json` v2, exactly
@@ -61,9 +67,9 @@
 
 import { execFileSync, spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { accessSync, appendFileSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { accessSync, appendFileSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
@@ -383,6 +389,21 @@ try {
   // THE STATE ROOT, before anything can derive a path from it. Set on THIS process too, because the
   // gate itself calls `runDirPathFor` to find a run's channel -- and a gate deriving one root while
   // the daemon wrote under another would be measuring an empty directory.
+  // THE OPERATOR'S OWN ROOT, read BEFORE this gate chooses its own -- the directory
+  // `runDirPathFor` would have used had nobody set `SLAVEOFAI_STATE_DIR`. Counted now and counted
+  // again at the end: a gate that leaves run directories in somebody's `$HOME` is the exact defect
+  // C1 was raised about, and "we set the variable" is a claim, while a before/after count is a
+  // measurement (M52 Task 6 fix round 1).
+  const operatorRunsDir = join(
+    (process.env['XDG_STATE_HOME'] ?? '') !== ''
+      ? join(process.env['XDG_STATE_HOME'], 'slaveofai')
+      : join(homedir(), '.local', 'state', 'slaveofai'),
+    'runs',
+  )
+  const operatorRunDirs = () => (existsSync(operatorRunsDir) ? readdirSync(operatorRunsDir) : [])
+  const operatorRunDirsBefore = operatorRunDirs()
+  console.log(`operator state root: ${operatorRunsDir} holds ${String(operatorRunDirsBefore.length)} run director(ies) before this gate`)
+
   stateDir = mkdtempSync(join(tmpdir(), 'slaveofai-gate-m52-state-'))
   process.env['SLAVEOFAI_STATE_DIR'] = stateDir
   const deployLog = join(stateDir, 'fake-deploy.log')
@@ -947,11 +968,37 @@ try {
   if (Object.hasOwn(childEnv, 'DATABASE_URL')) {
     await fail("stage 4: DATABASE_URL IS in the worker's own environment -- the worker can reach the database")
   }
-  // ...and the ORCHESTRATOR is where it DOES live, asserted rather than assumed: the environment
-  // every daemon in this gate was spawned with carries the value, and this process -- which is not
-  // the orchestrator -- does not.
-  await assertEqual(daemonEnv()[CREDENTIAL_ENV_VAR], FAKE_DEPLOY_TOKEN, "stage 4: the credential on the daemon's own environment")
-  await assertEqual(process.env[CREDENTIAL_ENV_VAR], undefined, "stage 4: the credential on the GATE's environment")
+  // The worker DOES have an identity, and the dump proves the identity is not a value anybody wrote
+  // down: the name is there, redacted at write time to `<present>`, and NO value anywhere in the
+  // dump hashes to the identity this run's row carries. That second check is the honest one -- the
+  // gate never holds the plaintext token (nothing does, outside the child), so it asks the only
+  // question it can answer: is any of these values THE token?
+  await assertEqual(Object.hasOwn(childEnv, 'SLAVEOFAI_RUN_TOKEN'), true, "stage 4: SLAVEOFAI_RUN_TOKEN is a name in the worker's environment")
+  await assertEqual(childEnv['SLAVEOFAI_RUN_TOKEN'], '<present>', 'stage 4: what the dump recorded for it')
+  const hashedValues = Object.values(childEnv).filter((value) => typeof value === 'string' && runTokenHash(value) === secondVerdict.tokenHash)
+  await assertEqual(hashedValues.length, 0, "stage 4: values in the dump that hash to this run's own runTokenHash")
+
+  // ...and the ORCHESTRATOR is where the credential DOES live. Asserted BY NAME and never by value:
+  // `assertEqual` prints what it measures, and a gate that printed a credential would put it in its
+  // own log and in CI's transcript, which is the one thing this milestone is about.
+  //
+  // DISCRIMINATING IN BOTH DIRECTIONS, though not by this line alone, and that is the point of
+  // reading the three together. A credential LEAKED into the worker's environment fails the
+  // `Object.hasOwn(childEnv, …)` check above. A credential MISSING from the orchestrator's
+  // environment never reaches this stage at all: `runBrokeredOperation` refuses `credential_unset`
+  // before the executor runs, so the thin client would exit 1, `fake-deploy.sh` would record
+  // nothing, and (a) and (c) would both fail. What is left for this line is the third corner -- the
+  // NAME is on the environment the daemon was actually spawned with, and it is not on the gate's.
+  await assertEqual(
+    Object.hasOwn(daemonEnv(), CREDENTIAL_ENV_VAR),
+    true,
+    `stage 4: ${CREDENTIAL_ENV_VAR} is a name on the daemon's own environment`,
+  )
+  await assertEqual(
+    Object.hasOwn(process.env, CREDENTIAL_ENV_VAR),
+    false,
+    `stage 4: ${CREDENTIAL_ENV_VAR} on the gate's own environment`,
+  )
   console.log(`stage 4: the daemon held ${CREDENTIAL_ENV_VAR}, the worker did not, and ${lines[0]} is the far side saying it arrived`)
 
   // (c) The timeline.
@@ -1409,6 +1456,24 @@ try {
   await assertEqual(afterThird, [], 'stage 10: the read_secret row after the third click -- the DELETE really deleted')
   console.log('stage 10 PASSED: six words on the panel and six on the matrix, three glyphs, the granter by name, and a way back to nobody-has-decided')
 
+  // ============================================================================================
+  // The last thing measured, and the one nobody was measuring: this gate left NOTHING in the
+  // operator's own state root. Every run directory it caused -- two dispatched runs, one hand-seeded
+  // one, and whatever the daemon's preflights touched -- is under its own `SLAVEOFAI_STATE_DIR`,
+  // which the `finally` removes whole.
+  // ============================================================================================
+  const operatorRunDirsAfter = operatorRunDirs()
+  const leaked = operatorRunDirsAfter.filter((name) => !operatorRunDirsBefore.includes(name))
+  console.log(
+    `operator state root: ${operatorRunsDir} holds ${String(operatorRunDirsAfter.length)} run director(ies) after this gate ` +
+      `(${String(operatorRunDirsBefore.length)} before)`,
+  )
+  if (leaked.length > 0) {
+    await fail(
+      `this gate left ${String(leaked.length)} run director(ies) in the operator's own state root ${operatorRunsDir}: ` +
+        `${JSON.stringify(leaked.slice(0, 10))}${leaked.length > 10 ? ' …' : ''}`,
+    )
+  }
   console.log(`gotoReliably retries this run: ${String(gotoRetries.length)}${gotoRetries.length === 0 ? '' : ` (${JSON.stringify(gotoRetries)})`}`)
   console.log(`PASS: ${PASS_LINE}`)
   exitCode = 0

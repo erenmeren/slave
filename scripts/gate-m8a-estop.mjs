@@ -23,6 +23,17 @@ import { fileURLToPath } from 'node:url'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '../packages/db/dist/index.js'
 import { prisma } from '../packages/db/dist/client.js'
 
+import { gateStateDir } from './lib/state-dir.mjs'
+
+// M52 Task 6 fix round 1. This gate spawns a real daemon and builds its child environment by hand
+// rather than through `loopbackChildEnv`, so it asks for its own state root here -- one line, in
+// the one place that decides it. Since M52 R4 a run's directory lives outside the repository
+// (`packages/control/src/paths.ts`) and nothing removes it when the run ends, so without this the
+// run directories this gate causes accumulate in the operator's `$HOME` forever (C1: 1,645 of them
+// were measured there in one afternoon). Called at module scope, before anything is spawned; the
+// child inherits it through `process.env`, which is how every spawn in this file already builds one.
+gateStateDir()
+
 const POLL_INTERVAL_MS = 15
 const ACTIVE_RUN_TIMEOUT_MS = 20_000
 const HALT_SETTLE_TIMEOUT_MS = 15_000

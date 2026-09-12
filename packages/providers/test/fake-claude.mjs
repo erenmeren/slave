@@ -418,14 +418,24 @@ async function workFixtureArm() {
  * NDJSON and APPENDED, because a daemon runs several work runs into the same file and the gate
  * wants all of them -- keyed by `SLAVEOFAI_RUN_ID`, which is how it tells one run's child from
  * another's.
+ *
+ * EVERY SECRET IS REDACTED TO `<present>` AT WRITE TIME, not filtered by the reader (M52 Task 6 fix
+ * round 1). `SLAVEOFAI_RUN_TOKEN` is the plaintext capability this whole milestone is about -- it is
+ * what the hook hashes against `permissions.json` and what the broker compares before it resolves a
+ * grant -- and a dump that wrote it would put a live token on disk to prove that a DIFFERENT secret
+ * is not on disk. The NAME still appears, which is what the assertion needs: a worker with no
+ * identity would be missing the key entirely. `<present>` is a value no token can be, so a reader
+ * can tell "redacted" from "empty" from "absent".
  */
+const REDACTED_ENV_NAMES = new Set(['SLAVEOFAI_RUN_TOKEN'])
+
 function dumpChildEnv() {
   const out = flagValue('--env-out') ?? process.env.FAKE_ENV_OUT
   if (out === undefined || out === '') return
-  appendFileSync(
-    out,
-    `${JSON.stringify({ runId: process.env.SLAVEOFAI_RUN_ID ?? null, cwd: process.cwd(), env: process.env })}\n`,
+  const env = Object.fromEntries(
+    Object.entries(process.env).map(([name, value]) => [name, REDACTED_ENV_NAMES.has(name) ? '<present>' : value]),
   )
+  appendFileSync(out, `${JSON.stringify({ runId: process.env.SLAVEOFAI_RUN_ID ?? null, cwd: process.cwd(), env })}\n`)
 }
 
 /**

@@ -21,7 +21,9 @@ export default defineConfig({
           include: ['packages/**/test/**/*.test.{ts,tsx}', 'apps/**/test/**/*.test.{ts,tsx}'],
           exclude: ['**/node_modules/**', '**/test/integration/**'],
           environment: 'node',
-          setupFiles: ['./test-setup/react-cleanup.ts'],
+          // `state-dir.ts` is on BOTH projects (M52 Task 6 fix round 1): the files that create run
+          // directories are split across them, and one temp root per worker is the same answer for both.
+          setupFiles: ['./test-setup/state-dir.ts', './test-setup/react-cleanup.ts'],
         },
       },
       {
@@ -37,7 +39,7 @@ export default defineConfig({
           include: ['packages/**/test/integration/**/*.test.ts', 'apps/**/test/integration/**/*.test.ts'],
           exclude: ['**/node_modules/**'],
           environment: 'node',
-          setupFiles: ['./test-setup/require-database.ts'],
+          setupFiles: ['./test-setup/state-dir.ts', './test-setup/require-database.ts'],
           poolOptions: { threads: { singleThread: true } },
           // Default was vitest's 5000ms, which the shared-DB TRUNCATE+seed hooks crossed under
           // full-suite load three times (M11 x2, M12 x1) with a test body that does no waiting.
