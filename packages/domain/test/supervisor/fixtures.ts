@@ -96,6 +96,12 @@ export function slave(overrides: Partial<SupervisorSlave> = {}): SupervisorSlave
     lifecycle: 'project',
     engagementTaskId: null,
     released: false,
+    // M53 R10/R1/R9: nothing has been refused this worker, nobody hired it from a template and no
+    // model is pinned to it -- so the permission, preference and cost steps of `rankCandidates` only
+    // ever decide in a test that says which denial, which template or which model it is about.
+    deniedKinds: [],
+    hiredFromTemplateId: null,
+    model: null,
     ...overrides,
   }
 }
@@ -201,6 +207,10 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     // M52 R5: nothing has been refused, so `permission_blocked` only ever fires in a test that
     // hands the world a denial and says which worker and which operation it is about.
     denials: [],
+    // M53 R9/R3: nobody has expressed a staffing preference and no profile has a record, so the
+    // preference and evidence steps only ever decide in a test that hands the world one.
+    staffingPreferences: [],
+    evidence: [],
     ...overrides,
   }
 }

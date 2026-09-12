@@ -111,6 +111,10 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   unknown_profile_field: true,
   capability_not_found: true,
   invalid_capability: true,
+  // M53 R9: the staffing preference's own kind. 409 by the suffix rule, and that is the right
+  // answer: the project is there and the capability is there, and a preference that names neither a
+  // profile nor a model is a request that does not make sense against them.
+  invalid_staffing_preference: true,
   runbook_not_found: true,
   invalid_runbook: true,
   runbook_already_adopted: true,

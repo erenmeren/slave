@@ -31,6 +31,14 @@ describe('the simulation never reaches a real tool (spec §8)', () => {
       // `SLAVEOFAI_RUN_TOKEN` rather than `token`, which appears all over the simulation for model
       // usage.
       expect(source, `${file} mentions the broker or a credential`).not.toMatch(/broker|Credential|SLAVEOFAI_RUN_TOKEN/)
+      // M53 R13: the three nouns by NAME, the way the case above names `@slave-of-ai/providers`
+      // and M52's own line names the broker. A `SimulationRun` binds to a `Company` and never to a
+      // `Workspace`, a simulated role is not a `Slave` and can reach no `SlaveRun` -- so no
+      // simulation row can name one, and the scan is what keeps that true through a refactor
+      // nobody reads a convention during.
+      expect(source, `${file} mentions evidence, ranking or a staffing preference`).not.toMatch(
+        /EvidenceRecord|rankCandidates|StaffingPreference/,
+      )
     }
   })
 })

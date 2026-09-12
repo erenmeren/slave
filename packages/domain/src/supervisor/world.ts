@@ -1,5 +1,7 @@
 import type { BreakerLevel, BreakerTripKind } from '../breaker/detect.js'
+import type { RankEvidence } from '../capability/rank.js'
 import type { CapabilityRecord } from '../capability/taxonomy.js'
+import type { PermissionKind } from '../permission/kinds.js'
 import type { HandoffContract } from '../handoff/contract.js'
 import type { SlaveLifecycle } from '../lifecycle/types.js'
 import type { Runbook } from '../runbook/spec.js'
@@ -117,6 +119,27 @@ export interface SupervisorSlave {
    *  excluded from `formTeam`'s roster and from `staffableSlaves` so nothing proposes giving it
    *  roles back. */
   readonly released: boolean
+  /**
+   * M53 R10 (plan erratum E7): the operations this worker has been REFUSED -- the `deny` rows of
+   * `SlavePermission` and only those.
+   *
+   * Not the allows, and not the unset kinds: `rankCandidates`' permission step asks one question,
+   * "is a baseline grant this run kind needs denied to this candidate", and an allow is the answer
+   * "no". EMPTY is the ordinary state and is loaded without a query when the project holds no
+   * permission row at all.
+   */
+  readonly deniedKinds: readonly PermissionKind[]
+  /** M53 R1 (plan erratum E7): the catalog persona this worker was hired from, or null for a
+   *  hand-made one. Half of the PROFILE KEY -- `profileKeyOf` makes `template:<id>` from it and
+   *  `slave:<id>` without it -- and the world carries the ingredient rather than the key so nothing
+   *  in the domain has to agree on a string format twice. */
+  readonly hiredFromTemplateId: string | null
+  /** M53 R9 (plan erratum E7): the model this worker would actually dispatch with, resolved by the
+   *  loader through `Slave.model ?? CompanySlave.model ?? SlaveTemplate.defaultModel ?? null`
+   *  (`schema.prisma:261-264`). Resolved at the EDGE so the pure functions never have to -- a
+   *  preference may name a model, and a candidate that cannot say which model it is on cannot be
+   *  matched against one. */
+  readonly model: string | null
 }
 
 /**
@@ -127,6 +150,11 @@ export interface SupervisorCompanyWorker {
   readonly companySlaveId: string
   readonly name: string
   readonly capabilities: readonly string[]
+  /** M53 R1 (plan erratum E7): the template behind this roster worker. `CompanySlave.templateId` is
+   *  NOT NULL (`schema.prisma:508`), so a company candidate always has a profile key and it is
+   *  always `template:<this>` -- which is what lets a preference naming a template match a worker
+   *  nobody has hired yet. */
+  readonly templateId: string
 }
 
 /**
@@ -139,6 +167,9 @@ export interface SupervisorCatalogEntry {
   readonly capabilities: readonly string[]
   readonly division: string | null
   readonly recommended: boolean
+  /** M53 R9 (plan erratum E7): `SlaveTemplate.defaultModel` -- what a template candidate's `model`
+   *  IS, since nobody has hired it and there is no worker row to resolve through. */
+  readonly defaultModel: string | null
 }
 
 /**
@@ -312,6 +343,26 @@ export interface SupervisorDenial {
   readonly latestRunId: string | null
 }
 
+/** M53 R9: one staffing decision a person took about this project, as the world sees it. The LABEL
+ *  rides beside the key because the rationale sentence a decision row stores is read a year later
+ *  (`docs/ia.md` rule 3), and `packages/domain` cannot resolve a label without the taxonomy table.
+ *  `setBy` is a `User.id` and stays one -- every visible surface resolves it to a username at its
+ *  own boundary (M52 erratum E18). */
+export interface SupervisorStaffingPreference {
+  readonly capability: string
+  readonly capabilityLabel: string
+  readonly templateId: string | null
+  readonly model: string | null
+  readonly setBy: string | null
+}
+
+/** M53 R3/R8: one profile's record, as the RANKER reads it. `RankEvidence` plus the key it is
+ *  looked up by -- the world holds no `EvidenceRecord` rows, only the grouped counts, for the
+ *  reason `staleMemoryCandidates` holds a count and not the memories (M49 plan erratum E11). */
+export interface SupervisorProfileEvidence extends RankEvidence {
+  readonly profileKey: string
+}
+
 /**
  * Everything the Supervisor is allowed to know about a workspace at one instant (M38 §3), built
  * by `packages/control/src/supervisorWorld.ts` from Prisma (spec E2) and handed to the pure
@@ -370,6 +421,14 @@ export interface SupervisorWorld {
    *  has been denied in the window -- the loader does not pay for a grouped event scan on a project
    *  where nothing has been refused. */
   readonly denials: readonly SupervisorDenial[]
+  /** M53 R9: what a person asked for, per capability. EMPTY unless some staffable task asks for a
+   *  capability -- the same gate {@link company} and {@link catalog} wait on. */
+  readonly staffingPreferences: readonly SupervisorStaffingPreference[]
+  /** M53 R3/R8: the record of every candidate profile -- roster, company roster and catalog --
+   *  and of nobody else. EMPTY under the same gate, and bounded by the CANDIDATE SET rather than
+   *  by a window: `WHERE profileKey = ANY(...)` is an index probe on
+   *  `(profileKey, model, repositoryKey)` (plan erratum E8). */
+  readonly evidence: readonly SupervisorProfileEvidence[]
 }
 
 /**

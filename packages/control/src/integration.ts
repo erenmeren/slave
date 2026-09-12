@@ -1,6 +1,7 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { type Result, err, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { settleTaskEvidence } from './evidence.js'
 import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
 
@@ -41,5 +42,12 @@ export async function confirmIntegration(
     payload: {},
     userId: principal?.userId ?? null,
   })
+
+  // M53 R4: the human half of the integration verdict. AFTER the event, for `promote`'s reason
+  // (M49 R2d) and for one of its own: `settleTaskEvidence` resolves the task's implementation run,
+  // and the row it settles is the IMPLEMENTER's -- the person confirming a merge is judging the
+  // work, not the confirmation. A crash between the two leaves an event with no fact rather than a
+  // fact with no event, which is the direction R7's backfill can repair.
+  await settleTaskEvidence(taskId, { kind: 'integration', integrated: true })
   return ok(undefined)
 }

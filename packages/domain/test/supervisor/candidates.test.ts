@@ -422,8 +422,8 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
       taxonomy: TAXONOMY,
       tasks: [task({ status: 'ready', requiredCapabilities: ['security.application'] })],
       slaves: [slave({ id: 's1', name: 'Rae', capabilities: ['security.application'], runtimeRoles: ['backend'] })],
-      company: [{ companySlaveId: 'cs1', name: 'Sam', capabilities: ['security.application'] }],
-      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false }],
+      company: [{ companySlaveId: 'cs1', name: 'Sam', capabilities: ['security.application'], templateId: 'tpl1' }],
+      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false, defaultModel: null }],
     })
     const offers = candidates(situation, w)
     expect(offers[0]?.action).toEqual({
@@ -441,8 +441,8 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
     const w = world({
       taxonomy: TAXONOMY,
       tasks: [task({ status: 'ready', requiredCapabilities: ['security.application'] })],
-      company: [{ companySlaveId: 'cs1', name: 'Sam', capabilities: ['security.application'] }],
-      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false }],
+      company: [{ companySlaveId: 'cs1', name: 'Sam', capabilities: ['security.application'], templateId: 'tpl1' }],
+      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false, defaultModel: null }],
     })
     const offers = candidates(situation, w)
     // Fix round 1, Minor 5: the rationale travels ON the action, because it is what is stored on
@@ -483,7 +483,7 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
         task({ id: 't1', status: 'ready', requiredCapabilities: ['security.application'] }),
         task({ id: 't2', status: 'ready', requiredCapabilities: ['security.application'] }),
       ],
-      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false }],
+      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false, defaultModel: null }],
     })
     const offers = candidates(situation, w)
     expect(offers[0]?.action).toEqual({
@@ -510,7 +510,7 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
       taxonomy: TAXONOMY,
       tasks: [task({ status: 'ready', requiredCapabilities: ['security.application'] })],
       slaves: [slave({ id: 's1', name: 'Rae', capabilities: ['security.application'], runtimeRoles: ['backend'] })],
-      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false }],
+      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false, defaultModel: null }],
     })
     for (const offer of candidates(situation, w)) expect(candidateSchema.safeParse(offer).success).toBe(true)
   })
@@ -544,7 +544,7 @@ describe('teamPlanOf (M47 R4)', () => {
         task({ id: 't3', status: 'done', requiredCapabilities: ['qa.test-automation'] }),
       ],
       slaves: [slave({ id: 's1', runtimeRoles: ['backend'] })],
-      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false }],
+      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false, defaultModel: null }],
     })
     const plan = teamPlanOf(w)
     expect(plan.covered).toEqual([{ capability: 'backend.api-design', by: 's1' }])
@@ -563,7 +563,7 @@ describe('teamPlanOf (M47 R4)', () => {
         task({ id: 't1', status: 'blocked', requiredCapabilities: ['security.application'] }),
         task({ id: 't2', status: 'ready', dependenciesDone: false, requiredCapabilities: ['backend.api-design'] }),
       ],
-      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false }],
+      catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false, defaultModel: null }],
     })
     const plan = teamPlanOf(w)
     expect(plan.proposals).toEqual([])
@@ -697,6 +697,7 @@ describe('the temporary hire reaches the action', () => {
             capabilities: ['security.application'],
             division: 'security',
             recommended: false,
+            defaultModel: null,
           },
         ],
       }),

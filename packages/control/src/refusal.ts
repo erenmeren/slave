@@ -129,6 +129,14 @@ export type ControlRefusal =
   /** M47 R1: a key, label or role that cannot become a taxonomy row (a malformed key, a blank
    *  label, a role that is not a role, a key that already exists). */
   | { readonly kind: 'invalid_capability'; readonly detail: string }
+  /** M53 R9: a staffing preference that names neither a profile nor a model is a preference for
+   *  nothing. 409 by `refusalStatus`'s suffix rule, which is right: the project exists and the
+   *  capability exists, and the request does not make sense against them.
+   *
+   *  Carries the CAPABILITY and not the offered input (plan decision D18): the refusal is about the
+   *  shape of the decision, the capability is what a person needs in order to fix it, and putting a
+   *  `templateId` or a `model` in the payload would put a value in a sentence about their absence. */
+  | { readonly kind: 'invalid_staffing_preference'; readonly capability: string }
   /** M48 R5: `adopt-runbook`, `runbooks show` and the routes all address a runbook by KEY. */
   | { readonly kind: 'runbook_not_found'; readonly key: string }
   /** M48 R5: the file `runbooks add --file` was handed is not a runbook -- a bad key, a missing
@@ -470,6 +478,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `there is no capability "${refusal.key}" in the taxonomy: add it with \`capabilities add\` first`
     case 'invalid_capability':
       return `that capability cannot be added: ${refusal.detail}`
+    case 'invalid_staffing_preference':
+      return `a staffing preference for ${refusal.capability} must name a profile, a model, or both`
     case 'memory_not_found':
       return `no memory with id ${refusal.memoryId}`
     case 'invalid_memory':

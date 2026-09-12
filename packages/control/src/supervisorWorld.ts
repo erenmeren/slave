@@ -7,13 +7,16 @@ import {
   RUN_PROMPT_MAX_CHARS,
   THREAD_BODY_MAX_CHARS,
   boundThread,
+  capabilityLabel,
   evaluateGuardrails,
   isStaffableTask,
   parseHandoffContract,
   parseRunbookStages,
+  profileKeyOf,
   runbookSourceOf,
   type ActionKind,
   type CapabilityRecord,
+  type PermissionKind,
   type DecisionStatus,
   type HandoffContract,
   type Runbook,
@@ -21,9 +24,11 @@ import {
   type SupervisorCatalogEntry,
   type SupervisorCompanyWorker,
   type SupervisorDenial,
+  type SupervisorProfileEvidence,
   type SupervisorQuestion,
   type SupervisorRun,
   type SupervisorSlave,
+  type SupervisorStaffingPreference,
   type SupervisorTask,
   type SupervisorWorld,
   type BreakerTripKind,
@@ -32,6 +37,7 @@ import {
   type ThreadMessage,
   type Tier,
 } from '@slave-of-ai/domain'
+import { evidenceForProfiles } from './evidence.js'
 import { staleCandidateCount } from './memory.js'
 import { stillPendingQuestion, waitingSenderRunIds } from './messaging.js'
 import { workspaceStats, type WorkspaceStatsSnapshot } from './stats.js'
@@ -100,7 +106,7 @@ async function loadCompanyRoster(
   workspaceId: string,
 ): Promise<readonly SupervisorCompanyWorker[]> {
   return tx.$queryRaw<SupervisorCompanyWorker[]>`
-    SELECT cs.id AS "companySlaveId", cs.name, t."capabilityKeys" AS capabilities
+    SELECT cs.id AS "companySlaveId", cs.name, cs."templateId" AS "templateId", t."capabilityKeys" AS capabilities
     FROM "CompanySlave" cs
     JOIN "CompanyTeam" ct ON ct.id = cs."companyTeamId"
     JOIN "Workspace" w ON w."companyId" = ct."companyId"
@@ -124,7 +130,7 @@ async function loadCatalogEntries(
 ): Promise<readonly SupervisorCatalogEntry[]> {
   const templates = await tx.slaveTemplate.findMany({
     where: { NOT: { capabilityKeys: { isEmpty: true } } },
-    select: { id: true, name: true, capabilityKeys: true, sourceDivision: true },
+    select: { id: true, name: true, capabilityKeys: true, sourceDivision: true, defaultModel: true },
     orderBy: { id: 'asc' },
     take: CATALOG_ENTRIES_MAX,
   })
@@ -150,7 +156,101 @@ async function loadCatalogEntries(
     capabilities: template.capabilityKeys,
     division: template.sourceDivision,
     recommended: recommended.has(template.id),
+    // M53 R9 (plan erratum E7): what a TEMPLATE candidate's model is. Nobody has hired it, so there
+    // is no worker row to resolve the `Slave.model ?? CompanySlave.model ?? defaultModel` chain
+    // through -- this column is the whole chain.
+    defaultModel: template.defaultModel,
   }))
+}
+
+/**
+ * The operations each worker has been REFUSED (M53 R10, plan erratum E7).
+ *
+ * One `findMany` over `SlavePermission` where the mode is `deny`, keyed on the slave ids the caller
+ * already holds, grouped into a map. SKIPPED ENTIRELY -- an empty map and no query at all -- when
+ * there are no workers, the bounded-loader rule {@link loadDenials} states for its own id list.
+ *
+ * NOT a `$queryRaw`, unlike the three loaders it sits beside (plan decision D19): those are raw
+ * because they group `ExecutionEvent` payloads, which Prisma cannot express. `SlavePermission` is a
+ * small table with a unique index on `(slaveId, kind)`, and a typed `findMany` is both clearer and
+ * safer.
+ *
+ * Only the DENIES, and this is the whole read: `rankCandidates`' permission step asks whether a
+ * baseline grant this run kind needs is denied to a candidate, and an allow answers "no" exactly as
+ * an unset kind does. Carrying the allows would put rows in the world no rule reads.
+ */
+async function loadDeniedKinds(
+  tx: Prisma.TransactionClient,
+  slaveIds: readonly string[],
+): Promise<ReadonlyMap<string, readonly PermissionKind[]>> {
+  if (slaveIds.length === 0) return new Map()
+  const rows = await tx.slavePermission.findMany({
+    where: { slaveId: { in: [...slaveIds] }, mode: 'deny' },
+    select: { slaveId: true, kind: true },
+    orderBy: [{ slaveId: 'asc' }, { kind: 'asc' }],
+  })
+  const bySlave = new Map<string, PermissionKind[]>()
+  for (const row of rows) {
+    const kinds = bySlave.get(row.slaveId)
+    if (kinds === undefined) bySlave.set(row.slaveId, [row.kind])
+    else kinds.push(row.kind)
+  }
+  return bySlave
+}
+
+/**
+ * What a person asked for, per capability, on this project (M53 R9).
+ *
+ * One `findMany` on the `@@unique([workspaceId, capability])` index -- whose leading column is
+ * `workspaceId`, so this is an index probe and not a scan -- labelled through `capabilityLabel` and
+ * ordered by capability. The LABEL is resolved here, at the edge, because `packages/domain` cannot
+ * reach the taxonomy table and a rationale sentence must print a word rather than a key.
+ *
+ * Called only under `asksForCapabilities`: a project whose board asks for no capability has no
+ * staffing question for a preference to answer.
+ */
+async function loadStaffingPreferences(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  taxonomy: readonly CapabilityRecord[],
+): Promise<readonly SupervisorStaffingPreference[]> {
+  const rows = await tx.staffingPreference.findMany({ where: { workspaceId }, orderBy: { capability: 'asc' } })
+  return rows.map((row) => ({
+    capability: row.capability,
+    capabilityLabel: capabilityLabel(row.capability, taxonomy),
+    templateId: row.templateId,
+    model: row.model,
+    setBy: row.setBy,
+  }))
+}
+
+/**
+ * The record of every CANDIDATE profile, and of nobody else (M53 R3/R8, plan erratum E8).
+ *
+ * The same `$queryRaw` `evidenceForProfiles` runs, TAKEN from `./evidence.js` rather than written a
+ * second time (erratum E6): two `GROUP BY`s over one table would eventually tell a person the
+ * Supervisor's rationale counted 38 runs while the Evidence tab counted 40, with no way to say which
+ * was right.
+ *
+ * Bounded by the CANDIDATE SET rather than by a window -- roster ∪ company roster ∪ the loader's
+ * already-bounded catalog, at most `roster + company + CATALOG_ENTRIES_MAX` keys -- which is an
+ * index probe on `(profileKey, model, repositoryKey)`. `evidenceForProfiles` asks nothing at all for
+ * an empty set, so a project with no candidates pays no query.
+ *
+ * NOT on `tx`: this is the one read in the loader that goes through another module's verb rather
+ * than through the transaction client, and it is deliberate. `evidenceForProfiles` is ALSO the
+ * Evidence tab's read and the ranker's read, and giving it a `tx` parameter for one caller would
+ * make every other caller decide something it has no opinion about. The cost is that these counts
+ * come from a moment just outside the snapshot the rest of the world was read in -- which is
+ * harmless here in a way it is not for the roster: an evidence count is a property of history, it
+ * only ever grows, and a run concluding between the two reads changes a denominator by one rather
+ * than making a proposal true that was false.
+ */
+async function loadProfileEvidence(
+  profileKeys: readonly string[],
+): Promise<readonly SupervisorProfileEvidence[]> {
+  const byProfile = await evidenceForProfiles(profileKeys)
+  return [...byProfile.entries()].map(([profileKey, evidence]) => ({ profileKey, ...evidence }))
 }
 
 /** A bound, because a full catalog import is thousands of rows (M55) and a Supervisor world is
@@ -735,6 +835,15 @@ export async function loadSupervisorWorld(
           lifecycle: true,
           engagementTaskId: true,
           releasedAt: true,
+          // M53 R1/R9 (plan erratum E7): the PROFILE KEY's ingredient and the three halves of the
+          // model chain `Slave.model ?? CompanySlave.model ?? SlaveTemplate.defaultModel`
+          // (`schema.prisma:261-264`). All four ride on this `findMany` through nested selects
+          // rather than costing a query of their own, and the chain is resolved at the EDGE below so
+          // the pure functions never have to.
+          hiredFromTemplateId: true,
+          model: true,
+          companySlave: { select: { model: true } },
+          hiredFromTemplate: { select: { defaultModel: true } },
           // "Busy" is "holds a run that can still leave a non-terminal status", the same predicate
           // `world.ts` gives the scheduler -- not "has ever held one". `take: 1` answers "any?".
           runs: { where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } }, select: { id: true }, take: 1 },
@@ -782,6 +891,28 @@ export async function loadSupervisorWorld(
       const taxonomy = asksForCapabilities || workspace.runbookId !== null || canRecommend ? await loadTaxonomy(tx) : []
       const companyRows = asksForCapabilities ? await loadCompanyRoster(tx, workspaceId) : []
       const catalogRows = asksForCapabilities ? await loadCatalogEntries(tx, slaveRows) : []
+
+      // M53 R9/R3 (plan errata E7/E8). The preference and the record wait on the SAME gate the
+      // company roster and the catalog do -- a project whose board asks for no capability has no
+      // staffing question, so it pays for neither. The candidate set is roster ∪ company ∪ catalog,
+      // deduplicated: a company worker and a catalog template can name the same template, and
+      // asking for one key twice would be one predicate longer for no extra row.
+      const staffingPreferences = asksForCapabilities
+        ? await loadStaffingPreferences(tx, workspaceId, taxonomy)
+        : []
+      const evidence = asksForCapabilities
+        ? await loadProfileEvidence([
+            ...new Set([
+              ...slaveRows.map((row) => profileKeyOf({ slaveId: row.id, hiredFromTemplateId: row.hiredFromTemplateId })),
+              ...companyRows.map((row) => `template:${row.templateId}`),
+              ...catalogRows.map((row) => `template:${row.templateId}`),
+            ]),
+          ])
+        : []
+
+      // M53 R10 (plan erratum E7). One query for the whole board, never one per worker, and none at
+      // all on a project with no workers.
+      const deniedKinds = await loadDeniedKinds(tx, slaveRows.map((row) => row.id))
 
       const runbooks = canRecommend ? await loadRunbooks(tx) : []
 
@@ -927,6 +1058,12 @@ export async function loadSupervisorWorld(
         lifecycle: row.lifecycle,
         engagementTaskId: row.engagementTaskId,
         released: row.releasedAt !== null,
+        // M53 R10/R1/R9 (plan erratum E7). `deniedKinds` is empty for a worker with no `deny` row,
+        // which is every worker on a project nobody has restricted; `model` is the resolution chain
+        // `schema.prisma:261-264` spells, answered here so `rankCandidates` never has to.
+        deniedKinds: deniedKinds.get(row.id) ?? [],
+        hiredFromTemplateId: row.hiredFromTemplateId,
+        model: row.model ?? row.companySlave?.model ?? row.hiredFromTemplate?.defaultModel ?? null,
       }))
 
       const world: SupervisorWorld = {
@@ -1002,6 +1139,11 @@ export async function loadSupervisorWorld(
         // counted over `PERMISSION_DENIAL_WINDOW_MS`. `observe` decides which of them is a wall a
         // person could move; this list is every refusal the window holds, unjudged.
         denials,
+        // M53 R9/R3: what a person asked for, and the record of every candidate profile. Both EMPTY
+        // on a project whose board asks for no capability -- the gate `company` and `catalog` wait
+        // on -- so the Supervisor's ordinary tick is unchanged for a project with nothing to staff.
+        staffingPreferences,
+        evidence,
       }
 
       return {

@@ -16,7 +16,14 @@ import { recordMemory } from '../../src/memory.js'
 import { adoptRunbook, syncRunbooks } from '../../src/runbook.js'
 import { workspaceSpend } from '../../src/spend.js'
 import { workspaceStats } from '../../src/stats.js'
+import { setStaffingPreference } from '../../src/staffing.js'
 import { RUNBOOKS_IN_WORLD_MAX, loadSupervisorWorld } from '../../src/supervisorWorld.js'
+import {
+  BACKEND_SERVICES_LABEL,
+  seedEvidenceFixture,
+  seedEvidenceRows,
+  type EvidenceFixture,
+} from './fixtures/evidence.js'
 
 const NOW = new Date('2026-09-09T12:00:00.000Z')
 const ago = (ms: number): Date => new Date(NOW.getTime() - ms)
@@ -1103,6 +1110,8 @@ describe('loadSupervisorWorld -- the capability facts (M47 R4)', () => {
         capabilities: ['security.application'],
         division: 'security',
         recommended: false,
+        // M53 plan erratum E7: a template candidate's model, which this one does not name.
+        defaultModel: null,
       },
     ])
   })
@@ -1128,7 +1137,9 @@ describe('loadSupervisorWorld -- the capability facts (M47 R4)', () => {
 
     const { world } = await loadSupervisorWorld(f.workspaceId, NOW)
     expect(world.company).toEqual([
-      { companySlaveId: notHere.id, name: 'Sam', capabilities: ['security.application'] },
+      // M53 plan erratum E7: `templateId` rides along, because a company worker's profile key is
+      // `template:<it>` and `CompanySlave.templateId` is NOT NULL.
+      { companySlaveId: notHere.id, name: 'Sam', capabilities: ['security.application'], templateId: template.id },
     ])
   })
 
@@ -1532,5 +1543,64 @@ describe('loadSupervisorWorld -- the denials (M52 R5)', () => {
     // `observe` is what refuses to put either in front of a person: neither names something a
     // person can grant.
     expect(observe(world).filter((situation) => situation.kind === 'permission_blocked')).toEqual([])
+  })
+})
+
+/**
+ * M53's three bounded loads, against the milestone's own fixture rather than this file's `seed()`:
+ * the ranker's world is about a PROFILE, and a profile needs a template, a worker hired from it and
+ * a task that asks for a capability -- which is exactly what `seedEvidenceFixture` is.
+ */
+describe('the world M53 hands the ranker (R8, R9, R10, errata E7/E8)', () => {
+  let fixture: EvidenceFixture
+  beforeEach(async (): Promise<void> => {
+    fixture = await seedEvidenceFixture()
+  })
+
+  it('carries each worker DENY rows, and only the denies', async (): Promise<void> => {
+    await prisma.slavePermission.create({ data: { slaveId: fixture.slaveId, kind: 'run_commands', mode: 'deny' } })
+    await prisma.slavePermission.create({ data: { slaveId: fixture.slaveId, kind: 'read_repo', mode: 'allow' } })
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+    expect(world.slaves.find((s) => s.id === fixture.slaveId)?.deniedKinds).toEqual(['run_commands'])
+  })
+
+  it('carries the profile key ingredients: the template a worker was hired from, and its resolved model', async (): Promise<void> => {
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+    const slave = world.slaves.find((s) => s.id === fixture.slaveId)
+    expect(slave?.hiredFromTemplateId).toBe(fixture.templateId)
+    expect(slave?.model).toBe('claude-sonnet-4-20250514')
+  })
+
+  it('carries the staffing preferences a person set', async (): Promise<void> => {
+    await setStaffingPreference(fixture.workspaceId, { capability: 'backend.services', model: 'opus' })
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+    expect(world.staffingPreferences).toEqual([
+      { capability: 'backend.services', capabilityLabel: BACKEND_SERVICES_LABEL, templateId: null, model: 'opus', setBy: null },
+    ])
+  })
+
+  it('carries the record of every candidate profile, and of nobody else', async (): Promise<void> => {
+    await seedEvidenceRows(fixture, 6)
+    await seedEvidenceRows(fixture, [{ profileKey: 'template:nobody-here', profileName: 'Nobody' }])
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+    const record = world.evidence.find((one) => one.profileKey === `template:${fixture.templateId}`)
+    expect(record?.attempted).toBe(6)
+    expect(world.evidence.map((one) => one.profileKey)).not.toContain('template:nobody-here')
+  })
+
+  it('reads NOTHING when no staffable task asks for a capability (erratum E8)', async (): Promise<void> => {
+    await seedEvidenceRows(fixture, 6)
+    await setStaffingPreference(fixture.workspaceId, { capability: 'backend.services', model: 'opus' })
+    await prisma.task.updateMany({ where: { workspaceId: fixture.workspaceId }, data: { requiredCapabilities: [] } })
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+    expect(world.evidence).toEqual([])
+    expect(world.staffingPreferences).toEqual([])
+    expect(world.company).toEqual([])
+    expect(world.catalog).toEqual([])
+  })
+
+  it('reads no denials query at all when the workspace holds no `SlavePermission` row', async (): Promise<void> => {
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+    for (const slave of world.slaves) expect(slave.deniedKinds).toEqual([])
   })
 })
