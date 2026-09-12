@@ -800,13 +800,13 @@ describe('the permission matrix', () => {
 
     it('shows a refusal verbatim without refreshing', async (): Promise<void> => {
       fetchMock.mockImplementationOnce(
-        async () => new Response(JSON.stringify({ error: 'a permission must name one of the six tools' }), { status: 409 }),
+        async () => new Response(JSON.stringify({ error: 'a permission must name one of the six operations' }), { status: 409 }),
       )
       render(<PermissionMatrix sections={rows} />)
       await act(async () => {
         fireEvent.click(screen.getByTestId('perm-cell-a1-read_repo'))
       })
-      expect(screen.getByRole('alert').textContent).toBe('a permission must name one of the six tools')
+      expect(screen.getByRole('alert').textContent).toBe('a permission must name one of the six operations')
       expect(routerRefresh).not.toHaveBeenCalled()
     })
   })

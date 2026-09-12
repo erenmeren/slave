@@ -4,6 +4,7 @@ import {
   TOOLS_BY_KIND,
   type PermissionKind,
   type PermissionProvider,
+  type PermissionRunKind,
 } from './kinds.js'
 
 /** One `SlavePermission` row, as the two functions below read it. A flat shape rather than the
@@ -56,7 +57,7 @@ function isPermissionKind(value: string): value is PermissionKind {
 export function resolveGrants(
   rows: readonly PermissionRowInput[],
   provider: PermissionProvider,
-  runKind: 'implementation' | 'review' | 'planning',
+  runKind: PermissionRunKind,
 ): readonly ResolvedGrant[] {
   const denied = new Set<PermissionKind>()
   const allowed = new Set<PermissionKind>(BASELINE_GRANTS[runKind])
@@ -100,7 +101,7 @@ export interface KindGrant {
  */
 export function grantsFor(
   rows: readonly PermissionRowInput[],
-  runKind: 'implementation' | 'review' | 'planning',
+  runKind: PermissionRunKind,
 ): readonly KindGrant[] {
   const byKind = new Map<PermissionKind, PermissionRowInput>()
   for (const row of rows) {

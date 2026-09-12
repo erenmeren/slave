@@ -8,6 +8,7 @@ import {
   MEMORY_TYPES,
   PERMISSION_KINDS,
   PERMISSION_PROVIDERS,
+  PERMISSION_RUN_KINDS,
   SITUATION_KINDS,
   SLAVE_LIFECYCLES,
   TIERS,
@@ -116,6 +117,14 @@ describe('database enums match the domain unions', () => {
 
   it('ProviderKind matches the domain\u2019s PERMISSION_PROVIDERS, so the permission tables key on the same two', async () => {
     expect(await enumValues('ProviderKind')).toEqual([...PERMISSION_PROVIDERS].sort())
+  })
+
+  // M52 fix round 1 (review m6): `BASELINE_GRANTS` is a total `Record` over `PERMISSION_RUN_KINDS`,
+  // so a FOURTH `RunKind` member that reached Prisma and not the domain would make
+  // `BASELINE_GRANTS[runKind]` `undefined`, `new Set(undefined)` empty, and every run of that kind
+  // silently deny-all. Nothing in TypeScript catches that; this line does.
+  it('RunKind matches the domain\u2019s PERMISSION_RUN_KINDS, so no run kind can have a deny-all baseline', async () => {
+    expect(await enumValues('RunKind')).toEqual([...PERMISSION_RUN_KINDS].sort())
   })
 
   // The test above pins the database enum to `EVENT_TYPE_BY_DOMAIN_TYPE`, a hand-maintained

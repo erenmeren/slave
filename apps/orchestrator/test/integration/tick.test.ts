@@ -363,10 +363,30 @@ describe('tick', () => {
     const written: unknown = JSON.parse(readFileSync(permissionsPath, 'utf8'))
     expect(written).toEqual({
       version: 1,
+      // M52 fix round 1 (the C1 classification): `run_commands` covers everything that can DO work
+      // or spawn work that can -- the shell, a subagent, a skill, a workflow, the schedulers -- so
+      // denying it denies the whole family, and this list is `TOOLS_BY_KIND.run_commands` in order.
       deny: [
         { tool: 'Bash', capability: 'run_commands' },
         { tool: 'BashOutput', capability: 'run_commands' },
         { tool: 'KillShell', capability: 'run_commands' },
+        { tool: 'Task', capability: 'run_commands' },
+        { tool: 'TaskStop', capability: 'run_commands' },
+        { tool: 'Skill', capability: 'run_commands' },
+        { tool: 'Workflow', capability: 'run_commands' },
+        { tool: 'SendMessage', capability: 'run_commands' },
+        { tool: 'EnterWorktree', capability: 'run_commands' },
+        { tool: 'ExitWorktree', capability: 'run_commands' },
+        { tool: 'EnterPlanMode', capability: 'run_commands' },
+        { tool: 'ExitPlanMode', capability: 'run_commands' },
+        { tool: 'CronCreate', capability: 'run_commands' },
+        { tool: 'CronDelete', capability: 'run_commands' },
+        { tool: 'CronList', capability: 'run_commands' },
+        { tool: 'ScheduleWakeup', capability: 'run_commands' },
+        { tool: 'RemoteTrigger', capability: 'run_commands' },
+        { tool: 'PushNotification', capability: 'run_commands' },
+        { tool: 'ReportFindings', capability: 'run_commands' },
+        { tool: 'DesignSync', capability: 'run_commands' },
       ],
     })
   })

@@ -26,6 +26,9 @@ DECLARE
   collided INTEGER;
   dropped  INTEGER;
 BEGIN
+  -- The `WHERE` is what makes `mapped` TRUE: without it `ROW_COUNT` counts every row the statement
+  -- touched, including the ones it set to NULL, and the audit line for the one destructive step in
+  -- this milestone would overstate what it mapped.
   UPDATE "SlavePermission" SET "kind" = CASE "tool"
     WHEN 'repo read'     THEN 'read_repo'::"PermissionKind"
     WHEN 'source write'  THEN 'write_repo'::"PermissionKind"
@@ -34,7 +37,8 @@ BEGIN
     WHEN 'deploy prod'   THEN 'deploy_release'::"PermissionKind"
     WHEN 'read secrets'  THEN 'read_secret'::"PermissionKind"
     ELSE NULL
-  END;
+  END
+  WHERE "tool" IN ('repo read', 'source write', 'run tests', 'create branch', 'deploy prod', 'read secrets');
   GET DIAGNOSTICS mapped = ROW_COUNT;
 
   -- `run tests` and `create branch` collapse onto one kind. Keep the DENY where a worker holds both
