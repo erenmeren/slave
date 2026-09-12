@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { runbookForWorkspace } from '@slave-of-ai/control'
+import { recordRunEvidence, runbookForWorkspace } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   parseHandoffContract,
@@ -578,6 +578,12 @@ export async function advance(input: AdvanceInput): Promise<void> {
       requiredCapabilities: task.requiredCapabilities,
       goalVersion: task.goalVersion,
     })
+    // M53 R4: the verdict is in, so the first-pass column settles. `runId` is the IMPLEMENTATION
+    // run's -- read at the top of this function, before the claim was cleared -- so this is
+    // `recordRunEvidence` directly rather than `settleTaskEvidence`'s lookup (plan erratum E2).
+    // A settle never CREATES a fact: with no row for this run (a database that predates M53), the
+    // writer's `updateMany` matches nothing and this line is a no-op.
+    if (runId !== null) await recordRunEvidence(runId, { settle: { kind: 'verify', verdict: 'passed' } })
     return
   }
 
@@ -628,6 +634,14 @@ export async function advance(input: AdvanceInput): Promise<void> {
       ...(input.result.stage === null ? {} : { stage: input.result.stage }),
     },
   })
+
+  // M53 R4, the same verdict the other way. BEFORE `rejectTask`, which is what the branch above
+  // means by "beside the event it belongs to": the column settles on the verdict the commands just
+  // gave, and everything after this line is about the TASK's next attempt rather than about this
+  // run. The `not_configured` / `could_not_run` branch above deliberately settles nothing (plan
+  // decision D23) -- it already refuses to charge the task an attempt, and charging the worker's
+  // record for the orchestrator's problem would be the same mistake in a new column.
+  if (runId !== null) await recordRunEvidence(runId, { settle: { kind: 'verify', verdict: 'failed' } })
 
   // Verify output is exactly what `lastRejectionReason` is for -- which is why Task 13 was
   // corrected to stop writing infrastructure errors into it, and why the two branches above do not

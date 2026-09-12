@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { refusalText } from '@slave-of-ai/control'
+import { recordRunEvidence, refusalText } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
@@ -926,5 +926,143 @@ describe('what a review teaches (M49 R2)', () => {
     }
 
     expect(await prisma.memory.count({ where: { taskId: fixture.taskId } })).toBe(0)
+  })
+})
+
+/**
+ * M53 R4, the second of the four verdicts: a review verdict settles `reviewRejected` on the
+ * IMPLEMENTER's row -- the run that did the work, never the run that judged it.
+ */
+describe('the review verdict settles the rejection column, on the IMPLEMENTER row (M53 R4, erratum E2)', () => {
+  const repos: string[] = []
+
+  interface ReviewPair {
+    readonly workspaceId: string
+    readonly taskId: string
+    readonly implRunId: string
+    readonly reviewRunId: string
+  }
+
+  /** The two runs R4's attribution is about, and an `EvidenceRecord` for each -- the reviewer's
+   *  included, so "the reviewer's own row stays null" is an assertion about a row that EXISTS. */
+  async function reviewRunFor(verdict: 'approve' | 'reject'): Promise<ReviewPair> {
+    const repoPath = makeRepo()
+    repos.push(repoPath)
+    const workspace = await prisma.workspace.create({
+      data: { name: 'Checkout Platform', repoPath, baseBranch: 'main', verifyCommands: ['true'], setupCommands: [] },
+    })
+    const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+    const worker = await prisma.slave.create({
+      data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
+    })
+    const reviewer = await prisma.slave.create({
+      data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] },
+    })
+    const task = await prisma.task.create({
+      data: {
+        workspaceId: workspace.id,
+        title: 'Add the thing',
+        description: 'make it work',
+        status: 'reviewing',
+        requiredRole: 'backend',
+        maxAttempts: workspace.maxAttempts,
+        branch: 'slaveofai/TASK-053-x',
+      },
+    })
+    const implRun = await prisma.slaveRun.create({
+      data: {
+        taskId: task.id,
+        slaveId: worker.id,
+        kind: 'implementation',
+        status: 'succeeded',
+        terminalAt: new Date(),
+        endedAt: new Date(),
+      },
+    })
+    const reviewRun = await prisma.slaveRun.create({
+      data: {
+        taskId: task.id,
+        slaveId: reviewer.id,
+        kind: 'review',
+        status: 'succeeded',
+        terminalAt: new Date(),
+        endedAt: new Date(),
+      },
+    })
+    await prisma.task.update({ where: { id: task.id }, data: { activeRunId: reviewRun.id } })
+    await appendEvent({
+      type: 'run.output',
+      workspaceId: workspace.id,
+      taskId: task.id,
+      slaveId: reviewer.id,
+      runId: reviewRun.id,
+      actor: 'slave',
+      payload: { text: JSON.stringify({ verdict, reason: 'because' }) },
+    })
+    await recordRunEvidence(implRun.id)
+    await recordRunEvidence(reviewRun.id)
+    return { workspaceId: workspace.id, taskId: task.id, implRunId: implRun.id, reviewRunId: reviewRun.id }
+  }
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  afterAll(async (): Promise<void> => {
+    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('settles true on a rejection naming this attempt, against the implementation run', async (): Promise<void> => {
+    const pair = await reviewRunFor('reject')
+
+    await concludeReview(brandRunId(pair.reviewRunId))
+
+    const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: pair.implRunId } })
+    expect(row.reviewRejected).toBe(true)
+    expect(row.settledAt).not.toBeNull()
+  })
+
+  it('settles false on an approval', async (): Promise<void> => {
+    const pair = await reviewRunFor('approve')
+
+    await concludeReview(brandRunId(pair.reviewRunId))
+
+    expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: pair.implRunId } })).reviewRejected).toBe(false)
+  })
+
+  it("leaves the REVIEWER's own row null -- a reviewer receives no verdict", async (): Promise<void> => {
+    const pair = await reviewRunFor('reject')
+
+    await concludeReview(brandRunId(pair.reviewRunId))
+
+    // Enforced at the WRITER (plan decision D16), which is why this holds whatever a call site
+    // passes: attributing the verdict to the reviewer would make its record a copy of the
+    // implementer's.
+    const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: pair.reviewRunId } })
+    expect(row.reviewRejected).toBeNull()
+    expect(row.verifiedFirstPass).toBeNull()
+    expect(row.integrated).toBeNull()
+  })
+
+  it('settles the same column once however many times the conclusion is replayed', async (): Promise<void> => {
+    // `concludeReview`'s own docstring says the row legitimately stays terminal so a restarted
+    // daemon can call this again. The settle is conditioned on the column being null, so the
+    // replay writes nothing.
+    const pair = await reviewRunFor('reject')
+    await concludeReview(brandRunId(pair.reviewRunId))
+    const first = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: pair.implRunId } })
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await concludeReview(brandRunId(pair.reviewRunId))
+    } finally {
+      warn.mockRestore()
+    }
+
+    const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: pair.implRunId } })
+    expect(row.reviewRejected).toBe(true)
+    expect(row.settledAt).toEqual(first.settledAt)
   })
 })

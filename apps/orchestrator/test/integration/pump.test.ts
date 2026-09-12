@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { isAlive } from '@slave-of-ai/control'
+import { isAlive, recordRunEvidence } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { slaveId, runId, taskId, workspaceId } from '@slave-of-ai/domain'
@@ -2223,5 +2223,119 @@ describe('pumpRun and what M51 made it persist', () => {
     const checkpoint = await prisma.checkpoint.findUniqueOrThrow({ where: { runId: ids.runId } })
     expect(checkpoint.cumulativeCostUsd).toBe(0)
     expect(checkpoint.cumulativeTokens).toBe(0)
+  })
+})
+
+describe('a fact at the terminal transition, and only there (M53 R3)', () => {
+  let ids: Ids
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+    ids = await seed()
+  })
+
+  it('leaves NO EvidenceRecord while the run is live', async (): Promise<void> => {
+    let release = (): void => {}
+    const held = new Promise<void>((res) => {
+      release = res
+    })
+    async function* stalls(): AsyncIterable<RuntimeEvent> {
+      yield { kind: 'session_started', sessionId: 's-1' }
+      await held
+      yield { kind: 'terminated', outcome: okOutcome }
+    }
+
+    const pumping = pumpRun({ ...ids, events: stalls() })
+    await until('the run to be working', async () => {
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
+      return run.status === 'working'
+    })
+
+    // R3: a fact is about a CONCLUSION. A run still in flight has concluded nothing, and a row
+    // written here would have to be rewritten by whatever the run went on to do.
+    expect(await prisma.evidenceRecord.count({ where: { runId: ids.runId } })).toBe(0)
+
+    release()
+    await pumping
+  })
+
+  it('writes exactly one the instant the pump concludes it clean', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+
+    const rows = await prisma.evidenceRecord.findMany({ where: { runId: ids.runId } })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.outcome).toBe('succeeded')
+    // The dimension keys R1 says a record is filed under, from the run's own row rather than from
+    // a join made at read time.
+    expect(rows[0]?.profileKey).toBe(`slave:${ids.slaveId}`)
+    expect(rows[0]?.runKind).toBe('implementation')
+    expect(rows[0]?.attempt).toBe(1)
+  })
+
+  it('writes one for the stream-ended arm, as `failed`', async (): Promise<void> => {
+    // No `terminated` event at all: the child died without reporting, which the pump concludes
+    // `failed` on its own. The conclusion is the pump's, so no recovery is counted.
+    await pumpRun({ ...ids, events: fromArray([{ kind: 'session_started', sessionId: 's-1' }]) })
+
+    const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: ids.runId } })
+    expect(row.outcome).toBe('failed')
+    expect(row.recoveries).toBe(0)
+  })
+
+  it('writes one for an operator stop, as `stopped`, with the intervention counted', async (): Promise<void> => {
+    await prisma.slaveRun.update({
+      where: { id: ids.runId },
+      data: { status: 'stopping', stopRequestedBy: 'meren', stopRequestedAt: new Date() },
+    })
+
+    await pumpRun({ ...ids, events: fromArray([{ kind: 'session_started', sessionId: 's-1' }]) })
+
+    const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: ids.runId } })
+    expect(row.outcome).toBe('stopped')
+    // R5(b): a person reached in and stopped this run, which is the thing the column counts.
+    expect(row.humanInterventions).toBeGreaterThanOrEqual(1)
+  })
+
+  it('writes one for the gate-failure halt arm', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      cancel: async (): Promise<void> => {},
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'hook_crashed', hookName: 'PreToolUse:Bash', exitCode: 2, stderr: 'deliberate hook crash' },
+      ]),
+    })
+
+    expect(await prisma.evidenceRecord.count({ where: { runId: ids.runId } })).toBe(1)
+    expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: ids.runId } })).outcome).toBe('failed')
+  })
+
+  it('a sweep racing a pump cannot make two rows -- `runId` is unique', async (): Promise<void> => {
+    await pumpRun({
+      ...ids,
+      events: fromArray([
+        { kind: 'session_started', sessionId: 's-1' },
+        { kind: 'terminated', outcome: okOutcome },
+      ]),
+    })
+    const first = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: ids.runId } })
+
+    // The retried tick, made literal: the same terminal transition observed a second time by a
+    // second writer. `EvidenceRecord.runId` is unique and the writer upserts on it, so a run this
+    // daemon concluded once counts once however many passes see it.
+    await recordRunEvidence(ids.runId)
+
+    const rows = await prisma.evidenceRecord.findMany({ where: { runId: ids.runId } })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.recordedAt).toEqual(first.recordedAt)
+    expect(rows[0]?.attempt).toBe(first.attempt)
   })
 })

@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { formTeam, type TeamInput } from '../../src/capability/team.js'
+import { formTeam, type TeamInput, type TeamRanking, type TeamRosterMember } from '../../src/capability/team.js'
+import type { RankEvidence } from '../../src/capability/rank.js'
 import type { CapabilityRecord } from '../../src/capability/taxonomy.js'
 
 const TAXONOMY: readonly CapabilityRecord[] = [
   { key: 'backend.api-design', label: 'API design', domain: 'backend', role: 'backend', synonyms: [] },
   { key: 'security.application', label: 'Application security', domain: 'security', role: 'security', synonyms: [] },
   { key: 'qa.test-automation', label: 'Test automation', domain: 'qa', role: 'qa', synonyms: [] },
+  // M53: the one key the ranking cases below are about. Added rather than reused so a case that
+  // ranks WITHIN a tier cannot accidentally move a tier-ORDER case that was written before it.
+  { key: 'backend.services', label: 'Service implementation', domain: 'backend', role: 'backend', synonyms: [] },
 ]
 
 const input = (overrides: Partial<TeamInput> = {}): TeamInput => ({
@@ -243,5 +247,227 @@ describe('formTeam -- one proposal per worker (fix round 1)', () => {
     )
     expect(plan.proposals).toEqual([])
     expect(plan.unfillable).toEqual(['ghost.thing'])
+  })
+})
+
+/**
+ * M53 R8. The `TeamSource` tier ORDER is M47 R4's and this milestone does not touch it -- every
+ * tier-order case above stays exactly as it was. What changes is the pick WITHIN a tier: the
+ * alphabet used to break every tie and now six steps do, with the id still the last of them.
+ */
+describe('formTeam ranks WITHIN a tier (M53 R8)', () => {
+  const base = {
+    required: ['backend.services'],
+    requiredBy: new Map<string, readonly string[]>(),
+    company: [],
+    catalog: [],
+    taxonomy: TAXONOMY,
+  }
+
+  /** A roster worker who PROVIDES the capability and holds no role for it -- tier 1's whole field. */
+  const provider = (slaveId: string, extra: Partial<TeamRosterMember> = {}): TeamRosterMember => ({
+    slaveId,
+    name: slaveId,
+    capabilities: ['backend.services'],
+    runtimeRoles: [],
+    busy: false,
+    ...extra,
+  })
+
+  /** A record of nothing: every counter zero, every median absent. The state of a profile nobody
+   *  has ever concluded a run for, spelled out so a case that means "thin" says which number is. */
+  const NO_EVIDENCE: RankEvidence = {
+    attempted: 0,
+    firstPassJudged: 0,
+    firstPassPassed: 0,
+    reviewJudged: 0,
+    reviewRejected: 0,
+    integrationJudged: 0,
+    integrated: 0,
+    medianCostUsd: null,
+    medianDurationMs: null,
+  }
+
+  const STRONG: RankEvidence = {
+    ...NO_EVIDENCE,
+    attempted: 20,
+    firstPassJudged: 20,
+    firstPassPassed: 19,
+    reviewJudged: 20,
+    reviewRejected: 1,
+    integrationJudged: 20,
+    integrated: 19,
+    medianCostUsd: 1,
+    medianDurationMs: 1_000,
+  }
+
+  const WEAK: RankEvidence = {
+    ...NO_EVIDENCE,
+    attempted: 20,
+    firstPassJudged: 20,
+    firstPassPassed: 2,
+    reviewJudged: 20,
+    reviewRejected: 18,
+    integrationJudged: 20,
+    integrated: 2,
+    medianCostUsd: 9,
+    medianDurationMs: 9_000,
+  }
+
+  /**
+   * A ranking context over the two candidates these cases use, with R1's own key rule applied: a
+   * worker hired from a template keys on the template, a bespoke one on itself. Everything a case
+   * does not name answers its neutral value, which is exactly the state a caller with no `ranking`
+   * at all is in.
+   */
+  const rankingWith = (evidence: Record<string, RankEvidence>, extra: Partial<TeamRanking> = {}): TeamRanking => {
+    const templateOf = extra.templateOf ?? new Map<string, string | null>()
+    const keyOf = (id: string): string => {
+      const templateId = templateOf.get(id) ?? null
+      return templateId === null ? `slave:${id}` : `template:${templateId}`
+    }
+    return {
+      preferences: extra.preferences ?? new Map(),
+      evidence: new Map(Object.entries(evidence)),
+      deniedKinds: extra.deniedKinds ?? new Map(),
+      templateOf,
+      modelOf: extra.modelOf ?? new Map(),
+      profileKeyOf: extra.profileKeyOf ?? new Map(['a', 'b'].map((id) => [id, keyOf(id)] as const)),
+      runKind: extra.runKind ?? 'implementation',
+    }
+  }
+
+  it('keeps the TIER order untouched: an existing worker still beats a company worker', () => {
+    const plan = formTeam({
+      ...base,
+      roster: [provider('a')],
+      company: [{ companySlaveId: 'c', name: 'C', capabilities: ['backend.services'] }],
+    })
+    expect(plan.proposals[0]?.source).toBe('existing_worker')
+  })
+
+  it('picks the profile with the better record, where the alphabet used to decide', () => {
+    const plan = formTeam({
+      ...base,
+      roster: [provider('a'), provider('b')],
+      ranking: rankingWith({
+        'slave:a': { ...NO_EVIDENCE, attempted: 10, firstPassJudged: 10, firstPassPassed: 1 },
+        'slave:b': { ...NO_EVIDENCE, attempted: 10, firstPassJudged: 10, firstPassPassed: 9 },
+      }),
+    })
+    expect(plan.proposals[0]?.pick.id).toBe('b')
+  })
+
+  it('picks the alphabet again when neither record is thick enough to mean anything (R11)', () => {
+    const plan = formTeam({
+      ...base,
+      roster: [provider('a'), provider('b')],
+      ranking: rankingWith({
+        'slave:a': { ...NO_EVIDENCE, attempted: 2, firstPassJudged: 2, firstPassPassed: 0 },
+        'slave:b': { ...NO_EVIDENCE, attempted: 2, firstPassJudged: 2, firstPassPassed: 2 },
+      }),
+    })
+    expect(plan.proposals[0]?.pick.id).toBe('a')
+  })
+
+  it('still prefers the IDLE worker -- availability is step 4 and outranks the record', () => {
+    const plan = formTeam({
+      ...base,
+      roster: [provider('a', { busy: true }), provider('b')],
+      ranking: rankingWith({ 'slave:a': STRONG, 'slave:b': WEAK }),
+    })
+    expect(plan.proposals[0]?.pick.id).toBe('b')
+  })
+
+  it('honours a preference naming a template, above the record', () => {
+    const plan = formTeam({
+      ...base,
+      roster: [provider('a'), provider('b')],
+      ranking: rankingWith(
+        { 'template:t-a': STRONG },
+        {
+          preferences: new Map([['backend.services', { templateId: 't-b', model: null }]]),
+          templateOf: new Map([
+            ['a', 't-a'],
+            ['b', 't-b'],
+          ]),
+        },
+      ),
+    })
+    expect(plan.proposals[0]?.pick.id).toBe('b')
+  })
+
+  it('ranks a DENIED worker below an undenied one, whatever the preference says', () => {
+    const plan = formTeam({
+      ...base,
+      roster: [provider('a'), provider('b')],
+      ranking: rankingWith(
+        {},
+        {
+          preferences: new Map([['backend.services', { templateId: 't-b', model: null }]]),
+          templateOf: new Map([
+            ['a', 't-a'],
+            ['b', 't-b'],
+          ]),
+          deniedKinds: new Map([['b', ['run_commands'] as const]]),
+        },
+      ),
+    })
+    expect(plan.proposals[0]?.pick.id).toBe('a')
+  })
+
+  it('names the step in the rationale, so a person reads WHY rather than a number', () => {
+    const plan = formTeam({
+      ...base,
+      roster: [provider('a'), provider('b', { busy: true })],
+      ranking: rankingWith({}),
+    })
+    // R11: the sentence names the STEP, and carries no score, rating or currency figure.
+    expect(plan.proposals[0]?.rationale).toMatch(/free/u)
+    expect(plan.proposals[0]?.rationale).not.toMatch(/\$|\d+\.\d{2}/u)
+  })
+
+  it('says nothing extra when nothing but the names separated them', () => {
+    // Plan decision D26: "we picked alphabetically" is not a reason worth putting in front of a
+    // person, and a one-candidate field has nothing to compare against at all.
+    const alone = formTeam({ ...base, roster: [provider('a')], ranking: rankingWith({}) })
+    expect(alone.proposals[0]?.rationale).toMatch(/nobody new\.$/u)
+
+    const tied = formTeam({ ...base, roster: [provider('a'), provider('b')], ranking: rankingWith({}) })
+    expect(tied.proposals[0]?.pick.id).toBe('a')
+    expect(tied.proposals[0]?.rationale).toMatch(/nobody new\.$/u)
+  })
+
+  it('ranks WITHIN the catalog tier too, where the alphabet was the last break', () => {
+    // D25: `coverWith`'s four existing breaks -- covers count, recommended, capability count, name
+    // -- are M47's and M50's and do not move. Only the LAST one, the id, becomes the record. Two
+    // entries with the same name is what it takes to reach it.
+    const plan = formTeam({
+      ...base,
+      roster: [],
+      catalog: [
+        { templateId: 't-a', name: 'Same Name', capabilities: ['backend.services'], division: 'backend' },
+        { templateId: 't-b', name: 'Same Name', capabilities: ['backend.services'], division: 'backend' },
+      ],
+      ranking: rankingWith(
+        { 'template:t-b': STRONG },
+        {
+          templateOf: new Map([
+            ['t-a', 't-a'],
+            ['t-b', 't-b'],
+          ]),
+          profileKeyOf: new Map([
+            ['t-a', 'template:t-a'],
+            ['t-b', 'template:t-b'],
+          ]),
+        },
+      ),
+    })
+    expect(plan.proposals[0]?.pick.id).toBe('t-b')
+  })
+
+  it('behaves exactly as it did before when `ranking` is absent -- every caller written before M53', () => {
+    const plan = formTeam({ ...base, roster: [provider('b', { busy: true }), provider('a')] })
+    expect(plan.proposals[0]?.pick.id).toBe('a')
   })
 })

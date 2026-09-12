@@ -836,6 +836,24 @@ describe('tick', () => {
     expect(await eventTypesFor(fixture.workspaceId)).toContain('run.failed')
   })
 
+  it('writes NO EvidenceRecord for a spawn failure -- nothing was attempted (M53 R3)', async (): Promise<void> => {
+    // R3, and an ABSENCE is only proved by looking for it (plan decision D22). A provisioning
+    // failure never reaches a pump: `failToStart` concludes the row itself, and nothing calls the
+    // writer. The distinction is the whole point -- a profile whose dispatches failed to SPAWN has
+    // not been evidenced about, and counting those rows as failures would rate a worker on the
+    // orchestrator's inability to give it a worktree.
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { setupCommands: ['exit 3'] },
+    })
+
+    await tick(deps)
+
+    const run = await prisma.slaveRun.findFirstOrThrow()
+    expect(run.status).toBe('failed')
+    expect(await prisma.evidenceRecord.count({ where: { runId: run.id } })).toBe(0)
+  })
+
   it('starts no second run on the next tick after a gate failure halted the workspace', async (): Promise<void> => {
     // The halt Task 12's pump writes on a gate failure is the same `Workspace.haltedReason` column
     // `decide()` reads as `stats.emergencyStopped` -- this is the tick's side of proving a halted

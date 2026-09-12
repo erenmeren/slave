@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { promisify } from 'node:util'
-import { killWithEscalation } from '@slave-of-ai/control'
+import { killWithEscalation, recordRunEvidence } from '@slave-of-ai/control'
 import { toExecutionEvent } from '@slave-of-ai/db'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import {
@@ -1039,6 +1039,14 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             // Two events, because the run failed *and* a guardrail is what failed it (§13.1).
             await emit('run.failed', 'system', { reason })
             await emit('guardrail.tripped', 'system', { guardrail: 'pause_gate' satisfies GuardrailKind, detail: reason })
+            // M53 R3: this run concluded here, so this is where its fact is written. AFTER the
+            // status write and never before it -- `recordRunEvidence` reads the row it is about,
+            // and a call above this line would find a run that had not ended yet and write nothing.
+            // LAST in the arm, after both events, for the reason the cancel above is wrapped in a
+            // `try`: everything in this arm after the halt is a behaviour §13.1 promises, and a
+            // throw between them skips the rest. The fact is the least load-bearing of them and is
+            // re-derivable from the events; the halt and the announcement are neither.
+            await recordRunEvidence(runId)
             break
           }
 
@@ -1201,6 +1209,10 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             ? 'cancelled by an operator'
             : `cancelled by ${stopped.stopRequestedBy}`,
       })
+      // M53 R3: inside the `count > 0` guard, deliberately. The fact is about the writer that won
+      // this race -- a call outside the guard would record a conclusion `requestStop` made in
+      // another process, in this pump's name.
+      await recordRunEvidence(runId)
       return null
     }
 
@@ -1237,6 +1249,11 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
           '`guardrail.tripped` append is a separate write racing this one and may still be in flight.',
       )
       await emit('run.failed', 'system', { reason })
+      // M53 R3, inside the same guard and for the same reason: a stream that ended with no terminal
+      // result is a conclusion, and THIS branch is the one that made it. No `recoveredBySweep` --
+      // a pump was alive to see it, which is exactly what R5(a) means by "not a recovery", even
+      // when a guardrail sweep's cancel is what killed the child.
+      await recordRunEvidence(runId)
     }
     return null
   }
@@ -1334,6 +1351,11 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   } else {
     await emit('run.succeeded', 'system', { numTurns: outcome.numTurns, costUsd: outcome.costUsd })
   }
+
+  // M53 R3: the fourth and last of this file's terminal transitions. Below the `concluded.count ===
+  // 0` early return above, so a run somebody else had already concluded is theirs to record, and
+  // after the emit pair, so the row and the events a backfill would re-derive it from agree.
+  await recordRunEvidence(runId)
 
   return outcome
 }

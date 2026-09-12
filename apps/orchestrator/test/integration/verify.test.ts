@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { addRunbook, adoptRunbook, memoriesForRun } from '@slave-of-ai/control'
+import { addRunbook, adoptRunbook, memoriesForRun, recordRunEvidence } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, taskId as brandTaskId } from '@slave-of-ai/domain'
@@ -1154,4 +1154,122 @@ describe('what the pipeline remembers (M49 R2)', () => {
     expect(await prisma.memory.count({ where: { slaveId: fixture.slaveId } })).toBe(0)
     expect(warned.some((message) => message.includes('[memory] promotion failed'))).toBe(true)
   }, 30_000)
+})
+
+/**
+ * M53 R4, the first of the four verdicts: the verify result settles `verifiedFirstPass` on the
+ * IMPLEMENTATION run's row.
+ *
+ * Its own describe with its own fixture, because every case here needs a run that already has an
+ * `EvidenceRecord` -- `advance` settles on the row the pump wrote, and a settle never creates one.
+ */
+describe('the verify verdict settles the first-pass column (M53 R4)', () => {
+  let fixture: Fixture
+  let base: {
+    taskId: ReturnType<typeof brandTaskId>
+    worktreePath: string
+    artifactDir: string
+    timeoutMs: number
+    stage: { key: string; gates: readonly string[] } | null
+  }
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+    fixture = await seed()
+    base = {
+      taskId: brandTaskId(fixture.taskId),
+      worktreePath: fixture.worktreePath,
+      artifactDir: fixture.artifactDir,
+      timeoutMs: 10_000,
+      stage: null,
+    }
+    // The fact the pump would have written when this run concluded -- the only thing standing
+    // between these cases and a pump they have no use for driving.
+    await recordRunEvidence(fixture.runId)
+  })
+
+  afterAll(async (): Promise<void> => {
+    await prisma.$disconnect()
+  })
+
+  const evidence = async () => prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: fixture.runId } })
+
+  const failedResult = {
+    kind: 'failed' as const,
+    passed: false,
+    output: 'red',
+    failedCommand: 'npm test',
+    exitCode: 1,
+    stage: null,
+  }
+
+  it('settles true for a pass on attempt one', async (): Promise<void> => {
+    await advance({
+      taskId: base.taskId,
+      result: await runVerify({ ...base, commands: ['true'] }),
+      branch: 'slaveofai/TASK-001-x',
+    })
+
+    const row = await evidence()
+    expect(row.verifiedFirstPass).toBe(true)
+    expect(row.settledAt).not.toBeNull()
+  })
+
+  it('settles FALSE for a failed verify, and the rework cycle is counted on the row', async (): Promise<void> => {
+    await advance({ taskId: base.taskId, result: failedResult, branch: 'slaveofai/TASK-001-x' })
+
+    const row = await evidence()
+    expect(row.verifiedFirstPass).toBe(false)
+    expect(row.settledAt).not.toBeNull()
+  })
+
+  it('settles NOTHING for a verify that could not run -- that is not the worker being judged', async (): Promise<void> => {
+    // Plan decision D23. `advance` already refuses to charge the task an attempt on this branch,
+    // in a comment that says why; settling a `false` would charge the worker's RECORD for the same
+    // thing the attempt counter refuses to charge its task for.
+    await advance({
+      taskId: base.taskId,
+      result: { kind: 'not_configured', passed: false, output: 'no commands', failedCommand: null, exitCode: null, stage: null },
+      branch: 'slaveofai/TASK-001-x',
+    })
+
+    const row = await evidence()
+    expect(row.verifiedFirstPass).toBeNull()
+    expect(row.settledAt).toBeNull()
+  })
+
+  it('does not move a column a verdict already settled, however many times the site runs', async (): Promise<void> => {
+    // The retried tick: `advance` is explicitly "harmless if called twice", and the settle has to
+    // be too. The column is written by an `updateMany` conditioned on that column being null, so a
+    // verdict moves it from null exactly once and can never move it back.
+    await advance({ taskId: base.taskId, result: failedResult, branch: 'slaveofai/TASK-001-x' })
+    const first = await evidence()
+
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'running', activeRunId: fixture.runId } })
+    await advance({
+      taskId: base.taskId,
+      result: await runVerify({ ...base, commands: ['true'] }),
+      branch: 'slaveofai/TASK-001-x',
+    })
+
+    const row = await evidence()
+    expect(row.verifiedFirstPass).toBe(false)
+    expect(row.settledAt).toEqual(first.settledAt)
+  })
+
+  it('settles nothing at all when there is no row to settle -- a settle never creates a fact', async (): Promise<void> => {
+    await prisma.evidenceRecord.deleteMany({ where: { runId: fixture.runId } })
+
+    await advance({
+      taskId: base.taskId,
+      result: await runVerify({ ...base, commands: ['true'] }),
+      branch: 'slaveofai/TASK-001-x',
+    })
+
+    // A database that predates this milestone, or a run nobody recorded. R4: the terminal write is
+    // the only thing that creates a fact, and a verdict about nothing is not an error.
+    expect(await prisma.evidenceRecord.count({ where: { runId: fixture.runId } })).toBe(0)
+  })
 })

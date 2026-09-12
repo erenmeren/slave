@@ -1,4 +1,5 @@
 import { join } from 'node:path'
+import { settleTaskEvidence } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   nextMergeCandidate,
@@ -54,6 +55,11 @@ async function failMerge(input: {
     actor: 'system',
     payload: { reason: input.reason },
   })
+
+  // M53 R4: the work did not reach the base branch, and the reason is the work -- a conflicted
+  // rebase, a post-rebase gate that said no, a merge git refused. Before the escalation count,
+  // which is about the WORKSPACE rather than about this attempt.
+  await settleTaskEvidence(input.taskId, { kind: 'integration', integrated: false })
 
   const failureCount = await prisma.executionEvent.count({
     where: { taskId: input.taskId, type: 'task_merge_failed' },
@@ -271,4 +277,9 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
     actor: 'system',
     payload: { branch },
   })
+
+  // M53 R4: the commits genuinely reached `workspace.baseBranch`, which is what `integratedAt` says
+  // a few lines above. The `!autoMerge` path gets NO call at all -- it writes `integratedAt: null`
+  // on purpose, and `confirmIntegration` is the verdict for that task, whenever a person gets to it.
+  await settleTaskEvidence(task.id, { kind: 'integration', integrated: true })
 }

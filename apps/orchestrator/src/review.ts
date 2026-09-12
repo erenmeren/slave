@@ -9,7 +9,7 @@ import {
   type GuardrailKind,
   type RunId,
 } from '@slave-of-ai/domain'
-import { admitProvider, refusalText, runFilePaths, writePermissionsFile } from '@slave-of-ai/control'
+import { admitProvider, refusalText, runFilePaths, settleTaskEvidence, writePermissionsFile } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
 import { runTokenHash, type SlaveRuntimeAdapter, type RunHandle } from '@slave-of-ai/providers'
@@ -117,6 +117,12 @@ export async function concludeReview(runId: RunId): Promise<void> {
         actor: 'system',
         payload: { reason: parsed.value.reason },
       })
+      // M53 R4: the reviewer judged the IMPLEMENTER's work, so the verdict settles on the
+      // implementer's row -- the pattern M49 already uses to attribute a verified fact to its
+      // author, never through `Task.assigneeId`, which nothing in this pipeline writes. INSIDE the
+      // `count === 1` guard: an approve that lost the race is an approval nobody will ever see
+      // land, and a verdict is a fact about work that moved.
+      await settleTaskEvidence(task.id, { kind: 'review', verdict: 'approved', attempt: null })
     } else {
       // Dropped, not silently discarded (fix round 2), the same as the reject branch below: an
       // approve that loses the guard is an approval nobody will ever see land, and an operator
@@ -167,6 +173,11 @@ export async function concludeReview(runId: RunId): Promise<void> {
     actor: 'system',
     payload: { reason: parsed.value.reason, attempt: counted.attempt },
   })
+  // M53 R4, the other half. `counted.attempt` is the same number the event's own payload carries
+  // one line above, which is what `reviewRejectedFrom` compares against the implementation run's
+  // own derived attempt -- so a rejection that names an OLDER attempt settles `false` rather than
+  // charging this run for a verdict about somebody else's work.
+  await settleTaskEvidence(task.id, { kind: 'review', verdict: 'rejected', attempt: counted.attempt })
   if (counted.exhausted) {
     await appendEvent({
       type: 'task.failed',

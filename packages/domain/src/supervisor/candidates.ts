@@ -1,6 +1,7 @@
 import { steerTextFor } from '../breaker/constants.js'
 import { capabilityLabel as capabilityLabelIn, projectRoles } from '../capability/taxonomy.js'
-import { formTeam, type TeamPlan, type TeamProposal } from '../capability/team.js'
+import { formTeam, type TeamPlan, type TeamProposal, type TeamRanking } from '../capability/team.js'
+import { profileKeyOf } from '../evidence/derive.js'
 import { PERMISSION_KINDS, PERMISSION_LABEL, type PermissionKind } from '../permission/kinds.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
 import type { Action, Candidate } from './actions.js'
@@ -135,6 +136,50 @@ export function teamPlanOf(world: SupervisorWorld): TeamPlan {
       else if (!waiting.includes(task.id)) waiting.push(task.id)
     }
   }
+  // M53 R8: everything the six steps need, gathered once from the world. `profileKeyOf` is R1's own
+  // rule applied to each candidate kind -- a roster worker keys on the template it was hired from or
+  // on itself, and a company worker or a catalog entry keys on its template, which both always have
+  // (`CompanySlave.templateId` is NOT NULL). Keyed on the CANDIDATE's id throughout, which is what
+  // `formTeam` hands the ranker; a released worker is not in the roster it builds a field from, so
+  // the rows gathered for one here are simply never read.
+  const templateOf = new Map<string, string | null>()
+  const modelOf = new Map<string, string | null>()
+  const profileKeys = new Map<string, string>()
+  const deniedKinds = new Map<string, readonly PermissionKind[]>()
+  for (const slave of world.slaves) {
+    templateOf.set(slave.id, slave.hiredFromTemplateId)
+    modelOf.set(slave.id, slave.model)
+    profileKeys.set(slave.id, profileKeyOf({ slaveId: slave.id, hiredFromTemplateId: slave.hiredFromTemplateId }))
+    // Only when there IS one: an empty list and an absent entry mean the same thing to the ranker,
+    // and a map with a row per worker would say "we looked" where nothing was refused.
+    if (slave.deniedKinds.length > 0) deniedKinds.set(slave.id, slave.deniedKinds)
+  }
+  for (const worker of world.company) {
+    templateOf.set(worker.companySlaveId, worker.templateId)
+    profileKeys.set(worker.companySlaveId, `template:${worker.templateId}`)
+  }
+  for (const entry of world.catalog) {
+    templateOf.set(entry.templateId, entry.templateId)
+    modelOf.set(entry.templateId, entry.defaultModel)
+    profileKeys.set(entry.templateId, `template:${entry.templateId}`)
+  }
+
+  const ranking: TeamRanking = {
+    preferences: new Map(
+      world.staffingPreferences.map((one) => [one.capability, { templateId: one.templateId, model: one.model }] as const),
+    ),
+    evidence: new Map(world.evidence.map((one) => [one.profileKey, one] as const)),
+    deniedKinds,
+    templateOf,
+    modelOf,
+    profileKeyOf: profileKeys,
+    // Every staffing decision the Supervisor makes is about implementation work: `assign_capability`
+    // grants a runtime role, and the run that role is dispatched as is an `implementation` run.
+    // A parameter rather than a constant because `BASELINE_GRANTS` differs per kind and both
+    // answers are true (M52 R1).
+    runKind: 'implementation',
+  }
+
   return formTeam({
     required,
     requiredBy,
@@ -164,6 +209,7 @@ export function teamPlanOf(world: SupervisorWorld): TeamPlan {
     })),
     taxonomy: world.taxonomy,
     recommendedTemplateIds: world.catalog.filter((entry) => entry.recommended).map((entry) => entry.templateId),
+    ranking,
   })
 }
 

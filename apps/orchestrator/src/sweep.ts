@@ -3,6 +3,7 @@ import {
   deliverBreakerSteer,
   isAlive,
   realWorktreeProbe,
+  recordRunEvidence,
   type WorktreeProbe,
 } from '@slave-of-ai/control'
 import { prisma as db } from '@slave-of-ai/db/client'
@@ -273,6 +274,11 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
         },
       })
     }
+    // M53 R5(a): the SWEEP concluded this run, which is the recovery -- known because this is the
+    // caller, never by matching the reason text of a `run.failed`, which is our own prose and may be
+    // reworded tomorrow. After every event this pass appends for the run, so the row and the events
+    // a backfill would re-derive it from say the same thing.
+    await recordRunEvidence(run.id, { recoveredBySweep: true })
     failed += 1
   }
 
@@ -1075,4 +1081,9 @@ async function concludeDeadRun(
     actor: 'system',
     payload: { reason: `the run's process (pid ${run.pid}) is gone but the run never concluded` },
   })
+
+  // M53 R5(a), the sixth and last write site: the same recovery as `reconcileOrphans`', from inside
+  // a running daemon rather than at startup. Inside the `concluded.count === 0` guard above, so a
+  // run a live pump concluded first is recorded by that pump, with no recovery counted against it.
+  await recordRunEvidence(run.id, { recoveredBySweep: true })
 }

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
-import type { WorktreeProbe } from '@slave-of-ai/control'
+import { recordRunEvidence, type WorktreeProbe } from '@slave-of-ai/control'
 import {
   BREAKER_BEAT_MS,
   CONSTRAIN_GRACE_CALLS,
@@ -170,6 +170,54 @@ describe('sweep and reconcileOrphans', () => {
     expect(await reconcileOrphans(deps)).toBe(1)
     expect((await prisma.slaveRun.findFirstOrThrow()).status).toBe('failed')
   })
+
+  /**
+   * M53 R3/R5(a): the two arms of this file that CONCLUDE a run, and are therefore two of the six
+   * places a run becomes a fact. Nested here, beside the orphan cases they are about, rather than at
+   * the end of the file -- a case below spies on `prisma.task.updateMany` and does not put it back.
+   */
+  describe("the sweep's own two arms (M53 R3, R5)", () => {
+    it('records an orphaned run, with ONE recovery', async (): Promise<void> => {
+      const run = await givenRun({ status: 'working', pid: null })
+
+      await reconcileOrphans(deps)
+
+      const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: run.id } })
+      expect(row.outcome).toBe('failed')
+      // R5(a): the SWEEP concluded this, and the CALLER is what says so -- never the reason text of
+      // the `run.failed` it appended, which is our own prose and may be reworded tomorrow.
+      expect(row.recoveries).toBe(1)
+    })
+
+    it('records a dead-pid run the same way, and nothing distinguishes them from the reason text', async (): Promise<void> => {
+      const run = await givenRun({ status: 'working' })
+      noteTickRan()
+
+      await sweep(deps)
+
+      const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: run.id } })
+      expect(row.outcome).toBe('failed')
+      expect(row.recoveries).toBe(1)
+    })
+
+    it("counts one recovery however many times the arm's own call is replayed", async (): Promise<void> => {
+      // The retried tick, made literal. Both arms sit inside a conditional terminal write, so
+      // neither can conclude one run twice from inside the sweep; what a retry replays is the CALL.
+      // `EvidenceRecord.runId` is unique and the writer upserts on it, so the second pass lands on
+      // the row the first one wrote instead of counting a second recovery.
+      const run = await givenRun({ status: 'working', pid: null })
+      await reconcileOrphans(deps)
+      const first = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: run.id } })
+
+      await recordRunEvidence(run.id, { recoveredBySweep: true })
+
+      const rows = await prisma.evidenceRecord.findMany({ where: { runId: run.id } })
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.recoveries).toBe(1)
+      expect(rows[0]?.recordedAt).toEqual(first.recordedAt)
+    })
+  })
+
 
   it('preserves the worktree of an orphaned run', async (): Promise<void> => {
     const worktreePath = mkdtempSync(join(tmpdir(), 'slaveofai-sweep-'))

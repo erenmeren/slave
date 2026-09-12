@@ -594,6 +594,59 @@ describe('teamPlanOf (M47 R4)', () => {
       })
     }
   })
+
+  // M53 R8/R9. `teamPlanOf` is the ONE place the ranking context is built, so these two cases are
+  // what stand between the world's new collections and the pick a person is offered.
+  it('names the worker a person asked for, where the alphabet used to decide', () => {
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [task({ status: 'ready', requiredCapabilities: ['security.application'] })],
+      slaves: [
+        slave({ id: 's1', name: 'Alex', capabilities: ['security.application'], runtimeRoles: [], hiredFromTemplateId: 'tpl-a' }),
+        slave({ id: 's2', name: 'Rae', capabilities: ['security.application'], runtimeRoles: [], hiredFromTemplateId: 'tpl-b' }),
+      ],
+      // R9: a template, for one capability. `s1` would win on the id alone, which is exactly what
+      // makes this case about the preference rather than about the order the roster came back in.
+      staffingPreferences: [
+        {
+          capability: 'security.application',
+          capabilityLabel: 'Application security',
+          templateId: 'tpl-b',
+          model: null,
+          setBy: 'u1',
+        },
+      ],
+    })
+
+    const plan = teamPlanOf(w)
+
+    expect(plan.proposals.map((one) => one.pick.id)).toEqual(['s2'])
+    // The rationale names the STEP, in the taxonomy's words and never the raw key (erratum E21).
+    expect(plan.proposals[0]?.rationale).toContain('Application security')
+    expect(plan.proposals[0]?.rationale).not.toContain('security.application')
+  })
+
+  it('produces exactly the plan it produced before M53 when the two new collections are empty', () => {
+    // The whole compatibility claim, as one case: a world with no preference and no record is every
+    // world that existed before this milestone, and its plan must not have moved. `s1` is busy and
+    // `s2` is idle, so what decides is availability -- the rule the old `busy`-then-`slaveId` sort
+    // already applied.
+    const w = world({
+      taxonomy: TAXONOMY,
+      tasks: [task({ status: 'ready', requiredCapabilities: ['security.application'] })],
+      slaves: [
+        slave({ id: 's1', name: 'Alex', capabilities: ['security.application'], runtimeRoles: [], busy: true }),
+        slave({ id: 's2', name: 'Rae', capabilities: ['security.application'], runtimeRoles: [] }),
+      ],
+    })
+
+    expect(w.staffingPreferences).toEqual([])
+    expect(w.evidence).toEqual([])
+    const plan = teamPlanOf(w)
+    expect(plan.proposals.map((one) => one.pick.id)).toEqual(['s2'])
+    expect(plan.covered).toEqual([])
+    expect(plan.unfillable).toEqual([])
+  })
 })
 
 

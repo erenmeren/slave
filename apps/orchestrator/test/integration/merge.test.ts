@@ -6,7 +6,7 @@ import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-a
 import { prisma } from '@slave-of-ai/db/client'
 import { workspaceId as brandWorkspaceId, taskId as brandTaskId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
-import { addRunbook, adoptRunbook, confirmIntegration } from '@slave-of-ai/control'
+import { addRunbook, adoptRunbook, confirmIntegration, recordRunEvidence, settleTaskEvidence } from '@slave-of-ai/control'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { runMergePass } from '../../src/merge.js'
 import { loadWorld } from '../../src/world.js'
@@ -570,5 +570,99 @@ describe('runMergePass + loadWorld: integratedAt unblocks dependents', () => {
       })
       expect((failure.payload as { reason: string }).reason).toBe('post-rebase verify failed: exit 7 exited 7')
     })
+  })
+})
+
+/**
+ * M53 R4, the last two of the four verdicts: integration settles only where work actually reached
+ * the base branch.
+ *
+ * The `!autoMerge` path settles NOTHING, on purpose. M35 spent a milestone on that distinction --
+ * it writes `integratedAt: null` explicitly, because no git merge happened -- and
+ * `confirmIntegration` is the verdict for that task, days later, when a person says the branch
+ * really landed.
+ */
+describe('integration settles only where work actually reached the base branch (M53 R4)', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  afterAll(async (): Promise<void> => {
+    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+  })
+
+  /** The task's own implementation run, and the fact the pump wrote when it concluded. */
+  async function implEvidenceFor(taskId: string): Promise<string> {
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId, kind: 'implementation' } })
+    await recordRunEvidence(run.id)
+    return run.id
+  }
+
+  it('settles true on an AUTO-MERGE, where `integratedAt` is written', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: true })
+    const { taskId } = await seedMergingTask(workspace)
+    const implRunId = await implEvidenceFor(taskId)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })).integrated).toBe(true)
+  })
+
+  it('settles NOTHING on the !autoMerge path, which writes `integratedAt: null` deliberately', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    const { taskId } = await seedMergingTask(workspace)
+    const implRunId = await implEvidenceFor(taskId)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: taskId } })).integratedAt).toBeNull()
+    const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })
+    expect(row.integrated).toBeNull()
+    expect(row.settledAt).toBeNull()
+  })
+
+  it('settles FALSE on `task.merge_failed`', async (): Promise<void> => {
+    // A post-rebase verify that says no: the commits did not reach the base branch, and the reason
+    // they did not is the work itself.
+    const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: ['exit 7'] })
+    const { taskId } = await seedMergingTask(workspace)
+    const implRunId = await implEvidenceFor(taskId)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    expect(await eventTypesFor(workspace.id)).toContain('task.merge_failed')
+    expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })).integrated).toBe(false)
+  })
+
+  it('settles true when a person confirms a hand merge, days later', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: false })
+    const { taskId } = await seedMergingTask(workspace)
+    const implRunId = await implEvidenceFor(taskId)
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    // `confirmIntegration`'s own settle landed in Task 2; this is the pair of paths meeting, which
+    // is the whole reason the !autoMerge path may not settle a `false` of its own.
+    await confirmIntegration(taskId)
+
+    expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })).integrated).toBe(true)
+  })
+
+  it('settles the integration column once, however many merge passes see the task', async (): Promise<void> => {
+    const workspace = await seedWorkspace({ autoMerge: true })
+    const { taskId } = await seedMergingTask(workspace)
+    const implRunId = await implEvidenceFor(taskId)
+    await runMergePass(brandWorkspaceId(workspace.id))
+    const first = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })
+
+    // The retried tick, made literal: the site's own call, made a second time. `applySettle` writes
+    // each column through an `updateMany` conditioned on THAT column being null, so a verdict moves
+    // it from null exactly once and a replayed pass writes nothing.
+    await settleTaskEvidence(taskId, { kind: 'integration', integrated: true })
+
+    const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })
+    expect(row.integrated).toBe(true)
+    expect(row.settledAt).toEqual(first.settledAt)
   })
 })
