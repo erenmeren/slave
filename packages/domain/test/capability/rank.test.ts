@@ -36,7 +36,25 @@ function candidate(overrides: Partial<RankCandidate> & { readonly id: string }):
   }
 }
 
-const CONTEXT: RankContext = { capability: 'backend.services', preference: null, runKind: 'implementation' }
+const CONTEXT: RankContext = {
+  capability: 'backend.services',
+  capabilityLabel: 'Services',
+  preference: null,
+  runKind: 'implementation',
+}
+
+/** Every ordering of a list. The permutation-invariance property (erratum E20) is the only way to
+ *  assert totality: a comparator that is merely non-transitive still gives ONE answer per input
+ *  order, and the defect only shows when the input order changes. */
+function permutations<T>(items: readonly T[]): readonly (readonly T[])[] {
+  if (items.length <= 1) return [items]
+  const out: (readonly T[])[] = []
+  for (let i = 0; i < items.length; i += 1) {
+    const rest = [...items.slice(0, i), ...items.slice(i + 1)]
+    for (const tail of permutations(rest)) out.push([items[i] as T, ...tail])
+  }
+  return out
+}
 
 const order = (ranked: ReturnType<typeof rankCandidates>): readonly string[] =>
   ranked.map((one) => one.candidate.id)
@@ -227,18 +245,23 @@ describe('rankCandidates: step 5, evidence (R8, R11)', () => {
     expect(order(ranked)).toEqual(['b', 'a'])
   })
 
-  it('SKIPS a rate whose own denominator is thin, so a thin record ties instead of deciding', () => {
+  it('does not let a THIN denominator make a claim: a perfect 2-of-2 ranks below a measured 1-of-10 (E20)', () => {
+    // Fix round 1. This used to assert a TIE, which is what made the comparator non-transitive: a
+    // thin record tied with everything while the records it sat between did not tie with each other.
+    // The rule now is two classes -- measured first, ordered by value; unmeasured after, tied.
     const thin = candidate({
-      id: 'a',
+      id: 'b',
       evidence: { ...NO_EVIDENCE, attempted: 2, firstPassJudged: 2, firstPassPassed: 2 },
     })
     const fat = candidate({
-      id: 'b',
+      id: 'a',
       evidence: { ...NO_EVIDENCE, attempted: 10, firstPassJudged: 10, firstPassPassed: 1 },
     })
     const ranked = rankCandidates([thin, fat], CONTEXT)
     expect(order(ranked)).toEqual(['a', 'b'])
-    expect(ranked[0]?.decidedBy).toBe('identity')
+    expect(ranked[0]?.decidedBy).toBe('evidence')
+    // And the 100 % it could have claimed is nowhere in the sentence.
+    expect(ranked[0]?.reason).toMatch(/record/u)
   })
 
   it('reads a denominator of exactly EVIDENCE_MIN_SAMPLE as enough', () => {
@@ -253,13 +276,48 @@ describe('rankCandidates: step 5, evidence (R8, R11)', () => {
     expect(order(rankCandidates([worse, five], CONTEXT))).toEqual(['a', 'b'])
   })
 
-  it('skips every rate for a candidate with NO record at all rather than reading it as zero', () => {
+  it('ranks a candidate with NO record at all below one with a measured record (E20)', () => {
     const none = candidate({ id: 'a', evidence: null })
     const some = candidate({
       id: 'b',
       evidence: { ...NO_EVIDENCE, attempted: 10, firstPassJudged: 10, firstPassPassed: 10 },
     })
-    expect(rankCandidates([none, some], CONTEXT)[0]?.decidedBy).toBe('identity')
+    const ranked = rankCandidates([none, some], CONTEXT)
+    expect(order(ranked)).toEqual(['b', 'a'])
+    expect(ranked[0]?.decidedBy).toBe('evidence')
+  })
+
+  it('still never reads a missing record as a ZERO -- provable on the rate where less is better', () => {
+    // The rejection rate is the one dimension where a 0 would WIN. A no-record candidate that was
+    // read as "zero rejections" would rank first here; classed as unmeasured, it ranks last.
+    const none = candidate({ id: 'a', evidence: null })
+    const some = candidate({
+      id: 'b',
+      evidence: { ...NO_EVIDENCE, attempted: 10, reviewJudged: 10, reviewRejected: 1 },
+    })
+    const ranked = rankCandidates([none, some], CONTEXT)
+    expect(order(ranked)).toEqual(['b', 'a'])
+    expect(ranked[0]?.decidedBy).toBe('evidence')
+  })
+
+  it('orders the whole step 5 class: 90 % beats 10 % beats unmeasured (E20)', () => {
+    // The ids run BACKWARDS against the expected order, so an alphabetical answer cannot pass.
+    const strong = candidate({
+      id: 'c',
+      evidence: { ...NO_EVIDENCE, attempted: 10, firstPassJudged: 10, firstPassPassed: 9 },
+    })
+    const weak = candidate({
+      id: 'b',
+      evidence: { ...NO_EVIDENCE, attempted: 10, firstPassJudged: 10, firstPassPassed: 1 },
+    })
+    const unmeasured = candidate({ id: 'a', evidence: null })
+    for (const world of permutations([strong, weak, unmeasured])) {
+      expect(order(rankCandidates(world, CONTEXT)), JSON.stringify(world.map((one) => one.id))).toEqual([
+        'c',
+        'b',
+        'a',
+      ])
+    }
   })
 })
 
@@ -287,7 +345,9 @@ describe('rankCandidates: step 6, cost and time (R8)', () => {
     expect(order(ranked)).toEqual(['b', 'a'])
   })
 
-  it('TIES on an unmeasured candidate rather than letting it win -- unmeasured is not cheap', () => {
+  it('ranks an unmeasured candidate BELOW a dear one -- unmeasured is not cheap (E20)', () => {
+    // Fix round 1. This used to assert a TIE, which let an unmeasured candidate be sorted anywhere
+    // -- including above a candidate whose median cost was known and lower.
     const ranked = rankCandidates(
       [
         candidate({ id: 'a', evidence: { ...NO_EVIDENCE, medianCostUsd: null } }),
@@ -295,8 +355,37 @@ describe('rankCandidates: step 6, cost and time (R8)', () => {
       ],
       CONTEXT,
     )
-    expect(order(ranked)).toEqual(['a', 'b'])
-    expect(ranked[0]?.decidedBy).toBe('identity')
+    expect(order(ranked)).toEqual(['b', 'a'])
+    expect(ranked[0]?.decidedBy).toBe('cost_time')
+  })
+
+  it('orders the whole step 6 class: cheaper beats dearer beats unmeasured (E20)', () => {
+    const cheap = candidate({ id: 'c', evidence: { ...NO_EVIDENCE, medianCostUsd: 1 } })
+    const dear = candidate({ id: 'b', evidence: { ...NO_EVIDENCE, medianCostUsd: 5 } })
+    const unmeasured = candidate({ id: 'a', evidence: { ...NO_EVIDENCE, medianCostUsd: null } })
+    for (const world of permutations([cheap, dear, unmeasured])) {
+      expect(order(rankCandidates(world, CONTEXT)), JSON.stringify(world.map((one) => one.id))).toEqual([
+        'c',
+        'b',
+        'a',
+      ])
+    }
+  })
+
+  it('THE SANDWICH: an unmeasured record between two measured ones cannot reorder them (E20)', () => {
+    // The reviewer's own reproduction. Under the old skip-on-null rule these three sorted to
+    // [$5, unmeasured, $1] from one input order -- the dearer candidate above the cheaper one --
+    // and to two DIFFERENT orders from the other two permutations.
+    const dear = candidate({ id: 'a', evidence: { ...NO_EVIDENCE, medianCostUsd: 5 } })
+    const unmeasured = candidate({ id: 'b', evidence: { ...NO_EVIDENCE, medianCostUsd: null } })
+    const cheap = candidate({ id: 'c', evidence: { ...NO_EVIDENCE, medianCostUsd: 1 } })
+    for (const world of permutations([dear, unmeasured, cheap])) {
+      expect(order(rankCandidates(world, CONTEXT)), JSON.stringify(world.map((one) => one.id))).toEqual([
+        'c',
+        'a',
+        'b',
+      ])
+    }
   })
 })
 
@@ -305,6 +394,40 @@ describe('rankCandidates: the shape of the answer (R11, E9, E10)', () => {
     const world = [candidate({ id: 'c' }), candidate({ id: 'a' }), candidate({ id: 'b' })]
     expect(order(rankCandidates(world, CONTEXT))).toEqual(['a', 'b', 'c'])
     expect(order(rankCandidates([...world].toReversed(), CONTEXT))).toEqual(['a', 'b', 'c'])
+  })
+
+  it('is a TOTAL order over a world of mixed nulls: every permutation yields the identical order (E20)', () => {
+    // Four candidates, one measured on both steps, one with nothing at all, one measured only on
+    // step 5, one measured only on step 6's second measure. 24 permutations, one answer.
+    //   a: 90 % first-pass, median $5      -> wins step 5's first rate
+    //   c: 10 % first-pass, median $1      -> second on that rate
+    //   d: thin 2-of-2 (no rate), 100 ms   -> unmeasured at step 5; measured on duration at step 6
+    //   b: nothing at all                  -> unmeasured everywhere
+    const world = [
+      candidate({
+        id: 'a',
+        evidence: { ...NO_EVIDENCE, attempted: 10, firstPassJudged: 10, firstPassPassed: 9, medianCostUsd: 5 },
+      }),
+      candidate({ id: 'b', evidence: null }),
+      candidate({
+        id: 'c',
+        evidence: { ...NO_EVIDENCE, attempted: 10, firstPassJudged: 10, firstPassPassed: 1, medianCostUsd: 1 },
+      }),
+      candidate({
+        id: 'd',
+        evidence: { ...NO_EVIDENCE, attempted: 2, firstPassJudged: 2, firstPassPassed: 2, medianDurationMs: 100 },
+      }),
+    ]
+    const every = permutations(world)
+    expect(every).toHaveLength(24)
+    for (const permuted of every) {
+      expect(order(rankCandidates(permuted, CONTEXT)), JSON.stringify(permuted.map((one) => one.id))).toEqual([
+        'a',
+        'c',
+        'd',
+        'b',
+      ])
+    }
   })
 
   it('does not mutate its input', () => {
@@ -342,6 +465,42 @@ describe('rankCandidates: the shape of the answer (R11, E9, E10)', () => {
       CONTEXT,
     )
     for (const one of ranked) expect(one.reason).not.toMatch(/\$|\d+\.\d{2}/u)
+  })
+
+  it('says the capability in WORDS in a preference rationale, never its key (E21)', () => {
+    const ranked = rankCandidates(
+      [candidate({ id: 'a', name: 'Atlas', templateId: 't-a' }), candidate({ id: 'b', name: 'Bea', templateId: 't-b' })],
+      { ...CONTEXT, preference: { templateId: 't-a', model: null } },
+    )
+    expect(ranked[0]?.decidedBy).toBe('preference')
+    expect(ranked[0]?.reason).toContain('Services')
+    expect(ranked[0]?.reason).not.toContain('backend.services')
+  })
+
+  it('never lets a dotted KEY of any kind into a rationale -- the same shape as the money case', () => {
+    // `<domain>.<name>`, unanchored, so a key anywhere inside a sentence is caught. A full stop that
+    // ends a sentence has no word character after it and does not match.
+    const KEY_IN_PROSE = /\b[a-z0-9]+(?:-[a-z0-9]+)*\.[a-z0-9]+(?:-[a-z0-9]+)*\b/u
+    const worlds: readonly (readonly RankCandidate[])[] = [
+      [candidate({ id: 'a', covers: [] }), candidate({ id: 'b' })],
+      [candidate({ id: 'a', deniedKinds: ['run_commands'] }), candidate({ id: 'b' })],
+      [candidate({ id: 'a', templateId: 't-a' }), candidate({ id: 'b', templateId: 't-b' })],
+      [candidate({ id: 'a', busy: true }), candidate({ id: 'b' })],
+      [
+        candidate({ id: 'a', evidence: { ...NO_EVIDENCE, firstPassJudged: 10, firstPassPassed: 9 } }),
+        candidate({ id: 'b', evidence: null }),
+      ],
+      [
+        candidate({ id: 'a', evidence: { ...NO_EVIDENCE, medianCostUsd: 1 } }),
+        candidate({ id: 'b', evidence: { ...NO_EVIDENCE, medianCostUsd: null } }),
+      ],
+      [candidate({ id: 'a' }), candidate({ id: 'b' })],
+    ]
+    for (const world of worlds) {
+      for (const one of rankCandidates(world, { ...CONTEXT, preference: { templateId: 't-a', model: null } })) {
+        expect(one.reason, one.reason).not.toMatch(KEY_IN_PROSE)
+      }
+    }
   })
 
   it('carries NO score, rating, rank, weight, index or total on any result property (R11)', () => {
