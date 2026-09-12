@@ -12,8 +12,8 @@
 //
 // WHAT MAKES THE DENY REAL. Everything in the enforcement chain is the repo's own, unfaked:
 //
-//   - the deny is a `SlavePermission` row (`{ tool: 'run tests', mode: 'deny' }`) --
-//     `gate-m18-skill-and-teeth.mjs:504`'s seed;
+//   - the deny is a `SlavePermission` row (`{ kind: 'run_commands', mode: 'deny' }` since M52 R1) --
+//     `gate-m18-skill-and-teeth.mjs`'s seed;
 //   - `apps/orchestrator/src/tick.ts` resolves it through `packages/control`'s `resolveDenyList`
 //     and writes the run's own `permissions.json` at dispatch;
 //   - `scripts/pause-gate.sh` (the PreToolUse hook the adapter registers) reads that file through
@@ -90,9 +90,15 @@ const WORKER_PROVIDER = 'claude_code'
 // capture stays inside its $1 cap.
 const WORKER_MODEL = 'sonnet'
 
-// The capability the matrix denies, and the vendor tool `packages/control/src/permission.ts`'s
-// `CAPABILITY_TOOLS` resolves it to for `claude_code`. Named here so the printed summary and the
-// README provenance quote the same two strings the seed uses.
+// The capability the matrix denies, and the vendor tool the domain's `TOOLS_BY_KIND`
+// (`packages/domain/src/permission/kinds.ts`) resolves it to for `claude_code`. Named here so the
+// printed summary and the README provenance quote the same two strings the seed uses.
+//
+// M52 R1 split the two. `DENIED_PERMISSION_KIND` is what the SEED writes -- `SlavePermission.tool`
+// is gone and the column is a closed enum now -- while `DENIED_CAPABILITY` is the vocabulary of the
+// RECORDING this script produces, which still spells the kind the old way. M52 Task 6 redacts the
+// recording and collapses the two back into one.
+const DENIED_PERMISSION_KIND = 'run_commands'
 const DENIED_CAPABILITY = 'run tests'
 const EXPECTED_DENIED_TOOL = 'Bash'
 
@@ -391,9 +397,9 @@ try {
   const slave = await prisma.slave.create({
     data: { teamId: team.id, name: WORKER_NAME, role: 'backend', runtimeRoles: ['backend'], provider: WORKER_PROVIDER, model: WORKER_MODEL },
   })
-  // `gate-m18-skill-and-teeth.mjs:504`'s seed, verbatim: 'run tests' resolves to `Bash` for
-  // `claude_code` (`CAPABILITY_TOOLS`), which is exactly the tool the task below is certain to try.
-  await prisma.slavePermission.create({ data: { slaveId: slave.id, tool: DENIED_CAPABILITY, mode: 'deny' } })
+  // `gate-m18-skill-and-teeth.mjs`'s seed, verbatim: `run_commands` resolves to `Bash` for
+  // `claude_code` (`TOOLS_BY_KIND`), which is exactly the tool the task below is certain to try.
+  await prisma.slavePermission.create({ data: { slaveId: slave.id, kind: DENIED_PERMISSION_KIND, mode: 'deny' } })
   const task = await prisma.task.create({
     data: {
       workspaceId,
@@ -407,7 +413,10 @@ try {
     },
   })
   console.log(`workspace ${workspaceId}; slave ${slave.id}; task ${task.id}`)
-  console.log(`matrix: deny ${JSON.stringify(DENIED_CAPABILITY)} -> expected vendor tool ${EXPECTED_DENIED_TOOL}`)
+  console.log(
+    `matrix: deny ${JSON.stringify(DENIED_PERMISSION_KIND)} -> expected vendor tool ${EXPECTED_DENIED_TOOL}` +
+      ` (the recording still spells it ${JSON.stringify(DENIED_CAPABILITY)})`,
+  )
 
   // ---- The real daemon, driven exactly as `gate-m12-providers.mjs:493` drives it. The ONLY
   // override is the stdout tee; `SLAVEOFAI_CLAUDE_ARGS` is deliberately left untouched, so the

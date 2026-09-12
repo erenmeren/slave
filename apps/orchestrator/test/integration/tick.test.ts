@@ -350,9 +350,9 @@ describe('tick', () => {
   })
 
   it('writes the resolved permission matrix into the run dir at dispatch (M18 Task 5)', async (): Promise<void> => {
-    // A denied capability that maps to a real Claude Code tool (`resolveDenyList`'s
-    // `CAPABILITY_TOOLS` table): 'run tests' -> Bash.
-    await prisma.slavePermission.create({ data: { slaveId: fixture.slaveId, tool: 'run tests', mode: 'deny' } })
+    // A denied OPERATION that maps to real Claude Code tools (`resolveDenyList` through the
+    // domain's `TOOLS_BY_KIND`): `run_commands` -> the whole shell.
+    await prisma.slavePermission.create({ data: { slaveId: fixture.slaveId, kind: 'run_commands', mode: 'deny' } })
 
     await tick(deps)
 
@@ -361,7 +361,14 @@ describe('tick', () => {
     // `pause.flag` -- not under the worktree (the previous test's own assertion).
     const permissionsPath = join(fixture.repoPath, '.slaveofai', 'runs', run.id, 'permissions.json')
     const written: unknown = JSON.parse(readFileSync(permissionsPath, 'utf8'))
-    expect(written).toEqual({ version: 1, deny: [{ tool: 'Bash', capability: 'run tests' }] })
+    expect(written).toEqual({
+      version: 1,
+      deny: [
+        { tool: 'Bash', capability: 'run_commands' },
+        { tool: 'BashOutput', capability: 'run_commands' },
+        { tool: 'KillShell', capability: 'run_commands' },
+      ],
+    })
   })
 
   it('writes an armed-but-empty permissions.json when nothing is denied (M18 Task 5)', async (): Promise<void> => {

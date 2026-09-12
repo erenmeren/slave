@@ -684,11 +684,14 @@ describe('provider adapter cards', () => {
 })
 
 describe('the permission matrix', () => {
+  // M52 R1: the six OPERATIONS, which is what `buildPermissionMatrix` puts in `cell.tool` now.
+  // The FIELD is still called `tool` for exactly one task (see `PermissionRow`'s own docstring),
+  // and the component still prints the raw string -- M52 Task 5 renames the field and swaps the
+  // header for `PERMISSION_LABEL` together with the copy.
   function cells(over: Partial<Record<string, 'allow' | 'deny' | null>> = {}) {
-    return ['repo read', 'source write', 'run tests', 'create branch', 'deploy prod', 'read secrets'].map((tool) => ({
-      tool,
-      mode: over[tool] ?? null,
-    }))
+    return ['read_repo', 'write_repo', 'run_commands', 'network_fetch', 'read_secret', 'deploy_release'].map(
+      (tool) => ({ tool, mode: over[tool] ?? null }),
+    )
   }
 
   const rows = [
@@ -700,7 +703,7 @@ describe('the permission matrix', () => {
           slaveId: 'a1',
           name: 'Alex',
           role: 'backend',
-          cells: cells({ 'repo read': 'allow', 'source write': 'deny' }),
+          cells: cells({ read_repo: 'allow', write_repo: 'deny' }),
         },
       ],
     },
@@ -709,17 +712,17 @@ describe('the permission matrix', () => {
   it('renders the six README columns and a glyph per cell', () => {
     render(<PermissionMatrix sections={rows} />)
     expect(screen.getAllByTestId('perm-column').map((c) => c.textContent)).toEqual([
-      'repo read', 'source write', 'run tests', 'create branch', 'deploy prod', 'read secrets',
+      'read_repo', 'write_repo', 'run_commands', 'network_fetch', 'read_secret', 'deploy_release',
     ])
-    expect(screen.getByTestId('perm-cell-a1-repo read').textContent).toBe('✓')
-    expect(screen.getByTestId('perm-cell-a1-source write').textContent).toBe('✕')
-    expect(screen.getByTestId('perm-cell-a1-run tests').textContent).toBe('–')
+    expect(screen.getByTestId('perm-cell-a1-read_repo').textContent).toBe('✓')
+    expect(screen.getByTestId('perm-cell-a1-write_repo').textContent).toBe('✕')
+    expect(screen.getByTestId('perm-cell-a1-run_commands').textContent).toBe('–')
   })
 
   it('distinguishes an unset cell from an explicit deny in its title', () => {
     render(<PermissionMatrix sections={rows} />)
-    expect(screen.getByTestId('perm-cell-a1-run tests').getAttribute('title')).toBe('not set')
-    expect(screen.getByTestId('perm-cell-a1-source write').getAttribute('title')).toBe('denied')
+    expect(screen.getByTestId('perm-cell-a1-run_commands').getAttribute('title')).toBe('not set')
+    expect(screen.getByTestId('perm-cell-a1-write_repo').getAttribute('title')).toBe('denied')
   })
 
   it('captions the whole matrix as not yet enforced', () => {
@@ -734,8 +737,8 @@ describe('the permission matrix', () => {
     render(
       <PermissionMatrix
         sections={[
-          { workspaceId: 'w1', workspaceName: 'Checkout Platform', rows: [{ slaveId: 'a1', name: 'Alex', role: 'backend', cells: cells({ 'repo read': 'allow' }) }] },
-          { workspaceId: 'w2', workspaceName: 'Ledger', rows: [{ slaveId: 'a2', name: 'Alex', role: 'backend', cells: cells({ 'repo read': 'deny' }) }] },
+          { workspaceId: 'w1', workspaceName: 'Checkout Platform', rows: [{ slaveId: 'a1', name: 'Alex', role: 'backend', cells: cells({ read_repo: 'allow' }) }] },
+          { workspaceId: 'w2', workspaceName: 'Ledger', rows: [{ slaveId: 'a2', name: 'Alex', role: 'backend', cells: cells({ read_repo: 'deny' }) }] },
         ]}
       />,
     )
@@ -747,9 +750,9 @@ describe('the permission matrix', () => {
 
     // The two same-named slaves are distinct rows under distinct sections, and each cell carries
     // its OWN slave's mode.
-    expect(within(first).getByTestId('perm-cell-a1-repo read').textContent).toBe('✓')
-    expect(within(second).getByTestId('perm-cell-a2-repo read').textContent).toBe('✕')
-    expect(within(first).queryByTestId('perm-cell-a2-repo read')).toBeNull()
+    expect(within(first).getByTestId('perm-cell-a1-read_repo').textContent).toBe('✓')
+    expect(within(second).getByTestId('perm-cell-a2-read_repo').textContent).toBe('✕')
+    expect(within(first).queryByTestId('perm-cell-a2-read_repo')).toBeNull()
   })
 
   it('says which workspace has no slaves rather than dropping its section', () => {
@@ -774,11 +777,11 @@ describe('the permission matrix', () => {
     it('PUTs the flipped mode on a cell click', async (): Promise<void> => {
       render(<PermissionMatrix sections={rows} />)
       await act(async () => {
-        fireEvent.click(screen.getByTestId('perm-cell-a1-repo read'))
+        fireEvent.click(screen.getByTestId('perm-cell-a1-read_repo'))
       })
       expect(fetchMock).toHaveBeenCalledWith(
         '/api/slaves/a1/permission',
-        expect.objectContaining({ method: 'PUT', body: JSON.stringify({ tool: 'repo read', mode: 'deny' }) }),
+        expect.objectContaining({ method: 'PUT', body: JSON.stringify({ tool: 'read_repo', mode: 'deny' }) }),
       )
     })
 
@@ -787,11 +790,11 @@ describe('the permission matrix', () => {
     it('PUTs allow on an unset cell, the same as on a denied one', async (): Promise<void> => {
       render(<PermissionMatrix sections={rows} />)
       await act(async () => {
-        fireEvent.click(screen.getByTestId('perm-cell-a1-run tests'))
+        fireEvent.click(screen.getByTestId('perm-cell-a1-run_commands'))
       })
       expect(fetchMock).toHaveBeenCalledWith(
         '/api/slaves/a1/permission',
-        expect.objectContaining({ body: JSON.stringify({ tool: 'run tests', mode: 'allow' }) }),
+        expect.objectContaining({ body: JSON.stringify({ tool: 'run_commands', mode: 'allow' }) }),
       )
     })
 
@@ -801,7 +804,7 @@ describe('the permission matrix', () => {
       )
       render(<PermissionMatrix sections={rows} />)
       await act(async () => {
-        fireEvent.click(screen.getByTestId('perm-cell-a1-repo read'))
+        fireEvent.click(screen.getByTestId('perm-cell-a1-read_repo'))
       })
       expect(screen.getByRole('alert').textContent).toBe('a permission must name one of the six tools')
       expect(routerRefresh).not.toHaveBeenCalled()

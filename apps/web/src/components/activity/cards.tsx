@@ -3,11 +3,15 @@ import type { DomainEventType } from '@slave-of-ai/db'
 import {
   BREAKER_LEVEL_LABEL,
   BREAKER_TRIP_LABEL,
+  BROKER_OP_LABEL,
+  BROKER_REFUSAL_LABEL,
   GUARDRAIL_LABEL,
   MEMORY_SOURCE_KIND_LABEL,
   MEMORY_STATUS_LABEL,
   MEMORY_TYPE_LABEL,
   type BreakerTripKind,
+  type BrokerOp,
+  type BrokerRefusalReason,
   type GuardrailKind,
   type MemoryScope,
   type MemorySourceKind,
@@ -1201,6 +1205,85 @@ function SlaveReleasedCard(props: ActivityCardProps): ReactElement {
   )
 }
 
+// ---- broker.executed / broker.refused / permission.changed (schema.ts, M52 R3/R5) --------------
+// Registered HERE, in the task that adds the event types, because `ACTIVITY_CARDS`' `satisfies`
+// is exhaustive over `DomainEventType` -- a type with no card fails the build. M52 Task 5 owns the
+// copy, the tones the spec names and the testids' final shape; these three are the honest minimum
+// that prints what the payload carries and never a key.
+
+/** M52 R3: an operation the orchestrator ran on a worker's behalf. The environment is the audit
+ *  value and is on the payload verbatim; the credential, the command and the output are not in the
+ *  row at all and so cannot be printed. A non-zero exit is `danger` -- a deploy that failed is an
+ *  outcome, not a warning. */
+function BrokerExecutedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    op: string
+    environment: string
+    paramsHash: string
+    exitCode: number | null
+    durationMs: number
+  }
+  const failed = payload.exitCode !== 0
+  const label = BROKER_OP_LABEL[payload.op as BrokerOp] ?? payload.op
+  return (
+    <ActivityCard {...props}>
+      <Transition tone={failed ? 'danger' : 'idle'} label="ran for a worker">
+        <span data-testid="broker-executed-text" title={payload.paramsHash} data-op={payload.op}>
+          {`${label} \u2192 ${payload.environment} \u00b7 exit ${payload.exitCode === null ? 'unknown' : String(payload.exitCode)}`}
+        </span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+/** M52 R3: a brokered call the authoriser refused. `warn`, for `RunToolDeniedCard`'s reason: the
+ *  worker is expected to route around it and the run continues.
+ *
+ *  The reason is a KEY on the wire (a forgiving `z.string()`, so a database holding an eighth
+ *  reason still reads), so it rides `title`/`data-reason` and the LABEL is what is printed -- and a
+ *  reason this build does not know prints itself rather than crashing the card. */
+function BrokerRefusedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { op: string; reason: string }
+  const label = BROKER_OP_LABEL[payload.op as BrokerOp] ?? payload.op
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="warn" label="refused">
+        <span data-testid="broker-refused-text" title={payload.reason} data-reason={payload.reason}>
+          {`${label} \u2014 ${BROKER_REFUSAL_LABEL[payload.reason as BrokerRefusalReason] ?? payload.reason}`}
+        </span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+/** M52 R5: a person granted, refused or revoked one operation for one worker. `kindLabel` is on the
+ *  payload rather than looked up here for `assign_capability`'s reason -- a row read a year from
+ *  now must still say what it was about in the vocabulary of the day it was written. `to: null` is
+ *  a REVOKE, which is a real change and reads as "never asked". */
+function PermissionChangedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    slaveId: string
+    name: string
+    kind: string
+    kindLabel: string
+    from: 'allow' | 'deny' | null
+    to: 'allow' | 'deny' | null
+    by: string | null
+  }
+  const word = (mode: 'allow' | 'deny' | null): string =>
+    mode === 'allow' ? 'granted' : mode === 'deny' ? 'refused' : 'never asked'
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label="permission changed">
+        <span data-testid="permission-changed-text" title={payload.kind} data-kind={payload.kind}>
+          {`${payload.name} \u00b7 ${payload.kindLabel} \u00b7 ${word(payload.from)} \u2192 ${word(payload.to)}`}
+        </span>
+        {payload.by !== null && <span data-testid="permission-changed-by">{` \u00b7 by ${payload.by}`}</span>}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
 /**
  * One card component per `DomainEventType`. `satisfies` (not a type annotation) is load-bearing:
  * it keeps each entry's own component type while still failing the build the moment a type is
@@ -1263,4 +1346,7 @@ export const ACTIVITY_CARDS = {
   'slave.released': SlaveReleasedCard,
   'run.tool_result': ToolResultCard,
   'run.breaker': BreakerCard,
+  'broker.executed': BrokerExecutedCard,
+  'broker.refused': BrokerRefusedCard,
+  'permission.changed': PermissionChangedCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>

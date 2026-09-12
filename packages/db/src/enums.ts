@@ -62,6 +62,9 @@ export const EVENT_TYPE_BY_DOMAIN_TYPE = {
   'slave.released': 'slave_released',
   'run.tool_result': 'run_tool_result',
   'run.breaker': 'run_breaker',
+  'broker.executed': 'broker_executed',
+  'broker.refused': 'broker_refused',
+  'permission.changed': 'permission_changed',
 } as const satisfies Record<DomainEventType, string>
 
 export type DbEventType = (typeof EVENT_TYPE_BY_DOMAIN_TYPE)[DomainEventType]

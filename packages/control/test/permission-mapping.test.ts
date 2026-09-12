@@ -1,30 +1,31 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import { PERMISSION_KINDS, type PermissionKind } from '@slave-of-ai/domain'
 import { PERMISSION_DENY_REASON_PREFIX } from '@slave-of-ai/providers'
-import { PERMISSION_TOOLS, resolveDenyList } from '../src/permission.js'
+import { resolveDenyList } from '../src/permission.js'
 
 const PROVIDERS = ['claude_code', 'cursor'] as const
 
-// The wire-level tool name each capability resolves to, per provider -- `[]` for
-// `read secrets` (unenforced in v1, spec §2). Kept as a plain table here so each row below
-// reads as one fact instead of re-deriving it from `CAPABILITY_TOOLS` (package-private).
-const EXPECTED: Record<(typeof PERMISSION_TOOLS)[number], { claude_code: readonly string[]; cursor: readonly string[] }> = {
-  'repo read': { claude_code: ['Read'], cursor: ['read'] },
-  'source write': { claude_code: ['Write', 'Edit', 'NotebookEdit'], cursor: ['edit'] },
-  'run tests': { claude_code: ['Bash'], cursor: ['shell'] },
-  'create branch': { claude_code: ['Bash'], cursor: ['shell'] },
-  'deploy prod': { claude_code: ['Bash'], cursor: ['shell'] },
-  'read secrets': { claude_code: [], cursor: [] },
+// The wire-level tool names each OPERATION covers, per provider -- `[]` for the two BROKER grants,
+// which name no vendor tool on either provider (M52 R1/R3). Kept as a plain table here so each row
+// below reads as one fact instead of re-deriving it from the domain's `TOOLS_BY_KIND`.
+const EXPECTED: Record<PermissionKind, { claude_code: readonly string[]; cursor: readonly string[] }> = {
+  read_repo: { claude_code: ['Read', 'Glob', 'Grep', 'NotebookRead', 'TodoWrite', 'Task', 'Skill'], cursor: ['read'] },
+  write_repo: { claude_code: ['Write', 'Edit', 'NotebookEdit'], cursor: ['edit'] },
+  run_commands: { claude_code: ['Bash', 'BashOutput', 'KillShell'], cursor: ['shell'] },
+  network_fetch: { claude_code: ['WebFetch', 'WebSearch'], cursor: [] },
+  read_secret: { claude_code: [], cursor: [] },
+  deploy_release: { claude_code: [], cursor: [] },
 }
 
 describe('resolveDenyList', () => {
-  for (const capability of PERMISSION_TOOLS) {
+  for (const capability of PERMISSION_KINDS) {
     for (const provider of PROVIDERS) {
       const expectedTools = EXPECTED[capability][provider]
       it(`resolves '${capability}' deny → ${provider === 'claude_code' ? 'Claude' : 'Cursor'} ${
-        expectedTools.length > 0 ? expectedTools.join('/') : '(nothing, unenforced)'
+        expectedTools.length > 0 ? expectedTools.join('/') : '(nothing -- a broker grant, not a tool grant)'
       }`, () => {
-        const result = resolveDenyList([{ tool: capability, mode: 'deny' }], provider)
+        const result = resolveDenyList([{ kind: capability, mode: 'deny' }], provider)
         expect([...result].sort((a, b) => a.tool.localeCompare(b.tool))).toEqual(
           [...expectedTools].sort().map((tool) => ({ tool, capability })),
         )
@@ -32,50 +33,53 @@ describe('resolveDenyList', () => {
     }
   }
 
-  it('a deny on both run tests and deploy prod resolves to ONE Bash entry -- the first capability wins', () => {
-    const result = resolveDenyList(
-      [
-        { tool: 'run tests', mode: 'deny' },
-        { tool: 'deploy prod', mode: 'deny' },
-      ],
-      'claude_code',
-    )
-    expect(result).toEqual([{ tool: 'Bash', capability: 'run tests' }])
+  it('a deny on run_commands denies the whole shell, and deploy_release is no longer part of it', () => {
+    // M52 R1: the three shell-backed rows collapsed onto `Bash` and could not be told apart. There
+    // is one shell row now, and `deploy_release` is a BROKER grant that names no tool -- which is
+    // exactly why `deploy prod` could never be expressed as a tool deny.
+    expect(resolveDenyList([{ kind: 'run_commands', mode: 'deny' }], 'claude_code')).toEqual([
+      { tool: 'Bash', capability: 'run_commands' },
+      { tool: 'BashOutput', capability: 'run_commands' },
+      { tool: 'KillShell', capability: 'run_commands' },
+    ])
+    expect(resolveDenyList([{ kind: 'deploy_release', mode: 'deny' }], 'claude_code')).toEqual([])
   })
 
   it('the reverse order still keeps the first row seen as the naming capability', () => {
+    // Two kinds that share no tool cannot collide any more, so the "first capability wins" rule is
+    // exercised where it still has a job: one kind named twice.
     const result = resolveDenyList(
       [
-        { tool: 'deploy prod', mode: 'deny' },
-        { tool: 'create branch', mode: 'deny' },
+        { kind: 'run_commands', mode: 'deny' },
+        { kind: 'run_commands', mode: 'deny' },
       ],
       'cursor',
     )
-    expect(result).toEqual([{ tool: 'shell', capability: 'deploy prod' }])
+    expect(result).toEqual([{ tool: 'shell', capability: 'run_commands' }])
   })
 
   it('allow and unset rows are ignored -- only deny rows produce entries', () => {
     const result = resolveDenyList(
       [
-        { tool: 'repo read', mode: 'allow' },
-        { tool: 'source write', mode: 'deny' },
+        { kind: 'read_repo', mode: 'allow' },
+        { kind: 'write_repo', mode: 'deny' },
       ],
       'claude_code',
     )
     expect(result).toEqual([
-      { tool: 'Write', capability: 'source write' },
-      { tool: 'Edit', capability: 'source write' },
-      { tool: 'NotebookEdit', capability: 'source write' },
+      { tool: 'Write', capability: 'write_repo' },
+      { tool: 'Edit', capability: 'write_repo' },
+      { tool: 'NotebookEdit', capability: 'write_repo' },
     ])
   })
 
-  it("a 'read secrets' deny resolves to an empty list -- unenforced in v1", () => {
-    expect(resolveDenyList([{ tool: 'read secrets', mode: 'deny' }], 'claude_code')).toEqual([])
-    expect(resolveDenyList([{ tool: 'read secrets', mode: 'deny' }], 'cursor')).toEqual([])
+  it('a read_secret deny resolves to an empty list -- it is a broker grant, and always was', () => {
+    expect(resolveDenyList([{ kind: 'read_secret', mode: 'deny' }], 'claude_code')).toEqual([])
+    expect(resolveDenyList([{ kind: 'read_secret', mode: 'deny' }], 'cursor')).toEqual([])
   })
 
-  it('an unknown capability string resolves to an empty list (defensive -- the caller may hand rows unvalidated against PERMISSION_TOOLS)', () => {
-    expect(resolveDenyList([{ tool: 'launch nukes', mode: 'deny' }], 'claude_code')).toEqual([])
+  it('an unknown kind string resolves to an empty list (defensive -- the caller may hand rows unvalidated against PERMISSION_KINDS)', () => {
+    expect(resolveDenyList([{ kind: 'launch nukes', mode: 'deny' }], 'claude_code')).toEqual([])
   })
 
   it('no rows at all resolves to an empty list', () => {

@@ -440,25 +440,25 @@ describe('the org routes', () => {
 
     it('writes the cell and returns 200', async (): Promise<void> => {
       const slaveId = await seedPermissionSlave()
-      const response = await permissionPUT(jsonPutRequest({ tool: 'repo read', mode: 'allow' }), slaveParams(slaveId))
+      const response = await permissionPUT(jsonPutRequest({ tool: 'read_repo', mode: 'allow' }), slaveParams(slaveId))
       expect(response.status).toBe(200)
       expect(await prisma.slavePermission.count({ where: { slaveId } })).toBe(1)
     })
 
-    it('409s with the verbatim refusal on a tool outside the six', async (): Promise<void> => {
+    it('409s with the verbatim refusal on a kind outside the six', async (): Promise<void> => {
       const response = await permissionPUT(jsonPutRequest({ tool: 'rm -rf', mode: 'allow' }), slaveParams(await seedPermissionSlave()))
       expect(response.status).toBe(409)
-      expect(await response.json()).toEqual({ error: 'a permission must name one of the six tools' })
+      expect(await response.json()).toEqual({ error: 'a permission must name one of the six operations' })
     })
 
     it('400s on a malformed body and on a missing mode', async (): Promise<void> => {
       const slaveId = await seedPermissionSlave()
       expect((await permissionPUT(malformedPutRequest(), slaveParams(slaveId))).status).toBe(400)
-      expect((await permissionPUT(jsonPutRequest({ tool: 'repo read' }), slaveParams(slaveId))).status).toBe(400)
+      expect((await permissionPUT(jsonPutRequest({ tool: 'read_repo' }), slaveParams(slaveId))).status).toBe(400)
     })
 
     it('404s with the slave-not-found refusal on an unknown slave', async (): Promise<void> => {
-      const response = await permissionPUT(jsonPutRequest({ tool: 'repo read', mode: 'allow' }), slaveParams('00000000-0000-4000-8000-000000000000'))
+      const response = await permissionPUT(jsonPutRequest({ tool: 'read_repo', mode: 'allow' }), slaveParams('00000000-0000-4000-8000-000000000000'))
       expect(response.status).toBe(404)
       expect((await response.json()).error).toBe('no slave with id 00000000-0000-4000-8000-000000000000')
     })

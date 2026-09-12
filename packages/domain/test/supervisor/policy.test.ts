@@ -50,6 +50,14 @@ const ACTIONS: Readonly<Record<Action['kind'], Action>> = {
   discard_stale_candidates: { kind: 'discard_stale_candidates', workspaceId: 'ws-1', count: 9 },
   release_worker: { kind: 'release_worker', slaveId: 's9', name: 'Robin', reason: 'the engagement is over' },
   steer_run: { kind: 'steer_run', runId: 'run-1', slaveId: 's1', text: 'Stop and say what you are stuck on.' },
+  request_permission: {
+    kind: 'request_permission',
+    slaveId: 'slave-1',
+    name: 'Alex',
+    permissionKind: 'network_fetch',
+    kindLabel: 'Fetch over the network',
+    why: 'because',
+  },
   escalate_to_human: { kind: 'escalate_to_human', summary: 'a human must look' },
   no_action: { kind: 'no_action' },
 }
@@ -92,6 +100,8 @@ describe('tierOf', () => {
     // M51 R3. Routine because the text is a CONSTANT, not a model's draft -- there is nothing for a
     // person to approve -- and demoted by the halt like everything else.
     ['steer_run', 'applied', 'proposed'],
+    // M52 R5. ALWAYS a proposal: the Supervisor may point at a wall, and only a person moves it.
+    ['request_permission', 'proposed', 'proposed'],
     ['escalate_to_human', 'escalated', 'escalated'],
     ['no_action', 'noop', 'noop'],
   ]
@@ -416,5 +426,45 @@ describe('discard_stale_candidates (M49 R2)', () => {
     expect(
       tierOf({ kind: 'discard_stale_candidates', workspaceId: 'ws-1', count: 9 }, world(), 'memory_candidates_piling'),
     ).toBe('proposed')
+  })
+})
+
+describe('tierOf(request_permission) (M52 R5)', () => {
+  const action = {
+    kind: 'request_permission',
+    slaveId: 'slave-1',
+    name: 'Alex',
+    permissionKind: 'network_fetch',
+    kindLabel: 'Fetch over the network',
+    why: 'because',
+  } as const
+
+  it('is PROPOSED on a healthy project -- the Supervisor may request, never grant', () => {
+    expect(tierOf(action, world(), 'permission_blocked')).toBe('proposed')
+  })
+
+  it('is PROPOSED under a halt too, which is the same answer by two routes on purpose', () => {
+    expect(tierOf(action, world({ halted: { reason: 'budget_exhausted' } }), 'permission_blocked')).toBe('proposed')
+  })
+
+  it('is proposed whatever situation it is asked about -- there is no situation that makes a grant routine', () => {
+    for (const kind of SITUATION_KINDS) {
+      expect(tierOf(action, RUNNING, kind)).toBe('proposed')
+      expect(tierOf(action, HALTED, kind)).toBe('proposed')
+    }
+  })
+})
+
+describe('assign_capability is still applied, and that is not a grant (M52 R5)', () => {
+  it('stays applied for an idle worker: a capability says what a worker is FOR, not what it may do', () => {
+    const action = {
+      kind: 'assign_capability',
+      slaveId: 'slave-1',
+      capability: 'security.application',
+      capabilityLabel: 'Application security',
+      role: 'security',
+    } as const
+    expect(tierOf(action, world({ slaves: [slave({ id: 'slave-1', busy: false })] }), 'capability_unstaffed'))
+      .toBe('applied')
   })
 })

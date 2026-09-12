@@ -3,6 +3,8 @@ import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, EVENT_TYPE_BY_DOMAIN_TYPE, type DomainEv
 import { listDecisions, type DecisionView } from '@slave-of-ai/control'
 import {
   BREAKER_TRIP_LABEL,
+  BROKER_OP_LABEL,
+  BROKER_REFUSAL_LABEL,
   LANE_BY_TYPE,
   LANE_LABEL,
   MEMORY_STATUSES,
@@ -12,6 +14,8 @@ import {
   laneFor,
   replanSentence,
   type BreakerTripKind,
+  type BrokerOp,
+  type BrokerRefusalReason,
   type MemoryStatus,
   type MemoryType,
   type TimelineLane,
@@ -312,6 +316,39 @@ function titleFor(
       const who = typeof name === 'string' && name !== '' ? name : 'a temporary specialist'
       const reason = payload['reason']
       return typeof reason === 'string' && reason !== '' ? `released ${who}: ${reason}` : `released ${who}`
+    }
+    // M52 R3/R5: all three are on the WORK lane and none carries a `title`, so without a case each
+    // would read as its own type name. The environment and the worker's name are on the payloads;
+    // the credential, the command and the output are on none of them.
+    case 'broker.executed': {
+      const op = payload['op']
+      const label = typeof op === 'string' && op in BROKER_OP_LABEL ? BROKER_OP_LABEL[op as BrokerOp] : 'ran an operation'
+      const environment = payload['environment']
+      const exitCode = payload['exitCode']
+      const where = typeof environment === 'string' && environment !== '' ? ` to ${environment}` : ''
+      return exitCode === 0 ? `${label.toLowerCase()}${where}` : `${label.toLowerCase()}${where} -- and it failed`
+    }
+    case 'broker.refused': {
+      const op = payload['op']
+      const label = typeof op === 'string' && op in BROKER_OP_LABEL ? BROKER_OP_LABEL[op as BrokerOp] : 'an operation'
+      const reason = payload['reason']
+      const because =
+        typeof reason === 'string' && reason in BROKER_REFUSAL_LABEL
+          ? BROKER_REFUSAL_LABEL[reason as BrokerRefusalReason].toLowerCase()
+          : 'it was refused'
+      return `refused ${label.toLowerCase()}: ${because}`
+    }
+    case 'permission.changed': {
+      const name = payload['name']
+      const who = typeof name === 'string' && name !== '' ? name : 'a worker'
+      // The LABEL, off the payload: a row read a year from now must still say what it was about in
+      // the vocabulary of the day it was written (`docs/ia.md` rule 3).
+      const kindLabel = payload['kindLabel']
+      const what = typeof kindLabel === 'string' && kindLabel !== '' ? kindLabel.toLowerCase() : 'an operation'
+      const to = payload['to']
+      if (to === 'allow') return `let ${who} ${what}`
+      if (to === 'deny') return `stopped ${who} being able to ${what}`
+      return `took back the decision about ${who} and ${what}`
     }
     default: {
       const title = payload['title']

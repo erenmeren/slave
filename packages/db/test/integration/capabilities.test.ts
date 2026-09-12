@@ -26,12 +26,14 @@ describe('slave capabilities', () => {
     await prisma.$disconnect()
   })
 
-  it('rejects two permissions for the same slave and tool', async () => {
+  // M52 R1: `@@unique([slaveId, kind])` replaced `@@unique([slaveId, tool])` -- the same invariant
+  // one column over, now over a closed enum rather than free text.
+  it('rejects two permissions for the same slave and kind', async () => {
     const { slaveId } = await seedSlave()
-    await prisma.slavePermission.create({ data: { slaveId, tool: 'Bash', mode: 'allow' } })
+    await prisma.slavePermission.create({ data: { slaveId, kind: 'run_commands', mode: 'allow' } })
 
     await expect(
-      prisma.slavePermission.create({ data: { slaveId, tool: 'Bash', mode: 'deny' } }),
+      prisma.slavePermission.create({ data: { slaveId, kind: 'run_commands', mode: 'deny' } }),
     ).rejects.toThrow()
   })
 

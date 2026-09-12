@@ -37,9 +37,21 @@ describe('every union a person reads has a label (M44 R5)', () => {
   // M51 R3: the sixteenth action. `ACTION_KINDS` has no Postgres enum of its own (an `Action` lives
   // inside a JSONB column), so this count is the only thing that notices a kind added to the union
   // and forgotten in the list the event payloads validate against.
-  it('carries the sixteen action kinds, `steer_run` among them', () => {
-    expect(ACTION_KINDS).toHaveLength(16)
+  it('carries the seventeen action kinds, `steer_run` among them', () => {
+    expect(ACTION_KINDS).toHaveLength(17)
     expect(ACTION_KINDS).toContain('steer_run')
+  })
+
+  // M52 R5: the seventeenth situation, asserted BY NAME for `engagement_over`'s own reason. The
+  // words are what is STUCK -- not the kind, and not the operation's own label, which the
+  // situation's summary carries beside it.
+  it('names the seventeenth situation the way a person says it', () => {
+    expect(SITUATION_LABEL.permission_blocked).toBe('Blocked by a permission')
+  })
+
+  // M52 R5: the seventeenth action, held by the same count that caught `steer_run`.
+  it('carries request_permission, the seventeenth action kind', () => {
+    expect(ACTION_KINDS).toContain('request_permission')
   })
 
   it('covers every tier, decision status and decider', () => {

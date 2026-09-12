@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { PERMISSION_TOOLS, capabilitiesOf, type ProviderKind } from '@slave-of-ai/control'
+import { capabilitiesOf, type ProviderKind } from '@slave-of-ai/control'
+import { PERMISSION_KINDS } from '@slave-of-ai/domain'
 import { prisma } from '@slave-of-ai/db/client'
 
 const run = promisify(execFile)
@@ -113,9 +114,14 @@ export interface PermissionRow {
   readonly slaveId: string
   readonly name: string
   readonly role: string
-  /** One entry per `PERMISSION_TOOLS` member, in that order. `mode` is `null` when no
-   *  `SlavePermission` row exists -- unset, which the matrix shows as `✕` and an operator can
-   *  change; it is NOT the same as an explicit deny, and the cell says which it is. */
+  /** One entry per `PERMISSION_KINDS` member, in that order (M52 R1 -- the six prose rows became
+   *  six OPERATIONS). `mode` is `null` when no `SlavePermission` row exists -- unset, which the
+   *  matrix shows as `–` and an operator can change; it is NOT the same as an explicit deny,
+   *  and the cell says which it is.
+   *
+   *  The FIELD is still called `tool` and carries a `PermissionKind` string for exactly one task:
+   *  `PermissionMatrix.tsx` reads `cell.tool`, and M52 Task 5 renames the field, the column headers
+   *  and the matrix copy together, where the copy has to change anyway. */
   readonly cells: readonly { readonly tool: string; readonly mode: 'allow' | 'deny' | null }[]
 }
 
@@ -165,7 +171,7 @@ export async function buildPermissionMatrix(workspaceId?: string): Promise<reado
   const bySlave = new Map<string, Map<string, 'allow' | 'deny'>>()
   for (const row of permissions) {
     const map = bySlave.get(row.slaveId) ?? new Map<string, 'allow' | 'deny'>()
-    map.set(row.tool, row.mode)
+    map.set(row.kind, row.mode)
     bySlave.set(row.slaveId, map)
   }
 
@@ -185,7 +191,7 @@ export async function buildPermissionMatrix(workspaceId?: string): Promise<reado
         // `null` is UNSET, and the cell says so: a slave nobody has decided about is not the
         // same as one explicitly denied, and collapsing them would make the matrix claim a
         // decision that was never taken.
-        cells: PERMISSION_TOOLS.map((tool) => ({ tool, mode: bySlave.get(slave.id)?.get(tool) ?? null })),
+        cells: PERMISSION_KINDS.map((kind) => ({ tool: kind, mode: bySlave.get(slave.id)?.get(kind) ?? null })),
       })),
   }))
 }

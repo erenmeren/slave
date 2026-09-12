@@ -632,6 +632,66 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       })
       .strict(),
   }),
+  z.object({
+    ...envelope,
+    type: z.literal('broker.executed'),
+    /**
+     * M52 R3: an operation the orchestrator ran on a worker's behalf, and how it ended.
+     *
+     * `.strict()`, and that is load-bearing rather than tidy -- the things that must NEVER reach
+     * this row are the credential, the resolved command and the output, and a permissive object
+     * would carry one of them the first time somebody added a debug field.
+     *
+     * `environment` is persisted VERBATIM where M51's `run.tool_call.argsHash` persists nothing:
+     * the registry's own schemas make these parameters bounded, non-secret and the whole audit
+     * value -- "which environment was deployed" is the question this row exists to answer months
+     * later. `paramsHash` is `sha256(canonical(params))` over the FULL object, for correlating two
+     * calls that asked for the same thing.
+     */
+    payload: z
+      .object({
+        op: z.string().min(1),
+        environment: z.string().min(1).max(64),
+        paramsHash: z.string().regex(/^[0-9a-f]{64}$/u),
+        exitCode: z.number().int().nullable(),
+        durationMs: z.number().int().nonnegative(),
+      })
+      .strict(),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('broker.refused'),
+    /** M52 R3. The reason is a `z.string()` and not a `z.enum`, for `guardrail.tripped`'s reason
+     *  (M51 R4): `packages/events/src/read.ts:23-26` THROWS on a row the domain cannot parse, so a
+     *  closed enum here would make the forward read of any database holding an eighth reason
+     *  unreadable. The closed list types the WRITERS (`BROKER_REFUSAL_REASONS`). */
+    payload: z.object({ op: z.string().min(1), reason: z.string().min(1).max(40) }).strict(),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('permission.changed'),
+    /**
+     * M52 R5: a person granted, refused or revoked one operation for one worker.
+     *
+     * A new type rather than `org.changed { entity: 'permission' }`: `org.changed`'s `field` union
+     * is spelled in four places (M50 erratum E11) and its payload has no room for the from/to/by
+     * triple the Advanced surface has to print -- and a permission change is not a roster change.
+     *
+     * `from` and `to` are each `'allow' | 'deny' | null`, and `null` on `to` is a REVOKE: back to
+     * "never asked", the state `setSlavePermission` could never reach because it had no delete.
+     */
+    payload: z
+      .object({
+        slaveId: z.string().min(1),
+        name: z.string().min(1),
+        kind: z.string().min(1),
+        kindLabel: z.string().min(1),
+        from: z.enum(['allow', 'deny']).nullable(),
+        to: z.enum(['allow', 'deny']).nullable(),
+        by: z.string().min(1).nullable(),
+      })
+      .strict(),
+  }),
 ])
 
 export type ExecutionEvent = z.infer<typeof executionEventSchema>

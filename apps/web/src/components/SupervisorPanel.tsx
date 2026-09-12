@@ -85,6 +85,11 @@ export function actionText(action: Action, taskTitles: Readonly<Record<string, s
     // re-deriving it -- this function runs in the browser and has no breaker constants to consult.
     case 'steer_run':
       return `tell that run to stop and rethink: \u201c${action.text}\u201d`
+    // M52 R5: the worker's NAME and the operation's LABEL, both off the action -- this function
+    // runs in the browser and may not import the domain's label table through control's barrel,
+    // which is the same reason `capabilityLabel` rides on `assign_capability` above.
+    case 'request_permission':
+      return `ask a person to let ${action.name} ${action.kindLabel.toLowerCase()}`
     case 'escalate_to_human':
       return `escalate to a human: ${action.summary}`
     case 'no_action':

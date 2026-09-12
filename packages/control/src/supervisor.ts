@@ -32,6 +32,7 @@ import { releaseWorker } from './lifecycle.js'
 import { discardStaleCandidates, recordMemory } from './memory.js'
 import { answerQuestion, reassignQuestion } from './messaging.js'
 import { setRuntimeRoles } from './profile.js'
+import { setSlavePermission } from './permission.js'
 import type { Principal } from './principal.js'
 import { refusalText, type ControlRefusal } from './refusal.js'
 import { adoptRunbook } from './runbook.js'
@@ -515,6 +516,18 @@ async function carryOut(
           reason: error instanceof Error ? error.message : String(error),
         })
       }
+    case 'request_permission':
+      // M52 R5. `tierOf` pins this to `proposed` on every branch, so the only way here is a human
+      // approving the proposal -- which is the whole ruling: the Supervisor may point at a wall,
+      // and only a person moves it. `setSlavePermission` re-validates the kind against
+      // `PERMISSION_KINDS` and re-reads the worker, so a proposal that waited a day and named a
+      // worker who has since been released is refused rather than written.
+      //
+      // TASK 1 MINIMUM (M52 plan, Task 3 owns the rest): the principal half and the
+      // `permission.changed` event this write must append come with Task 3's `setSlavePermission`
+      // signature. The arm is here because `carryOut`'s switch is exhaustive over `Action['kind']`
+      // and the seventeenth member landed in this task.
+      return reached(await setSlavePermission(action.slaveId, action.permissionKind, 'allow'))
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

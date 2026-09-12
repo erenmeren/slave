@@ -499,10 +499,12 @@ try {
       data: { teamId, name: WORKER_NAME, role: 'backend', runtimeRoles: ['backend'], provider: WORKER_PROVIDER, model: WORKER_MODEL },
     })
   ).id
-  // Stage 1's deny: 'run tests' maps to Bash for claude_code (`CAPABILITY_TOOLS` in
-  // `packages/control/src/permission.ts`) -- exactly the tool/capability pair the fixture's own
-  // canned `hook_response` reason names.
-  await prisma.slavePermission.create({ data: { slaveId, tool: 'run tests', mode: 'deny' } })
+  // Stage 1's deny. M52 R1: `run tests` is `run_commands`, and it still resolves to `Bash` for
+  // claude_code (`TOOLS_BY_KIND`, `packages/domain/src/permission/kinds.ts`) -- the same tool the
+  // fixture's canned `hook_response` reason names. The payload assertion below still reads
+  // `'run tests'` because the replayed RECORDING still says so; M52 Task 6 redacts the fixture and
+  // moves that assertion in the same commit.
+  await prisma.slavePermission.create({ data: { slaveId, kind: 'run_commands', mode: 'deny' } })
   const enforcementTask = await prisma.task.create({
     data: {
       workspaceId,

@@ -139,6 +139,10 @@ model Workspace {
   goalVersions           GoalVersion[]
   /// M49 R1: what this PROJECT knows (`scope: workspace`).
   memories               Memory[]
+  /// M52 R3: the secrets this project can use, by NAME -- never a value.
+  credentials            Credential[]
+  /// M52 R3: what each brokered operation actually runs here.
+  brokerBindings         BrokerBinding[]
 
   @@index([adoptedFromSimulationId])
 }
@@ -531,20 +535,97 @@ enum PermissionMode {
   deny
 }
 
+/// M52 R1: what a worker may DO, as a closed enum where a bare `String` was. The TypeScript twin is
+/// `PERMISSION_KINDS` (`packages/domain/src/permission/kinds.ts`) and `enum-parity.test.ts` proves
+/// the two are the same list. A permission is an OPERATION and never an M47 capability: `Capability`
+/// says what a worker is FOR, this says what any worker MAY DO, and the UI prints two words.
+enum PermissionKind {
+  read_repo
+  write_repo
+  run_commands
+  network_fetch
+  read_secret
+  deploy_release
+}
+
+/// M52 R3: what KIND of secret a `Credential` names. Never what it IS -- the value is not in this
+/// database and not in any event; the orchestrator reads `process.env[envVar]` at execution time
+/// and nothing else ever holds it.
+enum CredentialKind {
+  deploy_token
+  git_token
+  api_key
+}
+
 enum ProviderKind {
   claude_code
   cursor
 }
 
 model SlavePermission {
-  id      String         @id @default(uuid())
-  slaveId String
-  tool    String
-  mode    PermissionMode
+  id        String         @id @default(uuid())
+  slaveId   String
+  /// M52 R1: the OPERATION this row decides, replacing the free-text `tool` column whose six prose
+  /// values collapsed three ways onto `Bash` and one onto nothing at all.
+  kind      PermissionKind
+  /// `allow` is a grant, `deny` is a person's explicit refusal, and the ABSENCE of a row is "never
+  /// asked" -- three states, which are exactly the checkmark/cross/dash the matrix has always
+  /// drawn. From M52 all three DENY at the gate unless the run kind's baseline says otherwise, so
+  /// `allow` finally means something `deny`'s absence did not.
+  mode      PermissionMode
+  /// M52 R5: WHO decided. Null for a row written before this milestone, and for one written by a
+  /// path that had no principal -- the CLI and the daemon have none (`Principal` is the human).
+  grantedBy String?
+  grantedAt DateTime       @default(now())
 
   slave Slave @relation(fields: [slaveId], references: [id], onDelete: Cascade)
 
-  @@unique([slaveId, tool])
+  @@unique([slaveId, kind])
+}
+
+/// M52 R3: a secret this installation can use, by NAME. The value is never here.
+///
+/// Workspace-scoped, which is also the simulation boundary doing its job for free: a `SimulationRun`
+/// binds to the CATALOG company and never to a workspace, so no simulation row can name one of
+/// these.
+model Credential {
+  id          String         @id @default(uuid())
+  workspaceId String
+  name        String
+  kind        CredentialKind
+  /// The environment variable the ORCHESTRATOR reads at execution time. A name, checked for shape,
+  /// never a value: nothing in this system stores, logs or prints a secret.
+  envVar      String
+  createdAt   DateTime       @default(now())
+
+  workspace Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  bindings  BrokerBinding[]
+
+  @@unique([workspaceId, name])
+}
+
+/// M52 R3: what one brokered operation actually RUNS here, and with which credential.
+///
+/// A table rather than `Workspace.brokerCommands Json`: `verifyCommands`/`setupCommands` are
+/// `String[]` on the workspace and a Json blob would be the first untyped command carrier in this
+/// schema, and a binding needs a real foreign key to `Credential`. `command` is ARGV, never a shell
+/// string -- the parameters a worker supplies never enter it (they ride in the child's environment),
+/// and argv is what makes that a property of the shape rather than of a quoting rule.
+model BrokerBinding {
+  id           String   @id @default(uuid())
+  workspaceId  String
+  /// One of `BROKERED_OPERATIONS`' keys. A `String` and not an enum: the registry is a static
+  /// manifest in TypeScript, and an op this version does not know is refused `not_brokered` rather
+  /// than making the row unreadable.
+  op           String
+  command      String[]
+  credentialId String?
+  createdAt    DateTime @default(now())
+
+  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  credential Credential? @relation(fields: [credentialId], references: [id])
+
+  @@unique([workspaceId, op])
 }
 
 model SkillProvider {
@@ -801,6 +882,15 @@ model SlaveRun {
   /// Which runtime produced this run (M12 Task 6). Nullable: this task only adds the column --
   /// Tasks 7/8 resolve and write it, so every run recorded before them reads back null.
   provider          ProviderKind?
+  /// M52 R4: `sha256` hex of the 32 random bytes this run was issued at spawn, ROTATED on every
+  /// resume. The plaintext exists only in the child's environment (`SLAVEOFAI_RUN_TOKEN`) and is
+  /// written nowhere -- not here, not in `Checkpoint`, not in a file, because a token file inside
+  /// the run directory would be readable by every sibling run under the same uid, which is the hole
+  /// this column exists to close. `@unique` so two runs cannot share an identity even by accident.
+  /// Null for every run recorded before M52, and for any spawn that supplied none -- such a run
+  /// meets a `permissions.json` whose `tokenHash` it cannot match and is refused every tool call,
+  /// which is the correct failure for an unidentifiable worker.
+  runTokenHash      String?       @unique
   pid               Int?
   worktreePath      String?
   startedAt         DateTime      @default(now())
@@ -1077,6 +1167,10 @@ enum SupervisorSituationKind {
   /// M51 R3: a run the behavioural breaker has STEERED, whose sentence the Supervisor is being
   /// asked to deliver. The subject is the RUN -- the first kind whose subject is a run.
   run_looping
+  /// M52 R5: a worker keeps meeting the same wall -- three or more `run.tool_denied` events naming
+  /// one permission kind inside half an hour. The subject is `<slaveId>:<kind>`, the first COMPOUND
+  /// subject: one wall, not one worker.
+  permission_blocked
   done_not_integrated_stale
   /// M50 R3: a worker brought in for one assignment, whose assignment is over. The subject is the
   /// SLAVE.
@@ -1335,6 +1429,14 @@ enum EventType {
   /// M51 R2: the behavioural breaker climbed a rung (steered, then constrained). The top rung is a
   /// `guardrail.tripped { guardrail: 'behavioural_loop' }` instead -- one rung, one event.
   run_breaker                 @map("run.breaker")
+  /// M52 R3: an operation the orchestrator ran on a worker's behalf. The environment is verbatim;
+  /// the credential, the resolved command and the output are never in it.
+  broker_executed             @map("broker.executed")
+  /// M52 R3: a brokered call the authoriser refused, and which of the seven reasons it was.
+  broker_refused              @map("broker.refused")
+  /// M52 R5: a person granted, refused or revoked one operation for one worker. `to: null` is a
+  /// REVOKE -- back to "never asked".
+  permission_changed          @map("permission.changed")
 }
 
 model ExecutionEvent {

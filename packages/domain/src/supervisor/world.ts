@@ -294,6 +294,25 @@ export interface SupervisorRun {
 }
 
 /**
+ * One wall a worker keeps meeting (M52 R5, plan erratum E9).
+ *
+ * Loaded by `packages/control/src/supervisorWorld.ts` from ONE grouped read of `run.tool_denied`
+ * over `PERMISSION_DENIAL_WINDOW_MS`, the way `loadLatestGuardrails` reads the newest guardrail per
+ * task -- the world holds no events, and a predicate that counted them itself would be the
+ * Supervisor reading the log.
+ *
+ * `kind` is a `PermissionKind` in every row the current gate writes, but is typed `string` because
+ * the payload's own field is: a database holding pre-M52 rows carries `'run tests'`, and a denial
+ * of `ungoverned_tool` carries a reason no grant can fix. `observe` filters both out.
+ */
+export interface SupervisorDenial {
+  readonly slaveId: string
+  readonly kind: string
+  readonly count: number
+  readonly latestRunId: string | null
+}
+
+/**
  * Everything the Supervisor is allowed to know about a workspace at one instant (M38 §3), built
  * by `packages/control/src/supervisorWorld.ts` from Prisma (spec E2) and handed to the pure
  * functions here. No Prisma types, no `Date` objects (epoch ms throughout, so a fixture is a
@@ -347,6 +366,10 @@ export interface SupervisorWorld {
   /** Non-terminal runs of this workspace (M51 R3). Bounded by the concurrency guardrail: a
    *  workspace may have `maxConcurrentRuns` of them, three by default. */
   readonly runs: readonly SupervisorRun[]
+  /** M52 R5: how often each worker has been refused each operation lately. EMPTY unless some run
+   *  has been denied in the window -- the loader does not pay for a grouped event scan on a project
+   *  where nothing has been refused. */
+  readonly denials: readonly SupervisorDenial[]
 }
 
 /**

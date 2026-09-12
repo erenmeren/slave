@@ -210,7 +210,9 @@ export type ControlRefusal =
   | { readonly kind: 'company_mismatch'; readonly companySlaveId: string; readonly companyTeamId: string }
   /** A skill id that no `Skill` row carries (M14 §4.3). */
   | { readonly kind: 'skill_not_found'; readonly skillId: string }
-  /** A permission tool outside `PERMISSION_TOOLS` (M14 §5.7). */
+  /** A permission kind outside `PERMISSION_KINDS` (M14 §5.7; M52 R1 moved the vocabulary).
+   *  The kind's NAME and its payload FIELD both stay `tool` (plan erratum E11) -- renaming a
+   *  refusal costs three homes to rename a word no surface prints; only its sentence moved. */
   | { readonly kind: 'invalid_tool'; readonly tool: string }
   /** A permission mode that is neither `allow` nor `deny`. */
   | { readonly kind: 'invalid_permission_mode'; readonly mode: string }
@@ -500,7 +502,7 @@ export function refusalText(refusal: ControlRefusal): string {
     case 'skill_not_found':
       return `no skill with id ${refusal.skillId}`
     case 'invalid_tool':
-      return 'a permission must name one of the six tools'
+      return 'a permission must name one of the six operations'
     case 'invalid_permission_mode':
       return 'a permission must be allow or deny'
     case 'repo_path_not_absolute':

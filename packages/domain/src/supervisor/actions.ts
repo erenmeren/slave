@@ -54,6 +54,25 @@ export type Action =
    * of why `tierOf` may stamp it `applied`.
    */
   | { readonly kind: 'steer_run'; readonly runId: string; readonly slaveId: string; readonly text: string }
+  /**
+   * M52 R5: ask a PERSON to grant one operation to one worker. Never grants it.
+   *
+   * `permissionKind` rather than `kind`, because `Action`'s own discriminator is already called
+   * `kind` and a second one on the same object would read as the action's type. `kindLabel` rides
+   * along for `assign_capability`'s reason: the Supervisor panel is a client component and must be
+   * able to print a word without importing the domain's label table through control's barrel.
+   *
+   * `why` is `permissionWhyFor(permissionKind, count)` -- a fixed sentence from a constant with one
+   * integer interpolated, from a source file no model has seen and no prompt can reach.
+   */
+  | {
+      readonly kind: 'request_permission'
+      readonly slaveId: string
+      readonly name: string
+      readonly permissionKind: string
+      readonly kindLabel: string
+      readonly why: string
+    }
   /** `adoptRunbook`: the workspace adopts a way of working. Never automatic ({@link tierOf}) -- a
    *  process is a person's decision, exactly as a hire is, and the next plan is written against it.
    *  `name` and `rationale` are carried on the action rather than resolved by whoever renders it,
@@ -99,6 +118,7 @@ export const ACTION_KINDS = [
   'discard_stale_candidates',
   'release_worker',
   'steer_run',
+  'request_permission',
   'escalate_to_human',
   'no_action',
 ] as const
@@ -179,6 +199,16 @@ export const actionSchema: z.ZodType<Action, z.ZodTypeDef, unknown> = z.discrimi
     kind: z.literal('discard_stale_candidates'),
     workspaceId: z.string().min(1),
     count: z.number().int().positive(),
+  }),
+  z.object({
+    kind: z.literal('request_permission'),
+    slaveId: z.string().min(1),
+    name: z.string().min(1),
+    permissionKind: z.string().min(1),
+    kindLabel: z.string().min(1),
+    // Capped where the action is VALIDATED as well as where it is built, for `steer_run.text`'s
+    // reason: a stored row is read back and printed, so the bound belongs on the boundary too.
+    why: z.string().min(1).max(1000),
   }),
   z.object({ kind: z.literal('escalate_to_human'), summary: z.string().min(1) }),
   z.object({ kind: z.literal('no_action') }),

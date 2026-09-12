@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { parseExecutionEvent } from '../../src/events/schema.js'
+import { BROKER_REFUSAL_REASONS } from '../../src/broker/operations.js'
+import { executionEventSchema, parseExecutionEvent } from '../../src/events/schema.js'
 
 const BASE = {
   seq: 1,
@@ -1163,5 +1164,103 @@ describe('run.breaker (the 55th type)', () => {
     expect(
       parseExecutionEvent({ ...base, payload: { level: 'steered', trip: 'vibes', count: 8, detail: 'x' } }).ok,
     ).toBe(false)
+  })
+})
+
+describe('M52: the broker and the permission change (56th, 57th, 58th)', () => {
+  it('parses broker.executed with the environment verbatim and the rest hashed', () => {
+    const parsed = executionEventSchema.parse({
+      type: 'broker.executed',
+      seq: 1,
+      ts: '2026-09-12T10:00:00.000Z',
+      workspaceId: 'w',
+      runId: 'r',
+      slaveId: 's',
+      actor: 'system',
+      payload: {
+        op: 'deploy_release',
+        environment: 'staging',
+        paramsHash: 'a'.repeat(64),
+        exitCode: 0,
+        durationMs: 1234,
+      },
+    })
+    expect(parsed.type).toBe('broker.executed')
+  })
+
+  it('refuses a broker.executed payload carrying anything else -- the command, the output or a secret', () => {
+    expect(() =>
+      executionEventSchema.parse({
+        type: 'broker.executed',
+        seq: 1,
+        ts: '2026-09-12T10:00:00.000Z',
+        workspaceId: 'w',
+        actor: 'system',
+        payload: {
+          op: 'deploy_release',
+          environment: 'staging',
+          paramsHash: 'a'.repeat(64),
+          exitCode: 0,
+          durationMs: 1,
+          output: 'Deployed! token=hunter2',
+        },
+      }),
+    ).toThrow()
+  })
+
+  it('parses broker.refused with one of the seven reasons', () => {
+    for (const reason of BROKER_REFUSAL_REASONS) {
+      const parsed = executionEventSchema.parse({
+        type: 'broker.refused',
+        seq: 1,
+        ts: '2026-09-12T10:00:00.000Z',
+        workspaceId: 'w',
+        actor: 'system',
+        payload: { op: 'deploy_release', reason },
+      })
+      expect(parsed.type).toBe('broker.refused')
+    }
+  })
+
+  it('parses permission.changed with the from/to/by triple, either side nullable', () => {
+    const parsed = executionEventSchema.parse({
+      type: 'permission.changed',
+      seq: 1,
+      ts: '2026-09-12T10:00:00.000Z',
+      workspaceId: 'w',
+      slaveId: 's',
+      actor: 'human',
+      payload: {
+        slaveId: 's',
+        name: 'Alex',
+        kind: 'network_fetch',
+        kindLabel: 'Fetch over the network',
+        from: null,
+        to: 'allow',
+        by: 'meren',
+      },
+    })
+    expect(parsed.type).toBe('permission.changed')
+  })
+
+  it('parses a REVOKE -- `to: null` is "back to never asked", which is a real change', () => {
+    const parsed = executionEventSchema.parse({
+      type: 'permission.changed',
+      seq: 1,
+      ts: '2026-09-12T10:00:00.000Z',
+      workspaceId: 'w',
+      slaveId: 's',
+      actor: 'human',
+      payload: {
+        slaveId: 's',
+        name: 'Alex',
+        kind: 'network_fetch',
+        kindLabel: 'Fetch over the network',
+        from: 'allow',
+        to: null,
+        by: 'meren',
+      },
+    })
+    expect(parsed.type).toBe('permission.changed')
   })
 })

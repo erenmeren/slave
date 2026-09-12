@@ -30,7 +30,18 @@ export const TYPES_BY_KIND = {
   // M51 R1: a tool RESULT sits beside the call it answers, under the same chip an operator filters
   // to when they want per-call activity. Not under `runs`: it is not a run lifecycle event, and one
   // per call would swamp that chip.
-  tool_calls: ['run.tool_call', 'run.output', 'run.tool_denied', 'run.tool_result'],
+  // M52 R3: a brokered operation is PER-CALL activity -- a worker asked the orchestrator for
+  // something inside its own turn -- so both ends of it sit beside the call and the refusal an
+  // operator already filters to here. Deliberately not `guardrails`, which is `guardrail.tripped`
+  // alone (plan decision D31): nothing about a refused broker call stops work.
+  tool_calls: [
+    'run.tool_call',
+    'run.output',
+    'run.tool_denied',
+    'run.tool_result',
+    'broker.executed',
+    'broker.refused',
+  ],
   tasks: [
     'task.created',
     'task.started',
@@ -124,6 +135,10 @@ export const TYPES_BY_KIND = {
     // `org.changed` and `slave.runtime_roles_changed` sit under -- not a run outcome, and it
     // carries no taskId of its own.
     'slave.released',
+    // M52 R5: what a worker may DO is project configuration, beside `org.changed` and
+    // `slave.runtime_roles_changed` (plan decision D31) -- it carries no taskId, it is not a run
+    // outcome, and an operator asking "what changed about this project" is who reads it.
+    'permission.changed',
   ],
 } as const satisfies Record<ActivityKind, readonly DomainEventType[]>
 

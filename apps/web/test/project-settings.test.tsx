@@ -165,7 +165,7 @@ function settings(over: Partial<ProjectSettings['workspace']> = {}): ProjectSett
           slaveId: 'a1',
           name: 'Alex',
           role: 'backend',
-          cells: [{ tool: 'repo read', mode: 'allow' as const }],
+          cells: [{ tool: 'read_repo', mode: 'allow' as const }],
         },
       ],
     },

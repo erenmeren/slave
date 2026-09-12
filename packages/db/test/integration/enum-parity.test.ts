@@ -6,6 +6,8 @@ import {
   MEMORY_SOURCE_KINDS,
   MEMORY_STATUSES,
   MEMORY_TYPES,
+  PERMISSION_KINDS,
+  PERMISSION_PROVIDERS,
   SITUATION_KINDS,
   SLAVE_LIFECYCLES,
   TIERS,
@@ -97,6 +99,23 @@ describe('database enums match the domain unions', () => {
   // fails at the first `slaveRun.update` rather than at build.
   it('BreakerLevel matches BREAKER_LEVELS, member for member', async () => {
     expect(await enumValues('BreakerLevel')).toEqual([...BREAKER_LEVELS].sort())
+  })
+
+  // M52 R1/R3: the two new Postgres enums, held to the domain's lists for
+  // `SupervisorSituationKind`'s reason -- nothing in TypeScript ties a Prisma enum to the union it
+  // mirrors, and a seventh permission kind that reached the union and not the enum compiles clean
+  // and fails at the first `setSlavePermission`, in production, on a worker somebody was trying to
+  // unblock.
+  it('PermissionKind matches PERMISSION_KINDS, member for member', async () => {
+    expect(await enumValues('PermissionKind')).toEqual([...PERMISSION_KINDS].sort())
+  })
+
+  it('CredentialKind is the three the operator can name', async () => {
+    expect(await enumValues('CredentialKind')).toEqual(['api_key', 'deploy_token', 'git_token'])
+  })
+
+  it('ProviderKind matches the domain\u2019s PERMISSION_PROVIDERS, so the permission tables key on the same two', async () => {
+    expect(await enumValues('ProviderKind')).toEqual([...PERMISSION_PROVIDERS].sort())
   })
 
   // The test above pins the database enum to `EVENT_TYPE_BY_DOMAIN_TYPE`, a hand-maintained

@@ -22,10 +22,14 @@ describe('parseActivityFilters', () => {
     expect([...result.filters.types].sort()).toEqual(['guardrail.tripped', 'run.output'])
   })
   // M51 R1 widened this chip with `run.tool_result` -- the answer to a call sits beside the call.
-  it('expands kinds=tool_calls to run.tool_call, run.output, run.tool_denied and run.tool_result', () => {
+  // M52 R3 widened it again with both broker events (plan decision D31): a brokered operation is
+  // per-call activity, asked for inside a worker's own turn, not a run lifecycle event.
+  it('expands kinds=tool_calls to the four per-call types and both broker events', () => {
     const result = parseActivityFilters(new URLSearchParams('kinds=tool_calls'))
     if (!result.ok) throw new Error(result.error)
     expect([...result.filters.types].sort()).toEqual([
+      'broker.executed',
+      'broker.refused',
       'run.output',
       'run.tool_call',
       'run.tool_denied',
@@ -50,7 +54,8 @@ describe('parseActivityFilters', () => {
   // it again with the two roster writes (a persona rewritten, a runtime role set replaced); M38 t1
   // with the Supervisor's five decision events; M40 t1 with the two delta re-plan events; M48 t1
   // with `workspace.runbook_adopted`; M49 t1 with the two memory events; M50 t1 with
-  // `slave.released`, which is a change to the project's roster like `org.changed` beside it.
+  // `slave.released`, which is a change to the project's roster like `org.changed` beside it;
+  // M52 t1 with `permission.changed`.
   it('expands kinds=workspace to the created, goal, plan, re-plan, runbook, memory, company-assigned, settings-changed, org-changed, archived, restored, slave-configuration and supervisor event types', () => {
     const result = parseActivityFilters(new URLSearchParams('kinds=workspace'))
     if (!result.ok) throw new Error(result.error)
@@ -58,6 +63,9 @@ describe('parseActivityFilters', () => {
       'memory.changed',
       'memory.recorded',
       'org.changed',
+      // M52 R5 (plan decision D31): what a worker may DO is project configuration, beside
+      // `org.changed` and `slave.runtime_roles_changed`.
+      'permission.changed',
       'slave.profile_changed',
       'slave.released',
       'slave.runtime_roles_changed',

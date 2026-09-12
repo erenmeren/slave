@@ -157,6 +157,23 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
   'slave.released': { slaveId: 'ag-9', name: 'Robin', reason: 'the engagement is over', worktreesCollected: 1 },
   'run.tool_result': { toolUseId: 'toolu_1', toolName: 'Bash', outcome: 'error', errorClass: 'timeout' },
   'run.breaker': { level: 'steered', trip: 'repeated_call', count: 8, detail: 'Bash:aaaa' },
+  'broker.executed': {
+    op: 'deploy_release',
+    environment: 'staging',
+    paramsHash: 'a'.repeat(64),
+    exitCode: 0,
+    durationMs: 1234,
+  },
+  'broker.refused': { op: 'deploy_release', reason: 'permission_denied' },
+  'permission.changed': {
+    slaveId: 'ag-1',
+    name: 'Alex',
+    kind: 'network_fetch',
+    kindLabel: 'Fetch over the network',
+    from: null,
+    to: 'allow',
+    by: 'meren',
+  },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {
@@ -195,6 +212,58 @@ describe('targeted card bodies', () => {
     const Card = ACTIVITY_CARDS['run.tool_denied']
     render(<Card event={fixtureFor('run.tool_denied')} {...CARD_PROPS} />)
     expect(screen.getByTestId('tool-denied-text').textContent).toBe('Bash denied — run tests')
+  })
+
+  // M52 R3/R5: three cards, three payloads a person reads. The op and the reason are KEYS on the
+  // wire, so each rides `title`/`data-*` and the LABEL is what is printed (`docs/ia.md` rule 3).
+  it('broker.executed names the operation and the environment it reached', () => {
+    const Card = ACTIVITY_CARDS['broker.executed']
+    render(<Card event={fixtureFor('broker.executed')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('broker-executed-text').textContent).toBe('Deploy a release \u2192 staging \u00b7 exit 0')
+    expect(screen.getByTestId('broker-executed-text').getAttribute('data-op')).toBe('deploy_release')
+  })
+
+  it('broker.refused prints the reason\u2019s WORDS and keeps the key on the element', () => {
+    const Card = ACTIVITY_CARDS['broker.refused']
+    render(<Card event={fixtureFor('broker.refused')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('broker-refused-text').textContent).toBe(
+      'Deploy a release \u2014 This worker was not granted that',
+    )
+    expect(screen.getByTestId('broker-refused-text').getAttribute('data-reason')).toBe('permission_denied')
+  })
+
+  it('broker.refused prints a reason this build does not know as itself -- the log is forgiving', () => {
+    const Card = ACTIVITY_CARDS['broker.refused']
+    const event = baseEvent('broker.refused', { op: 'deploy_release', reason: 'from_the_future' })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('broker-refused-text').textContent).toBe('Deploy a release \u2014 from_the_future')
+  })
+
+  it('permission.changed reads the grant in words, with the kind key one hover away', () => {
+    const Card = ACTIVITY_CARDS['permission.changed']
+    render(<Card event={fixtureFor('permission.changed')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('permission-changed-text').textContent).toBe(
+      'Alex \u00b7 Fetch over the network \u00b7 never asked \u2192 granted',
+    )
+    expect(screen.getByTestId('permission-changed-text').getAttribute('data-kind')).toBe('network_fetch')
+    expect(screen.getByTestId('permission-changed-by').textContent).toBe(' \u00b7 by meren')
+  })
+
+  it('permission.changed reads a REVOKE as going back to never asked', () => {
+    const Card = ACTIVITY_CARDS['permission.changed']
+    const event = baseEvent('permission.changed', {
+      slaveId: 'ag-1',
+      name: 'Alex',
+      kind: 'network_fetch',
+      kindLabel: 'Fetch over the network',
+      from: 'allow',
+      to: null,
+      by: 'meren',
+    })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('permission-changed-text').textContent).toBe(
+      'Alex \u00b7 Fetch over the network \u00b7 granted \u2192 never asked',
+    )
   })
 
   it('run.failed shows the reason', () => {

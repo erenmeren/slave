@@ -1,6 +1,7 @@
 import { steerTextFor } from '../breaker/constants.js'
 import { capabilityLabel as capabilityLabelIn, projectRoles } from '../capability/taxonomy.js'
 import { formTeam, type TeamPlan, type TeamProposal } from '../capability/team.js'
+import { PERMISSION_KINDS, PERMISSION_LABEL, type PermissionKind } from '../permission/kinds.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
 import type { Action, Candidate } from './actions.js'
 import { rosterCapabilities, staffableSlaves } from './observe.js'
@@ -14,6 +15,29 @@ import type { SupervisorQuestion, SupervisorSlave, SupervisorTask, SupervisorWor
  * workspace's proposal into a menu nobody reads.
  */
 export const MAX_STAFFING_CANDIDATES = 3
+
+function isPermissionKind(value: string): value is PermissionKind {
+  return (PERMISSION_KINDS as readonly string[]).includes(value)
+}
+
+/**
+ * Why a permission is being asked for, as a FIXED sentence (M52 R5).
+ *
+ * Never a model's words, and this is the ruling that lets the action exist at all:
+ * `packages/domain/src/supervisor/critical.ts:33-34` forbids the Supervisor ANSWERING about
+ * permissions and credentials in prose, and the distinction that holds is between prose and a
+ * proposal. This function writes no prose -- it interpolates one label and one integer into a
+ * constant, and everything else a person needs is the row itself.
+ *
+ * It does not name the WORKER: the action carries `name` beside this sentence and the panel is the
+ * thing that prints it, so a name interpolated here would be the same fact twice.
+ */
+export function permissionWhyFor(kind: PermissionKind, count: number): string {
+  return (
+    `This worker has been refused \u2018${PERMISSION_LABEL[kind]}\u2019 ${String(count)} times ` +
+    'and cannot get past it. Only a person can grant it.'
+  )
+}
 
 /** The task a task-shaped situation is about, if the world still has it. */
 function subjectTask(situation: Situation, world: SupervisorWorld): SupervisorTask | undefined {
@@ -437,6 +461,35 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
             world,
             situation.kind,
             'Tell it, once, in the system\u2019s own words, that it is repeating itself -- the next rung takes its remaining tool budget away.',
+          ),
+        )
+      }
+      break
+    }
+
+    case 'permission_blocked': {
+      // `facts.slaveId` is the BARE id -- `subjectId` is `<slaveId>:<kind>` (plan decision D6) and
+      // nothing here parses it. The world moved between `observe` and here (the worker was
+      // released, the row is gone): no offer against a row that is not there, and the two last
+      // resorts below are then the whole catalogue, which is `run_looping`'s shape exactly.
+      const slaveId = String(situation.facts['slaveId'] ?? '')
+      const permissionKind = String(situation.facts['kind'] ?? '')
+      const count = Number(situation.facts['count'] ?? 0)
+      const blocked = world.slaves.find((one) => one.id === slaveId)
+      if (blocked !== undefined && isPermissionKind(permissionKind)) {
+        offers.push(
+          candidate(
+            {
+              kind: 'request_permission',
+              slaveId,
+              name: blocked.name,
+              permissionKind,
+              kindLabel: PERMISSION_LABEL[permissionKind],
+              why: permissionWhyFor(permissionKind, count),
+            },
+            world,
+            situation.kind,
+            `${blocked.name} cannot get past this without it.`,
           ),
         )
       }

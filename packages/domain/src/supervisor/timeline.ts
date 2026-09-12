@@ -72,6 +72,13 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   // `run.paused`/`run.resumed`: it is a thing that happened TO a run, and it is exactly what a
   // person reading "what happened here" needs between a run starting and a run failing.
   'run.breaker': 'work',
+  // M52 R3/R5: all three are WORK -- something the system did for a worker, or something a person
+  // did to what a worker may do. Not `null` (invisible) and not a lane of their own: the
+  // Supervisor's timeline is what a person reads to understand a project's week, and "the deploy
+  // ran" and "somebody opened the network for this worker" both belong in it.
+  'broker.executed': 'work',
+  'broker.refused': 'work',
+  'permission.changed': 'work',
   'slave.message_sent': 'work',
   // M50 R3: the end of one worker's engagement is part of the work story, beside the messages and
   // the pauses -- who was here, and until when. Not `decision`: the Supervisor applies this

@@ -70,6 +70,23 @@ export const SITUATION_KINDS = [
    * three packages, and this is the Supervisor's one.
    */
   'run_looping',
+  /**
+   * M52 R5: a worker keeps meeting the same WALL. `PERMISSION_TRIP_COUNT` or more `run.tool_denied`
+   * events naming one kind, inside `PERMISSION_DENIAL_WINDOW_MS`. `subjectId` is
+   * `<slaveId>:<kind>` -- "this worker's wall", the way `capability_unstaffed`'s subject is a
+   * capability key rather than a task: the situation KEY is `(kind, subjectId)` and a worker can be
+   * blocked on two operations at once, so a bare slave id would collapse the two in `filterFresh`
+   * and collide on `SupervisorDecision`'s unique key. `facts.slaveId` stays the BARE id, so
+   * `carryOut` never has to parse a subject.
+   *
+   * Directly after `run_looping` (plan decision D6): both are about a run that is spending and
+   * getting nowhere, and a reader meets "going in circles" and then "blocked by a wall nobody can
+   * move but you" in one pass. The Supervisor may only ever REQUEST the grant (`tierOf` returns
+   * `proposed` unconditionally), which is what lets an action about permissions exist at all beside
+   * `critical.ts:33-34`'s refusal to let the Supervisor ANSWER about them: this action writes no
+   * prose, and its `why` is a constant.
+   */
+  'permission_blocked',
   'ready_unstaffed',
   'done_not_integrated_stale',
   /**
@@ -109,8 +126,9 @@ export type SituationKind = (typeof SITUATION_KINDS)[number]
  * more specific), the WORKSPACE id for `runbook_recommended` -- which is about the project rather
  * than about any row in it -- the SLAVE id for `engagement_over` (M50 R3, the first kind whose
  * subject is a worker: one situation per person, however many rows their runs left behind), the
- * RUN id for `run_looping` (M51 R3, the first kind whose subject is a run) -- and the workspace id
- * for `workspace_halted`.
+ * RUN id for `run_looping` (M51 R3, the first kind whose subject is a run), `<slaveId>:<kind>` for
+ * `permission_blocked` (M52 R5, the first COMPOUND subject: one wall, not one worker) -- and the
+ * workspace id for `workspace_halted`.
  *
  * `summary` is for a human and for the model prompt; `facts` is the evidence the predicate fired
  * on, kept as flat scalars so the whole thing survives a round trip through `SupervisorDecision.
@@ -138,8 +156,8 @@ export const situationSchema: z.ZodType<Situation> = z.object({
  * key rendered as prose is the leak M44 closes -- the Supervisor panel's recent-decision rows read
  * `no_reviewer · proposed · pending · by model`.
  *
- * `Record<SituationKind, string>` is load-bearing: a SEVENTEENTH kind fails the build here rather
- * than turning up on the page as an identifier (sixteen as of M51's `run_looping`).
+ * `Record<SituationKind, string>` is load-bearing: an EIGHTEENTH kind fails the build here rather
+ * than turning up on the page as an identifier (seventeen as of M52's `permission_blocked`).
  * Each label says what is STUCK, in the words the report already uses; the decision's own
  * `situation.summary` carries the specifics beside it.
  */
@@ -157,6 +175,7 @@ export const SITUATION_LABEL: Record<SituationKind, string> = {
   // M51 R3: the same words `GUARDRAIL_LABEL.behavioural_loop` uses. One phenomenon, one phrase,
   // wherever a person meets it -- the run card, the guardrail card and this report all say it.
   run_looping: 'Going in circles',
+  permission_blocked: 'Blocked by a permission',
   ready_unstaffed: 'Ready work, nobody to do it',
   done_not_integrated_stale: 'Finished, not integrated',
   engagement_over: 'Engagement over',

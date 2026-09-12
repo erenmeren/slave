@@ -198,6 +198,9 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     // run and says which rung it is on. Defaulted here for the M49/M50 fixture rule -- every
     // existing case in this directory keeps meaning exactly what it meant.
     runs: [],
+    // M52 R5: nothing has been refused, so `permission_blocked` only ever fires in a test that
+    // hands the world a denial and says which worker and which operation it is about.
+    denials: [],
     ...overrides,
   }
 }

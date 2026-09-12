@@ -46,7 +46,7 @@ describe('buildProjectSettings', () => {
       data: { workspaceId: fixture.workspaceId, kind: 'cursor', settings: {} },
     })
     await prisma.slavePermission.create({
-      data: { slaveId: fixture.slaveId, tool: 'repo read', mode: 'allow' },
+      data: { slaveId: fixture.slaveId, kind: 'read_repo', mode: 'allow' },
     })
 
     const settings = await buildProjectSettings(fixture.workspaceId)
@@ -72,13 +72,13 @@ describe('buildProjectSettings', () => {
 
     expect(settings?.permissions?.workspaceId).toBe(fixture.workspaceId)
     expect(settings?.permissions?.rows[0]?.slaveId).toBe(fixture.slaveId)
-    expect(settings?.permissions?.rows[0]?.cells.find((c) => c.tool === 'repo read')?.mode).toBe('allow')
+    expect(settings?.permissions?.rows[0]?.cells.find((c) => c.tool === 'read_repo')?.mode).toBe('allow')
   })
 
   it('never leaks a second workspace’s permissions into this one’s section', async (): Promise<void> => {
     const fixtureA = await seed('Checkout Platform')
     const fixtureB = await seed('Billing Platform')
-    await prisma.slavePermission.create({ data: { slaveId: fixtureB.slaveId, tool: 'deploy prod', mode: 'deny' } })
+    await prisma.slavePermission.create({ data: { slaveId: fixtureB.slaveId, kind: 'deploy_release', mode: 'deny' } })
 
     const settings = await buildProjectSettings(fixtureA.workspaceId)
 

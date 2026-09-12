@@ -97,8 +97,8 @@ describe('the Settings query module', () => {
       const slave = await prisma.slave.create({ data: { teamId, name: 'Alex', role: 'backend' } })
       await prisma.slavePermission.createMany({
         data: [
-          { slaveId: slave.id, tool: 'repo read', mode: 'allow' },
-          { slaveId: slave.id, tool: 'source write', mode: 'deny' },
+          { slaveId: slave.id, kind: 'read_repo', mode: 'allow' },
+          { slaveId: slave.id, kind: 'write_repo', mode: 'deny' },
         ],
       })
 
@@ -108,12 +108,12 @@ describe('the Settings query module', () => {
       // All six, in the README's order, every time — a tool with no row is `null`, which is
       // UNSET and not the same statement as `deny`.
       expect(cells.map((c) => c.tool)).toEqual([
-        'repo read',
-        'source write',
-        'run tests',
-        'create branch',
-        'deploy prod',
-        'read secrets',
+        'read_repo',
+        'write_repo',
+        'run_commands',
+        'network_fetch',
+        'read_secret',
+        'deploy_release',
       ])
       expect(cells.map((c) => c.mode)).toEqual(['allow', 'deny', null, null, null, null])
     })
@@ -123,7 +123,7 @@ describe('the Settings query module', () => {
       const ledger = await seedWorkspace('Ledger')
       const here = await prisma.slave.create({ data: { teamId: checkout.teamId, name: 'Alex', role: 'backend' } })
       const there = await prisma.slave.create({ data: { teamId: ledger.teamId, name: 'Alex', role: 'backend' } })
-      await prisma.slavePermission.create({ data: { slaveId: here.id, tool: 'repo read', mode: 'allow' } })
+      await prisma.slavePermission.create({ data: { slaveId: here.id, kind: 'read_repo', mode: 'allow' } })
 
       const sections = await buildPermissionMatrix()
 

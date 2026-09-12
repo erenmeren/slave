@@ -1,7 +1,9 @@
 import { STEERS_PER_RUN_MAX } from '../breaker/constants.js'
 import { BREAKER_TRIP_LABEL } from '../breaker/detect.js'
+import { PERMISSION_TRIP_COUNT } from '../broker/operations.js'
 import { capabilityIndex, projectRoles } from '../capability/taxonomy.js'
 import { isReleasable } from '../lifecycle/release.js'
+import { PERMISSION_KINDS, PERMISSION_LABEL, type PermissionKind } from '../permission/kinds.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
 import { TERMINAL } from '../task/state.js'
 import { isStaffableTask } from './candidates.js'
@@ -332,6 +334,38 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
         count: run.count,
         level: run.breakerLevel,
         steers: run.breakerSteers,
+      },
+    })
+  }
+
+  // permission_blocked (M52 R5): a worker that keeps meeting the same wall. Four clauses, each one
+  // a way of being wrong about it:
+  //   - the kind is one of the six. A pre-M52 row spells `'run tests'` and a denial of an
+  //     ungoverned tool spells `ungoverned_tool`; neither names something a person can grant, and
+  //     proposing a grant for either would put an unactionable row in front of somebody.
+  //   - the count has reached PERMISSION_TRIP_COUNT. One refusal is a worker trying something.
+  //   - the worker is IN THE WORLD. A released or deleted worker has no wall to move, and
+  //     `applyDecision` would refuse `slave_not_found` on the proposal a person approved.
+  //   - the worker is not released. A released worker's grants are not the reason it is idle.
+  for (const denial of world.denials) {
+    if (!(PERMISSION_KINDS as readonly string[]).includes(denial.kind)) continue
+    if (denial.count < PERMISSION_TRIP_COUNT) continue
+    const blocked = world.slaves.find((candidate) => candidate.id === denial.slaveId)
+    if (blocked === undefined || blocked.released) continue
+    add({
+      kind: 'permission_blocked',
+      // `<slaveId>:<kind>`, not the bare slave id: one worker can be blocked on two operations at
+      // once and the situation key is `(kind, subjectId)` (plan decision D6). `facts.slaveId`
+      // below is the bare id, so nothing downstream ever parses this.
+      subjectId: `${denial.slaveId}:${denial.kind}`,
+      summary:
+        `${blocked.name} has been refused \u2018${PERMISSION_LABEL[denial.kind as PermissionKind]}\u2019 ` +
+        `${String(denial.count)} times and cannot get past it.`,
+      facts: {
+        slaveId: denial.slaveId,
+        kind: denial.kind,
+        count: denial.count,
+        runId: denial.latestRunId,
       },
     })
   }

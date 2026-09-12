@@ -171,7 +171,7 @@ describe('executing a resume intent from the daemon', () => {
 
     // The matrix edit happens BETWEEN pause and resume -- exactly the window the file must be
     // rewritten across, not merely written once at the original dispatch.
-    await prisma.slavePermission.create({ data: { slaveId: fixture.slaveId, tool: 'run tests', mode: 'deny' } })
+    await prisma.slavePermission.create({ data: { slaveId: fixture.slaveId, kind: 'run_commands', mode: 'deny' } })
 
     expect((await requestResume(runId, MARKER, 'web')).ok).toBe(true)
     await tick({
@@ -180,9 +180,15 @@ describe('executing a resume intent from the daemon', () => {
     })
     await drainPumps()
 
+    // M52 R1: the same shell, denied through the new vocabulary. `run_commands` covers the whole
+    // shell -- `Bash` and the two calls that operate on a shell it already started.
     expect(JSON.parse(readFileSync(permissionsPath, 'utf8'))).toEqual({
       version: 1,
-      deny: [{ tool: 'Bash', capability: 'run tests' }],
+      deny: [
+        { tool: 'Bash', capability: 'run_commands' },
+        { tool: 'BashOutput', capability: 'run_commands' },
+        { tool: 'KillShell', capability: 'run_commands' },
+      ],
     })
   }, 60_000)
 

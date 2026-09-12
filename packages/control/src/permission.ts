@@ -1,61 +1,40 @@
 import { writeFileSync } from 'node:fs'
 import { prisma } from '@slave-of-ai/db/client'
-import { type Result, err, ok } from '@slave-of-ai/domain'
+import {
+  PERMISSION_KINDS,
+  TOOLS_BY_KIND,
+  type PermissionKind,
+  type PermissionProvider,
+  type Result,
+  err,
+  ok,
+} from '@slave-of-ai/domain'
 import { permissionsFilePathFor } from '@slave-of-ai/providers'
 import type { ControlRefusal } from './refusal.js'
 
 /**
- * The design README §3a.9's six permission columns, verbatim and in its order. ONE list: this verb
- * validates against it and `apps/web/src/server/settings.ts` renders it, so a seventh column is a
- * single edit rather than two that can disagree.
+ * M18's denylist, re-pointed at M52's vocabulary and NOTHING ELSE.
  *
- * Enforcement (M18 §2) resolves ORCHESTRATOR-SIDE, at dispatch/resume snapshot time:
- * `resolveDenyList` below maps each `deny` row to real vendor tool names via `CAPABILITY_TOOLS`
- * and the result is written into a run's `permissions.json`, which the gate scripts read as a
- * dumb membership test. A matrix edit does not reach a run already in flight -- stated in the
- * matrix UI copy -- and `read secrets` stays unenforced (a path predicate, no tool carries it).
+ * TEMPORARY, and deleted by Task 2. The column swap and the inversion are two changes and this is
+ * the seam between them: after this task a denied `run_commands` row denies `Bash` exactly as a
+ * denied `run tests` row did, through a new column, in the new vocabulary, with the gate's answer
+ * untouched. Task 2 replaces this function and the file it writes with `resolveGrants` and
+ * `permissions.json` v2, and the library that reads it, in one commit.
+ *
+ * The six prose rows and `CAPABILITY_TOOLS` are gone with the column: the vocabulary now lives in
+ * `packages/domain/src/permission/kinds.ts`, where the Settings matrix and the worker panel can
+ * both reach it without importing this barrel (plan erratum E12).
  */
-export const PERMISSION_TOOLS = [
-  'repo read',
-  'source write',
-  'run tests',
-  'create branch',
-  'deploy prod',
-  'read secrets',
-] as const
-
-export type PermissionTool = (typeof PERMISSION_TOOLS)[number]
-
-function isPermissionTool(value: string): value is PermissionTool {
-  return (PERMISSION_TOOLS as readonly string[]).includes(value)
-}
-
-/**
- * v1 capability→vendor-tool resolution (spec §2, measured 2026-08-31). Coarse by design:
- * the three shell-backed capabilities all deny the shell tool outright (command-string
- * inspection is out of scope), and 'read secrets' maps to nothing — it is a path predicate
- * no tool carries, stated as unenforced in the matrix UI. Unmapped tools always pass.
- */
-const CAPABILITY_TOOLS: Record<string, { readonly claude_code: readonly string[]; readonly cursor: readonly string[] }> = {
-  'repo read': { claude_code: ['Read'], cursor: ['read'] },
-  'source write': { claude_code: ['Write', 'Edit', 'NotebookEdit'], cursor: ['edit'] },
-  'run tests': { claude_code: ['Bash'], cursor: ['shell'] },
-  'create branch': { claude_code: ['Bash'], cursor: ['shell'] },
-  'deploy prod': { claude_code: ['Bash'], cursor: ['shell'] },
-  'read secrets': { claude_code: [], cursor: [] },
-}
-
-/** The resolved deny list `permissions.json` carries: one entry per denied vendor tool, naming
- *  the (first) denied capability that put it there. Deny rows only — unset and allow pass. */
 export function resolveDenyList(
-  rows: readonly { readonly tool: string; readonly mode: 'allow' | 'deny' }[],
-  provider: 'claude_code' | 'cursor',
+  rows: readonly { readonly kind: string; readonly mode: 'allow' | 'deny' }[],
+  provider: PermissionProvider,
 ): readonly { readonly tool: string; readonly capability: string }[] {
   const byTool = new Map<string, string>()
   for (const row of rows) {
     if (row.mode !== 'deny') continue
-    for (const tool of CAPABILITY_TOOLS[row.tool]?.[provider] ?? []) {
-      if (!byTool.has(tool)) byTool.set(tool, row.tool)
+    if (!(PERMISSION_KINDS as readonly string[]).includes(row.kind)) continue
+    for (const tool of TOOLS_BY_KIND[row.kind as PermissionKind][provider]) {
+      if (!byTool.has(tool)) byTool.set(tool, row.kind)
     }
   }
   return [...byTool.entries()].map(([tool, capability]) => ({ tool, capability }))
@@ -95,10 +74,13 @@ export function writePermissionsFile(
 
 export async function setSlavePermission(
   slaveId: string,
-  tool: string,
+  kind: string,
   mode: 'allow' | 'deny',
 ): Promise<Result<void, ControlRefusal>> {
-  if (!isPermissionTool(tool)) return err({ kind: 'invalid_tool', tool })
+  // `invalid_tool` keeps its NAME (plan erratum E11): renaming a refusal kind costs three homes to
+  // rename a word no surface prints. Its payload field stays `tool` and now carries the offered
+  // KIND, and its sentence moved with the vocabulary.
+  if (!(PERMISSION_KINDS as readonly string[]).includes(kind)) return err({ kind: 'invalid_tool', tool: kind })
   // Narrowed by the signature, so a TypeScript caller cannot reach this -- but the route hands
   // through a parsed JSON body, and `refusalText` has to have something true to say when a
   // hand-rolled request carries `"mode": "maybe"`.
@@ -107,12 +89,12 @@ export async function setSlavePermission(
   const slave = await prisma.slave.findUnique({ where: { id: slaveId }, select: { id: true } })
   if (slave === null) return err({ kind: 'slave_not_found', slaveId })
 
-  // `@@unique([slaveId, tool])` makes this a flip in place -- the same "one row or none" shape
+  // `@@unique([slaveId, kind])` makes this a flip in place -- the same "one row or none" shape
   // `setWorkspaceProvider` keeps for its own table.
   await prisma.slavePermission.upsert({
-    where: { slaveId_tool: { slaveId, tool } },
+    where: { slaveId_kind: { slaveId, kind: kind as PermissionKind } },
     update: { mode },
-    create: { slaveId, tool, mode },
+    create: { slaveId, kind: kind as PermissionKind, mode },
   })
   return ok(undefined)
 }

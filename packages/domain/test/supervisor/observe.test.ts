@@ -739,3 +739,78 @@ describe('filterFresh with a per-kind cooldown (M51 R3)', () => {
     expect(filterFresh(situations, w)).toHaveLength(0)
   })
 })
+
+describe('permission_blocked (M52 R5)', () => {
+  it('raises one situation per (worker, kind) once three denials of that kind are in the window', () => {
+    const w = world({
+      denials: [{ slaveId: 'slave-1', kind: 'network_fetch', count: 3, latestRunId: 'run-1' }],
+      slaves: [slave({ id: 'slave-1', name: 'Alex' })],
+    })
+    const situations = observe(w)
+    const blocked = situations.filter((situation) => situation.kind === 'permission_blocked')
+    expect(blocked).toHaveLength(1)
+    // The subject is "this worker's wall", not this worker: a worker can be blocked on two
+    // operations at once, and a bare slave id would collapse them in `filterFresh` and collide on
+    // `SupervisorDecision`'s key (plan decision D6, the `capability_unstaffed` precedent).
+    expect(blocked[0]?.subjectId).toBe('slave-1:network_fetch')
+    expect(blocked[0]?.facts).toEqual({
+      slaveId: 'slave-1',
+      kind: 'network_fetch',
+      count: 3,
+      runId: 'run-1',
+    })
+  })
+
+  it('says what is blocked in WORDS, never the key', () => {
+    const w = world({
+      denials: [{ slaveId: 'slave-1', kind: 'network_fetch', count: 4, latestRunId: 'run-1' }],
+      slaves: [slave({ id: 'slave-1', name: 'Alex' })],
+    })
+    const situation = observe(w).find((entry) => entry.kind === 'permission_blocked')
+    expect(situation?.summary).toContain('Fetch over the network')
+    expect(situation?.summary).not.toContain('network_fetch')
+  })
+
+  it('does NOT raise below the trip count', () => {
+    const w = world({
+      denials: [{ slaveId: 'slave-1', kind: 'network_fetch', count: 2, latestRunId: 'run-1' }],
+      slaves: [slave({ id: 'slave-1', name: 'Alex' })],
+    })
+    expect(observe(w).some((entry) => entry.kind === 'permission_blocked')).toBe(false)
+  })
+
+  it('does NOT raise for a worker the world does not hold -- a released or deleted worker has no wall to move', () => {
+    const w = world({
+      denials: [{ slaveId: 'ghost', kind: 'network_fetch', count: 9, latestRunId: 'run-1' }],
+      slaves: [],
+    })
+    expect(observe(w).some((entry) => entry.kind === 'permission_blocked')).toBe(false)
+  })
+
+  it('does NOT raise for `ungoverned_tool`, which is not a kind and which no grant can fix', () => {
+    const w = world({
+      denials: [{ slaveId: 'slave-1', kind: 'ungoverned_tool', count: 9, latestRunId: 'run-1' }],
+      slaves: [slave({ id: 'slave-1', name: 'Alex' })],
+    })
+    expect(observe(w).some((entry) => entry.kind === 'permission_blocked')).toBe(false)
+  })
+
+  it('does NOT raise for a RELEASED worker -- its grants are not the reason it is idle', () => {
+    const w = world({
+      denials: [{ slaveId: 'slave-1', kind: 'network_fetch', count: 9, latestRunId: 'run-1' }],
+      slaves: [slave({ id: 'slave-1', name: 'Alex', released: true })],
+    })
+    expect(observe(w).some((entry) => entry.kind === 'permission_blocked')).toBe(false)
+  })
+
+  it('raises one per kind when a worker is hitting two walls', () => {
+    const w = world({
+      denials: [
+        { slaveId: 'slave-1', kind: 'network_fetch', count: 3, latestRunId: 'run-1' },
+        { slaveId: 'slave-1', kind: 'write_repo', count: 5, latestRunId: 'run-1' },
+      ],
+      slaves: [slave({ id: 'slave-1', name: 'Alex' })],
+    })
+    expect(observe(w).filter((entry) => entry.kind === 'permission_blocked')).toHaveLength(2)
+  })
+})

@@ -96,6 +96,15 @@ export function tierOf(action: Action, world: SupervisorWorld, situationKind: Si
     // project should follow this process, which is exactly what makes it a proposal rather than a
     // routine apply (M48 R5).
     case 'adopt_runbook':
+    // M52 R5: ALWAYS a proposal, beside `hire_from_catalog` -- and the halt short-circuit above is
+    // redundant for it deliberately, the `cancel_task` precedent (:103-106). A permission is a
+    // person's decision in every weather: "the Supervisor may point at a wall; only a person moves
+    // it" is the whole ruling, and a tier that could ever be `applied` would make it a wall the
+    // Supervisor moves on a quiet afternoon. Nothing about `assign_capability` being `applied`
+    // above contradicts this: giving a worker a capability changes what it is DISPATCHED for and
+    // changes nothing about what the gate lets it do -- that worker meets the same default-deny
+    // wall as every other.
+    case 'request_permission':
       return 'proposed'
     case 'raise_max_attempts':
     case 'set_runtime_roles':

@@ -929,6 +929,14 @@ export async function loadSupervisorWorld(
         runbook: adopted,
         runbooks,
         staleMemoryCandidates,
+        // M52 R5 / plan erratum E9: how often each worker has been refused each operation lately.
+        //
+        // TASK 1 MINIMUM (M52 plan, Task 3 owns the loader): the field is declared here as the
+        // empty list every project with no denials has, so `observe`'s `permission_blocked`
+        // predicate is a no-op until the grouped `run.tool_denied` read lands -- the same
+        // "declared before it is filled" state `capability_unstaffed` was in between M47's Task 1
+        // and Task 3.
+        denials: [],
       }
 
       return {

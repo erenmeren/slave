@@ -15,8 +15,14 @@ describe('LANE_BY_TYPE', () => {
     expect(Object.keys(LANE_BY_TYPE).sort()).toEqual(Object.keys(EVENT_TYPE_BY_DOMAIN_TYPE).sort())
   })
 
-  it('carries the 55 members the schema has today -- a fifty-sixth is a deliberate decision', () => {
-    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(55)
+  it('lanes every event type -- 58 as of M52', () => {
+    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(58)
+  })
+
+  it('puts both broker events and the permission change on the work lane', () => {
+    expect(LANE_BY_TYPE['broker.executed']).toBe('work')
+    expect(LANE_BY_TYPE['broker.refused']).toBe('work')
+    expect(LANE_BY_TYPE['permission.changed']).toBe('work')
   })
 
   it('puts a breaker rung on the WORK lane and a tool result on none', () => {

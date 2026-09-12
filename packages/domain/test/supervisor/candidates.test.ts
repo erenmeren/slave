@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { actionSchema, candidateSchema, type Action, type Candidate } from '../../src/supervisor/actions.js'
-import { candidates, isStaffableTask, teamPlanOf } from '../../src/supervisor/candidates.js'
+import { candidates, isStaffableTask, permissionWhyFor, teamPlanOf } from '../../src/supervisor/candidates.js'
 import { WAITING_STALE_MS } from '../../src/supervisor/constants.js'
 import { observe } from '../../src/supervisor/observe.js'
 import type { Situation } from '../../src/supervisor/situations.js'
@@ -807,5 +807,43 @@ describe('the run_looping offer (M51 R3)', () => {
     // The same shape every other arm uses when its subject has vanished: no offer against a row
     // that is gone, and the list still ends the way the invariant says it does.
     expect(kinds(candidates(situation!, world()))).toEqual(['escalate_to_human', 'no_action'])
+  })
+})
+
+describe('permission_blocked candidates (M52 R5)', () => {
+  const w = world({
+    denials: [{ slaveId: 'slave-1', kind: 'network_fetch', count: 3, latestRunId: 'run-1' }],
+    slaves: [slave({ id: 'slave-1', name: 'Alex' })],
+  })
+  const situation = observe(w).find((entry) => entry.kind === 'permission_blocked')!
+
+  it('offers request_permission first, before the two last resorts every list ends with', () => {
+    expect(kinds(candidates(situation, w))).toEqual(['request_permission', 'escalate_to_human', 'no_action'])
+  })
+
+  it('offers it as a PROPOSAL, never applied', () => {
+    expect(candidates(situation, w)[0]?.tier).toBe('proposed')
+  })
+
+  it('carries the kind, its LABEL and the worker’s name, so the panel prints words', () => {
+    const action = candidates(situation, w)[0]?.action
+    expect(action).toEqual({
+      kind: 'request_permission',
+      slaveId: 'slave-1',
+      name: 'Alex',
+      permissionKind: 'network_fetch',
+      kindLabel: 'Fetch over the network',
+      why: permissionWhyFor('network_fetch', 3),
+    })
+  })
+
+  it('builds `why` from a CONSTANT and the counted integer -- never a model’s words', () => {
+    expect(permissionWhyFor('network_fetch', 3)).toBe(
+      'This worker has been refused ‘Fetch over the network’ 3 times and cannot get past it. Only a person can grant it.',
+    )
+  })
+
+  it('falls back to the last resorts when the worker is gone between observe and here', () => {
+    expect(kinds(candidates(situation, world()))).toEqual(['escalate_to_human', 'no_action'])
   })
 })
