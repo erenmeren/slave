@@ -4,12 +4,26 @@
 # scripts/lib/pause-flag.sh's own conventions exactly: it defines one function, sets no traps, no
 # options and no exit status of its own, and is deliberately not chmod +x (mode 0644).
 #
-# The permission matrix's resolved deny list lives in the file SLAVEOFAI_PERMISSIONS_FILE points at
-# -- {"version":1,"deny":[{"tool":"Bash","capability":"run tests"}]} -- written once per
-# start/resume by the orchestrator (Task 5) with the RESOLVED vendor-tool names for that run's
-# provider (packages/control's permission.ts does the capability -> tool resolution
-# orchestrator-side; this library stays a dumb membership test, spec section 2). This library
-# answers "does this hook payload's tool appear on it".
+# THE FILE IS THE WHOLE VERDICT (M52 R2). SLAVEOFAI_PERMISSIONS_FILE points at `permissions.json`
+# v2, written once per start/resume by the orchestrator (packages/control's writePermissionsFile)
+# into the run's own scratch directory, OUTSIDE the repository the worker edits:
+#
+#   {"version":2,
+#    "runId":"<uuid>",
+#    "tokenHash":"<sha256 hex of this spawn's SLAVEOFAI_RUN_TOKEN>",
+#    "enforce":"all-tools"|"known-tools",
+#    "grants":["read_repo","write_repo","run_commands"],
+#    "allow":[{"tool":"Read","kind":"read_repo"}, ...],
+#    "vocabulary":{"Read":"read_repo","Bash":"run_commands", ...},
+#    "prefixes":[{"prefix":"mcp__","kind":"network_fetch"}]}
+#
+# It says five things and this library needs all five: what this run may call (`allow`), which
+# operation governs each tool (`vocabulary`, and `prefixes` for the name families nobody can
+# enumerate), which operations were granted (`grants` -- the decision is the KIND's, so ONE
+# `network_fetch` grant opens every `mcp__*` tool rather than the two the allow list can name),
+# how much of it this provider can enforce (`enforce`), and WHICH RUN the verdict is about
+# (`tokenHash`). This library stays a dumb membership test with no table of its own: every word it
+# compares against comes out of the file (spec section 2, plan decisions D10/D11).
 #
 # REPORT, DON'T PRINT -- pause-flag.sh's rule, inherited here on purpose. The two gates' output
 # shapes differ (Claude allows by staying silent and denies via hookSpecificOutput.
@@ -29,11 +43,13 @@
 # 2026-08-31-m18-skill-and-teeth-design.md section 2: "Claude: tool_name"). The node one-liner
 # below reads that key directly. That same fixture's `preToolUse` lines are ALSO what
 # `cursor-shell-gate.sh` receives, unmodified -- Cursor's tool_name there is "Read"/"Shell"/
-# "Write" (Claude-shaped casing), which never matches `permissions.json`'s resolved Cursor
-# vocabulary of lowercase `read`/`edit`/`shell` (`packages/control/src/permission.ts`'s
-# `CAPABILITY_TOOLS`). That mismatch is not fixed here -- it is exactly the measured caveat
-# `cursor-shell-gate.sh:11-14` and spec section 2 both name: Cursor's `preToolUse` tool identity
-# is untrustworthy for enforcement, a stated v1 limitation, not a bug this file works around.
+# "Write" (Claude-shaped casing), which never matches the resolved Cursor vocabulary of lowercase
+# `read`/`edit`/`shell`. Under M18's denylist that mismatch was inert. Under an ALLOW list it
+# would deny every tool call Cursor makes, so M52 states the measurement in DATA instead of
+# leaving it to a casing accident: the file's `enforce` word is `known-tools` for Cursor, and a
+# name its vocabulary does not know is allowed there (plan erratum E3). Cursor's `preToolUse` tool
+# identity is still untrustworthy for enforcement -- a stated v1 limitation, now stated in the
+# matrix copy and in the file rather than only in this comment.
 #
 # Cursor's `beforeShellExecution` payload (the OTHER hook `cursor-shell-gate.sh` gates on) carries
 # NO `tool_name` key at all -- confirmed against the same fixture's line 5: only `command`, `cwd`,
@@ -43,85 +59,137 @@
 # ONLY when the payload has no `tool_name` string AND does carry a `command` string of its own --
 # the shape unique to `beforeShellExecution`. `cursor-shell-gate.sh` passes `'shell'` on every
 # call, unconditionally; the shape guard below is what keeps that inert for every OTHER
-# tool_name-less payload (Claude's own Stop/SessionStart hooks, a malformed payload) so those keep
-# allowing exactly as they did before this argument existed, rather than being silently
-# reattributed to a fabricated tool identity. This is the one place Cursor's key/shape differs
+# tool_name-less payload (Claude's own Stop/SessionStart hooks, a malformed payload) so those are
+# never silently reattributed to a fabricated tool identity. That rule is UNCHANGED by M52 -- only
+# the verdict on the other side of it inverted. This is the one place Cursor's key/shape differs
 # enough to need a second key at all -- still one helper, never a fork.
 #
 # NODE FED ON STDIN, NEVER ARGV -- pause-flag.sh's json_string rationale applies identically here:
 # an operator-influenced payload string beginning with `-` would otherwise be parsed by node ITSELF
 # as an option rather than reaching the script. One node invocation reads BOTH the captured hook
 # payload (stdin) and the permissions file (read from disk inside the same process, path via
-# SLAVEOFAI_PERMISSIONS_FILE) so this stays a single subprocess spawn per tool call.
+# SLAVEOFAI_PERMISSIONS_FILE) so this stays a single subprocess spawn per tool call -- and that ONE
+# process now also answers "is this verdict about this child" (M52 R4), which needs no database and
+# no second spawn because the hash is in the file and the plaintext is in this process's
+# environment.
 #
-# SELF-POLICING THREAT MODEL (M19 spec) -- docs/superpowers/specs/2026-08-29-m13-runtime-hardening-design.md §7.1:
-# A run that deletes its own permissions file disarms the matrix for its remaining tool calls; the same
-# self-policing boundary as Cursor's in-worktree `.cursor/hooks.json` above, on both providers.
+# IDENTITY, NOT A PATH (M52 R4). SLAVEOFAI_RUN_TOKEN is 32 random bytes minted at spawn, put in
+# exactly one child's environment and written down nowhere: the row and the file hold only its
+# sha256. Pointing SLAVEOFAI_PERMISSIONS_FILE at a sibling run's verdict therefore buys nothing --
+# the sibling's `tokenHash` will not match this child's token, and the mismatch fails closed. The
+# run directory left the repository in the same milestone, so a worker can no longer reach its own
+# verdict either; the two locks are independent on purpose.
 
 PERMISSION_DENY_TOOL=''
 PERMISSION_DENY_CAPABILITY=''
 
 # read_permission_verdict "$payload" ["$default_tool"]
-#   Contract (mirrors pause-flag.sh's report-don't-print shape):
-#     return 0 -> DENY. PERMISSION_DENY_TOOL and PERMISSION_DENY_CAPABILITY are set to the
-#                 matched deny row; the caller spells the deny body.
-#     return 1 -> ALLOW. Covers: SLAVEOFAI_PERMISSIONS_FILE unset or the file does not exist
-#                 (pre-M18 runs, rehearsals -- no matrix in play at all); the payload has no
-#                 `tool_name` AND (no `default_tool` was given, or the payload doesn't have the
-#                 `command`-string shape `default_tool` requires) -- Claude's Stop/SessionStart
-#                 hooks, any payload that just doesn't name a tool -- only a payload that is not
-#                 JSON at all fails closed, per this file's own design note above); the payload
-#                 parses to valid JSON that is not an object at all -- `null`, `[1]`, `"x"`, `7`
-#                 -- which has no `tool_name` to read either, and is a DIFFERENT case from
-#                 BADPAYLOAD: it parsed fine, it just names no tool, so it allows exactly like a
-#                 missing key rather than failing closed (fixed post-landing, security-review
-#                 Important finding: `JSON.parse("null")` succeeds, so `payload.tool_name` on a
-#                 bare `null` threw an uncaught TypeError before this guard existed -- caught only
-#                 incidentally, as a nonzero node exit); the tool is present but not on the deny
-#                 list; an empty deny list.
-#     exit 2    -> FAIL CLOSED. The payload did not parse as JSON at all while a permissions file
-#                 is armed, or the permissions file itself is missing-but-unreadable or malformed
-#                 (not valid JSON, or its `deny` key is not an array). A gate cannot produce a
-#                 well-formed answer in either case, so it must not fall through to one that
-#                 reads as allow -- same doctrine as pause-flag.sh's own unreadable-file case.
+#   Contract (M52 R2 -- the INVERSE of M18's, arm for arm):
+#     return 0 -> DENY. PERMISSION_DENY_TOOL and PERMISSION_DENY_CAPABILITY are set; the caller
+#                 spells the deny body. Covers: a tool whose governing kind is not among the file's
+#                 `grants` (the capability is that kind); a tool no kind governs, under
+#                 `enforce: all-tools` (capability `ungoverned_tool`); and a payload that names no
+#                 tool at all under the same enforcement (tool `unknown`). All three are refused
+#                 CALLS on a run that keeps going -- exit 0 with a deny body -- because a PreToolUse
+#                 payload this gate cannot read is not a broken gate (M52 erratum E8).
+#     return 1 -> ALLOW. Covers exactly four things: the tool is on the `allow` list; the kind that
+#                 governs the tool (by name, or by one of the file's `prefixes`) is among `grants`;
+#                 SLAVEOFAI_PERMISSIONS_FILE is UNSET, which means this process is not a governed
+#                 run at all (an operator running the gate by hand, and `preflightGate`, which
+#                 spawns this script twice on every spawn and requires the disarmed direction to
+#                 allow -- erratum E1); and, under `enforce: known-tools`, a tool name the file's
+#                 vocabulary does not know, which is Cursor's measured limitation (the header
+#                 above) stated in data rather than left to a casing accident.
+#     exit 2    -> FAIL CLOSED, i.e. the run stops. The file is armed and cannot be read as a
+#                 verdict: missing, unreadable, malformed, not version 2, no `allow` array, no
+#                 `grants` array, no `tokenHash`; the payload is not JSON at all; or the identity
+#                 does not match -- SLAVEOFAI_RUN_TOKEN's sha256 is not the file's `tokenHash`. A
+#                 run that deletes its own permissions file no longer disarms itself: it stops. (It
+#                 can no longer reach the file either -- M52 R4 moved the run directory out of the
+#                 worktree -- but the two locks are independent on purpose.)
 read_permission_verdict() {
   PERMISSION_DENY_TOOL=''
   PERMISSION_DENY_CAPABILITY=''
   local default_tool="${2:-}"
-  if [[ -z "${SLAVEOFAI_PERMISSIONS_FILE:-}" || ! -e "${SLAVEOFAI_PERMISSIONS_FILE:-/nonexistent}" ]]; then
-    return 1  # no matrix in play (pre-M18 runs, rehearsals): allow
+  if [[ -z "${SLAVEOFAI_PERMISSIONS_FILE:-}" ]]; then
+    return 1  # not a governed run at all (an operator, a pre-flight): allow
   fi
   local verdict
   verdict=$(printf '%s' "$1" | SLAVEOFAI_PERMISSIONS_FILE="$SLAVEOFAI_PERMISSIONS_FILE" SLAVEOFAI_DEFAULT_TOOL="$default_tool" node -e '
+    const crypto = require("node:crypto");
     let raw = "";
     process.stdin.on("data", (c) => { raw += c; });
     process.stdin.on("end", () => {
       let payload, file;
       try { payload = JSON.parse(raw); } catch { process.stdout.write("BADPAYLOAD"); return; }
-      try { file = JSON.parse(require("node:fs").readFileSync(process.env.SLAVEOFAI_PERMISSIONS_FILE, "utf8")); } catch { process.stdout.write("BADFILE"); return; }
-      // `payload` is valid JSON here (the parse above already succeeded) but need not be an
-      // object -- JSON.parse("null"), JSON.parse("[1]") and JSON.parse("7") all succeed. Reading
-      // `.tool_name` off a non-object without this guard throws (TypeError on null; undefined
-      // -- not a throw -- on an array/number/string, which the `typeof ... === "string"` check
-      // alone would have handled, but null needed the explicit `!== null` too). Treated the same
-      // as "no tool_name": ALLOW, not BADPAYLOAD -- it parsed fine, it just names no tool.
+      try { file = JSON.parse(require("node:fs").readFileSync(process.env.SLAVEOFAI_PERMISSIONS_FILE, "utf8")); }
+      catch { process.stdout.write("BADFILE"); return; }
+
+      // 1. IS THIS A VERDICT AT ALL. A version-1 file is a pre-M52 snapshot, i.e. a stale verdict,
+      // and a stale verdict is not believed. Everything this arm rejects used to ALLOW.
+      if (file === null || typeof file !== "object") { process.stdout.write("BADFILE"); return; }
+      if (file.version !== 2) { process.stdout.write("BADFILE"); return; }
+      const allow = Array.isArray(file.allow) ? file.allow : null;
+      if (allow === null) { process.stdout.write("BADFILE"); return; }
+      // The granted KIND set. Required, not defaulted to empty: a file with no `grants` key is a
+      // writer this gate does not recognise, and guessing "nothing is granted" for it would turn a
+      // shape disagreement into a run that is silently refused everything.
+      const grants = Array.isArray(file.grants) ? file.grants : null;
+      if (grants === null) { process.stdout.write("BADFILE"); return; }
+      const vocabulary = file.vocabulary !== null && typeof file.vocabulary === "object" ? file.vocabulary : {};
+      const prefixes = Array.isArray(file.prefixes) ? file.prefixes : [];
+      const enforce = file.enforce === "known-tools" ? "known-tools" : "all-tools";
+
+      // 2. IS THIS VERDICT ABOUT THIS CHILD (M52 R4). The hash is on the file and the plaintext is
+      // in the environment of this process, so pointing SLAVEOFAI_PERMISSIONS_FILE at the verdict
+      // of a sibling run buys nothing: that hash will not match the token this child holds.
+      // `timingSafeEqual` over equal-length buffers, with the length guard first -- it THROWS on a
+      // length mismatch, and a thrown comparison would exit nonzero with no message.
+      const expected = typeof file.tokenHash === "string" ? file.tokenHash : "";
+      const token = process.env.SLAVEOFAI_RUN_TOKEN || "";
+      const actual = token === "" ? "" : crypto.createHash("sha256").update(token).digest("hex");
+      if (expected.length !== 64 || actual.length !== 64 ||
+          !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(actual))) {
+        process.stdout.write("BADIDENTITY"); return;
+      }
+
+      // 3. WHAT IS THIS CALL. Unchanged from M18, including the non-object guard and the
+      // `default_tool` shape rule -- see the paragraphs above, which still describe it exactly.
       const isObject = payload !== null && typeof payload === "object";
       let tool = isObject && typeof payload.tool_name === "string" ? payload.tool_name : null;
-      // Cursors beforeShellExecution payload (measured: fixtures/cursor/gate/run-1-hook.log line
-      // 5) carries no tool_name at all, only a top-level `command` string. `default_tool` is the
-      // caller-supplied fallback for exactly that shape -- applied ONLY when tool_name is absent
-      // AND `command` is present, so a tool_name-less payload of any OTHER shape (Claude
-      // Stop/SessionStart hooks, a garbage-but-valid-JSON object) still allows untouched, rather
-      // than being silently reattributed to a fabricated tool identity.
       const defaultTool = process.env.SLAVEOFAI_DEFAULT_TOOL || "";
       if (tool === null && defaultTool !== "" && isObject && typeof payload.command === "string") {
         tool = defaultTool;
       }
-      const deny = Array.isArray(file.deny) ? file.deny : null;
-      if (deny === null) { process.stdout.write("BADFILE"); return; }
-      if (tool === null) { process.stdout.write("ALLOW"); return; }
-      const hit = deny.find((d) => d && d.tool === tool && typeof d.capability === "string");
-      process.stdout.write(hit ? "DENY\t" + hit.tool + "\t" + hit.capability : "ALLOW");
+
+      if (tool !== null && allow.some((entry) => entry && entry.tool === tool)) {
+        process.stdout.write("ALLOW"); return;
+      }
+      // 4. WHICH OPERATION GOVERNS IT. The table first, then the prefix families the table cannot
+      // enumerate (`mcp__*` -- one server an operator installs tomorrow is governed with no table
+      // edit, M52 erratum E16), then nothing.
+      let kind = null;
+      if (tool !== null) {
+        if (Object.prototype.hasOwnProperty.call(vocabulary, tool)) {
+          kind = String(vocabulary[tool]);
+        } else {
+          for (const entry of prefixes) {
+            if (entry && typeof entry.prefix === "string" && entry.prefix !== "" && tool.startsWith(entry.prefix)) {
+              kind = String(entry.kind); break;
+            }
+          }
+        }
+      }
+      if (kind !== null) {
+        // The decision belongs to the KIND, which is what makes ONE `network_fetch` grant open
+        // every `mcp__*` tool rather than only the two an enumerable allow list can name.
+        if (grants.includes(kind)) { process.stdout.write("ALLOW"); return; }
+        process.stdout.write("DENY\t" + tool + "\t" + kind); return;
+      }
+      // Ungoverned, or unnamed. On Cursor (`known-tools`) that is the measured limitation and it
+      // allows; on Claude it is the class an allow list exists to close.
+      if (enforce === "known-tools") { process.stdout.write("ALLOW"); return; }
+      process.stdout.write("DENY\t" + (tool === null ? "unknown" : tool) + "\tungoverned_tool");
     });
   ')
   local status=$?
@@ -138,8 +206,11 @@ read_permission_verdict() {
     BADPAYLOAD)
       printf '%s: hook payload did not parse as JSON while a permissions file is armed\n' "$PAUSE_GATE_NAME" >&2
       exit 2 ;;
+    BADIDENTITY)
+      printf '%s: this run'"'"'s identity does not match the permissions file it was given\n' "$PAUSE_GATE_NAME" >&2
+      exit 2 ;;
     BADFILE)
-      printf '%s: permissions file unreadable or malformed: %s\n' "$PAUSE_GATE_NAME" "$SLAVEOFAI_PERMISSIONS_FILE" >&2
+      printf '%s: permissions file unreadable, malformed, or not a version-2 verdict: %s\n' "$PAUSE_GATE_NAME" "$SLAVEOFAI_PERMISSIONS_FILE" >&2
       exit 2 ;;
     *)
       printf '%s: permission verdict helper produced an unrecognized answer\n' "$PAUSE_GATE_NAME" >&2

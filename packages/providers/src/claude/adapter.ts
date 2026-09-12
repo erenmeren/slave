@@ -10,7 +10,13 @@ import { listClaudeCodeModels, type ModelListing } from '../models.js'
 import { AsyncEventQueue } from '../runtime/event-queue.js'
 import { preflightTap } from '../runtime/gate-preflight.js'
 import { clearAndVerifyPauseFlagAbsent } from '../runtime/pause-flag.js'
-import { buildChildEnv, permissionsFilePathFor, terminateChild, toolResultsPathFor } from '../runtime/process.js'
+import {
+  brokerChannelPathFor,
+  buildChildEnv,
+  permissionsFilePathFor,
+  terminateChild,
+  toolResultsPathFor,
+} from '../runtime/process.js'
 import { isRecord } from '../runtime/summary.js'
 import { TOOL_ERROR_CLASSES, type ToolErrorClass } from '../tool-result.js'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
@@ -86,6 +92,18 @@ export interface StartRunInput {
    * behaves exactly as it did before this field existed.
    */
   readonly model?: string
+  /**
+   * M52 R4: the PLAINTEXT run token this spawn's child carries, whose sha256 is already on the
+   * `SlaveRun` row and inside the `permissions.json` the caller just wrote. The adapter puts it in
+   * exactly one place -- the child's environment -- and never writes it anywhere.
+   *
+   * OPTIONAL for the same reason `resume`'s fourth parameter is (plan erratum E7): `Checkpoint` may
+   * not gain a field with no matching Prisma column, and a token file in `runDir` would be readable
+   * by every sibling run under the same uid. Optional cannot widen anything here -- an absent token
+   * means the key is absent from the child's environment, and the child then meets a `tokenHash` it
+   * cannot match, which denies every tool call rather than allowing one.
+   */
+  readonly runToken?: string
 }
 
 /** What `start()` reports back: enough to find and signal the process later. */
@@ -167,7 +185,18 @@ export interface SlaveRuntimeAdapter {
    * makes `events()`/`cancel()` work against the resumed run afterwards -- the process is tracked
    * from the moment it is spawned, not "untracked" for having no prior `start()` on this instance.
    */
-  resume(runId: RunId, checkpoint: Checkpoint, queuedInstruction: string | null): Promise<RunHandle>
+  /**
+   * `runToken` (M52 R4) is the ROTATED token for this spawn -- a resume mints a fresh one, so a
+   * token recovered from an old worktree, an old process listing or a stale environment dump is
+   * dead the moment the run resumes. Optional and last, so the ~20 existing call sites compile
+   * unchanged; see `StartRunInput.runToken` for why optional cannot widen anything.
+   */
+  resume(
+    runId: RunId,
+    checkpoint: Checkpoint,
+    queuedInstruction: string | null,
+    runToken?: string,
+  ): Promise<RunHandle>
 }
 
 export interface ClaudeCodeAdapterOptions {
@@ -200,6 +229,15 @@ export interface ClaudeCodeAdapterOptions {
    * an optional measurement into a spawn failure.
    */
   readonly tapPath?: string
+  /**
+   * M52 R3/E6: the absolute path of the orchestrator CLI a worker runs to ask the broker for an
+   * operation (`node "$SLAVEOFAI_BROKER_CLI" broker run …`). There is no `orchestrator` binary on
+   * anybody's PATH, so the path has to reach the child somehow, and it reaches it the way
+   * `hookPath` and `tapPath` do: a fact about this RUNTIME, filled once where the registry is
+   * built, never a per-run input. OPTIONAL, like `tapPath`: a deployment with nothing brokered runs
+   * perfectly well without it, and the variable is simply absent from the child.
+   */
+  readonly brokerCliPath?: string
 }
 
 interface RunState {
@@ -267,6 +305,7 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
   private readonly killGraceMs: number
   private readonly hookPath: string
   private readonly tapPath: string | undefined
+  private readonly brokerCliPath: string | undefined
   /** Whether {@link ClaudeCodeAdapter.runPreflightTap}'s downgrade has already been announced. */
   private tapWarned = false
   private readonly runs = new Map<RunId, RunState>()
@@ -277,6 +316,7 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
     this.killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS
     this.hookPath = options.hookPath
     this.tapPath = options.tapPath
+    this.brokerCliPath = options.brokerCliPath
   }
 
   /**
@@ -393,6 +433,13 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         gitIdentity: input.gitIdentity,
         pauseFlagPath: input.pauseFlagPath,
         permissionsFilePath: input.permissionsFilePath,
+        // M52 R4: the run this child IS, and the proof of it. Both or neither -- an id with no
+        // token names a run it cannot prove it is, and the broker would refuse it anyway.
+        ...(input.runToken === undefined ? {} : { runId: String(input.runId), runToken: input.runToken }),
+        // M52 R3: the FOURTH file channel of `pauseFlagPath`'s exact shape, derived from `runDir`
+        // by the one helper that owns the filename -- never joined here.
+        brokerChannelPath: brokerChannelPathFor(input.runDir),
+        ...(this.brokerCliPath === undefined ? {} : { brokerCliPath: this.brokerCliPath }),
         // Only when THIS SPAWN actually registered a tap: the variable is the channel, and an armed
         // channel with no hook writing to it is a tailer watching a file nothing creates. The path
         // is the pre-flight's answer, not the adapter's field, so a spawn that was downgraded to no
@@ -620,7 +667,12 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
    * unchanged from what was already there (a paused run's `runDir` still holds the original file),
    * so this never changes what a resumed run sees, only who last touched it.
    */
-  async resume(runId: RunId, checkpoint: Checkpoint, queuedInstruction: string | null): Promise<RunHandle> {
+  async resume(
+    runId: RunId,
+    checkpoint: Checkpoint,
+    queuedInstruction: string | null,
+    runToken?: string,
+  ): Promise<RunHandle> {
     await this.runPreflightGate(checkpoint.hookPath, runId)
     const tapPath = await this.runPreflightTap(runId)
     writeSettingsFile({
@@ -735,6 +787,13 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         gitIdentity: resumedInput.gitIdentity,
         pauseFlagPath: resumedInput.pauseFlagPath,
         permissionsFilePath: resumedInput.permissionsFilePath,
+        // M52 R4: the ROTATED token, minted by `executeResume` for this spawn alone and already
+        // hashed onto the row and into the file rewritten at the same path. `resumedInput.runDir`
+        // is the ORIGINAL directory, recovered from `checkpoint.settingsPath` above -- the same
+        // derivation the tap below already makes, never a new one.
+        ...(runToken === undefined ? {} : { runId: String(runId), runToken }),
+        brokerChannelPath: brokerChannelPathFor(resumedInput.runDir),
+        ...(this.brokerCliPath === undefined ? {} : { brokerCliPath: this.brokerCliPath }),
         // The resumed run's scratch directory is the ORIGINAL one (`resumedInput.runDir`, recovered
         // from `checkpoint.settingsPath`), so a resumed run appends to the same file its first half
         // wrote. What makes that safe is `startTapTailer`'s own rule -- it starts at the file's

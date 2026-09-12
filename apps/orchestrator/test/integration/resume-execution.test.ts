@@ -165,9 +165,19 @@ describe('executing a resume intent from the daemon', () => {
     const runId = await pauseARun()
     const checkpointBefore = await prisma.checkpoint.findUniqueOrThrow({ where: { runId } })
     // `runFilePaths`'s own contract: `permissions.json` sits beside `pause.flag` in the run's own
-    // scratch directory -- the same derivation `executeResume` itself uses.
+    // scratch directory -- the same derivation `executeResume` itself uses. M52 R4 moved that
+    // directory out of the repository, and deriving it from the checkpoint is exactly why a run in
+    // flight across the upgrade needs no migration.
     const permissionsPath = join(dirname(checkpointBefore.pauseFlagPath), 'permissions.json')
-    expect(JSON.parse(readFileSync(permissionsPath, 'utf8'))).toEqual({ version: 1, deny: [] })
+    interface Verdict {
+      readonly version: number
+      readonly tokenHash: string
+      readonly grants: readonly string[]
+      readonly allow: readonly { readonly tool: string; readonly kind: string }[]
+    }
+    const before = JSON.parse(readFileSync(permissionsPath, 'utf8')) as Verdict
+    expect(before.version).toBe(2)
+    expect(before.grants).toEqual(['read_repo', 'write_repo', 'run_commands'])
 
     // The matrix edit happens BETWEEN pause and resume -- exactly the window the file must be
     // rewritten across, not merely written once at the original dispatch.
@@ -180,36 +190,44 @@ describe('executing a resume intent from the daemon', () => {
     })
     await drainPumps()
 
-    // M52 R1: the same shell, denied through the new vocabulary. `run_commands` covers the whole
-    // shell -- `Bash` and the two calls that operate on a shell it already started.
-    expect(JSON.parse(readFileSync(permissionsPath, 'utf8'))).toEqual({
-      version: 1,
-      // M52 fix round 1 (the C1 classification): `run_commands` covers everything that can DO work
-      // or spawn work that can -- the shell, a subagent, a skill, a workflow, the schedulers -- so
-      // denying it denies the whole family, and this list is `TOOLS_BY_KIND.run_commands` in order.
-      deny: [
-        { tool: 'Bash', capability: 'run_commands' },
-        { tool: 'BashOutput', capability: 'run_commands' },
-        { tool: 'KillShell', capability: 'run_commands' },
-        { tool: 'Task', capability: 'run_commands' },
-        { tool: 'TaskStop', capability: 'run_commands' },
-        { tool: 'Skill', capability: 'run_commands' },
-        { tool: 'Workflow', capability: 'run_commands' },
-        { tool: 'SendMessage', capability: 'run_commands' },
-        { tool: 'EnterWorktree', capability: 'run_commands' },
-        { tool: 'ExitWorktree', capability: 'run_commands' },
-        { tool: 'EnterPlanMode', capability: 'run_commands' },
-        { tool: 'ExitPlanMode', capability: 'run_commands' },
-        { tool: 'CronCreate', capability: 'run_commands' },
-        { tool: 'CronDelete', capability: 'run_commands' },
-        { tool: 'CronList', capability: 'run_commands' },
-        { tool: 'ScheduleWakeup', capability: 'run_commands' },
-        { tool: 'RemoteTrigger', capability: 'run_commands' },
-        { tool: 'PushNotification', capability: 'run_commands' },
-        { tool: 'ReportFindings', capability: 'run_commands' },
-        { tool: 'DesignSync', capability: 'run_commands' },
-      ],
-    })
+    // M52 R1/R2: the same shell, refused through the new vocabulary and the inverted file --
+    // `run_commands` leaves the granted set, and with it every tool that can DO work or spawn work
+    // that can (the C1 classification: the shell, a subagent, a skill, a workflow, the schedulers).
+    const after = JSON.parse(readFileSync(permissionsPath, 'utf8')) as Verdict
+    expect(after.version).toBe(2)
+    expect(after.grants).toEqual(['read_repo', 'write_repo'])
+    const allowed = after.allow.map((entry) => entry.tool)
+    for (const tool of [
+      'Bash',
+      'BashOutput',
+      'KillShell',
+      'Task',
+      'TaskStop',
+      'Skill',
+      'Workflow',
+      'SendMessage',
+      'EnterWorktree',
+      'ExitWorktree',
+      'EnterPlanMode',
+      'ExitPlanMode',
+      'CronCreate',
+      'CronDelete',
+      'CronList',
+      'ScheduleWakeup',
+      'RemoteTrigger',
+      'PushNotification',
+      'ReportFindings',
+      'DesignSync',
+    ]) {
+      expect(allowed, tool).not.toContain(tool)
+    }
+    expect(allowed).toContain('Read')
+
+    // M52 R4: the token ROTATED. A token recovered from before the pause is dead -- the row's hash
+    // and the file's hash both moved, and they still agree with each other.
+    expect(after.tokenHash).not.toBe(before.tokenHash)
+    const row = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+    expect(row.runTokenHash).toBe(after.tokenHash)
   }, 60_000)
 
   it('leaves nothing to do on the tick after the one that claimed the intent', async (): Promise<void> => {

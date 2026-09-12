@@ -14,8 +14,10 @@
 //
 //   - the deny is a `SlavePermission` row (`{ kind: 'run_commands', mode: 'deny' }` since M52 R1) --
 //     `gate-m18-skill-and-teeth.mjs`'s seed;
-//   - `apps/orchestrator/src/tick.ts` resolves it through `packages/control`'s `resolveDenyList`
-//     and writes the run's own `permissions.json` at dispatch;
+//   - `apps/orchestrator/src/tick.ts` resolves it through the domain's `resolveGrants` and writes
+//     the run's own `permissions.json` v2 at dispatch (`packages/control`'s `writePermissionsFile`;
+//     M52 R2 turned that file from a deny list into the whole verdict, and `resolveDenyList` is
+//     gone with it);
 //   - `scripts/pause-gate.sh` (the PreToolUse hook the adapter registers) reads that file through
 //     `scripts/lib/permissions.sh` and spells the deny;
 //   - the orchestrator DAEMON dispatches, exactly as an operator's would.

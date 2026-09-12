@@ -30,7 +30,19 @@ export async function runGateScript(input: {
 
   return new Promise<GateRunResult>((resolve, reject) => {
     const child = spawn(input.hookPath, [], {
-      env: { ...process.env, SLAVEOFAI_PAUSE_FLAG: input.flagPath },
+      // M52 erratum E1: this check measures the PAUSE gate and must never measure the matrix. The
+      // orchestrator's own environment normally names no permissions file, but an operator's shell
+      // might -- and under default-deny a stray one would deny the disarmed direction and fail
+      // every spawn on the machine. Deleting both variables makes the pre-flight's contract exact
+      // rather than dependent on what happened to be exported; the RUN TOKEN goes with the file,
+      // because a token with no verdict beside it is meaningless and a verdict with no token fails
+      // closed.
+      env: ((): NodeJS.ProcessEnv => {
+        const env: NodeJS.ProcessEnv = { ...process.env, SLAVEOFAI_PAUSE_FLAG: input.flagPath }
+        delete env['SLAVEOFAI_PERMISSIONS_FILE']
+        delete env['SLAVEOFAI_RUN_TOKEN']
+        return env
+      })(),
       stdio: ['pipe', 'pipe', 'pipe'],
     })
 

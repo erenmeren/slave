@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 
 /**
@@ -112,6 +113,52 @@ export function permissionsFilePathFor(runDir: string): string {
 }
 
 /**
+ * The ONLY environment variables a worker's child inherits from this process (M52 R3).
+ *
+ * An explicit NAME list -- never a prefix rule, never a denylist. The denylist was tried in the
+ * harness this finding comes from and leaked three times before it was replaced by a four-entry
+ * allow list; a hardcoded five-name strip list there was measured SEVEN names short of a live
+ * session's dump. Denylists close instances; allow lists close the class.
+ *
+ * What each name is here FOR, because a list with no reasons grows by accretion:
+ *   - PATH, HOME, SHELL, USER      the child spawns `git` and its own subprocesses.
+ *   - LANG, LC_ALL, TERM           output encoding; a missing LANG mangles non-ASCII diffs.
+ *   - TMPDIR                       the CLI writes scratch files.
+ *   - XDG_CONFIG_HOME, XDG_CACHE_HOME  where the vendor CLI keeps its own auth and cache. This is
+ *                                  the pair that makes "the vendor CLI reads its own auth" work,
+ *                                  and it is why this is an allow list rather than an empty
+ *                                  environment: the credential the CLI uses is the OPERATOR's, held
+ *                                  by the vendor, and this system never sees it.
+ *   - NODE_EXTRA_CA_CERTS, SSL_CERT_FILE  corporate TLS. A child that cannot verify a certificate
+ *                                  fails in a way nobody can read.
+ *
+ * MEASURED, not guessed (M52 Task 2 Step 8): `claude 2.1.269` and `cursor-agent 2026.08.25-3e8eec8`
+ * were both run under exactly this list and nothing else, and both answered `--version` at exit 0;
+ * so did `packages/providers/test/fake-claude.mjs` playing a whole fixture and both gate fakes. No
+ * name had to be added to make any of them work.
+ *
+ * What is deliberately NOT here, and asserted so by `runtime-process.test.ts` and by the gate:
+ * `DATABASE_URL`, `SLAVEOFAI_SESSION_SECRET`, `SLAVEOFAI_PASSWORD`, and every API key an operator's
+ * shell happens to hold. A worker that cannot reach the database cannot rewrite its own
+ * permissions, and a worker that holds no key cannot spend one -- which is the whole point of
+ * asking the broker for an operation by name instead (R3).
+ */
+export const CHILD_ENV_ALLOW = [
+  'PATH',
+  'HOME',
+  'USER',
+  'SHELL',
+  'LANG',
+  'LC_ALL',
+  'TERM',
+  'TMPDIR',
+  'XDG_CONFIG_HOME',
+  'XDG_CACHE_HOME',
+  'NODE_EXTRA_CA_CERTS',
+  'SSL_CERT_FILE',
+] as const
+
+/**
  * The environment every runtime's child is spawned with (ADR 0001, "Concurrency and the git common
  * directory").
  *
@@ -120,6 +167,12 @@ export function permissionsFilePathFor(runDir: string): string {
  * `git config user.name/user.email` wrote into the repo-wide `.git/config`, which every worktree
  * shares. Environment variables are per-process, write no file, and cannot leak to a sibling
  * worktree's run.
+ *
+ * AN ALLOW LIST UNDERNEATH, NOT AN INHERITANCE (M52 R3). Until this milestone the base was
+ * `...process.env` -- the daemon's whole environment, `DATABASE_URL` included, handed to a process
+ * that is not trusted with it. It is `CHILD_ENV_ALLOW` now, and a name the parent does not hold is
+ * ABSENT from the child rather than present and empty: an empty `PATH` is a child that cannot find
+ * `git`, and it would read as a configuration rather than as a gap.
  *
  * `SLAVEOFAI_PAUSE_FLAG` is the ONE channel either gate reads the flag path on -- the same variable
  * `scripts/pause-gate.sh` and `scripts/cursor-shell-gate.sh` read. It was measured arriving intact
@@ -130,10 +183,9 @@ export function permissionsFilePathFor(runDir: string): string {
  *
  * `SLAVEOFAI_PERMISSIONS_FILE` (M18 Task 5) is the same shape of channel, for the same reason:
  * `scripts/lib/permissions.sh`'s `read_permission_verdict` is the ONE place either gate reads the
- * resolved deny list's path from. `permissionsFilePath` is required, not optional -- every start
- * and every resume writes `permissions.json` (`packages/control`'s `writePermissionsFile`) before
- * spawning, even when the resolved deny list is empty, so there is no real call site that has a
- * pause flag but no permissions file to point at.
+ * verdict's path from. `permissionsFilePath` is required, not optional -- every start and every
+ * resume writes `permissions.json` (`packages/control`'s `writePermissionsFile`) before spawning,
+ * so there is no real call site that has a pause flag but no verdict to point at.
  */
 export function buildChildEnv(input: {
   readonly gitIdentity: { readonly name: string; readonly email: string }
@@ -152,9 +204,31 @@ export function buildChildEnv(input: {
    * hook.
    */
   readonly toolResultsPath?: string
+  /**
+   * M52 R4: the run this child IS, and the proof of it. The id is for the broker's request lines;
+   * the token is what the hook hashes against `permissions.json`'s `tokenHash` and what the broker
+   * compares before it resolves a grant. Optional for `toolResultsPath`'s reason -- and an absent
+   * token is FAIL-CLOSED rather than permissive: the child then meets a hash it cannot match.
+   */
+  readonly runId?: string
+  readonly runToken?: string
+  /** M52 R3: the request/reply channel, the FOURTH file channel of this exact shape. */
+  readonly brokerChannelPath?: string
+  /**
+   * M52 erratum E6: the absolute path of the orchestrator CLI the thin client runs. There is no
+   * `orchestrator` binary on anybody's PATH -- `package.json`'s script is an npm script -- so this
+   * is how the worker finds one.
+   */
+  readonly brokerCliPath?: string
 }): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {}
+  for (const name of CHILD_ENV_ALLOW) {
+    const value = process.env[name]
+    // Absent, never empty: a name the parent does not hold must not arrive as a configured blank.
+    if (value !== undefined) env[name] = value
+  }
   return {
-    ...process.env,
+    ...env,
     GIT_AUTHOR_NAME: input.gitIdentity.name,
     GIT_AUTHOR_EMAIL: input.gitIdentity.email,
     GIT_COMMITTER_NAME: input.gitIdentity.name,
@@ -162,7 +236,45 @@ export function buildChildEnv(input: {
     SLAVEOFAI_PAUSE_FLAG: input.pauseFlagPath,
     SLAVEOFAI_PERMISSIONS_FILE: input.permissionsFilePath,
     ...(input.toolResultsPath === undefined ? {} : { SLAVEOFAI_TOOL_RESULTS: input.toolResultsPath }),
+    ...(input.runId === undefined ? {} : { SLAVEOFAI_RUN_ID: input.runId }),
+    ...(input.runToken === undefined ? {} : { SLAVEOFAI_RUN_TOKEN: input.runToken }),
+    ...(input.brokerChannelPath === undefined ? {} : { SLAVEOFAI_BROKER_CHANNEL: input.brokerChannelPath }),
+    ...(input.brokerCliPath === undefined ? {} : { SLAVEOFAI_BROKER_CLI: input.brokerCliPath }),
   }
+}
+
+/**
+ * Where a run's broker request channel lives (M52 R3) -- the ONE definition of the
+ * `'broker.ndjson'` filename, for `permissionsFilePathFor`'s reason: the adapter sets the child's
+ * `SLAVEOFAI_BROKER_CHANNEL` from it and the daemon tails the same file back, and a one-character
+ * drift would leave the daemon watching a file nothing writes -- which looks exactly like a worker
+ * that never asked for anything.
+ */
+export function brokerChannelPathFor(runDir: string): string {
+  return join(runDir, 'broker.ndjson')
+}
+
+/**
+ * Where the daemon writes ONE request's reply. The request id is the filename, which is also the
+ * idempotency key: the server serves a request only if this file does not already exist, so a
+ * daemon restart that re-reads the channel from byte 0 cannot execute anything twice.
+ */
+export function brokerReplyPathFor(runDir: string, requestId: string): string {
+  // `requestId` is checked by the caller against /^[a-f0-9]{32}$/ before it reaches here; this is
+  // the second lock, and it is the one that runs in the process that opens the file.
+  if (!/^[a-f0-9]{32}$/u.test(requestId)) {
+    throw new Error(`brokerReplyPathFor: bad request id ${JSON.stringify(requestId)}`)
+  }
+  return join(runDir, `broker-${requestId}.json`)
+}
+
+/**
+ * `sha256` hex of a run token (M52 R4). One definition, used by the writer (`writePermissionsFile`
+ * and the four dispatch sites) and by the broker's authoriser -- the hook computes the same thing
+ * in its own `node -e`, in six characters of JavaScript, because it may not import anything.
+ */
+export function runTokenHash(token: string): string {
+  return createHash('sha256').update(token).digest('hex')
 }
 
 /**

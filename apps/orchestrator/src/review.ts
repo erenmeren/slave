@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import {
   NON_TERMINAL_RUN_STATUSES,
   slaveId as brandSlaveId,
@@ -8,10 +9,10 @@ import {
   type GuardrailKind,
   type RunId,
 } from '@slave-of-ai/domain'
-import { admitProvider, refusalText, resolveDenyList, runFilePaths, writePermissionsFile } from '@slave-of-ai/control'
+import { admitProvider, refusalText, runFilePaths, writePermissionsFile } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
-import type { SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
+import { runTokenHash, type SlaveRuntimeAdapter, type RunHandle } from '@slave-of-ai/providers'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
@@ -481,8 +482,21 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     // back opaquely on `handle.runFiles` below.
     const { runDir, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
 
-    // M18 Task 5 -- see `tick.ts`'s `startRun` for the full reasoning.
-    const permissionsFilePath = writePermissionsFile(runDir, resolveDenyList(reviewer.permissions, resolved.provider))
+    // M18 Task 5 / M52 R2 -- see `tick.ts`'s `startRun` for the full reasoning. A review's baseline
+    // is `read_repo` + `run_commands`: a reviewer reads and runs the tests, and writes nothing.
+    // M52 R4: a fresh 32-byte token per spawn. The HASH goes on the row and into the file the gate
+    // reads; the PLAINTEXT goes into the child's environment and nowhere else -- not on the row, not
+    // in the checkpoint, not in a file, because a token file in `runDir` would be readable by every
+    // sibling run under the same uid.
+    const runToken = randomBytes(32).toString('hex')
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { runTokenHash: runTokenHash(runToken) } })
+    const permissionsFilePath = writePermissionsFile(runDir, {
+      rows: reviewer.permissions,
+      provider: resolved.provider,
+      runKind: 'review',
+      runId: run.id,
+      runToken,
+    })
 
     const gitIdentity = { name: reviewer.name, email: `${emailLocalPart(reviewer)}@slaveofai.local` }
 
@@ -510,6 +524,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
       pauseFlagPath,
       runDir,
       permissionsFilePath,
+      runToken,
       gitIdentity,
       ...(model !== undefined ? { model } : {}),
     })

@@ -215,6 +215,11 @@ esac
 # stated v1 limitation ("Cursor caveat"), not a bug this task fixes. Shell enforcement via
 # `beforeShellExecution` (the `default_tool` fallback above) is the reliable half; non-shell
 # enforcement on Cursor stays best-effort.
+# THE QUOTED SLOT CARRIES A KIND, NEVER A LABEL (M52 erratum E2). `PERMISSION_DENY_CAPABILITY`
+# holds a `PermissionKind` -- `run_commands`, `network_fetch` -- or the literal `ungoverned_tool`,
+# and `parsePermissionDenyReason` (packages/providers/src/gate.ts) parses it straight into
+# `run.tool_denied`'s `capability` payload field, which is stored and queried. Spelling a human
+# label here would put `Run commands` in the database; the LABEL is the card's job.
 if read_permission_verdict "$hook_payload" 'shell'; then
   deny "permission matrix denies '${PERMISSION_DENY_CAPABILITY}' (${PERMISSION_DENY_TOOL}) for this slave"
 fi

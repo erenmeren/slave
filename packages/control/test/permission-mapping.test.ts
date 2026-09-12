@@ -1,8 +1,18 @@
-import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, readFileSync, statSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { PERMISSION_KINDS, type PermissionKind } from '@slave-of-ai/domain'
+import {
+  MCP_TOOL_PREFIX,
+  PERMISSION_KINDS,
+  PERMISSION_RUN_KINDS,
+  type PermissionKind,
+  type PermissionProvider,
+  type PermissionRunKind,
+} from '@slave-of-ai/domain'
 import { PERMISSION_DENY_REASON_PREFIX } from '@slave-of-ai/providers'
-import { resolveDenyList } from '../src/permission.js'
+import { writePermissionsFile } from '../src/permission.js'
 
 const PROVIDERS = ['claude_code', 'cursor'] as const
 
@@ -59,21 +69,54 @@ const EXPECTED: Record<PermissionKind, { claude_code: readonly string[]; cursor:
   deploy_release: { claude_code: [], cursor: [] },
 }
 
-describe('resolveDenyList', () => {
-  for (const capability of PERMISSION_KINDS) {
+/** The v2 verdict `writePermissionsFile` wrote, read straight back off disk. */
+interface Verdict {
+  readonly version: number
+  readonly runId: string
+  readonly tokenHash: string
+  readonly enforce: string
+  readonly grants: readonly string[]
+  readonly allow: readonly { readonly tool: string; readonly kind: string }[]
+  readonly vocabulary: Readonly<Record<string, string>>
+  readonly prefixes: readonly { readonly prefix: string; readonly kind: string }[]
+}
+
+const TOKEN = 'f'.repeat(64)
+
+function write(
+  rows: readonly { readonly kind: string; readonly mode: 'allow' | 'deny' }[],
+  provider: PermissionProvider,
+  runKind: PermissionRunKind = 'implementation',
+): { readonly verdict: Verdict; readonly path: string } {
+  const runDir = mkdtempSync(join(tmpdir(), 'slaveofai-permissions-v2-'))
+  const path = writePermissionsFile(runDir, { rows, provider, runKind, runId: 'run-1', runToken: TOKEN })
+  return { verdict: JSON.parse(readFileSync(path, 'utf8')) as Verdict, path }
+}
+
+// M52 R2: the file is an ALLOW list, so the per-kind fact this file has always pinned is now read
+// off the DENIED direction of it -- a denied kind takes exactly its own tools off the list, and
+// nothing else moves. The table above is the same table; only the assertion's side changed.
+describe('writePermissionsFile: which tools each operation covers, per provider', () => {
+  for (const kind of PERMISSION_KINDS) {
     for (const provider of PROVIDERS) {
-      const expectedTools = EXPECTED[capability][provider]
-      it(`resolves '${capability}' deny → ${provider === 'claude_code' ? 'Claude' : 'Cursor'} ${
+      const expectedTools = EXPECTED[kind][provider]
+      it(`'${kind}' denied → ${provider === 'claude_code' ? 'Claude' : 'Cursor'} loses ${
         expectedTools.length > 0 ? expectedTools.join('/') : '(nothing -- a broker grant, not a tool grant)'
       }`, () => {
-        // ONE comparator on both sides. `localeCompare` and `Array.sort`'s default code-unit order
-        // disagree on names like `LSP` / `ListAgents` / `ListMcpResourcesTool`, which the fix-round
-        // toolbox introduced -- a mismatch that made a correct resolver look wrong.
-        const byTool = (a: { tool: string }, b: { tool: string }) => a.tool.localeCompare(b.tool)
-        const result = resolveDenyList([{ kind: capability, mode: 'deny' }], provider)
-        expect([...result].sort(byTool)).toEqual(
-          expectedTools.map((tool) => ({ tool, capability })).sort(byTool),
-        )
+        // Everything granted, then this one kind refused: the difference between the two allow
+        // lists is exactly the tools this kind covers.
+        const allKinds = PERMISSION_KINDS.map((k) => ({ kind: k, mode: 'allow' as const }))
+        const withAll = write(allKinds, provider).verdict
+        const withoutOne = write(
+          allKinds.map((row) => (row.kind === kind ? { kind, mode: 'deny' as const } : row)),
+          provider,
+        ).verdict
+        const lost = withAll.allow.filter((entry) => !withoutOne.allow.some((kept) => kept.tool === entry.tool))
+        const byTool = (a: { tool: string }, b: { tool: string }): number => a.tool.localeCompare(b.tool)
+        expect([...lost].sort(byTool)).toEqual([...expectedTools].map((tool) => ({ tool, kind })).sort(byTool))
+        // And the kind itself leaves the granted set, which is what the gate actually decides on.
+        expect(withAll.grants).toContain(kind)
+        expect(withoutOne.grants).not.toContain(kind)
       })
     }
   }
@@ -82,81 +125,141 @@ describe('resolveDenyList', () => {
     // M52 R1: the three shell-backed rows collapsed onto `Bash` and could not be told apart. There
     // is one shell row now, and `deploy_release` is a BROKER grant that names no tool -- which is
     // exactly why `deploy prod` could never be expressed as a tool deny.
-    const denied = resolveDenyList([{ kind: 'run_commands', mode: 'deny' }], 'claude_code').map((e) => e.tool)
-    expect(denied).toContain('Bash')
-    expect(denied).toContain('BashOutput')
-    expect(denied).toContain('KillShell')
+    const denied = write([{ kind: 'run_commands', mode: 'deny' }], 'claude_code').verdict
+    const tools = denied.allow.map((entry) => entry.tool)
+    expect(tools).not.toContain('Bash')
+    expect(tools).not.toContain('BashOutput')
+    expect(tools).not.toContain('KillShell')
     // Fix round 1 (the C1 classification): `Task` and `Skill` are the same power as the shell -- a
     // subagent has one, and a skill is instructions about what to run -- so the shell grant covers
     // them and denying it denies them too.
-    expect(denied).toContain('Task')
-    expect(denied).toContain('Skill')
-    expect(resolveDenyList([{ kind: 'deploy_release', mode: 'deny' }], 'claude_code')).toEqual([])
+    expect(tools).not.toContain('Task')
+    expect(tools).not.toContain('Skill')
+    // The read tools are untouched: a denied kind takes its own tools and no others.
+    expect(tools).toContain('Read')
+    // `deploy_release` grants no tool however it resolves, so granting it changes no allow list.
+    const withDeploy = write([{ kind: 'deploy_release', mode: 'allow' }], 'claude_code').verdict
+    const baseline = write([], 'claude_code').verdict
+    expect(withDeploy.allow).toEqual(baseline.allow)
+    expect(withDeploy.grants).toContain('deploy_release')
   })
 
-  it('names each denied tool ONCE, whatever order the rows arrive in', () => {
-    // M52 fix round 1 (review m2). The old case paired `deploy prod` with `create branch`, two
-    // capabilities that both resolved to the shell -- a collision the kinds vocabulary no longer
-    // has, since no two kinds share a tool. What is still worth pinning is that the output is a MAP
-    // keyed by tool name walked in table order, so two denies produce one entry per tool and the
-    // same list either way round. Two rows that really differ, so the assertion can fail.
-    const forwards = resolveDenyList(
+  it('names each allowed tool ONCE, in a deterministic order, whatever order the rows arrive in', () => {
+    const forwards = write(
       [
-        { kind: 'run_commands', mode: 'deny' },
-        { kind: 'read_repo', mode: 'deny' },
+        { kind: 'run_commands', mode: 'allow' },
+        { kind: 'read_repo', mode: 'allow' },
       ],
       'cursor',
-    )
-    const backwards = resolveDenyList(
-      [
-        { kind: 'read_repo', mode: 'deny' },
-        { kind: 'run_commands', mode: 'deny' },
-      ],
-      'cursor',
-    )
-    const byTool = (entries: readonly { tool: string; capability: string }[]) =>
-      [...entries].sort((a, b) => a.tool.localeCompare(b.tool))
-    expect(byTool(forwards)).toEqual([
-      { tool: 'read', capability: 'read_repo' },
-      { tool: 'shell', capability: 'run_commands' },
-    ])
-    // The LIST's order follows the rows (this resolver walks them, not `PERMISSION_KINDS` -- that
-    // is `resolveGrants`' property and Task 2's), so the set is what is pinned here, and that each
-    // tool appears exactly once.
-    expect(byTool(backwards)).toEqual(byTool(forwards))
-    expect(new Set(backwards.map((e) => e.tool)).size).toBe(backwards.length)
-  })
-
-  it('allow and unset rows are ignored -- only deny rows produce entries', () => {
-    const result = resolveDenyList(
+    ).verdict
+    const backwards = write(
       [
         { kind: 'read_repo', mode: 'allow' },
-        { kind: 'write_repo', mode: 'deny' },
+        { kind: 'run_commands', mode: 'allow' },
       ],
-      'claude_code',
-    )
-    expect(result).toEqual([
-      { tool: 'Write', capability: 'write_repo' },
-      { tool: 'Edit', capability: 'write_repo' },
-      { tool: 'NotebookEdit', capability: 'write_repo' },
+      'cursor',
+    ).verdict
+    // BYTE-EQUAL either way round, not merely the same set: `resolveGrants` walks
+    // `PERMISSION_KINDS` and then `TOOLS_BY_KIND`, never the rows, so the same matrix produces the
+    // same file however Postgres returned them.
+    expect(backwards.allow).toEqual(forwards.allow)
+    expect(new Set(forwards.allow.map((entry) => entry.tool)).size).toBe(forwards.allow.length)
+  })
+
+  it('a deny beats an allow for the same kind, in either row order', () => {
+    for (const rows of [
+      [
+        { kind: 'run_commands', mode: 'allow' as const },
+        { kind: 'run_commands', mode: 'deny' as const },
+      ],
+      [
+        { kind: 'run_commands', mode: 'deny' as const },
+        { kind: 'run_commands', mode: 'allow' as const },
+      ],
+    ]) {
+      const verdict = write(rows, 'claude_code').verdict
+      expect(verdict.grants).not.toContain('run_commands')
+      expect(verdict.allow.map((entry) => entry.tool)).not.toContain('Bash')
+    }
+  })
+
+  it('a read_secret grant puts no tool on the list -- it is a broker grant, and always was', () => {
+    for (const provider of PROVIDERS) {
+      const verdict = write([{ kind: 'read_secret', mode: 'allow' }], provider).verdict
+      expect(verdict.allow.some((entry) => entry.kind === 'read_secret')).toBe(false)
+      expect(verdict.grants).toContain('read_secret')
+    }
+  })
+
+  it('an unknown kind string contributes nothing (defensive -- rows may arrive unvalidated)', () => {
+    const verdict = write([{ kind: 'launch nukes', mode: 'allow' }], 'claude_code').verdict
+    expect(verdict.allow).toEqual(write([], 'claude_code').verdict.allow)
+    expect(verdict.grants).toEqual(write([], 'claude_code').verdict.grants)
+  })
+})
+
+describe('writePermissionsFile: the file IS the verdict (M52 R2/R4)', () => {
+  it('writes version 2 with the run, its token hash, the granted kinds, the vocabulary and the prefixes', () => {
+    const { verdict } = write([], 'claude_code')
+    expect(verdict.version).toBe(2)
+    expect(verdict.runId).toBe('run-1')
+    // The HASH, never the plaintext (erratum E7): the token exists in exactly one child's
+    // environment and nowhere on disk.
+    expect(verdict.tokenHash).toBe(createHash('sha256').update(TOKEN).digest('hex'))
+    expect(JSON.stringify(verdict)).not.toContain(TOKEN)
+    expect(verdict.enforce).toBe('all-tools')
+    expect(verdict.vocabulary['Bash']).toBe('run_commands')
+    // The one name family no allow list can enumerate (erratum E16): one `network_fetch` grant has
+    // to open every MCP tool, and a prefix entry is how the shell can answer that.
+    expect(verdict.prefixes).toEqual([{ prefix: MCP_TOOL_PREFIX, kind: 'network_fetch' }])
+    expect(verdict.allow.some((entry) => entry.tool.startsWith(MCP_TOOL_PREFIX))).toBe(false)
+  })
+
+  it("says 'known-tools' for Cursor, which is the measured limitation stated in data (E3)", () => {
+    expect(write([], 'cursor').verdict.enforce).toBe('known-tools')
+    expect(Object.keys(write([], 'cursor').verdict.vocabulary).sort()).toEqual(['edit', 'read', 'shell'])
+  })
+
+  it('resolves a different baseline per run kind, and says so in `grants`', () => {
+    expect(write([], 'claude_code', 'implementation').verdict.grants).toEqual([
+      'read_repo',
+      'write_repo',
+      'run_commands',
     ])
+    expect(write([], 'claude_code', 'review').verdict.grants).toEqual(['read_repo', 'run_commands'])
+    expect(write([], 'claude_code', 'planning').verdict.grants).toEqual(['read_repo'])
+    // A planning run cannot spawn a subagent: `Task` and `Skill` are `run_commands` (fix round 1),
+    // which the planning baseline does not carry.
+    const planning = write([], 'claude_code', 'planning').verdict.allow.map((entry) => entry.tool)
+    expect(planning).not.toContain('Task')
+    expect(planning).not.toContain('Skill')
+    expect(planning).toContain('Read')
   })
 
-  it('a read_secret deny resolves to an empty list -- it is a broker grant, and always was', () => {
-    expect(resolveDenyList([{ kind: 'read_secret', mode: 'deny' }], 'claude_code')).toEqual([])
-    expect(resolveDenyList([{ kind: 'read_secret', mode: 'deny' }], 'cursor')).toEqual([])
+  it('covers every run kind -- a fourth one would fail this loop rather than resolve silently', () => {
+    for (const runKind of PERMISSION_RUN_KINDS) {
+      expect(write([], 'claude_code', runKind).verdict.grants.length).toBeGreaterThan(0)
+    }
   })
 
-  it('an unknown kind string resolves to an empty list (defensive -- the caller may hand rows unvalidated against PERMISSION_KINDS)', () => {
-    expect(resolveDenyList([{ kind: 'launch nukes', mode: 'deny' }], 'claude_code')).toEqual([])
+  it('writes the file 0600 -- the verdict that governs a worker is not world-readable (D15)', () => {
+    expect(statSync(write([], 'claude_code').path).mode & 0o777).toBe(0o600)
   })
 
-  it('no rows at all resolves to an empty list', () => {
-    expect(resolveDenyList([], 'claude_code')).toEqual([])
+  it('every tool on the allow list carries the kind the vocabulary says governs it', () => {
+    const verdict = write(
+      PERMISSION_KINDS.map((kind) => ({ kind, mode: 'allow' as const })),
+      'claude_code',
+    ).verdict
+    for (const entry of verdict.allow) {
+      expect(verdict.vocabulary[entry.tool], entry.tool).toBe(entry.kind)
+      expect(verdict.grants, entry.tool).toContain(entry.kind)
+    }
   })
+})
 
-  // Task 2 creates `scripts/lib/permissions.sh` -- pinned here, byte-equal, against the TS
-  // constant so neither spelling can drift alone.
+describe('the shell twin', () => {
+  // The deny prefix, pinned byte-equal against the TS constant so neither spelling can drift alone.
   it('the shell helper spells the deny prefix exactly as the TS constant', () => {
     const lib = readFileSync('scripts/lib/permissions.sh', 'utf8')
     expect(lib).toContain(PERMISSION_DENY_REASON_PREFIX)

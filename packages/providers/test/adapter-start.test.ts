@@ -107,6 +107,53 @@ describe('ClaudeCodeAdapter', () => {
     expect(env['SLAVEOFAI_PERMISSIONS_FILE']).toBe(input.permissionsFilePath)
   })
 
+  // M52 R4/R3: the four variables the milestone adds to a spawn, measured off the child itself
+  // rather than off the caller's memory of what it passed.
+  it('carries the run id, the run token and the broker channel into the child (M52 R4/R3)', async (): Promise<void> => {
+    const adapter = new ClaudeCodeAdapter({
+      command: 'node',
+      extraArgs: [FAKE, '--fixture', 'env-echo'],
+      hookPath,
+      brokerCliPath: '/opt/slaveofai/cli.js',
+    })
+    await adapter.start({ ...input, runToken: 'f'.repeat(64) })
+    const env = await collectEnvFrom(adapter, input.runId)
+    expect(env['SLAVEOFAI_RUN_ID']).toBe(String(input.runId))
+    expect(env['SLAVEOFAI_RUN_TOKEN']).toBe('f'.repeat(64))
+    expect(env['SLAVEOFAI_BROKER_CHANNEL']).toBe(path.join(input.runDir, 'broker.ndjson'))
+    expect(env['SLAVEOFAI_BROKER_CLI']).toBe('/opt/slaveofai/cli.js')
+  })
+
+  it('leaves SLAVEOFAI_RUN_TOKEN absent on a spawn with no token, rather than empty', async (): Promise<void> => {
+    // Absent is the FAIL-CLOSED direction, not the permissive one: the child then meets a
+    // `tokenHash` it cannot match and every tool call is refused.
+    const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'], hookPath })
+    await adapter.start(input)
+    const env = await collectEnvFrom(adapter, input.runId)
+    expect('SLAVEOFAI_RUN_TOKEN' in env).toBe(false)
+    expect('SLAVEOFAI_RUN_ID' in env).toBe(false)
+    expect('SLAVEOFAI_BROKER_CLI' in env).toBe(false)
+  })
+
+  // M52 R3: the child gets an allow list, not this process's environment. Measured through a real
+  // spawn, because `buildChildEnv`'s own unit test cannot prove what actually crossed the boundary.
+  it('does not hand the child DATABASE_URL or any other secret this process holds', async (): Promise<void> => {
+    process.env['DATABASE_URL'] = 'postgres://u:p@localhost:5433/db'
+    process.env['SLAVEOFAI_SESSION_SECRET'] = 'secret'
+    try {
+      const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'], hookPath })
+      await adapter.start(input)
+      const env = await collectEnvFrom(adapter, input.runId)
+      expect('DATABASE_URL' in env).toBe(false)
+      expect('SLAVEOFAI_SESSION_SECRET' in env).toBe(false)
+      // And the list it DOES get still works: the child found `node` on its PATH to run at all.
+      expect(env['PATH']).toBe(process.env['PATH'])
+    } finally {
+      delete process.env['DATABASE_URL']
+      delete process.env['SLAVEOFAI_SESSION_SECRET']
+    }
+  })
+
   it('appends --model to the spawned args when input.model is set', async (): Promise<void> => {
     // fixture 'env-echo' also carries the child's own process.argv in its terminal result payload.
     const adapter = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'env-echo'], hookPath })

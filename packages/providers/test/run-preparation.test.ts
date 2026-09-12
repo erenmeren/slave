@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runId } from '@slave-of-ai/domain'
 import { describe, expect, it } from 'vitest'
-import { ClaudeCodeAdapter } from '../src/index.js'
+import { ClaudeCodeAdapter, brokerChannelPathFor, permissionsFilePathFor } from '../src/index.js'
 import { copyGateInto } from './helpers/gate-fixture.js'
 
 describe('the Claude adapter prepares its own run files', () => {
@@ -44,5 +44,16 @@ describe('the Claude adapter prepares its own run files', () => {
     expect(JSON.parse(readFileSync(settings, 'utf8'))).toMatchObject({
       hooks: { PreToolUse: [{ matcher: '*' }] },
     })
+  })
+
+  // M52 R3: the broker channel is the FOURTH file channel of the pause flag's exact shape, and it
+  // lives where the other three do -- inside the run's own scratch directory, beside
+  // `permissions.json`. Pinned against the two helpers rather than against a literal, because the
+  // filename having ONE definition is the whole reason the helpers exist.
+  it('puts the broker channel inside runDir, beside permissions.json', () => {
+    const runDir = join(tmpdir(), '.slaveofai-state', 'runs', 'run-1')
+    const channel = brokerChannelPathFor(runDir)
+    expect(channel).toBe(join(runDir, 'broker.ndjson'))
+    expect(join(channel, '..')).toBe(join(permissionsFilePathFor(runDir), '..'))
   })
 })

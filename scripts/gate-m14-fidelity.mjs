@@ -1141,14 +1141,19 @@ try {
   // ============================================================================================
   daemon = spawn('node', [ORCHESTRATOR_CLI, 'daemon', '--workspace', workspaceId, '--period', '500'], {
     cwd: repoRoot,
-    // `buildChildEnv` spreads `process.env` into the vendor child, so this reaches `fake-claude.sh`
-    // and widens the window in which the run is `working` (see FAKE_STEP_GAP_MS).
+    // THE STEP GAP RIDES ON ARGV, NOT IN THE ENVIRONMENT (M52 R3). `buildChildEnv` used to spread
+    // `process.env` into the vendor child, so exporting `FAKE_CLAUDE_STEP_GAP_MS` here reached
+    // `fake-claude.sh`; the child gets an explicit `CHILD_ENV_ALLOW` list now and a gate-only knob
+    // will never be on it. `SLAVEOFAI_CLAUDE_ARGS` is the channel that still arrives -- the daemon
+    // turns it into the child's leading argv (`claudeCommandFrom`), which is how `--fixture` has
+    // always reached `fake-claude.mjs` -- and it is what widens the window in which the run is
+    // `working` (see FAKE_STEP_GAP_MS).
     //
     // M32 item 7: this gate's preflight already refuses to run unless `SLAVEOFAI_CLAUDE_BIN` is an
     // executable under `scripts/gate-fakes/`; the flag carries that same promise INTO the daemon,
     // which would otherwise fall back to the real `claude` if the variable were ever lost between
     // here and there.
-    env: { ...process.env, FAKE_CLAUDE_STEP_GAP_MS: FAKE_STEP_GAP_MS, SLAVEOFAI_REQUIRE_FAKE_CLI: '1' },
+    env: { ...process.env, SLAVEOFAI_CLAUDE_ARGS: `--step-gap-ms ${FAKE_STEP_GAP_MS}`, SLAVEOFAI_REQUIRE_FAKE_CLI: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   daemon.stdout.on('data', (chunk) => {

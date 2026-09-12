@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import {
   NON_TERMINAL_RUN_STATUSES,
   slaveId as brandSlaveId,
@@ -15,14 +16,13 @@ import {
   listCapabilities,
   readRunbookById,
   refusalText,
-  resolveDenyList,
   runbookForWorkspace,
   runFilePaths,
   writePermissionsFile,
 } from '@slave-of-ai/control'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
-import type { SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
+import { runTokenHash, type SlaveRuntimeAdapter, type RunHandle } from '@slave-of-ai/providers'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
@@ -532,8 +532,22 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
     // back opaquely on `handle.runFiles` below.
     const { runDir, pauseFlagPath } = runFilePaths(workspace.repoPath, runId)
 
-    // M18 Task 5 -- see `tick.ts`'s `startRun` for the full reasoning.
-    const permissionsFilePath = writePermissionsFile(runDir, resolveDenyList(manager.permissions, resolved.provider))
+    // M18 Task 5 / M52 R2 -- see `tick.ts`'s `startRun` for the full reasoning. `runKind` is the
+    // literal `'planning'` here, and it is what makes the baseline this run resolves the READ-ONLY
+    // one: a planner gets `read_repo` and nothing else unless a person granted more.
+    // M52 R4: a fresh 32-byte token per spawn. The HASH goes on the row and into the file the gate
+    // reads; the PLAINTEXT goes into the child's environment and nowhere else -- not on the row, not
+    // in the checkpoint, not in a file, because a token file in `runDir` would be readable by every
+    // sibling run under the same uid.
+    const runToken = randomBytes(32).toString('hex')
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { runTokenHash: runTokenHash(runToken) } })
+    const permissionsFilePath = writePermissionsFile(runDir, {
+      rows: manager.permissions,
+      provider: resolved.provider,
+      runKind: 'planning',
+      runId: run.id,
+      runToken,
+    })
 
     const gitIdentity = { name: manager.name, email: `${emailLocalPart(manager)}@slaveofai.local` }
 
@@ -564,6 +578,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       pauseFlagPath,
       runDir,
       permissionsFilePath,
+      runToken,
       gitIdentity,
       ...(model !== undefined ? { model } : {}),
     })

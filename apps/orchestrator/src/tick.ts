@@ -1,10 +1,10 @@
+import { randomBytes } from 'node:crypto'
 import {
   admitProvider,
   type ModelDecider,
   claimResume,
   pauseActiveRuns,
   refusalText,
-  resolveDenyList,
   runFilePaths,
   writePermissionsFile,
   type WorkspaceStatsSnapshot,
@@ -23,7 +23,7 @@ import {
   type WorkspaceId,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
-import type { AdapterRegistry, SlaveRuntimeAdapter, RunHandle } from '@slave-of-ai/providers'
+import { runTokenHash, type AdapterRegistry, type SlaveRuntimeAdapter, type RunHandle } from '@slave-of-ai/providers'
 import { deliverAnswers } from './deliver.js'
 import { runMergePass } from './merge.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
@@ -661,9 +661,22 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
 
     // M18 Task 5: the permission matrix is resolved and snapshotted to disk HERE, at dispatch,
     // against this run's own provider -- the same resolve-once-at-spawn discipline `model` already
-    // gets. `permissions.json` is written even when the deny list is empty (spec §2): the gate
-    // scripts distinguish "armed with nothing denied" from "not armed at all".
-    const permissionsFilePath = writePermissionsFile(runDir, resolveDenyList(slave.permissions, resolved.provider))
+    // gets. Under M52 R2 the snapshot is an ALLOW list and the file is the whole verdict, so it is
+    // written unconditionally: a run granted nothing is a real state, and an absent file is no
+    // longer "nothing denied" but a run that stops.
+    // M52 R4: a fresh 32-byte token per spawn. The HASH goes on the row and into the file the gate
+    // reads; the PLAINTEXT goes into the child's environment and nowhere else -- not on the row, not
+    // in the checkpoint, not in a file, because a token file in `runDir` would be readable by every
+    // sibling run under the same uid.
+    const runToken = randomBytes(32).toString('hex')
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { runTokenHash: runTokenHash(runToken) } })
+    const permissionsFilePath = writePermissionsFile(runDir, {
+      rows: slave.permissions,
+      provider: resolved.provider,
+      runKind: 'implementation',
+      runId: run.id,
+      runToken,
+    })
 
     // M37 Task 2: the one builder. Everything this run is told -- who the slave is, who else is
     // here, what was asked of it, which skills it has and where they now sit in its worktree, its
@@ -688,6 +701,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
       pauseFlagPath,
       runDir,
       permissionsFilePath,
+      runToken,
       gitIdentity: { name: slave.name, email: `${emailLocalPart(slave)}@slaveofai.local` },
       // Conditional spread, not `model`, because `exactOptionalPropertyTypes` treats an explicit
       // `model: undefined` as a different (and disallowed) thing from the key being absent.

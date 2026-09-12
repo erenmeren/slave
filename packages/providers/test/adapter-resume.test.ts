@@ -276,6 +276,29 @@ describe('ClaudeCodeAdapter.resume', () => {
     expect(env['SLAVEOFAI_PERMISSIONS_FILE']).not.toBe(input.permissionsFilePath)
   })
 
+  // M52 R4: a resume ROTATES the token. The adapter's job is only to carry the one it is handed
+  // into the child, and to leave the key absent when it is handed none.
+  it('carries the resumed spawn\u2019s rotated run token and broker channel into the child', async (): Promise<void> => {
+    const handle = await adapter.resume(input.runId, checkpoint, 'do the other thing', 'e'.repeat(64))
+    await spawnedArgsFor(handle)
+    const payload = adapter.rawTerminalPayload(handle.runId)
+    const env = z.record(z.string(), z.string().optional()).parse(payload?.['env'])
+    expect(env['SLAVEOFAI_RUN_ID']).toBe(String(input.runId))
+    expect(env['SLAVEOFAI_RUN_TOKEN']).toBe('e'.repeat(64))
+    // The ORIGINAL run directory, recovered from the checkpoint -- the same derivation the
+    // permissions file makes, never a new one.
+    expect(env['SLAVEOFAI_BROKER_CHANNEL']).toBe(path.join(input.runDir, 'broker.ndjson'))
+  })
+
+  it('leaves SLAVEOFAI_RUN_TOKEN absent on a resume with no token', async (): Promise<void> => {
+    const handle = await adapter.resume(input.runId, checkpoint, 'do the other thing')
+    await spawnedArgsFor(handle)
+    const payload = adapter.rawTerminalPayload(handle.runId)
+    const env = z.record(z.string(), z.string().optional()).parse(payload?.['env'])
+    expect('SLAVEOFAI_RUN_TOKEN' in env).toBe(false)
+    expect('SLAVEOFAI_RUN_ID' in env).toBe(false)
+  })
+
   it('appends --model to the resumed spawn when checkpoint.model is set', async (): Promise<void> => {
     const handle = await adapter.resume(input.runId, { ...checkpoint, model: 'test-model-a' }, 'do the other thing')
     const args = await spawnedArgsFor(handle)
@@ -488,29 +511,37 @@ describe('ClaudeCodeAdapter.resume', () => {
     // inherit that fd is exactly this shape in production. This throwaway script reproduces it
     // deterministically -- it spawns a detached grandchild that inherits its own stdout and
     // hangs indefinitely (holding the pipe open no matter how long anything waits), writes that
-    // grandchild's pid to SLAVEOFAI_TEST_ORPHAN_PID_FILE so this test can kill it explicitly
-    // afterward, then hangs itself until signaled. Without resume()'s explicit close() call on
-    // the old queue, a consumer already sitting in `for await` over it -- registered before
-    // resume() is even called, matching "the orchestrator's pump" finding A describes -- would
-    // wait on that queue forever, because nothing else will ever close it.
+    // grandchild's pid to a file this test names so it can kill it explicitly afterward, then
+    // hangs itself until signaled. Without resume()'s explicit close() call on the old queue, a
+    // consumer already sitting in `for await` over it -- registered before resume() is even
+    // called, matching "the orchestrator's pump" finding A describes -- would wait on that queue
+    // forever, because nothing else will ever close it.
+    //
+    // M52 R3: the pid file's path is BAKED INTO THE SCRIPT and the script is rewritten between the
+    // start and the resume, because `buildChildEnv` no longer spreads `process.env` -- a
+    // test-only variable exported by this process does not reach the child any more, and an
+    // allow-list entry invented for a test would be exactly the accretion `CHILD_ENV_ALLOW`'s
+    // docstring refuses. One adapter, one `extraArgs`, so one script path rewritten twice.
     const orphanScript = path.join(worktreePath, 'hang-with-orphan.mjs')
-    writeFileSync(
-      orphanScript,
-      [
-        "import { spawn } from 'node:child_process'",
-        "import { writeFileSync } from 'node:fs'",
-        '',
-        "const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 3600000)'], {",
-        "  stdio: ['ignore', 'inherit', 'ignore'],",
-        '  detached: true,',
-        '})',
-        'grandchild.unref()',
-        "writeFileSync(process.env['SLAVEOFAI_TEST_ORPHAN_PID_FILE'], String(grandchild.pid))",
-        '',
-        'setInterval(() => {}, 3600000)',
-        '',
-      ].join('\n'),
-    )
+    const writeOrphanScript = (pidFile: string): void => {
+      writeFileSync(
+        orphanScript,
+        [
+          "import { spawn } from 'node:child_process'",
+          "import { writeFileSync } from 'node:fs'",
+          '',
+          "const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 3600000)'], {",
+          "  stdio: ['ignore', 'inherit', 'ignore'],",
+          '  detached: true,',
+          '})',
+          'grandchild.unref()',
+          `writeFileSync(${JSON.stringify(pidFile)}, String(grandchild.pid))`,
+          '',
+          'setInterval(() => {}, 3600000)',
+          '',
+        ].join('\n'),
+      )
+    }
 
     const orphanRunId = makeRunId('run-resume-dead-not-closed')
     const orphanInput: StartRunInput = {
@@ -523,10 +554,9 @@ describe('ClaudeCodeAdapter.resume', () => {
     const resumePidFile = path.join(worktreePath, 'resume-grandchild.pid')
     const grandchildPids: number[] = []
     const immediatePids: number[] = []
-    const previousOrphanEnv = process.env['SLAVEOFAI_TEST_ORPHAN_PID_FILE']
 
     try {
-      process.env['SLAVEOFAI_TEST_ORPHAN_PID_FILE'] = startPidFile
+      writeOrphanScript(startPidFile)
       const handle = await orphanAdapter.start(orphanInput)
       immediatePids.push(handle.pid)
       await capturePidFile(startPidFile, grandchildPids)
@@ -555,7 +585,7 @@ describe('ClaudeCodeAdapter.resume', () => {
         settingsPath: handle.runFiles.settingsPath,
         hookPath: handle.runFiles.hookPath,
       }
-      process.env['SLAVEOFAI_TEST_ORPHAN_PID_FILE'] = resumePidFile
+      writeOrphanScript(resumePidFile)
       const resumedHandle = await orphanAdapter.resume(orphanRunId, orphanCheckpoint, null)
       immediatePids.push(resumedHandle.pid)
       expect(resumedHandle.runId).toBe(orphanRunId)
@@ -574,11 +604,6 @@ describe('ClaudeCodeAdapter.resume', () => {
 
       await orphanAdapter.cancel(orphanRunId)
     } finally {
-      if (previousOrphanEnv === undefined) {
-        delete process.env['SLAVEOFAI_TEST_ORPHAN_PID_FILE']
-      } else {
-        process.env['SLAVEOFAI_TEST_ORPHAN_PID_FILE'] = previousOrphanEnv
-      }
       // A last sweep, on top of capturePidFile's own retry above: by the time cleanup runs,
       // several more seconds have passed (the rest of the try body, including a 3s race), which
       // is enough time for a pid file that had not yet appeared during capturePidFile's own

@@ -6,7 +6,7 @@ import { capabilitiesOf } from '../capabilities.js'
 import { listCursorModels, type ModelListing } from '../models.js'
 import { AsyncEventQueue } from '../runtime/event-queue.js'
 import { clearAndVerifyPauseFlagAbsent } from '../runtime/pause-flag.js'
-import { buildChildEnv, permissionsFilePathFor, terminateChild } from '../runtime/process.js'
+import { brokerChannelPathFor, buildChildEnv, permissionsFilePathFor, terminateChild } from '../runtime/process.js'
 import { isRecord } from '../runtime/summary.js'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
 import type { SlaveRuntimeAdapter, ProviderCapabilities, RunHandle, StartRunInput } from '../claude/adapter.js'
@@ -76,6 +76,13 @@ export interface CursorAdapterOptions {
   readonly extraArgs?: readonly string[]
   /** Grace period between `SIGTERM` and the `SIGKILL` escalation in `cancel()`. Default 5000ms. */
   readonly killGraceMs?: number
+  /**
+   * M52 R3/E6: the absolute path of the orchestrator CLI a worker runs to ask the broker for an
+   * operation. `ClaudeCodeAdapterOptions.brokerCliPath`'s exact shape and for its reason -- a fact
+   * about this RUNTIME, filled once where the registry is built, never a per-run input, and
+   * optional because a deployment with nothing brokered needs none of it.
+   */
+  readonly brokerCliPath?: string
 }
 
 const DEFAULT_KILL_GRACE_MS = 5_000
@@ -123,6 +130,7 @@ export class CursorAdapter implements SlaveRuntimeAdapter {
   private readonly gatePath: string
   private readonly extraArgs: readonly string[]
   private readonly killGraceMs: number
+  private readonly brokerCliPath: string | undefined
   private readonly runs = new Map<RunId, CursorRunState>()
 
   constructor(options: CursorAdapterOptions) {
@@ -130,6 +138,7 @@ export class CursorAdapter implements SlaveRuntimeAdapter {
     this.gatePath = options.gatePath
     this.extraArgs = options.extraArgs ?? []
     this.killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS
+    this.brokerCliPath = options.brokerCliPath
   }
 
   /**
@@ -177,6 +186,12 @@ export class CursorAdapter implements SlaveRuntimeAdapter {
         gitIdentity: input.gitIdentity,
         pauseFlagPath: input.pauseFlagPath,
         permissionsFilePath: input.permissionsFilePath,
+        // M52 R4/R3, exactly as the Claude adapter passes them: the run this child IS, and the
+        // channel it can ask through. `input.runDir` is the run's own scratch directory, and
+        // `brokerChannelPathFor` is the one definition of the filename inside it.
+        ...(input.runToken === undefined ? {} : { runId: String(input.runId), runToken: input.runToken }),
+        brokerChannelPath: brokerChannelPathFor(input.runDir),
+        ...(this.brokerCliPath === undefined ? {} : { brokerCliPath: this.brokerCliPath }),
       }),
       runFiles: { settingsPath: hooksPath, hookPath: this.gatePath },
     })
@@ -203,7 +218,12 @@ export class CursorAdapter implements SlaveRuntimeAdapter {
    * Resuming a `runId` this adapter instance never `start()`-ed is the normal case, not an error --
    * that is what surviving a daemon restart means. `checkpoint` carries everything the spawn needs.
    */
-  async resume(runId: RunId, checkpoint: Checkpoint, queuedInstruction: string | null): Promise<RunHandle> {
+  async resume(
+    runId: RunId,
+    checkpoint: Checkpoint,
+    queuedInstruction: string | null,
+    runToken?: string,
+  ): Promise<RunHandle> {
     await this.runPreflightGate(checkpoint.hookPath, runId)
     writeCursorHooksFile({ hooksPath: checkpoint.settingsPath, gatePath: checkpoint.hookPath })
 
@@ -255,6 +275,12 @@ export class CursorAdapter implements SlaveRuntimeAdapter {
         // (M18 Task 5 fix round 1) is the ONE definition of the filename itself, shared with the
         // Claude adapter and `writePermissionsFile` -- never joined as a literal here.
         permissionsFilePath: permissionsFilePathFor(dirname(checkpoint.pauseFlagPath)),
+        // M52 R4: the ROTATED token for this spawn. The broker channel comes off the SAME
+        // `dirname(checkpoint.pauseFlagPath)` derivation the permissions file above does -- the one
+        // field guaranteed to live in `runDir` on this provider -- never a new one.
+        ...(runToken === undefined ? {} : { runId: String(runId), runToken }),
+        brokerChannelPath: brokerChannelPathFor(dirname(checkpoint.pauseFlagPath)),
+        ...(this.brokerCliPath === undefined ? {} : { brokerCliPath: this.brokerCliPath }),
       }),
       runFiles: { settingsPath: checkpoint.settingsPath, hookPath: checkpoint.hookPath },
     })

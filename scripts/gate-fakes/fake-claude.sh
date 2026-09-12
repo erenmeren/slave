@@ -45,11 +45,21 @@ done
 
 session_id=""
 resuming=0
+step_gap_arg=""
 prev=""
 for arg in "$@"; do
   if [ "$prev" = "--resume" ]; then
     resuming=1
     session_id="$arg"
+  fi
+  # THE STEP GAP ARRIVES ON ARGV (M52 R3). It used to arrive in the environment, because
+  # `buildChildEnv` spread the daemon's whole `process.env` into the vendor child; it does not any
+  # more -- the child gets an explicit `CHILD_ENV_ALLOW` list, and a gate-only knob on that list
+  # would be exactly the accretion its docstring refuses. So `gate-m14-fidelity.mjs` passes it
+  # through `SLAVEOFAI_CLAUDE_ARGS`, the same channel `--fixture` has always ridden into
+  # `fake-claude.mjs`. The environment variable below still works for a fake run started by hand.
+  if [ "$prev" = "--step-gap-ms" ]; then
+    step_gap_arg="$arg"
   fi
   prev="$arg"
 done
@@ -61,7 +71,7 @@ flag="${SLAVEOFAI_PAUSE_FLAG:-}"
 # Fewer steps on a resume: the resumed run has to REACH `succeeded`, and every extra step is another
 # window in which something could interrupt it.
 if [ "$resuming" = "1" ]; then steps=2; else steps=8; fi
-gap_ms="${FAKE_CLAUDE_STEP_GAP_MS:-700}"
+gap_ms="${step_gap_arg:-${FAKE_CLAUDE_STEP_GAP_MS:-700}}"
 
 trap '' TERM INT
 

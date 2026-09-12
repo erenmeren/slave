@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { parsePermissionDenyReason } from '../src/gate.js'
 import { copyGateInto } from './helpers/gate-fixture.js'
 
 const repoRoot = fileURLToPath(new URL('../../../', import.meta.url))
@@ -32,6 +34,11 @@ interface RunHookOptions {
   // entirely (not merely "leaves it unset in this test file's own process") -- the permission
   // matrix must stay completely out of the picture for every pre-M18-shaped test in this file.
   readonly permissionsFile?: string
+  // M52 R4: the plaintext run token `buildChildEnv` puts in a real worker's environment. Defaults
+  // to `TOKEN`, whose sha256 is what `writePermissionsFile` below writes as `tokenHash`, so a case
+  // that does not care about identity spawns as the run the verdict is about. Deleted from the
+  // child's environment the way `permissionsFile` is when explicitly `undefined`.
+  readonly runToken?: string
 }
 
 interface RunHookResult {
@@ -69,6 +76,11 @@ function runHook(options: RunHookOptions = {}): Promise<RunHookResult> {
     delete env['SLAVEOFAI_PERMISSIONS_FILE']
   } else {
     env['SLAVEOFAI_PERMISSIONS_FILE'] = options.permissionsFile
+  }
+  if ('runToken' in options && options.runToken === undefined) {
+    delete env['SLAVEOFAI_RUN_TOKEN']
+  } else {
+    env['SLAVEOFAI_RUN_TOKEN'] = options.runToken ?? TOKEN
   }
 
   return new Promise((resolve, reject) => {
@@ -110,11 +122,42 @@ function runHook(options: RunHookOptions = {}): Promise<RunHookResult> {
   })
 }
 
-/** Writes `{"version":1,"deny":[...]}` to a fresh temp file and returns its path. */
-function writePermissionsFile(deny: ReadonlyArray<{ readonly tool: string; readonly capability: string }>): string {
+/**
+ * The plaintext run token every permission case spawns with, and the sha256 the file carries
+ * (M52 R4). Spelled with `createHash` rather than as a hex literal so the fixture stays readable.
+ */
+const TOKEN = 'f'.repeat(64)
+const TOKEN_HASH = createHash('sha256').update(TOKEN).digest('hex')
+
+/**
+ * Writes a `permissions.json` **v2** verdict to a fresh temp file and returns its path (M52 R2).
+ *
+ * An ALLOW list now, not a deny list: `grants` are the operations this run was given, `allow` the
+ * vendor tools they resolve to, `vocabulary` what governs each governed tool, and `tokenHash` which
+ * run the verdict is about. The default body is a Claude implementation baseline minus the shell --
+ * `Read` is granted and `Bash` is not -- so the deny this file's cases assert is the ordinary one.
+ */
+function writePermissionsFile(
+  overrides: {
+    readonly grants?: readonly string[]
+    readonly allow?: ReadonlyArray<{ readonly tool: string; readonly kind: string }>
+  } = {},
+): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-pause-gate-matrix-'))
   const filePath = path.join(dir, 'permissions.json')
-  writeFileSync(filePath, JSON.stringify({ version: 1, deny }))
+  writeFileSync(
+    filePath,
+    JSON.stringify({
+      version: 2,
+      runId: 'run-1',
+      tokenHash: TOKEN_HASH,
+      enforce: 'all-tools',
+      grants: overrides.grants ?? ['read_repo'],
+      allow: overrides.allow ?? [{ tool: 'Read', kind: 'read_repo' }],
+      vocabulary: { Read: 'read_repo', Bash: 'run_commands', WebFetch: 'network_fetch' },
+      prefixes: [{ prefix: 'mcp__', kind: 'network_fetch' }],
+    }),
+  )
   return filePath
 }
 
@@ -288,9 +331,12 @@ describe('pause-gate.sh', () => {
   // M18 Task 3: the gate now also consumes `read_permission_verdict` (scripts/lib/permissions.sh,
   // Task 2) against the hook payload it captures on stdin, and refuses a matrix-denied tool by
   // name -- but only once the pause check above has already said "no pause requested" (status 1).
+  // M52 R2 inverted what "matrix-denied" means: the file is an allow list, so the denial is a tool
+  // nobody granted rather than a tool somebody listed. The gate's SHAPE is untouched -- a deny body
+  // at exit 0, the same reason grammar, the same pause precedence.
   describe('permission matrix', () => {
     it('denies a matrix-listed tool, naming the capability and the tool in the reason', async (): Promise<void> => {
-      const permissionsFile = writePermissionsFile([{ tool: 'Bash', capability: 'run tests' }])
+      const permissionsFile = writePermissionsFile()
       try {
         const { stdout, code } = await runHook({
           flagExists: false,
@@ -305,8 +351,11 @@ describe('pause-gate.sh', () => {
         // The prefix is pinned byte-equal against packages/providers/src/gate.ts's
         // PERMISSION_DENY_REASON_PREFIX by packages/control/test/permission-mapping.test.ts --
         // this assertion is deliberately exact, not `.toContain`, so a drift here is caught here.
+        // The quoted slot carries a `PermissionKind`, never a label (plan erratum E2): it is
+        // parsed straight into `run.tool_denied.payload.capability`, and the LABEL is the card's
+        // job.
         expect(parsed.hookSpecificOutput.permissionDecisionReason).toBe(
-          "permission matrix denies 'run tests' (Bash) for this slave",
+          "permission matrix denies 'run_commands' (Bash) for this slave",
         )
       } finally {
         rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
@@ -314,7 +363,7 @@ describe('pause-gate.sh', () => {
     })
 
     it('allows silently when the payload names a tool absent from the deny list', async (): Promise<void> => {
-      const permissionsFile = writePermissionsFile([{ tool: 'Bash', capability: 'run tests' }])
+      const permissionsFile = writePermissionsFile()
       try {
         const { stdout, code } = await runHook({
           flagExists: false,
@@ -329,7 +378,7 @@ describe('pause-gate.sh', () => {
     })
 
     it('lets an operator pause win over a matrix deny on the same tool call', async (): Promise<void> => {
-      const permissionsFile = writePermissionsFile([{ tool: 'Bash', capability: 'run tests' }])
+      const permissionsFile = writePermissionsFile()
       try {
         const { stdout, code } = await runHook({
           flagExists: true,
@@ -360,7 +409,7 @@ describe('pause-gate.sh', () => {
     })
 
     it('exits 2 and names the gate when the hook payload is not JSON while a permissions file is armed', async (): Promise<void> => {
-      const permissionsFile = writePermissionsFile([{ tool: 'Bash', capability: 'run tests' }])
+      const permissionsFile = writePermissionsFile()
       try {
         const { stdout, stderr, code } = await runHook({
           flagExists: false,
@@ -371,6 +420,49 @@ describe('pause-gate.sh', () => {
         expect(stdout).toBe('')
         expect(stderr).toContain('pause-gate.sh')
         expect(stderr).toContain('did not parse as JSON')
+      } finally {
+        rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
+      }
+    })
+
+    // The point of the whole inversion, end to end through the real gate: nobody listed `WebFetch`
+    // anywhere, and it is refused because nobody GRANTED it -- and the reason the gate spells parses
+    // back into the exact `{ tool, capability }` pair `pump.ts` writes onto `run.tool_denied` and a
+    // card labels.
+    it('denies a tool nobody granted, and the reason parses back to the kind a card can label', async (): Promise<void> => {
+      const permissionsFile = writePermissionsFile()
+      try {
+        const { stdout, code } = await runHook({
+          flagExists: false,
+          payload: JSON.stringify({ tool_name: 'WebFetch' }),
+          permissionsFile,
+        })
+        expect(code).toBe(0)
+        const parsed = JSON.parse(stdout) as { hookSpecificOutput: { permissionDecisionReason: string } }
+        expect(parsePermissionDenyReason(parsed.hookSpecificOutput.permissionDecisionReason)).toEqual({
+          tool: 'WebFetch',
+          capability: 'network_fetch',
+        })
+      } finally {
+        rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
+      }
+    })
+
+    // M52 R4, through the gate rather than through the library: a verdict that is not about this
+    // child stops the run (exit 2), it does not merely refuse the call.
+    it('exits 2 when the child carries a token that does not match the file it was given', async (): Promise<void> => {
+      const permissionsFile = writePermissionsFile()
+      try {
+        const { stdout, stderr, code } = await runHook({
+          flagExists: false,
+          payload: JSON.stringify({ tool_name: 'Read' }),
+          permissionsFile,
+          runToken: 'a'.repeat(64),
+        })
+        expect(code).toBe(2)
+        expect(stdout).toBe('')
+        expect(stderr).toContain('pause-gate.sh')
+        expect(stderr).toContain('identity')
       } finally {
         rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
       }

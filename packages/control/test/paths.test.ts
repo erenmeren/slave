@@ -1,11 +1,20 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import { runId } from '@slave-of-ai/domain'
 import { runFilePaths } from '../src/paths.js'
 
+const RUN = runId('11111111-1111-4111-8111-111111111111')
+
 describe('runFilePaths', () => {
+  const previousStateDir = process.env['SLAVEOFAI_STATE_DIR']
+
+  afterEach(() => {
+    if (previousStateDir === undefined) delete process.env['SLAVEOFAI_STATE_DIR']
+    else process.env['SLAVEOFAI_STATE_DIR'] = previousStateDir
+  })
+
   it('derives both control-file paths from the repo path and run id', (): void => {
     // A real writable directory, not a bare literal like '/repo': `runFilePaths` `mkdirSync`s the
     // target for real (its whole point per the doc comment), and a fixed root-level path is not
@@ -15,6 +24,34 @@ describe('runFilePaths', () => {
     expect(paths.pauseFlagPath).toContain('11111111-1111-4111-8111-111111111111')
     expect(paths.runDir).toContain('11111111-1111-4111-8111-111111111111')
     expect(paths.pauseFlagPath).not.toBe(paths.runDir)
+  })
+
+  // M52 R4. The three cases the move is FOR: a worker edits the repository, so a verdict that
+  // lives inside the repository is a verdict the worker can delete -- which, under default-deny,
+  // would stop being a hole and start being a bypass of everything.
+  it('puts the run directory OUTSIDE the repository entirely', () => {
+    const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-control-paths-outside-'))
+    const stateDir = mkdtempSync(join(tmpdir(), 'slaveofai-state-'))
+    process.env['SLAVEOFAI_STATE_DIR'] = stateDir
+    const paths = runFilePaths(repoPath, RUN)
+    expect(paths.runDir.startsWith(repoPath)).toBe(false)
+    expect(paths.pauseFlagPath.startsWith(repoPath)).toBe(false)
+  })
+
+  it('honours SLAVEOFAI_STATE_DIR, which is what gives every gate its own isolated state root', () => {
+    const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-control-paths-env-'))
+    const stateDir = mkdtempSync(join(tmpdir(), 'slaveofai-state-'))
+    process.env['SLAVEOFAI_STATE_DIR'] = stateDir
+    expect(runFilePaths(repoPath, RUN).runDir).toBe(join(stateDir, 'runs', RUN))
+  })
+
+  it('creates the directory 0700 -- the verdict inside it governs a worker', () => {
+    const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-control-paths-mode-'))
+    const stateDir = join(mkdtempSync(join(tmpdir(), 'slaveofai-state-')), 'nested')
+    process.env['SLAVEOFAI_STATE_DIR'] = stateDir
+    const { runDir } = runFilePaths(repoPath, RUN)
+    // Masked to the permission bits: `statSync().mode` carries the file type in its high bits.
+    expect(statSync(runDir).mode & 0o777).toBe(0o700)
   })
 
   it('refuses a repo path that does not exist, naming it, instead of hanging in mkdirSync', () => {

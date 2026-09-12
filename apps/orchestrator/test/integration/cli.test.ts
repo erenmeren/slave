@@ -4,9 +4,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
-import { createSimulation, loadSimulation, recordDecision, startAutoRun, verifyCredentials } from '@slave-of-ai/control'
+import {
+  createSimulation,
+  loadSimulation,
+  recordDecision,
+  runFilePaths,
+  startAutoRun,
+  verifyCredentials,
+} from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import type { Candidate, Situation } from '@slave-of-ai/domain'
+import { runId as brandRunId, type Candidate, type Situation } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 
@@ -996,7 +1003,10 @@ describe('the orchestrator CLI', () => {
     // separate process cannot follow the rest of the protocol -- it has no handle on the child and
     // no view of its stream -- so writing the flag is the half it can perform, and the daemon's
     // pump observes the deny.
-    expect(existsSync(join(fixture.repoPath, '.slaveofai', 'runs', run.id, 'pause.flag'))).toBe(true)
+    // M52 R4: the flag moved out of the repository with the rest of the run directory, so this
+    // asks `runFilePaths` where it is rather than spelling `<repo>/.slaveofai/runs/<id>` -- the
+    // same derivation the CLI's own `signalPause` makes.
+    expect(existsSync(runFilePaths(fixture.repoPath, brandRunId(run.id)).pauseFlagPath)).toBe(true)
 
     const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
     expect(after.status).toBe('pause_requested')

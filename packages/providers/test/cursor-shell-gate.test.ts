@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { chmodSync, copyFileSync, existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -32,6 +33,11 @@ interface RunHookOptions {
   // entirely (not merely "leaves it unset in this test file's own process") -- the permission
   // matrix must stay completely out of the picture for every pre-Task-4-shaped test in this file.
   readonly permissionsFile?: string
+  // M52 R4: the plaintext run token `buildChildEnv` puts in a real worker's environment, hashed by
+  // the library against the file's `tokenHash`. Defaults to `TOKEN`, the one `writePermissionsFile`
+  // below writes the hash of, so a case that is not about identity spawns as the run the verdict is
+  // about.
+  readonly runToken?: string
 }
 
 interface RunHookResult {
@@ -74,6 +80,11 @@ function runHook(options: RunHookOptions = {}): Promise<RunHookResult> {
   } else {
     env['SLAVEOFAI_PERMISSIONS_FILE'] = options.permissionsFile
   }
+  if ('runToken' in options && options.runToken === undefined) {
+    delete env['SLAVEOFAI_RUN_TOKEN']
+  } else {
+    env['SLAVEOFAI_RUN_TOKEN'] = options.runToken ?? TOKEN
+  }
 
   return new Promise((resolve, reject) => {
     const child = spawn(options.gateOverride ?? gatePath, [], { env, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -113,11 +124,40 @@ function runHook(options: RunHookOptions = {}): Promise<RunHookResult> {
   })
 }
 
-/** Writes `{"version":1,"deny":[...]}` to a fresh temp file and returns its path. */
-function writePermissionsFile(deny: ReadonlyArray<{ readonly tool: string; readonly capability: string }>): string {
+/** The plaintext run token every permission case spawns with, and the sha256 the file carries. */
+const TOKEN = 'f'.repeat(64)
+const TOKEN_HASH = createHash('sha256').update(TOKEN).digest('hex')
+
+/**
+ * Writes a `permissions.json` **v2** verdict for a CURSOR run and returns its path (M52 R2/E3).
+ *
+ * `enforce: 'known-tools'` and a three-word vocabulary, which is what a real Cursor spawn gets:
+ * the measured limitation (`preToolUse` sends Claude-shaped casing) is stated in the file, so a
+ * name the vocabulary does not know allows here and denies on Claude. `grants` defaults to
+ * `read_repo` alone, so `shell` -- the one name Cursor can be trusted to send, through
+ * `beforeShellExecution` and `default_tool` -- is the ungranted one.
+ */
+function writePermissionsFile(
+  overrides: {
+    readonly grants?: readonly string[]
+    readonly allow?: ReadonlyArray<{ readonly tool: string; readonly kind: string }>
+  } = {},
+): string {
   const dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-cursor-gate-matrix-'))
   const filePath = path.join(dir, 'permissions.json')
-  writeFileSync(filePath, JSON.stringify({ version: 1, deny }))
+  writeFileSync(
+    filePath,
+    JSON.stringify({
+      version: 2,
+      runId: 'run-1',
+      tokenHash: TOKEN_HASH,
+      enforce: 'known-tools',
+      grants: overrides.grants ?? ['read_repo'],
+      allow: overrides.allow ?? [{ tool: 'read', kind: 'read_repo' }],
+      vocabulary: { read: 'read_repo', edit: 'write_repo', shell: 'run_commands' },
+      prefixes: [{ prefix: 'mcp__', kind: 'network_fetch' }],
+    }),
+  )
   return filePath
 }
 
@@ -327,7 +367,7 @@ describe('cursor-shell-gate.sh', () => {
   // already said "no pause requested" (status 1).
   describe('permission matrix', () => {
     it('denies a matrix-listed preToolUse tool, naming the capability and tool in user_message', async (): Promise<void> => {
-      const permissionsFile = writePermissionsFile([{ tool: 'edit', capability: 'source write' }])
+      const permissionsFile = writePermissionsFile()
       try {
         const { stdout, code } = await runHook({
           flagExists: false,
@@ -340,7 +380,7 @@ describe('cursor-shell-gate.sh', () => {
         // The prefix is pinned byte-equal against packages/providers/src/gate.ts's
         // PERMISSION_DENY_REASON_PREFIX by packages/control/test/permission-mapping.test.ts --
         // this assertion is deliberately exact, not `.toContain`, so a drift here is caught here.
-        expect(parsed.user_message).toBe("permission matrix denies 'source write' (edit) for this slave")
+        expect(parsed.user_message).toBe("permission matrix denies 'write_repo' (edit) for this slave")
       } finally {
         rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
       }
@@ -352,7 +392,7 @@ describe('cursor-shell-gate.sh', () => {
     // shape guard (a `command` string present, no `tool_name`) is what makes that substitution
     // fire only for this shape.
     it('denies a beforeShellExecution-shaped payload (no tool_name) via the shell default_tool', async (): Promise<void> => {
-      const permissionsFile = writePermissionsFile([{ tool: 'shell', capability: 'run tests' }])
+      const permissionsFile = writePermissionsFile()
       try {
         const { stdout, code } = await runHook({
           flagExists: false,
@@ -362,14 +402,14 @@ describe('cursor-shell-gate.sh', () => {
         expect(code).toBe(0)
         const parsed = JSON.parse(stdout) as { permission: string; user_message: string }
         expect(parsed.permission).toBe('deny')
-        expect(parsed.user_message).toBe("permission matrix denies 'run tests' (shell) for this slave")
+        expect(parsed.user_message).toBe("permission matrix denies 'run_commands' (shell) for this slave")
       } finally {
         rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
       }
     })
 
     it('allows explicitly when the payload names a tool absent from the deny list', async (): Promise<void> => {
-      const permissionsFile = writePermissionsFile([{ tool: 'shell', capability: 'run tests' }])
+      const permissionsFile = writePermissionsFile()
       try {
         const { stdout, code } = await runHook({
           flagExists: false,
@@ -385,7 +425,7 @@ describe('cursor-shell-gate.sh', () => {
     })
 
     it('lets an operator pause win over a matrix deny on the same tool call', async (): Promise<void> => {
-      const permissionsFile = writePermissionsFile([{ tool: 'shell', capability: 'run tests' }])
+      const permissionsFile = writePermissionsFile()
       try {
         const { stdout, code } = await runHook({
           flagExists: true,
@@ -418,7 +458,7 @@ describe('cursor-shell-gate.sh', () => {
     })
 
     it('exits 2 and names the gate when the hook payload is not JSON while a permissions file is armed', async (): Promise<void> => {
-      const permissionsFile = writePermissionsFile([{ tool: 'shell', capability: 'run tests' }])
+      const permissionsFile = writePermissionsFile()
       try {
         const { stdout, stderr, code } = await runHook({
           flagExists: false,
@@ -429,6 +469,57 @@ describe('cursor-shell-gate.sh', () => {
         expect(stdout).toBe('')
         expect(stderr).toContain('cursor-shell-gate.sh')
         expect(stderr).toContain('did not parse as JSON')
+      } finally {
+        rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
+      }
+    })
+
+    // BOTH HALVES OF ERRATUM E3 IN ONE CASE. Under an allow list, Cursor's measured limitation
+    // stops being inert and starts being the difference between a governed provider and a bricked
+    // one: `preToolUse` sends Claude-shaped casing (`"tool_name":"Read"`), which this run's
+    // vocabulary does not know, so `enforce: known-tools` ALLOWS it -- while the one identity
+    // Cursor can be trusted with, the shell through `beforeShellExecution`, is DENIED on the same
+    // file because `run_commands` was never granted.
+    it('allows a Claude-shaped preToolUse name while still denying an ungranted shell', async (): Promise<void> => {
+      const permissionsFile = writePermissionsFile()
+      try {
+        const allowed = await runHook({
+          flagExists: false,
+          payload: JSON.stringify({ tool_name: 'Read', hook_event_name: 'preToolUse' }),
+          permissionsFile,
+        })
+        expect(allowed.code).toBe(0)
+        expect((JSON.parse(allowed.stdout) as { permission: string }).permission).toBe('allow')
+
+        const denied = await runHook({
+          flagExists: false,
+          payload: JSON.stringify({ command: 'npm test', cwd: '/tmp', hook_event_name: 'beforeShellExecution' }),
+          permissionsFile,
+        })
+        expect(denied.code).toBe(0)
+        const parsed = JSON.parse(denied.stdout) as { permission: string; user_message: string }
+        expect(parsed.permission).toBe('deny')
+        expect(parsed.user_message).toBe("permission matrix denies 'run_commands' (shell) for this slave")
+      } finally {
+        rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
+      }
+    })
+
+    // M52 R4: `known-tools` softens what the gate ENFORCES, never who the verdict is about. A
+    // borrowed file stops the run on Cursor exactly as it does on Claude.
+    it('exits 2 when the child carries a token that does not match the file it was given', async (): Promise<void> => {
+      const permissionsFile = writePermissionsFile()
+      try {
+        const { stdout, stderr, code } = await runHook({
+          flagExists: false,
+          payload: JSON.stringify({ tool_name: 'read', hook_event_name: 'preToolUse' }),
+          permissionsFile,
+          runToken: 'a'.repeat(64),
+        })
+        expect(code).toBe(2)
+        expect(stdout).toBe('')
+        expect(stderr).toContain('cursor-shell-gate.sh')
+        expect(stderr).toContain('identity')
       } finally {
         rmSync(path.dirname(permissionsFile), { recursive: true, force: true })
       }

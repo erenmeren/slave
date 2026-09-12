@@ -101,6 +101,40 @@ describe('preflightGate', () => {
   // (see flags.ts) -- passing one is now a compile error, verified by `tsc --build` on
   // every run of this suite, not by a runtime assertion here.
 
+  // M52 erratum E1, the load-bearing one: under default-deny, a permissions file in the
+  // ORCHESTRATOR's own environment would answer the pre-flight's disarmed probe with a DENY, the
+  // pre-flight would read that as "this hook denies unconditionally", and every spawn on the
+  // machine would fail. `runGateScript` deletes the variable (and the run token with it), so the
+  // probe measures the pause gate and nothing else -- whatever an operator's shell exported.
+  it('passes with a permissions file armed in this process that would deny everything', async (): Promise<void> => {
+    const permissionsFile = path.join(dir, 'permissions.json')
+    writeFileSync(
+      permissionsFile,
+      JSON.stringify({
+        version: 2,
+        runId: 'someone-elses-run',
+        tokenHash: 'f'.repeat(64),
+        enforce: 'all-tools',
+        grants: [],
+        allow: [],
+        vocabulary: {},
+        prefixes: [],
+      }),
+    )
+    const previousFile = process.env['SLAVEOFAI_PERMISSIONS_FILE']
+    const previousToken = process.env['SLAVEOFAI_RUN_TOKEN']
+    process.env['SLAVEOFAI_PERMISSIONS_FILE'] = permissionsFile
+    process.env['SLAVEOFAI_RUN_TOKEN'] = 'a'.repeat(64)
+    try {
+      await expect(preflightGate({ hookPath })).resolves.toBeUndefined()
+    } finally {
+      if (previousFile === undefined) delete process.env['SLAVEOFAI_PERMISSIONS_FILE']
+      else process.env['SLAVEOFAI_PERMISSIONS_FILE'] = previousFile
+      if (previousToken === undefined) delete process.env['SLAVEOFAI_RUN_TOKEN']
+      else process.env['SLAVEOFAI_RUN_TOKEN'] = previousToken
+    }
+  })
+
   it('leaves no temp directory behind, in success and in every rejection path', async (): Promise<void> => {
     const before = preflightTmpDirs()
 

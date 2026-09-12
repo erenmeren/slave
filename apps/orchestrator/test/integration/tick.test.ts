@@ -1,14 +1,15 @@
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { refusalText, type ModelDecider } from '@slave-of-ai/control'
+import { refusalText, runFilePaths, type ModelDecider } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   ANSWER_BLOCK_OPEN,
   ASK_BLOCK_OPEN,
+  runId as brandRunId,
   workspaceId as brandWorkspaceId,
   runContextManifestSchema,
 } from '@slave-of-ai/domain'
@@ -350,56 +351,86 @@ describe('tick', () => {
   })
 
   it('writes the resolved permission matrix into the run dir at dispatch (M18 Task 5)', async (): Promise<void> => {
-    // A denied OPERATION that maps to real Claude Code tools (`resolveDenyList` through the
-    // domain's `TOOLS_BY_KIND`): `run_commands` -> the whole shell.
+    // A denied OPERATION that maps to real Claude Code tools (`resolveGrants` through the domain's
+    // `TOOLS_BY_KIND`): `run_commands` -> the whole shell.
     await prisma.slavePermission.create({ data: { slaveId: fixture.slaveId, kind: 'run_commands', mode: 'deny' } })
 
     await tick(deps)
 
     const run = await prisma.slaveRun.findFirstOrThrow()
-    // `runFilePaths`'s own contract: `.slaveofai/runs/<runId>` under the repo root, beside
-    // `pause.flag` -- not under the worktree (the previous test's own assertion).
-    const permissionsPath = join(fixture.repoPath, '.slaveofai', 'runs', run.id, 'permissions.json')
-    const written: unknown = JSON.parse(readFileSync(permissionsPath, 'utf8'))
-    expect(written).toEqual({
-      version: 1,
-      // M52 fix round 1 (the C1 classification): `run_commands` covers everything that can DO work
-      // or spawn work that can -- the shell, a subagent, a skill, a workflow, the schedulers -- so
-      // denying it denies the whole family, and this list is `TOOLS_BY_KIND.run_commands` in order.
-      deny: [
-        { tool: 'Bash', capability: 'run_commands' },
-        { tool: 'BashOutput', capability: 'run_commands' },
-        { tool: 'KillShell', capability: 'run_commands' },
-        { tool: 'Task', capability: 'run_commands' },
-        { tool: 'TaskStop', capability: 'run_commands' },
-        { tool: 'Skill', capability: 'run_commands' },
-        { tool: 'Workflow', capability: 'run_commands' },
-        { tool: 'SendMessage', capability: 'run_commands' },
-        { tool: 'EnterWorktree', capability: 'run_commands' },
-        { tool: 'ExitWorktree', capability: 'run_commands' },
-        { tool: 'EnterPlanMode', capability: 'run_commands' },
-        { tool: 'ExitPlanMode', capability: 'run_commands' },
-        { tool: 'CronCreate', capability: 'run_commands' },
-        { tool: 'CronDelete', capability: 'run_commands' },
-        { tool: 'CronList', capability: 'run_commands' },
-        { tool: 'ScheduleWakeup', capability: 'run_commands' },
-        { tool: 'RemoteTrigger', capability: 'run_commands' },
-        { tool: 'PushNotification', capability: 'run_commands' },
-        { tool: 'ReportFindings', capability: 'run_commands' },
-        { tool: 'DesignSync', capability: 'run_commands' },
-      ],
-    })
+    // M52 R4 -- THE PIN THIS MILESTONE MOVES. `runFilePaths` is asked where the run directory is
+    // rather than told: it is no longer `<repo>/.slaveofai/runs/<id>` but a directory outside the
+    // repository entirely, because a worker that can delete its own verdict disarms itself, and
+    // under default-deny that is a bypass of everything rather than a hole.
+    const { runDir } = runFilePaths(fixture.repoPath, brandRunId(run.id))
+    expect(runDir.startsWith(fixture.repoPath)).toBe(false)
+    expect(existsSync(join(fixture.repoPath, '.slaveofai', 'runs'))).toBe(false)
+
+    const written = JSON.parse(readFileSync(join(runDir, 'permissions.json'), 'utf8')) as {
+      version: number
+      runId: string
+      tokenHash: string
+      enforce: string
+      grants: readonly string[]
+      allow: readonly { tool: string; kind: string }[]
+    }
+    expect(written.version).toBe(2)
+    expect(written.runId).toBe(run.id)
+    expect(written.enforce).toBe('all-tools')
+    // M52 R2: an ALLOW list. The implementation baseline minus the denied kind -- read and write,
+    // and not one member of the shell family.
+    expect(written.grants).toEqual(['read_repo', 'write_repo'])
+    const allowed = written.allow.map((entry) => entry.tool)
+    // M52 fix round 1 (the C1 classification): `run_commands` covers everything that can DO work
+    // or spawn work that can -- the shell, a subagent, a skill, a workflow, the schedulers -- so
+    // denying it denies the whole family, and this list is `TOOLS_BY_KIND.run_commands` in order.
+    for (const tool of [
+      'Bash',
+      'BashOutput',
+      'KillShell',
+      'Task',
+      'TaskStop',
+      'Skill',
+      'Workflow',
+      'SendMessage',
+      'EnterWorktree',
+      'ExitWorktree',
+      'EnterPlanMode',
+      'ExitPlanMode',
+      'CronCreate',
+      'CronDelete',
+      'CronList',
+      'ScheduleWakeup',
+      'RemoteTrigger',
+      'PushNotification',
+      'ReportFindings',
+      'DesignSync',
+    ]) {
+      expect(allowed, tool).not.toContain(tool)
+    }
+    expect(allowed).toContain('Read')
+    expect(allowed).toContain('Write')
+
+    // M52 R4: the HASH of this spawn's token is on the row and in the file, and they agree. The
+    // plaintext is in one child's environment and nowhere else -- not here.
+    expect(written.tokenHash).toMatch(/^[a-f0-9]{64}$/u)
+    expect(run.runTokenHash).toBe(written.tokenHash)
   })
 
   it('writes an armed-but-empty permissions.json when nothing is denied (M18 Task 5)', async (): Promise<void> => {
     await tick(deps)
 
     const run = await prisma.slaveRun.findFirstOrThrow()
-    const permissionsPath = join(fixture.repoPath, '.slaveofai', 'runs', run.id, 'permissions.json')
-    const written: unknown = JSON.parse(readFileSync(permissionsPath, 'utf8'))
-    // Present and armed, distinct from the file being absent -- `read_permission_verdict` treats
-    // those two cases differently (spec §2; `scripts/lib/permissions.sh`'s own docstring).
-    expect(written).toEqual({ version: 1, deny: [] })
+    const { runDir } = runFilePaths(fixture.repoPath, brandRunId(run.id))
+    const written = JSON.parse(readFileSync(join(runDir, 'permissions.json'), 'utf8')) as {
+      version: number
+      grants: readonly string[]
+    }
+    // Present and armed. Under M52 R2 the file is no longer "empty means nothing denied" but the
+    // whole verdict: an unedited matrix resolves to the implementation BASELINE, and an absent file
+    // is no longer a permissive state at all -- it stops the run.
+    expect(written.version).toBe(2)
+    expect(written.grants).toEqual(['read_repo', 'write_repo', 'run_commands'])
   })
 
   it('emits guardrail.tripped and starts nothing when decide halts', async (): Promise<void> => {

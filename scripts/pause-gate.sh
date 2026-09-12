@@ -117,6 +117,11 @@ esac
 # Only status 1 (no pause requested) reaches here. Pause always wins: an operator's pause is
 # checked first, above, and this permission-matrix check never runs while a pause is armed --
 # `deny` above already exited the whole script.
+# THE QUOTED SLOT CARRIES A KIND, NEVER A LABEL (M52 erratum E2). `PERMISSION_DENY_CAPABILITY`
+# holds a `PermissionKind` -- `run_commands`, `network_fetch` -- or the literal `ungoverned_tool`,
+# and `parsePermissionDenyReason` (packages/providers/src/gate.ts) parses it straight into
+# `run.tool_denied`'s `capability` payload field, which is stored and queried. Spelling a human
+# label here would put `Run commands` in the database; the LABEL is the card's job.
 if read_permission_verdict "$hook_payload"; then
   deny "permission matrix denies '${PERMISSION_DENY_CAPABILITY}' (${PERMISSION_DENY_TOOL}) for this slave"
 fi

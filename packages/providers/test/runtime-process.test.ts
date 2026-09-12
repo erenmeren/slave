@@ -1,6 +1,16 @@
 import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { buildChildEnv, isAlive, signalRun, terminateChild } from '../src/runtime/process.js'
+import {
+  CHILD_ENV_ALLOW,
+  brokerChannelPathFor,
+  brokerReplyPathFor,
+  buildChildEnv,
+  isAlive,
+  runTokenHash,
+  signalRun,
+  terminateChild,
+} from '../src/runtime/process.js'
 
 function spawnSleeper() {
   return spawn('node', ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
@@ -53,42 +63,136 @@ describe('signalRun / isAlive (characterization)', () => {
   })
 })
 
-describe('buildChildEnv (characterization)', () => {
-  // M18 Task 5: `permissionsFilePath` became a required input field alongside `pauseFlagPath` --
-  // the contract genuinely grew (every start and every resume now writes `permissions.json` before
-  // spawning, so there is no real caller with a pause flag but no permissions file to point at),
-  // so both cases below were extended rather than left to characterize a narrower input shape than
-  // `buildChildEnv` actually accepts. This is the ONE sanctioned edit to an existing
-  // characterization test in this task (task-5-brief.md).
+describe('buildChildEnv (M52 R3: an allow list, never an inheritance)', () => {
+  const base = {
+    gitIdentity: { name: 'AI Worker', email: 'worker@example.com' },
+    pauseFlagPath: '/tmp/x/pause.flag',
+    permissionsFilePath: '/tmp/x/permissions.json',
+    runId: 'run-1',
+    runToken: 'f'.repeat(64),
+    brokerChannelPath: '/tmp/x/broker.ndjson',
+  }
+
+  // M18 Task 5 grew this from the git identity and the pause flag to the permissions file; M52 R4
+  // grows it again, by the run this child IS and the channel it can ask through. Same case, same
+  // shape: everything `buildChildEnv` is TOLD reaches the child.
   it('carries the git identity (author + committer), the pause-flag path, and the permissions-file path', () => {
-    const env = buildChildEnv({
-      gitIdentity: { name: 'AI Worker', email: 'worker@example.com' },
-      pauseFlagPath: '/tmp/x/pause.flag',
-      permissionsFilePath: '/tmp/x/permissions.json',
-    })
+    const env = buildChildEnv(base)
     expect(env['SLAVEOFAI_PAUSE_FLAG']).toBe('/tmp/x/pause.flag')
-    // M18 Task 5 -- SLAVEOFAI_PERMISSIONS_FILE, the ONE channel the gates read the resolved deny
-    // list's path on, the same shape of channel SLAVEOFAI_PAUSE_FLAG already is.
+    // M18 Task 5 -- SLAVEOFAI_PERMISSIONS_FILE, the ONE channel the gates read the verdict's path
+    // on, the same shape of channel SLAVEOFAI_PAUSE_FLAG already is.
     expect(env['SLAVEOFAI_PERMISSIONS_FILE']).toBe('/tmp/x/permissions.json')
-    // process.ts:120-123 -- author and committer both, not just author.
+    expect(env['SLAVEOFAI_RUN_ID']).toBe('run-1')
+    expect(env['SLAVEOFAI_RUN_TOKEN']).toBe('f'.repeat(64))
+    expect(env['SLAVEOFAI_BROKER_CHANNEL']).toBe('/tmp/x/broker.ndjson')
+    // process.ts -- author and committer both, not just author.
     expect(env['GIT_AUTHOR_NAME']).toBe('AI Worker')
     expect(env['GIT_AUTHOR_EMAIL']).toBe('worker@example.com')
     expect(env['GIT_COMMITTER_NAME']).toBe('AI Worker')
     expect(env['GIT_COMMITTER_EMAIL']).toBe('worker@example.com')
   })
 
-  it('inherits the current process env underneath the overrides (process.ts:119)', () => {
+  // THE SENTENCE THIS TEST USED TO ASSERT, REVERSED. It characterized `...process.env` --
+  // "inherits the current process env underneath the overrides" -- which is exactly what M52 R3
+  // deletes. Kept in place, with its meaning inverted, so the diff reads as the inversion it is.
+  it('does NOT inherit the current process env -- the sentence this test used to assert', () => {
     process.env['SLAVEOFAI_TEST_PROBE'] = 'inherited'
     try {
-      const env = buildChildEnv({
-        gitIdentity: { name: 'AI Worker', email: 'worker@example.com' },
-        pauseFlagPath: '/tmp/x/pause.flag',
-        permissionsFilePath: '/tmp/x/permissions.json',
-      })
-      expect(env['SLAVEOFAI_TEST_PROBE']).toBe('inherited')
+      expect('SLAVEOFAI_TEST_PROBE' in buildChildEnv(base)).toBe(false)
     } finally {
       delete process.env['SLAVEOFAI_TEST_PROBE']
     }
+  })
+
+  it('carries none of the four secrets a worker must never hold', () => {
+    process.env['DATABASE_URL'] = 'postgres://u:p@localhost:5433/db'
+    process.env['SLAVEOFAI_SESSION_SECRET'] = 'secret'
+    process.env['SLAVEOFAI_PASSWORD'] = 'hunter2'
+    process.env['FAKE_DEPLOY_TOKEN'] = 'tok'
+    const names = ['DATABASE_URL', 'SLAVEOFAI_SESSION_SECRET', 'SLAVEOFAI_PASSWORD', 'FAKE_DEPLOY_TOKEN']
+    try {
+      const env = buildChildEnv(base)
+      for (const name of names) {
+        expect(name in env, name).toBe(false)
+      }
+    } finally {
+      for (const name of names) {
+        delete process.env[name]
+      }
+    }
+  })
+
+  it('passes through exactly the CHILD_ENV_ALLOW names that are actually set, and invents none', () => {
+    const previousPath = process.env['PATH']
+    const previousLcAll = process.env['LC_ALL']
+    const previousCache = process.env['XDG_CACHE_HOME']
+    try {
+      process.env['PATH'] = '/usr/bin'
+      process.env['LC_ALL'] = 'C'
+      const env = buildChildEnv(base)
+      expect(env['PATH']).toBe('/usr/bin')
+      expect(env['LC_ALL']).toBe('C')
+      // A name on the list that the parent does not have is ABSENT, never empty: an empty PATH is a
+      // child that cannot find `git`, and it would look like a configuration rather than a gap.
+      delete process.env['XDG_CACHE_HOME']
+      expect('XDG_CACHE_HOME' in buildChildEnv(base)).toBe(false)
+    } finally {
+      if (previousPath === undefined) delete process.env['PATH']
+      else process.env['PATH'] = previousPath
+      if (previousLcAll === undefined) delete process.env['LC_ALL']
+      else process.env['LC_ALL'] = previousLcAll
+      if (previousCache === undefined) delete process.env['XDG_CACHE_HOME']
+      else process.env['XDG_CACHE_HOME'] = previousCache
+    }
+  })
+
+  it('is an explicit NAME list -- never a prefix rule and never a denylist', () => {
+    process.env['SLAVEOFAI_SOMETHING_NEW'] = 'x'
+    try {
+      expect('SLAVEOFAI_SOMETHING_NEW' in buildChildEnv(base)).toBe(false)
+    } finally {
+      delete process.env['SLAVEOFAI_SOMETHING_NEW']
+    }
+    // And the list itself is names, not patterns: nothing in it ends in a wildcard, and every
+    // entry is a legal environment-variable name.
+    for (const name of CHILD_ENV_ALLOW) {
+      expect(name, name).toMatch(/^[A-Z][A-Z0-9_]*$/u)
+    }
+  })
+
+  it('leaves the token, the id and the channel ABSENT when they are not supplied', () => {
+    const env = buildChildEnv({
+      gitIdentity: base.gitIdentity,
+      pauseFlagPath: base.pauseFlagPath,
+      permissionsFilePath: base.permissionsFilePath,
+    })
+    expect('SLAVEOFAI_RUN_ID' in env).toBe(false)
+    expect('SLAVEOFAI_RUN_TOKEN' in env).toBe(false)
+    expect('SLAVEOFAI_BROKER_CHANNEL' in env).toBe(false)
+    expect('SLAVEOFAI_BROKER_CLI' in env).toBe(false)
+  })
+
+  it('carries the broker CLI path when the adapter has one (M52 erratum E6)', () => {
+    const env = buildChildEnv({ ...base, brokerCliPath: '/opt/slaveofai/dist/cli.js' })
+    expect(env['SLAVEOFAI_BROKER_CLI']).toBe('/opt/slaveofai/dist/cli.js')
+  })
+})
+
+describe('the run directory\u2019s file channels (M52 R3/R4)', () => {
+  it('puts the broker channel and one reply beside permissions.json, inside runDir', () => {
+    expect(brokerChannelPathFor('/tmp/x')).toBe('/tmp/x/broker.ndjson')
+    expect(brokerReplyPathFor('/tmp/x', 'a'.repeat(32))).toBe(`/tmp/x/broker-${'a'.repeat(32)}.json`)
+  })
+
+  it('refuses a request id that is not 32 lowercase hex characters -- the filename IS the id', () => {
+    for (const bad of ['', '../escape', 'A'.repeat(32), 'a'.repeat(31), `${'a'.repeat(32)}/x`]) {
+      expect(() => brokerReplyPathFor('/tmp/x', bad), JSON.stringify(bad)).toThrow(/bad request id/u)
+    }
+  })
+
+  it('hashes a run token with sha256, which is what the file and the row both carry', () => {
+    expect(runTokenHash('f'.repeat(64))).toBe(createHash('sha256').update('f'.repeat(64)).digest('hex'))
+    expect(runTokenHash('f'.repeat(64))).toHaveLength(64)
   })
 })
 

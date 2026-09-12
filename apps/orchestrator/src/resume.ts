@@ -1,5 +1,6 @@
+import { randomBytes } from 'node:crypto'
 import { dirname } from 'node:path'
-import { resolveDenyList, writePermissionsFile } from '@slave-of-ai/control'
+import { writePermissionsFile } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   slaveId as brandSlaveId,
@@ -8,7 +9,7 @@ import {
   workspaceId as brandWorkspaceId,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
-import type { AdapterRegistry } from '@slave-of-ai/providers'
+import { runTokenHash, type AdapterRegistry } from '@slave-of-ai/providers'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
 import { verifyConcludedRun } from './verify.js'
@@ -81,7 +82,21 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
   // `Checkpoint`), so what is written here is exactly what `SLAVEOFAI_PERMISSIONS_FILE` will point
   // the resumed child at.
   const runDir = dirname(checkpoint.pauseFlagPath)
-  writePermissionsFile(runDir, resolveDenyList(run.slave.permissions, checkpoint.provider ?? 'claude_code'))
+
+  // ROTATED, not replayed (M52 R4). A token recovered from an old worktree, an old process listing
+  // or a stale environment dump is dead the moment the run resumes: the row's hash and the file's
+  // hash both move, and the only process holding the new plaintext is the child this call spawns.
+  // `run.kind` is read off the row the claim already loaded -- the resolution differs per run kind
+  // and this is the one of the four sites that does not know its kind statically.
+  const runToken = randomBytes(32).toString('hex')
+  await prisma.slaveRun.update({ where: { id: run.id }, data: { runTokenHash: runTokenHash(runToken) } })
+  writePermissionsFile(runDir, {
+    rows: run.slave.permissions,
+    provider: checkpoint.provider ?? 'claude_code',
+    runKind: run.kind,
+    runId: run.id,
+    runToken,
+  })
 
   // The checkpoint is the whole point of `resume`'s signature: this process may never have called
   // `start()` for that run, so the settings file, the hook path and the git identity exist nowhere
@@ -117,6 +132,7 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
       ...(checkpoint.provider !== null ? { provider: checkpoint.provider } : {}),
     },
     message,
+    runToken,
   )
 
   await prisma.slaveRun.update({
