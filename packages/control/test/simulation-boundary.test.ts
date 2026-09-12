@@ -25,6 +25,12 @@ describe('the simulation never reaches a real tool (spec §8)', () => {
       const source = readFileSync(file, 'utf8')
       expect(source, `${file} imports @slave-of-ai/providers`).not.toMatch(/@slave-of-ai\/providers/)
       expect(source, `${file} contains child_process/process.env/spawn(`).not.toMatch(/child_process|process\.env|spawn\(/)
+      // M52 R6: the broker module by NAME, the way the case above names `@slave-of-ai/providers`.
+      // A simulation reaches no real tool and therefore no real credential; the boundary is a source
+      // scan rather than a convention because a convention is what a future refactor does not read.
+      // `SLAVEOFAI_RUN_TOKEN` rather than `token`, which appears all over the simulation for model
+      // usage.
+      expect(source, `${file} mentions the broker or a credential`).not.toMatch(/broker|Credential|SLAVEOFAI_RUN_TOKEN/)
     }
   })
 })

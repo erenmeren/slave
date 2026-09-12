@@ -7,6 +7,7 @@
  * convention: it is defined here (M12 Task 7) ahead of the budget admission logic (Task 9) that
  * will actually raise it.
  */
+import { BROKER_REFUSAL_LABEL, type BrokerRefusalReason } from '@slave-of-ai/domain'
 import { sectors } from '@slave-of-ai/simulation'
 import { plural } from './plural.js'
 
@@ -160,7 +161,11 @@ export type ControlRefusal =
   | { readonly kind: 'company_team_not_found'; readonly companyTeamId: string }
   /** `deleteCompanySlave` on a `companySlaveId` no `CompanySlave` row carries (M27 §5). */
   | { readonly kind: 'company_slave_not_found'; readonly companySlaveId: string }
-  | { readonly kind: 'invalid_name' }
+  /** A name that is blank, or -- with `detail` -- one that has a SHAPE to meet and does not
+   *  (M52 R3: a credential's `envVar` is an environment variable name, not free text). The default
+   *  sentence stays exactly what the nine callers before it said; `detail` REPLACES it, so a verb
+   *  with a rule of its own can state the rule rather than leave an operator guessing at it. */
+  | { readonly kind: 'invalid_name'; readonly detail?: string }
   | { readonly kind: 'invalid_model' }
   /** A budget was set to something that is neither a non-negative number nor `null` (M13 §6.1). */
   | { readonly kind: 'invalid_budget' }
@@ -354,6 +359,22 @@ export type ControlRefusal =
    *  of what an operator typed is how a template ends up dispatchable as something nobody meant --
    *  `normaliseRoles`' own reasoning. */
   | { readonly kind: 'invalid_role_map'; readonly detail: string }
+  /**
+   * M52 R3 (plan erratum E5): ONE kind carrying the broker's seven reasons, not seven kinds.
+   *
+   * The reasons are already a closed vocabulary in the `broker.refused` payload
+   * (`BROKER_REFUSAL_REASONS`, `@slave-of-ai/domain`); spelling the same list again as union members
+   * would be two lists to keep in step, and two of the names (`permission_denied`, `simulation`)
+   * would sit ambiguously beside the union's existing `invalid_provider` / `unsupported_simulation`.
+   *
+   * 409 by `refusalStatus`'s suffix rule, which is right for all seven: the run exists and the
+   * request does not make sense against it.
+   */
+  | { readonly kind: 'broker_refused'; readonly op: string; readonly reason: BrokerRefusalReason }
+  /** M52 R3: `bindBrokerOp` named a credential this project does not have. 404 by the `_not_found`
+   *  suffix rule -- and a credential in ANOTHER project reads back the same as "does not exist"
+   *  from a scoped caller's side of the boundary (`message_not_found`'s rule). */
+  | { readonly kind: 'credential_not_found'; readonly name: string }
 
 /**
  * The word a person reads for `live_runs`'s `entity` (M27 final review, Important finding 3).
@@ -468,7 +489,7 @@ export function refusalText(refusal: ControlRefusal): string {
     case 'company_slave_not_found':
       return `no catalog slave with id ${refusal.companySlaveId}`
     case 'invalid_name':
-      return 'a name must be a non-empty text'
+      return refusal.detail ?? 'a name must be a non-empty text'
     case 'invalid_model':
       return 'a model must be a non-empty text'
     case 'invalid_budget':
@@ -596,5 +617,13 @@ export function refusalText(refusal: ControlRefusal): string {
       return `"${refusal.field}" is not a profile field`
     case 'invalid_role_map':
       return `--role-map is unusable: ${refusal.detail}`
+    case 'broker_refused':
+      // The reason's own sentence, from the domain's table rather than a second copy of it here,
+      // with the op beside it -- an operator reading one CLI line needs to know WHICH verb was
+      // refused. Lower-cased to join the house sentence style; none of the seven labels carries a
+      // proper noun.
+      return `${refusal.op}: ${BROKER_REFUSAL_LABEL[refusal.reason].toLowerCase()}`
+    case 'credential_not_found':
+      return `there is no credential "${refusal.name}" in this project: add it with \`credential add\` first`
   }
 }

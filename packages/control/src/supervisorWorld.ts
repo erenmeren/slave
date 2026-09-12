@@ -3,6 +3,7 @@ import {
   ACTION_KINDS,
   NON_TERMINAL_RUN_STATUSES,
   PENDING_TTL_MS,
+  PERMISSION_DENIAL_WINDOW_MS,
   RUN_PROMPT_MAX_CHARS,
   THREAD_BODY_MAX_CHARS,
   boundThread,
@@ -19,6 +20,7 @@ import {
   type SituationKind,
   type SupervisorCatalogEntry,
   type SupervisorCompanyWorker,
+  type SupervisorDenial,
   type SupervisorQuestion,
   type SupervisorRun,
   type SupervisorSlave,
@@ -324,6 +326,48 @@ async function loadLatestBreakerTrips(
         : [[row.runId, { trip: row.trip, detail: row.detail, count: row.count }] as const],
     ),
   )
+}
+
+/**
+ * How often each worker has been refused each operation lately (M52 R5, plan erratum E9).
+ *
+ * The world holds no events, and `observe` is pure, so the counting happens here. One grouped read
+ * over `run.tool_denied` inside `PERMISSION_DENIAL_WINDOW_MS`, keyed on the payload's `capability`
+ * -- which is a `PermissionKind` in every row M52 writes, `'run tests'` in a row written before it,
+ * and `ungoverned_tool` in a row no grant can fix. All three come back and `observe` filters the
+ * last two: this query's job is counting, not judging.
+ *
+ * NOT CALLED AT ALL when the project has no live run, which is every tick of a project nobody is
+ * working on -- {@link loadLatestBreakerTrips}' gate, for its reason. A wall is something a worker
+ * is standing at now: a run that has already concluded is not blocked by a permission, and the
+ * proposal this feeds ("only a person can grant it") would be about nothing.
+ */
+async function loadDenials(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  since: Date,
+): Promise<readonly SupervisorDenial[]> {
+  const rows = await tx.$queryRaw<
+    { readonly slaveId: string; readonly kind: string; readonly count: bigint; readonly latestRunId: string | null }[]
+  >`
+    SELECT e."slaveId" AS "slaveId",
+           e.payload->>'capability' AS kind,
+           COUNT(*) AS count,
+           (ARRAY_AGG(e."runId" ORDER BY e.seq DESC))[1] AS "latestRunId"
+    FROM "ExecutionEvent" e
+    WHERE e."workspaceId" = ${workspaceId}
+      AND e.type::text = 'run.tool_denied'
+      AND e.ts >= ${since}
+      AND e."slaveId" IS NOT NULL
+      AND e.payload->>'capability' IS NOT NULL
+    GROUP BY e."slaveId", e.payload->>'capability'
+  `
+  return rows.map((row) => ({
+    slaveId: row.slaveId,
+    kind: row.kind,
+    count: Number(row.count),
+    latestRunId: row.latestRunId,
+  }))
 }
 
 /** `text` at most `max` characters. Every foreign text this loader puts into the world is bounded
@@ -650,6 +694,14 @@ export async function loadSupervisorWorld(
         ? await loadLatestBreakerTrips(tx, workspaceId, runRows.map((row) => row.id))
         : new Map<string, { readonly trip: string; readonly detail: string; readonly count: number }>()
 
+      // M52 R5 / plan erratum E9. ONLY when something is running here, for the reason above: a
+      // permission wall is a live worker standing at it, and a project with no run has nobody to
+      // unblock. One grouped query for the whole board, never one per worker.
+      const denials =
+        runRows.length === 0
+          ? []
+          : await loadDenials(tx, workspaceId, new Date(now.getTime() - PERMISSION_DENIAL_WINDOW_MS))
+
       const slaveRows = await tx.slave.findMany({
         where: { team: { workspaceId } },
         select: {
@@ -929,14 +981,10 @@ export async function loadSupervisorWorld(
         runbook: adopted,
         runbooks,
         staleMemoryCandidates,
-        // M52 R5 / plan erratum E9: how often each worker has been refused each operation lately.
-        //
-        // TASK 1 MINIMUM (M52 plan, Task 3 owns the loader): the field is declared here as the
-        // empty list every project with no denials has, so `observe`'s `permission_blocked`
-        // predicate is a no-op until the grouped `run.tool_denied` read lands -- the same
-        // "declared before it is filled" state `capability_unstaffed` was in between M47's Task 1
-        // and Task 3.
-        denials: [],
+        // M52 R5 / plan erratum E9: how often each worker has been refused each operation lately,
+        // counted over `PERMISSION_DENIAL_WINDOW_MS`. `observe` decides which of them is a wall a
+        // person could move; this list is every refusal the window holds, unjudged.
+        denials,
       }
 
       return {

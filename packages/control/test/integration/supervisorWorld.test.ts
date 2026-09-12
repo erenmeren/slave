@@ -1,6 +1,8 @@
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   MEMORY_CANDIDATE_STALE_MS,
+  PERMISSION_DENIAL_WINDOW_MS,
+  PERMISSION_TRIP_COUNT,
   RUN_PROMPT_MAX_CHARS,
   STALE_CANDIDATES_MIN,
   SUPERVISOR_PER_CALL_CAP_USD,
@@ -1408,5 +1410,106 @@ describe('loadSupervisorWorld -- the runbook fields (M48 R5, E6, E8)', () => {
       // And the situation the whole projection exists for is now raisable.
       expect(observe(world).map((situation) => situation.kind)).toContain('run_looping')
     })
+  })
+})
+
+/**
+ * M52 R5 / plan erratum E9: `world.denials`, the count behind `permission_blocked`.
+ *
+ * A real clock rather than this file's fixed `NOW`: the window is measured back from the instant
+ * the loader is given, and `appendEvent` stamps `ts` itself, so a fixed clock far in the past puts
+ * every row inside the window and the "outside it" case could not be written at all.
+ */
+describe('loadSupervisorWorld -- the denials (M52 R5)', () => {
+  beforeEach(reset)
+
+  async function deny(
+    fixture: Fixture,
+    slaveId: string,
+    runId: string,
+    capability: string,
+    times = 1,
+  ): Promise<void> {
+    for (let index = 0; index < times; index += 1) {
+      await appendEvent({
+        type: 'run.tool_denied',
+        workspaceId: fixture.workspaceId,
+        slaveId,
+        runId,
+        actor: 'slave',
+        payload: { tool: 'WebFetch', capability, toolUseId: `tu-${capability}-${String(index)}` },
+      })
+    }
+  }
+
+  async function liveRun(fixture: Fixture, name: string): Promise<{ slaveId: string; runId: string }> {
+    const slave = await prisma.slave.create({
+      data: { teamId: fixture.teamId, name, role: 'Senior Engineer', runtimeRoles: ['backend'] },
+    })
+    const run = await prisma.slaveRun.create({
+      data: { slaveId: slave.id, status: 'working', kind: 'implementation' },
+    })
+    return { slaveId: slave.id, runId: run.id }
+  }
+
+  it('counts each worker’s refusals per OPERATION, and keeps the newest run behind them', async (): Promise<void> => {
+    const fixture = await seed()
+    const alex = await liveRun(fixture, 'Alex')
+    const robin = await liveRun(fixture, 'Robin')
+    await deny(fixture, alex.slaveId, alex.runId, 'network_fetch', PERMISSION_TRIP_COUNT)
+    await deny(fixture, alex.slaveId, alex.runId, 'deploy_release', 1)
+    await deny(fixture, robin.slaveId, robin.runId, 'network_fetch', 1)
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+    expect([...world.denials].sort((a, b) => (a.slaveId + a.kind < b.slaveId + b.kind ? -1 : 1))).toEqual(
+      [
+        { slaveId: alex.slaveId, kind: 'network_fetch', count: PERMISSION_TRIP_COUNT, latestRunId: alex.runId },
+        { slaveId: alex.slaveId, kind: 'deploy_release', count: 1, latestRunId: alex.runId },
+        { slaveId: robin.slaveId, kind: 'network_fetch', count: 1, latestRunId: robin.runId },
+      ].sort((a, b) => (a.slaveId + a.kind < b.slaveId + b.kind ? -1 : 1)),
+    )
+    // And only the one that reached the trip count is a wall a person is asked about.
+    expect(observe(world).filter((situation) => situation.kind === 'permission_blocked')).toHaveLength(1)
+  })
+
+  it('leaves a refusal older than the window out -- a wall met last week is not one now', async (): Promise<void> => {
+    const fixture = await seed()
+    const alex = await liveRun(fixture, 'Alex')
+    await deny(fixture, alex.slaveId, alex.runId, 'network_fetch', 2)
+    await prisma.executionEvent.updateMany({
+      where: { type: 'run_tool_denied' },
+      data: { ts: new Date(Date.now() - PERMISSION_DENIAL_WINDOW_MS - 60_000) },
+    })
+    await deny(fixture, alex.slaveId, alex.runId, 'network_fetch', 1)
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+    expect(world.denials).toEqual([
+      { slaveId: alex.slaveId, kind: 'network_fetch', count: 1, latestRunId: alex.runId },
+    ])
+  })
+
+  it('asks the event log NOTHING while no run is live', async (): Promise<void> => {
+    // The gate the loader is built on, proved the way the breaker's is: the rows are there, the
+    // run that wrote them has concluded, and the count does not appear.
+    const fixture = await seed()
+    const alex = await liveRun(fixture, 'Alex')
+    await deny(fixture, alex.slaveId, alex.runId, 'network_fetch', PERMISSION_TRIP_COUNT)
+    await prisma.slaveRun.update({ where: { id: alex.runId }, data: { status: 'succeeded' } })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+    expect(world.denials).toEqual([])
+  })
+
+  it('carries a pre-M52 capability and an ungoverned tool through unjudged -- the counting is not the judging', async (): Promise<void> => {
+    const fixture = await seed()
+    const alex = await liveRun(fixture, 'Alex')
+    await deny(fixture, alex.slaveId, alex.runId, 'run tests', PERMISSION_TRIP_COUNT)
+    await deny(fixture, alex.slaveId, alex.runId, 'ungoverned_tool', PERMISSION_TRIP_COUNT)
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+    expect(world.denials.map((denial) => denial.kind).sort()).toEqual(['run tests', 'ungoverned_tool'])
+    // `observe` is what refuses to put either in front of a person: neither names something a
+    // person can grant.
+    expect(observe(world).filter((situation) => situation.kind === 'permission_blocked')).toEqual([])
   })
 })

@@ -117,6 +117,12 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   memory_not_found: true,
   invalid_memory: true,
   memory_not_editable: true,
+  // M52 R3 (plan erratum E5): the broker's two. `credential_not_found` answers 404 by the suffix
+  // rule -- the project has no credential by that name, and a credential in another project reads
+  // back the same. `broker_refused` answers 409: it carries all seven refusal reasons, and every one
+  // of them is "the request does not make sense against what is here", never "this is not a thing".
+  broker_refused: true,
+  credential_not_found: true,
 }
 
 const ALL = Object.keys(ALL_KINDS) as ControlRefusal['kind'][]
@@ -147,13 +153,14 @@ const TODAYS_NOT_FOUND_KINDS = [
   'capability_not_found',
   'runbook_not_found',
   'memory_not_found',
+  'credential_not_found',
 ] as const satisfies readonly ControlRefusal['kind'][]
 
 describe('refusalStatus', () => {
-  it('is 404 for exactly the twenty kinds ending in _not_found today', () => {
+  it('is 404 for exactly the twenty-one kinds ending in _not_found today', () => {
     const bySuffix = ALL.filter((kind) => kind.endsWith('_not_found')).sort()
     expect(bySuffix).toEqual([...TODAYS_NOT_FOUND_KINDS].sort())
-    expect(bySuffix).toHaveLength(20)
+    expect(bySuffix).toHaveLength(21)
   })
 
   it('maps every kind in the taxonomy to 404 iff it ends in _not_found, 409 otherwise', () => {

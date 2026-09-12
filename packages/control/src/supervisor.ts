@@ -523,11 +523,10 @@ async function carryOut(
       // `PERMISSION_KINDS` and re-reads the worker, so a proposal that waited a day and named a
       // worker who has since been released is refused rather than written.
       //
-      // TASK 1 MINIMUM (M52 plan, Task 3 owns the rest): the principal half and the
-      // `permission.changed` event this write must append come with Task 3's `setSlavePermission`
-      // signature. The arm is here because `carryOut`'s switch is exhaustive over `Action['kind']`
-      // and the seventeenth member landed in this task.
-      return reached(await setSlavePermission(action.slaveId, action.permissionKind, 'allow'))
+      // THE APPROVER IS THE GRANTER: `principal`, not `origin`, and not the Supervisor. The event
+      // `setSlavePermission` appends records `by` as the PERSON who approved this decision, which is
+      // the true answer to "who granted this" -- the Supervisor only ever asked.
+      return reached(await setSlavePermission(action.slaveId, action.permissionKind, 'allow', principal))
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

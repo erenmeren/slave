@@ -881,6 +881,78 @@ describe('applyDecision', () => {
     expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('failed')
   })
 
+  // M52 R5: the seventeenth arm, and the only path by which a Supervisor decision reaches
+  // `SlavePermission`. `tierOf` pins `request_permission` to `proposed` unconditionally, so the
+  // whole of these two cases is that a wall stays where it is until a PERSON moves it.
+  it('request_permission grants NOTHING while it waits, and records the APPROVER as the granter', async () => {
+    const decision = await record(
+      f,
+      {
+        kind: 'request_permission',
+        slaveId: f.slaveId,
+        name: 'Maya',
+        permissionKind: 'network_fetch',
+        kindLabel: 'Fetch over the network',
+        why: 'This worker has been refused ‘Fetch over the network’ 3 times and cannot get past it. Only a person can grant it.',
+      },
+      'proposed',
+      {
+        subjectId: `${f.slaveId}:network_fetch`,
+        situation: {
+          kind: 'permission_blocked',
+          subjectId: `${f.slaveId}:network_fetch`,
+          summary: 'Maya has been refused ‘Fetch over the network’ 3 times and cannot get past it.',
+          facts: { slaveId: f.slaveId, kind: 'network_fetch', count: 3, runId: null },
+        },
+      },
+    )
+    expect(decision.status).toBe('pending')
+    expect(await prisma.slavePermission.count({ where: { slaveId: f.slaveId } })).toBe(0)
+
+    expect((await approveDecision(decision.id, { userId: f.userId })).ok).toBe(true)
+
+    const row = await prisma.slavePermission.findUniqueOrThrow({
+      where: { slaveId_kind: { slaveId: f.slaveId, kind: 'network_fetch' } },
+    })
+    expect(row.mode).toBe('allow')
+    // THE APPROVER IS THE GRANTER. The Supervisor asked; this id is the person who said yes, and it
+    // is what the worker panel prints beside the grant.
+    expect(row.grantedBy).toBe(f.userId)
+    const [changed] = await eventsOfType('permission_changed')
+    expect(changed?.actor).toBe('human')
+    expect(changed?.payload).toMatchObject({ kind: 'network_fetch', from: null, to: 'allow', by: f.userId })
+  })
+
+  it('request_permission refuses slave_not_found when the worker is gone by the time it is approved', async () => {
+    const decision = await record(
+      f,
+      {
+        kind: 'request_permission',
+        slaveId: f.slaveId,
+        name: 'Maya',
+        permissionKind: 'network_fetch',
+        kindLabel: 'Fetch over the network',
+        why: 'blocked',
+      },
+      'proposed',
+      {
+        subjectId: `${f.slaveId}:network_fetch`,
+        situation: {
+          kind: 'permission_blocked',
+          subjectId: `${f.slaveId}:network_fetch`,
+          summary: 'Maya has been refused ‘Fetch over the network’ 3 times and cannot get past it.',
+          facts: { slaveId: f.slaveId, kind: 'network_fetch', count: 3, runId: null },
+        },
+      },
+    )
+    await prisma.slave.delete({ where: { id: f.slaveId } })
+
+    const applied = await applyDecision(decision.id, 'system')
+    expect(applied.ok).toBe(false)
+    expect(applied.ok ? null : applied.error).toEqual({ kind: 'slave_not_found', slaveId: f.slaveId })
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('failed')
+  })
+
   it('mark_task_failed fails the task and records the reason', async () => {
     const decision = await record(f, { kind: 'mark_task_failed', taskId: f.taskId, reason: 'a dead end' }, 'proposed')
     expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
