@@ -20,6 +20,7 @@ import {
   clearSlavePermission,
   assignCompany,
   CREDENTIAL_KINDS,
+  CREDENTIAL_KIND_LABEL,
   claimResume,
   cloneSimulation,
   compareSimulations,
@@ -2909,15 +2910,21 @@ export async function main(argv: readonly string[]): Promise<number> {
         )
         if (!result.ok) throw new Error(refusalText(result.error))
         process.stdout.write(
-          `credential ${result.value.name} (${result.value.kind}) registered: the orchestrator reads ` +
-            `${result.value.envVar} from its own environment when an operation bound to it runs\n`,
+          `credential ${result.value.name} (${CREDENTIAL_KIND_LABEL[result.value.kind]}) registered: the ` +
+            `orchestrator reads ${result.value.envVar} from its own environment when an operation bound ` +
+            'to it runs\n',
         )
         return 0
       }
       if (sub === 'list') {
         for (const credential of await listCredentials(workspaceId)) {
+          // The WORD, never the key (`docs/ia.md` rule 3). Unlike `permission list` and
+          // `broker list`, no column here carries the raw value beside it: nothing an operator
+          // types takes a credential kind as an argument, so the key would be a column nobody
+          // could use.
           process.stdout.write(
-            `${credential.name}\t${credential.kind}\t${credential.envVar}\t${credential.createdAt.toISOString()}\n`,
+            `${credential.name}\t${CREDENTIAL_KIND_LABEL[credential.kind]}\t${credential.envVar}\t` +
+              `${credential.createdAt.toISOString()}\n`,
           )
         }
         return 0
@@ -2947,9 +2954,13 @@ export async function main(argv: readonly string[]): Promise<number> {
         if (!result.ok) throw new Error(refusalText(result.error))
         process.stdout.write(
           `${brokerOpLabel(result.value.op)} (${result.value.op}) runs ${result.value.command.join(' ')}\n` +
+            // The parenthetical only when there is a name to put in it (fix round 1, review
+            // Minor 3): a binding with a variable and no credential name printed `(credential )`.
             (result.value.envVar === null
               ? '  with no credential\n'
-              : `  with ${result.value.envVar} (credential ${result.value.credentialName ?? ''})\n`),
+              : result.value.credentialName === null
+                ? `  with ${result.value.envVar}\n`
+                : `  with ${result.value.envVar} (credential ${result.value.credentialName})\n`),
         )
         return 0
       }

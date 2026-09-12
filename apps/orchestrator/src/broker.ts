@@ -1,10 +1,6 @@
 import { closeSync, existsSync, fstatSync, openSync, readSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import {
-  runBrokeredOperation,
-  runFilePaths,
-  type BrokerExecutor,
-} from '@slave-of-ai/control'
+import { runBrokeredOperation, runDirPathFor, type BrokerExecutor } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   BROKER_REFUSAL_REASONS,
@@ -12,7 +8,8 @@ import {
   type BrokerRefusalReason,
   type WorkspaceId,
 } from '@slave-of-ai/domain'
-import { brokerChannelPathFor, brokerReplyPathFor } from '@slave-of-ai/providers'
+import { appendEvent } from '@slave-of-ai/events'
+import { brokerChannelPathFor, brokerClaimPathFor, brokerReplyPathFor } from '@slave-of-ai/providers'
 import { z } from 'zod'
 import { runShellCommand } from './shell.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
@@ -42,25 +39,43 @@ import { NON_TERMINAL_RUN_STATUSES } from './world.js'
  * by uuid, they are outside every worktree a worker can see (M52 R4, which is what made that true),
  * and a served request cannot be replayed, because its reply file is its idempotency key.
  *
- * IDEMPOTENCY IS THE FILE. This module keeps an in-memory byte offset per channel, and that offset
- * is an optimisation, never the correctness: a daemon restart re-reads every channel from byte zero,
- * and what stops a second execution is that `broker-<requestId>.json` already exists. Two daemons
- * serving one channel would race on that existence check; the design's answer is the one this
+ * AT MOST ONCE, AND WHAT THAT COSTS. Two files per request, and the order is the whole mechanism
+ * (fix round 1, review Important 1). `broker-<requestId>.claim` is created with `wx` BEFORE the
+ * operation starts; `broker-<requestId>.json` is written after it returns. So:
+ *
+ *   - no claim, no reply  -> never served; serve it.
+ *   - claim, no reply, in flight HERE -> being served right this moment; leave it alone.
+ *   - claim, no reply, nothing in flight -> a process died between the child exiting and the reply
+ *     landing, or the reply could not be written. THE OUTCOME IS UNKNOWN. The worker is told so
+ *     (`internal_error`) and the operation is NEVER run again. An operator checks the target.
+ *   - reply -> answered; nothing more to do, whatever the channel says.
+ *
+ * The in-memory byte offset per channel is an optimisation on top of that and never the
+ * correctness: a daemon restart re-reads every channel from byte zero, and so does a worker
+ * TRUNCATING its own channel, which it can do at will -- the two files are what stop a second
+ * execution in both cases. What is NOT guaranteed: exactly-once. A claim that outlives its process
+ * costs the worker its answer, which is the direction an irreversible operation has to fail in.
+ * Two daemons serving one channel would race on the `wx`; the design's answer is the one this
  * repository already relies on for every run -- one daemon per workspace.
  *
- * NOTHING HERE THROWS OUT OF A TICK. This runs inside `sweep()`, which runs inside the daemon's
- * tick. Every read is `try`/`catch`, an unparseable line is skipped (never a reply -- a line that is
- * not a request has no `requestId` to answer), and an executor that throws becomes a refused reply
- * rather than a dead daemon.
+ * A LATE FAILURE STILL READS AS "NOTHING HAPPENED", and that is the residual under the claim:
+ * `broker.executed`'s append happens after the child ran, so a database failure there becomes an
+ * `internal_error` reply for an operation that really did deploy. The claim file is the evidence
+ * that it might have; the reply's own sentence is what stops a worker being told it may retry.
  *
- * WHAT IT COSTS THE TICK, named rather than discovered later: a brokered operation runs INLINE, so
- * a deploy that takes its whole `BROKER_TIMEOUT_MS` holds this workspace's sweep for two minutes --
- * no guardrail check, no orphan check, no breaker beat until it returns (the pumps are their own
- * promise chains and keep running). The alternative -- starting the execution and not awaiting it --
- * costs the property this whole module is built on: while an operation is in flight its reply file
- * does not exist yet, so the only thing that could stop a second execution would be an in-memory
- * set, and an in-memory set does not survive the restart that the reply file is here to survive. A
- * deploy that runs twice is worse than a sweep that is late, so the operation is awaited.
+ * NOTHING HERE THROWS OUT OF A PASS. Every read is `try`/`catch`, an unparseable line is skipped
+ * (never a reply -- a line that is not a request has no `requestId` to answer), and an executor
+ * that throws becomes a refused reply rather than a dead daemon.
+ *
+ * IT IS NOT PART OF THE TICK (fix round 1, review Important 3). This pass used to run inside
+ * `sweep()`, which runs inside the daemon's coalesced tick -- so one brokered operation froze the
+ * budget guardrail, dispatch, the merge pass, the breaker beat, orphan reconciliation AND the
+ * global simulation pass for as long as it ran, which is `BROKER_TIMEOUT_MS` times the number of
+ * pending requests and not the flat two minutes the first version of this header claimed. It is the
+ * daemon's OWN pass now (`daemon.ts`'s `brokerPass`), on its own coalescer and its own interval,
+ * running beside the tick rather than inside it, and drained on shutdown so an operation in flight
+ * still gets its reply written. Awaiting the execution is safe there, and it is the claim file
+ * above -- not the await -- that makes a second execution impossible.
  */
 
 /**
@@ -142,6 +157,17 @@ export function resetBrokerCursors(): void {
 }
 
 /**
+ * The requests THIS process is executing right now (fix round 1, review Important 3).
+ *
+ * The claim file cannot tell "a dead process left this" from "a live pass is in the middle of it",
+ * and those two demand opposite answers: recover the first, leave the second alone. This set is the
+ * difference. The daemon's broker pass is coalesced, so two passes do not overlap there -- but the
+ * recovery arm must not be one `setInterval` away from answering `internal_error` for an operation
+ * that is still running, and a guard that depends on a caller's scheduling is not a guard.
+ */
+const inFlight = new Set<string>()
+
+/**
  * One pass over every live run's channel in this workspace (M52 R3).
  *
  * Returns the request ids it served -- the `brokerServed` list on `SweepReport`, empty on every
@@ -160,8 +186,11 @@ export async function serveBrokerRequests(deps: {
   const served: string[] = []
   const visited = new Set<string>()
 
-  let runs: readonly { readonly id: string; readonly checkpoint: { readonly pauseFlagPath: string } | null }[]
-  let repoPath: string
+  let runs: readonly {
+    readonly id: string
+    readonly slaveId: string
+    readonly checkpoint: { readonly pauseFlagPath: string } | null
+  }[]
   try {
     // Every NON-TERMINAL status, not `sweep`'s narrower `SWEEPABLE`: a `paused` worker waiting on a
     // reply it asked for before its pause is not a forgery, and `stopping` is a run that has not
@@ -169,27 +198,25 @@ export async function serveBrokerRequests(deps: {
     // may actually have an operation run for it -- this query only decides whose channel is read.
     runs = await prisma.slaveRun.findMany({
       where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] }, slave: { team: { workspaceId: deps.workspaceId } } },
-      select: { id: true, checkpoint: { select: { pauseFlagPath: true } } },
+      // `slaveId` rides along for the E15 event (fix round 1, review Important 2): the refusal is
+      // filed against the run whose DIRECTORY the line was found in, and an `ExecutionEvent` needs
+      // a slave to name.
+      select: { id: true, slaveId: true, checkpoint: { select: { pauseFlagPath: true } } },
     })
-    if (runs.length === 0) return served
-    repoPath = (
-      await prisma.workspace.findUniqueOrThrow({ where: { id: deps.workspaceId }, select: { repoPath: true } })
-    ).repoPath
   } catch (error) {
     console.error('[broker] could not load this workspace’s live runs:', error)
     return served
   }
 
   for (const run of runs) {
-    const runDir = runDirFor(run, repoPath)
-    if (runDir === null) continue
+    const runDir = runDirFor(run)
     const channelPath = brokerChannelPathFor(runDir)
     visited.add(channelPath)
     // A run that has never asked for anything has no channel at all, which is nearly every run:
     // one `stat` and the pass is done with it.
     if (!existsSync(channelPath)) continue
     for (const line of readNewLines(channelPath)) {
-      const requestId = await serveOneLine(run.id, runDir, line, execute)
+      const requestId = await serveOneLine(deps.workspaceId, run, runDir, line, execute)
       if (requestId !== null) served.push(requestId)
     }
   }
@@ -203,32 +230,24 @@ export async function serveBrokerRequests(deps: {
 }
 
 /**
- * Where this run's files are, or `null` when this process cannot say.
+ * Where this run's files are.
  *
  * WHAT WAS RECORDED BEATS WHAT THIS PROCESS WOULD DERIVE -- the ruling `requestPause`
  * (`packages/control/src/pause.ts`) already implements for the pause flag, and for the same reason:
- * `runFilePaths` reads `SLAVEOFAI_STATE_DIR`/`XDG_STATE_HOME`/`homedir()`, so a daemon under
- * systemd and a shell that exports one of them compute different answers, and the adapter told the
- * child ONE of them. The checkpoint's `pauseFlagPath` is the path the child was actually spawned
- * with, so it wins; the derivation is only for a run that has never paused.
+ * the derivation reads `SLAVEOFAI_STATE_DIR`/`XDG_STATE_HOME`/`homedir()`, so a daemon under systemd
+ * and a shell that exports one of them compute different answers, and the adapter told the child ONE
+ * of them. The checkpoint's `pauseFlagPath` is the path the child was actually spawned with, so it
+ * wins; the derivation is only for a run that has never paused.
  *
- * `null` rather than a throw: `runFilePaths` stats the repository and refuses a path that is gone,
- * and a workspace whose repository has been moved is broken in ways the broker's pass is not the
- * place to announce -- once per second, per run, forever. Such a run has no scratch directory this
- * process can compute and therefore no channel to read, which is the whole of what this pass needs
- * to know.
+ * `runDirPathFor` and NOT `runFilePaths` (fix round 1): this pass is a READER and asks this question
+ * of every live run every half second. `runFilePaths` stats the repository and `mkdirSync`s the
+ * directory -- synchronous work, on the event loop, creating directories for runs that have never
+ * asked for anything. It also meant a run whose repository had moved had no derivable channel at
+ * all, which is a fact about the repository and not about the channel.
  */
-function runDirFor(
-  run: { readonly id: string; readonly checkpoint: { readonly pauseFlagPath: string } | null },
-  repoPath: string,
-): string | null {
+function runDirFor(run: { readonly id: string; readonly checkpoint: { readonly pauseFlagPath: string } | null }): string {
   const recorded = run.checkpoint?.pauseFlagPath
-  if (recorded !== undefined && recorded !== '') return dirname(recorded)
-  try {
-    return runFilePaths(repoPath, brandRunId(run.id)).runDir
-  } catch {
-    return null
-  }
+  return recorded !== undefined && recorded !== '' ? dirname(recorded) : runDirPathFor(brandRunId(run.id))
 }
 
 /**
@@ -276,14 +295,20 @@ function readNewLines(channelPath: string): readonly string[] {
 }
 
 /**
- * One line: parse it, decide whether it may be answered at all, and answer it exactly once.
+ * One line: parse it, decide whether it may be answered at all, and answer it AT MOST once.
  *
  * Returns the request id if a reply was written, `null` otherwise. A line this function cannot read
  * is skipped in silence -- there is no `requestId` to name a reply file with, so there is nowhere
  * to put an answer even if one were owed.
+ *
+ * The order of the four gates is the module header's table, and it is load-bearing: in flight here,
+ * then answered already, then CLAIMED but unanswered (the outcome is unknown and must not be
+ * re-run), and only then a claim of our own -- taken with `wx`, which is one atomic syscall and not
+ * a check followed by a write.
  */
 async function serveOneLine(
-  runId: string,
+  workspaceId: WorkspaceId,
+  run: { readonly id: string; readonly slaveId: string },
   runDir: string,
   line: string,
   execute: BrokerExecutor,
@@ -297,52 +322,101 @@ async function serveOneLine(
   }
   const request = requestSchema.safeParse(parsed)
   if (!request.success) return null
+  const { requestId, op } = request.data
 
   let replyPath: string
+  let claimPath: string
   try {
-    replyPath = brokerReplyPathFor(runDir, request.data.requestId)
+    replyPath = brokerReplyPathFor(runDir, requestId)
+    claimPath = brokerClaimPathFor(runDir, requestId)
   } catch {
     return null
   }
-  // THE IDEMPOTENCY KEY. Checked before anything is executed, so a channel re-read from byte zero
-  // -- a restart, a truncation, a pass that ran twice -- costs one `stat` and nothing else.
+
+  // 1. A pass that is still running this one. Never two answers, and never a recovery that
+  //    overtakes a live operation.
+  if (inFlight.has(requestId)) return null
+  // 2. THE IDEMPOTENCY KEY. One `stat`, and a channel re-read from byte zero -- a restart, a
+  //    truncation, a pass that ran twice -- costs nothing else.
   if (existsSync(replyPath)) return null
 
-  // Plan erratum E15, and the half the token cannot supply: the line claims a run, and the claim is
-  // only believed when it names the run whose directory this line was found in. Refused BEFORE
-  // `runBrokeredOperation`, which would otherwise resolve the stolen token's own run quite happily
-  // and deliver its output here.
-  if (request.data.runId !== runId) {
-    writeReply(replyPath, refusal(request.data.requestId, 'identity_mismatch'))
-    return request.data.requestId
+  // 3./4. Claim it, or discover that somebody already did. `wx` answers both questions in one
+  //       syscall: a claim we could not create because it exists is a claim a process that is no
+  //       longer running left behind, and what it marks is an operation whose OUTCOME IS UNKNOWN.
+  try {
+    writeFileSync(claimPath, `${JSON.stringify({ requestId, op, claimedAt: new Date().toISOString() })}\n`, {
+      flag: 'wx',
+      mode: 0o600,
+    })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+      // A claim that cannot be written is an operation that must not run: without the claim there
+      // is nothing to stop the next pass running it again. The worker waits out its own deadline,
+      // which is the direction an irreversible operation has to fail in.
+      console.error(`[broker] could not claim ${requestId} for run ${run.id}:`, error)
+      return null
+    }
+    writeReply(replyPath, {
+      requestId,
+      ok: false,
+      exitCode: null,
+      output:
+        'the orchestrator started this operation and did not finish recording it: its outcome is ' +
+        'UNKNOWN and it will not be run again. Check the target before asking for it a second time.',
+      reason: BROKER_INTERNAL_ERROR_REASON,
+    })
+    return requestId
   }
 
-  let reply: BrokerReply
+  inFlight.add(requestId)
   try {
+    // Plan erratum E15, and the half the token cannot supply: the line claims a run, and the claim
+    // is only believed when it names the run whose directory this line was found in. Refused BEFORE
+    // `runBrokeredOperation`, which would otherwise resolve the stolen token's own run quite
+    // happily and deliver its output here.
+    if (request.data.runId !== run.id) {
+      // AND THE TIMELINE HEARS ABOUT IT (fix round 1, review Important 2). This is the single
+      // highest-signal security event the design can produce, and until this round its only record
+      // was a file in the attacker's own directory that the attacker could delete. Questions 1 and 2
+      // in `packages/control` refuse silently because they have no run to file against; this one
+      // does -- the run whose directory the line sits in is known, live, in this workspace, and is
+      // exactly the worker that wrote the line. Same payload shape control uses.
+      await appendEvent({
+        type: 'broker.refused',
+        workspaceId,
+        slaveId: run.slaveId,
+        runId: run.id,
+        actor: 'slave',
+        payload: { op, reason: 'identity_mismatch' },
+      })
+      writeReply(replyPath, refusal(requestId, 'identity_mismatch'))
+      return requestId
+    }
+
     const result = await runBrokeredOperation(
-      { runToken: request.data.runToken, op: request.data.op, params: request.data.params },
+      { runToken: request.data.runToken, op, params: request.data.params },
       { execute },
     )
-    reply = result.ok
-      ? {
-          requestId: request.data.requestId,
-          ok: true,
-          exitCode: result.value.exitCode,
-          output: result.value.output,
-          reason: null,
-        }
-      : refusal(
-          request.data.requestId,
-          result.error.kind === 'broker_refused' ? result.error.reason : BROKER_INTERNAL_ERROR_REASON,
-        )
+    writeReply(
+      replyPath,
+      result.ok
+        ? { requestId, ok: true, exitCode: result.value.exitCode, output: result.value.output, reason: null }
+        : refusal(
+            requestId,
+            result.error.kind === 'broker_refused' ? result.error.reason : BROKER_INTERNAL_ERROR_REASON,
+          ),
+    )
+    return requestId
   } catch (error) {
     // The executor threw, or the database did. The worker gets an answer either way: a request that
-    // is never replied to costs it the full `BROKER_CLIENT_TIMEOUT_MS` to learn nothing.
-    console.error(`[broker] serving ${request.data.op} for run ${runId} failed:`, error)
-    reply = refusal(request.data.requestId, BROKER_INTERNAL_ERROR_REASON)
+    // is never replied to costs it the full `BROKER_CLIENT_TIMEOUT_MS` to learn nothing. The claim
+    // stays where it is, so this is the LAST word on this request whatever happens next.
+    console.error(`[broker] serving ${op} for run ${run.id} failed:`, error)
+    writeReply(replyPath, refusal(requestId, BROKER_INTERNAL_ERROR_REASON))
+    return requestId
+  } finally {
+    inFlight.delete(requestId)
   }
-  writeReply(replyPath, reply)
-  return request.data.requestId
 }
 
 function refusal(
@@ -364,6 +438,12 @@ export function isBrokerRefusalReason(reason: unknown): reason is BrokerRefusalR
  * Written beside itself and renamed: `rename` within a directory is atomic, so the client polling
  * for `broker-<id>.json` never opens a half-written one. Mode 0600 inside an already-0700
  * directory, for that directory's own reason.
+ *
+ * A FAILURE HERE DOES NOT RE-SERVE THE REQUEST (fix round 1, review Important 1). It used to: the
+ * claim file did not exist, so a reply that could not be written left the request looking untouched
+ * and the next pass deployed again. Now the claim is already on disk, so the next pass finds
+ * "claimed, unanswered" and tells the worker its outcome is unknown -- which is the failure an
+ * audit trail can recover from, where a second deploy is not.
  */
 function writeReply(replyPath: string, reply: BrokerReply): void {
   const partial = `${replyPath}.partial`
@@ -375,7 +455,7 @@ function writeReply(replyPath: string, reply: BrokerReply): void {
     try {
       unlinkSync(partial)
     } catch {
-      // Nothing to clean up, or nothing that can be. The next pass re-serves this request.
+      // Nothing to clean up, or nothing that can be. The claim stands either way.
     }
   }
 }

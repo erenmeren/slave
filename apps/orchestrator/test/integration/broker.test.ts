@@ -1,4 +1,14 @@
-import { appendFileSync, chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -10,10 +20,12 @@ import {
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
-import { brokerChannelPathFor, brokerReplyPathFor, runTokenHash } from '@slave-of-ai/providers'
+import { brokerChannelPathFor, brokerClaimPathFor, brokerReplyPathFor, runTokenHash } from '@slave-of-ai/providers'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { realBrokerExecutor, resetBrokerCursors, serveBrokerRequests } from '../../src/broker.js'
 import { COMMAND_OUTPUT_LIMIT } from '../../src/shell.js'
+import { sweep } from '../../src/sweep.js'
+import type { SlaveRuntimeAdapter } from '@slave-of-ai/providers'
 
 /**
  * The ORCHESTRATOR's half of the broker (M52 R3): the per-tick pass that reads a worker's channel
@@ -244,6 +256,114 @@ describe('serveBrokerRequests', () => {
 
     expect(readReply(runDir, ID)).toMatchObject({ ok: false })
   })
+
+  it('serves nothing for a project that has never used the broker, and CREATES nothing', async (): Promise<void> => {
+    // Both live runs, with their scratch directories not yet made -- which is every run that has
+    // not paused and has never had a file written for it.
+    rmSync(runDir, { recursive: true, force: true })
+    rmSync(otherRunDir, { recursive: true, force: true })
+
+    const served = await serveBrokerRequests({ workspaceId: brandWorkspaceId(workspaceId), execute: fakeExecutor })
+
+    expect(served).toEqual([])
+    expect(executions).toBe(0)
+    // Fix round 1: the pass is a READER. It used to derive the path through `runFilePaths`, which
+    // `mkdirSync`s -- synchronous work on the event loop, once per live run, every pass, making
+    // directories for runs that had asked for nothing.
+    expect(existsSync(runDir)).toBe(false)
+    expect(existsSync(otherRunDir)).toBe(false)
+  })
+
+  it('leaves a CLAIM beside every reply, so a crash cannot look like an unserved request', async (): Promise<void> => {
+    appendRequest(runDir, { requestId: ID, runId, op: 'deploy_release', params: PARAMS, runToken: TOKEN })
+
+    await serveBrokerRequests({ workspaceId: brandWorkspaceId(workspaceId), execute: fakeExecutor })
+
+    expect(existsSync(brokerClaimPathFor(runDir, ID))).toBe(true)
+    expect(existsSync(brokerReplyPathFor(runDir, ID))).toBe(true)
+    // The claim names the request and the op and nothing else -- above all not the token.
+    const claim = readFileSync(brokerClaimPathFor(runDir, ID), 'utf8')
+    expect(JSON.parse(claim)).toMatchObject({ requestId: ID, op: 'deploy_release' })
+    expect(claim).not.toContain(TOKEN)
+  })
+
+  it('answers a CLAIMED but unanswered request without ever running it again', async (): Promise<void> => {
+    // Exactly what a daemon that died between the child exiting and the reply landing leaves
+    // behind, and exactly what a `writeReply` that failed leaves behind: a claim, no reply.
+    writeFileSync(brokerClaimPathFor(runDir, ID), `${JSON.stringify({ requestId: ID, op: 'deploy_release' })}\n`)
+    appendRequest(runDir, { requestId: ID, runId, op: 'deploy_release', params: PARAMS, runToken: TOKEN })
+
+    const served = await serveBrokerRequests({ workspaceId: brandWorkspaceId(workspaceId), execute: fakeExecutor })
+
+    expect(served).toEqual([ID])
+    expect(executions).toBe(0)
+    const reply = readReply(runDir, ID)
+    expect(reply).toMatchObject({ ok: false, reason: 'internal_error' })
+    // The sentence has to say the thing an operator needs to act on: nobody knows whether it ran.
+    expect(String(reply['output'])).toContain('UNKNOWN')
+  })
+
+  it('does not re-execute after a worker truncates its own channel and deletes its reply', async (): Promise<void> => {
+    // TWO requests first, so the byte cursor sits past both of them.
+    appendRequest(runDir, { requestId: ID, runId, op: 'deploy_release', params: PARAMS, runToken: TOKEN })
+    appendRequest(runDir, { requestId: OTHER_ID, runId, op: 'deploy_release', params: PARAMS, runToken: TOKEN })
+    await serveBrokerRequests({ workspaceId: brandWorkspaceId(workspaceId), execute: fakeExecutor })
+    expect(executions).toBe(2)
+
+    // The worker owns this directory. It deletes the answer it did not like and rewrites the
+    // channel SHORTER than the cursor, which is how a file "shrinks" -- and a shrunken channel is
+    // re-read from byte zero, so the offset cannot be what stops the second execution.
+    unlinkSync(brokerReplyPathFor(runDir, ID))
+    writeFileSync(brokerChannelPathFor(runDir), '')
+    appendRequest(runDir, { requestId: ID, runId, op: 'deploy_release', params: PARAMS, runToken: TOKEN })
+
+    await serveBrokerRequests({ workspaceId: brandWorkspaceId(workspaceId), execute: fakeExecutor })
+
+    // The CLAIM is. It survived the worker's tidy-up, because it is not the file the worker was
+    // deleting, and the answer says the outcome is unknown rather than running the deploy again.
+    expect(executions).toBe(2)
+    expect(readReply(runDir, ID)).toMatchObject({ ok: false, reason: 'internal_error' })
+  })
+
+  it('files broker.refused against the directory’s run when a line claims a different one', async (): Promise<void> => {
+    appendRequest(runDir, { requestId: ID, runId: otherRunId, op: 'deploy_release', params: PARAMS, runToken: OTHER_TOKEN })
+
+    await serveBrokerRequests({ workspaceId: brandWorkspaceId(workspaceId), execute: fakeExecutor })
+
+    // The one attack this milestone's erratum is named for, and until fix round 1 its only record
+    // was a file in the attacker's own directory that the attacker could delete.
+    const event = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'broker_refused' } })
+    expect(event.runId).toBe(runId)
+    expect(event.slaveId).toBe(slaveId)
+    expect(event.payload).toEqual({ op: 'deploy_release', reason: 'identity_mismatch' })
+    expect(event.actor).toBe('slave')
+  })
+
+  it('is NOT part of sweep(): a slow operation and a sweep do not wait for each other', async (): Promise<void> => {
+    appendRequest(runDir, { requestId: ID, runId, op: 'deploy_release', params: PARAMS, runToken: TOKEN })
+    const finished: string[] = []
+    const registry = { resolve: () => ({ cancel: async (): Promise<void> => undefined }) as unknown as SlaveRuntimeAdapter }
+
+    const serving = serveBrokerRequests({
+      workspaceId: brandWorkspaceId(workspaceId),
+      execute: async () => {
+        executions += 1
+        await new Promise<void>((settle) => setTimeout(settle, 500))
+        return { exitCode: 0, durationMs: 500, output: 'deployed' }
+      },
+    }).then((): void => {
+      finished.push('broker')
+    })
+    const report = await sweep({ workspaceId: brandWorkspaceId(workspaceId), registry })
+    finished.push('sweep')
+    await serving
+
+    // The sweep finished first, with a half-second operation still running beside it.
+    expect(finished).toEqual(['sweep', 'broker'])
+    // And it served nothing itself: `SweepReport` has no `brokerServed` any more.
+    expect(report).not.toHaveProperty('brokerServed')
+    expect(executions).toBe(1)
+  }, 15_000)
 })
 
 describe('realBrokerExecutor', () => {

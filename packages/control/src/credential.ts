@@ -17,6 +17,23 @@ export const CREDENTIAL_KINDS = ['deploy_token', 'git_token', 'api_key'] as cons
 export type CredentialKind = (typeof CREDENTIAL_KINDS)[number]
 
 /**
+ * What each kind is CALLED when a person reads it (`docs/ia.md` rule 3, M52 fix round 1).
+ *
+ * Beside {@link CREDENTIAL_KINDS} rather than in `@slave-of-ai/domain`'s label layer, because the
+ * list itself is here and for the reason stated above it: nothing outside this file and the CLI
+ * behind it decides anything from a credential kind. What matters is only that no printed surface
+ * shows `deploy_token` -- `credential list` and `credential add` print these words.
+ *
+ * `Record<CredentialKind, string>` is load-bearing exactly as `PERMISSION_LABEL`'s is: a fourth
+ * kind fails the build here rather than turning up on an operator's screen as an identifier.
+ */
+export const CREDENTIAL_KIND_LABEL: Record<CredentialKind, string> = {
+  deploy_token: 'Deploy token',
+  git_token: 'Git token',
+  api_key: 'API key',
+}
+
+/**
  * What an environment variable may be called: upper-case, digits and underscores, starting with a
  * letter, at most 128 characters.
  *

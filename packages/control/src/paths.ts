@@ -52,14 +52,21 @@ import type { RunId } from '@slave-of-ai/domain'
  * FOREVER, with no error to catch. statSync answers immediately for the same inputs, so a bad
  * root becomes an actionable throw on the tick's hot path instead of a silent stall.
  */
-export function runFilePaths(repoPath: string, runId: RunId): { runDir: string; pauseFlagPath: string } {
-  let root
-  try {
-    root = statSync(repoPath)
-  } catch (error) {
-    throw new Error(`runFilePaths: cannot stat repo path ${repoPath} (run ${runId}): ${error instanceof Error ? error.message : String(error)}`)
-  }
-  if (!root.isDirectory()) throw new Error(`runFilePaths: repo path is not a directory: ${repoPath} (run ${runId})`)
+/**
+ * WHERE a run's directory is, deciding nothing and creating nothing (M52 t4 fix round 1).
+ *
+ * The pure half of {@link runFilePaths}: the same three-step state-root rule, spelled once, with no
+ * `statSync`, no `mkdirSync` and no opinion about whether the run is healthy. A READER wants this
+ * one -- the broker's pass asks every live run where its channel would be, once every half second,
+ * and `runFilePaths` there meant a synchronous recursive `mkdirSync` per run per pass on the event
+ * loop, for directories it had no business creating. (Measured: with the broker pass on its own
+ * interval beside the tick, that synchronous work widened the window between `requestPause`'s claim
+ * and `steerRun`'s second statement enough to make `gate:m51-breaker` fail two runs in five.)
+ *
+ * A WRITER still wants {@link runFilePaths}: the directory has to exist before anything is written
+ * into it, and the repo-path assertion is about the RUN.
+ */
+export function runDirPathFor(runId: RunId): string {
   const stateDir = process.env['SLAVEOFAI_STATE_DIR']
   const xdgStateHome = process.env['XDG_STATE_HOME']
   const stateRoot =
@@ -68,7 +75,18 @@ export function runFilePaths(repoPath: string, runId: RunId): { runDir: string; 
       : xdgStateHome !== undefined && xdgStateHome !== ''
         ? join(xdgStateHome, 'slaveofai')
         : join(homedir(), '.local', 'state', 'slaveofai')
-  const dir = join(stateRoot, 'runs', runId)
+  return join(stateRoot, 'runs', runId)
+}
+
+export function runFilePaths(repoPath: string, runId: RunId): { runDir: string; pauseFlagPath: string } {
+  let root
+  try {
+    root = statSync(repoPath)
+  } catch (error) {
+    throw new Error(`runFilePaths: cannot stat repo path ${repoPath} (run ${runId}): ${error instanceof Error ? error.message : String(error)}`)
+  }
+  if (!root.isDirectory()) throw new Error(`runFilePaths: repo path is not a directory: ${repoPath} (run ${runId})`)
+  const dir = runDirPathFor(runId)
   try {
     // 0700 on the whole chain: a run directory holds the verdict that governs a worker, and this
     // machine may have other accounts on it. It does NOT protect a run from a SIBLING run under the

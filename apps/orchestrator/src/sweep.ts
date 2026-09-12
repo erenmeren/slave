@@ -22,7 +22,6 @@ import {
   type WorkspaceId,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
-import { serveBrokerRequests } from './broker.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import type { AdapterRegistry } from '@slave-of-ai/providers'
 import { resolveAdapter } from './provider.js'
@@ -61,11 +60,6 @@ export interface SweepReport {
   readonly breakerSteered: readonly RunId[]
   readonly breakerConstrained: readonly RunId[]
   readonly breakerStopped: readonly RunId[]
-  /** M52 R3: the broker request ids this pass served -- request ids, not run ids, because one run
-   *  may ask for several things in one turn and the id is what names the reply the worker is
-   *  waiting on. Empty on every tick of a project that has never used the broker, which is nearly
-   *  all of them. */
-  readonly brokerServed: readonly string[]
 }
 
 /**
@@ -436,12 +430,13 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     breakerStopped: [],
   }
 
-  // M52 R3: the broker's pass. Before the per-run loop rather than inside it -- it reads every live
-  // run's channel in one go, and a worker waiting on a reply must not be made to wait for a
-  // breaker beat or a worktree probe. It never throws (its own docstring), so it is not wrapped.
-  // It is also the one thing in this function that reads a PAUSED run's channel: a worker that
-  // asked for something and was then parked is still owed its answer.
-  const brokerServed = await serveBrokerRequests({ workspaceId: deps.workspaceId })
+  // M52 R3, and NOT here (fix round 1, review Important 3): the broker's pass used to run at this
+  // line. A brokered operation can run for `BROKER_TIMEOUT_MS`, this function is the last thing in
+  // the daemon's coalesced tick, and a coalescer drops every wake-up while one run is in flight --
+  // so one deploy froze the budget guardrail, dispatch, the merge pass, the breaker beat, orphan
+  // reconciliation and the global simulation pass along with it. It is the daemon's own pass now
+  // (`daemon.ts`'s `brokerPass`), beside this one rather than inside it. Nothing in `sweep` serves
+  // a broker request any more, and `SweepReport` carries no `brokerServed`.
 
   // BEFORE the per-run loop, and on every tick rather than on the beat (M51 R3, erratum E8). The
   // loop cannot do this: `paused` is not in `SWEEPABLE`, so a parked run is not even in `runs`
@@ -565,7 +560,7 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   // and running this first would look at claims it is about to make current.
   const strandedClaims = await reconcileStrandedClaims(deps, workspace)
 
-  return { timedOut, overToolCap, deadPids, strandedClaims, brokerServed, ...breakerMoves }
+  return { timedOut, overToolCap, deadPids, strandedClaims, ...breakerMoves }
 }
 
 /** Which rung a beat climbed -- the three `SweepReport` keys, so the push site cannot misspell one. */

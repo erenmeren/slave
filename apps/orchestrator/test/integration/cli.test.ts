@@ -1,4 +1,5 @@
 import { execFile, execFileSync, spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -15,7 +16,7 @@ import {
 import { prisma } from '@slave-of-ai/db/client'
 import { runId as brandRunId, type Candidate, type Situation } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
-import { brokerChannelPathFor, brokerReplyPathFor } from '@slave-of-ai/providers'
+import { brokerChannelPathFor, brokerClaimPathFor, brokerReplyPathFor } from '@slave-of-ai/providers'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 
 const execFileAsync = promisify(execFile)
@@ -3756,6 +3757,9 @@ describe('the orchestrator CLI', () => {
         expect(result.code).toBe(0)
         expect(result.stdout).toContain('FAKE_DEPLOY_TOKEN')
         expect(result.stdout).not.toContain(CREDENTIAL_PLACEHOLDER)
+        // The WORD, never the key (fix round 1, review Minor 2 upgraded).
+        expect(result.stdout).toContain('Deploy token')
+        expect(result.stdout).not.toContain('deploy_token')
         const row = await prisma.credential.findFirstOrThrow()
         expect({ name: row.name, kind: row.kind, envVar: row.envVar }).toEqual({
           name: 'deploy', kind: 'deploy_token', envVar: 'FAKE_DEPLOY_TOKEN',
@@ -3779,6 +3783,9 @@ describe('the orchestrator CLI', () => {
         expect(result.stdout).toContain('deploy')
         expect(result.stdout).toContain('FAKE_DEPLOY_TOKEN')
         expect(result.stdout).not.toContain(CREDENTIAL_PLACEHOLDER)
+        // Labels never keys, on the one surface that still printed one.
+        expect(result.stdout).toContain('Deploy token')
+        expect(result.stdout).not.toContain('deploy_token')
       } finally {
         delete process.env['FAKE_DEPLOY_TOKEN']
       }
@@ -3908,6 +3915,84 @@ describe('the orchestrator CLI', () => {
       expect(result.code).not.toBe(0)
       expect(result.stderr).toContain('SLAVEOFAI_BROKER_CHANNEL')
     }, 30_000)
+
+    it('the DAEMON serves the channel on its own pass and DRAINS the operation in flight on shutdown', async (): Promise<void> => {
+      // Fix round 1, review Important 3. Two properties in one run, because they are the same
+      // wiring: the pass is the daemon's own (nothing in `sweep` serves any more), and a shutdown
+      // waits for the child it started rather than abandoning a worker with a claim and no reply.
+      const stateDir = mkdtempSync(join(tmpdir(), 'slaveofai-cli-daemon-state-'))
+      const scriptDir = mkdtempSync(join(tmpdir(), 'slaveofai-cli-daemon-bin-'))
+      repos.push(stateDir, scriptDir)
+      const script = join(scriptDir, 'slow-deploy.sh')
+      writeFileSync(script, '#!/bin/sh\nsleep 2\nprintf "deployed-after-drain\\n"\n', { mode: 0o700 })
+
+      const run = await prisma.slaveRun.create({
+        data: {
+          taskId: fixture.taskId,
+          slaveId: fixture.slaveId,
+          kind: 'implementation',
+          status: 'working',
+          pid: process.pid,
+          runTokenHash: createHash('sha256').update(TOKEN).digest('hex'),
+        },
+      })
+      // The task holds this run, so nothing the daemon does dispatches a second one.
+      await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'running', activeRunId: run.id } })
+      await runCli(['permission', 'grant', '--slave', fixture.slaveId, '--kind', 'deploy_release'])
+      await runCli([
+        'credential', 'add', '--workspace', fixture.workspaceId,
+        '--name', 'deploy', '--kind', 'deploy_token', '--env-var', 'FAKE_DEPLOY_TOKEN',
+      ])
+      await runCli([
+        'broker', 'bind', '--workspace', fixture.workspaceId, '--op', 'deploy_release',
+        '--command', script, '--credential', 'deploy',
+      ])
+
+      const runDir = join(stateDir, 'runs', run.id)
+      mkdirSync(runDir, { recursive: true, mode: 0o700 })
+      const requestId = 'ef'.repeat(16)
+      writeFileSync(
+        brokerChannelPathFor(runDir),
+        `${JSON.stringify({ requestId, runId: run.id, runToken: TOKEN, op: 'deploy_release', params: { environment: 'staging', digest: 'a1b2c3d' } })}\n`,
+      )
+
+      const daemon = spawn('node', [CLI, 'daemon', '--workspace', fixture.workspaceId, '--period', '1000'], {
+        env: {
+          ...process.env,
+          DATABASE_URL: process.env['TEST_DATABASE_URL'] ?? '',
+          SLAVEOFAI_CLAUDE_BIN: 'node',
+          SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
+          SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
+          SLAVEOFAI_STATE_DIR: stateDir,
+          FAKE_DEPLOY_TOKEN: CREDENTIAL_PLACEHOLDER,
+        },
+      })
+      let stdout = ''
+      daemon.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString()
+      })
+      const exited = new Promise<number>((res) => daemon.on('close', (code) => res(code ?? 1)))
+      try {
+        // The claim file appears the instant the pass decides to run the operation -- the daemon
+        // is two seconds of `sleep` away from its reply, which is the window a shutdown must not
+        // drop.
+        await expect.poll(() => existsSync(brokerClaimPathFor(runDir, requestId)), { timeout: 20_000 }).toBe(true)
+        expect(existsSync(brokerReplyPathFor(runDir, requestId))).toBe(false)
+        daemon.kill('SIGTERM')
+        expect(await exited).toBe(0)
+      } finally {
+        daemon.kill('SIGKILL')
+      }
+
+      // The reply the worker was waiting on, written by a daemon that was already shutting down.
+      const reply = JSON.parse(readFileSync(brokerReplyPathFor(runDir, requestId), 'utf8')) as Record<string, unknown>
+      expect(reply).toMatchObject({ requestId, ok: true, exitCode: 0, reason: null })
+      expect(String(reply['output'])).toContain('deployed-after-drain')
+      expect(String(reply['output'])).not.toContain(CREDENTIAL_PLACEHOLDER)
+      // The pass has its own log line, so an operator sees the deploy in the daemon's output.
+      expect(stdout).toContain(requestId)
+      expect(stdout).toContain('daemon stopped')
+    }, 60_000)
 
     it('`broker run` refuses an op the manifest does not carry, without writing a line', async (): Promise<void> => {
       const runDir = makeRunDir()

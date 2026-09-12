@@ -1,8 +1,9 @@
 import { describeSync, drainModelCalls, syncSkillCatalog, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import type { WorkspaceId } from '@slave-of-ai/domain'
+import { BROKER_TIMEOUT_MS, type WorkspaceId } from '@slave-of-ai/domain'
 import { subscribeEvents, type EventSubscription } from '@slave-of-ai/events'
 import type { AdapterRegistry } from '@slave-of-ai/providers'
+import { serveBrokerRequests } from './broker.js'
 import { collectWorktrees } from './collect.js'
 import { reconcileOrphans, sweep } from './sweep.js'
 import { activePumpRunIds, drainPumps, tick, type TickDeps } from './tick.js'
@@ -16,6 +17,18 @@ import { activePumpRunIds, drainPumps, tick, type TickDeps } from './tick.js'
  * most once a day.
  */
 export const COLLECT_PERIOD_MS = 10 * 60 * 1000
+
+/**
+ * How often the broker looks for new requests on the live runs' channels (M52 R3, fix round 1).
+ *
+ * Half a second, and its OWN cadence rather than the tick's, because the two passes now answer to
+ * different clocks: a tick is a scheduling decision and once a second is plenty, while this is a
+ * worker sitting blocked in a tool call waiting for an answer -- and the client polls for its reply
+ * every 200 ms, so anything slower than this would be the dominant term in how long a brokered call
+ * appears to take. The pass itself is a `stat` per live run when nobody has asked for anything,
+ * which is nearly every pass.
+ */
+export const BROKER_PASS_MS = 500
 
 export interface DaemonDeps {
   readonly workspaceId: WorkspaceId
@@ -208,12 +221,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
         swept.strandedClaims.length > 0 ||
         swept.breakerSteered.length > 0 ||
         swept.breakerConstrained.length > 0 ||
-        swept.breakerStopped.length > 0 ||
-        // M52 R3, and the same argument as the breaker rungs directly above: a tick whose only
-        // action was running a deploy on a worker's behalf must leave a mark an operator can find.
-        // The ids are REQUEST ids -- what the reply file beside the run's channel is named -- so
-        // the line points at the artefact rather than only saying that something happened.
-        swept.brokerServed.length > 0
+        swept.breakerStopped.length > 0
       ) {
         process.stdout.write(`${JSON.stringify({ sweep: swept })}\n`)
       }
@@ -223,9 +231,41 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
     }
   })
 
+  /**
+   * The broker's pass (M52 R3), BESIDE the tick and never inside it (fix round 1, review
+   * Important 3).
+   *
+   * Its own coalescer and its own interval, so a brokered operation -- up to `BROKER_TIMEOUT_MS`,
+   * and this pass serves every pending request in turn -- cannot hold the tick's chain. The tick
+   * coalescer drops wake-ups while one run is in flight, so an inline broker call froze dispatch,
+   * the budget guardrail, the merge pass, the breaker beat, orphan reconciliation and the GLOBAL
+   * simulation pass along with the sweep it lived in.
+   *
+   * Coalesced rather than fired blind, for the tick's own reason: a pass that takes two minutes
+   * must produce exactly one more pass afterwards and not two hundred and forty. Two passes
+   * therefore never overlap here -- and `serveBrokerRequests` keeps its own in-flight set anyway,
+   * because a guard that depends on a caller's scheduling is not a guard.
+   *
+   * Its own log line, for the reason the sweep's rungs have one: a pass whose only action was
+   * running a deploy on a worker's behalf must leave a mark an operator can find. The ids are
+   * REQUEST ids -- what the reply file beside the run's channel is named.
+   */
+  const brokerPass = createCoalescer(async (): Promise<void> => {
+    try {
+      const served = await serveBrokerRequests({ workspaceId: deps.workspaceId })
+      if (served.length > 0) process.stdout.write(`${JSON.stringify({ broker: { served } })}\n`)
+    } catch (error) {
+      // `serveBrokerRequests` promises never to throw; this is the daemon-lifetime closure that
+      // makes the promise good at the boundary rather than asserting it, exactly as `runCollect`
+      // above does for a pass with the same promise.
+      process.stderr.write(`[broker] pass failed: ${error instanceof Error ? error.message : String(error)}\n`)
+    }
+  })
+
   let subscription: EventSubscription | null = null
   let timer: NodeJS.Timeout | null = null
   let collectTimer: NodeJS.Timeout | null = null
+  let brokerTimer: NodeJS.Timeout | null = null
 
   try {
     // The subscription is opened *before* the timer starts. Opened after, a failure here left an
@@ -242,7 +282,9 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
 
     timer = setInterval((): void => coalescer.wake(), deps.periodMs)
     collectTimer = setInterval((): void => void runCollect(), COLLECT_PERIOD_MS)
+    brokerTimer = setInterval((): void => brokerPass.wake(), BROKER_PASS_MS)
     coalescer.wake()
+    brokerPass.wake()
 
     await new Promise<void>((resolve) => {
       let shuttingDown = false
@@ -270,13 +312,30 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
     // to drain) -- unlike a tick, there is no partial state a shutdown could catch it mid-write.
     // The pass simply retries on the next cycle, or the next process's startup call.
     if (collectTimer !== null) clearInterval(collectTimer)
+    if (brokerTimer !== null) clearInterval(brokerTimer)
     coalescer.stop()
+    brokerPass.stop()
 
     // Ordered, and every one of them reached. The tick in flight goes first because it may still be
     // provisioning and about to spawn -- without this the daemon printed "daemon stopped", drained
     // an empty pump set, disconnected Prisma, and *then* an in-flight tick started a fresh slave
     // nothing was left to supervise.
     await coalescer.inFlight()
+    // M52 R3 (fix round 1): the brokered operation in flight, before Prisma goes. It is a real
+    // deploy with a real child process, and abandoning it would leave the worker with a claim file,
+    // no reply and no way to learn what happened -- the one outcome the claim protocol exists to
+    // make rare. Bounded by `BROKER_TIMEOUT_MS`, which is the longest the operation itself may run:
+    // past that the child has already been killed by its own deadline, so anything still pending
+    // here is stuck on something this process cannot wait out.
+    const drained = await Promise.race([
+      brokerPass.inFlight().then((): true => true),
+      new Promise<false>((settle) => setTimeout(() => settle(false), BROKER_TIMEOUT_MS).unref()),
+    ])
+    if (!drained) {
+      process.stderr.write(
+        `[broker] a brokered operation was still running after ${String(BROKER_TIMEOUT_MS)}ms; exiting without its reply\n`,
+      )
+    }
     try {
       await subscription?.close()
     } catch (error) {

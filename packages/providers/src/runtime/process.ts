@@ -269,6 +269,27 @@ export function brokerReplyPathFor(runDir: string, requestId: string): string {
 }
 
 /**
+ * Where the daemon records that it is ABOUT TO run one request (M52 R3, fix round 1).
+ *
+ * The reply file is the idempotency key, but it can only be written once the operation has
+ * returned -- so between the child exiting and the reply landing there is a window in which a dead
+ * daemon, or a reply that could not be written, leaves no evidence that anything ran. This file is
+ * created with `wx` BEFORE the operation starts, which closes it: a claim with no reply beside it
+ * is an operation whose OUTCOME IS UNKNOWN, and the one thing that must never happen to it is a
+ * second execution.
+ *
+ * Beside the reply and named from the same request id, in this one place, for
+ * {@link brokerReplyPathFor}'s reason: two spellings of one filename is a daemon that cannot find
+ * its own evidence.
+ */
+export function brokerClaimPathFor(runDir: string, requestId: string): string {
+  if (!/^[a-f0-9]{32}$/u.test(requestId)) {
+    throw new Error(`brokerClaimPathFor: bad request id ${JSON.stringify(requestId)}`)
+  }
+  return join(runDir, `broker-${requestId}.claim`)
+}
+
+/**
  * `sha256` hex of a run token (M52 R4). One definition, used by the writer (`writePermissionsFile`
  * and the four dispatch sites) and by the broker's authoriser -- the hook computes the same thing
  * in its own `node -e`, in six characters of JavaScript, because it may not import anything.

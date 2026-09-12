@@ -1,5 +1,6 @@
 export { noteTickRan, reconcileOrphans, resetTickObservation, sweep, type SweepDeps, type SweepReport } from './sweep.js'
 export {
+  BROKER_INTERNAL_ERROR_REASON,
   REQUEST_LINE_MAX_BYTES,
   brokerReplySchema,
   isBrokerRefusalReason,
