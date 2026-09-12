@@ -143,6 +143,9 @@ model Workspace {
   credentials            Credential[]
   /// M52 R3: what each brokered operation actually runs here.
   brokerBindings         BrokerBinding[]
+  /// M53 R3/R9: the facts this project's runs produced, and the staffing decisions taken about it.
+  evidence            EvidenceRecord[]
+  staffingPreferences StaffingPreference[]
 
   @@index([adoptedFromSimulationId])
 }
@@ -548,6 +551,26 @@ enum PermissionKind {
   deploy_release
 }
 
+/// M53 R3: how a run ENDED, as evidence sees it -- exactly the three terminal members of
+/// `RunStatus`, closed. The TypeScript twin is `EVIDENCE_OUTCOMES`
+/// (`packages/domain/src/evidence/outcome.ts`) and `enum-parity.test.ts` proves they are the same
+/// list. `stopped` is kept apart from `failed` on purpose: an operator's cancel is not the system
+/// failing, and folding the two would charge a worker's record for a person's decision.
+enum EvidenceOutcome {
+  succeeded
+  failed
+  stopped
+}
+
+/// M53 R6: where an evidence row's money figure came from -- M51's own three-way split, stored
+/// beside the figure so a table can print the word without re-deriving it per row. The TypeScript
+/// twin is `CostProvenance`, pinned through `COST_PROVENANCE_WORD` (plan erratum E14).
+enum EvidenceCostProvenance {
+  reported
+  estimated
+  unmeasured
+}
+
 /// M52 R3: what KIND of secret a `Credential` names. Never what it IS -- the value is not in this
 /// database and not in any event; the orchestrator reads `process.env[envVar]` at execution time
 /// and nothing else ever holds it.
@@ -908,6 +931,134 @@ model SlaveRun {
 
   @@index([taskId])
   @@index([slaveId, status])
+}
+
+/// M53 R3: ONE ROW PER CONCLUDED RUN, and the whole of what this organisation knows about how its
+/// workers actually perform.
+///
+/// A FACT TABLE and never a rollup: every rate any surface shows is a `GROUP BY` over this, because
+/// a rollup is a second copy of a derived number and something eventually has to keep the two in
+/// step. The identity is four dimensions -- (`profileKey`, `model`, `repositoryKey`, `domains`) --
+/// and `workspaceId` rides beside them as a COLUMN rather than a dimension, so every fact can be
+/// traced back to the project that produced it without the project becoming part of the question.
+///
+/// APPEND-ONLY, in three separate senses, each enforced by `recordRunEvidence` and none by a
+/// trigger: a row is never deleted, its dimension keys and run-local measurements are never
+/// rewritten to a different value, and a judgement column moves from null to a verdict exactly once
+/// and never back.
+///
+/// ONE RELATION, and it is to `Workspace` (plan erratum E4). There is deliberately no foreign key
+/// to `SlaveRun`, `Slave` or `Task`: evidence must OUTLIVE all three -- `profileName` is a snapshot
+/// for exactly that reason -- and a cascade from any of them would destroy the record the first
+/// time an operator deleted a worker. The workspace relation is not a lifecycle rule (nothing in
+/// this product deletes a `Workspace`); it is what makes `db:seed`'s `TRUNCATE ... CASCADE` reach
+/// this table.
+model EvidenceRecord {
+  id          String @id @default(uuid())
+  /// The run this fact is ABOUT. `@unique` is the whole idempotence story: a sweep racing a pump to
+  /// conclude one run cannot make two rows, and R7's backfill upserts on it.
+  runId       String @unique
+  workspaceId String
+  slaveId     String
+  /// Null for a `planning` run (M8b), which has no task and counts toward `general`.
+  taskId      String?
+  /// R1: `template:<SlaveTemplate.id>` for a hired worker, `slave:<Slave.id>` for a hand-made one.
+  /// Never null -- there is always a profile.
+  profileKey  String
+  /// The template's or the worker's NAME as it read at write time. One column beyond the four
+  /// dimensions, and the price of "labels never keys": `hiredFromTemplateId` is `onDelete: SetNull`,
+  /// so a deleted template would otherwise strand a key pointing at nothing, and a surface must
+  /// print a word without a join.
+  profileName String
+  /// `SlaveRun.model` -- the SPAWN-TIME snapshot, never re-derived from the profile chain, because a
+  /// resume replays `checkpoint.model` verbatim and the question is what this run actually used.
+  /// NULLABLE, and that is the one asymmetry with the profile: a pre-M51 run recorded none, and
+  /// inventing a name for it would invent a fact. The by-model table prints the null group as
+  /// `Model not recorded`; the ranker skips it entirely.
+  model       String?
+  /// `Workspace.repoPath`, normalised and snapshotted, so two projects on one checkout share a
+  /// record and a later `repoPath` edit does not rewrite the past.
+  repositoryKey String
+  /// R2: every domain this run's task asked for, or the single reserved `general`. NEVER EMPTY, and
+  /// never one row per pair: a domain is a FILTER on the tables, never a group key -- a count under
+  /// a domain chip is "runs that touched this domain", and no total is ever computed by adding the
+  /// domains up.
+  domains     String[]
+  runKind     RunKind
+  /// R4: the number of `task.rework` events for this task below this run's own `run.started`, plus
+  /// one. DERIVED and never carried on an event -- no event gained an `attempt` field and `SlaveRun`
+  /// gained no `attempt` column, which M51 §3 already refused once.
+  attempt     Int
+  outcome     EvidenceOutcome
+  /// R4: the three JUDGEMENT columns. Null is "nobody has judged this yet" -- the `SlaveRun.costUsd`
+  /// nullability precedent, never a false `false`. A REVIEW run's row and a PLANNING run's row keep
+  /// all three null forever: a reviewer receives no verdict.
+  verifiedFirstPass Boolean?
+  reviewRejected    Boolean?
+  integrated        Boolean?
+  /// The `task.rework` events appended after this run started. 0 or 1 in today's pipeline; an Int
+  /// and not a Boolean because nothing guarantees one and a column that could silently be 2 must be
+  /// able to say so.
+  reworkCycles      Int @default(0)
+  /// R5: `run.pause_requested` + `run.resume_requested` + an OPERATOR's stop. Closed and bounded to
+  /// this run's own stream.
+  humanInterventions Int @default(0)
+  /// R5: the sweep concluded this run (one), plus every `task.unblocked` after it started. A breaker
+  /// de-escalation is NOT one of these -- M51 R2 made it silent on purpose.
+  recoveries        Int @default(0)
+  durationMs        Int?
+  /// R6: the reported figure when reported, the estimate when estimable, and NULL when neither --
+  /// never a zero standing in for a gap.
+  actualCostUsd     Float?
+  costProvenance    EvidenceCostProvenance
+  /// Set once, on INSERT, and never rewritten -- which is what makes the backfill's second pass
+  /// byte-equal to its first.
+  recordedAt        DateTime @default(now())
+  /// When the FIRST of the three judgement columns settled (plan erratum E1). Three columns settle
+  /// from three different moments, so one stamp cannot mean "the settle"; this one means "somebody
+  /// has judged this run at least once", and each column carries its own null-or-verdict.
+  settledAt         DateTime?
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  /// The ranker's read: `WHERE profileKey = ANY(...)`, grouped by the first three dimensions.
+  @@index([profileKey, model, repositoryKey])
+  @@index([workspaceId])
+  /// The domain facet's only possible index: a btree cannot answer an array containment predicate,
+  /// and containment is the only way `domains` is ever read. The FIRST `type:` index in this schema
+  /// (plan erratum E5) -- if Prisma rejects this form the index is not created at all, because an
+  /// index the schema cannot name breaks the milestone's own `migrate diff` proof.
+  @@index([domains(ops: ArrayOps)], type: Gin)
+}
+
+/// M53 R9: ONE decision per capability per project -- who should take this work, or on what model,
+/// or both ("Atlas, and on opus").
+///
+/// At least one of `templateId` / `model` is non-null; a row naming neither is refused by
+/// `setStaffingPreference` as `invalid_staffing_preference` rather than stored as a preference for
+/// nothing. `templateId` is a plain column and NOT a relation, the `CollaborationHint.capability`
+/// precedent: a preference must survive the deletion of a template it happens to name, and
+/// `rankCandidates` matching on an id nothing answers is simply a preference nobody satisfies.
+///
+/// `setBy` holds a `User.id`, exactly as `SlavePermission.grantedBy` does, and every visible surface
+/// resolves it to a username at its own boundary (M52 erratum E18).
+model StaffingPreference {
+  id          String   @id @default(uuid())
+  workspaceId String
+  /// A taxonomy key. A plain column for `CollaborationHint.capability`'s reason -- a preference must
+  /// survive a taxonomy row being renamed out from under it.
+  capability  String
+  templateId  String?
+  model       String?
+  setBy       String?
+  setAt       DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  /// One decision per capability per project. Its leading column is `workspaceId`, so the loader's
+  /// `WHERE "workspaceId" = $1` is served from this index and a second one would be a second write
+  /// on every preference change for no read.
+  @@unique([workspaceId, capability])
 }
 
 model Checkpoint {
@@ -1437,6 +1588,9 @@ enum EventType {
   /// M52 R5: a person granted, refused or revoked one operation for one worker. `to: null` is a
   /// REVOKE -- back to "never asked".
   permission_changed          @map("permission.changed")
+  /// M53 R9: a person said who -- or what model -- should take one capability on this project, or
+  /// took that decision back. `to: null` is the clear.
+  staffing_preference_changed @map("staffing.preference_changed")
 }
 
 model ExecutionEvent {

@@ -139,6 +139,10 @@ export const TYPES_BY_KIND = {
     // `slave.runtime_roles_changed` (plan decision D31) -- it carries no taskId, it is not a run
     // outcome, and an operator asking "what changed about this project" is who reads it.
     'permission.changed',
+    // M53 R9: who should take a capability is project CONFIGURATION, beside `org.changed` and
+    // `permission.changed` -- it carries no taskId, it is not a run outcome, and an operator asking
+    // "what changed about this project" is who reads it.
+    'staffing.preference_changed',
   ],
 } as const satisfies Record<ActivityKind, readonly DomainEventType[]>
 

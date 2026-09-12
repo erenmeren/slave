@@ -35,6 +35,10 @@ export const EVENT_PREFIX_LABEL: Readonly<Record<string, string>> = {
   // M52 R5: the same word the worker panel's group and the Settings matrix use, because it is the
   // same idea -- what a worker may do.
   'permission.*': 'Permissions',
+  // M53 R9: who should take which capability on this project. `Staffing` rather than `Preferences`,
+  // so `readableEventType` reads `Staffing · preference changed` as a sentence -- and because
+  // `Preferences` is a settings word and this family is a decision about people.
+  'staffing.*': 'Staffing',
 }
 
 export function eventPrefixLabel(prefix: string): string {

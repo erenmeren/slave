@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   CAPABILITY_KEY_PATTERN,
+  GENERAL_DOMAIN,
   capabilityLabel,
+  domainLabel,
   normaliseCapabilities,
   normaliseCapabilityText,
   projectRoles,
@@ -86,5 +88,34 @@ describe('CAPABILITY_KEY_PATTERN', () => {
     expect(CAPABILITY_KEY_PATTERN.test('Backend.API')).toBe(false)
     expect(CAPABILITY_KEY_PATTERN.test('backend')).toBe(false)
     expect(CAPABILITY_KEY_PATTERN.test('backend.api.design')).toBe(false)
+  })
+})
+
+describe('domainLabel (M53 R2/R12)', () => {
+  it('title-cases a plain domain segment', () => {
+    expect(domainLabel('backend')).toBe('Backend')
+    expect(domainLabel('frontend')).toBe('Frontend')
+    expect(domainLabel('security')).toBe('Security')
+  })
+
+  it('carries the small exception table, because "Qa" is not a word anybody writes', () => {
+    expect(domainLabel('qa')).toBe('QA')
+    expect(domainLabel('docs')).toBe('Docs')
+  })
+
+  it('names the reserved domain in words too -- a chip never reads `general`', () => {
+    expect(GENERAL_DOMAIN).toBe('general')
+    expect(domainLabel(GENERAL_DOMAIN)).toBe('General')
+  })
+
+  it('labels every domain the seeded taxonomy carries, so no chip on the page is a bare key', () => {
+    for (const domain of ['backend', 'data', 'database', 'design', 'docs', 'frontend', 'mobile', 'operations', 'planning', 'product', 'qa', 'review', 'security']) {
+      expect(domainLabel(domain), domain).toMatch(/^[A-Z]/u)
+    }
+  })
+
+  it('falls back to the raw segment for a domain this bundle has never heard of (the SITUATION_LABEL idiom)', () => {
+    expect(domainLabel('quantum')).toBe('Quantum')
+    expect(domainLabel('')).toBe('')
   })
 })

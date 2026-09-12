@@ -350,6 +350,20 @@ function titleFor(
       if (to === 'deny') return `stopped ${who} being able to ${what}`
       return `took back the decision about ${who} and ${what}`
     }
+    case 'staffing.preference_changed': {
+      const capabilityLabel = payload['capabilityLabel']
+      const what = typeof capabilityLabel === 'string' && capabilityLabel !== '' ? capabilityLabel.toLowerCase() : 'a capability'
+      const to = payload['to']
+      if (to === null) return `stopped asking for anybody in particular on ${what}`
+      const named = typeof to === 'object' && to !== null ? (to as { templateName?: unknown; model?: unknown }) : {}
+      const who =
+        typeof named.templateName === 'string' && named.templateName !== ''
+          ? named.templateName
+          : typeof named.model === 'string' && named.model !== ''
+            ? named.model
+            : 'somebody'
+      return `asked for ${who} on ${what}`
+    }
     default: {
       const title = payload['title']
       return typeof title === 'string' && title !== '' ? title : readableEventType(type)

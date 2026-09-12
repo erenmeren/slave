@@ -170,6 +170,29 @@ export function costProvenanceOf(row: CostRow): CostProvenance {
 }
 
 /**
+ * WHERE one run's figure came from, for a person (M51 R5, `docs/ia.md` rule 3).
+ *
+ * MOVED here from `apps/web/src/components/TaskDetailPanel.tsx:48` by M53 R6: the Evidence tab and
+ * the task panel now read one table, and two homes for one label is the exact shape M52 erratum E12
+ * refused for `resolveGrants`. A `Record<CostProvenance, string>` so a fourth provenance is a build
+ * error here rather than a table cell printing a raw member; the three words happen to read the
+ * same as the three keys -- they are English, not identifiers -- and the table exists so that stays
+ * a choice rather than an accident.
+ *
+ * It is also the only total value over {@link CostProvenance} in the tree, which is why
+ * `packages/db/test/integration/enum-parity.test.ts` pins the `EvidenceCostProvenance` Postgres
+ * enum against its keys (M53 plan erratum E14).
+ *
+ * `provenanceWordFor` does NOT move: "estimated so far" is a fact about a LIVE run, and the
+ * Evidence tab has none -- every row on it is a concluded run.
+ */
+export const COST_PROVENANCE_WORD: Record<CostProvenance, string> = {
+  reported: 'reported',
+  estimated: 'estimated',
+  unmeasured: 'unmeasured',
+}
+
+/**
  * What a CONCLUDED run nobody measured is worth as an UPPER BOUND, in USD (M51 R5).
  *
  * The same one dollar `SUPERVISOR_PER_CALL_CAP_USD` charges an unmeasured Supervisor call, and

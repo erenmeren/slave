@@ -177,6 +177,13 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     // A `User.id`, which is what `setSlavePermission` writes -- never a username.
     by: 'u-9f3c',
   },
+  'staffing.preference_changed': {
+    capability: 'backend.services',
+    capabilityLabel: 'Services',
+    from: null,
+    to: { templateId: 't1', templateName: 'Backend Developer', model: 'opus' },
+    by: 'u1',
+  },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {
@@ -291,6 +298,16 @@ describe('targeted card bodies', () => {
     // the id stays in `title`.
     expect(screen.getByTestId('permission-changed-by').textContent).toBe(' \u00b7 by ada')
     expect(screen.getByTestId('permission-changed-by').getAttribute('title')).toBe('u-9f3c')
+  })
+
+  it('prints the capability label and the template name, never their keys (M53 R9)', () => {
+    const Card = ACTIVITY_CARDS['staffing.preference_changed']
+    render(<Card event={fixtureFor('staffing.preference_changed')} {...CARD_PROPS} />)
+    const text = screen.getByTestId('staffing-preference-text')
+    expect(text.textContent).toContain('Services')
+    expect(text.textContent).toContain('Backend Developer on opus')
+    expect(text.textContent).not.toContain('backend.services')
+    expect(text.getAttribute('data-capability')).toBe('backend.services')
   })
 
   it('permission.changed says a person is no longer on record rather than printing their id', () => {

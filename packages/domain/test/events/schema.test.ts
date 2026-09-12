@@ -1264,3 +1264,77 @@ describe('M52: the broker and the permission change (56th, 57th, 58th)', () => {
     expect(parsed.type).toBe('permission.changed')
   })
 })
+
+describe('staffing.preference_changed (M53 R9)', () => {
+  const base = { seq: 1, ts: new Date().toISOString(), workspaceId: 'w1', actor: 'human' as const }
+
+  it('accepts a preference set from nothing to a template and a model', () => {
+    const parsed = parseExecutionEvent({
+      ...base,
+      type: 'staffing.preference_changed',
+      payload: {
+        capability: 'backend.services',
+        capabilityLabel: 'Services',
+        from: null,
+        to: { templateId: 't1', templateName: 'Backend Developer', model: 'opus' },
+        by: 'u1',
+      },
+    })
+    expect(parsed.ok).toBe(true)
+  })
+
+  it('accepts a CLEAR -- `to: null` is back to "nobody has asked for anybody"', () => {
+    const parsed = parseExecutionEvent({
+      ...base,
+      type: 'staffing.preference_changed',
+      payload: {
+        capability: 'backend.services',
+        capabilityLabel: 'Services',
+        from: { templateId: 't1', templateName: 'Backend Developer', model: null },
+        to: null,
+        by: null,
+      },
+    })
+    expect(parsed.ok).toBe(true)
+  })
+
+  it('carries the LABEL beside the key, so a card prints a word without a join', () => {
+    const parsed = parseExecutionEvent({
+      ...base,
+      type: 'staffing.preference_changed',
+      payload: { capability: 'backend.services', from: null, to: { templateId: 't1', templateName: 'X', model: null }, by: null },
+    })
+    expect(parsed.ok).toBe(false)
+  })
+
+  it('refuses an unknown key -- `.strict()`, so a debug field can never reach this row', () => {
+    const parsed = parseExecutionEvent({
+      ...base,
+      type: 'staffing.preference_changed',
+      payload: {
+        capability: 'backend.services',
+        capabilityLabel: 'Services',
+        from: null,
+        to: null,
+        by: null,
+        why: 'because',
+      },
+    })
+    expect(parsed.ok).toBe(false)
+  })
+
+  it('allows a side that names a MODEL and no template -- "on opus, whoever it is"', () => {
+    const parsed = parseExecutionEvent({
+      ...base,
+      type: 'staffing.preference_changed',
+      payload: {
+        capability: 'backend.services',
+        capabilityLabel: 'Services',
+        from: null,
+        to: { templateId: null, templateName: null, model: 'opus' },
+        by: 'u1',
+      },
+    })
+    expect(parsed.ok).toBe(true)
+  })
+})

@@ -1,7 +1,9 @@
 import {
   BREAKER_LEVELS,
+  COST_PROVENANCE_WORD,
   DECIDERS,
   DECISION_STATUSES,
+  EVIDENCE_OUTCOMES,
   MEMORY_SCOPES,
   MEMORY_SOURCE_KINDS,
   MEMORY_STATUSES,
@@ -136,5 +138,18 @@ describe('database enums match the domain unions', () => {
   it('EventType matches the live Zod union directly, independent of the hand-maintained map', async () => {
     const schemaTypes = executionEventSchema.options.map((option) => option.shape.type.value).sort()
     expect(await enumValues('EventType')).toEqual(schemaTypes)
+  })
+
+  // M53 R3: the two enums the fact table is typed on. The first is derived rather than spelled --
+  // `EVIDENCE_OUTCOMES` is RunStatus minus the non-terminal statuses, and asserting that against
+  // Postgres is what stops a tenth `RunStatus` member quietly becoming an outcome nobody decided on.
+  it('EvidenceOutcome matches EVIDENCE_OUTCOMES, member for member', async () => {
+    expect(await enumValues('EvidenceOutcome')).toEqual([...EVIDENCE_OUTCOMES].sort())
+  })
+
+  // M53 plan erratum E14: `CostProvenance` is a TYPE, so the only total value over it in the tree
+  // is `COST_PROVENANCE_WORD` -- which R6 moved into the domain beside the type for exactly this.
+  it('EvidenceCostProvenance matches CostProvenance member for member, via the one label table', async () => {
+    expect(await enumValues('EvidenceCostProvenance')).toEqual(Object.keys(COST_PROVENANCE_WORD).sort())
   })
 })

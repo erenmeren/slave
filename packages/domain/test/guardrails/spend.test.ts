@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  COST_PROVENANCE_WORD,
   RUN_UNMEASURED_CAP_USD,
   costProvenanceOf,
   sumSpend,
@@ -158,5 +159,23 @@ describe('costProvenanceOf', () => {
     expect(costProvenanceOf({ ...ROW, costUsd: 0.01, tokensIn: 9e6, tokensOut: 9e6, model: 'claude-fable-5-1' })).toBe(
       'reported',
     )
+  })
+})
+
+describe('COST_PROVENANCE_WORD (M53 R6)', () => {
+  it('gives every provenance a word, so no money surface prints the key', () => {
+    expect(COST_PROVENANCE_WORD).toEqual({
+      reported: 'reported',
+      estimated: 'estimated',
+      unmeasured: 'unmeasured',
+    })
+  })
+
+  it('is total over what `costProvenanceOf` can answer -- the only value list of that type there is', () => {
+    const measured = costProvenanceOf({ costUsd: 1, provider: 'claude_code', status: 'succeeded', tokensIn: null, tokensOut: null, model: null })
+    const unmeasured = costProvenanceOf({ costUsd: null, provider: 'cursor', status: 'succeeded', tokensIn: null, tokensOut: null, model: null })
+    for (const provenance of [measured, unmeasured]) {
+      expect(COST_PROVENANCE_WORD[provenance], provenance).toBeTruthy()
+    }
   })
 })

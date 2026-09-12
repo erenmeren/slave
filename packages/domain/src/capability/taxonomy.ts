@@ -127,3 +127,37 @@ export function capabilityIndex(taxonomy: readonly CapabilityRecord[]): Readonly
 export function capabilityLabel(key: CapabilityKey, taxonomy: readonly CapabilityRecord[]): string {
   return capabilityIndex(taxonomy).get(key)?.label ?? key
 }
+
+/**
+ * The ONE domain that is not a `Capability.domain` value (M53 R2).
+ *
+ * A run whose task required no capability, required only keys the taxonomy does not have, or had no
+ * task at all (a `planning` run, M8b) counts toward this. Declared as a constant beside the label
+ * table rather than spelled as a string in five places, so nothing has to guess whether the word is
+ * `general`, `other` or `unknown` -- and so a taxonomy that one day seeds a real `general` domain
+ * is a collision somebody can see rather than a silent merge.
+ */
+export const GENERAL_DOMAIN = 'general'
+
+/**
+ * The words for a domain, where title-casing the segment is not enough (M53 R12, `docs/ia.md`
+ * rule 3).
+ *
+ * Deliberately SMALL: only the segments whose ordinary English spelling is not their title case.
+ * Every other domain falls through to `segment[0].toUpperCase() + rest`, which is what keeps this
+ * table from becoming a second taxonomy that has to be kept in step with `packages/db/src/
+ * capabilities.ts`. A domain this bundle has never heard of is title-cased and shown, the
+ * `SITUATION_LABEL` fallback idiom (M44 R5): the honest thing to show is the word itself.
+ */
+export const DOMAIN_LABEL: Readonly<Record<string, string>> = {
+  qa: 'QA',
+  docs: 'Docs',
+}
+
+/** What a person reads instead of a domain key. Never empty unless the input is. */
+export function domainLabel(domain: string): string {
+  const exception = DOMAIN_LABEL[domain]
+  if (exception !== undefined) return exception
+  if (domain === '') return ''
+  return domain.charAt(0).toUpperCase() + domain.slice(1)
+}

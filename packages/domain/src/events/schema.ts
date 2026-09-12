@@ -32,6 +32,16 @@ const runbookAdherence = z.object({
   stagesMissing: z.array(z.string().min(1)),
 })
 
+/** One side of a staffing preference change (M53 R9). Null is "nobody has asked for anybody". */
+const staffingPreferenceSide = z
+  .object({
+    templateId: z.string().min(1).nullable(),
+    templateName: z.string().min(1).nullable(),
+    model: z.string().min(1).nullable(),
+  })
+  .strict()
+  .nullable()
+
 /** One member per event type. The payload shape is bound to the type by construction. */
 export const executionEventSchema = z.discriminatedUnion('type', [
   // M40 t1: `goalVersion` is the plan version the task was derived from, `null` for a hand-made
@@ -688,6 +698,38 @@ export const executionEventSchema = z.discriminatedUnion('type', [
         kindLabel: z.string().min(1),
         from: z.enum(['allow', 'deny']).nullable(),
         to: z.enum(['allow', 'deny']).nullable(),
+        by: z.string().min(1).nullable(),
+      })
+      .strict(),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('staffing.preference_changed'),
+    /**
+     * M53 R9: a person said who -- or what model -- should take one capability on this project, or
+     * took that decision back.
+     *
+     * A new type rather than `org.changed { entity: 'staffing' }`, for `permission.changed`'s own
+     * reason (M52 R5): `org.changed`'s `field` union is spelled in four places (M50 erratum E11)
+     * and its payload has no room for the from/to/by triple this card has to print. And a staffing
+     * preference is not a roster change: nobody was hired, nobody was renamed, and nothing about
+     * who is here moved.
+     *
+     * `from` and `to` are each a `{ templateId, templateName, model }` triple or `null`, and `null`
+     * on `to` is a CLEAR: back to "nobody has asked for anybody", the state the table expresses by
+     * having no row. `templateName` and `capabilityLabel` ride along for `permission.changed`'s
+     * reason: a card must print words without a join, and a renamed or deleted template must not
+     * rewrite history.
+     *
+     * `.strict()` on both the payload and the two sides: this row is newborn, nothing has ever
+     * written another key into it, and a permissive object is how a debug field becomes a column.
+     */
+    payload: z
+      .object({
+        capability: z.string().min(1),
+        capabilityLabel: z.string().min(1),
+        from: staffingPreferenceSide,
+        to: staffingPreferenceSide,
         by: z.string().min(1).nullable(),
       })
       .strict(),

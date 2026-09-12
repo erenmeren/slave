@@ -1329,6 +1329,50 @@ function PermissionChangedCard(props: ActivityCardProps): ReactElement {
 }
 
 /**
+ * M53 R9: a person decided who -- or what model -- should take one capability on this project.
+ *
+ * Registered HERE rather than in the web task, because `ACTIVITY_CARDS`' `satisfies` is exhaustive
+ * over `DomainEventType` and a type with no card fails the BUILD (plan erratum E13).
+ *
+ * The card prints the capability's LABEL and the template's NAME, both off the payload -- a row read
+ * a year from now says what it was about in the vocabulary of the day it was written, and neither
+ * needs a join. The keys stay in `title` and on `data-capability` (`docs/ia.md` rule 3).
+ */
+function StaffingPreferenceChangedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    capability: string
+    capabilityLabel: string
+    from: { templateId: string | null; templateName: string | null; model: string | null } | null
+    to: { templateId: string | null; templateName: string | null; model: string | null } | null
+    by: string | null
+  }
+  // "Atlas", "opus", "Atlas on opus", or the word for a side that is not there at all.
+  const sideOf = (side: typeof payload.to): string => {
+    if (side === null) return 'nobody in particular'
+    if (side.templateName !== null && side.model !== null) return `${side.templateName} on ${side.model}`
+    return side.templateName ?? side.model ?? 'nobody in particular'
+  }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone={payload.to === null ? 'idle' : 'working'} label="staffing preference">
+        <span
+          data-testid="staffing-preference-text"
+          title={payload.capability}
+          data-capability={payload.capability}
+        >
+          {`${payload.capabilityLabel} · ${sideOf(payload.from)} → ${sideOf(payload.to)}`}
+        </span>
+        {payload.by !== null && (
+          <span data-testid="staffing-preference-by" title={payload.by}>
+            {` · by ${props.userName ?? 'a person no longer on record'}`}
+          </span>
+        )}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+/**
  * One card component per `DomainEventType`. `satisfies` (not a type annotation) is load-bearing:
  * it keeps each entry's own component type while still failing the build the moment a type is
  * missing, doubled, or misspelled — the same exhaustiveness idiom `EVENT_TYPE_BY_DOMAIN_TYPE`
@@ -1393,4 +1437,5 @@ export const ACTIVITY_CARDS = {
   'broker.executed': BrokerExecutedCard,
   'broker.refused': BrokerRefusedCard,
   'permission.changed': PermissionChangedCard,
+  'staffing.preference_changed': StaffingPreferenceChangedCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>

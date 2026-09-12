@@ -15,8 +15,15 @@ describe('LANE_BY_TYPE', () => {
     expect(Object.keys(LANE_BY_TYPE).sort()).toEqual(Object.keys(EVENT_TYPE_BY_DOMAIN_TYPE).sort())
   })
 
-  it('lanes every event type -- 58 as of M52', () => {
-    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(58)
+  it('lanes every event type -- 59 as of M53', () => {
+    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(59)
+  })
+
+  it('puts a staffing preference on NO lane -- project configuration is not the organisation story', () => {
+    // The `org.changed` precedent (`timeline.ts:132`): an operator changed how this project will be
+    // staffed, which belongs on the Activity page and not in the six-lane narrative of what the
+    // project decided and verified.
+    expect(LANE_BY_TYPE['staffing.preference_changed']).toBeNull()
   })
 
   it('puts both broker events and the permission change on the work lane', () => {

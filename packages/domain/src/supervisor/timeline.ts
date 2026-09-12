@@ -130,6 +130,10 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   'slave.runtime_roles_changed': null,
   'guardrail.tripped': null,
   'org.changed': null,
+  // M53 R9: what a person asked for about STAFFING is project configuration, beside `org.changed`
+  // -- the Activity page keeps it, and the six-lane timeline is the story of what the project
+  // decided and verified, which a preference is not part of.
+  'staffing.preference_changed': null,
   'workspace.company_assigned': null,
   'workspace.settings_changed': null,
   'workspace.created': null,

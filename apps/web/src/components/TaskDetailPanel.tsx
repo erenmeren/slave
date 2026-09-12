@@ -2,10 +2,10 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
+  COST_PROVENANCE_WORD,
   NON_TERMINAL_RUN_STATUSES,
   costProvenanceOf,
   estimateCostUsd,
-  type CostProvenance,
   type Manifest,
 } from '@slave-of-ai/domain'
 import { onUnauthorized } from '../lib/onUnauthorized'
@@ -35,20 +35,6 @@ interface OpenRunContext {
   readonly runId: string
   readonly prompt: string
   readonly manifest: Manifest
-}
-
-/**
- * WHERE one run's figure came from, for a person (M51 R5, `docs/ia.md` rule 3).
- *
- * A `Record<CostProvenance, string>` so a fourth provenance is a build error here rather than a
- * card printing a raw member. The three words happen to read the same as the three keys -- they
- * are English, not identifiers -- and the table exists so that stays a choice rather than an
- * accident.
- */
-const COST_PROVENANCE_WORD: Record<CostProvenance, string> = {
-  reported: 'reported',
-  estimated: 'estimated',
-  unmeasured: 'unmeasured',
 }
 
 /**

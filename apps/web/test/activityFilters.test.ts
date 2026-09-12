@@ -69,6 +69,8 @@ describe('parseActivityFilters', () => {
       'slave.profile_changed',
       'slave.released',
       'slave.runtime_roles_changed',
+      // M53 R9: who should take a capability is project configuration too, for the same reason.
+      'staffing.preference_changed',
       'supervisor.applied',
       'supervisor.decided',
       'supervisor.failed',
