@@ -2,8 +2,10 @@ import { prisma } from '@slave-of-ai/db/client'
 import {
   NON_TERMINAL_RUN_STATUSES,
   TERMINAL,
+  parseExternalOrigin,
   parseHandoffContract,
   parseRunbookStages,
+  type ExternalOrigin,
   type HandoffContract,
   type RunStatus,
   type TaskStatus,
@@ -115,6 +117,15 @@ export interface TaskBoardItem {
    */
   readonly goalVersion: number | null
   /**
+   * M54 R9: where the requirement that produced this task came from, or null for a task derived
+   * from a version a person set (which is every task before this milestone).
+   *
+   * Read through `Task.goalVersion`, which the row already carries -- `Task` gains no column (R5).
+   * Rendered BESIDE the `goal v<n>` stamp and never instead of it: the stamp says WHICH
+   * requirement, this says WHO ASKED for it, and they are two different facts.
+   */
+  readonly origin: ExternalOrigin | null
+  /**
    * M35 t2: null until the task's work actually reached the base branch -- `merge.ts`'s
    * real-merge path stamps it, its `!autoMerge` path (done, no merge, branch left for a human)
    * leaves it null. ISO string, same convention as every other timestamp on this DTO.
@@ -222,6 +233,25 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
     }
   }
 
+  // M54 R9: one read over the DISTINCT non-null stamps already on the rows this function loaded --
+  // never one query per task, and no query at all for a board of hand-made ones. The same
+  // "bound it by what is already in hand" rule `waitingFor` above follows.
+  const stamped = [...new Set(tasks.map((task) => task.goalVersion).filter((version): version is number => version !== null))]
+  const originByVersion = new Map<number, ExternalOrigin>()
+  if (stamped.length > 0) {
+    const versions = await prisma.goalVersion.findMany({
+      where: { workspaceId, version: { in: stamped } },
+      select: { version: true, origin: true },
+    })
+    for (const row of versions) {
+      // PARSED, never cast: a hand-edited column, or one written by a future version with a field
+      // this build does not know, reads back as "no origin" -- which renders as nothing at all,
+      // rather than throwing inside a board render (`handoffOf`'s own rule, two functions down).
+      const origin = parseExternalOrigin(row.origin)
+      if (origin !== null) originByVersion.set(row.version, origin)
+    }
+  }
+
   // ONE parse for the whole board: `parseRunbookStages` validates a JSON column, and a task list
   // of thirty would otherwise re-validate it thirty times. A column that will not parse leaves the
   // map empty, which reads as "no title known" -- the same as no runbook at all.
@@ -248,6 +278,7 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         branch: task.branch,
         lastRejectionReason: task.lastRejectionReason,
         goalVersion: task.goalVersion,
+        origin: task.goalVersion === null ? null : (originByVersion.get(task.goalVersion) ?? null),
         integratedAt: task.integratedAt?.toISOString() ?? null,
         // M23 B4 (controller ruling): a terminal task with a worktree still standing on at least
         // one of its runs. Computed here, not in the panel -- the panel never imports `TERMINAL`

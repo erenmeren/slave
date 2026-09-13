@@ -33,6 +33,8 @@ const task = (over: Partial<TaskBoardItem>): TaskBoardItem => ({
   branch: 'feature/add-the-thing',
   lastRejectionReason: null,
   goalVersion: null,
+  // M54 R9: required on the DTO, and null MEANS a person set the requirement this task came from.
+  origin: null,
   runs: [],
   collectable: false,
   artifacts: [],
@@ -182,6 +184,36 @@ describe('TaskDetailPanel — the goal stamp, the stale badge and a cancellation
     render(<TaskDetailPanel workspaceGoalVersion={2} workspaceId="w1" task={task({ goalVersion: null })} onClose={() => {}} />)
     expect(screen.getByTestId('task-panel-goal-version').textContent).toBe('unstamped')
     expect(screen.queryByTestId('task-panel-stale')).toBeNull()
+  })
+
+  // M54 R9: the panel repeats the board's origin sentence, for `task-stage-chip`'s reason -- the
+  // panel is where a person READS a task rather than scans a board, and "where did this come from"
+  // is the first question an externally-originated task provokes.
+  it('repeats the origin sentence BESIDE the goal stamp, and keeps the raw source off the page', () => {
+    render(
+      <TaskDetailPanel
+        workspaceGoalVersion={2}
+        workspaceId="w1"
+        task={task({
+          goalVersion: 2,
+          origin: { source: 'github', repository: 'acme/checkout', ref: '#412', url: 'https://github.com/acme/checkout/issues/412' },
+        })}
+        onClose={() => {}}
+      />,
+    )
+
+    expect(screen.getByTestId('task-panel-goal-version').textContent).toBe('goal v2')
+    const chip = screen.getByTestId('task-panel-origin')
+    expect(chip.textContent).toBe('from GitHub · acme/checkout#412')
+    expect(chip.getAttribute('data-external-source')).toBe('github')
+    expect(chip.getAttribute('title')).toBe('acme/checkout')
+    expect(chip.textContent).not.toContain('github')
+  })
+
+  it('says nothing at all for a task nobody outside asked for', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={2} workspaceId="w1" task={task({ goalVersion: 2 })} onClose={() => {}} />)
+    expect(screen.getByTestId('task-panel-goal-version').textContent).toBe('goal v2')
+    expect(screen.queryByTestId('task-panel-origin')).toBeNull()
   })
 
   it('labels a cancelled task\'s reason as a cancellation, not as a rejection', () => {

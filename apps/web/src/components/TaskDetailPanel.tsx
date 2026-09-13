@@ -6,6 +6,7 @@ import {
   NON_TERMINAL_RUN_STATUSES,
   costProvenanceOf,
   estimateCostUsd,
+  originLabel,
   type Manifest,
 } from '@slave-of-ai/domain'
 import { onUnauthorized } from '../lib/onUnauthorized'
@@ -271,6 +272,16 @@ export function TaskDetailPanel({
             {/* Which requirement produced this task (M40 §1) -- "unstamped" for one a human made,
               * which was derived from no goal version at all. */}
             <span data-testid="task-panel-goal-version" className="text-text-3">{goalStampText(task.goalVersion)}</span>
+            {/* M54 R9: repeated here for `task-stage-chip`'s reason -- the panel is where a person
+              * reads a task rather than scans a board, and "where did this come from" is the first
+              * question an externally-originated task provokes. Same structured sentence, same raw
+              * source in `data-external-source` and repository in `title`, and the same silence
+              * for a task no delivery asked for. */}
+            {task.origin !== null && (
+              <span data-testid="task-panel-origin" data-external-source={task.origin.source} title={task.origin.repository} className="text-text-3">
+                {originLabel(task.origin)}
+              </span>
+            )}
             {isStale(task.goalVersion, workspaceGoalVersion) && (
               <span data-testid="task-panel-stale" className="uppercase tracking-wide text-tone-waiting">stale</span>
             )}

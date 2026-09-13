@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { originLabel, parseExternalOrigin } from '@slave-of-ai/domain'
 import type { GoalVersionView } from '../../server/goal'
 import { errorMessage } from '../../lib/postControl'
 import { onUnauthorized } from '../../lib/onUnauthorized'
@@ -108,46 +109,74 @@ export function GoalHistory({ workspaceId }: { readonly workspaceId: string }): 
             <ul className="flex flex-col gap-2">
               {/* Newest first, as the verb returns them: each row's diff is against the row BELOW
                 * it, which is the version that row replaced. */}
-              {entries.map((entry) => (
-                <li
-                  key={entry.version}
-                  data-testid="goal-history-entry"
-                  className="rounded border border-line p-2 text-xs text-text-2"
-                >
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span data-testid="goal-history-version" className="font-mono text-[10px] text-text-3">
-                      v{entry.version}
-                    </span>
-                    <span data-testid="goal-history-at" className="font-mono text-[10px] text-text-3">
-                      {entry.createdAt.slice(0, 19).replace('T', ' ')}
-                    </span>
-                  </div>
-                  <p data-testid="goal-history-text" className="mt-1 whitespace-pre-wrap text-text-2">
-                    {entry.text}
-                  </p>
-                  {entry.diff === null ? (
-                    // v1 is the requirement's beginning, not an edit of anything.
-                    <SectionLabel>the first version</SectionLabel>
-                  ) : (
-                    <ul className="mt-1 flex flex-col font-mono text-[10.5px]">
-                      {entry.diff.removed.map((line, index) => (
-                        <li
-                          key={`removed-${String(index)}`}
-                          data-testid="goal-diff-removed"
-                          className="text-tone-blocked"
+              {entries.map((entry) => {
+                // M54 R9: the version a delivery produced says so, on the row it belongs to.
+                //
+                // PARSED here rather than read straight off the view, for the reason `isGoalHistory`
+                // above gives for existing at all: this component fetches its own JSON and
+                // deliberately does not re-validate every field the route built, so a row this page
+                // is one deploy out of step with -- one with no `origin` key, or one whose `Json`
+                // column a hand edit broke -- must read as "nobody outside asked" rather than print
+                // `undefined` into the sentence. `parseExternalOrigin` answers null for all three,
+                // which is exactly what `listGoalVersions` already answers server-side for the
+                // column itself.
+                const origin = parseExternalOrigin(entry.origin)
+                return (
+                  <li
+                    key={entry.version}
+                    data-testid="goal-history-entry"
+                    className="rounded border border-line p-2 text-xs text-text-2"
+                  >
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span data-testid="goal-history-version" className="font-mono text-[10px] text-text-3">
+                        v{entry.version}
+                      </span>
+                      {/* The sentence is built from the origin's STRUCTURED fields -- source label,
+                        * repository, ref -- and never from the external title or body, which are
+                        * another party's text and live only inside the fence in the version's own
+                        * text below. The raw `github` stays in `data-external-source` and the
+                        * repository in `title` (`docs/ia.md` rule 3). */}
+                      {origin !== null && (
+                        <span
+                          data-testid="goal-history-origin"
+                          data-external-source={origin.source}
+                          title={origin.repository}
+                          className="font-mono text-[10px] text-text-3"
                         >
-                          - {line}
-                        </li>
-                      ))}
-                      {entry.diff.added.map((line, index) => (
-                        <li key={`added-${String(index)}`} data-testid="goal-diff-added" className="text-tone-done">
-                          + {line}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </li>
-              ))}
+                          {originLabel(origin)}
+                        </span>
+                      )}
+                      <span data-testid="goal-history-at" className="font-mono text-[10px] text-text-3">
+                        {entry.createdAt.slice(0, 19).replace('T', ' ')}
+                      </span>
+                    </div>
+                    <p data-testid="goal-history-text" className="mt-1 whitespace-pre-wrap text-text-2">
+                      {entry.text}
+                    </p>
+                    {entry.diff === null ? (
+                      // v1 is the requirement's beginning, not an edit of anything.
+                      <SectionLabel>the first version</SectionLabel>
+                    ) : (
+                      <ul className="mt-1 flex flex-col font-mono text-[10.5px]">
+                        {entry.diff.removed.map((line, index) => (
+                          <li
+                            key={`removed-${String(index)}`}
+                            data-testid="goal-diff-removed"
+                            className="text-tone-blocked"
+                          >
+                            - {line}
+                          </li>
+                        ))}
+                        {entry.diff.added.map((line, index) => (
+                          <li key={`added-${String(index)}`} data-testid="goal-diff-added" className="text-tone-done">
+                            + {line}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
           )}
         </div>

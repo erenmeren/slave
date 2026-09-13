@@ -21,6 +21,10 @@ export function taskItem(over: Partial<TaskBoardItem>): TaskBoardItem {
     branch: 'feature/add-the-thing',
     lastRejectionReason: null,
     goalVersion: null,
+    // M54 R9: `TaskBoardItem.origin` is REQUIRED, and null MEANS "a person set the version this
+    // task came from" -- which is every task before this milestone. A case about an
+    // externally-originated one passes an `ExternalOrigin` through `over`.
+    origin: null,
     integratedAt: null,
     runs: [],
     collectable: false,

@@ -25,6 +25,8 @@ const SNAPSHOT: TasksSnapshot = {
       branch: 'feature/add-the-thing',
       lastRejectionReason: null,
       goalVersion: null,
+      // M54 R9: required on the DTO, and null MEANS a person set the requirement this task came from.
+      origin: null,
       collectable: false,
       artifacts: [],
       integratedAt: null,

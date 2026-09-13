@@ -1,5 +1,5 @@
 import { TASK_STATUSES } from '@slave-of-ai/db'
-import type { TaskStatus } from '@slave-of-ai/domain'
+import { originLabel, type TaskStatus } from '@slave-of-ai/domain'
 import { cardStateForTask, CARD_STATE_TONE, taskStatusWord, toneForTaskStatus } from '../lib/tones'
 import type { TaskBoardItem } from '../server/tasks'
 import { AvatarTile } from './ui/AvatarTile'
@@ -115,6 +115,24 @@ export function TaskCard({
         <span data-testid="task-goal-version" className="truncate font-mono text-[9.5px] text-text-3">
           {goalStampText(task.goalVersion)}
         </span>
+        {/* M54 R9: WHO asked for that requirement, beside WHICH requirement it was -- two different
+          * facts, and the stamp is the one that was already here. Rendered only when a version
+          * carries an origin, so a project nobody has connected looks exactly as it did. The raw
+          * source stays on `data-external-source` and the repository in `title` (`docs/ia.md`
+          * rule 3); the sentence itself is built from the origin's STRUCTURED fields by
+          * `originLabel`, never from the external title or body, and it carries neither the
+          * delivery url nor the delivery id (R9 -- a correlation id is an operator's, not a
+          * page's). */}
+        {task.origin !== null && (
+          <span
+            data-testid="task-origin"
+            data-external-source={task.origin.source}
+            title={task.origin.repository}
+            className="truncate font-mono text-[9.5px] text-text-3"
+          >
+            {originLabel(task.origin)}
+          </span>
+        )}
         <span className="flex shrink-0 items-baseline gap-[6px]">
           {stale && (
             // The one thing on this card an operator may have to act on: the requirement moved and
