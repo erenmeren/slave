@@ -230,12 +230,28 @@ async function classifyAll(focus: ReadonlySet<string> | null): Promise<{
   return { classified, scanned: new Set(rows.map((row) => row.id)), truncated: rows.length === DUPLICATE_SCAN_MAX }
 }
 
+/**
+ * What one pair's write did.
+ *
+ * TWO facts, not one, and they are independent (fix round 1, item 2): `wrote` is what happened to
+ * the row, and `dismissed` is whether the operator has already said they know about this pair. A
+ * dismissed pair whose verdict CHANGED is a row that moved -- it belongs in `updated`, because
+ * `updated` is what the pass did -- and is still not tallied into `counts`, because the counts are
+ * what the operator is being TOLD. Collapsing the two into one verdict is how `updated`
+ * under-reported.
+ */
+interface PairWrite {
+  /** `null` when the stored verdict already matched and nothing at all was written. */
+  readonly wrote: 'created' | 'updated' | null
+  readonly dismissed: boolean
+}
+
 /** Writes one classified pair, and says what it did. Read-then-write rather than `upsert`, for two
  *  reasons: a pair whose verdict has not changed is not written AT ALL (so `detectedAt` cannot move
  *  and a re-import genuinely writes nothing), and the caller can report `created` against `updated`.
  *  The unique index is still the authority -- a concurrent create answers P2002 and is turned into
  *  the update it should have been. */
-async function writePair(pair: ClassifiedPair): Promise<'created' | 'updated' | 'unchanged' | 'dismissed'> {
+async function writePair(pair: ClassifiedPair): Promise<PairWrite> {
   const existing = await prisma.templateDuplicate.findUnique({
     where: { aId_bId: { aId: pair.aId, bId: pair.bId } },
     select: { id: true, class: true, basis: true, score: true, dismissedAt: true },
@@ -245,14 +261,16 @@ async function writePair(pair: ClassifiedPair): Promise<'created' | 'updated' | 
       await prisma.templateDuplicate.create({
         data: { aId: pair.aId, bId: pair.bId, class: pair.class, basis: pair.basis, score: pair.score },
       })
-      return 'created'
+      return { wrote: 'created', dismissed: false }
     } catch (error) {
       if (!isUniqueConstraintViolation(error)) throw error
       await prisma.templateDuplicate.update({
         where: { aId_bId: { aId: pair.aId, bId: pair.bId } },
         data: { class: pair.class, basis: pair.basis, score: pair.score },
       })
-      return 'updated'
+      // A row created between this pass's read and its write is a row nobody has seen yet, so
+      // nobody has dismissed it.
+      return { wrote: 'updated', dismissed: false }
     }
   }
   const same = existing.class === pair.class && existing.basis === pair.basis && existing.score === pair.score
@@ -264,8 +282,7 @@ async function writePair(pair: ClassifiedPair): Promise<'created' | 'updated' | 
       data: { class: pair.class, basis: pair.basis, score: pair.score },
     })
   }
-  if (existing.dismissedAt !== null) return 'dismissed'
-  return same ? 'unchanged' : 'updated'
+  return { wrote: same ? null : 'updated', dismissed: existing.dismissedAt !== null }
 }
 
 /** What a batch of classified pairs added up to, once every one of them has been written. */
@@ -292,9 +309,9 @@ async function writeAndTally(classified: readonly ClassifiedPair[]): Promise<Wri
   let updated = 0
   for (const pair of classified) {
     const outcome = await writePair(pair)
-    if (outcome === 'created') created += 1
-    if (outcome === 'updated') updated += 1
-    if (outcome !== 'dismissed') counts[pair.class] += 1
+    if (outcome.wrote === 'created') created += 1
+    if (outcome.wrote === 'updated') updated += 1
+    if (!outcome.dismissed) counts[pair.class] += 1
   }
   return { counts, created, updated }
 }
@@ -320,13 +337,42 @@ export async function writeTemplateDuplicates(templateIds: readonly string[]): P
   return { ...tally, truncated, removed: 0 }
 }
 
-/** Fills the four derived columns for every row that has a `profileSpec` and is missing one, in
- *  batches. Returns how many rows moved. */
+/**
+ * Fills the four derived columns for every row that has a `profileSpec` and is missing one, in
+ * batches of {@link DUPLICATE_SPECS_MAX}. Returns how many rows moved.
+ *
+ * **The walk advances by ID and never re-selects by predicate** (fix round 1, item 1). The obvious
+ * loop -- ask for the next page of rows the predicate still matches -- terminates only if every
+ * update CLEARS the predicate, and two kinds of row do not clear it: one whose `profileSpec` this
+ * build cannot parse (left alone deliberately, below), and one whose derivation genuinely yields
+ * `searchText: ''`. The second needs an empty name AND an empty description AND a spec with no
+ * identity, summary or lists, which is a narrow door -- but the column cannot tell "not derived
+ * yet" from "derived to nothing" (`schema.prisma`: `""` means not backfilled yet, and it is NOT
+ * NULL), so no predicate could, and closing that door with a schema change is a migration for one
+ * pathological row. A cursor closes it without one: each pass either returns or moves strictly
+ * forward, so the walk is `O(rows)` whatever any single update does or does not change.
+ *
+ * `id: { gt: cursor }` rather than Prisma's `cursor`/`skip: 1`, deliberately: `skip: 1` skips the
+ * first row the `where` matches at or after the cursor, and this walk EDITS the rows it reads, so
+ * the cursor row itself usually stops matching -- and the skip would then eat a row nobody had
+ * looked at. The stale-pair walk in {@link recomputeTemplateDuplicates} may use `cursor` because it
+ * does not write what it reads.
+ */
 async function backfillDerivedColumns(): Promise<number> {
   let filled = 0
+  let cursor: string | null = null
   for (;;) {
-    const rows = await prisma.slaveTemplate.findMany({
+    // Annotated, because `cursor` is assigned FROM `rows` and read INSIDE the query that produces
+    // them -- TS7022 without it (the stale-pair walk below carries one for the same reason).
+    const rows: {
+      id: string
+      name: string
+      description: string
+      profileSpec: Prisma.JsonValue | null
+      profileOverrides: Prisma.JsonValue | null
+    }[] = await prisma.slaveTemplate.findMany({
       where: {
+        ...(cursor === null ? {} : { id: { gt: cursor } }),
         NOT: { profileSpec: { equals: Prisma.DbNull } },
         OR: [{ contentSha256: null }, { bodyBands: { isEmpty: true } }, { searchText: '' }],
       },
@@ -335,7 +381,6 @@ async function backfillDerivedColumns(): Promise<number> {
       take: DUPLICATE_SPECS_MAX,
     })
     if (rows.length === 0) return filled
-    let moved = 0
     for (const row of rows) {
       const spec = profileSpecSchema.safeParse(row.profileSpec)
       // A spec this build cannot parse is left alone rather than half-derived: a `contentSha256`
@@ -351,11 +396,10 @@ async function backfillDerivedColumns(): Promise<number> {
           overrides: stored.success ? stored.data : {},
         }),
       })
-      moved += 1
+      filled += 1
     }
-    filled += moved
-    // Every row in the page was unparseable, so the same page would come back forever.
-    if (moved === 0) return filled
+    cursor = rows[rows.length - 1]?.id ?? null
+    if (cursor === null) return filled
   }
 }
 

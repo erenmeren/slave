@@ -320,6 +320,15 @@ export async function importCatalog(
   // written, so pairing before the loop ends would miss every pair inside the run. NOT chunked --
   // it forms pairs ACROSS the whole set, and chunking it would be chunking the question. Its own
   // three bounds are what keep it finite.
+  //
+  // OUTSIDE any transaction, and so are the two passes above it -- one transaction per ROW is M42
+  // R2, and a transaction spanning three hundred files is the thing that rule exists to forbid. The
+  // window is therefore real and is STATED rather than papered over: a crash after the row loop and
+  // before the `CatalogImport` row below leaves rows written, some of their pairs missing, and no
+  // record of the run. Every one of those is repairable and none of them is corrupt -- the rows are
+  // the truth, `TemplateDuplicate` is derived state, and `template duplicates --recompute` rebuilds
+  // it from the table. That verb is the repair after an interrupted import as much as it is the
+  // backfill after an upgrade.
   const scan = await writeTemplateDuplicates(touched)
 
   const report = { created, updated, unchanged, skipped, duplicates: scan.counts, scanTruncated: scan.truncated }

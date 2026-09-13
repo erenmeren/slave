@@ -376,6 +376,37 @@ describe('recomputeTemplateDuplicates (M55 R4, R5, R10)', () => {
     expect(row.dismissedBy).toBe('operator')
   })
 
+  it('COUNTS a dismissed pair whose verdict changed as `updated`, and still does not tally it (fix round 1, item 2)', async (): Promise<void> => {
+    const a = await write({
+      name: 'One',
+      spec: specOf({ body: 'same body words here now' }),
+      capabilityKeys: ['c1', 'c2', 'c3'],
+    })
+    const b = await write({
+      name: 'Two',
+      spec: specOf({ body: 'same body words here now' }),
+      capabilityKeys: ['c1', 'c2', 'c3'],
+    })
+    await writeTemplateDuplicates([a, b])
+    const pairId = (await allPairs())[0]?.id as string
+    await setTemplateDuplicateDismissal(pairId, true, 'operator')
+    // The hash moves under it, so the pair re-classifies from exact/content_hash to near/body_shingles
+    // -- the same two rows, a different verdict. The shared capability keys keep it a candidate.
+    await prisma.slaveTemplate.update({ where: { id: b }, data: { contentSha256: 'something-else' } })
+
+    const result = await writeTemplateDuplicates([a, b])
+
+    expect(result.updated).toBe(1)
+    // Written, but not TOLD: the counts are what the operator is being shown, and a dismissal is
+    // them having said they already know.
+    expect(result.counts).toEqual({ exact: 0, near: 0, overlapping: 0 })
+    const row = await prisma.templateDuplicate.findUniqueOrThrow({ where: { id: pairId } })
+    expect(row.class).toBe('near')
+    expect(row.basis).toBe('body_shingles')
+    expect(row.dismissedAt).not.toBeNull()
+    expect(row.dismissedBy).toBe('operator')
+  })
+
   it('BACKFILLS the four derived columns for a row that has a profileSpec and none of them', async (): Promise<void> => {
     const spec = specOf({ summary: 'A findable summary sentence' })
     const row = await prisma.slaveTemplate.create({
@@ -411,6 +442,23 @@ describe('recomputeTemplateDuplicates (M55 R4, R5, R10)', () => {
     await recomputeTemplateDuplicates()
 
     expect((await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: row.id } })).capabilityKeys).toEqual([])
+  })
+
+  it('TERMINATES over a row whose derived searchText is empty, and counts it (fix round 1, item 1)', async (): Promise<void> => {
+    // The one row whose update cannot clear the predicate: an empty name, an empty description and a
+    // spec with nothing in it derive `searchText: ''`, which is the value the `where` selects on.
+    // Re-selecting by predicate would hand this row back forever; the cursor is what ends the walk.
+    await prisma.slaveTemplate.create({
+      data: { name: '', role: 'backend', description: '', profileSpec: emptyProfileSpec() as unknown as object },
+    })
+
+    const first = await recomputeTemplateDuplicates()
+    const second = await recomputeTemplateDuplicates()
+
+    expect(first.backfilled).toBe(1)
+    // Counted again, and that is honest rather than a leak: the row IS still underived by the only
+    // test the column can make, and the walk costs it one bounded update per pass.
+    expect(second.backfilled).toBe(1)
   })
 
   it('leaves a row with NO profileSpec entirely alone -- there is nothing to derive from', async (): Promise<void> => {
