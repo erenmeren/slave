@@ -143,6 +143,28 @@ const GOLDEN_RUN_TOKEN = 'm56a-golden-token-not-a-secret'
 // prefix rule covers every name this list cannot enumerate, and it is asserted separately.
 const CLAUDE_VOCABULARY_NAMES = 38
 
+/**
+ * The spend net's two sentences, as BYTES rather than as a call (spec §3 stage 7, fix round 1).
+ *
+ * The Claude one is the historical constant this milestone promised to preserve byte for byte: it
+ * was `refusing to start: SLAVEOFAI_REQUIRE_FAKE_CLI is set but SLAVEOFAI_CLAUDE_BIN is not the fake
+ * CLI` before R10 widened the net, and `requireFakeCliRefusal(envVar)` has to keep rendering exactly
+ * that for the `SLAVEOFAI_CLAUDE_BIN` case. Spelled out here, and never derived: asking
+ * `requireFakeCliRefusal('SLAVEOFAI_CLAUDE_BIN')` whether it equals
+ * `REQUIRE_FAKE_CLI_REFUSAL` compares one call to the same call -- `require-fake-cli.ts:18` DEFINES
+ * the constant as that call -- so the template could be reworded any way at all and the comparison
+ * would still hold. A golden is bytes somebody wrote down; this is the same rule stage 10 follows
+ * for the two `unsupported_model_provider` sentences, applied to the one sentence a widened net had
+ * the most opportunity to move.
+ *
+ * The Cursor one is the same template with the other hole filled, and is pinned the same way so the
+ * hole itself is proven to be a hole rather than a second hard-coded string.
+ */
+const HISTORICAL_CLAUDE_REFUSAL =
+  'refusing to start: SLAVEOFAI_REQUIRE_FAKE_CLI is set but SLAVEOFAI_CLAUDE_BIN is not the fake CLI'
+const CURSOR_BIN_REFUSAL =
+  'refusing to start: SLAVEOFAI_REQUIRE_FAKE_CLI is set but SLAVEOFAI_CURSOR_BIN is not the fake CLI'
+
 // Exact literals, never suffixed -- `preflightCleanup` removes whatever a prior crashed run left on
 // these exact names, in the same FK order the `finally` block uses.
 const WORKSPACE_NAME = 'M56a Gate Project'
@@ -895,24 +917,37 @@ try {
   console.log('\n=== stage 7: the spend net covers every registered binary')
 
   const bothFakes = { SLAVEOFAI_REQUIRE_FAKE_CLI: '1', SLAVEOFAI_CLAUDE_BIN: FAKE_CLAUDE, SLAVEOFAI_CURSOR_BIN: FAKE_CURSOR }
-  const cursorRefusal = requireFakeCliRefusal('SLAVEOFAI_CURSOR_BIN')
-  const claudeRefusal = requireFakeCliRefusal('SLAVEOFAI_CLAUDE_BIN')
-  if (claudeRefusal !== REQUIRE_FAKE_CLI_REFUSAL) {
-    await fail(`stage 7: the historical Claude sentence drifted: ${JSON.stringify(claudeRefusal)} vs ${JSON.stringify(REQUIRE_FAKE_CLI_REFUSAL)}`)
+
+  // The sentences first, against the BYTES above and never against another call of the same
+  // function. `REQUIRE_FAKE_CLI_REFUSAL` is asserted too, because it is what twenty-nine gates and
+  // two test files actually import.
+  await assertEqual(
+    requireFakeCliRefusal('SLAVEOFAI_CLAUDE_BIN'),
+    HISTORICAL_CLAUDE_REFUSAL,
+    "the historical Claude sentence, byte for byte (R10's one promise about wording)",
+  )
+  await assertEqual(REQUIRE_FAKE_CLI_REFUSAL, HISTORICAL_CLAUDE_REFUSAL, 'REQUIRE_FAKE_CLI_REFUSAL, the constant every caller imports')
+  await assertEqual(
+    requireFakeCliRefusal('SLAVEOFAI_CURSOR_BIN'),
+    CURSOR_BIN_REFUSAL,
+    'the same sentence with the other variable in the hole',
+  )
+  if (!CURSOR_BIN_REFUSAL.includes('SLAVEOFAI_CURSOR_BIN')) {
+    await fail('stage 7: the Cursor refusal does not name SLAVEOFAI_CURSOR_BIN, so it would send somebody to the wrong line')
   }
+
   for (const [label, env, expected] of [
-    ['cursor variable unset', { SLAVEOFAI_REQUIRE_FAKE_CLI: '1', SLAVEOFAI_CLAUDE_BIN: FAKE_CLAUDE }, cursorRefusal],
-    ['cursor variable empty', { ...bothFakes, SLAVEOFAI_CURSOR_BIN: '' }, cursorRefusal],
-    ['cursor variable is the real binary', { ...bothFakes, SLAVEOFAI_CURSOR_BIN: '/usr/local/bin/cursor-agent' }, cursorRefusal],
-    ['claude variable unset', { SLAVEOFAI_REQUIRE_FAKE_CLI: '1', SLAVEOFAI_CURSOR_BIN: FAKE_CURSOR }, claudeRefusal],
-    ['claude variable is the real binary', { ...bothFakes, SLAVEOFAI_CLAUDE_BIN: '/usr/bin/claude' }, claudeRefusal],
+    ['cursor variable unset', { SLAVEOFAI_REQUIRE_FAKE_CLI: '1', SLAVEOFAI_CLAUDE_BIN: FAKE_CLAUDE }, CURSOR_BIN_REFUSAL],
+    ['cursor variable empty', { ...bothFakes, SLAVEOFAI_CURSOR_BIN: '' }, CURSOR_BIN_REFUSAL],
+    ['cursor variable is the real binary', { ...bothFakes, SLAVEOFAI_CURSOR_BIN: '/usr/local/bin/cursor-agent' }, CURSOR_BIN_REFUSAL],
+    ['claude variable unset', { SLAVEOFAI_REQUIRE_FAKE_CLI: '1', SLAVEOFAI_CURSOR_BIN: FAKE_CURSOR }, HISTORICAL_CLAUDE_REFUSAL],
+    ['claude variable is the real binary', { ...bothFakes, SLAVEOFAI_CLAUDE_BIN: '/usr/bin/claude' }, HISTORICAL_CLAUDE_REFUSAL],
     ['both fakes', bothFakes, null],
   ]) {
     const answer = fakeCliRefusal(env)
     console.log(`  ${label}: ${JSON.stringify(answer)}`)
     if (answer !== expected) await fail(`stage 7: fakeCliRefusal(${label}) answered ${JSON.stringify(answer)}, expected ${JSON.stringify(expected)}`)
   }
-  if (!cursorRefusal.includes('SLAVEOFAI_CURSOR_BIN')) await fail('stage 7: the Cursor refusal does not name SLAVEOFAI_CURSOR_BIN')
 
   // The live proof. The override comes AFTER `loopbackChildEnv()`, which is the stage's own point:
   // the helper arms the fake, so the net has to catch a real binary name however it got there.
@@ -923,7 +958,7 @@ try {
   })
   console.log(`  the mis-armed daemon exited with code ${String(refusing.code)} and said: ${JSON.stringify(refusing.stderr.trim())}`)
   if (refusing.code === 0) await fail('stage 7: a daemon pointed at the real cursor-agent exited 0')
-  if (!refusing.stderr.includes(cursorRefusal)) {
+  if (!refusing.stderr.includes(CURSOR_BIN_REFUSAL)) {
     await fail(`stage 7: the mis-armed daemon did not print the SLAVEOFAI_CURSOR_BIN refusal; it said ${JSON.stringify(refusing.stderr)}`)
   }
 
