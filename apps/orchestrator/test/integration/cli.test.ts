@@ -4226,4 +4226,194 @@ describe('the orchestrator CLI', () => {
       expect(printed).toContain('staffing prefer')
     })
   })
+
+  describe('triggers (M54 R12, plan erratum E11)', () => {
+    const ENV_VAR = 'SLAVEOFAI_CLI_HOOK_SECRET'
+    const SECRET = 'a-secret-nothing-in-this-repository-stores'
+
+    // This file's own `seed()` truncates a list that does not name either M54 table:
+    // `ExternalRepository` cascades from `Workspace` and `InboundEvent` cannot (plan erratum E5), so
+    // this block empties both itself -- the `import-catalog` describe at `:3179` sets the same
+    // precedent. Truncating these two reaches nothing above them: `ExternalRepository` REFERENCES
+    // `Workspace`, so the outer `beforeEach`'s fixture survives this one.
+    beforeEach(async (): Promise<void> => {
+      await prisma.$executeRawUnsafe('TRUNCATE TABLE "InboundEvent", "ExternalRepository" RESTART IDENTITY CASCADE')
+    })
+
+    // `--workspace` is a workspace ID here, exactly as it is in every other verb of this CLI:
+    // `resolveWorkspace` brands the flag's text and looks no name up (`cli.ts:894`). The project's
+    // NAME is what comes back OUT, on every line this verb prints.
+    const map = async (workspaceId: string, repository: string, envVar = ENV_VAR): Promise<CliResult> =>
+      runCli([
+        'triggers', 'map', '--workspace', workspaceId, '--source', 'github', '--repository', repository,
+        '--secret-env', envVar,
+      ])
+
+    it('maps a repository and prints the path to paste and the variable NAME', async (): Promise<void> => {
+      const result = await map(fixture.workspaceId, 'acme/checkout')
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('acme/checkout')
+      expect(result.stdout).toContain('/api/hooks/github/')
+      expect(result.stdout).toContain(ENV_VAR)
+      expect(result.stdout).not.toContain(SECRET)
+      // The project by NAME, never the id it was addressed by.
+      expect(result.stdout).toContain('Checkout Platform')
+      expect(result.stdout).not.toContain(fixture.workspaceId)
+      expect(await prisma.externalRepository.count({ where: { workspaceId: fixture.workspaceId } })).toBe(1)
+    })
+
+    it('refuses a second mapping for the same repository, with the sentence that says what to do', async (): Promise<void> => {
+      const billing = await seed({ name: 'Billing' })
+
+      expect((await map(fixture.workspaceId, 'acme/checkout')).code).toBe(0)
+      const second = await map(billing.workspaceId, 'acme/checkout')
+
+      expect(second.code).not.toBe(0)
+      // The CLI's OWN sentence, not `refusalText`'s: the kind carries the holder's workspace id and
+      // control deliberately cannot print one (M52 erratum E18), so this surface resolves it.
+      expect(second.stderr).toContain('already mapped to project')
+      expect(second.stderr).toContain('Checkout Platform')
+      expect(second.stderr).not.toContain(fixture.workspaceId)
+      expect(second.stderr).toContain('triggers unmap')
+      expect(await prisma.externalRepository.count()).toBe(1)
+    })
+
+    it('refuses a source no adapter exists for, naming the ones that do', async (): Promise<void> => {
+      const result = await runCli([
+        'triggers', 'map', '--workspace', fixture.workspaceId, '--source', 'gitlab',
+        '--repository', 'acme/checkout', '--secret-env', ENV_VAR,
+      ])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('github')
+      expect(await prisma.externalRepository.count()).toBe(0)
+    })
+
+    it('refuses a lower-case variable name with the SAME sentence `credential add` gives', async (): Promise<void> => {
+      const result = await map(fixture.workspaceId, 'acme/checkout', 'lower_case')
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('upper-case letters, digits and underscores')
+      expect(await prisma.externalRepository.count()).toBe(0)
+    })
+
+    it('lists mappings with WORDS and the keys beside them, and says nothing about whether the variable is set', async (): Promise<void> => {
+      await map(fixture.workspaceId, 'acme/checkout')
+
+      const result = await runCli(['triggers', 'list'], { [ENV_VAR]: SECRET })
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('GitHub')
+      expect(result.stdout).toContain('github')
+      expect(result.stdout).toContain('Checkout Platform')
+      expect(result.stdout).toContain(ENV_VAR)
+      expect(result.stdout).not.toContain(SECRET)
+      // R2: no surface reports whether a variable is exported. Matched as words, so `--secret-env`
+      // and a repository called `settings` do not trip it.
+      expect(result.stdout).not.toMatch(/\bset\b|\bunset\b|\bexported\b|\bmissing\b/iu)
+    })
+
+    it('unmaps, and refuses to unmap one this project does not hold', async (): Promise<void> => {
+      const billing = await seed({ name: 'Billing' })
+      await map(fixture.workspaceId, 'acme/checkout')
+
+      const wrong = await runCli([
+        'triggers', 'unmap', '--workspace', billing.workspaceId, '--source', 'github',
+        '--repository', 'acme/checkout',
+      ])
+      expect(wrong.code).not.toBe(0)
+      expect(wrong.stderr).toContain('has no GitHub mapping')
+      expect(await prisma.externalRepository.count()).toBe(1)
+
+      const right = await runCli([
+        'triggers', 'unmap', '--workspace', fixture.workspaceId, '--source', 'github',
+        '--repository', 'acme/checkout',
+      ])
+      expect(right.code).toBe(0)
+      expect(await prisma.externalRepository.count()).toBe(0)
+    })
+
+    it('prints what has arrived, in words, with the correlation ids an operator needs', async (): Promise<void> => {
+      await map(fixture.workspaceId, 'acme/checkout')
+      const hook = await prisma.externalRepository.findFirstOrThrow()
+      await prisma.inboundEvent.create({
+        data: {
+          hookId: hook.hookId,
+          source: 'github',
+          deliveryId: 'd-7f3c',
+          eventKind: 'issue_opened',
+          workspaceId: fixture.workspaceId,
+          status: 'actioned',
+          goalVersion: 2,
+          payload: { eventName: 'issues', repository: 'acme/checkout' },
+        },
+      })
+
+      const result = await runCli(['triggers', 'inbound'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('Issue opened')
+      expect(result.stdout).toContain('Changed the requirement')
+      expect(result.stdout).toContain('acme/checkout')
+      expect(result.stdout).toContain('d-7f3c')
+      expect(result.stdout).toContain('v2')
+      expect(result.stdout).not.toContain('issue_opened')
+      expect(result.stdout).not.toContain('actioned')
+    })
+
+    it('prints the REASON in words for a delivery that changed nothing, and a dash for no version', async (): Promise<void> => {
+      await map(fixture.workspaceId, 'acme/checkout')
+      const hook = await prisma.externalRepository.findFirstOrThrow()
+      await prisma.inboundEvent.create({
+        data: {
+          hookId: hook.hookId,
+          source: 'github',
+          deliveryId: 'd-1',
+          eventKind: 'custom',
+          workspaceId: null,
+          status: 'ignored',
+          ignoredReason: 'unmapped_repository',
+          payload: { eventName: 'ping', repository: 'acme/somebody-elses' },
+        },
+      })
+
+      const result = await runCli(['triggers', 'inbound'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('No project is mapped to that repository')
+      expect(result.stdout).not.toContain('unmapped_repository')
+      expect(result.stdout).toContain('\t-\t')
+    })
+
+    it('`triggers map --by` refuses a name no account carries, and writes nothing', async (): Promise<void> => {
+      // Resolved to a ROW before the mapping is written, never passed through as a string: the
+      // principal of a verb a person types is a `User.id` everywhere in this CLI (M52 R2).
+      const result = await runCli([
+        'triggers', 'map', '--workspace', fixture.workspaceId, '--source', 'github',
+        '--repository', 'acme/checkout', '--secret-env', ENV_VAR, '--by', 'nobody',
+      ])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('no user named nobody')
+      expect(await prisma.externalRepository.count()).toBe(0)
+    })
+
+    it('refuses a subcommand it does not have, naming the four it does', async (): Promise<void> => {
+      const result = await runCli(['triggers', 'replay'])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('map, unmap, list or inbound')
+    })
+
+    it('`help` offers all four verbs', async (): Promise<void> => {
+      const result = await runCli(['help'])
+
+      const printed = `${result.stdout}${result.stderr}`
+      expect(printed).toContain('triggers map')
+      expect(printed).toContain('triggers unmap')
+      expect(printed).toContain('triggers list')
+      expect(printed).toContain('triggers inbound')
+    })
+  })
 })

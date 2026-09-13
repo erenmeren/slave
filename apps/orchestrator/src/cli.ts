@@ -41,15 +41,20 @@ import {
   deleteTeam,
   deleteUser,
   emergencyStop,
+  EXTERNAL_IGNORED_REASON_LABEL,
   haltSimulation,
   hireFromTemplate,
   importCatalog,
+  INBOUND_EVENT_STATUS_LABEL,
   injectExternalEvent,
+  LIST_INBOUND_LIMIT,
   listBrokerBindings,
   listCatalogImports,
   listCapabilities,
   listCredentials,
   listEvidence,
+  listExternalRepositories,
+  listInboundEvents,
   listDecisions,
   listMemories,
   listGoalVersions,
@@ -59,6 +64,7 @@ import {
   listUsers,
   loadSimulation,
   loadSupervisorWorld,
+  mapExternalRepository,
   moveSlave,
   moveCompanySlave,
   pauseSimulation,
@@ -103,7 +109,9 @@ import {
   tickSimulations,
   plural,
   unblockTask,
+  unmapExternalRepository,
   verifyMemory,
+  type ControlRefusal,
   type CredentialKind,
   type ImportReport,
   type ModelDecider,
@@ -117,6 +125,9 @@ import {
   BROKER_OP_LABEL,
   COST_PROVENANCE_WORD,
   EVIDENCE_OUTCOME_LABEL,
+  EXTERNAL_KIND_LABEL,
+  EXTERNAL_SOURCES,
+  EXTERNAL_SOURCE_LABEL,
   MEMORY_SCOPE_LABEL,
   MEMORY_STATUSES,
   MEMORY_STATUS_LABEL,
@@ -143,6 +154,7 @@ import {
   workspaceId as brandWorkspaceId,
   type BrokerOp,
   type BreakerTripKind,
+  type ExternalSource,
   type MemoryStatus,
   type MemoryType,
   type PermissionKind,
@@ -584,6 +596,32 @@ const USAGE = `usage: orchestrator <command> [options]
   staffing list [--workspace <id>]     every decision on this project: the capability's label and
                                        its key, the profile, the model, when it was taken and who
                                        took it.
+
+  what may tell this installation something (M54)
+  triggers map --workspace <id> --source github --repository <owner/repo> --secret-env <VAR>
+                                       connect one external repository to one project. Prints the
+                                       path to paste into the provider and the NAME of the
+                                       environment variable the WEB process reads the signing
+                                       secret from at verification time. The value is never stored,
+                                       never printed and never asked for -- and this verb does not
+                                       tell you whether the variable is set, does not create the
+                                       webhook at the provider, and sends nothing outbound. One
+                                       project per repository: a repository something already maps
+                                       is refused, and unmap is how a variable changes.
+  triggers unmap --source github --repository <owner/repo> [--workspace <id>]
+                                       disconnect it. THE OFF SWITCH -- there is no per-hook
+                                       disable flag, because two ways to stop a hook is one more
+                                       than a person can remember. Every delivery it already made
+                                       stays recorded.
+  triggers list [--workspace <id>]     every mapping: the project, the source and its key, the
+                                       repository, the variable NAME, the path, and when it was
+                                       made. --workspace narrows; omitting it is every project.
+  triggers inbound [--workspace <id>]  every delivery, newest first: when, from where, what kind,
+                                       what became of it, why nothing happened if nothing did,
+                                       which goal version it produced if it produced one, and the
+                                       provider's own delivery id. THE MOST RECENT
+                                       ${String(LIST_INBOUND_LIMIT)}. This is the only surface that shows a delivery
+                                       id -- no page does.
 
   users
   create-user --name <u>                create a local account. The password is never a
@@ -1032,6 +1070,31 @@ async function resolvePrincipal(flags: Flags): Promise<Principal | undefined> {
   const user = await prisma.user.findUnique({ where: { username }, select: { id: true } })
   if (user === null) throw new Error(refusalText({ kind: 'user_not_found', username }))
   return { userId: user.id }
+}
+
+/**
+ * What `triggers map` says about a refusal, which for ONE kind is not what `refusalText` says
+ * (M54 R12, Task 2 hand-off).
+ *
+ * `external_repository_mapped` is the only refusal in this file whose sentence is composed here.
+ * The kind CARRIES the id of the project that already holds the repository and `refusalText`
+ * deliberately prints "a project" instead of it: a raw id is never visible text (M52 erratum E18),
+ * and control has no boundary to resolve one at. THIS is that boundary -- the same one `staffing
+ * list` crosses for a username -- and an operator who is told WHICH project holds the mapping can
+ * act on the sentence instead of going looking.
+ *
+ * A project deleted between the refusal and this lookup falls back to control's own sentence,
+ * which names the repository and the command and needs no project at all.
+ */
+async function mapRefusalText(refusal: ControlRefusal): Promise<string> {
+  if (refusal.kind !== 'external_repository_mapped') return refusalText(refusal)
+  const holder = await prisma.workspace.findUnique({ where: { id: refusal.workspaceId }, select: { name: true } })
+  if (holder === null) return refusalText(refusal)
+  return (
+    `${refusal.repository} on ${EXTERNAL_SOURCE_LABEL[refusal.source]} is already mapped to project ` +
+    `${holder.name}; unmap it there first with: triggers unmap --workspace <that project> ` +
+    `--source ${refusal.source} --repository ${refusal.repository}`
+  )
 }
 
 /** A brokered op's WORD, with the key left to the caller's own column (`docs/ia.md` rule 3). A
@@ -3118,6 +3181,103 @@ export async function main(argv: readonly string[]): Promise<number> {
         return 0
       }
       throw new Error('staffing takes prefer, clear or list')
+    }
+
+    /**
+     * M54 R12: what may tell this installation something, and what has.
+     *
+     * The ONE place a mapping is made. There is no web form, deliberately: connecting a repository
+     * is a one-off installation act that must be paired with exporting a variable into the WEB
+     * process's environment and pasting a url into a provider's settings, and a form that can do
+     * only the first of the three would imply the other two happened.
+     *
+     * This verb never creates the webhook at the provider (no outbound call, no token), never
+     * disables a hook without unmapping it, and offers no "test delivery" button -- a provider's
+     * own redelivery is the test, and it exercises the real path.
+     *
+     * And it never says whether a variable is SET. `addCredential`'s own comment calls that an
+     * enumeration oracle pointed at a daemon's environment; the web process's is no different, and
+     * the one place the question is answered is the log line a refused delivery writes (R10).
+     */
+    case 'triggers': {
+      const sub = argv[1] ?? 'list'
+      if (sub === 'map') {
+        const source = oneOfFlag<ExternalSource>(flags, 'source', EXTERNAL_SOURCES)
+        if (source === undefined) throw new Error(`--source must be one of ${EXTERNAL_SOURCES.join(', ')}`)
+        const result = await mapExternalRepository(
+          await resolveWorkspace(flags),
+          {
+            source,
+            repository: requireFlag(flags, 'repository'),
+            secretEnvVar: requireFlag(flags, 'secret-env'),
+          },
+          await resolvePrincipal(flags),
+        )
+        if (!result.ok) throw new Error(await mapRefusalText(result.error))
+        // The three things an operator still has to do, in the order they have to do them. The last
+        // line is the whole reason there is no form: this verb cannot export a variable and cannot
+        // reach a provider, and saying so is better than implying otherwise by silence. The PATH
+        // and the variable's NAME travel to the provider separately -- the operator pairs them
+        // there, and nothing in this process ever holds the value.
+        process.stdout.write(
+          `${result.value.repository} on ${EXTERNAL_SOURCE_LABEL[result.value.source]} now belongs to ` +
+            `${result.value.workspaceName}\n` +
+            `  paste this path into the repository's webhook settings: ${result.value.hookPath}\n` +
+            `  export the signing secret as ${result.value.secretEnvVar} in the web process's environment\n` +
+            '  this verb does not create the webhook and does not tell you whether that variable is set\n',
+        )
+        return 0
+      }
+      if (sub === 'unmap') {
+        const source = oneOfFlag<ExternalSource>(flags, 'source', EXTERNAL_SOURCES)
+        if (source === undefined) throw new Error(`--source must be one of ${EXTERNAL_SOURCES.join(', ')}`)
+        const repository = requireFlag(flags, 'repository')
+        const result = await unmapExternalRepository(
+          await resolveWorkspace(flags),
+          { source, repository },
+          await resolvePrincipal(flags),
+        )
+        if (!result.ok) throw new Error(refusalText(result.error))
+        process.stdout.write(
+          `${repository} on ${EXTERNAL_SOURCE_LABEL[source]} no longer reaches this installation; every ` +
+            'delivery it already made is still recorded\n',
+        )
+        return 0
+      }
+      if (sub === 'list') {
+        // `--workspace` NARROWS; omitting it is every project. An operator checking a fresh install
+        // is asking about the INSTALLATION, and a mapping is the installation's own state.
+        const workspaceId = flagText(flags, 'workspace') === undefined ? null : await resolveWorkspace(flags)
+        for (const row of await listExternalRepositories(workspaceId)) {
+          // The WORDS first and the keys beside them (`docs/ia.md` rule 3): the label is what a
+          // person reads, the key is what they type into `--source`, and a CLI's expanded view is
+          // the line. The project is its NAME, never the id it was addressed by; the variable is a
+          // NAME too, and nothing here reads what is in it.
+          process.stdout.write(
+            `${row.workspaceName}\t${EXTERNAL_SOURCE_LABEL[row.source]}\t${row.source}\t${row.repository}\t` +
+              `${row.secretEnvVar}\t${row.hookPath}\t${row.createdAt.toISOString()}\n`,
+          )
+        }
+        return 0
+      }
+      if (sub === 'inbound') {
+        const workspaceId = flagText(flags, 'workspace') === undefined ? null : await resolveWorkspace(flags)
+        // `listInboundEvents` applies `LIST_INBOUND_LIMIT` itself and this verb takes no `--limit`;
+        // the cap is NAMED in the usage text (`evidence list`'s own choice for its own reason), so
+        // an operator who reads 200 lines can tell the whole record from the top of it.
+        for (const row of await listInboundEvents({ workspaceId })) {
+          // The delivery id IS printed here and on no page (R9): it is the correlation id an
+          // operator pastes into a provider's own delivery log, and this is an operator's terminal.
+          process.stdout.write(
+            `${row.receivedAt.toISOString()}\t${EXTERNAL_SOURCE_LABEL[row.source]}\t${row.repository}\t` +
+              `${EXTERNAL_KIND_LABEL[row.eventKind]}\t${INBOUND_EVENT_STATUS_LABEL[row.status]}\t` +
+              `${row.ignoredReason === null ? '-' : EXTERNAL_IGNORED_REASON_LABEL[row.ignoredReason]}\t` +
+              `${row.goalVersion === null ? '-' : `v${String(row.goalVersion)}`}\t${row.deliveryId}\n`,
+          )
+        }
+        return 0
+      }
+      throw new Error('triggers takes map, unmap, list or inbound')
     }
 
     case 'help':
