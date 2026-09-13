@@ -64,7 +64,8 @@
     "gate:m50-ephemeral": "tsc --build && node --env-file=.env scripts/gate-m50-ephemeral.mjs",
     "gate:m51-breaker": "tsc --build && node --env-file=.env scripts/gate-m51-breaker.mjs",
     "gate:m52-broker": "tsc --build && node --env-file=.env scripts/gate-m52-broker.mjs",
-    "gate:m53-evidence": "tsc --build && node --env-file=.env scripts/gate-m53-evidence.mjs"
+    "gate:m53-evidence": "tsc --build && node --env-file=.env scripts/gate-m53-evidence.mjs",
+    "gate:m54-triggers": "tsc --build && node --env-file=.env scripts/gate-m54-triggers.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",
