@@ -392,6 +392,56 @@ model SlaveTemplate {
   /// The capability sentences that matched no key, verbatim -- what the taxonomy is missing, kept
   /// where an operator can see it. Never matched against anything.
   unresolvedCapabilities String[] @default([])
+  /// M55 R2: whether this template is a HIRING CANDIDATE. `false` by default, which is the whole of
+  /// "an import produces a library, not a workforce": `importCatalog` creates every row inactive
+  /// unless `--activate` was passed, and never writes this column on a row it UPDATES, because
+  /// activation is a person's decision and an import is not the moment to revisit it.
+  /// `createTemplate` writes `true` -- a template somebody typed by hand IS that deliberate act.
+  ///
+  /// ONE reader gates on it: `loadCatalogEntries` (`packages/control/src/supervisorWorld.ts`), the
+  /// single place a template becomes a `SupervisorCatalogEntry`. `formTeam` and `rankCandidates` are
+  /// pure functions over a world and are untouched. `addCompanySlave`, `assignCompany`,
+  /// `materialiseCompanySlave` and `add-slave --template` all keep working on an inactive row: an
+  /// operator naming a specific row by hand is the same deliberate act as activating it, and a
+  /// worker already hired from a template does not stop working when the template is deactivated.
+  ///
+  /// The migration turns every row that exists on the day of the upgrade to `true`: every one of
+  /// them was already a candidate, and an operator upgrading must not find their workforce silently
+  /// emptied.
+  active        Boolean        @default(false)
+  /// Who turned this on or off, and when (M55 R2). NOT an event, and the gap is deliberate:
+  /// `appendEvent` requires a `workspaceId`, `ExecutionEvent.workspaceId` is NOT NULL, and a
+  /// template belongs to no workspace -- the same rule M42 R5 wrote for `CatalogImport` and M54 R6
+  /// wrote for an unmapped delivery. The row IS the record. Both are NULL on a row nobody has ever
+  /// toggled, including every row the migration backfilled.
+  activationChangedAt DateTime?
+  activationChangedBy String?
+  /// M55 R1: the CROSS-catalog identity of this persona -- `goalSha256` of the normalised canonical
+  /// text (`canonicalPersonaText` + `normalisePersona`,
+  /// `packages/domain/src/catalog/duplicate.ts`). `sourceId` is a PATH and answers "is this the row
+  /// that file wrote"; `sourceSha256` is over the FILE's bytes and changes when a maintainer fixes a
+  /// typo; neither can answer "is this the same specialist as that one" across two catalogs.
+  ///
+  /// DELIBERATELY NOT UNIQUE: two rows holding the same persona are exactly the fact this milestone
+  /// exists to SHOW, and a unique index would turn showing it into refusing the second import. NULL
+  /// on a row with no `profileSpec` -- hand-made, or imported before M46 and never re-imported --
+  /// which then takes part only in the name and capability classes.
+  contentSha256 String?
+  /// M55 R4: the sixteen MinHash band keys of this persona's body, the candidate index the `near`
+  /// class is found through. Two rows are CANDIDATES exactly when they share one of these strings.
+  /// Written from the UPSTREAM spec, never the effective one: the classes are about the persona
+  /// somebody published, not about what an operator did to it since.
+  bodyBands     String[] @default([])
+  /// M55 R3: the lower-cased join of the seven fields a catalog row DISPLAYS (`catalogSearchText`),
+  /// capped at `SEARCH_TEXT_MAX_CHARS`. The M47 precedent applied a second time: a filter vocabulary
+  /// inside a JSON column cannot be a `where`. Written from the EFFECTIVE spec, so a customised row
+  /// is findable by the words its own row shows. `""` means "not backfilled yet" and matches
+  /// nothing; the column is never NULL, so no `contains` clause is ever three-valued.
+  searchText    String   @default("")
+  /// M55 R3: `profileSpec.recommendedSkills` denormalised beside `capabilityKeys`, so the catalog's
+  /// skill filter is a `has` clause instead of an in-memory scan. The EFFECTIVE list, for
+  /// `searchText`'s reason.
+  recommendedSkills String[] @default([])
   createdAt     DateTime       @default(now())
   companySlaves CompanySlave[]
 
@@ -399,6 +449,58 @@ model SlaveTemplate {
   advisedBy          CollaborationHint[] @relation("CollaborationHintTarget")
   hiredWorkers       Slave[]             @relation("HiredWorkers")
   runbooks           RunbookTemplate[]   @relation("RunbookFromTemplate")
+  /// M55 R5: the pairs this template is the LOW half of, and the pairs it is the high half of.
+  /// Two relations because `aId < bId` is a writer's rule and a pair therefore names this row
+  /// through exactly one of them -- and both are what the catalog's `duplicates` filter reads,
+  /// `OR: [{ duplicatesA: { some } }, { duplicatesB: { some } }]`.
+  duplicatesA        TemplateDuplicate[] @relation("TemplateDuplicateA")
+  duplicatesB        TemplateDuplicate[] @relation("TemplateDuplicateB")
+
+  /// M55 R3: the catalog page's own order under its own commonest filter. `loadCatalogEntries`
+  /// orders by id and is unaffected; this is for `listWorkforceCatalog`'s `(name, id)` cursor under
+  /// an `active` clause.
+  @@index([active, name])
+}
+
+/// M55 R5: one row per ORDERED pair of catalog templates that look alike, written by the importer's
+/// fourth post-pass and by `template duplicates --recompute`, dismissed by a person, and never
+/// deleted by either.
+///
+/// `aId < bId` is enforced by ONE helper (`orderedPair`, `packages/domain/src/catalog/duplicate.ts`)
+/// that every write path goes through, not by a CHECK constraint: M42 erratum E23 makes the
+/// migration proof `prisma migrate diff ...` -> "No difference detected", and a constraint the
+/// Prisma schema cannot express is a difference that proof would report forever.
+///
+/// A template's deletion CASCADES its pairs, which is the one automatic removal in this design and
+/// is the right one: a pair naming a row that no longer exists is not a signal, it is a dangling
+/// reference. Nothing else removes a row except `recomputeTemplateDuplicates`, which may retire a
+/// pair that no longer classifies at all -- this table is derived state, and the residual is stated
+/// rather than hidden: a pair that stops classifying and later classifies again comes back
+/// undismissed.
+model TemplateDuplicate {
+  id          String         @id @default(uuid())
+  aId         String
+  bId         String
+  class       DuplicateClass
+  basis       DuplicateBasis
+  /// The Jaccard behind the class, rounded to three decimals at write time so the stored number IS
+  /// the number the label prints. A `Float`, not a `Decimal`: this schema has no `Decimal` column
+  /// anywhere, `Float` is what every ratio and every money figure in it is, and a Prisma `Decimal`
+  /// arrives in JavaScript as a Decimal.js object that is not JSON-safe -- which would put a
+  /// `.toNumber()` in every read path from `packages/control` to the browser.
+  score       Float
+  detectedAt  DateTime       @default(now())
+  /// Written only by `setTemplateDuplicateDismissal`. A dismissed pair stays in this table forever,
+  /// greyed rather than gone, with a Restore beside it: the importer never dismisses and never
+  /// deletes.
+  dismissedAt DateTime?
+  dismissedBy String?
+
+  a SlaveTemplate @relation("TemplateDuplicateA", fields: [aId], references: [id], onDelete: Cascade)
+  b SlaveTemplate @relation("TemplateDuplicateB", fields: [bId], references: [id], onDelete: Cascade)
+
+  @@unique([aId, bId])
+  @@index([bId])
 }
 
 /// M48 R3: a reusable STAGE PLAN -- design -> implement -> verify -> review -> release, or a
@@ -630,6 +732,30 @@ enum ExternalIgnoredReason {
   workspace_archived
   request_refused
   hook_mismatch
+}
+
+/// M55 R4: how alike two catalog rows are, in three named classes and no fourth. `exact` is one
+/// persona under two rows; `near` is one persona somebody edited; `overlapping` is two different
+/// specialists claiming the same work. A pair carries its HIGHEST class and nothing else.
+///
+/// DECLARED STRONGEST FIRST, deliberately (plan decision D12): a Postgres enum compares in
+/// declaration order, so `ORDER BY "class" ASC` IS the class ranking and no rank table exists
+/// anywhere. The top-pair query behind the catalog chip and `listTemplateDuplicates` both rely on
+/// it, which is why a fourth member would have to be placed rather than appended.
+enum DuplicateClass {
+  exact
+  near
+  overlapping
+}
+
+/// M55 R5: WHY a pair classified. One column beyond "how alike", for M53 R1's reason: a surface must
+/// be able to answer a question without a join or a guess, and "these two are the same" is a
+/// completely different next action from "these two are spelled the same".
+enum DuplicateBasis {
+  content_hash
+  name
+  body_shingles
+  capability_keys
 }
 
 enum ProviderKind {

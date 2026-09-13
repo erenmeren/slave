@@ -131,7 +131,11 @@ export async function seed(): Promise<void> {
   // workspace is never assigned to Atlas Software (spec Decision 7 -- legacy stays legacy;
   // assignment is the operator's first act).
   for (const template of TEMPLATES) {
-    await prisma.slaveTemplate.create({ data: { name: template.name, role: template.role, defaultModel: null } })
+    // M55 R2/R12: `active: true` explicitly. A seeded database is a database somebody is meant to
+    // be able to staff a company from on the first run, and `active` defaults to `false` for an
+    // IMPORT -- a hundred strangers' personas -- not for the five rows this file writes by hand.
+    // Same act as `createTemplate`'s, same value.
+    await prisma.slaveTemplate.create({ data: { name: template.name, role: template.role, defaultModel: null, active: true } })
   }
 
   const templatesByName = new Map(
@@ -156,7 +160,7 @@ export async function seed(): Promise<void> {
   // M29: a second, non-software company so the Simulations page has a roster to freeze. Four
   // departments named for the trade sector's four roles, one catalog slave each, from one
   // generic template. Synthetic like everything else here; never assigned to a workspace.
-  const tradeTemplate = await prisma.slaveTemplate.create({ data: { name: 'Trade Clerk', role: 'clerk', defaultModel: null } })
+  const tradeTemplate = await prisma.slaveTemplate.create({ data: { name: 'Trade Clerk', role: 'clerk', defaultModel: null, active: true } })
   const trading = await prisma.company.create({ data: { name: DEMO_TRADING_COMPANY_NAME } })
   for (const [department, slave] of TRADE_ROSTER) {
     const team = await prisma.companyTeam.create({ data: { companyId: trading.id, name: department } })
@@ -173,7 +177,7 @@ export async function seed(): Promise<void> {
   // distinct role, because `rosterOf` takes a catalog slave's role off its TEMPLATE.
   const checkoutTemplateIds = new Map<string, string>()
   for (const role of new Set(CHECKOUT_PLATFORM_ROSTER.map((member) => member.role))) {
-    const template = await prisma.slaveTemplate.create({ data: { name: checkoutPlatformTemplateName(role), role, defaultModel: null } })
+    const template = await prisma.slaveTemplate.create({ data: { name: checkoutPlatformTemplateName(role), role, defaultModel: null, active: true } })
     checkoutTemplateIds.set(role, template.id)
   }
   const checkout = await prisma.company.create({ data: { name: CHECKOUT_PLATFORM_COMPANY_NAME } })

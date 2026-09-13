@@ -3,6 +3,8 @@ import {
   COST_PROVENANCE_WORD,
   DECIDERS,
   DECISION_STATUSES,
+  DUPLICATE_BASES,
+  DUPLICATE_CLASSES,
   EVIDENCE_OUTCOMES,
   EXTERNAL_EVENT_KINDS,
   EXTERNAL_SOURCES,
@@ -180,5 +182,18 @@ describe('database enums match the domain unions', () => {
   // is `COST_PROVENANCE_WORD` -- which R6 moved into the domain beside the type for exactly this.
   it('EvidenceCostProvenance matches CostProvenance member for member, via the one label table', async () => {
     expect(await enumValues('EvidenceCostProvenance')).toEqual(Object.keys(COST_PROVENANCE_WORD).sort())
+  })
+
+  // M55 R5: the two new Postgres enums, pinned against the DOMAIN's own arrays rather than against
+  // literals -- `classifyPair` is a pure function in `packages/domain` that DECIDES from both, which
+  // is plan erratum E9's own rule for where a vocabulary lives and therefore what it is pinned
+  // against. A fourth class that reached the union and not the enum would compile clean and fail at
+  // the first `writeTemplateDuplicates`, in production, in the middle of a three-hundred-row import.
+  it('DuplicateClass matches DUPLICATE_CLASSES, member for member', async () => {
+    expect(await enumValues('DuplicateClass')).toEqual([...DUPLICATE_CLASSES].sort())
+  })
+
+  it('DuplicateBasis matches DUPLICATE_BASES, member for member', async () => {
+    expect(await enumValues('DuplicateBasis')).toEqual([...DUPLICATE_BASES].sort())
   })
 })
