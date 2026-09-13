@@ -9,27 +9,37 @@
 import type { ControlRefusal } from '@slave-of-ai/control'
 import type { Result } from '@slave-of-ai/domain'
 
-/** What one pass did, counted apart. `recorded` is `created + alreadyPresent`: both were re-derived
- *  and written, because there is no skip branch (plan erratum E15). `skipped` is
- *  `skippedSimulation + skippedIncomplete`: the boundary refusal (`run_not_found`, R13) and every
- *  other reason a row could not be recorded. `alreadySettled` is a fact about rows this script
- *  READ -- it settles nothing. */
+/**
+ * What one pass did, counted apart.
+ *
+ * `recorded` is `created + alreadyPresent`: both were re-derived and written, because there is no
+ * skip branch (plan erratum E15). `skipped` is `skippedSimulation + skippedIncomplete`: the boundary
+ * refusal (`run_not_found`, R13) and every other reason a row could not be recorded.
+ *
+ * The three `skipped*` figures are **`null` under `--dry-run`** and never `0`: a dry run hands no
+ * run to the writer, so nobody measured what it would refuse, and a zero would be a claim.
+ *
+ * `alreadyJudged` is a READING, never a write (erratum E23): the rows that already carried a verdict
+ * when this pass found them, settled by the live pipeline. This script settles nothing — a
+ * backfilled run's verify, review and integration columns stay "not judged yet".
+ */
 export interface BackfillReport {
+  readonly dryRun: boolean
   readonly scanned: number
   readonly recorded: number
   readonly created: number
   readonly alreadyPresent: number
-  readonly alreadySettled: number
-  readonly skipped: number
-  readonly skippedSimulation: number
-  readonly skippedIncomplete: number
+  readonly alreadyJudged: number
+  readonly skipped: number | null
+  readonly skippedSimulation: number | null
+  readonly skippedIncomplete: number | null
 }
 
 export interface BackfillOptions {
   /** Rows per query. The walk is a cursor on the primary key, so this changes how often the
    *  database is asked and never what the pass records. */
   readonly batchSize?: number
-  /** Decide everything, write nothing. */
+  /** Decide everything, write nothing, and name by id every run it would create. */
   readonly dryRun?: boolean
   /** The writer. Defaults to control's `recordRunEvidence` -- the SAME verb the pipeline calls,
    *  which is what makes a backfilled row byte-identical to a live one. A seam for the test. */

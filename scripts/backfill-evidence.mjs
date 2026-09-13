@@ -4,10 +4,34 @@
 //   npm run backfill:evidence -- --batch 500
 //   npm run backfill:evidence -- --dry-run
 //
-// Walks every `SlaveRun` with a non-null `terminalAt`, in `id` order, in bounded batches, and calls
-// the SAME `recordRunEvidence` the pipeline calls. There is one derivation in this system and this
-// script does not add a second: a rule written twice is a rule that eventually disagrees with
-// itself, and the thing it would disagree about here is whether a profile is any good.
+// Walks every CONCLUDED `SlaveRun`, in `id` order, in bounded batches, and calls the SAME
+// `recordRunEvidence` the pipeline calls. There is one derivation in this system and this script
+// does not add a second: a rule written twice is a rule that eventually disagrees with itself, and
+// the thing it would disagree about here is whether a profile is any good.
+//
+// "CONCLUDED" IS A STATUS, NEVER A TIMESTAMP (fix round 1, Important 1). The walk selects
+// `status NOT IN NON_TERMINAL_RUN_STATUSES` -- the same array `evidenceOutcomeOf`
+// (`packages/domain/src/evidence/outcome.ts`) reads to decide the very same question, so there is
+// one definition and it cannot drift. A `terminalAt IS NOT NULL` predicate would be a SECOND
+// definition, and it disagrees with the first exactly on the rows this script exists for:
+// `packages/control/src/stats.ts:123-127` records that `SlaveRun.terminalAt` has only been written
+// by the pump since M5 Task 12 and that rows older than that still carry `null` -- it calls a bare
+// `terminalAt` predicate "not merely imprecise, it is a trap". Such a run would have been never
+// scanned, never recorded and in no counter, under a header claiming day one.
+//
+// It is `NON_TERMINAL_RUN_STATUSES` and not `stats.ts`'s `CONCLUDED_RUN_STATUSES`, which is a
+// different question with a different answer: that list classifies `stopped` as
+// `terminal_uncounted` because an operator stopping a run is not the run failing. A stop IS
+// evidence -- `EVIDENCE_OUTCOME_LABEL.stopped` is `Stopped by somebody` and R5's
+// `humanInterventions` counts it -- so this walk must see it.
+//
+// HISTORY IS RECORDED, NOT JUDGED (erratum E23). A run this script fills in gets its facts -- the
+// dimension keys, the outcome, the attempt, the counters, the money -- and its three JUDGEMENT
+// columns stay "nobody has judged this yet". This script never calls `settleTaskEvidence` and never
+// settles a column: a verdict is the live site's act at the moment somebody reached it (erratum E1
+// makes it irreversible), and deriving one from old events afterwards is carried backlog, not this
+// pass. `alreadyJudged` below counts rows that were ALREADY judged, by the pipeline, before this
+// script ran; it is a reading and never a write.
 //
 // SAFE ON A LIVE DATABASE, and this is the second reason it exists. Seven transitions write a fact
 // the moment a run concludes (plan erratum E22), and a crash between the terminal status write and
@@ -46,12 +70,18 @@
 // mistake: a project adopted from a simulation (`Workspace.adoptedFromSimulationId`) runs real
 // workers against a real checkout, and skipping its runs would lose real history.
 //
+// WHAT A DRY RUN CANNOT KNOW (fix round 1, item 3). `--dry-run` hands no run to the writer, so it
+// cannot know which runs the writer would refuse: `skipped`, `skippedSimulation` and
+// `skippedIncomplete` come back `null` rather than `0`, and the summary says so instead of printing
+// a clean pass nobody measured. What it CAN know it names: every run it would create is printed by
+// id as it is reached.
+//
 // IT IS NOT A MIGRATION. `20260913090000_m53_evidence` is additive DDL and carries no data statement
 // at all; the data arrives here, run once by a person who chose to run it. That is ADR 0003's
 // discipline (one write gate, and data statements do not hide inside schema changes), not a style
 // preference.
 //
-// IT WRITES THROUGH ONE VERB AND NOWHERE ELSE. Nothing in this file deletes a row, edits one in
+// IT WRITES THROUGH ONE VERB AND NOWHERE ELSE. Nothing in this file removes a row, edits one in
 // place, or reaches Postgres with raw SQL -- and the check for that is a grep, so this sentence is
 // deliberately written without naming the Prisma methods it forbids, which would make the grep
 // match its own prose. The only write this script can cause is the upsert `recordRunEvidence`
@@ -61,6 +91,7 @@ import { realpathSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { recordRunEvidence, refusalText } from '../packages/control/dist/index.js'
 import { prisma } from '../packages/db/dist/client.js'
+import { NON_TERMINAL_RUN_STATUSES } from '../packages/domain/dist/index.js'
 
 /**
  * One pass over every concluded run.
@@ -73,7 +104,7 @@ export async function backfillEvidence({ batchSize = 200, dryRun = false, record
   let scanned = 0
   let created = 0
   let alreadyPresent = 0
-  let alreadySettled = 0
+  let alreadyJudged = 0
   let skippedSimulation = 0
   let skippedIncomplete = 0
 
@@ -83,7 +114,10 @@ export async function backfillEvidence({ batchSize = 200, dryRun = false, record
     // index range scan whatever the batch size is -- which is also what makes the batch size not
     // change the result.
     const runs = await prisma.slaveRun.findMany({
-      where: { terminalAt: { not: null }, ...(cursor === null ? {} : { id: { gt: cursor } }) },
+      where: {
+        status: { notIn: [...NON_TERMINAL_RUN_STATUSES] },
+        ...(cursor === null ? {} : { id: { gt: cursor } }),
+      },
       select: { id: true },
       orderBy: { id: 'asc' },
       take: batchSize,
@@ -110,14 +144,17 @@ export async function backfillEvidence({ batchSize = 200, dryRun = false, record
         return
       }
       alreadyPresent += 1
-      if (before.get(runId) !== null) alreadySettled += 1
+      // The row was judged by the PIPELINE, before this script ran. Counted so a repair pass can be
+      // read; never written to (erratum E23).
+      if (before.get(runId) !== null) alreadyJudged += 1
     }
 
     for (const run of runs) {
       scanned += 1
-      // --dry-run decides everything and writes nothing: the counters below are exactly what a real
-      // pass would report, because the only thing skipped is the call.
+      // --dry-run decides everything and writes nothing. The run it would CREATE is named as it is
+      // reached -- a count alone is not something an operator can check against their own records.
       if (dryRun) {
+        if (!before.has(run.id)) process.stdout.write(`backfill: would record run ${run.id}\n`)
         countPresence(run.id)
         continue
       }
@@ -136,18 +173,39 @@ export async function backfillEvidence({ batchSize = 200, dryRun = false, record
   }
 
   return {
+    dryRun,
     scanned,
     // `recorded` is created PLUS already present, because both were re-derived and written. It is
     // not "rows that changed": on a second pass nothing changes and everything is still recorded.
+    // Under `--dry-run` it is what a real pass WOULD record.
     recorded: created + alreadyPresent,
     created,
     alreadyPresent,
-    alreadySettled,
-    skipped: skippedSimulation + skippedIncomplete,
-    skippedSimulation,
-    skippedIncomplete,
+    alreadyJudged,
+    // NULL under `--dry-run`, never 0: no run was handed to the writer, so nobody knows how many it
+    // would refuse, and a zero here would be a measurement nobody made.
+    skipped: dryRun ? null : skippedSimulation + skippedIncomplete,
+    skippedSimulation: dryRun ? null : skippedSimulation,
+    skippedIncomplete: dryRun ? null : skippedIncomplete,
   }
 }
+
+/** What an operator reads before they run this on a database that matters. */
+const USAGE = `usage: npm run backfill:evidence -- [--batch <n>] [--dry-run]
+
+  --batch <n>   rows per query (default 200). The walk is a cursor on the primary key, so this
+                changes how often the database is asked and never what the pass records.
+  --dry-run     decide everything, write nothing, and name by id every run it would create. A dry
+                run hands no run to the writer, so it cannot report what would be skipped, and it
+                does not pretend to.
+
+Fills in the record for every concluded run that has none, and re-derives the ones that do -- safe
+to run on a live database, and the repair when a crash lost a run's evidence write.
+
+History is recorded, not judged: a backfilled run's verify, review and integration columns stay
+"not judged yet". A verdict is the live pipeline's act at the moment somebody reached it, and this
+script never settles one.
+`
 
 /** `--batch <n>`, a positive integer, and `--dry-run`. Anything else is a typo worth refusing. */
 function parseArgs(argv) {
@@ -159,6 +217,7 @@ function parseArgs(argv) {
       dryRun = true
       continue
     }
+    if (arg === '--help' || arg === '-h') return { help: true, batchSize, dryRun }
     if (arg === '--batch') {
       const value = Number(argv[i + 1])
       if (!Number.isInteger(value) || value <= 0) throw new Error('--batch must be a positive integer')
@@ -166,9 +225,36 @@ function parseArgs(argv) {
       i += 1
       continue
     }
-    throw new Error(`unknown option: ${arg}\n\nusage: npm run backfill:evidence -- [--batch <n>] [--dry-run]`)
+    throw new Error(`unknown option: ${arg}\n\n${USAGE}`)
   }
-  return { batchSize, dryRun }
+  return { help: false, batchSize, dryRun }
+}
+
+/** The summary an operator reads. Two shapes, because a dry run measured two different things and
+ *  must not borrow the words of a pass that actually happened. */
+function summaryOf(report) {
+  const facts =
+    `scanned ${report.scanned}, ${report.dryRun ? 'would record' : 'recorded'} ${report.recorded} ` +
+    `(${report.dryRun ? 'would create' : 'created'} ${report.created}, ` +
+    `already present ${report.alreadyPresent}, already judged ${report.alreadyJudged})`
+  // The judgement sentence on EVERY pass, not only in the usage text: the operator who reads this
+  // line is the one about to believe the record is complete (erratum E23).
+  const judged =
+    'history is recorded, not judged: a backfilled run\'s verify, review and integration columns stay\n' +
+    '"not judged yet", and the already judged count above was judged by the pipeline, never here.\n'
+  if (report.dryRun) {
+    return (
+      `${facts}\n` +
+      '--dry-run: nothing was written, and no run was handed to the writer -- so this pass cannot\n' +
+      'know how many would be skipped, and skipped / no such run / refused are not reported.\n' +
+      judged
+    )
+  }
+  return (
+    `${facts}, skipped ${report.skipped} ` +
+    `(no such run ${report.skippedSimulation}, refused ${report.skippedIncomplete})\n` +
+    judged
+  )
 }
 
 // Run only when invoked as a program: the integration test imports `backfillEvidence` directly, and
@@ -177,19 +263,19 @@ function parseArgs(argv) {
 // `import.meta.filename` is already resolved, and a mismatch means exiting 0 having done nothing.
 if (process.argv[1] !== undefined && import.meta.filename === realpathSync(resolve(process.argv[1]))) {
   try {
-    const { batchSize, dryRun } = parseArgs(process.argv.slice(2))
+    const { help, batchSize, dryRun } = parseArgs(process.argv.slice(2))
+    if (help) {
+      process.stdout.write(USAGE)
+      await prisma.$disconnect()
+      process.exit(0)
+    }
     const report = await backfillEvidence({ batchSize, dryRun })
-    process.stdout.write(
-      `${dryRun ? 'would record' : 'recorded'}: scanned ${report.scanned}, recorded ${report.recorded} ` +
-        `(created ${report.created}, already present ${report.alreadyPresent}, ` +
-        `already settled ${report.alreadySettled} -- this script settles nothing), ` +
-        `skipped ${report.skipped} (no such run ${report.skippedSimulation}, refused ${report.skippedIncomplete})\n`,
-    )
-    if (dryRun) process.stdout.write('--dry-run: nothing was written\n')
+    process.stdout.write(summaryOf(report))
     await prisma.$disconnect()
     // An operator who was told nothing was skipped and then finds a hole should have seen a non-zero
     // status. Every skipped run is named on stderr above; this is the same fact for a shell script.
-    process.exit(report.skipped > 0 ? 1 : 0)
+    // A dry run skipped nothing because it attempted nothing, so it exits 0.
+    process.exit(report.skipped !== null && report.skipped > 0 ? 1 : 0)
   } catch (error) {
     // The SENTENCE, never a stack trace: a typo in a flag is an operator's ordinary mistake, and
     // this is the shape `cli.ts`'s own entry point answers one with.

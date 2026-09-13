@@ -88,6 +88,26 @@ async function seedRuns(
   return ids
 }
 
+/**
+ * Run something with `process.stdout.write` wrapped, and answer what it printed.
+ *
+ * A WRAPPER assigned and restored in a `finally`, never `vi.spyOn`: the house rule Task 3's fix
+ * round wrote down after a spy left a Prisma delegate `undefined` for every case below it.
+ */
+async function capturingStdout<T>(body: () => Promise<T>): Promise<{ readonly report: T; readonly printed: string }> {
+  const real = process.stdout.write.bind(process.stdout)
+  let printed = ''
+  process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+    printed += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')
+    return (real as (...args: unknown[]) => boolean)(chunk, ...rest)
+  }) as typeof process.stdout.write
+  try {
+    return { report: await body(), printed }
+  } finally {
+    process.stdout.write = real
+  }
+}
+
 describe('backfillEvidence (M53 R7)', () => {
   it('records every terminal run and skips every live one', async (): Promise<void> => {
     await seedRuns(fixture, { terminal: 3, live: 2 })
@@ -99,6 +119,23 @@ describe('backfillEvidence (M53 R7)', () => {
     // `where`, so they are never scanned at all. A run still moving is evidence about nothing.
     expect(report.scanned).toBe(3)
     expect(await prisma.evidenceRecord.count()).toBe(3)
+  })
+
+  it('scans a run whose STATUS concluded even though `terminalAt` was never written', async (): Promise<void> => {
+    const runId = await seedTerminalRun(fixture)
+    // `SlaveRun.terminalAt` has only been written by the pump since M5 Task 12 -- rows older than
+    // that carry null, and `packages/control/src/stats.ts:123-127` calls a bare `terminalAt`
+    // predicate a trap for exactly this reason. "Concluded" is a STATUS, and the walk asks the same
+    // array `evidenceOutcomeOf` asks (fix round 1, Important 1).
+    await prisma.slaveRun.update({ where: { id: runId }, data: { terminalAt: null } })
+
+    const report = await backfillEvidence({})
+
+    expect(report.scanned).toBe(1)
+    expect(report.created).toBe(1)
+    expect(await prisma.evidenceRecord.count({ where: { runId } })).toBe(1)
+    const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId } })
+    expect(row.outcome).toBe('succeeded')
   })
 
   it('is IDEMPOTENT to the byte, `recordedAt` included (stage 5, erratum E15)', async (): Promise<void> => {
@@ -211,26 +248,49 @@ describe('backfillEvidence (M53 R7)', () => {
     const after = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId } })
     expect(after.verifiedFirstPass).toBe(true)
     expect(after.settledAt).toEqual(settled.settledAt)
-    expect(report.alreadySettled).toBe(1)
+    expect(report.alreadyJudged).toBe(1)
     expect(report.created).toBe(0)
   })
 
-  it('--dry-run says what it WOULD do and writes nothing at all', async (): Promise<void> => {
-    await seedRuns(fixture, { terminal: 3 })
+  it('--dry-run says what it WOULD do, names it by id, and writes nothing at all', async (): Promise<void> => {
+    const ids = await seedRuns(fixture, { terminal: 3 })
 
-    const dry = await backfillEvidence({ dryRun: true })
+    const { report: dry, printed } = await capturingStdout(() => backfillEvidence({ dryRun: true }))
 
     expect(dry.scanned).toBe(3)
     expect(dry.created).toBe(3)
     expect(dry.recorded).toBe(3)
+    // NOTHING was written -- the row count is the whole claim.
     expect(await prisma.evidenceRecord.count()).toBe(0)
+    // Every run it would create, named. A count alone is not something an operator can check
+    // against their own records.
+    for (const id of ids) expect(printed).toContain(`backfill: would record run ${id}`)
 
     // And the same flag over history that is already filled in reports nothing to create.
     await backfillEvidence({})
-    const again = await backfillEvidence({ dryRun: true })
+    const { report: again, printed: quiet } = await capturingStdout(() => backfillEvidence({ dryRun: true }))
     expect(again.created).toBe(0)
     expect(again.alreadyPresent).toBe(3)
+    expect(quiet).toBe('')
     expect(await prisma.evidenceRecord.count()).toBe(3)
+  })
+
+  it('--dry-run reports NULL for every skip counter, because it handed no run to the writer', async (): Promise<void> => {
+    await seedRuns(fixture, { terminal: 2 })
+
+    const dry = await backfillEvidence({ dryRun: true })
+
+    // Not zero. A zero here would be a measurement nobody made: the writer was never called, so
+    // nobody knows how many runs it would have refused.
+    expect(dry.skipped).toBeNull()
+    expect(dry.skippedSimulation).toBeNull()
+    expect(dry.skippedIncomplete).toBeNull()
+    expect(dry.dryRun).toBe(true)
+
+    // A real pass measures them, and says so with numbers.
+    const real = await backfillEvidence({})
+    expect(real.skipped).toBe(0)
+    expect(real.dryRun).toBe(false)
   })
 
   it('nothing simulated crosses into the record (R6, R13)', async (): Promise<void> => {
