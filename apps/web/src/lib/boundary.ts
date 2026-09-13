@@ -33,6 +33,33 @@ const ALLOWED_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[
 const PUBLIC_PATHS: ReadonlySet<string> = new Set(['/favicon.ico', '/login', '/api/auth/login'])
 const PUBLIC_PREFIX = '/_next/'
 
+/**
+ * The one PUBLIC API family (M54 R1): an inbound webhook delivery.
+ *
+ * Checked at the TOP of {@link boundaryVerdict} -- before rule 1's host allowlist, before rule 3's
+ * cross-site objection, before rule 4's session -- and all three are skipped deliberately, each for
+ * its own reason. Loopback mode's host rule cannot be satisfied by a sender on the internet, which
+ * can no more arrange `Host: localhost` than it can guess a secret. `sec-fetch-site` and `Origin`
+ * are BROWSER fetch metadata, absent from every server-to-server POST, so a rule keyed on them would
+ * make this family's answer depend on a header the real caller never sends and a proxy might add.
+ * And a session cookie is precisely what a webhook sender does not have.
+ *
+ * **THE CARVE-OUT IS ONE PREFIX AND IT BUYS NOTHING.** Everything under it is refused by default and
+ * opened only by an HMAC over the bytes the caller sent (`verifyHookDelivery`,
+ * `packages/control/src/triggers.ts`), and the route body parses no JSON, touches no Prisma and
+ * appends no event until that signature has verified. A path that merely STARTS with `/api/hook` is
+ * not in the family: the trailing `s/` is part of the constant.
+ *
+ * Spelled here and, separately, as `HOOK_PATH_PREFIX` in `packages/control/src/triggers.ts` -- this
+ * module is PURE and compiles for the edge runtime, so it cannot import that package;
+ * `apps/web/test/integration/hooks-route.test.ts` asserts the two are the same string.
+ *
+ * It adds no third `BoundaryMode`, it is not loopback-only (a tailnet install must be able to
+ * receive deliveries), and it adds no rate limiting -- this repository has none anywhere, and
+ * inventing one here would be a second unproven mechanism guarding the first.
+ */
+export const PUBLIC_API_PREFIX = '/api/hooks/'
+
 /** The single source for the Settings card's security line. `username` is who the reader is
  *  signed in as — `null` in accounts mode means a cookie whose user no longer exists (or none at
  *  all), which the line says out loud rather than hiding. Loopback mode names nobody: there is
@@ -111,6 +138,9 @@ function crossSiteRefusal(request: BoundaryRequest): BoundaryVerdict | null {
 }
 
 export function boundaryVerdict(request: BoundaryRequest): BoundaryVerdict {
+  // Rule 0 (M54 R1) -- the one public API family, before everything. See PUBLIC_API_PREFIX.
+  if (request.path.startsWith(PUBLIC_API_PREFIX)) return { allow: true }
+
   const host = request.host === null ? null : hostOf(request.host)
 
   // Rule 1 — loopback mode, every path, every method: both loopback spellings and the IPv6

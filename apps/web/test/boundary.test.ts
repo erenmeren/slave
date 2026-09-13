@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { boundaryVerdict, postureFor } from '../src/lib/boundary.js'
+import { PUBLIC_API_PREFIX, boundaryVerdict, postureFor } from '../src/lib/boundary.js'
 
 const base = {
   mode: 'loopback-only' as const,
@@ -183,5 +183,55 @@ describe('boundaryVerdict in accounts mode', () => {
   it('never emits unauthenticated in loopback mode', () => {
     expect(boundaryVerdict({ ...base, path: '/w/abc/tasks' })).toEqual({ allow: true })
     expect(boundaryVerdict(base)).toEqual({ allow: true })
+  })
+})
+
+describe('the one public API family (M54 R1)', () => {
+  const HOOK = '/api/hooks/github/2f1c-not-a-real-uuid'
+
+  it('spells the prefix once, and it is a prefix and not a path', () => {
+    expect(PUBLIC_API_PREFIX).toBe('/api/hooks/')
+  })
+
+  it.each([['loopback-only'], ['accounts']] as const)(
+    'allows a hooks path in %s mode with no cookie, from a foreign host, cross-site',
+    (mode) => {
+      expect(
+        boundaryVerdict({
+          mode,
+          host: 'hooks.example.com',
+          secFetchSite: 'cross-site',
+          origin: 'https://evil.example',
+          path: HOOK,
+          sessionValid: false,
+        }),
+      ).toEqual({ allow: true })
+    },
+  )
+
+  it('allows it with NO host header at all -- a sender on the internet cannot arrange one', () => {
+    expect(boundaryVerdict({ ...base, host: null, path: HOOK }).allow).toBe(true)
+  })
+
+  it('is checked FIRST -- before the host rule, the cross-site rule and the session', () => {
+    // The same three inputs on ANY other /api/ path are refused in loopback mode, refused
+    // cross-site, and unauthenticated in accounts mode. Asserting the contrast is what shows the
+    // carve-out is a carve-out rather than a coincidence.
+    expect(boundaryVerdict({ ...base, host: 'evil.example', path: '/api/w/x/overview' }).allow).toBe(false)
+    expect(boundaryVerdict({ ...base, secFetchSite: 'cross-site', path: '/api/w/x/overview' }).allow).toBe(false)
+    expect(
+      boundaryVerdict({ ...base, mode: 'accounts', path: '/api/w/x/overview', sessionValid: false }).allow,
+    ).toBe(false)
+  })
+
+  it('opens NOTHING else: a path that merely starts with /api/hook is not in the family', () => {
+    for (const path of ['/api/hook', '/api/hooks', '/api/hookserver/x', '/api/w/x/hooks/github/1']) {
+      expect(boundaryVerdict({ ...base, mode: 'accounts', path, sessionValid: false }).allow, path).toBe(false)
+    }
+  })
+
+  it('does not become a third BoundaryMode -- `postureFor` says exactly what it said', () => {
+    expect(postureFor('loopback-only')).toBe('loopback-only · no accounts · cross-site requests refused')
+    expect(postureFor('accounts', 'ada')).toBe('accounts · signed in as ada · cross-site requests refused')
   })
 })
