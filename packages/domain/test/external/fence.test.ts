@@ -61,7 +61,7 @@ describe('sanitiseExternalText pass 1 -- truncation (R8, erratum E6)', () => {
   })
 })
 
-describe('sanitiseExternalText pass 2 -- control characters (R8)', () => {
+describe('sanitiseExternalText pass 2 -- invisible characters (R8, erratum E15)', () => {
   it('removes C0 controls but keeps newline and tab, which are line structure a reader wants', () => {
     expect(sanitiseExternalText('a\u0007bc\td\ne', 100)).toBe('abc\td\ne')
   })
@@ -78,6 +78,44 @@ describe('sanitiseExternalText pass 2 -- control characters (R8)', () => {
     const cut = sanitiseExternalText(`${'\u0000'.repeat(5000)}${'b'.repeat(5000)}`, 100)
     expect([...cut].length).toBeLessThanOrEqual(100)
     expect(cut).not.toContain('\u0000')
+  })
+
+  it('removes a bidi OVERRIDE -- quoted text that reads one way to a person and another to a model', () => {
+    expect(sanitiseExternalText('a\u202Eb\u202Dc', 100)).toBe('abc')
+  })
+
+  it('removes every ZERO-WIDTH character, which is text a reader cannot see at all', () => {
+    expect(sanitiseExternalText('a\u200Bb\u200Cc\u200Dd\u2060e', 100)).toBe('abcde')
+  })
+
+  it('removes a byte-order mark wherever in the body it sits', () => {
+    expect(sanitiseExternalText('\uFEFFabc\uFEFF', 100)).toBe('abc')
+  })
+
+  it('removes both bidi ISOLATES, the pair an override hides a run of text inside', () => {
+    expect(sanitiseExternalText('a\u2066b\u2069c', 100)).toBe('abc')
+  })
+
+  it('removes a SOFT HYPHEN, which renders as nothing and splits a word for every matcher', () => {
+    expect(sanitiseExternalText('check\u00ADout', 100)).toBe('checkout')
+  })
+
+  it('removes Unicode TAG characters -- the invisible-instruction vector this pass exists for', () => {
+    const tagged = 'hi \u{E0041}\u{E0042}\u{E007F}'
+    expect(sanitiseExternalText(tagged, 100)).toBe('hi ')
+  })
+
+  it('leaves ORDINARY non-ASCII text alone -- a fence quotes text, it does not transliterate it', () => {
+    expect(sanitiseExternalText('Gerçekleşti: ödeme şu an çalışmıyor', 200)).toBe(
+      'Gerçekleşti: ödeme şu an çalışmıyor',
+    )
+    expect(sanitiseExternalText('结账在重试时返回 500 错误', 200)).toBe('结账在重试时返回 500 错误')
+    expect(sanitiseExternalText('naïve café — résumé', 200)).toBe('naïve café — résumé')
+  })
+
+  it('is still idempotent once the format class goes too', () => {
+    const once = sanitiseExternalText('a\u202Eb\u200Bc\u{E0041}', 100)
+    expect(sanitiseExternalText(once, 100)).toBe(once)
   })
 })
 

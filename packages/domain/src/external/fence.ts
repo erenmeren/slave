@@ -32,18 +32,42 @@ export const EXTERNAL_SUBJECT_MAX_CHARS = 120
 export const EXTERNAL_TITLE_MAX_CHARS = 300
 
 /**
- * C0 controls except newline (U+000A) and tab (U+0009), every C1 control, DEL, and the two Unicode
- * line separators.
+ * Everything INVISIBLE (M54 R8, widened by fix-round-1 erratum E15).
  *
- * Written as escapes rather than as literal bytes, deliberately: a literal control character in a
+ * Two families, and the second is the one a first reading misses:
+ *
+ *  - the CONTROL characters -- C0 except newline (U+000A) and tab (U+0009), every C1, DEL -- plus
+ *    the two Unicode line separators U+2028/U+2029, which are `Zl`/`Zp` rather than `Cc` and so are
+ *    named one at a time. A line structure is something a renderer and a prompt assembler both read,
+ *    and U+2028 is a line break to a JavaScript engine and invisible to a person, so a payload that
+ *    carries one is carrying a line we did not write.
+ *  - the whole Unicode FORMAT class, `\p{Cf}`: the bidi controls and isolates (U+200E-U+200F,
+ *    U+202A-U+202E, U+2066-U+2069), every zero-width (U+200B ZWSP, U+200C/U+200D ZWNJ/ZWJ, U+2060
+ *    WORD JOINER), the byte-order mark U+FEFF, SOFT HYPHEN U+00AD, the Arabic and interlinear format
+ *    marks, and the Unicode TAG block U+E0000-U+E007F.
+ *
+ * The second family is not a tidiness point. A right-to-left OVERRIDE makes one string of quoted
+ * text read one way to the person approving the goal document and another to the model executing
+ * it; a TAG character is invisible to the person entirely and is the standard way an instruction is
+ * smuggled past a human reader into an LLM's input. Stripping controls alone would have left the
+ * fence's own claim -- "the text inside me is data" -- true about line structure and false about
+ * everything a reader cannot see.
+ *
+ * `\p{Cf}` rather than a hand-written list of ranges, deliberately: the list would be the thing that
+ * goes stale, and the Unicode property is maintained by somebody whose job it is. The COST is stated
+ * rather than hidden: U+200D ZWJ is `Cf`, so an emoji sequence quoted out of an issue body arrives
+ * as its component emoji, and U+200C ZWNJ is `Cf`, so Persian and some Indic text loses a joining
+ * hint. Both are a rendering loss inside a quoted block; an invisible instruction inside the same
+ * block is a security failure, and this pass is on the security side of that trade. Variation
+ * selectors (U+FE00-U+FE0F) are `Mn`, not `Cf`, and are deliberately left alone.
+ *
+ * Written as escapes rather than as literal bytes, deliberately: a literal invisible character in a
  * source file is invisible to the next reader, which is precisely the property this pass exists to
  * remove from somebody else's text.
  *
- * A line structure is something a renderer and a prompt assembler both read, and U+2028 is a line
- * break to a JavaScript engine and invisible to a person -- so a payload that carries one is
- * carrying a line we did not write.
+ * One code point removed is never a code point added, so pass 1's bound survives this unchanged.
  */
-const CONTROL_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u2028\u2029]/gu
+const INVISIBLE_CHARACTERS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u2028\u2029\p{Cf}]/gu
 
 /** Pass 4, extracted so its comment can sit beside it. `split`/`join` replaces EVERY occurrence, and
  *  no occurrence can survive: forming a new token out of the join would need a `<<` from the
@@ -65,8 +89,9 @@ function neutraliseFenceTokens(text: string): string {
  *  1. TRUNCATE by code point, so every later pass works over bounded input rather than over whatever
  *     arrived. A cut body is exactly `maxChars` code points -- `maxChars - 1` kept plus the ellipsis
  *     (plan erratum E6) -- and an uncut one is at most that.
- *  2. REMOVE control characters, so a payload cannot smuggle a line structure past a renderer or a
- *     prompt assembler.
+ *  2. REMOVE every invisible character -- controls, and the whole Unicode format class (erratum
+ *     E15) -- so a payload can smuggle neither a line structure past a renderer nor an instruction
+ *     past the person who reads the quoted block before the model does.
  *  3. The EXISTING composition `defuseRoutingLiterals(neutraliseMarkers(text))`
  *     (`../handoff/contract.ts:97`), reused and not re-implemented -- this is its third caller, and
  *     the shared helper the M49 backlog keeps asking for is now marginally more attractive.
@@ -81,7 +106,7 @@ function neutraliseFenceTokens(text: string): string {
 export function sanitiseExternalText(text: string, maxChars: number): string {
   const points = [...text]
   const truncated = points.length > maxChars ? `${points.slice(0, maxChars - 1).join('')}…` : text
-  const stripped = truncated.replace(CONTROL_CHARACTERS, '')
+  const stripped = truncated.replace(INVISIBLE_CHARACTERS, '')
   return neutraliseFenceTokens(defuseRoutingLiterals(neutraliseMarkers(stripped)))
 }
 
