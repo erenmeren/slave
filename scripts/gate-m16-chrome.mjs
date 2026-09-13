@@ -36,10 +36,11 @@
 //      `ProjectRow.team` server-side).
 //   4. Repo hygiene (no browser): Task 7's own clean-check grep, expected empty.
 //   5. Evidence `/workforce?tab=evidence` (MOVED here by M53 R12 / plan erratum E11, from the
-//      `/analytics` per-slave table that milestone deleted): a by-profile row that says
-//      `Insufficient evidence` draws NO progress bar at all, and a row that claims rates draws one
-//      carrying `aria-valuenow` for each. The branch actually exercised is printed, so a database
-//      with no thin profile still proves the wiring in the other direction rather than passing
+//      `/analytics` per-slave table that milestone deleted): a by-profile row that claims no rate --
+//      marked `evidence-insufficient-` below R11's floor, or `evidence-unjudged-` when nobody has
+//      settled a judgement column -- draws NO progress bar at all, and a row that claims rates draws
+//      one carrying `aria-valuenow` for each. The branch actually exercised is printed, so a database
+//      with no silent profile still proves the wiring in the other direction rather than passing
 //      vacuously.
 //
 // NEVER RUN THIS WHILE A DEV SERVER IS ALREADY SERVING `apps/web`: like `gate-m14-fidelity.mjs` and
@@ -399,6 +400,7 @@ try {
   const cells = await page.evaluate(() =>
     [...document.querySelectorAll('[data-testid^="evidence-profile-row-"]')].map((row) => ({
       insufficient: row.querySelector('[data-testid^="evidence-insufficient-"]') !== null,
+      unjudged: row.querySelector('[data-testid^="evidence-unjudged-"]') !== null,
       bars: row.querySelectorAll('[data-testid="progress-bar"]').length,
       valued: row.querySelectorAll('[data-testid="progress-bar"][aria-valuenow]').length,
     })),
@@ -422,30 +424,39 @@ try {
         `concludes and the seeded database has concluded none; the table says so: ${JSON.stringify(empty)})`,
     )
   } else {
-    const thinRows = cells.filter((row) => row.insufficient)
-    for (const row of thinRows) {
+    // EITHER marker means "this row claims no rate" (M53 t5 fix round 1, review Important 1). Two of
+    // them because two different facts put a row here: `evidence-insufficient-` is R11's floor, and
+    // `evidence-unjudged-` is a row with attempts enough whose judgement columns nobody has settled
+    // -- which Task 3's fix round made ORDINARY, and which the round-1 partition classified as a row
+    // CLAIMING rates and then failed for drawing none.
+    const silentRows = cells.filter((row) => row.insufficient || row.unjudged)
+    for (const row of silentRows) {
       assert(
         row.bars === 0,
-        `check 5 (evidence): a row says "Insufficient evidence" and still draws ${String(row.bars)} progress bar(s) -- ` +
+        `check 5 (evidence): a row claims no rate and still draws ${String(row.bars)} progress bar(s) -- ` +
           'R11 rejects a greyed percentage, and a bar with no value beside the words is exactly that',
       )
     }
-    const shownRows = cells.filter((row) => !row.insufficient)
+    const shownRows = cells.filter((row) => !row.insufficient && !row.unjudged)
     for (const row of shownRows) {
       assert(
         row.bars === row.valued && row.valued > 0,
-        `check 5 (evidence): a row claims rates but has ${String(row.bars)} progress bar(s) and ` +
-          `${String(row.valued)} carrying aria-valuenow -- a bar that exists must carry a value`,
+        `check 5 (evidence): a row carries neither the insufficient nor the unjudged marker, so it claims at ` +
+          `least one rate -- but it has ${String(row.bars)} progress bar(s), ${String(row.valued)} of them carrying ` +
+          'aria-valuenow. A bar that exists must carry a value, and a row that claims a rate must draw one',
       )
     }
     // Which BRANCH was exercised, printed rather than assumed -- exactly what stopped the old check
     // on /analytics being vacuous: the wiring must be shown to exist in at least one direction.
+    const thinRows = cells.filter((row) => row.insufficient)
+    const unjudgedRows = cells.filter((row) => row.unjudged)
     console.log(
-      thinRows.length === 0
-        ? `check 5 PASSED: no profile in this database is below the sample floor -- fallback pass: all ` +
-            `${String(shownRows.length)} row(s) draw a progress bar for every rate they claim, each carrying aria-valuenow`
-        : `check 5 PASSED: ${String(thinRows.length)} of ${String(cells.length)} row(s) say "Insufficient evidence" and draw ` +
-            `no progress bar at all, and the other ${String(shownRows.length)} draw one carrying aria-valuenow per rate claimed`,
+      silentRows.length === 0
+        ? `check 5 PASSED: every one of the ${String(cells.length)} row(s) claims at least one rate -- fallback pass: ` +
+            'each draws a progress bar per rate claimed and every bar carries aria-valuenow'
+        : `check 5 PASSED: ${String(thinRows.length)} row(s) below the sample floor and ${String(unjudgedRows.length)} ` +
+            `with nothing judged draw no progress bar at all, and the other ${String(shownRows.length)} of ` +
+            `${String(cells.length)} draw one carrying aria-valuenow per rate claimed`,
     )
   }
 

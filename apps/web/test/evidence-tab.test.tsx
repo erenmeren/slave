@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { EvidenceTab } from '../src/components/workforce/EvidenceTab'
 import type { EvidenceModelRow, EvidencePage, EvidenceProfileRow, EvidenceRate } from '../src/server/evidence'
@@ -26,11 +26,14 @@ function page(over: Over = {}): EvidencePage {
     reviewRejected: thin(over.reviewRejected, rate(17)),
     integrated: thin(over.integrated, rate(75)),
   }
+  // `in`, not `??`: `null` is a MEANING here (nothing was reported, nobody measured the span) and
+  // `?? default` would silently turn an explicit null back into a figure.
   const money = {
-    reportedUsd: over.reportedUsd ?? 4.2,
-    estimatedUsd: over.estimatedUsd ?? 0.5,
+    reportedUsd: 'reportedUsd' in over ? (over.reportedUsd ?? null) : 4.2,
+    estimatedUsd: 'estimatedUsd' in over ? (over.estimatedUsd ?? null) : 0.5,
     unmeasuredRuns: over.unmeasuredRuns ?? 0,
   }
+  const medianDurationMs = 'medianDurationMs' in over ? (over.medianDurationMs ?? null) : 754_000
   const profile: EvidenceProfileRow = {
     profileKey: over.profileKey ?? 'template:t1',
     name: over.name ?? 'Backend Developer',
@@ -41,7 +44,7 @@ function page(over: Over = {}): EvidencePage {
     reworkCycles: over.reworkCycles ?? 2,
     humanInterventions: over.humanInterventions ?? 1,
     recoveries: over.recoveries ?? 0,
-    medianDurationMs: over.medianDurationMs ?? 754_000,
+    medianDurationMs,
     ...money,
     insufficient,
   }
@@ -50,7 +53,7 @@ function page(over: Over = {}): EvidencePage {
     label: 'model' in over ? (over.model ?? 'Model not recorded') : 'sonnet-4',
     attempted: over.attempted ?? 12,
     ...rates,
-    medianDurationMs: over.medianDurationMs ?? 754_000,
+    medianDurationMs,
     ...money,
     insufficient,
   }
@@ -102,9 +105,99 @@ describe('EvidenceTab (M53 R11, R12)', () => {
     const row = screen.getByTestId('evidence-profile-row-template:t1')
     expect(row.textContent).toContain('Insufficient evidence')
     expect(row.textContent).toMatch(/\d+%/u)
-    // The ROW is not thin -- only one of its denominators is -- so it carries no row marker, which
-    // is what `gate:m16-chrome`'s moved check 5 branches on (plan erratum E11).
+    // The ROW claims two of its three rates, so it carries NEITHER row marker -- which is what
+    // `gate:m16-chrome`'s moved check 5 branches on (plan erratum E11).
     expect(screen.queryByTestId('evidence-insufficient-template:t1')).toBeNull()
+    expect(screen.queryByTestId('evidence-unjudged-template:t1')).toBeNull()
+  })
+
+  /**
+   * Fix round 1, findings 1 and 4: THREE kinds of row, and the marker each carries.
+   *
+   * Before this round a row with enough attempts and nothing judged carried no marker at all, so
+   * `gate:m16-chrome`'s check 5 classified it as claiming rates and then failed it for drawing no
+   * bar. Task 3's fix round made that row ordinary -- only a verdict somebody reached settles a
+   * judgement column.
+   */
+  it('marks a THIN row, marks an UNJUDGED row, and marks a claiming row not at all (fix round 1)', () => {
+    const nothingJudged = { pct: null, judged: 0 }
+
+    render(<EvidenceTab page={page({ insufficient: true, attempted: 2 })} />)
+    expect(screen.getByTestId('evidence-insufficient-template:t1')).toBeTruthy()
+    expect(screen.queryByTestId('evidence-unjudged-template:t1')).toBeNull()
+    expect(screen.queryByTestId('progress-bar')).toBeNull()
+    cleanup()
+
+    const unjudged = render(
+      <EvidenceTab
+        page={page({
+          attempted: 8,
+          firstPass: nothingJudged,
+          reviewRejected: nothingJudged,
+          integrated: nothingJudged,
+        })}
+      />,
+    )
+    expect(screen.getByTestId('evidence-unjudged-template:t1')).toBeTruthy()
+    expect(screen.queryByTestId('evidence-insufficient-template:t1')).toBeNull()
+    // The whole point of the marker: this row draws no bar either, and the moved check must not
+    // read it as a row that claims something.
+    expect(unjudged.container.querySelector('[data-testid="progress-bar"]')).toBeNull()
+    cleanup()
+
+    render(<EvidenceTab page={page()} />)
+    expect(screen.queryByTestId('evidence-insufficient-template:t1')).toBeNull()
+    expect(screen.queryByTestId('evidence-unjudged-template:t1')).toBeNull()
+  })
+
+  // Fix round 1, item 4: `Insufficient evidence` is ONLY "there is a sample and it is too thin".
+  // A denominator of zero is a question nobody has answered, and the page says so in words rather
+  // than hiding the difference in a `title`.
+  it('says "not judged yet" in words for a rate nobody has judged, never "Insufficient evidence"', () => {
+    render(<EvidenceTab page={page({ attempted: 8, integrated: { pct: null, judged: 0 } })} />)
+    const row = screen.getByTestId('evidence-profile-row-template:t1')
+    expect(row.textContent).toContain('not judged yet')
+    // Its neighbours still claim their rates, so the phrase R11 minted does not appear at all here.
+    expect(row.textContent).not.toContain('Insufficient evidence')
+    cleanup()
+
+    // And the thin-sample case keeps the phrase, with the denominator one hover away. Scoped to the
+    // profile row: the fixture patches both tables, so the model row carries the same cell.
+    render(<EvidenceTab page={page({ attempted: 8, integrated: { pct: null, judged: 2 } })} />)
+    const thinCell = within(screen.getByTestId('evidence-profile-row-template:t1')).getByText('Insufficient evidence')
+    expect(thinCell.getAttribute('title')).toBe('2 judged so far')
+  })
+
+  // Fix round 1, item 3: `SlavePanel`'s `permission-mode-word` idiom -- a glyph carrying meaning
+  // gets a word behind it, or the cell has no accessible name at all.
+  it('puts a word behind every "—", for a screen reader and for a hover', () => {
+    render(<EvidenceTab page={page({ medianDurationMs: null, reportedUsd: null, estimatedUsd: null, unmeasuredRuns: 0 })} />)
+    const durationMark = screen.getAllByTestId('evidence-duration-unrecorded')[0]
+    expect(durationMark?.textContent).toContain('not recorded')
+    expect(durationMark?.getAttribute('title')).toBe('not recorded')
+    expect(durationMark?.querySelector('.sr-only')?.textContent).toBe('not recorded')
+    expect(durationMark?.querySelector('[aria-hidden]')?.textContent).toBe('—')
+    expect(screen.getAllByTestId('evidence-cost-unrecorded')[0]?.getAttribute('title')).toBe('not recorded')
+  })
+
+  /**
+   * Fix round 1, finding 2: an empty table under a domain chip means "nothing in THIS domain", and
+   * the global sentence there is a claim about the whole installation the page cannot support --
+   * the same class of over-claim as the raw `SUM(costUsd)` tile this milestone deleted.
+   */
+  it('names the filter when an empty table is empty only because of it, and says so in words', () => {
+    const empty = { byProfile: [], byModel: [] }
+    render(<EvidenceTab page={{ ...page(), ...empty }} selected="qa" />)
+    expect(screen.getByTestId('evidence-profile-empty').textContent).toBe('No record in QA yet.')
+    expect(screen.getByTestId('evidence-model-empty').textContent).toBe('No record in QA yet.')
+    // The LABEL, never the key.
+    expect(screen.getByTestId('evidence-profile-empty').textContent).not.toContain('qa')
+    cleanup()
+
+    render(<EvidenceTab page={{ ...page(), ...empty }} selected={null} />)
+    expect(screen.getByTestId('evidence-profile-empty').textContent).toBe(
+      'no run has left a record yet. A record is written when a run concludes, never before.',
+    )
   })
 
   it('gives a shown rate a progress bar carrying `aria-valuenow`, and a thin one NO bar (erratum E11)', () => {
