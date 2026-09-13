@@ -9,12 +9,29 @@ function walk(dir: string): string[] {
 }
 
 /**
- * The module specifier, in all three spellings a bundler honours and in both the prefixed and the
- * bare form. Written as ONE regex applied to the raw source, because no comment in this tree writes
- * `from 'node:crypto'` -- a comment that documents the ban writes the module's NAME, which is what
- * the second, comment-stripped pass below is for.
+ * Whitespace and comments, together: what may legally sit between `import` and the specifier it
+ * names. Spelled out because a block comment between the paren and the quote -- a webpack magic
+ * comment is the everyday reason to write one -- is valid TypeScript, and a bare whitespace class
+ * does not span it (fix round 1, item 3).
  */
-const CRYPTO_IMPORT_RE = /(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*)['"](?:node:)?crypto['"]/u
+const GAP = String.raw`(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*\n)*`
+const SPECIFIER = String.raw`['"](?:node:)?crypto['"]`
+
+/**
+ * The module specifier, in every shape a bundler honours and in both the prefixed and the bare form:
+ * `from 'crypto'` (static and re-export), `require('node:crypto')`, `import('crypto')`, and the bare
+ * side-effect `import 'crypto'` -- each with comments or newlines anywhere between the keyword and
+ * the quote.
+ *
+ * Applied to the RAW source, because no comment in this tree writes a specifier -- a comment that
+ * documents the ban writes the module's NAME, which is what the second, comment-stripped pass below
+ * is for. The paren forms are listed BEFORE the bare `import` form so the alternation reaches them
+ * first.
+ */
+const CRYPTO_IMPORT_RE = new RegExp(
+  String.raw`(?:\bfrom${GAP}|\brequire${GAP}\(${GAP}|\bimport${GAP}\(${GAP}|\bimport${GAP})${SPECIFIER}`,
+  'u',
+)
 
 /**
  * Source with comments removed, crudely and deliberately so.

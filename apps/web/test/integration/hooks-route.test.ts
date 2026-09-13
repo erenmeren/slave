@@ -14,7 +14,8 @@ import { PUBLIC_API_PREFIX } from '../../src/lib/boundary'
  */
 vi.mock('next/headers', () => ({ cookies: async () => ({ get: () => undefined }) }))
 
-const { POST } = await import('../../src/app/api/hooks/[source]/[hookId]/route')
+const route = await import('../../src/app/api/hooks/[source]/[hookId]/route')
+const { POST } = route
 
 const ENV_VAR = 'SLAVEOFAI_HOOKS_ROUTE_TEST_SECRET'
 const SECRET = 'a-secret-nothing-in-this-repository-stores'
@@ -95,9 +96,61 @@ const counts = async (): Promise<{ rows: number; events: number; versions: numbe
   versions: await prisma.goalVersion.count(),
 })
 
+/** `RequestInit` is lib.dom's here and predates the field; Node requires it for a stream body. */
+type StreamingInit = RequestInit & { readonly duplex: 'half' }
+
+interface Sender {
+  readonly request: Request
+  /** How many bytes the route actually PULLED. The whole point of erratum E20 is that this stays
+   *  near the cap however many the sender offers. */
+  readonly enqueued: () => number
+  readonly cancelled: () => boolean
+}
+
+/**
+ * A sender with no `Content-Length` that offers `offered` bytes in `chunk`-sized pieces (M54 R3,
+ * plan erratum E20). `pull` is demand-driven, so a chunk is only built when the route asks for it --
+ * which is what makes `enqueued()` a measurement of the route's appetite and not of the fixture's.
+ */
+function chunkedDeliver(offered: number, chunk: number, options: { readonly signature?: string | null } = {}): Sender {
+  let enqueued = 0
+  let cancelled = false
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (enqueued >= offered) {
+        controller.close()
+        return
+      }
+      const size = Math.min(chunk, offered - enqueued)
+      enqueued += size
+      controller.enqueue(new Uint8Array(size).fill(0x78))
+    },
+    cancel() {
+      cancelled = true
+    },
+  })
+  const headers = new Headers({ 'content-type': 'application/json' })
+  if (options.signature !== undefined && options.signature !== null) {
+    headers.set('x-hub-signature-256', options.signature)
+  }
+  headers.set('x-github-delivery', 'd-chunked')
+  headers.set('x-github-event', 'issues')
+  const init: StreamingInit = { method: 'POST', body: stream, headers, duplex: 'half' }
+  return {
+    request: new Request('http://x/api/hooks/github/x', init),
+    enqueued: () => enqueued,
+    cancelled: () => cancelled,
+  }
+}
+
 describe('the public prefix is one string (M54 R1)', () => {
   it('is spelled the same in the boundary and in control', () => {
     expect(PUBLIC_API_PREFIX).toBe(HOOK_PATH_PREFIX)
+  })
+
+  it('runs on Node and is never cached -- the verifier needs a crypto the edge runtime has not got', () => {
+    expect(route.runtime).toBe('nodejs')
+    expect(route.dynamic).toBe('force-dynamic')
   })
 })
 
@@ -189,6 +242,53 @@ describe('the two refusals that are not about identity (M54 R3, R11)', () => {
   it('verifies BEFORE it parses -- a malformed body with no signature is still a 401', async () => {
     const response = await POST(deliver('{not json', { signature: null }), params())
     expect(response.status).toBe(401)
+  })
+
+  it('413s a CHUNKED body over the cap without ever buffering it -- no Content-Length to lie with (E20)', async () => {
+    const before = await counts()
+    const CHUNK = 256 * 1024
+    // Eight times the cap on offer. A route that buffered first would pull all of it.
+    const sender = chunkedDeliver(HOOK_BODY_MAX_BYTES * 8, CHUNK)
+    const response = await POST(sender.request, params())
+    expect(response.status).toBe(413)
+    expect(await response.json()).toEqual({ error: 'body too large' })
+    expect(sender.cancelled()).toBe(true)
+    // It stopped at the first chunk that would cross the cap. TWO chunks of slack and not one: a
+    // default `ReadableStream` keeps one chunk queued ahead of its reader, so the sender builds the
+    // chunk after the crossing one before the cancel lands. That slack is the transport's and is
+    // bounded by the chunk size; what matters is that 8 MiB were offered and ~1.5 MiB were ever built.
+    expect(sender.enqueued()).toBeLessThanOrEqual(HOOK_BODY_MAX_BYTES + CHUNK * 2)
+    expect(sender.enqueued()).toBeLessThan(HOOK_BODY_MAX_BYTES * 2)
+    expect(await counts()).toEqual(before)
+  })
+
+  it('reads a chunked body EXACTLY at the cap, and the bytes it reassembles are the signed bytes', async () => {
+    const CHUNK = 256 * 1024
+    const body = new Uint8Array(HOOK_BODY_MAX_BYTES).fill(0x78)
+    const signature = `sha256=${createHmac('sha256', SECRET).update(Buffer.from(body)).digest('hex')}`
+    const sender = chunkedDeliver(HOOK_BODY_MAX_BYTES, CHUNK, { signature })
+    // A cap-sized run of `x` is not JSON, so the signature VERIFIED and the payload did not: this is
+    // a 400 and not a 401, which is the only way to tell the two locks apart at the cap's edge.
+    const response = await POST(sender.request, params())
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: 'payload invalid' })
+    expect(sender.cancelled()).toBe(false)
+    expect(sender.enqueued()).toBe(HOOK_BODY_MAX_BYTES)
+    expect(await prisma.inboundEvent.count()).toBe(0)
+  })
+
+  it('treats a POST with NO body as an empty one -- signed, verified, and then unparseable', async () => {
+    const empty = `sha256=${createHmac('sha256', SECRET).update(Buffer.alloc(0)).digest('hex')}`
+    const response = await POST(
+      new Request('http://x/api/hooks/github/x', {
+        method: 'POST',
+        headers: { 'x-hub-signature-256': empty, 'x-github-delivery': 'd-empty', 'x-github-event': 'ping' },
+      }),
+      params(),
+    )
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: 'payload invalid' })
+    expect(await prisma.inboundEvent.count()).toBe(0)
   })
 })
 
