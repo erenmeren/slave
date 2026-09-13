@@ -1089,4 +1089,5 @@ run one at a time.
 - `docs/architecture.md` — how the pieces fit: control verbs, the event log, the orchestrator, the UI
 - `docs/domain-model.md` and `docs/event-model.md` — the entities and every event type
 - `docs/decisions/` — the architecture decision records
+- `docs/providers/adding-a-provider.md` — what a third CLI runtime costs, and the ledger of what the two shipped ones actually do
 - `docs/superpowers/specs/` — the design spec of every milestone, M3 through M24

@@ -165,10 +165,11 @@ export interface ProviderRunFiles {
 /**
  * The binary version and date every value in this row was measured against.
  *
- * Not decoration: `packages/providers/src/capabilities.ts:81-85` says a recorded capability may only
- * ever be WIDENED by proof and never narrowed, never assumed true because a vendor's documentation
- * says so -- and a claim with no measurement beside it cannot be widened by proof, because nobody
- * can tell what it was proved against. `cursor-agent` self-updates between runs; `claude` does too.
+ * Not decoration: `packages/providers/src/capabilities.ts`'s widen-never-narrow rule -- cited by
+ * NAME because M56a moved it down that file -- says a recorded capability may only ever be WIDENED
+ * by proof and never narrowed, never assumed true because a vendor's documentation says so; and a
+ * claim with no measurement beside it cannot be widened by proof, because nobody can tell what it
+ * was proved against. `cursor-agent` self-updates between runs; `claude` does too.
  */
 export interface ProviderMeasurement {
   readonly version: string

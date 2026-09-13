@@ -108,8 +108,10 @@ export const PERMISSION_LABEL: Record<PermissionKind, string> = {
  *       them -- plus `Workflow`, `SendMessage`, `TaskStop`, the `Cron*` family, `ScheduleWakeup`,
  *       `RemoteTrigger`, `PushNotification`, `ReportFindings`, `DesignSync`, and the worktree and
  *       plan-mode transitions. The `Cron*` family travels together for `BashOutput`/`KillShell`'s
- *       reason: a grant that let a worker CREATE a schedule and not list it would leave it able to
- *       start something it cannot see.
+ *       reason, which lives beside those two names now, in
+ *       `packages/domain/src/provider/claude-code.ts`'s `run_commands` column: a grant that let a
+ *       worker CREATE a schedule and not list it would leave it able to start something it cannot
+ *       see.
  *   (c) **Every `mcp__*` name is `network_fetch`.** An MCP server is an external integration, which
  *       is what that kind means; it is denied by default and ONE grant enables the lot. Implemented
  *       as a PREFIX rule in {@link toolKindFor}, never as forty-one literals here, so a server an

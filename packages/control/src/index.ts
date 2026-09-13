@@ -42,8 +42,9 @@ export type { ModelListing, ModelOption } from '@slave-of-ai/providers'
  * isProviderKind is exactly this shape of caller) should reach the one canonical,
  * compile-time-guarded list rather than hand-roll another. NOT safe to value-import into a
  * CLIENT component through this barrel -- see PROVIDER_KINDS's docstring in
- * @slave-of-ai/providers/src/types.ts for why, and apps/web/src/components/ProviderSelect.tsx
- * for the client-safe mirror that exists because of it.
+ * packages/domain/src/provider/kind.ts, where the union is DECLARED (M56a R2), for why, and
+ * apps/web/src/lib/providerLabel.ts, which re-exports that declaration under the same names, for
+ * the client-safe mirror that exists because of it.
  */
 export { PROVIDER_KINDS } from '@slave-of-ai/providers'
 /** Re-exported for `capabilitiesOf`'s reason (M56a R10): `apps/web/src/server/settings.ts` names

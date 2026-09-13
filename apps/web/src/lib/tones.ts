@@ -131,7 +131,9 @@ export function cardStateFor(slave: SlaveStatus, task: TaskStatus | null, facts?
     case 'rework':
       return cardStateForSlave(slave, facts)
     default: {
-      // The `capabilitiesOf` idiom (`packages/providers/src/capabilities.ts:29-38`). `tsconfig.base`
+      // The exhaustiveness idiom this repository states once, in
+      // `packages/domain/src/provider/kind.ts`'s `_ProviderKindsComplete` guard -- where
+      // `capabilitiesOf`'s own `const unhandled: never` default case went in M56a. `tsconfig.base`
       // sets `strict` but not `noImplicitReturns`, so a fourteenth `TaskStatus` added later would
       // otherwise fall out of this switch with no compile error, silently landing on whatever
       // `cardStateForSlave(slave)` returns -- exactly the "a status silently defaults" failure this

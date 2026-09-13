@@ -62,7 +62,7 @@ export const CURSOR_MANIFEST: ProviderCapabilityManifest = {
   // settings file nor a hook, reported under the pair's names because the Postgres columns are
   // those two (`cursor/adapter.ts:196`).
   runFiles: { channels: ['settings', 'hook'], persisted: ['settings', 'hook'] },
-  // `packages/providers/src/capabilities.ts:77-79` and `cursor/hooks.ts:65-67` both record this
+  // `packages/providers/src/capabilities.ts:113-115` and `cursor/hooks.ts:65-67` both record this
   // version, and the binary self-updates between runs.
   measured: { version: 'cursor-agent 2026.08.25-3e8eec8', date: '2026-08-29' },
   differences: [
