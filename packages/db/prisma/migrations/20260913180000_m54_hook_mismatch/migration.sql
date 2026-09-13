@@ -1,0 +1,14 @@
+-- M54 fix wave (erratum E25): a fifth reason a delivery can be ignored.
+--
+-- A hook's secret is scoped to the repositories that hook speaks for. `ingestExternalEvent` resolves
+-- the project from the delivery's own `repository.full_name` (R6, so an organisation-level hook
+-- reaches the right project each time) and now also requires the resolved mapping's `hookId` to be
+-- the DELIVERING hook's -- otherwise the delivery is recorded with this reason, changes no goal and
+-- appends no event.
+--
+-- Additive in the sense the milestone's constraint means: one new enum member, no column touched, no
+-- existing row rewritten, nothing dropped. `IF NOT EXISTS` makes re-running it a no-op.
+--
+-- `ALTER TYPE ... ADD VALUE` runs inside Prisma's per-migration transaction, which Postgres 12+
+-- permits as long as the new value is not USED in the same transaction. Nothing here uses it.
+ALTER TYPE "ExternalIgnoredReason" ADD VALUE IF NOT EXISTS 'hook_mismatch';

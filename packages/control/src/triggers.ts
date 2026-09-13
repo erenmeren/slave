@@ -105,8 +105,15 @@ const LOG_SOURCE_MAX_CHARS = 32
  * The delivery id of a refused delivery is deliberately NOT in it: nothing has authenticated it.
  */
 export function hookRefusalLine(source: string, reason: HookLogReason): string {
+  return `[hooks] ${safeLogSource(source)} delivery refused: ${reason}`
+}
+
+/** The path segment as a log line may print it, shared by the two lines above and below so the two
+ *  cannot drift: lower-cased, stripped to `[a-z0-9-]`, truncated, and a dash when nothing is left
+ *  (rather than two spaces). An attacker's bytes never reach a terminal and the length is ours. */
+function safeLogSource(source: string): string {
   const safe = source.toLowerCase().replace(/[^a-z0-9-]/gu, '').slice(0, LOG_SOURCE_MAX_CHARS)
-  return `[hooks] ${safe === '' ? '-' : safe} delivery refused: ${reason}`
+  return safe === '' ? '-' : safe
 }
 
 /** Who a verified delivery turned out to be (M54 R3). A source and a hook, and nothing else: the
@@ -196,23 +203,48 @@ export const INBOUND_EVENT_STATUS_LABEL: Record<InboundEventStatus, string> = {
   actioned: 'Changed the requirement',
 }
 
-/** Why a delivery changed nothing (M54 R4/R6/R7/R11, plan erratum E10). Four, closed. */
+/** Why a delivery changed nothing (M54 R4/R6/R7/R11, plan erratum E10; the fifth is fix-wave
+ *  erratum E25). FIVE, closed. `hook_mismatch` is last because `ALTER TYPE ... ADD VALUE` appends
+ *  and these members are pinned against the Postgres enum member for member
+ *  (`packages/db/test/integration/enum-parity.test.ts`). */
 export const EXTERNAL_IGNORED_REASONS = [
   'unmapped_repository',
   'unrecognised_event',
   'workspace_archived',
   'request_refused',
+  'hook_mismatch',
 ] as const
 
 export type ExternalIgnoredReason = (typeof EXTERNAL_IGNORED_REASONS)[number]
 
-/** What each reason is CALLED. A `Record` over the union, so a fifth fails the build here rather
+/** What each reason is CALLED. A `Record` over the union, so a sixth fails the build here rather
  *  than turning up in `triggers inbound`'s output as an identifier. */
 export const EXTERNAL_IGNORED_REASON_LABEL: Record<ExternalIgnoredReason, string> = {
   unmapped_repository: 'No project is mapped to that repository',
   unrecognised_event: 'Not a kind this system acts on',
   workspace_archived: 'The project is archived',
   request_refused: 'The requirement already said exactly this',
+  hook_mismatch: 'That repository answers to a different hook',
+}
+
+/**
+ * The ONE line an IGNORED delivery produces, and the one reason that earns it (M54 R10, fix-wave
+ * erratum E25).
+ *
+ * `hook_mismatch` is a fact about AUTHORISATION -- a party holding one hook's secret signed a
+ * delivery naming a repository some other hook speaks for -- so it belongs beside R10's refusal
+ * lines, on the operator's stderr, where the same `[hooks]` prefix finds it. The other four ignored
+ * reasons are ordinary configuration or an ordinary day (nobody mapped that repository, it was a
+ * ping, the project is archived, the requirement already said this), and their home is the row
+ * `triggers inbound` prints -- a log line for each of those would be noise that trains an operator
+ * to stop reading the ones that matter.
+ *
+ * Bounded exactly the way `hookRefusalLine` is, and by the same helper: the reason is a member of a
+ * closed union and the source segment is stripped to `[a-z0-9-]` and truncated. It says `ignored`
+ * and not `refused`, because this delivery WAS recorded -- the row is there to be read.
+ */
+export function hookIgnoredLine(source: string, reason: ExternalIgnoredReason): string {
+  return `[hooks] ${safeLogSource(source)} delivery ignored: ${reason}`
 }
 
 /**
@@ -292,7 +324,8 @@ export function boundedPayload(payload: Record<string, unknown>): Record<string,
  *
  * MAP is `(source, repository.full_name)` against `ExternalRepository`, which is why an
  * organisation-level hook delivering for several repositories resolves each delivery to the
- * repository it is actually about.
+ * repository it is actually about -- and then the resolved row's `hookId` must be the DELIVERING
+ * hook's, or the delivery is recorded `hook_mismatch` and changes nothing (fix-wave erratum E25).
  *
  * RECORD is the FIRST write: one `InboundEvent` row, guarded by `@@unique([hookId, deliveryId])`
  * rather than by a pre-read, because a pre-query-then-insert has a race the constraint cannot have.
@@ -317,9 +350,29 @@ export async function ingestExternalEvent(
 
   const mapping = await prisma.externalRepository.findUnique({
     where: { source_repositoryFullName: { source: identity.source, repositoryFullName: origin.repository } },
-    select: { workspaceId: true, workspace: { select: { archivedAt: true } } },
+    select: { hookId: true, workspaceId: true, workspace: { select: { archivedAt: true } } },
   })
-  const workspaceId = mapping?.workspaceId ?? null
+  /**
+   * A HOOK'S SECRET IS SCOPED TO THE REPOSITORIES THAT HOOK SPEAKS FOR (fix-wave erratum E25).
+   *
+   * R6 resolves the workspace from the PAYLOAD, deliberately, so that an organisation-level hook
+   * delivering for several repositories reaches the right project each time. Without this line that
+   * also meant a party holding the secret for `acme/a`'s hook could sign a delivery whose
+   * `repository.full_name` is `acme/b` and amend project B's requirement -- even though the operator
+   * gave the two repositories different variables, which is the whole of what giving them different
+   * variables was supposed to mean.
+   *
+   * The ORGANISATION case is untouched: one `triggers map` per repository, all naming the same
+   * variable, gives N mappings with N hookIds, and the operator pastes each hook's own path into its
+   * own repository -- so every delivery arrives at the hook that mapping issued and this comparison
+   * is an identity. What it closes is the CROSS-hook case, which no correct configuration produces.
+   */
+  const hookMismatch = mapping !== null && mapping.hookId !== identity.hookId
+  // A mismatch resolves to NO project, for the reason it is a mismatch: this hook may not speak for
+  // that repository, so the row it writes is not attributed to that repository's project and no
+  // `ExecutionEvent` can be written against one (the column is NOT NULL). The row is still written,
+  // with `hook_mismatch` on it, because a forgery an operator cannot see is a forgery twice.
+  const workspaceId = hookMismatch ? null : (mapping?.workspaceId ?? null)
 
   let row: { id: string }
   try {
@@ -347,8 +400,12 @@ export async function ingestExternalEvent(
   }
 
   // R6: no workspace, no `ExecutionEvent` -- `ExecutionEvent.workspaceId` is NOT NULL and the log is
-  // per-workspace by construction, so there is nowhere to write it. The ROW and R10's log line are
-  // the honest pair of homes for a fact about a project this installation does not have.
+  // per-workspace by construction, so there is nowhere to write it. The ROW is the honest home for a
+  // fact about a project this installation does not have, and it is the ONLY one: R10's log line
+  // belongs to a delivery that was REFUSED, and this one was recorded (fix-wave item 11 -- this
+  // comment used to promise a second home nothing wrote to). The one ignored reason that also earns
+  // a line is `hook_mismatch`, which the route writes through `hookIgnoredLine` (erratum E25).
+  if (hookMismatch) return await settleIgnored(row.id, 'hook_mismatch')
   if (workspaceId === null) return await settleIgnored(row.id, 'unmapped_repository')
 
   await appendEvent({
@@ -571,7 +628,11 @@ export async function listInboundEvents(filter: {
   const rows = await prisma.inboundEvent.findMany({
     where: filter.workspaceId === null ? {} : { workspaceId: filter.workspaceId },
     orderBy: { receivedAt: 'desc' },
-    take: Math.min(filter.limit ?? LIST_INBOUND_LIMIT, LIST_INBOUND_LIMIT),
+    // Floored at one as well as capped (fix-wave item 10): Prisma reads a NEGATIVE `take` as "from
+    // the end, reversed", so an unclamped one would answer the OLDEST rows in the wrong order for a
+    // caller who passed `-1`. No caller does -- `triggers inbound` has no `--limit` flag -- and a
+    // bound that only holds because nothing exercises the other end is not a bound.
+    take: Math.max(1, Math.min(filter.limit ?? LIST_INBOUND_LIMIT, LIST_INBOUND_LIMIT)),
   })
   return rows.map((row) => {
     const payload = row.payload as { repository?: unknown }

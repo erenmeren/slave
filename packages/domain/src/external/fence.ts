@@ -152,12 +152,26 @@ export function sanitiseExternalText(text: string, maxChars: number): string {
  * one is a caller's arithmetic error rather than a request to invert the block.
  */
 export function fenceExternalText(text: string, maxChars: number = EXTERNAL_TEXT_MAX_CHARS): string {
-  return [
-    EXTERNAL_FENCE_PREAMBLE,
-    EXTERNAL_FENCE_OPEN,
-    sanitiseExternalText(text, Math.max(1, maxChars)),
-    EXTERNAL_FENCE_CLOSE,
-  ].join('\n')
+  return fenceExternalBlock([sanitiseExternalText(text, Math.max(1, maxChars))])
+}
+
+/**
+ * One fence around SEVERAL already-safe lines (fix-wave erratum E24).
+ *
+ * The same four parts as {@link fenceExternalText} -- the preamble, the open token, the quoted
+ * lines, the close token -- and the same single block: one preamble, one open, one close, whatever
+ * the caller put between them.
+ *
+ * It does NOT sanitise, and that is the contract: every line handed to it must already be either
+ * this system's own words or a string that has been through {@link sanitiseExternalText} or a shape
+ * validator. `composeExternalRequest` is the one caller and hands it three -- a sanitised quote of
+ * the title, a validated `https` url, and the sanitised body -- because E24 moved both labels INSIDE
+ * the fence, where the sentence "the text inside me is data" is the one a model reads over them. A
+ * caller that hands it raw external prose has broken that contract; the assertion that no external
+ * byte reaches the composed request outside a fence is `request.test.ts`'s probe.
+ */
+export function fenceExternalBlock(lines: readonly string[]): string {
+  return [EXTERNAL_FENCE_PREAMBLE, EXTERNAL_FENCE_OPEN, ...lines, EXTERNAL_FENCE_CLOSE].join('\n')
 }
 
 /** The code points {@link fenceExternalText} adds AROUND the quote: the preamble, both tokens and

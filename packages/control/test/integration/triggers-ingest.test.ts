@@ -7,6 +7,8 @@ import {
   INBOUND_EVENT_STATUSES,
   INBOUND_EVENT_STATUS_LABEL,
   EXTERNAL_IGNORED_REASON_LABEL,
+  LIST_INBOUND_LIMIT,
+  hookIgnoredLine,
   ingestExternalEvent,
   listInboundEvents,
 } from '../../src/triggers.js'
@@ -45,12 +47,13 @@ describe('the two closed vocabularies control owns (plan errata E9, E10)', () =>
     expect([...INBOUND_EVENT_STATUSES]).toEqual(['received', 'ignored', 'actioned'])
   })
 
-  it('is four ignored reasons', () => {
+  it('is FIVE ignored reasons (fix-wave erratum E25 added the fifth)', () => {
     expect([...EXTERNAL_IGNORED_REASONS]).toEqual([
       'unmapped_repository',
       'unrecognised_event',
       'workspace_archived',
       'request_refused',
+      'hook_mismatch',
     ])
   })
 
@@ -62,6 +65,19 @@ describe('the two closed vocabularies control owns (plan errata E9, E10)', () =>
     for (const reason of EXTERNAL_IGNORED_REASONS) {
       expect(EXTERNAL_IGNORED_REASON_LABEL[reason], reason).not.toBe(reason)
       expect(EXTERNAL_IGNORED_REASON_LABEL[reason], reason).toMatch(/^[A-Z]/u)
+    }
+  })
+
+  it('writes one bounded line for the ONE ignored reason that is about authorisation (E25)', () => {
+    expect(hookIgnoredLine('github', 'hook_mismatch')).toBe('[hooks] github delivery ignored: hook_mismatch')
+    // The same bounding as the refusal line, and by the same helper: an attacker's bytes never
+    // reach a terminal and the length of the line is ours.
+    expect(hookIgnoredLine('github<script>', 'hook_mismatch')).toBe(
+      '[hooks] githubscript delivery ignored: hook_mismatch',
+    )
+    expect(hookIgnoredLine('!!!', 'hook_mismatch')).toBe('[hooks] - delivery ignored: hook_mismatch')
+    for (const reason of EXTERNAL_IGNORED_REASONS) {
+      expect(hookIgnoredLine(TRIGGERS_SECRET, reason), reason).not.toContain(TRIGGERS_SECRET)
     }
   })
 })
@@ -404,7 +420,7 @@ describe('ingestExternalEvent -- the four ways nothing happens (M54 R6, R7, R11)
   })
 
   it('records an ARCHIVED project`s delivery and changes nothing about it (R6)', async () => {
-    await prisma.externalRepository.create({
+    const retired = await prisma.externalRepository.create({
       data: {
         workspaceId: fixture.archivedWorkspaceId,
         source: 'github',
@@ -412,11 +428,17 @@ describe('ingestExternalEvent -- the four ways nothing happens (M54 R6, R7, R11)
         secretEnvVar: TRIGGERS_ENV_VAR,
       },
     })
-    const outcome = await ingestExternalEvent(identity(), {
-      deliveryId: 'd-1',
-      eventName: 'issues',
-      payload: issueOpened('acme/retired'),
-    })
+    // Delivered at the hook THAT mapping issued, which is where a provider would send it: the
+    // archived project is what this case is about, and erratum E25 answers a delivery arriving at
+    // another mapping's hook with `hook_mismatch` before the archive is ever looked at.
+    const outcome = await ingestExternalEvent(
+      { source: 'github', hookId: retired.hookId },
+      {
+        deliveryId: 'd-1',
+        eventName: 'issues',
+        payload: issueOpened('acme/retired'),
+      },
+    )
     expect(outcome.status).toBe('ignored')
     if (outcome.status !== 'ignored') throw new Error('narrowing')
     expect(outcome.reason).toBe('workspace_archived')
@@ -429,6 +451,71 @@ describe('ingestExternalEvent -- the four ways nothing happens (M54 R6, R7, R11)
     expect(types).toEqual(['external_received'])
     const archived = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.archivedWorkspaceId } })
     expect(archived.goalVersion).toBe(1)
+  })
+
+  it('IGNORES a delivery whose repository answers to a different hook (fix-wave erratum E25)', async () => {
+    // Two hooks, two mapped repositories, two variables -- which is what an operator means by
+    // mapping them separately. The delivery is VALID: it is signed by hook A's secret and arrives at
+    // hook A's path, and `verifyHookDelivery` has already answered `ok` for it. What it names is
+    // hook B's repository, and before E25 that amended project B's requirement.
+    const billing = await prisma.externalRepository.create({
+      data: {
+        workspaceId: fixture.otherWorkspaceId,
+        source: 'github',
+        repositoryFullName: 'acme/billing',
+        secretEnvVar: 'ANOTHER_VARIABLE_NOBODY_EXPORTS',
+      },
+    })
+    expect(billing.hookId).not.toBe(fixture.hookId)
+    const before = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.otherWorkspaceId } })
+
+    const outcome = await ingestExternalEvent(identity(), {
+      deliveryId: 'd-cross-hook',
+      eventName: 'issues',
+      payload: issueOpened('acme/billing'),
+    })
+    expect(outcome.status).toBe('ignored')
+    if (outcome.status !== 'ignored') throw new Error('narrowing')
+    expect(outcome.reason).toBe('hook_mismatch')
+
+    // THE ROW, so a forgery is visible -- and it belongs to no project, because this hook may not
+    // speak for that one.
+    const row = await prisma.inboundEvent.findUniqueOrThrow({ where: { id: outcome.inboundEventId } })
+    expect(row.hookId).toBe(fixture.hookId)
+    expect(row.workspaceId).toBeNull()
+    expect(row.status).toBe('ignored')
+    expect(row.ignoredReason).toBe('hook_mismatch')
+    expect(row.goalVersion).toBeNull()
+    // NO event and NO goal change, on either project.
+    expect(await prisma.executionEvent.count()).toBe(0)
+    expect(await prisma.goalVersion.count()).toBe(1)
+    const after = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.otherWorkspaceId } })
+    expect(after.goalVersion).toBe(before.goalVersion)
+    expect(after.goal).toBe(before.goal)
+  })
+
+  it('leaves the ORGANISATION case exactly as R6 designed it -- one variable, N repositories', async () => {
+    // The case E25 must not break: the same variable named by two mappings, each delivery arriving
+    // at its OWN hook. Both action, because each hook speaks for the repository it was issued for.
+    const second = await prisma.externalRepository.create({
+      data: {
+        workspaceId: fixture.otherWorkspaceId,
+        source: 'github',
+        repositoryFullName: 'acme/billing',
+        secretEnvVar: TRIGGERS_ENV_VAR,
+      },
+    })
+    const first = await ingestExternalEvent(identity(), {
+      deliveryId: 'd-org-1',
+      eventName: 'issues',
+      payload: issueOpened(fixture.repository),
+    })
+    const other = await ingestExternalEvent(
+      { source: 'github', hookId: second.hookId },
+      { deliveryId: 'd-org-2', eventName: 'issues', payload: issueOpened('acme/billing') },
+    )
+    expect(first.status).toBe('actioned')
+    expect(other.status).toBe('actioned')
   })
 
   it('does NOT ignore a HALTED project -- halting stops dispatch, not the requirement (R6)', async () => {
@@ -506,9 +593,45 @@ describe('listInboundEvents (plan erratum E11)', () => {
     expect(await listInboundEvents({ workspaceId: null })).toHaveLength(1)
   })
 
-  it('is BOUNDED, and the cap is the verb`s own and not the caller`s', async () => {
-    const rows = await listInboundEvents({ workspaceId: null, limit: 5000 })
-    expect(rows.length).toBeLessThanOrEqual(200)
+  it('is BOUNDED, and the cap is the verb`s own and not the caller`s (fix-wave item 15)', async () => {
+    // SEEDED PAST THE CAP, because a case that asks a three-row table whether it answered at most
+    // two hundred cannot fail. `createMany` in one statement: the rows are a fixture and not the
+    // subject, and the subject is the number the verb answers with.
+    await prisma.inboundEvent.createMany({
+      data: Array.from({ length: LIST_INBOUND_LIMIT + 1 }, (_unused, index) => ({
+        hookId: fixture.hookId,
+        source: 'github' as const,
+        deliveryId: `d-bulk-${String(index)}`,
+        eventKind: 'issue_opened' as const,
+        workspaceId: fixture.workspaceId,
+        payload: { repository: fixture.repository },
+      })),
+    })
+    expect(await prisma.inboundEvent.count()).toBe(LIST_INBOUND_LIMIT + 1)
+    expect(await listInboundEvents({ workspaceId: null })).toHaveLength(LIST_INBOUND_LIMIT)
+    expect(await listInboundEvents({ workspaceId: null, limit: 5000 })).toHaveLength(LIST_INBOUND_LIMIT)
+    expect(await listInboundEvents({ workspaceId: null, limit: 5 })).toHaveLength(5)
+  })
+
+  it('answers a page rather than the table read backwards for a NEGATIVE limit (fix-wave item 10)', async () => {
+    // Prisma reads a negative `take` as "from the end, reversed", so an unclamped one would answer
+    // the OLDEST rows in the wrong order. Unreachable from the CLI, which has no `--limit` flag.
+    await prisma.inboundEvent.createMany({
+      // `receivedAt` spelled out rather than defaulted: three rows written in one statement share
+      // one CURRENT_TIMESTAMP, and "newest first" over a tie is not an order.
+      data: [1, 2, 3].map((index) => ({
+        hookId: fixture.hookId,
+        source: 'github' as const,
+        deliveryId: `d-neg-${String(index)}`,
+        eventKind: 'issue_opened' as const,
+        workspaceId: fixture.workspaceId,
+        receivedAt: new Date(`2026-09-13T0${String(index)}:00:00.000Z`),
+        payload: { repository: fixture.repository },
+      })),
+    })
+    const rows = await listInboundEvents({ workspaceId: null, limit: -1 })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.deliveryId).toBe('d-neg-3')
   })
 
   it('never answers the secret or the hookId`s mapping row', async () => {

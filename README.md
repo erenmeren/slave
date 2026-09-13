@@ -368,6 +368,63 @@ is due and not happening: `archived`, `halted`, `dedup` (this version was alread
 `retry_cap` or `live_planning_run`. Reading the prompt starts no run and records nothing — the tick
 is the only thing that dispatches one.
 
+## Connect a repository
+
+Something outside can amend the requirement: an issue opened, a CI run that failed, a pull request
+that moved, a deployment that failed. Connect one repository to one project, and each delivery
+becomes a new goal version whose text quotes what arrived inside a fence that says it is data.
+
+```bash
+npm run orchestrator -- triggers map --workspace <id> --source github \
+  --repository acme/checkout --secret-env ACME_CHECKOUT_HOOK_SECRET
+# acme/checkout on GitHub now belongs to Checkout Platform
+#   paste this path into the repository's webhook settings: /api/hooks/github/<hookId>
+#   export the signing secret as ACME_CHECKOUT_HOOK_SECRET in the web process's environment
+```
+
+Then, in order:
+
+1. **Put the secret in `.env`, under the name the mapping carries.** Invent a long random one
+   (`openssl rand -hex 32`), and `echo "ACME_CHECKOUT_HOOK_SECRET=<that value>" >> .env`. The
+   **web** process is the one that reads it — `npm run web` and `web:exposed` both pass
+   `--env-file=.env` — so **restart the web process** afterwards; a variable exported after start is
+   not in its environment. Never put the value in a file the repository tracks, and never in the
+   mapping: the row holds the NAME of a variable and nothing in this system stores what is in it.
+2. **Paste the path into the provider**, with the same secret. GitHub → the repository → Settings →
+   Webhooks → Add webhook: the payload URL is your web address plus the path the command printed,
+   the content type is `application/json`, the secret is the same value you put in `.env`, and the
+   events are the ones you want (Issues, Workflow runs, Pull requests, Deployment statuses).
+3. **Check what arrived.** `npm run orchestrator -- triggers inbound` lists every delivery, newest
+   first: which project it reached, what kind it was, what became of it, why nothing happened if
+   nothing did, and the provider's own delivery id to paste back into its delivery log.
+
+```bash
+npm run orchestrator -- triggers list [--workspace <id>]     # every mapping and its hook path
+npm run orchestrator -- triggers inbound [--workspace <id>]  # the 200 most recent deliveries
+npm run orchestrator -- triggers unmap --source github --repository acme/checkout --workspace <id>
+```
+
+Three things to know:
+
+- **An unsigned or wrongly-signed delivery writes nothing.** The hook path is the one public API
+  path this product has, and it buys nobody anything: no body over 1 MiB is read, no JSON is parsed
+  and no row is written until the signature over the exact bytes matches. Every way of being
+  nobody — no signature, a wrong one, an unknown hook, an unknown source, **or a variable the web
+  process does not have** — answers the same `401 {"error":"unauthenticated"}`. So a mistyped or
+  unexported variable looks exactly like an attacker to the sender: the *reason* is written once, on
+  the web process's own stderr, as `[hooks] github delivery refused: secret_unset`. That line is
+  where to look when a webhook you just connected does nothing.
+- **A secret is scoped to the repositories its hook was issued for.** Each `triggers map` issues its
+  own hook path; a delivery signed for one repository's hook that names another's is recorded and
+  ignored (`[hooks] github delivery ignored: hook_mismatch`), and changes no requirement.
+- **Nothing outside creates or cancels work.** A delivery amends the requirement; the re-plan on the
+  next tick decides what that means for the board, and its cancellations are still proposals you
+  approve ([Requirements have versions](#requirements-have-versions)).
+
+`triggers map` does not create the webhook at the provider, does not send anything outbound, and
+does not tell you whether the variable is set — that last one is deliberate, because a verb that
+answered it would be an enumeration oracle pointed at the web process's environment.
+
 ## Importing a catalog
 
 A team you already have written down does not have to be typed in again. Point the CLI at a
@@ -832,9 +889,11 @@ printf '%s\n' "$PASSWORD" | npm run orchestrator -- create-user --name <you>   #
 npm run web:exposed
 ```
 
-With a secret set the app runs in **accounts mode**: every page and API call needs a signed-in user,
-sessions are 30-day signed cookies, and deleting a user locks them out on their next write.
-`web:exposed` refuses to start without a secret of 32+ characters and at least one user.
+With a secret set the app runs in **accounts mode**: every page and API call needs a signed-in user
+— with one exception, `POST /api/hooks/…`, which is opened deliberately and answers nobody without a
+valid HMAC signature ([Connect a repository](#connect-a-repository)) — sessions are 30-day signed
+cookies, and deleting a user locks them out on their next write. `web:exposed` refuses to start
+without a secret of 32+ characters and at least one user.
 
 Two things to know first:
 

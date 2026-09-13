@@ -619,14 +619,17 @@ enum InboundEventStatus {
   actioned
 }
 
-/// M54 R4/R6/R7/R11: why a delivery changed nothing. Four members (plan erratum E10): the repository
-/// is mapped to no project, the delivery is not one this adapter recognises, the project is
-/// archived, or `requestChange` itself refused it (a byte-equal repeat).
+/// M54 R4/R6/R7/R11: why a delivery changed nothing. FIVE members (plan erratum E10, fix-wave
+/// erratum E25): the repository is mapped to no project, the delivery is not one this adapter
+/// recognises, the project is archived, `requestChange` itself refused it (a byte-equal repeat), or
+/// the repository it names answers to a DIFFERENT hook than the one that signed the delivery.
+/// `hook_mismatch` is last because `ALTER TYPE ... ADD VALUE` appends.
 enum ExternalIgnoredReason {
   unmapped_repository
   unrecognised_event
   workspace_archived
   request_refused
+  hook_mismatch
 }
 
 enum ProviderKind {

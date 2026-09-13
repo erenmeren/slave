@@ -616,9 +616,10 @@ const USAGE = `usage: orchestrator <command> [options]
   triggers list [--workspace <id>]     every mapping: the project, the source and its key, the
                                        repository, the variable NAME, the path, and when it was
                                        made. --workspace narrows; omitting it is every project.
-  triggers inbound [--workspace <id>]  every delivery, newest first: when, from where, what kind,
-                                       what became of it, why nothing happened if nothing did,
-                                       which goal version it produced if it produced one, and the
+  triggers inbound [--workspace <id>]  every delivery, newest first: when, WHICH PROJECT it reached
+                                       (a dash when it reached none), from where, what kind, what
+                                       became of it, why nothing happened if nothing did, which
+                                       goal version it produced if it produced one, and the
                                        provider's own delivery id. THE MOST RECENT
                                        ${String(LIST_INBOUND_LIMIT)}. This is the only surface that shows a delivery
                                        id -- no page does.
@@ -3265,11 +3266,25 @@ export async function main(argv: readonly string[]): Promise<number> {
         // `listInboundEvents` applies `LIST_INBOUND_LIMIT` itself and this verb takes no `--limit`;
         // the cap is NAMED in the usage text (`evidence list`'s own choice for its own reason), so
         // an operator who reads 200 lines can tell the whole record from the top of it.
-        for (const row of await listInboundEvents({ workspaceId })) {
+        const rows = await listInboundEvents({ workspaceId })
+        // The PROJECT column (fix-wave item 25). `listInboundEvents` answers a `workspaceId`, which
+        // is an id and never visible text (M52 erratum E18), and this is the boundary that resolves
+        // one -- the same one `triggers map`'s refusal and `staffing list` cross. ONE read for the
+        // whole page rather than one per line, and `-` for the two rows that legitimately have no
+        // project: a delivery for a repository nobody mapped, and one a hook may not speak for.
+        const ids = [...new Set(rows.map((row) => row.workspaceId).filter((id): id is string => id !== null))]
+        const names = new Map(
+          (ids.length === 0
+            ? []
+            : await prisma.workspace.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })
+          ).map((workspace) => [workspace.id, workspace.name]),
+        )
+        for (const row of rows) {
           // The delivery id IS printed here and on no page (R9): it is the correlation id an
           // operator pastes into a provider's own delivery log, and this is an operator's terminal.
           process.stdout.write(
-            `${row.receivedAt.toISOString()}\t${EXTERNAL_SOURCE_LABEL[row.source]}\t${row.repository}\t` +
+            `${row.receivedAt.toISOString()}\t${row.workspaceId === null ? '-' : (names.get(row.workspaceId) ?? '-')}\t` +
+              `${EXTERNAL_SOURCE_LABEL[row.source]}\t${row.repository}\t` +
               `${EXTERNAL_KIND_LABEL[row.eventKind]}\t${INBOUND_EVENT_STATUS_LABEL[row.status]}\t` +
               `${row.ignoredReason === null ? '-' : EXTERNAL_IGNORED_REASON_LABEL[row.ignoredReason]}\t` +
               `${row.goalVersion === null ? '-' : `v${String(row.goalVersion)}`}\t${row.deliveryId}\n`,

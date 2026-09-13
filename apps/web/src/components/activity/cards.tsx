@@ -438,7 +438,7 @@ function ToolResultCard(props: ActivityCardProps): ReactElement {
         <span data-testid="tool-result-name">{payload.toolName}</span>
         {payload.errorClass !== null && (
           <>
-            {' · '}
+            {' \u00b7 '}
             <span data-testid="tool-result-class" title={payload.errorClass} data-error-class={payload.errorClass}>
               {TOOL_ERROR_LABEL[payload.errorClass] ?? payload.errorClass}
             </span>
@@ -499,9 +499,9 @@ function BreakerCard(props: ActivityCardProps): ReactElement {
         <span data-testid="breaker-trip" title={payload.trip} data-breaker-trip={payload.trip}>
           {BREAKER_TRIP_LABEL[payload.trip]}
         </span>
-        {' · '}
+        {' \u00b7 '}
         <span data-testid="breaker-count">{plural(payload.count, 'time')}</span>
-        {' · '}
+        {' \u00b7 '}
         <span data-testid="breaker-detail" title={payload.detail}>
           {breakerDetailText(payload.trip, payload.detail)}
         </span>
@@ -1018,11 +1018,11 @@ function SlaveMessageReassignedCard(props: ActivityCardProps): ReactElement {
         <span data-testid="reassigned-to" className="font-mono">
           {payload.to.slaveId}
         </span>
-        {' · by '}
+        {' \u00b7 by '}
         <span data-testid="reassigned-actor">{payload.actor}</span>
         {payload.decisionId !== null && (
           <>
-            {' · '}
+            {' \u00b7 '}
             <DecisionRef id={payload.decisionId} />
           </>
         )}
@@ -1075,7 +1075,7 @@ function SupervisorDecidedCard(props: ActivityCardProps): ReactElement {
         <span data-testid="supervisor-tier" className="text-text-3">
           ({payload.tier}, by {payload.decidedBy})
         </span>
-        {' · '}
+        {' \u00b7 '}
         <DecisionRef id={payload.decisionId} />
       </Transition>
     </ActivityCard>
@@ -1100,7 +1100,7 @@ function SupervisorProposedCard(props: ActivityCardProps): ReactElement {
         <span data-testid="supervisor-subject" className="font-mono">
           {payload.subjectId}
         </span>
-        {' · awaiting a human until '}
+        {' \u00b7 awaiting a human until '}
         {/* The STAMP, not "in 24h": this row is read weeks later as often as live, and a duration
           * computed against now would then describe a proposal that expired long ago. Trimmed to
           * minutes -- `expirePendingDecisions` runs per tick, so seconds are a precision the
@@ -1108,7 +1108,7 @@ function SupervisorProposedCard(props: ActivityCardProps): ReactElement {
         <span data-testid="supervisor-expires" className="font-mono">
           {payload.expiresAt.slice(0, 16).replace('T', ' ')}
         </span>
-        {' · '}
+        {' \u00b7 '}
         <DecisionRef id={payload.decisionId} />
       </Transition>
     </ActivityCard>
@@ -1121,7 +1121,7 @@ function SupervisorAppliedCard(props: ActivityCardProps): ReactElement {
     <ActivityCard {...props}>
       <Transition tone="working" label="supervisor applied">
         <span data-testid="supervisor-action">{payload.action.kind}</span>
-        {' · '}
+        {' \u00b7 '}
         <DecisionRef id={payload.decisionId} />
       </Transition>
     </ActivityCard>
@@ -1138,7 +1138,7 @@ function SupervisorResolvedCard(props: ActivityCardProps): ReactElement {
     <ActivityCard {...props}>
       <Transition tone={payload.outcome === 'approved' ? 'idle' : 'warn'} label={`supervisor ${payload.outcome}`}>
         <DecisionRef id={payload.decisionId} />
-        {payload.reason !== null && <span data-testid="supervisor-reason">{` · ${payload.reason}`}</span>}
+        {payload.reason !== null && <span data-testid="supervisor-reason">{` \u00b7 ${payload.reason}`}</span>}
       </Transition>
     </ActivityCard>
   )
@@ -1150,9 +1150,9 @@ function SupervisorFailedCard(props: ActivityCardProps): ReactElement {
     <ActivityCard {...props}>
       <Transition tone="danger" label="supervisor action failed">
         <span data-testid="supervisor-action">{payload.action.kind}</span>
-        {' · '}
+        {' \u00b7 '}
         <span data-testid="supervisor-reason">{payload.reason}</span>
-        {' · '}
+        {' \u00b7 '}
         <DecisionRef id={payload.decisionId} />
       </Transition>
     </ActivityCard>

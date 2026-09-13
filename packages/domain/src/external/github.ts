@@ -9,8 +9,8 @@ import {
 } from './fence.js'
 import {
   EXTERNAL_REF_RE,
-  EXTERNAL_URL_MAX_CHARS,
   REPOSITORY_FULL_NAME_RE,
+  safeExternalUrl,
   type ExternalOrigin,
 } from './origin.js'
 import type { ExternalEventKind } from './request.js'
@@ -115,7 +115,8 @@ export function classifyGitHubDelivery(eventName: string, payload: GitHubDeliver
  *  - `action` -- `EXTERNAL_ACTION_MAX_CHARS` (100), sanitised
  *  - `repository` -- 201, by `REPOSITORY_FULL_NAME_RE` itself, which refuses anything longer
  *  - `ref` -- 40, by `EXTERNAL_REF_RE`, likewise
- *  - `url` -- under `EXTERNAL_URL_MAX_CHARS` (500), by `safeUrl`, which drops a longer one to null
+ *  - `url` -- at most `EXTERNAL_URL_MAX_CHARS` (500), by `safeUrl`, which drops a longer one, one on
+ *    a host this source does not serve, and one that is not `https:`, to null (erratum E24)
  *  - `title` -- `EXTERNAL_TITLE_MAX_CHARS` (300), sanitised
  *  - `body` -- `EXTERNAL_TEXT_MAX_CHARS` (2000), sanitised
  *
@@ -153,16 +154,14 @@ export interface NormalisedDelivery {
  */
 export type ExternalPayloadProblem = 'shape' | 'repository' | 'ref'
 
-/** A url a person could be handed, or `null` (R8). Dropped rather than refused: half a link is worse
- *  than no link, and a delivery whose issue url is malformed is still a real issue. */
+/** A url a person could be handed, or `null` (R8) -- this adapter's own source bound into the one
+ *  rule both readers share (fix-wave erratum E24). What it answers is the PARSED, normalised `href`
+ *  on a host this source actually serves, never the string that arrived: a url is a label, it is
+ *  quoted where a model reads it, and `new URL()` accepts a value carrying tab, LF and CR because
+ *  the parser is specified to strip them before it parses. Dropped rather than refused, as before:
+ *  a delivery whose issue url is malformed is still a real issue. */
 function safeUrl(value: string | null | undefined): string | null {
-  if (typeof value !== 'string' || value.length >= EXTERNAL_URL_MAX_CHARS) return null
-  try {
-    const parsed = new URL(value)
-    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? value : null
-  } catch {
-    return null
-  }
+  return safeExternalUrl(value, 'github')
 }
 
 /** A seven-character short sha, or `null` for anything that is not a sha at all. The SHORT form is
@@ -187,7 +186,9 @@ function shortSha(value: string | undefined): string | null {
  *  3. the KIND -- `classifyGitHubDelivery`, with `null` becoming `custom` and `recognised: false`.
  *  4. the REF -- read per kind, then held to `EXTERNAL_REF_RE` when there is one. A PRESENT ref that
  *     fails is `ref`; an ABSENT ref is `null`, which every unrecognised delivery carries.
- *  5. the URL -- dropped to `null` when it is not an `http(s)` url under the cap (R8 says so).
+ *  5. the URL -- dropped to `null` when it is not an `https` url, under the cap, on one of this
+ *     source's own hosts (R8 says so; fix-wave erratum E24 says which hosts and returns the parsed
+ *     `href` rather than the string that arrived).
  *  6. the TEXT -- title and body through `sanitiseExternalText` at their own caps, with `truncated`
  *     saying whether the stored text is what arrived.
  *  7. the LABELS -- the event name and the action through the same sanitiser at their own caps

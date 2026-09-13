@@ -258,8 +258,16 @@ async function preflightCleanup() {
   }
   const orphans = await prisma.inboundEvent.deleteMany({ where: { deliveryId: { startsWith: 'm54-gate-' } } })
   if (orphans.count > 0) console.log(`preflight: removed ${String(orphans.count)} leftover inbound row(s)`)
+  // SCOPED TO THIS GATE'S OWN PROJECTS (fix-wave item 39). `acme/checkout` is a name an operator
+  // could plausibly have mapped for real on this machine, and a `deleteMany` by repository name
+  // alone would have unmapped it -- silently, on every gate run. The workspaces above are removed
+  // first and their mappings cascade with them; this is the second pass, for a mapping whose gate
+  // workspace is gone, and it may only ever touch one of those.
   const mappings = await prisma.externalRepository.deleteMany({
-    where: { repositoryFullName: { in: [MAPPED_REPO, UNEXPORTED_REPO, UNMAPPED_REPO] } },
+    where: {
+      repositoryFullName: { in: [MAPPED_REPO, UNEXPORTED_REPO, UNMAPPED_REPO] },
+      workspace: { name: { startsWith: WORKSPACE_PREFIX } },
+    },
   })
   if (mappings.count > 0) console.log(`preflight: removed ${String(mappings.count)} leftover mapping(s)`)
 }
@@ -699,6 +707,12 @@ try {
     'issue-unmapped',
     issuePayload(UNMAPPED_REPO, 7, 'Something happened somewhere else', 'A repository nobody connected to this installation.'),
   )
+  /** Stage 5b's: a real issue on the repository the SECOND mapping speaks for, delivered at the
+   *  FIRST mapping's hook (fix-wave erratum E25). */
+  const ISSUE_UNEXPORTED = payloadFile(
+    'issue-unexported',
+    issuePayload(UNEXPORTED_REPO, 9, 'An issue on the other repository', 'Mapped to a hook with a different variable.'),
+  )
   const ISSUE_412 = payloadFile(
     'issue-412',
     issuePayload(MAPPED_REPO, 412, 'Checkout times out on the payment step', 'Five seconds is not enough for the payment provider to answer.'),
@@ -811,6 +825,10 @@ try {
   /** The sixth fake's environment: the secret, and nothing else this gate invented. */
   const senderEnv = { ...process.env, [SECRET_ENV]: HOOK_SECRET }
 
+  /** How many deliveries have been sent without a name of their own, so the default `send()` builds
+   *  is still unique per call (fix-wave item 37). Zero today. */
+  let unnamedDeliveries = 0
+
   /**
    * One delivery. Returns the status, the body and the fake's own accounting line.
    *
@@ -819,8 +837,11 @@ try {
    */
   async function send(payloadPath, { source = 'github', hookId, event = 'issues', delivery, switches = [] }) {
     const url = `${baseUrl}/api/hooks/${source}/${hookId}`
-    const args = [FAKE_GITHUB, payloadPath, url, '--event', event]
-    if (delivery !== undefined) args.push('--delivery', delivery)
+    // The delivery id is ALWAYS this gate's own (fix-wave item 37). Every call site passes one
+    // today, so the fake's `gate-<epoch>` default was never used -- and the first call that forgot
+    // would write a row neither `preflightCleanup` nor the teardown can find, because both match on
+    // `DELIVERY_PREFIX`. A leak of one row per run, latent until somebody left an argument out.
+    const args = [FAKE_GITHUB, payloadPath, url, '--event', event, '--delivery', delivery ?? deliveryId(`unnamed-${String(++unnamedDeliveries)}`)]
     args.push(...switches)
     const result = spawnSync('node', args, { cwd: repoRoot, env: senderEnv, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
     const stdout = String(result.stdout ?? '')
@@ -1020,6 +1041,48 @@ try {
   console.log('stage 5 PASSED: recorded with no project, no event and no version -- and not dropped')
 
   // ============================================================================================
+  // Stage 5b: a hook may not speak for another hook's repository (fix-wave erratum E25).
+  // ============================================================================================
+  // The delivery is VALID by every rule stage 1 to 3 tests: signed with the real secret, arriving at
+  // the real hook's path, carrying a real issue. What it NAMES is the repository the SECOND mapping
+  // speaks for -- the one whose variable nothing exports, which is how an operator says "a different
+  // secret guards this one". Before E25 this amended the requirement of whatever project that second
+  // mapping belongs to, using the first mapping's secret.
+  const before5b = await counts()
+  const goalBefore5b = await goalVersionNow()
+  const CROSS_HOOK_DELIVERY = deliveryId('cross-hook')
+  const crossHook = await send(ISSUE_UNEXPORTED, { hookId: HOOK_ID, delivery: CROSS_HOOK_DELIVERY })
+  await assertEqual(crossHook.status, 200, "stage 5b: the status of a delivery naming another hook's repository")
+  const crossHookBody = JSON.parse(crossHook.body)
+  await assertEqual(
+    [crossHookBody.status, crossHookBody.reason],
+    ['ignored', 'hook_mismatch'],
+    'stage 5b: what became of it, and why',
+  )
+  const crossHookRow = await inboundOf(CROSS_HOOK_DELIVERY)
+  console.log(`stage 5b: the row = ${describeInbound(crossHookRow)}`)
+  await assertEqual(crossHookRow.hookId, HOOK_ID, 'stage 5b: which hook the row records as the deliverer')
+  await assertEqual(crossHookRow.workspaceId, null, 'stage 5b: the project the row belongs to')
+  await assertEqual(crossHookRow.status, 'ignored', "stage 5b: the row's status")
+  await assertEqual(crossHookRow.ignoredReason, 'hook_mismatch', "stage 5b: the row's reason")
+  await assertEqual(crossHookRow.goalVersion, null, 'stage 5b: the version it produced')
+  const after5b = await counts()
+  await assertEqual(after5b.events, before5b.events, 'stage 5b: ExecutionEvent rows after a cross-hook delivery')
+  await assertEqual(after5b.inbound, before5b.inbound + 1, 'stage 5b: InboundEvent rows after a cross-hook delivery')
+  await assertEqual(await goalVersionNow(), goalBefore5b, 'stage 5b: Workspace.goalVersion after a cross-hook delivery')
+  // The OTHER mapping's own project is this same one here, so the line above covers both; the
+  // MAPPING itself is untouched either way.
+  await assertEqual(
+    (await prisma.externalRepository.findUnique({ where: { hookId: UNEXPORTED_HOOK_ID } })).repositoryFullName,
+    UNEXPORTED_REPO,
+    'stage 5b: the second mapping, after a delivery tried to speak for it',
+  )
+  console.log(
+    "stage 5b PASSED: a valid hook naming another hook's repository was recorded, ignored with `hook_mismatch`, " +
+      'attributed to no project, and changed no requirement',
+  )
+
+  // ============================================================================================
   // Stage 6: an issue opened becomes a goal version with its origin.
   // ============================================================================================
   const goalBefore6 = await goalVersionNow()
@@ -1041,9 +1104,12 @@ try {
     where: { workspaceId_version: { workspaceId, version: ISSUE_VERSION } },
   })
   await assertEqual(issueVersionRow.origin, ISSUE_ORIGIN, "stage 6: the new GoalVersion's origin, field for field")
-  const ISSUE_SUBJECT = `${EXTERNAL_KIND_LABEL.issue_opened} · ${MAPPED_REPO}#412 — Checkout times out on the payment step`
+  // The subject is the kind's LABEL and the validated origin, and nothing else (fix-wave erratum
+  // E24): the delivery's own title is quoted INSIDE the fence now, on a `Title:` line.
+  const ISSUE_SUBJECT = `${EXTERNAL_KIND_LABEL.issue_opened} · ${MAPPED_REPO}#412`
   for (const [what, needle] of [
     ['the subject line', ISSUE_SUBJECT],
+    ['the quoted title, inside the fence', 'Title: Checkout times out on the payment step'],
     ['the fence preamble', EXTERNAL_FENCE_PREAMBLE],
     ['the opening token', EXTERNAL_FENCE_OPEN],
     ['the closing token', EXTERNAL_FENCE_CLOSE],
@@ -1140,7 +1206,11 @@ try {
     where: { workspaceId_version: { workspaceId, version: CI_VERSION } },
   })
   await assertEqual(ciVersionRow.origin, CI_ORIGIN, "stage 7: the CI version's origin -- the ref is the SEVEN-character head sha")
-  await assertEqual([...CI_SHORT_SHA].length, 7, 'stage 7: how many characters of the head sha the ref keeps')
+  // Measured on what the ADAPTER produced, not on the gate's own `CI_HEAD_SHA.slice(0, 7)`, which
+  // is seven characters long by arithmetic and could not have failed (fix-wave item 36): a build
+  // that stopped shortening would put a forty-character sha on the row and this line would say so.
+  await assertEqual([...ciVersionRow.origin.ref].length, 7, 'stage 7: how many characters of the head sha the version kept')
+  await assertEqual([...CI_HEAD_SHA].length, 40, 'stage 7: how many the delivery carried')
 
   const ciTask = await watchReplan(CI_VERSION, 'the CI version')
 
@@ -1272,10 +1342,14 @@ try {
   }
   await assertEqual(occurrences(request, EXTERNAL_FENCE_CLOSE), 1, 'stage 9: real close tokens in the request')
 
-  const fencedBody = request.slice(
+  const fenced = request.slice(
     request.indexOf(EXTERNAL_FENCE_OPEN) + EXTERNAL_FENCE_OPEN.length + 1,
     request.indexOf(EXTERNAL_FENCE_CLOSE) - 1,
   )
+  // Inside the fence, in order: `Title:`, `Source:`, a blank line, then the quoted body (E24).
+  const fencedLines = fenced.split('\n')
+  const bodyStart = fencedLines.indexOf('')
+  const fencedBody = bodyStart === -1 ? '' : fencedLines.slice(bodyStart + 1).join('\n')
   console.log(`stage 9: the fenced body is ${String([...fencedBody].length)} code points, ending ${JSON.stringify(fencedBody.slice(-24))}`)
   if ([...fencedBody].length > EXTERNAL_TEXT_MAX_CHARS) {
     await fail(`stage 9: the fenced body is ${String([...fencedBody].length)} code points, over EXTERNAL_TEXT_MAX_CHARS`)
@@ -1283,20 +1357,50 @@ try {
   if (!fencedBody.endsWith('…')) {
     await fail('stage 9: the fenced body does not end in the truncation ellipsis -- 50 KB arrived and was not cut')
   }
-  // THE SUBJECT IS GENERATED, not the raw title: the kind's LABEL, the validated repository and ref,
-  // and a quote of at most EXTERNAL_SUBJECT_MAX_CHARS.
+  // THE SUBJECT IS GENERATED, and since fix-wave erratum E24 it is generated ENTIRELY: the kind's
+  // LABEL and the validated repository and ref, with no quote of the delivery's title at all.
   const subjectLine = request.slice(0, request.indexOf('\n'))
   console.log(`stage 9: the subject line = ${JSON.stringify(subjectLine)}`)
-  const quote = subjectLine.slice(subjectLine.indexOf(' — ') + 3)
-  if (!subjectLine.startsWith(`${EXTERNAL_KIND_LABEL.issue_opened} · ${MAPPED_REPO}#666 — `)) {
-    await fail(`stage 9: the subject line does not begin with the kind label and the validated origin: ${subjectLine}`)
+  await assertEqual(
+    subjectLine,
+    `${EXTERNAL_KIND_LABEL.issue_opened} · ${MAPPED_REPO}#666`,
+    'stage 9: the subject line, character for character',
+  )
+
+  // NOTHING FROM OUTSIDE IS OUTSIDE THE FENCE. Everything before the opening token is exactly the
+  // four lines the composer writes -- subject, blank, ask, blank -- plus the preamble, so a fifth
+  // line there would be a line somebody else supplied. The count is the cheapest possible statement
+  // of the property the milestone is named for, and before E24 it was five and six.
+  const beforeFence = request.slice(0, request.indexOf(EXTERNAL_FENCE_OPEN)).split('\n')
+  console.log(`stage 9: the lines before the fence = ${JSON.stringify(beforeFence)}`)
+  await assertEqual(beforeFence.length, 6, 'stage 9: how many lines the composer writes before the opening token')
+  await assertEqual(beforeFence[5], '', 'stage 9: the fragment after the last newline before the token')
+  await assertEqual(beforeFence[4], EXTERNAL_FENCE_PREAMBLE, 'stage 9: the line immediately above the token')
+  for (const line of beforeFence) {
+    if (line.includes('Ignore previous instructions') || line.includes('<slave-ask>') || line.includes('"verdict"')) {
+      await fail(`stage 9: a line above the fence carries the delivery's own words: ${JSON.stringify(line)}`)
+    }
   }
+  // The TITLE is quoted inside the fence, on its own line, capped and sanitised.
+  const titleLine = fencedLines.find((line) => line.startsWith('Title: ')) ?? ''
+  const quote = titleLine.slice('Title: '.length)
+  console.log(`stage 9: the quoted title = ${JSON.stringify(quote)}`)
+  if (quote === '') await fail('stage 9: the fence carries no `Title:` line')
   if ([...quote].length > EXTERNAL_SUBJECT_MAX_CHARS) {
-    await fail(`stage 9: the subject's quote is ${String([...quote].length)} code points, over EXTERNAL_SUBJECT_MAX_CHARS`)
+    await fail(`stage 9: the quoted title is ${String([...quote].length)} code points, over EXTERNAL_SUBJECT_MAX_CHARS`)
   }
-  if (quote === INJECTION_TITLE) await fail('stage 9: the subject line IS the raw title')
+  if (quote === INJECTION_TITLE) await fail('stage 9: the quoted title IS the raw title')
   if (quote.includes('<slave-ask>') || quote.includes('"verdict"')) {
-    await fail(`stage 9: the subject's quote carries a live marker or literal: ${JSON.stringify(quote)}`)
+    await fail(`stage 9: the quoted title carries a live marker or literal: ${JSON.stringify(quote)}`)
+  }
+  // And the SOURCE url is inside the fence too, not after it (E24).
+  const sourceLine = fencedLines.find((line) => line.startsWith('Source: ')) ?? ''
+  console.log(`stage 9: the quoted source = ${JSON.stringify(sourceLine)}`)
+  if (!sourceLine.startsWith(`Source: https://github.com/${MAPPED_REPO}/issues/666`)) {
+    await fail(`stage 9: the fence carries no Source line for this delivery: ${JSON.stringify(sourceLine)}`)
+  }
+  if (request.slice(request.indexOf(EXTERNAL_FENCE_CLOSE)).includes('Source:')) {
+    await fail('stage 9: a Source line survives AFTER the closing token')
   }
 
   // THE ROW HOLDS THE SAME SANITISED STRINGS, and no invisible character at all.

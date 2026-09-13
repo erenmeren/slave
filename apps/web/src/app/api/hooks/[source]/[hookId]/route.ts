@@ -1,5 +1,6 @@
 import {
   HOOK_BODY_MAX_BYTES,
+  hookIgnoredLine,
   hookRefusalLine,
   ingestExternalEvent,
   verifyHookDelivery,
@@ -99,7 +100,8 @@ async function readBounded(body: ReadableStream<Uint8Array> | null): Promise<Uin
  *     `Request.text()` (plan erratum E3): the signature was over bytes, and a body that is not valid
  *     UTF-8 is a payload this system cannot read rather than a caller it cannot identify.
  *  5. `ingestExternalEvent` -- `200` for `actioned`, `ignored` and `replayed`, `400` for a payload
- *     the adapter refuses.
+ *     the adapter refuses. One ignored reason, `hook_mismatch`, also writes a line on stderr
+ *     (erratum E25); the others are the row's business alone.
  */
 export async function POST(
   request: Request,
@@ -150,6 +152,12 @@ export async function POST(
   if (outcome.status === 'invalid') {
     console.error(hookRefusalLine(source, outcome.reason))
     return Response.json({ error: 'payload invalid' }, { status: 400 })
+  }
+  // The ONE ignored outcome that also earns a line (fix-wave erratum E25): a valid hook signed for a
+  // repository some OTHER hook speaks for. It is a fact about authorisation rather than about
+  // configuration, and the row alone would leave it unread until somebody went looking.
+  if (outcome.status === 'ignored' && outcome.reason === 'hook_mismatch') {
+    console.error(hookIgnoredLine(source, outcome.reason))
   }
   // The outcome IS the body: `{status, inboundEventId, goalVersion}`, `{status, inboundEventId,
   // reason}` or `{status, inboundEventId}`, which are the three shapes R4 fixes byte for byte.

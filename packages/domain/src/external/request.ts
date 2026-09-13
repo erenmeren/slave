@@ -2,13 +2,14 @@ import {
   EXTERNAL_FENCE_FRAME_CHARS,
   EXTERNAL_SUBJECT_MAX_CHARS,
   EXTERNAL_TEXT_MAX_CHARS,
-  fenceExternalText,
+  fenceExternalBlock,
   sanitiseExternalText,
 } from './fence.js'
 import {
   EXTERNAL_REF_MAX_CHARS,
   EXTERNAL_URL_MAX_CHARS,
   REPOSITORY_FULL_NAME_MAX_CHARS,
+  safeExternalUrl,
   type ExternalOrigin,
 } from './origin.js'
 
@@ -95,21 +96,26 @@ function refSuffix(ref: string | null): string {
 }
 
 /**
- * The sentence a delivery becomes, as `requestChange` receives it (M54 R7, R8).
+ * The sentence a delivery becomes, as `requestChange` receives it (M54 R7, R8, fix-wave erratum
+ * E24).
  *
- * Four parts, and the order is the argument:
+ * THREE parts, and NOTHING FROM OUTSIDE IS IN THE FIRST TWO:
  *
- *  - the SUBJECT -- the kind's label, a middle dot, the repository and its ref, an em dash, and a
- *    truncated, sanitised quote of the title. Generated from the kind and from VALIDATED labels; the
- *    only external prose in it is the quote, capped at `EXTERNAL_SUBJECT_MAX_CHARS` and put through
- *    the same sanitiser the body gets. External text never becomes a title verbatim (R8), and a
- *    fence inside a one-line subject would be noise a person reads, so the subject carries the
- *    sanitiser instead of the fence.
+ *  - the SUBJECT -- the kind's label, a middle dot, the repository and its ref. Generated, every
+ *    character of it, from a closed union and two regex-validated labels. It used to end with an em
+ *    dash and a 120-character quote of the delivery's own title, and E24 took that out: the
+ *    sanitiser keeps `\n` and `\t` by design (a quoted BODY reads as prose), so a title arriving
+ *    with line breaks put attacker-chosen prose on its own lines above the ask, outside any fence,
+ *    reading as the operator's own requirement.
  *  - the ASK -- one of five fixed sentences, chosen by kind, written by us.
- *  - the FENCE -- the preamble, the open token, the sanitised body, the close token. This is the
- *    only place external prose goes.
- *  - the SOURCE -- the validated url, after the fence, because a url that parsed as `http(s)` under
- *    500 characters is a label and not prose. Absent when the payload carried none.
+ *  - the FENCE -- the preamble, the open token, THE QUOTED TITLE, THE SOURCE URL, the sanitised
+ *    body, the close token. One fence, not two: a second block of the same shape would mean two
+ *    preambles to read and two ways to get the tokens wrong, and everything that came from outside
+ *    belongs under the same sentence saying it is data. The title is quoted at
+ *    `EXTERNAL_SUBJECT_MAX_CHARS` through the same sanitiser the body gets; the url is re-checked
+ *    against `safeExternalUrl` here rather than trusted from the caller, so this function's own
+ *    property holds for a hand-made `ExternalOrigin` too. The body is last, because it is the only
+ *    part the budget below ever cuts.
  *
  * Pure and deterministic: the same delivery composes the same request, which is what lets
  * `requestChange`'s own `duplicate_request` refusal recognise a re-delivery that slipped past the
@@ -138,6 +144,11 @@ export function composeExternalRequest(
   return composeAt(kind, origin, title, body, EXTERNAL_REQUEST_MAX_CHARS - frame)
 }
 
+/** The two words that say which quoted line is which, INSIDE the fence (erratum E24). Ours, both of
+ *  them, and they sit where every line under them is already sanitised or shape-validated. */
+const FENCED_TITLE_LABEL = 'Title: '
+const FENCED_SOURCE_LABEL = 'Source: '
+
 function composeAt(
   kind: ExternalEventKind,
   origin: ExternalOrigin,
@@ -145,11 +156,19 @@ function composeAt(
   body: string,
   bodyMaxChars: number,
 ): string {
-  const quote = sanitiseExternalText(title, EXTERNAL_SUBJECT_MAX_CHARS)
-  const subject = `${EXTERNAL_KIND_LABEL[kind]} · ${origin.repository}${refSuffix(origin.ref)} — ${quote}`
-  const lines = [subject, '', EXTERNAL_KIND_ASK[kind], '', fenceExternalText(body, bodyMaxChars)]
-  if (origin.url !== null) lines.push('', `Source: ${origin.url}`)
-  return lines.join('\n')
+  const subject = `${EXTERNAL_KIND_LABEL[kind]} · ${origin.repository}${refSuffix(origin.ref)}`
+  // The url is re-validated HERE and not taken on trust: `normaliseGitHubDelivery` is the only
+  // caller today and it already answers a normalised `href`, but this function's claim is about
+  // what it WRITES, and a claim that depends on its caller is a claim about somebody else.
+  const url = origin.url === null ? null : safeExternalUrl(origin.url, origin.source)
+  const quoted = [`${FENCED_TITLE_LABEL}${sanitiseExternalText(title, EXTERNAL_SUBJECT_MAX_CHARS)}`]
+  if (url !== null) quoted.push(`${FENCED_SOURCE_LABEL}${url}`)
+  const quotedBody = sanitiseExternalText(body, Math.max(1, bodyMaxChars))
+  // An empty body is NO line rather than a blank one: a `custom` delivery carries none by design,
+  // and the branch is stable across the recompose below -- the sanitiser never empties a non-empty
+  // string, so a body that was quoted at the full cap is still quoted at the smaller one.
+  if (quotedBody !== '') quoted.push('', quotedBody)
+  return [subject, '', EXTERNAL_KIND_ASK[kind], '', fenceExternalBlock(quoted)].join('\n')
 }
 
 /**
@@ -157,9 +176,9 @@ function composeAt(
  * E17), derived from the strings and caps themselves so it cannot drift from them.
  *
  * It exists to prove one thing, in `request.test.ts`: it is smaller than
- * {@link EXTERNAL_REQUEST_MAX_CHARS}, so the budget the recompose above hands the quote is always at
- * least one code point and the `Math.max(1, …)` inside `fenceExternalText` is a belt and not the
- * only thing holding the trousers up. Nothing reads it at runtime.
+ * {@link EXTERNAL_REQUEST_MAX_CHARS}, so the budget the recompose above hands the quoted body is
+ * always at least one code point and the `Math.max(1, …)` beside it is a belt and not the only
+ * thing holding the trousers up. Nothing reads it at runtime.
  */
 export const EXTERNAL_REQUEST_FRAME_MAX_CHARS =
   Math.max(
@@ -167,17 +186,18 @@ export const EXTERNAL_REQUEST_FRAME_MAX_CHARS =
       (kind) => [...EXTERNAL_KIND_LABEL[kind]].length + [...EXTERNAL_KIND_ASK[kind]].length,
     ),
   ) +
-  // ' · ', the repository, ' ' + a 40-character sha, ' — ', the quoted title
+  // the subject: ' · ', the repository, ' ' + a 40-character sha
   3 +
   REPOSITORY_FULL_NAME_MAX_CHARS +
   1 +
   EXTERNAL_REF_MAX_CHARS +
-  3 +
-  EXTERNAL_SUBJECT_MAX_CHARS +
   EXTERNAL_FENCE_FRAME_CHARS +
-  // the two newlines, 'Source: ' and the url
-  2 +
-  8 +
+  // inside the fence (erratum E24): 'Title: ' and the quote, 'Source: ' and the url
+  [...FENCED_TITLE_LABEL].length +
+  EXTERNAL_SUBJECT_MAX_CHARS +
+  [...FENCED_SOURCE_LABEL].length +
   EXTERNAL_URL_MAX_CHARS +
+  // the three newlines those two lines and the blank line before the body add inside the fence
+  3 +
   // the four newlines joining subject, blank, ask, blank and fence
   4

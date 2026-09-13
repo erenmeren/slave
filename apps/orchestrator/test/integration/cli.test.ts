@@ -4360,6 +4360,10 @@ describe('the orchestrator CLI', () => {
       expect(result.stdout).toContain('v2')
       expect(result.stdout).not.toContain('issue_opened')
       expect(result.stdout).not.toContain('actioned')
+      // WHICH PROJECT it reached, by name (fix-wave item 25): an operator reading two hundred lines
+      // had no column for it, and the id it is stored under is never visible text.
+      expect(result.stdout).toContain('Checkout Platform')
+      expect(result.stdout).not.toContain(fixture.workspaceId)
     })
 
     it('prints the REASON in words for a delivery that changed nothing, and a dash for no version', async (): Promise<void> => {

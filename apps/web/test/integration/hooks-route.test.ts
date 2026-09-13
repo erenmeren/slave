@@ -277,6 +277,30 @@ describe('the two refusals that are not about identity (M54 R3, R11)', () => {
     expect(await prisma.inboundEvent.count()).toBe(0)
   })
 
+  it('400s a signed body that is not valid UTF-8 -- the bytes verified and the TEXT does not (E3)', async () => {
+    // The case that tells `arrayBuffer()` from `text()` apart (fix-wave item 18). A lone 0x80 is a
+    // continuation byte with nothing to continue: `Request.text()` would decode it to U+FFFD and
+    // hand the route a string that is not what was signed, and `TextDecoder(..., { fatal: true })`
+    // throws instead. The signature is over the REAL bytes, so this is a 400 and not a 401 -- which
+    // is the only way to see that the verifier read bytes and the parser read text.
+    const body = new Uint8Array([0x7b, 0x22, 0x61, 0x22, 0x3a, 0x80, 0x7d])
+    const signature = `sha256=${createHmac('sha256', SECRET).update(Buffer.from(body)).digest('hex')}`
+    const headers = new Headers({
+      'content-type': 'application/json',
+      'x-hub-signature-256': signature,
+      'x-github-delivery': 'd-invalid-utf8',
+      'x-github-event': 'issues',
+    })
+    const response = await POST(
+      new Request('http://x/api/hooks/github/x', { method: 'POST', body, headers }),
+      params(),
+    )
+    expect(response.status).toBe(400)
+    expect(await response.json()).toEqual({ error: 'payload invalid' })
+    expect(await prisma.inboundEvent.count()).toBe(0)
+    expect(await prisma.executionEvent.count()).toBe(0)
+  })
+
   it('treats a POST with NO body as an empty one -- signed, verified, and then unparseable', async () => {
     const empty = `sha256=${createHmac('sha256', SECRET).update(Buffer.alloc(0)).digest('hex')}`
     const response = await POST(
@@ -321,6 +345,42 @@ describe('the three things a 200 says (M54 R4)', () => {
     expect(answered.status).toBe('ignored')
     expect(answered.reason).toBe('unmapped_repository')
     expect(await prisma.executionEvent.count()).toBe(0)
+  })
+
+  it('IGNORES a delivery this hook may not speak for, and says so on stderr (erratum E25)', async () => {
+    // A second mapping, a second hook, a second variable -- and a delivery signed by the FIRST
+    // hook's secret, arriving at the FIRST hook's path, naming the SECOND hook's repository.
+    const other = await prisma.workspace.create({
+      data: {
+        name: 'Billing',
+        repoPath: '/tmp/m54-hooks-route-2',
+        verifyCommands: ['true'],
+        setupCommands: [],
+        goal: 'Bill correctly.',
+        goalVersion: 1,
+      },
+    })
+    await prisma.externalRepository.create({
+      data: {
+        workspaceId: other.id,
+        source: 'github',
+        repositoryFullName: 'acme/billing',
+        secretEnvVar: 'ANOTHER_VARIABLE_NOBODY_EXPORTS',
+      },
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    const body = JSON.stringify({ ...ISSUE, repository: { full_name: 'acme/billing' } })
+    const response = await POST(deliver(body, { delivery: 'd-cross-hook' }), params())
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ status: 'ignored', reason: 'hook_mismatch' })
+    expect(errors.mock.calls[0]?.[0]).toBe('[hooks] github delivery ignored: hook_mismatch')
+    const row = await prisma.inboundEvent.findFirstOrThrow({ where: { deliveryId: 'd-cross-hook' } })
+    expect(row.ignoredReason).toBe('hook_mismatch')
+    expect(row.workspaceId).toBeNull()
+    expect(await prisma.executionEvent.count()).toBe(0)
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: other.id } })).goalVersion).toBe(1)
   })
 
   it('signs over BYTES -- a re-serialised body with the same fields does not verify (E3)', async () => {

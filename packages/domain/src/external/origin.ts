@@ -54,8 +54,74 @@ export const EXTERNAL_REF_RE = /^(?:#\d{1,12}|[0-9a-f]{7,40})$/u
 export const EXTERNAL_REF_MAX_CHARS = 40
 
 /** The longest url this system will store or hand to a reader (M54 R8). A url over it is dropped
- *  to `null` rather than truncated: half a link is worse than no link. */
+ *  to `null` rather than truncated: half a link is worse than no link. The bound is INCLUSIVE in
+ *  both readers -- `safeExternalUrl` and `externalOriginSchema` -- since fix-wave erratum E24; they
+ *  disagreed about the five-hundredth character until then. */
 export const EXTERNAL_URL_MAX_CHARS = 500
+
+/**
+ * WHICH HOSTS each source's links may point at (fix-wave erratum E24).
+ *
+ * A url is a LABEL: it is rendered beside a project's requirement and, since E24, quoted inside the
+ * fence a worker's prompt reads. `https://` and "it parsed" are not a shape -- `deployment_status`'s
+ * `target_url` is set by whoever calls the deployments API rather than by GitHub, so without this
+ * table any party who can sign one delivery can put any url they like in front of a reader. One
+ * entry per source, and a second source adds a line here rather than widening the rule.
+ *
+ * A url on any other host is DROPPED to `null`, which is what R8 already does with a url it cannot
+ * use: half a link is worse than no link, and a link to somewhere this delivery cannot have come
+ * from is worse than both.
+ */
+export const EXTERNAL_SOURCE_HOSTS: Record<ExternalSource, readonly string[]> = { github: ['github.com'] }
+
+/**
+ * What a url looks like once it is NORMALISED (fix-wave erratum E24): `https://`, then printable
+ * ASCII with no space, no double quote and no angle bracket.
+ *
+ * A belt beside {@link safeExternalUrl}'s braces. The WHATWG serialiser already percent-encodes
+ * every C0 control, space, `"`, `<` and `>` in a path, query or fragment and punycodes the host, so
+ * a parsed `href` satisfies this by construction -- but the property this regex states is the one
+ * the rest of the system depends on (a url is ONE line and cannot spell a fence token), and stating
+ * it here means `externalOriginSchema` can hold a STORED url to it without re-parsing, and a future
+ * reader can see what "validated" means without reading the URL specification.
+ */
+export const EXTERNAL_URL_RE = /^https:\/\/[!#-;=?-~]+$/u
+
+/**
+ * A url a person could be handed, NORMALISED, or `null` (M54 R8, fix-wave erratum E24).
+ *
+ * The three rules, in order, and each of them refuses rather than repairs:
+ *
+ *  1. a string under the cap;
+ *  2. that the WHATWG parser accepts, whose scheme is `https:`, whose host is one this source's own
+ *     ({@link EXTERNAL_SOURCE_HOSTS}), and which carries no `user:password@` -- `https://
+ *     evil.example@github.com/x` parses to the host `github.com` and READS as the other one;
+ *  3. whose serialised `href` is still under the cap and still matches {@link EXTERNAL_URL_RE}.
+ *
+ * It returns `parsed.href` and NEVER the caller's string, which is the whole of what E24 fixed: the
+ * URL parser is SPECIFIED to strip ASCII tab, LF and CR from its input before parsing, so
+ * `new URL(value)` accepts a value carrying newlines and says nothing about them. Returning the
+ * original string meant a validated url and a stored url were different strings, and the stored one
+ * could carry line breaks, a `<<external-text>>` token and up to 499 characters of prose that no
+ * pass in this package had ever looked at.
+ *
+ * Dropped rather than refused, still: a delivery whose issue url is malformed is a real issue.
+ */
+export function safeExternalUrl(value: unknown, source: ExternalSource): string | null {
+  if (typeof value !== 'string' || value.length > EXTERNAL_URL_MAX_CHARS) return null
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'https:') return null
+  if (parsed.username !== '' || parsed.password !== '') return null
+  if (!EXTERNAL_SOURCE_HOSTS[source].includes(parsed.host)) return null
+  const href = parsed.href
+  if (href.length > EXTERNAL_URL_MAX_CHARS || !EXTERNAL_URL_RE.test(href)) return null
+  return href
+}
 
 /**
  * WHERE a thing came from, carried nested under the key `origin` in exactly three places so one
@@ -91,15 +157,31 @@ export interface ExternalOrigin {
  *
  * Typed `z.ZodType<ExternalOrigin, z.ZodTypeDef, unknown>`, the annotation every schema in this
  * package that parses an unknown carries.
+ *
+ * The `url` is the only one of the four whose rule is not a bare regex, and fix-wave erratum E24 is
+ * why: it is held to {@link EXTERNAL_URL_RE} for its SHAPE and then, by the refinement below, to
+ * being exactly what {@link safeExternalUrl} would have produced for this origin's own source. A
+ * stored origin therefore cannot round-trip a url the adapter would refuse today -- which is the
+ * half of E24 that closes the back door, since `GoalVersion.origin` is a `Json` column a hand or a
+ * future version can write and three readers parse back.
  */
 export const externalOriginSchema: z.ZodType<ExternalOrigin, z.ZodTypeDef, unknown> = z
   .object({
     source: z.enum(EXTERNAL_SOURCES),
     repository: z.string().regex(REPOSITORY_FULL_NAME_RE),
     ref: z.string().regex(EXTERNAL_REF_RE).nullable(),
-    url: z.string().max(EXTERNAL_URL_MAX_CHARS).nullable(),
+    url: z.string().max(EXTERNAL_URL_MAX_CHARS).regex(EXTERNAL_URL_RE).nullable(),
   })
   .strict()
+  .superRefine((value, ctx) => {
+    if (value.url !== null && safeExternalUrl(value.url, value.source) !== value.url) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['url'],
+        message: `a url must be an https link to one of: ${EXTERNAL_SOURCE_HOSTS[value.source].join(', ')}`,
+      })
+    }
+  })
 
 /**
  * The origin a stored `Json` column holds, or `null` when it holds something else (M54 R9).

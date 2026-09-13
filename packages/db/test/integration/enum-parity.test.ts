@@ -136,8 +136,9 @@ describe('database enums match the domain unions', () => {
     expect(await enumValues('InboundEventStatus')).toEqual(['actioned', 'ignored', 'received'])
   })
 
-  it('ExternalIgnoredReason is the four a delivery can be ignored for', async () => {
+  it('ExternalIgnoredReason is the five a delivery can be ignored for (fix-wave erratum E25)', async () => {
     expect(await enumValues('ExternalIgnoredReason')).toEqual([
+      'hook_mismatch',
       'request_refused',
       'unmapped_repository',
       'unrecognised_event',

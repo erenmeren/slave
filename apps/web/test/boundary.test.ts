@@ -1,3 +1,5 @@
+import { readdirSync } from 'node:fs'
+import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { PUBLIC_API_PREFIX, boundaryVerdict, postureFor } from '../src/lib/boundary.js'
 
@@ -233,5 +235,22 @@ describe('the one public API family (M54 R1)', () => {
   it('does not become a third BoundaryMode -- `postureFor` says exactly what it said', () => {
     expect(postureFor('loopback-only')).toBe('loopback-only · no accounts · cross-site requests refused')
     expect(postureFor('accounts', 'ada')).toBe('accounts · signed in as ada · cross-site requests refused')
+  })
+
+  /**
+   * WHAT IS ACTUALLY BEHIND THE CARVE-OUT (fix-wave item 19).
+   *
+   * The rule above is a prefix, so every route file that ever lands under `/api/hooks/` is public by
+   * construction -- with no session, from any host, cross-site. Nothing else in the repository would
+   * notice a second one being added. This walks the directory and pins the list: a new file here has
+   * to be added to this literal on purpose, by somebody who has read this comment.
+   */
+  it('has exactly ONE route file behind it, and a second one has to be added here on purpose', () => {
+    const root = new URL('../src/app/api/hooks/', import.meta.url).pathname
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+        entry.isDirectory() ? walk(join(dir, entry.name)) : [relative(root, join(dir, entry.name))],
+      )
+    expect(walk(root).sort()).toEqual(['[source]/[hookId]/route.ts'])
   })
 })
