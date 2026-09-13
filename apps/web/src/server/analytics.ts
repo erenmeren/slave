@@ -1,8 +1,7 @@
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import { SEED_WORKSPACE_ID } from '@slave-of-ai/db'
-import { NON_TERMINAL_RUN_STATUSES, RUN_UNMEASURED_CAP_USD } from '@slave-of-ai/domain'
+import { NON_TERMINAL_RUN_STATUSES } from '@slave-of-ai/domain'
 import { formatDuration } from '../lib/format'
-import { formatUsd } from '../lib/realMoney'
 
 /**
  * The Analytics page's aggregation (M14 §4.4): one query round per section, all scoped to a
@@ -11,14 +10,20 @@ import { formatUsd } from '../lib/realMoney'
  * **Stated limits, because the page shows figures an operator will act on:**
  * - Skill counts are END-OF-RUN facts (`SlaveRun.skillCalls`, M14 §4.1). A run in flight
  *   contributes nothing, so "skills used today" trails the live board by one run.
- * - Token counts are CLAUDE-ONLY. Cursor reports none, and `tokens` is `null` for a slave whose
- *   runs are all on Cursor — not zero.
- * - Cost is KNOWN cost. `unmeasuredRuns` beside it is how many runs really ran, finished, and
- *   left no figure; it is never folded into the total.
- * - The KPI tiles and per-slave table are computed over ALL of this scope's runs, not just the
- *   7-day window the series and the seeded caption describe -- an average duration or a success
- *   rate over the last week alone would swing wildly on a quiet workspace, and the day-by-day
- *   trend already exists for the windowed view. Only `series` is window-bound.
+ * - Token counts left with the per-slave table (M53 R12). They were CLAUDE-ONLY -- Cursor reports
+ *   none -- and no tile on this page has ever shown them.
+ * - There is NO money on this page since M53 R6. The `Spend` tile's figure was a raw
+ *   `SUM(costUsd)` over every run in scope -- no provenance, no profile, no model, no domain -- so
+ *   it presented the measured part of a bill as the whole of it. Money is three figures with three
+ *   words beside them on `/workforce?tab=evidence`, where the provenance each run was recorded with
+ *   is a column rather than a rounding error.
+ * - The five KPI tiles are computed over ALL of this scope's runs, not just the 7-day window the
+ *   series and the seeded caption describe -- an average duration or a success rate over the last
+ *   week alone would swing wildly on a quiet workspace, and the day-by-day trend already exists for
+ *   the windowed view. Only `series` is window-bound.
+ * - The per-slave performance table is GONE (M53 R12): it counted one project's materialised
+ *   workers, which is neither a profile nor a model, and its questions are answered per profile and
+ *   per model on `/workforce?tab=evidence` -- `docs/ia.md` rule 2, nothing removed, only moved.
  */
 export interface DayCount {
   /** `YYYY-MM-DD`, UTC. Seven entries, oldest first, zero-filled. */
@@ -37,21 +42,6 @@ export interface Kpi {
   readonly note: string | null
 }
 
-export interface SlavePerformanceRow {
-  readonly slaveId: string
-  readonly name: string
-  readonly role: string
-  readonly runs: number
-  /** `null` when the slave has no terminal run at all — no denominator, no rate. */
-  readonly successPct: number | null
-  /** Mean `endedAt − startedAt` in ms over terminal runs, `null` with none. */
-  readonly avgDurationMs: number | null
-  /** Summed `tokensIn + tokensOut` over runs that reported them, `null` when none did. */
-  readonly tokens: number | null
-  readonly costUsd: number
-  readonly unmeasuredRuns: number
-}
-
 export interface AnalyticsSnapshot {
   /** `null` for the global (all-workspace) view. */
   readonly workspaceId: string | null
@@ -60,57 +50,46 @@ export interface AnalyticsSnapshot {
    *  the page's "Last 7 days · seeded development data" caption. */
   readonly seeded: boolean
   readonly series: readonly DayCount[]
-  /** Exactly six, in the order the page renders them. */
+  /** Exactly five, in the order the page renders them (M53 R12 / plan erratum E18 -- `Spend` left
+   *  with the raw `SUM(costUsd)` behind it). The same five render on the Projects home, from this
+   *  same builder with a null scope. */
   readonly kpis: readonly Kpi[]
-  readonly perSlave: readonly SlavePerformanceRow[]
 }
 
-/** One row per slave that has ever run, from `perSlaveRunAggregates` — every JS reduce the old
- *  `allRuns` + per-slave pass used to do, expressed as a SQL `FILTER` instead. `bigint` on the
- *  COUNT/SUM-of-integer columns is `pg`'s driver behaviour for those aggregates; every consumer
- *  converts with `Number()` at the point it reads the field, never earlier. */
-interface SlaveAggRow {
-  readonly slaveId: string
-  readonly terminal: bigint
-  readonly succeeded: bigint
+/** The three figures the five remaining tiles need, in ONE row (M53 R12).
+ *
+ *  This was `perSlaveRunAggregates`: one row per slave, with a `SUM(r."costUsd")` and an unmeasured
+ *  count beside it that fed the `Spend` tile and the per-slave table. Both are gone, and what is
+ *  left is three totals over the same scope -- so the query is no longer grouped at all and always
+ *  answers exactly one row. `bigint` on the COUNT/SUM-of-integer columns is `pg`'s driver behaviour
+ *  for those aggregates; the caller converts with `Number()` at the point it reads the field.
+ *
+ *  Raw SQL rather than `prisma.slaveRun.aggregate`: the duration sum is
+ *  `SUM(EXTRACT(EPOCH FROM (endedAt - startedAt)))` under a `FILTER`, which has no Prisma
+ *  expression, and the negative-span guard has to live in the same place as the count that pairs
+ *  with it or the mean is computed over a different set than it was summed over. */
+interface RunTotalsRow {
   readonly durationMsSum: number | null
   readonly durationCount: bigint
-  readonly reported: bigint
-  readonly tokensSum: bigint | null
-  readonly knownUsd: number | null
-  readonly unmeasured: bigint
-  readonly toolCalls: bigint
+  readonly toolCalls: bigint | null
 }
 
-/**
- * One row per slave that has ever run in this scope, grouped in SQL rather than fetched as
- * `SlaveRun` rows and reduced in JS (Task 12, M17): the old `allRuns` findMany pulled every run in
- * the database on the global (`workspaceId: null`) route. Every branch below is the same rule the
- * old JS reduce applied, restated as a `FILTER` clause — see `apps/web/test/integration/
- * analytics-aggregates.test.ts` for the equivalence proof against that old computation.
- */
-export async function perSlaveRunAggregates(workspaceId: string | null): Promise<readonly SlaveAggRow[]> {
+async function runTotals(workspaceId: string | null): Promise<RunTotalsRow> {
   const scopeJoin =
     workspaceId === null
       ? Prisma.empty
       : Prisma.sql`JOIN "Slave" a ON a."id" = r."slaveId" JOIN "Team" t ON t."id" = a."teamId" WHERE t."workspaceId" = ${workspaceId}`
-  return prisma.$queryRaw<SlaveAggRow[]>(Prisma.sql`
-    SELECT r."slaveId" AS "slaveId",
-      COUNT(*) FILTER (WHERE r."terminalAt" IS NOT NULL) AS terminal,
-      COUNT(*) FILTER (WHERE r."terminalAt" IS NOT NULL AND r."status"::text = 'succeeded') AS succeeded,
+  const rows = await prisma.$queryRaw<RunTotalsRow[]>(Prisma.sql`
+    SELECT
       (SUM(EXTRACT(EPOCH FROM (r."endedAt" - r."startedAt")) * 1000)
         FILTER (WHERE r."terminalAt" IS NOT NULL AND r."endedAt" IS NOT NULL AND r."endedAt" >= r."startedAt"))::float8 AS "durationMsSum",
       COUNT(*) FILTER (WHERE r."terminalAt" IS NOT NULL AND r."endedAt" IS NOT NULL AND r."endedAt" >= r."startedAt") AS "durationCount",
-      COUNT(*) FILTER (WHERE r."tokensIn" IS NOT NULL OR r."tokensOut" IS NOT NULL) AS reported,
-      SUM(COALESCE(r."tokensIn", 0) + COALESCE(r."tokensOut", 0))
-        FILTER (WHERE r."tokensIn" IS NOT NULL OR r."tokensOut" IS NOT NULL) AS "tokensSum",
-      SUM(r."costUsd")::float8 AS "knownUsd",
-      COUNT(*) FILTER (WHERE r."costUsd" IS NULL AND r."provider" IS NOT NULL
-        AND r."status"::text NOT IN (${Prisma.join([...NON_TERMINAL_RUN_STATUSES])})) AS unmeasured,
       SUM(r."toolCalls") AS "toolCalls"
     FROM "SlaveRun" r
-    ${scopeJoin}
-    GROUP BY r."slaveId"`)
+    ${scopeJoin}`)
+  // An aggregate with no GROUP BY always answers one row, even over no rows at all -- the fallback
+  // is for the type, not for a case this query can reach.
+  return rows[0] ?? { durationMsSum: null, durationCount: 0n, toolCalls: null }
 }
 
 const WINDOW_DAYS = 7
@@ -135,17 +114,15 @@ function windowStart(): Date {
 export { formatDuration } from '../lib/format'
 
 export async function buildAnalytics(workspaceId: string | null): Promise<AnalyticsSnapshot> {
-  const slaveWhere = workspaceId === null ? {} : { team: { workspaceId } }
   const runWhere = workspaceId === null ? {} : { slave: { team: { workspaceId } } }
   const from = windowStart()
 
-  const [slaves, windowRuns, aggRows, pauses, activeSlaveRows, tasks] = await Promise.all([
-    prisma.slave.findMany({ where: slaveWhere, orderBy: { name: 'asc' }, select: { id: true, name: true, role: true } }),
+  const [windowRuns, totals, pauses, activeSlaveRows, tasks] = await Promise.all([
     prisma.slaveRun.findMany({
       where: { ...runWhere, terminalAt: { gte: from } },
       select: { status: true, terminalAt: true },
     }),
-    perSlaveRunAggregates(workspaceId),
+    runTotals(workspaceId),
     prisma.executionEvent.count({
       where: { type: 'run_paused', ...(workspaceId === null ? {} : { workspaceId }) },
     }),
@@ -183,28 +160,20 @@ export async function buildAnalytics(workspaceId: string | null): Promise<Analyt
   }
   const series: DayCount[] = [...byDay.entries()].map(([day, counts]) => ({ day, ...counts }))
 
-  // ---- the six KPIs ----------------------------------------------------------------------
+  // ---- the five KPIs ---------------------------------------------------------------------
   const countOf = (statuses: readonly string[]): number =>
     tasks.filter((t) => statuses.includes(t.status)).reduce((n, t) => n + t._count._all, 0)
   const done = countOf(['done'])
   const failedTasks = countOf(['failed'])
   const successDenominator = done + failedTasks
 
-  // Every ingredient below is a straight sum across `aggRows` (one row per slave) of the exact
-  // figure the old per-slave `FILTER`-equivalent JS reduce produced for that slave — see
-  // `perSlaveRunAggregates`'s doc comment and the equivalence test it points to.
-  let durationMsSum = 0
-  let durationCount = 0
-  let knownUsd = 0
-  let unknownRuns = 0
-  let toolCallsTotal = 0
-  for (const row of aggRows) {
-    durationMsSum += row.durationMsSum ?? 0
-    durationCount += Number(row.durationCount)
-    knownUsd += row.knownUsd ?? 0
-    unknownRuns += Number(row.unmeasured)
-    toolCallsTotal += Number(row.toolCalls)
-  }
+  // One row, three figures — the loop that used to fold one row per slave into these went with the
+  // table it fed (M53 R12). `?? 0` on each: a `SUM` over no rows is SQL's null, and a total of
+  // nothing is a measured zero here rather than a gap, because the denominators beside them are
+  // counts that are zero too.
+  const durationMsSum = totals.durationMsSum ?? 0
+  const durationCount = Number(totals.durationCount)
+  const toolCallsTotal = Number(totals.toolCalls ?? 0n)
 
   const kpis: readonly Kpi[] = [
     {
@@ -217,52 +186,13 @@ export async function buildAnalytics(workspaceId: string | null): Promise<Analyt
       value: durationCount === 0 ? '—' : formatDuration(durationMsSum / durationCount),
       note: durationCount === 0 ? null : `over ${durationCount} run(s)`,
     },
-    {
-      label: 'Spend',
-      value: formatUsd(knownUsd),
-      // Its own line, never folded into the figure (Decision 4): a total that silently absorbs
-      // unmeasured runs as zeros presents the measured part of a bill as the whole of it.
-      //
-      // M51 R7: the existing `note` convention, one clause wider. `knownUsd` above is unchanged and
-      // is still the measured figure; the bound is named BESIDE it rather than folded into it, for
-      // the same reason the count is -- and because charging an unmeasured run would let a budget
-      // halt fire on spending nobody measured (`RUN_UNMEASURED_CAP_USD`'s own docstring).
-      note:
-        unknownRuns === 0
-          ? null
-          : `${unknownRuns} run${unknownRuns === 1 ? '' : 's'} unmeasured — upper bound ` +
-            `${formatUsd(knownUsd + unknownRuns * RUN_UNMEASURED_CAP_USD)}`,
-    },
+    // No `Spend` tile since M53 R6 (plan erratum E18): its figure was a raw `SUM(costUsd)` with no
+    // provenance in it, and money now lives on `/workforce?tab=evidence` as three figures with
+    // three words beside them -- reported, estimated, and the count nobody measured.
     { label: 'Tool calls', value: String(toolCallsTotal), note: null },
     { label: 'Pauses', value: String(pauses), note: null },
     { label: 'Active slaves', value: String(activeSlaveRows.length), note: null },
   ]
 
-  // ---- per-slave performance -------------------------------------------------------------
-  const aggBySlave = new Map(aggRows.map((row) => [row.slaveId, row]))
-
-  const perSlave: readonly SlavePerformanceRow[] = slaves.map((slave) => {
-    const agg = aggBySlave.get(slave.id)
-    const terminal = agg === undefined ? 0 : Number(agg.terminal)
-
-    return {
-      slaveId: slave.id,
-      name: slave.name,
-      role: slave.role,
-      runs: terminal,
-      // `null` when the slave has no terminal run at all — no denominator, no rate.
-      successPct: terminal === 0 || agg === undefined ? null : Math.round((Number(agg.succeeded) / terminal) * 100),
-      // Mean `endedAt − startedAt` in ms over terminal runs, `null` with none.
-      avgDurationMs:
-        agg === undefined || Number(agg.durationCount) === 0 ? null : (agg.durationMsSum ?? 0) / Number(agg.durationCount),
-      // `null` when NO run reported, a sum when some did (Decision 4). A partial sum is still a
-      // real measurement of the runs that reported; a zero would be a claim about the ones that
-      // did not.
-      tokens: agg === undefined || Number(agg.reported) === 0 ? null : Number(agg.tokensSum ?? 0n),
-      costUsd: agg?.knownUsd ?? 0,
-      unmeasuredRuns: agg === undefined ? 0 : Number(agg.unmeasured),
-    }
-  })
-
-  return { workspaceId, seeded: workspaceId === SEED_WORKSPACE_ID, series, kpis, perSlave }
+  return { workspaceId, seeded: workspaceId === SEED_WORKSPACE_ID, series, kpis }
 }

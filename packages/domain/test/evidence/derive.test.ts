@@ -160,7 +160,7 @@ describe('durationMsFrom', () => {
     expect(durationMsFrom(new Date(1_000), null)).toBeNull()
   })
 
-  it('is null for a negative span, the same guard `perSlaveRunAggregates` already applies', () => {
+  it('is null for a negative span, the same guard the analytics aggregate already applies', () => {
     expect(durationMsFrom(new Date(4_500), new Date(1_000))).toBeNull()
   })
 })

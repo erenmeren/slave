@@ -2,7 +2,7 @@
 import { render } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
-const buildAnalytics = vi.fn(async () => ({ workspaceId: null, seeded: false, series: [], kpis: [], perSlave: [] }))
+const buildAnalytics = vi.fn(async () => ({ workspaceId: null, seeded: false, series: [], kpis: [] }))
 const listProjects = vi.fn(async () => [{ id: 'w1', name: 'Checkout' }, { id: 'w2', name: 'Old', archived: true }])
 vi.mock('../src/server/analytics', () => ({ buildAnalytics: (...args: unknown[]) => buildAnalytics(...(args as [])) }))
 vi.mock('../src/server/org', () => ({ listProjects: (...args: unknown[]) => listProjects(...(args as [])) }))

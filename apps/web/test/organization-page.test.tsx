@@ -101,9 +101,23 @@ const view: OrganizationView = {
       summary: 'Nobody on this project can be dispatched for Application security.',
       readyTasks: 2,
       decisions: [decision],
+      preference: null,
     },
   ],
-  covered: [{ capability: 'backend.api-design', label: 'API design', by: 's2' }],
+  covered: [
+    {
+      capability: 'backend.api-design',
+      label: 'API design',
+      by: 's2',
+      preference: {
+        templateId: 't-api',
+        templateName: 'API Designer',
+        model: 'opus',
+        setBy: 'ada',
+        setById: 'u-9f3c',
+      },
+    },
+  ],
   unfillable: [{ capability: 'mobile.ios', label: 'iOS' }],
   hints: [
     {
@@ -116,6 +130,10 @@ const view: OrganizationView = {
   ],
   pendingElsewhere: 0,
   taskTitles: { t1: 'Review the checkout API' },
+  templates: [
+    { id: 't-api', name: 'API Designer' },
+    { id: 't-sec', name: 'Security Reviewer' },
+  ],
 }
 
 const EMPTY: OrganizationView = {
@@ -126,6 +144,7 @@ const EMPTY: OrganizationView = {
   hints: [],
   pendingElsewhere: 0,
   taskTitles: {},
+  templates: [],
 }
 
 /** `count` advisory edges, so the collapsed case has something to collapse. */
@@ -214,6 +233,57 @@ describe('OrganizationClient', () => {
         '/api/w/w1/organization',
       ]),
     )
+  })
+
+  // M53 R9 / plan decision D36: the decision lives where the staffing decision is READ, on the need
+  // row and beside every covered capability -- with the capability's LABEL beside it, never its key.
+  it('offers the staffing preference on a need row, with the capability label beside it', () => {
+    render(<OrganizationClient workspaceId="w1" initial={view} />)
+    const need = screen.getByTestId('organization-need-security.application')
+    const control = within(need).getByTestId('staffing-control-security.application')
+    expect(control.textContent).toContain('Application security')
+    expect(control.textContent).not.toContain('security.application')
+    expect(within(need).getByTestId('staffing-preference-security.application')).toBeTruthy()
+    // Nobody has asked for anything here, so there is nothing to take back.
+    expect(within(need).queryByTestId('staffing-clear-security.application')).toBeNull()
+  })
+
+  it('names the template and the person on a capability somebody has asked for, and offers the clear', () => {
+    render(<OrganizationClient workspaceId="w1" initial={view} />)
+    const asked = screen.getByTestId('staffing-asked-backend.api-design')
+    expect(asked.textContent).toContain('API Designer on opus')
+    // A USERNAME, never the `User.id` the column holds (M52 erratum E18).
+    expect(asked.textContent).toContain('by ada')
+    expect(asked.textContent).not.toContain('u-9f3c')
+    expect(screen.getByTestId('staffing-clear-backend.api-design')).toBeTruthy()
+    expect((screen.getByTestId('staffing-preference-backend.api-design') as HTMLSelectElement).value).toBe('t-api')
+  })
+
+  it('takes the decision back through DELETE and re-reads the page', async () => {
+    render(<OrganizationClient workspaceId="w1" initial={view} />)
+    fireEvent.click(screen.getByTestId('staffing-clear-backend.api-design'))
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+        '/api/w/w1/staffing/backend.api-design',
+        '/api/w/w1/organization',
+      ]),
+    )
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'DELETE' })
+  })
+
+  it('asks for a profile through PUT, and shows the refusal where the proposals show theirs', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'a staffing preference for security.application must name a profile, a model, or both' }), {
+        status: 409,
+      }),
+    )
+    render(<OrganizationClient workspaceId="w1" initial={view} />)
+    fireEvent.change(screen.getByTestId('staffing-preference-security.application'), { target: { value: 't-sec' } })
+
+    await waitFor(() => expect(screen.getByTestId('organization-error')).toBeTruthy())
+    expect(screen.getByTestId('organization-error').textContent).toContain('must name a profile, a model, or both')
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/w/w1/staffing/security.application')
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'PUT' })
   })
 
   it('says plainly when nobody anywhere can do something', () => {

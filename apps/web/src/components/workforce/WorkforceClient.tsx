@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import type { CapabilityRecord } from '@slave-of-ai/domain'
 import type { AllSlavesPage, CatalogRowView, ProjectTeamRow, RosterCompany, RunbookRowView, WorkforceCatalogView } from '../../server/org'
 import type { OverviewSnapshot, SlaveCardData } from '../../server/overview'
+import type { EvidencePage } from '../../server/evidence'
 import type { SkillsPage } from '../../server/skills'
 import { AllSlavesTable } from '../AllSlavesTable'
 import { CatalogImports, type CatalogImportRow } from '../CatalogImports'
@@ -13,6 +14,7 @@ import { DepartmentsTable } from '../DepartmentsTable'
 import { SkillsClient } from '../SkillsClient'
 import { SlavePanel } from '../SlavePanel'
 import { NewSlaveDrawer } from '../slaves/NewSlaveDrawer'
+import { EvidenceTab } from './EvidenceTab'
 import { RunbooksTab } from './RunbooksTab'
 import { WorkforceCatalog } from './WorkforceCatalog'
 import { Alert } from '../ui/Alert'
@@ -22,24 +24,30 @@ import { PageShell } from '../ui/PageShell'
 import { Panel } from '../ui/Panel'
 import { Tabs } from '../ui/Tabs'
 
-export type WorkforceTab = 'slaves' | 'departments' | 'catalog' | 'skills' | 'runbooks'
+export type WorkforceTab = 'slaves' | 'departments' | 'catalog' | 'skills' | 'runbooks' | 'evidence'
 
 export const WORKFORCE_TABS: readonly { readonly id: WorkforceTab; readonly label: string }[] = [
   { id: 'slaves', label: 'Slaves' },
   { id: 'departments', label: 'Departments' },
   { id: 'catalog', label: 'Catalog' },
   { id: 'skills', label: 'Skills' },
-  // M48 R7, LAST: a runbook is a way of WORKING, which is what you look for after you know who is
+  // M48 R7: a runbook is a way of WORKING, which is what you look for after you know who is
   // here and what they are made of.
   { id: 'runbooks', label: 'Runbooks' },
+  // M53 R12, LAST: a record is what you look at after you know who is here, what they are made of
+  // and how they are asked to work. `docs/ia.md:41` and `:58` promised this since M44 -- the
+  // per-profile evidence that replaces the Analytics tiles.
+  { id: 'evidence', label: 'Evidence' },
 ]
 
 /**
- * The Workforce page (M44 R1). Five tabs since M48 R7, and every panel on them is the one that was
+ * The Workforce page (M44 R1). Six tabs since M53 R12, and every panel on them is the one that was
  * already there: that milestone MOVED surfaces, it did not rewrite them (R5, and the roadmap's
  * "extend, do not rewrite"). What changed is where a person finds them -- four surfaces for "a
  * slave" used to be a sidebar row, another sidebar row, a section on the Projects home and a panel
- * inside a project; Runbooks, the fifth tab, is the way those people are asked to WORK.
+ * inside a project; Runbooks, the fifth tab, is the way those people are asked to WORK; Evidence,
+ * the sixth, is what their record actually says -- the per-profile and per-model tables that replace
+ * the `/analytics` per-slave table and its raw `SUM(costUsd)` tile (M53 R12).
  *
  * The tab lives in `?tab=`, written with `window.history.replaceState` (fix round 1). It is the
  * SMALLER of the two options: `router.replace` on an `export const dynamic = 'force-dynamic'` page
@@ -62,6 +70,7 @@ export function WorkforceClient({
   skills,
   taxonomy,
   runbooks,
+  evidence,
 }: {
   readonly initialTab: WorkforceTab
   readonly slaves: AllSlavesPage
@@ -79,6 +88,10 @@ export function WorkforceClient({
   readonly taxonomy: readonly CapabilityRecord[]
   /** Every runbook (M48 R7) -- read by the page beside the taxonomy that labels their stages. */
   readonly runbooks: readonly RunbookRowView[]
+  /** The sixth tab's two tables (M53 R12), read on the SERVER under the `?domain=` the URL already
+   *  claims to be filtering by -- both are `GROUP BY`s, and no amount of client work can narrow an
+   *  aggregate that has already happened. */
+  readonly evidence: EvidencePage
 }): React.JSX.Element {
   const searchParams = useSearchParams()
   const [tab, setTab] = useState<WorkforceTab>(initialTab)
@@ -182,6 +195,7 @@ export function WorkforceClient({
       )}
       {tab === 'skills' && <SkillsClient page={skills} />}
       {tab === 'runbooks' && <RunbooksTab runbooks={runbooks} taxonomy={taxonomy} />}
+      {tab === 'evidence' && <EvidenceTab page={evidence} />}
       <NewSlaveDrawer
         open={newOpen}
         onClose={() => setNewOpen(false)}

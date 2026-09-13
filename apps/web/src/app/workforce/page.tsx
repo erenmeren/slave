@@ -10,13 +10,14 @@ import {
   listWorkforceCatalogPage,
   listWorkspaceNames,
 } from '../../server/org'
+import { buildEvidencePage } from '../../server/evidence'
 import { buildSkillsPage } from '../../server/skills'
 import { parseCatalogFilters } from '../../lib/catalogFilters'
 import { WorkforceClient, type WorkforceTab } from '../../components/workforce/WorkforceClient'
 
 export const dynamic = 'force-dynamic'
 
-const TAB_IDS: readonly WorkforceTab[] = ['slaves', 'departments', 'catalog', 'skills', 'runbooks']
+const TAB_IDS: readonly WorkforceTab[] = ['slaves', 'departments', 'catalog', 'skills', 'runbooks', 'evidence']
 
 /** Next hands a repeated param (`?capability=a&capability=b`) as an array; the catalog's filters
  *  are one value each, so the first wins -- the same thing `URLSearchParams.get` does for the
@@ -32,9 +33,9 @@ function queryOf(params: Record<string, string | readonly string[] | undefined>)
 
 /**
  * The people (M44 R1): every slave, the departments they sit on, the catalog they are made from,
- * the skills they are given and -- since M48 R7 -- the runbooks they can be asked to follow: five
- * tabs on one page instead of two sidebar rows and a section on the Projects home. `/slaves` and
- * `/skills` are 307s into it (`next.config.ts`).
+ * the skills they are given, the runbooks they can be asked to follow (M48 R7) and -- since M53 R12
+ * -- what their record says: six tabs on one page instead of two sidebar rows and a section on the
+ * Projects home. `/slaves` and `/skills` are 307s into it (`next.config.ts`).
  *
  * The tab is in the URL (`?tab=`), the way the Graph page keeps its mode, so `/skills` can redirect
  * to a tab and a reload or a shared link keeps it. An unknown value falls back to `slaves` rather
@@ -64,9 +65,10 @@ export default async function WorkforcePage({
 }): Promise<React.JSX.Element> {
   const params = await searchParams
   const tab = typeof params.tab === 'string' ? params.tab : undefined
-  const filters = parseCatalogFilters(queryOf(params))
+  const query = queryOf(params)
+  const filters = parseCatalogFilters(query)
   const filtered = Object.keys(filters).length > 0
-  const [slaves, teams, workspaces, companies, roster, catalog, allTemplates, catalogImports, skills, taxonomy, runbooks] =
+  const [slaves, teams, workspaces, companies, roster, catalog, allTemplates, catalogImports, skills, taxonomy, runbooks, evidence] =
     await Promise.all([
       listAllSlaves(),
       listProjectTeams(),
@@ -84,6 +86,10 @@ export default async function WorkforcePage({
       // component -- a runbook changes when an operator adds a file or an import runs, which is
       // not something this page has to watch for.
       listRunbookRows(),
+      // M53 R12: the sixth tab's two aggregates, seeded with the domain the URL already claims to
+      // be filtering by -- the `parseCatalogFilters` precedent one line up. Both are `GROUP BY`s,
+      // so the filter has to be applied where the grouping happens and cannot be a client concern.
+      buildEvidencePage({ domain: query.get('domain') }),
     ])
   const initialTab = TAB_IDS.find((id) => id === tab) ?? 'slaves'
   return (
@@ -100,6 +106,7 @@ export default async function WorkforcePage({
       skills={skills}
       taxonomy={taxonomy}
       runbooks={runbooks}
+      evidence={evidence}
     />
   )
 }

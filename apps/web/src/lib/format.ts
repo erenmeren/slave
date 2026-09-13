@@ -1,9 +1,10 @@
 /**
  * `860000` → `14m 20s`; `45000` → `45s`.
  *
- * Lives here, not in `server/analytics.ts` where it was first written, because it is also needed
- * by `AnalyticsClient.tsx` (a `'use client'` component) to render the per-slave table's average
- * duration. `server/analytics.ts` imports `@slave-of-ai/db/client` at module scope, and Next's
+ * Lives here, not in `server/analytics.ts` where it was first written, because it is also needed by
+ * `'use client'` components -- `AnalyticsClient.tsx`'s per-slave table until M53 R12 deleted it, and
+ * the Evidence tab's median-duration column since. `server/analytics.ts` imports
+ * `@slave-of-ai/db/client` at module scope, and Next's
  * client bundler resolves an entire module's imports before any tree-shaking of unused exports
  * happens — a client component that value-imports even one pure export from that file drags
  * `pg`'s Node-only dependency graph (`fs`, `net`, `tls`, `dns`) into the browser bundle and fails
@@ -29,12 +30,8 @@ export function formatTimeout(ms: number): string {
   return seconds === 0 ? `${minutes}m` : `${minutes}m${seconds}s`
 }
 
-/** `1_400_000` → `1.4M`; `900` → `900`. The handoff's own token format -- moved here from the
- *  old flat worker list (M24 Task 7: that table is gone, folded into `AllSlavesTable`, which has
- *  no Tokens column; `AnalyticsClient.tsx`'s per-slave table is this function's one remaining
- *  caller, the reason it lives in a plain module rather than back inside a deleted component). */
-export function formatTokens(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`
-  return String(tokens)
-}
+// `formatTokens` was deleted by M53 R12 with the per-slave Analytics table, which its own docstring
+// already named as "this function's one remaining caller" -- the flat worker list it was written for
+// went in M24 and `AllSlavesTable` has no Tokens column. Nothing in this tree calls it, no test
+// covers it, and no tile on `/analytics` has ever shown a token figure. An exported helper with no
+// caller is a second thing to keep working for nobody.

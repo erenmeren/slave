@@ -1,30 +1,29 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { formatDuration, formatTokens } from '../lib/format'
-import { formatUsd } from '../lib/realMoney'
 import type { AnalyticsSnapshot } from '../server/analytics'
 import { BarChart } from './BarChart'
 import { KpiStrip } from './analytics/KpiStrip'
-import { AvatarTile } from './ui/AvatarTile'
-import { DataTable, Row } from './ui/DataTable'
 import { PageShell } from './ui/PageShell'
 import { Panel } from './ui/Panel'
-import { ProgressBar } from './ui/ProgressBar'
-
-const PERF_COLUMNS = '1fr 46px 80px 70px 90px 60px'
-const PERF_HEADER = ['Slave', 'Runs', 'Success', 'Avg', 'Tokens', 'Cost']
 
 /**
- * The Analytics page (spec §5.9, design README "3a — Analytics"): a workspace selector, six
- * ALL-TIME KPI tiles, the 7-day stacked bar chart, and the ALL-TIME per-slave performance table.
+ * The Analytics page (spec §5.9, design README "3a — Analytics"): a workspace selector, five
+ * ALL-TIME KPI tiles and the 7-day stacked bar chart.
  *
- * Controller ruling (Task 7): the KPIs and per-slave rows summarize this scope's ENTIRE history,
- * not the 7-day window — an average duration or a success rate over the last week alone would
- * swing wildly on a quiet workspace, and the day-by-day trend already exists for the windowed
- * view. The "Last 7 days" caption is therefore CHART-scoped, not a page-wide claim: it sits on the
- * chart panel, beside the chart it actually describes, rather than in the page header where it
- * would misstate the KPIs and table sitting next to it.
+ * M53 R12 took two things off it and kept the route, the `?workspace=` scope and everything else:
+ * the per-slave performance table, which counted one project's MATERIALISED workers and summed
+ * `costUsd` raw, and the `Spend` tile whose figure was that same raw sum. Both questions are
+ * answered on `/workforce?tab=evidence`, per PROFILE and per MODEL -- two different questions -- with
+ * the provenance of every figure beside it. `docs/ia.md` rule 2: nothing is removed, only moved, and
+ * the panel that stood here now says where it went.
+ *
+ * Controller ruling (Task 7): the KPIs summarize this scope's ENTIRE history, not the 7-day window
+ * — an average duration or a success rate over the last week alone would swing wildly on a quiet
+ * workspace, and the day-by-day trend already exists for the windowed view. The "Last 7 days"
+ * caption is therefore CHART-scoped, not a page-wide claim: it sits on the chart panel, beside the
+ * chart it actually describes, rather than in the page header where it would misstate the tiles
+ * sitting next to it.
  */
 export function AnalyticsClient({
   snapshot,
@@ -73,7 +72,7 @@ export function AnalyticsClient({
         </div>
 
         {/* M44 t3: the strip is `analytics/KpiStrip` now, so the Projects home's all-workspaces
-          * section renders the same six tiles from the same builder rather than a second recipe. */}
+          * section renders the same five tiles from the same builder rather than a second recipe. */}
         <KpiStrip kpis={snapshot.kpis} />
 
         <div className="grid grid-cols-2 gap-[16px]">
@@ -84,51 +83,18 @@ export function AnalyticsClient({
             <BarChart series={snapshot.series} height={180} label="tasks completed, last 7 days" />
           </Panel>
 
-          <Panel title="slave performance">
-            <DataTable columns={PERF_COLUMNS} header={PERF_HEADER}>
-              {snapshot.perSlave.map((row) => (
-                <Row key={row.slaveId} columns={PERF_COLUMNS}>
-                  <span className="flex min-w-0 items-center gap-[9px]">
-                    {/* `idle`, fixed: this row summarizes ALL-TIME performance, not a live run --
-                        there is no status on `SlavePerformanceRow` to derive a tone from, and
-                        borrowing one from the slave's CURRENT run would tie a history table to a
-                        fact it does not describe. */}
-                    <AvatarTile name={row.name} tone="idle" />
-                    <span className="min-w-0">
-                      <span className="block truncate text-[12.5px] font-semibold text-text-1">{row.name}</span>
-                      <span className="block truncate text-[10px] text-text-dim">{row.role}</span>
-                    </span>
-                  </span>
-                  <span className="font-mono text-[11px] text-text-2">{row.runs}</span>
-                  <span className="flex items-center gap-1">
-                    <span className="w-[34px]">
-                      <ProgressBar pct={row.successPct} />
-                    </span>
-                    <span data-testid={`perf-success-${row.slaveId}`} className="font-mono text-[11px] text-text-2">
-                      {row.successPct === null ? '—' : `${row.successPct}%`}
-                    </span>
-                  </span>
-                  <span data-testid={`perf-avg-${row.slaveId}`} className="font-mono text-[11px] text-text-2">
-                    {row.avgDurationMs === null ? '—' : formatDuration(row.avgDurationMs)}
-                  </span>
-                  <span data-testid={`perf-tokens-${row.slaveId}`} className="font-mono text-[11px] text-text-2">
-                    {row.tokens === null ? '—' : formatTokens(row.tokens)}
-                  </span>
-                  {/* The Spend KPI tile's own idiom, on the per-slave row (M14 fix wave, review
-                    * I1): a cost that hides how many of the slave's runs were never measured
-                    * presents the measured part of a bill as the whole of it. */}
-                  <span className="font-mono text-[11px] text-text-1">
-                    {formatUsd(row.costUsd)}
-                    {row.unmeasuredRuns > 0 && (
-                      <span data-testid={`perf-unmeasured-${row.slaveId}`} className="text-text-3">
-                        {' '}
-                        · {row.unmeasuredRuns} unmeasured
-                      </span>
-                    )}
-                  </span>
-                </Row>
-              ))}
-            </DataTable>
+          <Panel title="how this workforce is doing">
+            {/* `docs/ia.md` rule 2: nothing is removed, only moved. The per-slave table that stood
+              * here counted one project's materialised workers and summed `costUsd` raw -- no
+              * provenance, no profile, no model, no domain. Its questions are answered on the
+              * Evidence tab, per PROFILE and per MODEL, which are two different questions. */}
+            <p className="text-xs text-text-2">
+              Per-profile and per-model evidence — counts, rates and what it cost —{' '}
+              <a data-testid="evidence-link" className="underline" href="/workforce?tab=evidence">
+                moved to Workforce → Evidence
+              </a>
+              .
+            </p>
           </Panel>
         </div>
       </div>

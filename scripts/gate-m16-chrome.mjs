@@ -35,9 +35,12 @@
 //      proves the tile genuinely reachable (fix round 1: `server/org.ts` no longer caps
 //      `ProjectRow.team` server-side).
 //   4. Repo hygiene (no browser): Task 7's own clean-check grep, expected empty.
-//   5. Analytics `/analytics`: a per-slave row whose success cell reads `—` has a progress bar with
-//      no `aria-valuenow`; if no such row exists in the seed, the fallback proves the wiring exists
-//      the other way -- at least one progress bar DOES carry `aria-valuenow`.
+//   5. Evidence `/workforce?tab=evidence` (MOVED here by M53 R12 / plan erratum E11, from the
+//      `/analytics` per-slave table that milestone deleted): a by-profile row that says
+//      `Insufficient evidence` draws NO progress bar at all, and a row that claims rates draws one
+//      carrying `aria-valuenow` for each. The branch actually exercised is printed, so a database
+//      with no thin profile still proves the wiring in the other direction rather than passing
+//      vacuously.
 //
 // NEVER RUN THIS WHILE A DEV SERVER IS ALREADY SERVING `apps/web`: like `gate-m14-fidelity.mjs` and
 // `gate-m15-boundary.mjs`, this gate boots `next dev` against the repo's own `apps/web/.next` (no
@@ -385,49 +388,64 @@ try {
   )
 
   // ============================================================================================
-  // Check 5: Analytics /analytics -- a `—` success cell pairs with a progress bar carrying no
-  // `aria-valuenow`; the fallback proves the wiring the other way if no such row exists.
+  // Check 5: Evidence /workforce?tab=evidence -- M53 R12 deleted the per-slave Analytics table this
+  // check used to read (plan erratum E11), and the wiring moved with it. The claim is the same and
+  // the form is stronger: a rate the page SHOWS carries a `progress-bar` with `aria-valuenow`, and a
+  // rate below `EVIDENCE_MIN_SAMPLE` renders the words `Insufficient evidence` and NO bar at all --
+  // R11's "not a greyed percentage" is an absence a browser can measure.
   // ============================================================================================
-  await page.goto(url('/analytics'), { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
-  await waitVisible(page.getByTestId('kpi-tile'), "an Analytics KPI tile")
-  const rows = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-testid="data-table-row"]')]
-      .map((row) => {
-        const successCell = row.querySelector('[data-testid^="perf-success-"]')
-        const bar = row.querySelector('[data-testid="progress-bar"]')
-        if (successCell === null || bar === null) return null
-        return {
-          success: successCell.textContent?.trim() ?? '',
-          hasValueNow: bar.hasAttribute('aria-valuenow'),
-        }
-      })
-      .filter((row) => row !== null),
+  await page.goto(url('/workforce?tab=evidence'), { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await waitVisible(page.getByTestId('evidence-table-profile'), 'the by-profile evidence table')
+  const cells = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid^="evidence-profile-row-"]')].map((row) => ({
+      insufficient: row.querySelector('[data-testid^="evidence-insufficient-"]') !== null,
+      bars: row.querySelectorAll('[data-testid="progress-bar"]').length,
+      valued: row.querySelectorAll('[data-testid="progress-bar"][aria-valuenow]').length,
+    })),
   )
-  if (rows.length === 0) {
-    await fail('check 5 (analytics): no per-slave performance rows rendered at all')
-  }
-  const unmeasuredRows = rows.filter((row) => row.success === '—')
-  if (unmeasuredRows.length === 0) {
-    const wired = rows.some((row) => row.hasValueNow)
+  // A seeded database has NO `EvidenceRecord` rows at all: a fact is written when a run CONCLUDES
+  // (R3) and `db:seed` concludes nothing, so the table is legitimately empty here -- unlike the
+  // per-slave table this check used to read, which had one row per seeded slave whether or not it
+  // had ever run. The empty case is check 2's own vacuous-but-stated pass, in this same file, and
+  // `gate:m53-evidence` stage 9 is where the pair below is proved against a table a real pipeline
+  // wrote. What this branch still measures is that the surface renders and says so honestly.
+  if (cells.length === 0) {
+    const empty = await page.evaluate(
+      () => document.querySelector('[data-testid="evidence-profile-empty"]')?.textContent?.trim() ?? null,
+    )
     assert(
-      wired,
-      'check 5 (analytics): no row has an unmeasured (—) success cell, and the fallback found no progress bar ' +
-        'carrying aria-valuenow either -- the wiring cannot be shown to exist at all',
+      empty !== null,
+      'check 5 (evidence): no by-profile rows AND no empty state either -- the table rendered nothing at all',
     )
     console.log(
-      `check 5: no row in the seed has an unmeasured success cell -- fallback pass: at least one of ` +
-        `${String(rows.length)} progress bar(s) carries aria-valuenow`,
+      `check 5: the by-profile evidence table has no rows -- vacuous-but-stated pass (a fact is written when a run ` +
+        `concludes and the seeded database has concluded none; the table says so: ${JSON.stringify(empty)})`,
     )
   } else {
-    for (const row of unmeasuredRows) {
+    const thinRows = cells.filter((row) => row.insufficient)
+    for (const row of thinRows) {
       assert(
-        !row.hasValueNow,
-        `check 5 (analytics): a row reads — for success but its progress bar still carries aria-valuenow`,
+        row.bars === 0,
+        `check 5 (evidence): a row says "Insufficient evidence" and still draws ${String(row.bars)} progress bar(s) -- ` +
+          'R11 rejects a greyed percentage, and a bar with no value beside the words is exactly that',
       )
     }
+    const shownRows = cells.filter((row) => !row.insufficient)
+    for (const row of shownRows) {
+      assert(
+        row.bars === row.valued && row.valued > 0,
+        `check 5 (evidence): a row claims rates but has ${String(row.bars)} progress bar(s) and ` +
+          `${String(row.valued)} carrying aria-valuenow -- a bar that exists must carry a value`,
+      )
+    }
+    // Which BRANCH was exercised, printed rather than assumed -- exactly what stopped the old check
+    // on /analytics being vacuous: the wiring must be shown to exist in at least one direction.
     console.log(
-      `check 5 PASSED: ${String(unmeasuredRows.length)} of ${String(rows.length)} row(s) read — for success, ` +
-        'and every one of them has a progress bar with no aria-valuenow',
+      thinRows.length === 0
+        ? `check 5 PASSED: no profile in this database is below the sample floor -- fallback pass: all ` +
+            `${String(shownRows.length)} row(s) draw a progress bar for every rate they claim, each carrying aria-valuenow`
+        : `check 5 PASSED: ${String(thinRows.length)} of ${String(cells.length)} row(s) say "Insufficient evidence" and draw ` +
+            `no progress bar at all, and the other ${String(shownRows.length)} draw one carrying aria-valuenow per rate claimed`,
     )
   }
 

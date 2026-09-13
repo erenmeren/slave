@@ -340,7 +340,8 @@ const GROUP_COUNTERS = Prisma.sql`
 
 /** The shape the driver hands back for {@link GROUP_COUNTERS}. `bigint` on every COUNT is `pg`'s
  *  behaviour for those aggregates, and every consumer converts with `Number()` at the point it reads
- *  the field and never earlier -- the rule `perSlaveRunAggregates`' own docstring states. */
+ *  the field and never earlier -- the rule `apps/web/src/server/analytics.ts`'s own aggregate
+ *  docstring states. */
 interface GroupCountersRow {
   readonly attempted: bigint
   readonly firstPassJudged: bigint

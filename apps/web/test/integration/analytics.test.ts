@@ -66,12 +66,12 @@ describe('buildAnalytics', () => {
     expect(busiest?.failed).toBe(1)
   })
 
-  it('produces six KPIs in a fixed order', async (): Promise<void> => {
+  // FIVE since M53 R12 (plan erratum E12/E18): `Spend` went with the raw `SUM(costUsd)` behind it.
+  it('produces five KPIs in a fixed order, and no money tile', async (): Promise<void> => {
     const snapshot = await buildAnalytics(fixture.workspaceId)
     expect(snapshot.kpis.map((k) => k.label)).toEqual([
       'Task success rate',
       'Avg run duration',
-      'Spend',
       'Tool calls',
       'Pauses',
       'Active slaves',
@@ -100,21 +100,6 @@ describe('buildAnalytics', () => {
     expect(rate?.note).toBe('3 of 4')
   })
 
-  it('reports known spend and says how many runs nobody could measure', async (): Promise<void> => {
-    await prisma.slaveRun.create({
-      data: { slaveId: fixture.slaveId, status: 'succeeded', provider: 'claude_code', costUsd: 1.5, terminalAt: new Date(), endedAt: new Date() },
-    })
-    await prisma.slaveRun.create({
-      data: { slaveId: fixture.slaveId, status: 'succeeded', provider: 'cursor', costUsd: null, terminalAt: new Date(), endedAt: new Date() },
-    })
-    const snapshot = await buildAnalytics(fixture.workspaceId)
-    const spend = snapshot.kpis.find((k) => k.label === 'Spend')
-    expect(spend?.value).toBe('$1.50')
-    // M51 R7: the count, and the bound beside it -- never folded into the figure. `$2.50` is
-    // `knownUsd` plus the one unmeasured run at `RUN_UNMEASURED_CAP_USD`, shown and never charged.
-    expect(spend?.note).toBe('1 run unmeasured — upper bound $2.50')
-  })
-
   it('counts pauses from the event log, not from a run column', async (): Promise<void> => {
     const run = await prisma.slaveRun.create({ data: { slaveId: fixture.slaveId, status: 'paused', provider: 'claude_code' } })
     for (let i = 0; i < 2; i += 1) {
@@ -138,26 +123,9 @@ describe('buildAnalytics', () => {
     expect(snapshot.kpis.find((k) => k.label === 'Active slaves')?.value).toBe('1')
   })
 
-  it('sums a slave tokens only over runs that reported them, and says null when none did', async (): Promise<void> => {
-    await prisma.slaveRun.create({
-      data: { slaveId: fixture.slaveId, status: 'succeeded', provider: 'claude_code', tokensIn: 10, tokensOut: 90, terminalAt: new Date(), endedAt: new Date() },
-    })
-    expect((await buildAnalytics(fixture.workspaceId)).perSlave[0]?.tokens).toBe(100)
-
-    await prisma.slaveRun.deleteMany({})
-    await prisma.slaveRun.create({
-      data: { slaveId: fixture.slaveId, status: 'succeeded', provider: 'cursor', tokensIn: null, tokensOut: null, terminalAt: new Date(), endedAt: new Date() },
-    })
-    expect((await buildAnalytics(fixture.workspaceId)).perSlave[0]?.tokens).toBeNull()
-  })
-
-  it('reports a null success rate and duration for a slave with no terminal run', async (): Promise<void> => {
-    const row = (await buildAnalytics(fixture.workspaceId)).perSlave[0]
-    expect(row?.runs).toBe(0)
-    expect(row?.successPct).toBeNull()
-    expect(row?.avgDurationMs).toBeNull()
-  })
-
+  // The `?workspace=` scope, re-pinned on the tiles now that the per-slave rows it used to be
+  // asserted through are gone (M53 R12): a scoped read counts this project's runs and the global
+  // one counts both, which is the whole of what the scope does.
   it('scopes to a workspace, and covers every workspace when given null', async (): Promise<void> => {
     const other = await prisma.workspace.create({
       data: { name: 'Other', repoPath: '/tmp/other', verifyCommands: ['true'], setupCommands: [] },
@@ -165,11 +133,17 @@ describe('buildAnalytics', () => {
     const otherTeam = await prisma.team.create({ data: { workspaceId: other.id, name: 'T' } })
     const otherSlave = await prisma.slave.create({ data: { teamId: otherTeam.id, name: 'Bea', role: 'qa' } })
     await prisma.slaveRun.create({
-      data: { slaveId: otherSlave.id, status: 'succeeded', provider: 'claude_code', terminalAt: new Date(), endedAt: new Date() },
+      data: { slaveId: otherSlave.id, status: 'succeeded', provider: 'claude_code', toolCalls: 7, terminalAt: new Date(), endedAt: new Date() },
+    })
+    await prisma.slaveRun.create({
+      data: { slaveId: fixture.slaveId, status: 'succeeded', provider: 'claude_code', toolCalls: 3, terminalAt: new Date(), endedAt: new Date() },
     })
 
-    expect((await buildAnalytics(fixture.workspaceId)).perSlave.map((r) => r.name)).toEqual(['Alex'])
-    expect((await buildAnalytics(null)).perSlave.map((r) => r.name).sort()).toEqual(['Alex', 'Bea'])
+    const toolCallsOf = (snapshot: { readonly kpis: readonly { readonly label: string; readonly value: string }[] }): string | undefined =>
+      snapshot.kpis.find((k) => k.label === 'Tool calls')?.value
+    expect(toolCallsOf(await buildAnalytics(fixture.workspaceId))).toBe('3')
+    expect(toolCallsOf(await buildAnalytics(other.id))).toBe('7')
+    expect(toolCallsOf(await buildAnalytics(null))).toBe('10')
   })
 
   it('marks only the seeded workspace as seeded, never a fresh workspace or the all-workspaces view', async (): Promise<void> => {

@@ -231,6 +231,58 @@ describe('buildOrganization', () => {
     expect(view.unfillable.map((one) => one.label)).toEqual(['iOS'])
   })
 
+  // M53 R9: the staffing decision, read where it is acted on. The setter is resolved to a USERNAME
+  // at this boundary in ONE batched lookup (M52 erratum E18) -- the column holds a `User.id`, and a
+  // page that printed it would be printing a key at a person.
+  it('carries each capability staffing decision, with the setter as a username and the id beside it', async () => {
+    // `truncateAll` does not name `User` (accounts outlive a project fixture), so the username is
+    // this file's own rather than a bare `ada` another suite may already hold.
+    const user = await prisma.user.upsert({
+      where: { username: 'm53-organization-ada' },
+      create: { username: 'm53-organization-ada', passwordHash: 'x' },
+      update: {},
+    })
+    const template = await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'Security Reviewer' } })
+    const { setStaffingPreference } = await import('@slave-of-ai/control')
+    const written = await setStaffingPreference(
+      workspaceId,
+      { capability: 'security.application', templateId: template.id, model: 'opus' },
+      // `Principal` in control is a `userId` and nothing else -- the NAME is each surface's own
+      // resolution, which is the whole of M52 erratum E18.
+      { userId: user.id },
+    )
+    expect(written.ok).toBe(true)
+
+    const view = await buildOrganization(workspaceId)
+    expect(view).not.toBeNull()
+    if (view === null) return
+    const need = view.needs.find((one) => one.capability === 'security.application')
+    expect(need?.preference?.templateName).toBe('Security Reviewer')
+    expect(need?.preference?.model).toBe('opus')
+    expect(need?.preference?.setBy).toBe('m53-organization-ada')
+    expect(need?.preference?.setById).toBe(user.id)
+    // Nothing was asked for on the covered capability, and that is a null rather than a blank row.
+    expect(view.covered.find((one) => one.capability === 'backend.api-design')?.preference).toBeNull()
+    // The pick list is read once for the page and holds every template, so a person can ask for a
+    // specialist who is not on this project yet -- which is the case a preference is for.
+    expect(view.templates.map((one) => one.name)).toEqual(['Gate Platform Builder', 'Security Reviewer'])
+  })
+
+  it('says a setter is no longer on record rather than printing their id', async () => {
+    await prisma.staffingPreference.create({
+      data: { workspaceId, capability: 'security.application', model: 'opus', setBy: 'u-gone' },
+    })
+
+    const view = await buildOrganization(workspaceId)
+    expect(view).not.toBeNull()
+    if (view === null) return
+    const preference = view.needs.find((one) => one.capability === 'security.application')?.preference
+    // `setBy` null with `setById` set is "the account was deleted since"; both null would be "the
+    // decision named nobody at all", and the page says the two apart.
+    expect(preference?.setBy).toBeNull()
+    expect(preference?.setById).toBe('u-gone')
+  })
+
   it('carries the advisory edges, and never anything that dispatches', async () => {
     const view = await buildOrganization(workspaceId)
     // The `not.toBeNull()` is the assertion; the narrowing return below is only TypeScript's

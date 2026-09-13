@@ -27,7 +27,7 @@ export default async function Home({
     // with them.
     buildAnalytics(null),
   ])
-  // Only the tiles cross into the client bundle -- `buildAnalytics` also returns `series` and
-  // `perSlave`, which `/analytics` renders and this page does not.
+  // Only the tiles cross into the client bundle -- `buildAnalytics` also returns `series`, which
+  // `/analytics` renders and this page does not.
   return <ProjectsClient projects={projects} companies={companies} kpis={analytics.kpis} />
 }

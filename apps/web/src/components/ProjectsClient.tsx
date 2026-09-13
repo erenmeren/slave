@@ -234,8 +234,8 @@ export function ProjectsClient({
    * The ALL-workspaces KPI tiles (M44 R1), from the same `buildAnalytics` `/analytics` calls with a
    * null scope. Just the tiles, not the whole `AnalyticsSnapshot` (fix round 1): this is a CLIENT
    * component, so every field handed to it is serialized into the RSC payload and shipped to the
-   * browser -- `series` and `perSlave` would have crossed the wire on every Projects load for a
-   * section that renders neither. Required, not optional: a caller with nothing to show passes
+   * browser -- `series` would have crossed the wire on every Projects load for a section that does
+   * not render it. Required, not optional: a caller with nothing to show passes
    * `[]` rather than the section silently disappearing.
    */
   readonly kpis: readonly Kpi[]

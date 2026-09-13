@@ -46,7 +46,7 @@ const projects = [project({})]
 // M44 t3: `templates`/`roster`/`catalogImports` are gone -- the team catalog they fed moved to
 // Workforce -> Catalog, and its cases moved with it (`workforce-page.test.tsx`). What arrived in
 // its place is `kpis`, the all-workspaces tiles the analytics section renders (fix round 1: the
-// tiles alone, not the whole snapshot -- `series`/`perSlave` never reach this client component).
+// tiles alone, not the whole snapshot -- `series` never reaches this client component).
 // Most of this file's cases only exercise the cards grid, so the wrapper defaults it to `[]` and a
 // case that cares overrides it (an explicit prop in `props` wins in JSX prop order).
 const KPIS: readonly Kpi[] = [

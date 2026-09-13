@@ -24,14 +24,9 @@ function snapshot(over: Partial<AnalyticsSnapshot> = {}): AnalyticsSnapshot {
     kpis: [
       { label: 'Task success rate', value: '92%', note: '23 of 25' },
       { label: 'Avg run duration', value: '14m 20s', note: 'over 25 run(s)' },
-      { label: 'Spend', value: '$8.43', note: '2 runs unmeasured' },
       { label: 'Tool calls', value: '482', note: null },
       { label: 'Pauses', value: '7', note: null },
       { label: 'Active slaves', value: '3', note: null },
-    ],
-    perSlave: [
-      { slaveId: 'a1', name: 'Alex Turner', role: 'backend', runs: 42, successPct: 95, avgDurationMs: 760_000, tokens: 1_400_000, costUsd: 3.02, unmeasuredRuns: 0 },
-      { slaveId: 'a2', name: 'Bea Ng', role: 'qa', runs: 0, successPct: null, avgDurationMs: null, tokens: null, costUsd: 0, unmeasuredRuns: 0 },
     ],
     ...over,
   }
@@ -60,27 +55,22 @@ describe('BarChart', () => {
 })
 
 describe('AnalyticsClient', () => {
-  it('renders six KPI tiles with their notes', () => {
+  // FIVE since M53 R12 (plan erratum E18): the `Spend` tile went with the raw `SUM(costUsd)`
+  // behind it, and money is three figures with three words beside them on the Evidence tab.
+  it('renders five KPI tiles with their notes, and no money tile at all', () => {
     render(<AnalyticsClient snapshot={snapshot()} workspaces={workspaces} seeded={false} />)
-    expect(screen.getAllByTestId('kpi-tile')).toHaveLength(6)
-    expect(screen.getByTestId('kpi-note-Spend').textContent).toBe('2 runs unmeasured')
+    expect(screen.getAllByTestId('kpi-tile')).toHaveLength(5)
+    expect(screen.getAllByTestId('kpi-tile').map((tile) => tile.textContent ?? '').join(' | ')).not.toContain('Spend')
+    expect(screen.queryByTestId('kpi-note-Spend')).toBeNull()
+    expect(screen.getByTestId('kpi-note-Task success rate').textContent).toBe('23 of 25')
     expect(screen.queryByTestId('kpi-note-Pauses')).toBeNull()
   })
 
-  it('renders the per-slave table with unknown marks where nothing was measured', () => {
+  it('hands the per-slave question over rather than dropping it (ia.md rule 2)', () => {
     render(<AnalyticsClient snapshot={snapshot()} workspaces={workspaces} seeded={false} />)
-    expect(screen.getByTestId('perf-tokens-a1').textContent).toBe('1.4M')
-    expect(screen.getByTestId('perf-tokens-a2').textContent).toBe('—')
-    expect(screen.getByTestId('perf-success-a2').textContent).toBe('—')
-    expect(screen.getByTestId('perf-avg-a2').textContent).toBe('—')
-  })
-
-  // M14 fix wave, review I1: `unmeasuredRuns` reached this row's DTO and was rendered nowhere.
-  it('says how many of a slave runs went unmeasured, beside the cost', () => {
-    const rows = snapshot().perSlave.map((r) => (r.slaveId === 'a1' ? { ...r, unmeasuredRuns: 3 } : r))
-    render(<AnalyticsClient snapshot={snapshot({ perSlave: rows })} workspaces={workspaces} seeded={false} />)
-    expect(screen.getByTestId('perf-unmeasured-a1').textContent?.replace(/\s+/g, ' ').trim()).toBe('· 3 unmeasured')
-    expect(screen.queryByTestId('perf-unmeasured-a2')).toBeNull()
+    const link = screen.getByTestId('evidence-link')
+    expect(link.getAttribute('href')).toBe('/workforce?tab=evidence')
+    expect(screen.queryByTestId('perf-success-a1')).toBeNull()
   })
 
   // M14 fix wave, review I5: the page returned a bare `flex flex-col gap-4`, so the `analytics`

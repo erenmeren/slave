@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WorkforceClient, type WorkforceTab } from '../src/components/workforce/WorkforceClient.js'
 import WorkforcePage from '../src/app/workforce/page.js'
 import type { AllSlaveRow, AllSlavesPage, CatalogRowView, WorkforceCatalogView } from '../src/server/org.js'
+import type { EvidencePage } from '../src/server/evidence.js'
 import type { SkillsPage } from '../src/server/skills.js'
 
 const routerRefresh = vi.fn()
@@ -43,6 +44,13 @@ vi.mock('../src/server/org.js', () => ({
 }))
 
 vi.mock('../src/server/skills.js', () => ({ buildSkillsPage: async () => skillsPage() }))
+
+// M53 R12: the sixth tab's read opens Postgres like the others, so the page's loader is a stub and
+// the read model keeps its own coverage (`test/integration/evidence-page.test.ts`).
+const buildEvidencePage = vi.fn(async (_filter?: unknown) => emptyEvidence())
+vi.mock('../src/server/evidence.js', () => ({
+  buildEvidencePage: (filter?: unknown) => buildEvidencePage(filter),
+}))
 
 function slaveRow(over: Partial<AllSlaveRow> = {}): AllSlaveRow {
   return {
@@ -128,6 +136,14 @@ function templateRow(over: Partial<CatalogRowView> = {}): CatalogRowView {
   }
 }
 
+const emptyEvidence = (): EvidencePage => ({
+  domains: [{ domain: 'general', label: 'General' }],
+  byProfile: [],
+  byModel: [],
+  sortCaption: 'Most runs first, then by name. Nothing here is a score.',
+  minSample: 5,
+})
+
 const catalogPage = (rows: readonly CatalogRowView[]): WorkforceCatalogView => ({
   rows,
   facets: { divisions: [], capabilities: [], skills: [] },
@@ -153,6 +169,7 @@ function TestWorkforceClient(
       skills={skillsPage()}
       taxonomy={[]}
       runbooks={[]}
+      evidence={emptyEvidence()}
       {...props}
     />
   )
@@ -167,13 +184,21 @@ afterEach(() => {
 describe('WorkforceClient tabs (M44 R1)', () => {
   // The four surfaces the M44 audit found for "a slave" -- a sidebar row, another sidebar row, a
   // section on the Projects home and a panel inside a project -- are four tabs on one page now.
-  it('renders the slaves table by default, with the other four tabs beside it', () => {
+  it('renders the slaves table by default, with the other five tabs beside it', () => {
     render(<TestWorkforceClient />)
     expect(screen.getByTestId('data-table')).toBeTruthy()
     expect(screen.getByTestId('worker-row-button').textContent).toContain('Alex')
     expect(screen.getByTestId('workforce-tab-slaves').getAttribute('aria-selected')).toBe('true')
-    // FIVE since M48 R7 added Runbooks, last.
-    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Slaves', 'Departments', 'Catalog', 'Skills', 'Runbooks'])
+    // SIX since M53 R12 added Evidence, last -- a record is what you look at after you know who is
+    // here, what they are made of and how they are asked to work.
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
+      'Slaves',
+      'Departments',
+      'Catalog',
+      'Skills',
+      'Runbooks',
+      'Evidence',
+    ])
   })
 
   it('switches to the Departments tab and renders a DepartmentsTable row', () => {
@@ -254,6 +279,15 @@ describe('WorkforceClient tabs (M44 R1)', () => {
     )
     expect(screen.getByTestId('workforce-tab-runbooks').getAttribute('aria-selected')).toBe('true')
     expect(screen.getByTestId('runbook-row').getAttribute('data-key')).toBe('feature-delivery')
+  })
+
+  // M53 R12: the sixth tab, bookmarkable like the other five. The tables themselves are
+  // `evidence-tab.test.tsx`'s subject; what this case pins is that the strip reaches them.
+  it('opens straight onto the Evidence tab from ?tab=evidence, and renders both tables', () => {
+    render(<TestWorkforceClient initialTab="evidence" />)
+    expect(screen.getByTestId('workforce-tab-evidence').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('evidence-table-profile')).toBeTruthy()
+    expect(screen.getByTestId('evidence-table-model')).toBeTruthy()
   })
 
   // The tab is in the URL the way the Graph page keeps its mode: `/skills` redirects to a tab, and
@@ -556,5 +590,18 @@ describe('the Workforce page seeds the catalog from the URL (M46 M1)', () => {
 
   it('still falls back to the Slaves tab for an unknown ?tab=', async () => {
     expect((await renderPage({ tab: 'nonsense' })).props.initialTab).toBe('slaves')
+  })
+
+  // M53 R12: both tables are `GROUP BY`s, so the domain chip has to reach the read that groups.
+  // A shared `?domain=` link that painted every domain under a chip row saying otherwise is the
+  // same bug M46's M1 fixed for the catalog, one tab over.
+  it('seeds the Evidence tab with the domain the URL already claims to be filtering by', async () => {
+    buildEvidencePage.mockClear()
+    await renderPage({ tab: 'evidence', domain: 'qa' })
+    expect(buildEvidencePage).toHaveBeenCalledWith({ domain: 'qa' })
+
+    buildEvidencePage.mockClear()
+    await renderPage({ tab: 'evidence' })
+    expect(buildEvidencePage).toHaveBeenCalledWith({ domain: null })
   })
 })

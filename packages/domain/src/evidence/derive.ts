@@ -132,8 +132,9 @@ export function recoveriesFrom(input: {
 }
 
 /** How long the run took, or null. Guarded on `endedAt >= startedAt`, the same guard
- *  `perSlaveRunAggregates` already applies in SQL (`apps/web/src/server/analytics.ts:101-103`): a
- *  negative span is a clock that moved, not a measurement. */
+ *  `runTotals` already applies in SQL (`apps/web/src/server/analytics.ts`, named
+ *  `perSlaveRunAggregates` until M53 R12 deleted the per-slave table it also fed): a negative span
+ *  is a clock that moved, not a measurement. */
 export function durationMsFrom(startedAt: Date | null, endedAt: Date | null): number | null {
   if (startedAt === null || endedAt === null) return null
   const span = endedAt.getTime() - startedAt.getTime()

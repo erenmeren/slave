@@ -5,15 +5,17 @@ import { SLAVE_LIFECYCLE_LABEL } from '@slave-of-ai/domain'
 // Type-only, so nothing from `server/organization.ts` -- and nothing under it, control and the
 // Prisma client -- reaches the client bundle. The rule `SupervisorPanel.tsx` states for
 // `SupervisorView`.
-import type { OrganizationView } from '../../server/organization'
+import type { OrganizationPreference, OrganizationView } from '../../server/organization'
 import { plural } from '../../lib/plural'
-import { postControl } from '../../lib/postControl'
+import { postControl, sendControl } from '../../lib/postControl'
 import { ProposalRow } from '../SupervisorPanel'
 import { Alert } from '../ui/Alert'
+import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
 import { DataTable, Row } from '../ui/DataTable'
 import { DetailsGroup } from '../ui/DetailsGroup'
 import { EmptyState } from '../ui/EmptyState'
+import { INPUT_SHELL } from '../ui/FormControls'
 import { PageShell } from '../ui/PageShell'
 import { Panel } from '../ui/Panel'
 import { SectionLabel } from '../ui/SectionLabel'
@@ -193,6 +195,18 @@ export function OrganizationClient({
                     <span className="font-mono text-[10px] text-text-3">{plural(need.readyTasks, 'ready task')}</span>
                   </span>
                   <span className="text-xs text-text-2">{need.summary}</span>
+                  {/* M53 R9: the decision lives where the staffing decision is READ. Two controls
+                    * and no third: a picker that names a profile or a model, and a clear. There is
+                    * no "prefer for every project" and no priority -- one decision per capability
+                    * per project is the whole of the table. */}
+                  <StaffingPreferenceControl
+                    workspaceId={workspaceId}
+                    capability={need.capability}
+                    capabilityLabel={need.label}
+                    templates={view.templates}
+                    preference={need.preference}
+                    onChanged={() => void reload()}
+                  />
                   {need.decisions.map((decision) => (
                     // A one-item `<ul>` per decision, because `ProposalRow` IS the `<li>` (the
                     // M45 timeline wraps it exactly this way).
@@ -236,12 +250,23 @@ export function OrganizationClient({
 
         {view.covered.length > 0 && (
           <Panel title="what this project is covered for">
-            <ul data-testid="organization-covered" className="flex flex-wrap gap-1">
+            {/* D36: the control sits here TOO, and not only on the need rows -- a person's most
+              * likely reason to ask for somebody is that the current holder is not working out, and
+              * a capability with a holder has no need row at all. */}
+            <ul data-testid="organization-covered" className="flex flex-col gap-1.5">
               {view.covered.map((one) => (
-                <li key={one.capability}>
+                <li key={one.capability} className="flex flex-wrap items-center gap-2">
                   <Chip title={one.capability} tone="done">
                     {one.label} · {nameOf(one.by, view)}
                   </Chip>
+                  <StaffingPreferenceControl
+                    workspaceId={workspaceId}
+                    capability={one.capability}
+                    capabilityLabel={one.label}
+                    templates={view.templates}
+                    preference={one.preference}
+                    onChanged={() => void reload()}
+                  />
                 </li>
               ))}
             </ul>
@@ -294,6 +319,142 @@ export function OrganizationClient({
       </div>
     </PageShell>
   )
+}
+
+
+/**
+ * One capability's staffing decision, where the staffing decision is read (M53 R9).
+ *
+ * TWO controls and no third: a picker that names a profile or a model, and a `Clear`. A set `PUT`s
+ * and a clear `DELETE`s, both against `/api/w/<id>/staffing/<capability>`, and the refusal renders
+ * through the same `organization-error` row the proposals already use.
+ *
+ * Nothing here repeats a rule the verb owns. Asking for neither a profile nor a model is not
+ * refused in the browser: it is sent, and `setStaffingPreference` answers `a staffing preference for
+ * <key> must name a profile, a model, or both` in its own words -- one owner for that sentence
+ * rather than a second copy here to go stale. `Clear` is how a person means "nobody in particular",
+ * which is a different act and has its own verb.
+ *
+ * The preference is ADVISORY and the caption says so: `rankCandidates` reads it at step 3 of seven,
+ * so it is obeyed ahead of any record and behind any refusal, and a preference for a busy worker
+ * loses to availability.
+ */
+function StaffingPreferenceControl({
+  workspaceId,
+  capability,
+  capabilityLabel,
+  templates,
+  preference,
+  onChanged,
+}: {
+  readonly workspaceId: string
+  readonly capability: string
+  readonly capabilityLabel: string
+  readonly templates: readonly { readonly id: string; readonly name: string }[]
+  readonly preference: OrganizationPreference | null
+  readonly onChanged: () => void
+}): React.JSX.Element {
+  const [model, setModel] = useState(preference?.model ?? '')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const send = async (options: { method: 'PUT' | 'DELETE'; body?: Record<string, unknown> }): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    const failure = await sendControl(`/api/w/${workspaceId}/staffing/${encodeURIComponent(capability)}`, options)
+    setBusy(false)
+    if (failure !== null) {
+      setError(failure)
+      return
+    }
+    onChanged()
+  }
+
+  const set = (templateId: string | null, nextModel: string): void => {
+    void send({ method: 'PUT', body: { templateId, model: nextModel.trim() === '' ? null : nextModel.trim() } })
+  }
+
+  return (
+    <span data-testid={`staffing-control-${capability}`} className="flex flex-col gap-1">
+      <span className="flex flex-wrap items-center gap-1.5">
+        {/* The capability's LABEL beside the control, so a person reading one row of several knows
+          * which decision this picker is about (`docs/ia.md` rule 3 -- the key is in `title`). */}
+        <span title={capability} className="font-mono text-[10px] text-text-3">
+          {`Ask for · ${capabilityLabel}`}
+        </span>
+        <select
+          data-testid={`staffing-preference-${capability}`}
+          aria-label={`who should take ${capabilityLabel}`}
+          disabled={busy}
+          value={preference?.templateId ?? ''}
+          onChange={(event) => set(event.target.value === '' ? null : event.target.value, model)}
+          className={`${INPUT_SHELL} py-0.5 text-xs`}
+        >
+          <option value="">Nobody in particular</option>
+          {templates.map((template) => (
+            <option key={template.id} value={template.id}>
+              {template.name}
+            </option>
+          ))}
+        </select>
+        <input
+          data-testid={`staffing-model-${capability}`}
+          aria-label={`what model should take ${capabilityLabel}`}
+          disabled={busy}
+          value={model}
+          placeholder="any model"
+          onChange={(event) => setModel(event.target.value)}
+          onBlur={() => {
+            if ((preference?.model ?? '') !== model.trim()) set(preference?.templateId ?? null, model)
+          }}
+          className={`${INPUT_SHELL} w-[130px] py-0.5 text-xs`}
+        />
+        {preference !== null && (
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid={`staffing-clear-${capability}`}
+            disabled={busy}
+            onClick={() => {
+              setModel('')
+              void send({ method: 'DELETE' })
+            }}
+          >
+            Clear
+          </Button>
+        )}
+      </span>
+      {preference !== null && (
+        <span data-testid={`staffing-asked-${capability}`} className="text-[11px] text-text-2">
+          {askedFor(preference)}
+        </span>
+      )}
+      {error !== null && (
+        <span role="alert" data-testid="organization-error" className="text-[11px] text-tone-blocked">
+          {error}
+        </span>
+      )}
+    </span>
+  )
+}
+
+/**
+ * The sentence under the control: what was asked for, and who asked.
+ *
+ * The template's NAME and never its id, and a USERNAME and never a `User.id` -- `buildOrganization`
+ * resolved the setter at the web boundary in one batched lookup (M52 erratum E18). The two ways a
+ * name can be missing are said apart, because they are different facts: an account deleted since is
+ * `a person no longer on record`, and a decision taken with no principal at all (the CLI carries
+ * none) named nobody to begin with.
+ */
+function askedFor(preference: OrganizationPreference): string {
+  const who =
+    preference.templateName !== null && preference.model !== null
+      ? `${preference.templateName} on ${preference.model}`
+      : (preference.templateName ?? preference.model ?? 'nobody in particular')
+  const by =
+    preference.setById === null ? 'somebody unrecorded' : (preference.setBy ?? 'a person no longer on record')
+  return `Asked for: ${who} — by ${by}. A preference is obeyed ahead of any record and behind any refusal.`
 }
 
 /** A worker's name for an id this view already holds, and the id itself when it does not -- which

@@ -1,9 +1,12 @@
+import { prisma } from '@slave-of-ai/db/client'
 import {
   listCapabilities,
   listDecisions,
   listOrganization,
+  listStaffingPreferences,
   loadSupervisorWorld,
   type DecisionView,
+  type StaffingPreferenceView,
 } from '@slave-of-ai/control'
 import {
   capabilityIndex,
@@ -35,6 +38,26 @@ export interface OrganizationRow {
   readonly doing: string | null
 }
 
+/**
+ * One capability's staffing decision, as the page reads it (M53 R9).
+ *
+ * `setBy` is a USERNAME and never a `User.id`: `StaffingPreference.setBy` holds an id (M52 erratum
+ * E18 -- the column answers "who decided this", and resolving it to a name is each surface's own
+ * boundary), and this is that boundary. The raw id stays on {@link setById} so the page can put it
+ * in `title` without ever printing it, which is `docs/ia.md` rule 3 applied to a person.
+ *
+ * The three states a reader can be in are all different and are all said apart: a NAME when the
+ * account is still here, a null `setBy` with a non-null `setById` when the account has been deleted
+ * since, and both null when nobody was named at all (the CLI carries no principal).
+ */
+export interface OrganizationPreference {
+  readonly templateId: string | null
+  readonly templateName: string | null
+  readonly model: string | null
+  readonly setBy: string | null
+  readonly setById: string | null
+}
+
 export interface OrganizationNeed {
   readonly capability: string
   readonly label: string
@@ -43,12 +66,24 @@ export interface OrganizationNeed {
   /** The `pending` decisions about THIS capability -- rendered as `ProposalRow`s, so a proposal
    *  reads and is answered here exactly as it is on the Overview (M45's rule). */
   readonly decisions: readonly DecisionView[]
+  /** M53 R9: what a person has asked for on this capability, or null for "nobody in particular".
+   *  The Supervisor obeys it at step 3 of seven -- ahead of any record and behind any refusal --
+   *  which is why the control that sets it lives on the row where the gap is read. */
+  readonly preference: OrganizationPreference | null
 }
 
 export interface OrganizationView {
   readonly workers: readonly OrganizationRow[]
   readonly needs: readonly OrganizationNeed[]
-  readonly covered: readonly { readonly capability: string; readonly label: string; readonly by: string }[]
+  /** M53 plan decision D36 carries the preference here too, not only onto the need rows: a
+   *  person's most likely reason to express one is that the current holder is not working out, and
+   *  a capability with a holder has no need row at all. */
+  readonly covered: readonly {
+    readonly capability: string
+    readonly label: string
+    readonly by: string
+    readonly preference: OrganizationPreference | null
+  }[]
   readonly unfillable: readonly { readonly capability: string; readonly label: string }[]
   readonly hints: readonly {
     readonly slaveId: string
@@ -71,6 +106,11 @@ export interface OrganizationView {
    */
   readonly pendingElsewhere: number
   readonly taskTitles: Readonly<Record<string, string>>
+  /** The pick list behind every staffing-preference control on this page (M53 R9), read ONCE for
+   *  the whole view -- never one query per need row. Every template this installation holds, so a
+   *  person can ask for a specialist who is not on the project yet, which is exactly the case a
+   *  preference is for. */
+  readonly templates: readonly { readonly id: string; readonly name: string }[]
 }
 
 /**
@@ -99,7 +139,16 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
     return null
   }
   const plan = teamPlanOf(world)
-  const pending = await listDecisions(workspaceId, { pending: true })
+  // THREE reads for the whole page, not one per row (M53 R9): the decisions, every staffing
+  // preference this project holds, and the pick list behind every preference control. The setter
+  // ids inside the preferences are resolved to usernames in ONE further query below, and in none
+  // at all for a project nobody has decided anything about -- `overview.ts`'s granter rule.
+  const [pending, preferenceRows, templates] = await Promise.all([
+    listDecisions(workspaceId, { pending: true }),
+    listStaffingPreferences(workspaceId),
+    prisma.slaveTemplate.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
+  ])
+  const preferences = await preferencesByCapability(preferenceRows)
   const taskTitles = Object.fromEntries(world.tasks.map((task) => [task.id, task.title] as const))
 
   // ONE index for the whole render (M47 t1 review, carried): `capabilityLabel` builds a fresh Map
@@ -141,6 +190,7 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
           (task) => isStaffableTask(task) && task.requiredCapabilities.includes(capability),
         ).length,
         decisions,
+        preference: preferences.get(capability) ?? null,
       }
     })
 
@@ -165,7 +215,12 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
       // rows name-ascending, so this is a stable partition rather than a second sort.
       .toSorted((a, b) => (a.released === null ? 0 : 1) - (b.released === null ? 0 : 1)),
     needs,
-    covered: plan.covered.map((one) => ({ capability: one.capability, label: label(one.capability), by: one.by })),
+    covered: plan.covered.map((one) => ({
+      capability: one.capability,
+      label: label(one.capability),
+      by: one.by,
+      preference: preferences.get(one.capability) ?? null,
+    })),
     unfillable: plan.unfillable.map((capability) => ({ capability, label: label(capability) })),
     hints: org.value.hints.map((hint) => ({
       ...hint,
@@ -175,7 +230,43 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
       (decision) => decision.situationKind === 'capability_unstaffed' && !shown.has(decision.subjectId),
     ).length,
     taskTitles,
+    templates,
   }
+}
+
+/**
+ * Every staffing preference on this project, keyed by capability, with each setter resolved to a
+ * USERNAME in one batched lookup (M52 erratum E18, the pattern `server/overview.ts` uses for
+ * `SlavePermission.grantedBy`).
+ *
+ * One query for the whole page, and NONE at all for a project nobody has decided anything about --
+ * not the per-row round trip a `findUnique` inside the map would have been. `setBy` is a plain
+ * `String?` column rather than a declared relation, exactly as `grantedBy` is, so Prisma cannot join
+ * it from an `include` and this is the only way to have the name at all.
+ */
+async function preferencesByCapability(
+  rows: readonly StaffingPreferenceView[],
+): Promise<ReadonlyMap<string, OrganizationPreference>> {
+  const setterIds = [...new Set(rows.map((row) => row.setBy))].filter((id): id is string => id !== null)
+  const names = new Map(
+    setterIds.length === 0
+      ? []
+      : (await prisma.user.findMany({ where: { id: { in: setterIds } }, select: { id: true, username: true } })).map(
+          (user) => [user.id, user.username] as const,
+        ),
+  )
+  return new Map(
+    rows.map((row) => [
+      row.capability,
+      {
+        templateId: row.templateId,
+        templateName: row.templateName,
+        model: row.model,
+        setBy: row.setBy === null ? null : (names.get(row.setBy) ?? null),
+        setById: row.setBy,
+      },
+    ]),
+  )
 }
 
 /** Prisma's "a record this operation depended on was not found" (`P2025`), which is what
