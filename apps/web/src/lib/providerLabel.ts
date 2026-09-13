@@ -1,51 +1,29 @@
-import type { ProviderKind } from '@slave-of-ai/control'
+import { PROVIDER_KINDS, PROVIDER_LABEL, type ProviderKind } from '@slave-of-ai/domain'
 
 /**
- * Every `ProviderKind`, guarded the same way `packages/providers/src/types.ts`'s canonical
- * `PROVIDER_KINDS` is (`satisfies` + the `Exclude<..., never>` completeness check): a third
- * `ProviderKind` added to that union without a matching entry here fails the BUILD, not just this
- * file's compile, so both copies go stale together or not at all.
+ * Every `ProviderKind`, and the word a person reads for each -- both RE-EXPORTED from
+ * `@slave-of-ai/domain` (M56a R2), which is where they are declared.
  *
- * This is a SEPARATE list from that canonical one, not an import of it (M12 Task 13 fix round 1,
- * Important finding 1's remedy weighed against the client/server boundary the same review praised
- * elsewhere; MOVED here verbatim from `ProviderSelect.tsx` in the M44 fix wave, because the label
- * table below has four call sites and only one of them is that component):
- * `@slave-of-ai/providers`'s package entry (`index.ts`) re-exports `claude/adapter.ts` and
- * `cursor/adapter.ts`, both of which import `node:child_process` at module scope with no
- * `sideEffects: false` escape hatch, so a VALUE import of anything from that barrel -- even this
- * two-string list -- would force a client bundle to evaluate (and likely fail on) Node-only code.
- * `@slave-of-ai/control`'s barrel re-exports the same list for exactly this reason: safe for a
- * SERVER caller, not for a file four client components import. The TYPE import above is erased at
- * compile time and reaches no runtime module. Two independently compiler-guarded lists is the
- * deliberate trade against that risk, not an oversight.
+ * This file used to carry a second, independently-guarded copy of the list and the only copy of the
+ * table, and its own docstring argued for both: "the provider vocabulary belongs to
+ * `@slave-of-ai/providers`, whose value exports a client bundle cannot reach, and inventing a second
+ * home for it in the domain would put the union in three places instead of two". The first half is
+ * still true and is exactly why the union did not move THERE; the second half was answered by
+ * counting -- the union was in ten places, and M56a MOVED it rather than copying it.
+ *
+ * A VALUE import of `@slave-of-ai/domain` is safe in a client component and a value import of
+ * `@slave-of-ai/providers` is not: the providers barrel re-exports two adapters that import
+ * `node:child_process` at module scope with no `sideEffects: false` escape hatch, while the domain
+ * depends on nothing but `zod`. `apps/web/src/components/SlavePanel.tsx:5-12` already value-imports
+ * `PERMISSION_PROVIDERS` and `TOOLS_BY_KIND` from the domain in a client component, and has since
+ * M52.
+ *
+ * Re-exported rather than replaced because four client components and
+ * `apps/web/test/provider-select.test.tsx` import these two names FROM THIS PATH, and
+ * `docs/ia.md` rule 2 is that nothing is removed, only moved.
  */
-export const PROVIDER_KINDS = ['claude_code', 'cursor'] as const satisfies readonly ProviderKind[]
-type _AssertNever<T extends never> = T
-type _ProviderKindsComplete = _AssertNever<Exclude<ProviderKind, (typeof PROVIDER_KINDS)[number]>>
-
-/**
- * The word a person reads for a runtime (M44 R4, final review item I3).
- *
- * `claude_code` is a COLUMN VALUE. It was visible text on four surfaces -- the Overview slave
- * card's chip, the slave panel's chip, the Workforce table's provider cell and every provider
- * `<select>` -- which is exactly what R4 forbids, and `scripts/gate-m44-ux-foundation.mjs` now
- * derives its blocklist from `PROVIDER_KINDS` so a fifth surface cannot reintroduce it.
- *
- * A PROJECTION, never a replacement (the rule `packages/domain/src/status/user.ts` states for
- * statuses): every call site keeps the raw kind beside the word, in `title` on a chip and in
- * `value` on an `<option>` -- the value a form posts and a column stores is untouched.
- *
- * `Record<ProviderKind, string>` is load-bearing: a third kind fails the build here rather than
- * rendering as a bare enum member.
- *
- * NOT in `packages/domain`: the provider vocabulary belongs to `@slave-of-ai/providers`, whose
- * value exports a client bundle cannot reach (see above), and inventing a second home for it in
- * the domain would put the union in three places instead of two.
- */
-export const PROVIDER_LABEL: Record<ProviderKind, string> = {
-  claude_code: 'Claude Code',
-  cursor: 'Cursor',
-}
+export { PROVIDER_KINDS, PROVIDER_LABEL }
+export type { ProviderKind }
 
 /** The em dash every one of these surfaces already showed for "no run has resolved a provider"
  *  (M12 Task 9, ruling R10), so the null case is spelled once rather than at four call sites. */

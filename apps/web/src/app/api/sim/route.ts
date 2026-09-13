@@ -1,4 +1,5 @@
 import { LLM_INPUT_MESSAGES, createSimulation } from '@slave-of-ai/control'
+import { PROVIDER_KINDS } from '@slave-of-ai/domain'
 import { sectors } from '@slave-of-ai/simulation'
 import { z } from 'zod'
 import { simControlResponse } from '../../../server/simControlRoute'
@@ -22,7 +23,9 @@ const body = z
     sector: z.enum(SECTOR_NAMES),
     seed: z.number().int().optional(),
     decisionProvider: z.enum(['rules', 'llm']).optional(),
-    modelProvider: z.enum(['claude_code', 'cursor']).optional(),
+    // M56a R2: the union, not a literal. `z.enum` takes a readonly tuple, which is what
+    // `PROVIDER_KINDS` is, so a third provider is offered here the day it exists.
+    modelProvider: z.enum(PROVIDER_KINDS).optional(),
     model: z.string().min(1).optional(),
     maxModelCostUsd: z.number().positive().optional(),
   })

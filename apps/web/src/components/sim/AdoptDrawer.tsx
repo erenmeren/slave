@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import type { ProviderKind } from '@slave-of-ai/domain'
 import { errorMessage } from '../../lib/postControl'
 import { Drawer } from '../ui/Drawer'
 import { SelectField, TextField } from '../ui/FormControls'
@@ -33,7 +34,9 @@ export interface AdoptionPreview {
    *  (M34 t3) -- read off the preview rather than found here with a `roles.find` of its own. */
   readonly leadName: string | null
   readonly settings: { readonly maxConcurrentRuns: number; readonly maxAttempts: number; readonly autoMerge: false }
-  readonly model: { readonly provider: 'claude_code' | 'cursor'; readonly model: string } | null
+  /** M56a R2: the union, not a literal. A CLIENT component, so the import is TYPE-ONLY and is
+   *  erased at compile time, reaching no runtime module. */
+  readonly model: { readonly provider: ProviderKind; readonly model: string } | null
   readonly workspaces: readonly { readonly id: string; readonly name: string }[]
 }
 

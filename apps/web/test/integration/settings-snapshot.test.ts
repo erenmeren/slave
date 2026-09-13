@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildPermissionMatrix, buildProviderAdapters } from '../../src/server/settings.js'
@@ -88,6 +89,21 @@ describe('the Settings query module', () => {
       const adapters = await buildProviderAdapters(async () => null)
       expect(adapters.find((a) => a.kind === 'claude_code')?.slavesBound).toBe(2)
       expect(adapters.find((a) => a.kind === 'cursor')?.slavesBound).toBe(1)
+    })
+
+    it('produces the card array this milestone found, derived from three tables instead of four copies', async (): Promise<void> => {
+      // M56a erratum E17: `apps/web` is a Next app with no `dist`, so no `.mjs` gate can import
+      // `buildProviderAdapters` -- this file is where stage 10's card half lives, and the gate
+      // asserts the same golden against `PROVIDER_MANIFESTS`, `PROVIDER_LABEL` and
+      // `PROVIDER_ADAPTERS` from the other side.
+      const cards = await buildProviderAdapters(async () => '9.9.9')
+      const golden: unknown = JSON.parse(readFileSync('scripts/fixtures/m56a-goldens/settings-cards.json', 'utf8'))
+      // `slavesBound` is excluded on purpose: it is a `groupBy` over whatever `SlaveRun` rows this
+      // database holds, which is not a golden-able fact. It is asserted as a number instead.
+      expect(
+        cards.map(({ slavesBound, version, ...card }) => ({ ...card, version: version === null ? null : '<resolver>' })),
+      ).toEqual(golden)
+      for (const card of cards) expect(card.slavesBound, card.kind).toBeGreaterThanOrEqual(0)
     })
   })
 

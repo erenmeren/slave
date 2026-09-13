@@ -46,6 +46,13 @@ export type { ModelListing, ModelOption } from '@slave-of-ai/providers'
  * for the client-safe mirror that exists because of it.
  */
 export { PROVIDER_KINDS } from '@slave-of-ai/providers'
+/** Re-exported for `capabilitiesOf`'s reason (M56a R10): `apps/web/src/server/settings.ts` names
+ *  the adapter CLASS on each provider card, and the registry entry is where that name lives now
+ *  instead of in a fourth hand-written array. A SERVER caller only -- this is a value from
+ *  `@slave-of-ai/providers` and carries its `node:child_process` imports with it, exactly like
+ *  `capabilitiesOf` above, which `settings.ts` already imports. */
+export { PROVIDER_ADAPTERS } from '@slave-of-ai/providers'
+export type { ProviderRegistration, ProviderWiring } from '@slave-of-ai/providers'
 export * from './pause.js'
 export * from './breaker.js'
 export * from './broker.js'

@@ -47,6 +47,7 @@ import {
   importCatalog,
   INBOUND_EVENT_STATUS_LABEL,
   injectExternalEvent,
+  isProviderKind,
   LIST_INBOUND_LIMIT,
   listBrokerBindings,
   listCatalogImports,
@@ -2960,10 +2961,11 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (decisionProviderText !== undefined && decisionProviderText !== 'rules' && decisionProviderText !== 'llm') throw new Error('--decision-provider must be rules or llm')
       const decisionProvider = decisionProviderText as 'rules' | 'llm' | undefined
       const modelProviderText = flagText(flags, 'model-provider')
-      // M56a R6: membership is asked of `PROVIDER_KINDS`, not spelled a second time. The sentence
-      // an operator reads is byte-identical (plan erratum E9) -- it names what they have to type,
-      // and a list rendered from the union would read the same today and be a different string.
-      if (modelProviderText !== undefined && !(PROVIDER_KINDS as readonly string[]).includes(modelProviderText)) throw new Error('--model-provider must be claude_code or cursor')
+      // M56a R2: membership from `isProviderKind`, which is this tree's one answer for an untrusted
+      // provider string (`packages/control/src/org.ts`). The SENTENCE stays hand-written: it is
+      // prose an operator reads, `oneOfFlag` would reword it to "must be one of claude_code,
+      // cursor", and this milestone changes no operator-visible text (plan erratum E9).
+      if (modelProviderText !== undefined && !isProviderKind(modelProviderText)) throw new Error('--model-provider must be claude_code or cursor')
       const modelProvider = modelProviderText as ProviderKind | undefined
       const model = flagText(flags, 'model')
       const maxModelCostUsdText = flagText(flags, 'max-model-cost-usd')

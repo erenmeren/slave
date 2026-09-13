@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { capabilitiesOf, type ProviderKind } from '@slave-of-ai/control'
-import { PERMISSION_KINDS, type PermissionKind } from '@slave-of-ai/domain'
+import { PROVIDER_ADAPTERS, capabilitiesOf, type ProviderKind } from '@slave-of-ai/control'
+import { PERMISSION_KINDS, PROVIDER_KINDS, PROVIDER_LABEL, manifestFor, type PermissionKind } from '@slave-of-ai/domain'
 import { prisma } from '@slave-of-ai/db/client'
 
 const run = promisify(execFile)
@@ -25,19 +25,43 @@ export interface AdapterCard {
 }
 
 /**
- * The two REAL adapters and the two the handoff draws but this codebase does not have. The second
- * pair is rendered disabled and captioned `not configured · later` (M14 Decision 7) -- a card that
- * looks functional and is not is the exact lie this milestone is about.
+ * The REAL adapters, derived, and the two the handoff draws but this codebase does not have.
+ *
+ * Every field of a real card comes from a table that owns it: the kind and its word from the
+ * domain's `PROVIDER_KINDS`/`PROVIDER_LABEL`, the binary from that provider's manifest, the class
+ * name from its registry entry. Before M56a this array was a fourth copy of all four, and moving a
+ * vendor out of `LATER` meant editing it by hand.
+ *
+ * `LATER` is UNCHANGED and stays hand-written: there is no adapter behind those two cards to derive
+ * anything from, which is the whole point of them. They are rendered disabled and captioned
+ * `not configured · later` (M14 Decision 7) -- a card that looks functional and is not is the exact
+ * lie that milestone was about -- and they move only in M56b and M56c, each of which installs its
+ * vendor's binary and measures it first. M56a ships no third provider, so nothing here moves.
  */
-const REAL: ReadonlyArray<{ kind: ProviderKind; label: string; bin: string; adapter: string }> = [
-  { kind: 'claude_code', label: 'Claude Code', bin: 'claude', adapter: 'ClaudeCodeAdapter' },
-  { kind: 'cursor', label: 'Cursor', bin: 'cursor-agent', adapter: 'CursorAdapter' },
-]
+const REAL: ReadonlyArray<{ kind: ProviderKind; label: string; bin: string; adapter: string }> = PROVIDER_KINDS.map(
+  (kind) => ({
+    kind,
+    label: PROVIDER_LABEL[kind],
+    bin: manifestFor(kind).invocation.binary,
+    adapter: PROVIDER_ADAPTERS[kind].adapterName,
+  }),
+)
 
 const LATER: ReadonlyArray<{ kind: string; label: string; adapter: string }> = [
   { kind: 'codex', label: 'OpenAI Codex', adapter: 'CodexAdapter — planned' },
   { kind: 'gemini', label: 'Gemini', adapter: 'GeminiAdapter — planned' },
 ]
+
+/**
+ * Which environment variable overrides which binary, from the manifests (M56a R10, §4 row 18).
+ *
+ * The two-branch `bin === 'claude' ? … : …` this replaces had the third provider's branch already
+ * written into its shape: a `gemini` would have read `SLAVEOFAI_CURSOR_BIN`. A binary nothing
+ * declares now gets NO override, which is the honest answer.
+ */
+const BIN_ENV_VAR: Readonly<Record<string, string>> = Object.fromEntries(
+  PROVIDER_KINDS.map((kind) => [manifestFor(kind).invocation.binary, manifestFor(kind).invocation.binEnvVar]),
+)
 
 /**
  * The binary's own `--version`, or `null` when it is not on PATH. Bounded, because a hung binary
@@ -48,7 +72,8 @@ const LATER: ReadonlyArray<{ kind: string; label: string; adapter: string }> = [
  * gate run sees the fakes rather than whatever happens to be installed on the gate machine.
  */
 export async function versionOf(bin: string): Promise<string | null> {
-  const override = bin === 'claude' ? process.env['SLAVEOFAI_CLAUDE_BIN'] : process.env['SLAVEOFAI_CURSOR_BIN']
+  const envVar = BIN_ENV_VAR[bin]
+  const override = envVar === undefined ? undefined : process.env[envVar]
   try {
     const { stdout } = await run(override !== undefined && override !== '' ? override : bin, ['--version'], {
       timeout: 10_000,
