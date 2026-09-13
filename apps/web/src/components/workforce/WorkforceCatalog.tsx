@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { WorkforceCatalogFilters } from '@slave-of-ai/control'
-import type { CapabilityRecord } from '@slave-of-ai/domain'
+import { DUPLICATE_BASIS_LABEL, DUPLICATE_CLASS_LABEL, type CapabilityRecord } from '@slave-of-ai/domain'
 import type { WorkforceCatalogView } from '../../server/org'
 import { catalogFilterParams } from '../../lib/catalogFilters'
 import { plural } from '../../lib/plural'
 import { sendControl } from '../../lib/postControl'
 import { useCatalogFilters } from '../../hooks/useCatalogFilters'
 import { Alert } from '../ui/Alert'
+import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
 import { DangerConfirm } from '../ui/DangerConfirm'
 import { DataTable, Row } from '../ui/DataTable'
@@ -25,8 +26,8 @@ import { TemplateForm } from './TemplateForm'
  * change -- the Catalog tab is not one of `gate:m14-fidelity`'s screenshots, which take
  * `/workforce`'s DEFAULT tab (Slaves) -- but the primitive is not.
  */
-const COLUMNS = '1fr 110px 1.6fr 1.4fr 150px 140px 90px'
-const HEADER = ['Name', 'Division', 'Summary', 'Capabilities', 'Source', 'Default model', ''] as const
+const COLUMNS = '1fr 110px 1.4fr 1.3fr 150px 130px 90px 90px'
+const HEADER = ['Name', 'Division', 'Summary', 'Capabilities', 'Source', 'Default model', 'Hirable', ''] as const
 
 /** How many capability chips fit a row before the rest becomes a count. */
 const CHIPS = 3
@@ -86,15 +87,20 @@ export function WorkforceCatalog({
    * refetch there would hide the row they made behind a stale-data band. It retries once.
    */
   const latest = useRef(0)
-  const reload: (next: WorkforceCatalogFilters, attemptsLeft?: number) => void = useCallback(
-    (next: WorkforceCatalogFilters, attemptsLeft = 0): void => {
-      const query = catalogFilterParams(next).toString()
+  const reload: (next: WorkforceCatalogFilters, options?: { attemptsLeft?: number; cursor?: string }) => void =
+    useCallback((next: WorkforceCatalogFilters, options: { attemptsLeft?: number; cursor?: string } = {}): void => {
+      const params = catalogFilterParams(next)
+      // The cursor is NOT one of `catalogFilterParams`' seven: it is a position in an answer, not a
+      // filter, and writing it into the address bar would make a shared link open on page two of a
+      // list whose page one the reader never saw.
+      if (options.cursor !== undefined) params.set('cursor', options.cursor)
+      const query = params.toString()
       const id = latest.current + 1
       latest.current = id
       setRefreshing(true)
       const failed = (): void => {
-        if (attemptsLeft > 0) {
-          reload(next, attemptsLeft - 1)
+        if ((options.attemptsLeft ?? 0) > 0) {
+          reload(next, { ...options, attemptsLeft: (options.attemptsLeft ?? 0) - 1 })
           return
         }
         setRefreshing(false)
@@ -112,15 +118,15 @@ export function WorkforceCatalog({
           }
           setRefreshing(false)
           setStaleError(false)
-          setPage(view)
+          // A cursored answer EXTENDS what is on screen; an uncursored one replaces it. Anything
+          // else would make `Show more` flash the list away and redraw it.
+          setPage((current) => (options.cursor === undefined ? view : { ...view, rows: [...current.rows, ...view.rows] }))
         })
         .catch(() => {
           if (id !== latest.current) return
           failed()
         })
-    },
-    [],
-  )
+    }, [])
 
   /**
    * Seeded from the server on the first render; re-read whenever the filters move. The first pass
@@ -141,14 +147,20 @@ export function WorkforceCatalog({
 
   return (
     <div className="flex flex-col gap-3">
-      <CatalogFilterBar filters={filters} facets={page.facets} onChange={setFilters} />
+      <CatalogFilterBar filters={filters} facets={page.facets} taxonomy={taxonomy} onChange={setFilters} />
       {staleError && (
         <Alert variant="error" testId="catalog-stale">
           could not refresh the catalog — showing the last answer.
         </Alert>
       )}
       <span data-testid="catalog-count" className="text-xs text-text-3">
-        {plural(page.rows.length, 'template')}
+        {/* Two sentences and not one (M55 R3): `N templates` when what is on screen IS the whole
+          * answer -- which is what `gate:m46-workforce-catalog` stage 2b reads -- and
+          * `showing N of M templates` when it is not, because a count that silently means "the
+          * first hundred" is a number that lies. */}
+        {page.rows.length >= page.total
+          ? plural(page.total, 'template')
+          : `showing ${String(page.rows.length)} of ${plural(page.total, 'template')}`}
       </span>
       {/* The rows below are the PREVIOUS answer while this is up: a list that empties itself on
         * every keystroke is harder to read than one that lags by a request. */}
@@ -186,6 +198,27 @@ export function WorkforceCatalog({
                         <Chip testId={`catalog-overridden-${row.id}`}>customised</Chip>
                       )}
                       {row.rawOverride && <Chip testId={`catalog-raw-override-${row.id}`}>raw override</Chip>}
+                      {row.duplicate !== null && (
+                        /* M55 R6/R9. The CLASS as the first half of a sentence and the other row's
+                         * NAME as the second; the raw class, basis and score one attribute away; and
+                         * the `title` carrying the sentence R9 requires, because the consequence of
+                         * an undetected duplicate is a split record and the person looking at this
+                         * chip is the person who can act on it. */
+                        <span
+                          data-testid={`catalog-duplicate-${row.id}`}
+                          data-class={row.duplicate.class}
+                          data-basis={row.duplicate.basis}
+                          data-score={String(row.duplicate.score)}
+                          title={
+                            `${DUPLICATE_BASIS_LABEL[row.duplicate.basis]} · ${row.duplicate.score.toFixed(3)} — ` +
+                            'evidence is recorded per profile, so two rows split their own record.'
+                          }
+                          className="inline-flex items-center rounded-chip border border-line bg-bg-2 px-2 py-0.5 text-xs text-text-2"
+                        >
+                          {`${DUPLICATE_CLASS_LABEL[row.duplicate.class]} ${row.duplicate.otherName}`}
+                          {row.duplicateCount > 1 && ` +${String(row.duplicateCount - 1)}`}
+                        </span>
+                      )}
                     </span>
                   </span>
                   {/* R6 says DIVISION, which is what an imported row is filed under; a
@@ -217,6 +250,31 @@ export function WorkforceCatalog({
                       ? '—'
                       : `${row.defaultModel}${row.defaultProvider === null ? '' : ` · ${row.defaultProvider}`}`}
                   </span>
+                  {/* M55 R2/R6. A WORD, never `true`; the boolean on `data-active`; and
+                    * `stopPropagation`, the same thing the delete control beside it does, so
+                    * activating a row does not also open its drawer behind the click. */}
+                  <span onClick={(event) => event.stopPropagation()}>
+                    <button
+                      type="button"
+                      data-testid={`catalog-activate-${row.id}`}
+                      data-active={String(row.active)}
+                      aria-pressed={row.active}
+                      title={row.activationChangedBy === null ? 'nobody has changed this' : `last changed by ${row.activationChangedBy}`}
+                      onClick={() => {
+                        void sendControl(`/api/org/templates/${row.id}/activation`, {
+                          method: 'POST',
+                          body: { active: !row.active },
+                        }).then((error) => {
+                          if (error === null) reload(filters)
+                        })
+                      }}
+                      className={`rounded-bubble border px-[9px] py-[3px] font-mono text-[10px] font-medium transition-colors ${
+                        row.active ? 'border-text-1 bg-bg-2 text-text-1' : 'border-line bg-bg-1 text-text-3 hover:text-text-2'
+                      }`}
+                    >
+                      {row.active ? 'active' : 'inactive'}
+                    </button>
+                  </span>
                   {/* The delete is an action ON the row, not a way INTO it: without this the
                     * confirm click would also open the drawer behind the thing it is confirming. */}
                   <span onClick={(event) => event.stopPropagation()}>
@@ -240,9 +298,26 @@ export function WorkforceCatalog({
           </DataTable>
         </div>
       )}
+      {page.nextCursor !== null && (
+        <Button
+          variant="ghost"
+          size="sm"
+          data-testid="catalog-more"
+          disabled={refreshing}
+          onClick={() => {
+            // Read at CLICK time rather than at render time -- and narrowed here rather than by the
+            // `!== null` above, because `exactOptionalPropertyTypes` will not take an optional
+            // `cursor` that is present and undefined, which is what `?? undefined` would hand it.
+            const cursor = page.nextCursor
+            if (cursor !== null) reload(filters, { cursor })
+          }}
+        >
+          Show more
+        </Button>
+      )}
       {/* One retry: the row an operator just created is not in the answer already on screen, so
         * a failed refetch here would hide their own template behind a stale-data band. */}
-      <TemplateForm onCreated={() => reload(filters, 1)} />
+      <TemplateForm onCreated={() => reload(filters, { attemptsLeft: 1 })} />
       {open !== null && (
         <ProfileDrawer
           key={open.id}
@@ -252,6 +327,13 @@ export function WorkforceCatalog({
           taxonomy={taxonomy}
           onClose={() => setOpen(null)}
           onChanged={() => reload(filters)}
+          /* M55 R6: the drawer's Duplicates group names the other template as a BUTTON that opens
+           * ITS drawer. The keys come off the loaded page when the row is on it; a row that is not
+           * (the pair points past the first hundred) opens with none, and the drawer's "Matchable
+           * capabilities" block simply does not render -- everything else in it is fetched by id. */
+          onOpenTemplate={(id, name) =>
+            setOpen({ id, name, capabilityKeys: page.rows.find((candidate) => candidate.id === id)?.capabilityKeys ?? [] })
+          }
         />
       )}
     </div>

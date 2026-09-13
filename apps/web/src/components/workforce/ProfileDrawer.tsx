@@ -1,8 +1,10 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   capabilityIndex,
+  DUPLICATE_BASIS_LABEL,
+  DUPLICATE_CLASS_LABEL,
   MAPPING_QUALITY_LABEL,
   PROFILE_FIELD_KIND,
   PROFILE_FIELD_LABEL,
@@ -14,6 +16,7 @@ import {
   type ProfileSpecField,
 } from '@slave-of-ai/domain'
 import type { TemplateProfileView } from '@slave-of-ai/control'
+import type { TemplateDuplicateRowView } from '../../server/org'
 import { sendControl } from '../../lib/postControl'
 import { Alert } from '../ui/Alert'
 import { Button } from '../ui/Button'
@@ -63,6 +66,9 @@ const GROUPS: readonly { readonly group: DetailsGroupName; readonly title: strin
   { group: 'collaboration', title: 'Collaboration' },
   { group: 'skills', title: 'Skills' },
   { group: 'source', title: 'Source' },
+  // M55 R6: who ELSE this row looks like. After Source, because provenance answers "where did this
+  // come from" and this answers "who else is this" -- two questions, two next actions.
+  { group: 'duplicates', title: 'Duplicates' },
   // Thirteenth, under the twelve R6 names: the persona's own words, last for the same reason
   // `PROFILE_SECTION_PRIORITY` renders them last -- everything above is partly a reading of them.
   { group: 'body', title: 'In their own words' },
@@ -115,6 +121,7 @@ export function ProfileDrawer({
   taxonomy,
   onClose,
   onChanged,
+  onOpenTemplate,
 }: {
   readonly templateId: string
   readonly name: string
@@ -124,6 +131,9 @@ export function ProfileDrawer({
   readonly taxonomy: readonly CapabilityRecord[]
   readonly onClose: () => void
   readonly onChanged: () => void
+  /** M55 R6: open another template's drawer from a pair. Optional, so a caller that has no second
+   *  drawer to open (a test, a future embed) renders the name as text instead of a button. */
+  readonly onOpenTemplate?: (templateId: string, name: string) => void
 }): React.JSX.Element {
   const [state, setState] = useState<
     { readonly kind: 'loading' } | { readonly kind: 'error' } | { readonly kind: 'ready'; readonly view: TemplateProfileView }
@@ -183,6 +193,26 @@ export function ProfileDrawer({
   }
 
   useEffect(() => load(), [templateId])
+
+  /**
+   * The pairs this row is in (M55 R6), a SECOND read beside the profile: the row's own chip carries
+   * the strongest undismissed pair and this carries every one of them, dismissed included, which is
+   * why `listTemplateDuplicatesView` is a different read and not this one filtered.
+   */
+  const [duplicates, setDuplicates] = useState<readonly TemplateDuplicateRowView[] | null>(null)
+  const reloadDuplicates = useCallback((): void => {
+    void fetch(`/api/org/templates/${templateId}/duplicates`)
+      .then(async (response) => (response.ok ? ((await response.json()) as unknown) : []))
+      // An empty list on failure, never an error band: the group says "nothing looks like this row",
+      // which is what a reader takes from an empty Duplicates group anyway, and a red band inside a
+      // profile drawer would claim the PROFILE failed to load. A body that is not a list is a
+      // failure like any other -- and the one that would otherwise take the whole drawer down.
+      .catch(() => [])
+      .then((rows) => setDuplicates(Array.isArray(rows) ? (rows as readonly TemplateDuplicateRowView[]) : []))
+  }, [templateId])
+  useEffect(() => {
+    reloadDuplicates()
+  }, [reloadDuplicates])
 
   const after =
     (settled: ReadonlyArray<ProfileSpecField | 'raw'>) =>
@@ -343,8 +373,65 @@ export function ProfileDrawer({
                 )}
               </div>
             )}
-            {group === 'source'
-              ? (() => {
+            {group === 'duplicates' ? (
+              duplicates === null ? (
+                <LoadingState testId="profile-duplicates-loading" message="reading what else looks like this…" />
+              ) : duplicates.length === 0 ? (
+                <span className="text-xs text-text-3">nothing else in the catalog looks like this row.</span>
+              ) : (
+                <div className="flex flex-col gap-1">
+                  {duplicates.map((pair) => {
+                    const otherId = pair.aId === templateId ? pair.bId : pair.aId
+                    const otherName = pair.aId === templateId ? pair.bName : pair.aName
+                    return (
+                      <div
+                        key={pair.id}
+                        data-testid={`profile-duplicate-${pair.id}`}
+                        data-class={pair.class}
+                        data-basis={pair.basis}
+                        data-score={String(pair.score)}
+                        className={`flex flex-wrap items-center gap-2 text-xs ${pair.dismissedAt === null ? 'text-text-2' : 'text-text-3 opacity-60'}`}
+                      >
+                        <span>{DUPLICATE_CLASS_LABEL[pair.class]}</span>
+                        {onOpenTemplate === undefined ? (
+                          <span className="text-text-1">{otherName}</span>
+                        ) : (
+                          <button
+                            type="button"
+                            data-testid={`profile-duplicate-open-${pair.id}`}
+                            onClick={() => onOpenTemplate(otherId, otherName)}
+                            className="text-text-1 underline decoration-dotted underline-offset-2 hover:text-text-2"
+                          >
+                            {otherName}
+                          </button>
+                        )}
+                        <span className="font-mono text-[10px] text-text-3">{pair.score.toFixed(3)}</span>
+                        <span className="text-text-3">{DUPLICATE_BASIS_LABEL[pair.basis]}</span>
+                        <span className="font-mono text-[10px] text-text-3">{pair.detectedAt.slice(0, 10)}</span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          data-testid={`profile-duplicate-dismiss-${pair.id}`}
+                          onClick={() => {
+                            void sendControl(`/api/org/duplicates/${pair.id}/dismissal`, {
+                              method: 'POST',
+                              body: { dismissed: pair.dismissedAt === null },
+                            }).then((error) => {
+                              if (error !== null) return
+                              reloadDuplicates()
+                              onChanged()
+                            })
+                          }}
+                        >
+                          {pair.dismissedAt === null ? 'Dismiss' : 'Restore'}
+                        </Button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            ) : group === 'source' ? (
+              (() => {
                   const source = spec.source
                   if (source === null) return <span className="text-xs text-text-3">made here; no source record.</span>
                   return (
@@ -368,9 +455,11 @@ export function ProfileDrawer({
                     </dl>
                   )
                 })()
-              : PROFILE_SPEC_FIELDS.filter((member) => GROUP_BY_FIELD[member] === group).map((member) =>
-                  field(member, spec, view.overridden, group !== 'body'),
-                )}
+            ) : (
+              PROFILE_SPEC_FIELDS.filter((member) => GROUP_BY_FIELD[member] === group).map((member) =>
+                field(member, spec, view.overridden, group !== 'body'),
+              )
+            )}
           </DetailsGroup>
         ))}
 

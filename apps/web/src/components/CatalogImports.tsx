@@ -1,5 +1,6 @@
 'use client'
 
+import { DUPLICATE_CLASS_LABEL, type DuplicateCounts } from '@slave-of-ai/domain'
 import { DataTable, Row } from './ui/DataTable'
 
 /** One `CatalogImport` row, as `server/org.ts`'s `listCatalogImports` hands it over. */
@@ -13,10 +14,22 @@ export interface CatalogImportRow {
   readonly updated: number
   readonly unchanged: number
   readonly skipped: number
+  /** M55 R7, plan erratum E9: what the run's duplicate pass noticed. Three zeroes for every import
+   *  recorded before that milestone, which is true -- nothing was looking. */
+  readonly duplicates: DuplicateCounts
 }
 
-const COLUMNS = '150px 1fr 110px 90px 90px 90px 90px'
-const HEADER = ['When', 'Catalog', 'By', 'Created', 'Updated', 'Unchanged', 'Skipped'] as const
+const COLUMNS = '150px 1fr 110px 70px 70px 80px 70px 70px 70px 90px'
+const HEADER = ['When', 'Catalog', 'By', 'Created', 'Updated', 'Unchanged', 'Skipped', 'Same', 'Similar', 'Overlapping'] as const
+
+/** The three duplicate columns say what they COUNT, never the raw class member (`docs/ia.md` rule
+ *  3) -- and each cell's `title` carries the class's own label table sentence, so the word on the
+ *  header and the word on a catalog row's chip are one vocabulary. */
+const DUPLICATE_COLUMN_TITLE: Readonly<Record<keyof DuplicateCounts, string>> = {
+  exact: `${DUPLICATE_CLASS_LABEL.exact} another row: the same persona text, or the same name`,
+  near: `${DUPLICATE_CLASS_LABEL.near} another row: most of the same text`,
+  overlapping: `${DUPLICATE_CLASS_LABEL.overlapping} another row: most of the same capabilities`,
+}
 
 /**
  * The last ten catalog imports (M42 §2), read only.
@@ -55,7 +68,7 @@ export function CatalogImports({ imports }: { readonly imports: readonly Catalog
                 {row.catalog}
               </span>
               <span className="truncate text-text-2">{row.by ?? '—'}</span>
-              {/* The four counts carry one shared testid so a test can read them AS A SEQUENCE:
+              {/* The counts carry one shared testid so a test can read them AS A SEQUENCE:
                *  asserting that a row's text merely contains "2" is satisfied by the year in its
                *  own timestamp, which is no assertion at all (fix round 1, important 1). */}
               <span data-testid="catalog-import-count" className="text-text-2">
@@ -69,6 +82,18 @@ export function CatalogImports({ imports }: { readonly imports: readonly Catalog
               </span>
               <span data-testid="catalog-import-count" className="text-text-2">
                 {row.skipped}
+              </span>
+              {/* The three the duplicate pass noticed, in the same sequence the CLI prints them
+               *  (M55 R7 / erratum E9): seven numbers here and seven in `list-imports`, out of one
+               *  recorded report. */}
+              <span data-testid="catalog-import-count" title={DUPLICATE_COLUMN_TITLE.exact} className="text-text-2">
+                {row.duplicates.exact}
+              </span>
+              <span data-testid="catalog-import-count" title={DUPLICATE_COLUMN_TITLE.near} className="text-text-2">
+                {row.duplicates.near}
+              </span>
+              <span data-testid="catalog-import-count" title={DUPLICATE_COLUMN_TITLE.overlapping} className="text-text-2">
+                {row.duplicates.overlapping}
               </span>
             </Row>
           </div>

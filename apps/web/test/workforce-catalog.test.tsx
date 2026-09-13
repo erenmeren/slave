@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ProviderKind } from '@slave-of-ai/control'
 import type { CapabilityRecord } from '@slave-of-ai/domain'
 import type { CatalogRowView, WorkforceCatalogView } from '../src/server/org.js'
+import { CATALOG_SEARCH_DEBOUNCE_MS } from '../src/lib/catalogFilters.js'
 import { clearModelSelectCache } from '../src/components/ModelSelect.js'
 import { TemplateForm } from '../src/components/workforce/TemplateForm.js'
 import { WorkforceCatalog } from '../src/components/workforce/WorkforceCatalog.js'
@@ -98,6 +99,19 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals()
 })
+
+/**
+ * One keystroke in the search box, plus the wait the box takes before it asks (M55 R3's
+ * `CATALOG_SEARCH_DEBOUNCE_MS`). Every assertion below is the one it always was -- what moved is
+ * that the request is issued one debounce window after the keystroke instead of on it, so a case
+ * about two requests in flight has to let both be issued.
+ */
+const typeSearch = async (value: string): Promise<void> => {
+  await act(async () => {
+    fireEvent.change(screen.getByTestId('catalog-search'), { target: { value } })
+    await new Promise((resolve) => setTimeout(resolve, CATALOG_SEARCH_DEBOUNCE_MS + 20))
+  })
+}
 
 describe('WorkforceCatalog rows', () => {
   it('renders a row per template: name, summary, three capability chips and a +N', () => {
@@ -224,9 +238,7 @@ describe('WorkforceCatalog rows', () => {
     render(<WorkforceCatalog initial={view([row()])} />)
     fetchMock.mockImplementation(async () => new Response('nope', { status: 500 }))
 
-    await act(async () => {
-      fireEvent.change(screen.getByTestId('catalog-search'), { target: { value: 'nothing' } })
-    })
+    await typeSearch('nothing')
 
     await waitFor(() => expect(screen.getByTestId('catalog-stale')).toBeTruthy())
     expect(screen.getByTestId('catalog-row-t1')).toBeTruthy()
@@ -237,13 +249,33 @@ describe('WorkforceCatalog filters', () => {
   it('fetches the filtered catalog and writes the search into the URL without a router push', async () => {
     render(<WorkforceCatalog initial={view([row()])} />)
 
-    await act(async () => {
-      fireEvent.change(screen.getByTestId('catalog-search'), { target: { value: 'builder' } })
-    })
+    await typeSearch('builder')
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/org/catalog?q=builder'))
     expect(replaceState).toHaveBeenCalledWith(null, '', '/workforce?q=builder')
     expect(routerRefresh).not.toHaveBeenCalled()
+  })
+
+  /**
+   * `gate:m46-workforce-catalog` stage 2c, as a unit case (M55 R3 fix): a filter changed DURING the
+   * debounce window has to survive the keystroke's own push. The timer used to carry the filters of
+   * the render that armed it, so the chip clicked 100 ms after a keystroke was reverted 150 ms
+   * later by a request nobody made.
+   */
+  it('merges a debounced search into the filters as they are when it fires, never as they were', async () => {
+    render(<WorkforceCatalog initial={view([row()])} />)
+
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('catalog-search'), { target: { value: 'Gate' } })
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('catalog-source-chip-local'))
+      await new Promise((resolve) => setTimeout(resolve, CATALOG_SEARCH_DEBOUNCE_MS + 20))
+    })
+
+    const urls = fetchMock.mock.calls.map(([url]) => String(url))
+    expect(urls.at(-1)).toBe('/api/org/catalog?q=Gate&source=local')
+    expect(urls).not.toContain('/api/org/catalog?q=Gate&source=imported')
   })
 
   it('toggles a source chip on and off', async () => {
@@ -312,12 +344,8 @@ describe('WorkforceCatalog filters', () => {
     )
     render(<WorkforceCatalog initial={view([row()])} />)
 
-    await act(async () => {
-      fireEvent.change(screen.getByTestId('catalog-search'), { target: { value: 'buil' } })
-    })
-    await act(async () => {
-      fireEvent.change(screen.getByTestId('catalog-search'), { target: { value: 'builder' } })
-    })
+    await typeSearch('buil')
+    await typeSearch('builder')
     await waitFor(() => expect(Object.keys(release)).toHaveLength(2))
 
     // The LATER query answers first, then the earlier one -- the race, made deterministic.
@@ -344,12 +372,8 @@ describe('WorkforceCatalog filters', () => {
     )
     render(<WorkforceCatalog initial={view([row()])} />)
 
-    await act(async () => {
-      fireEvent.change(screen.getByTestId('catalog-search'), { target: { value: 'buil' } })
-    })
-    await act(async () => {
-      fireEvent.change(screen.getByTestId('catalog-search'), { target: { value: 'builder' } })
-    })
+    await typeSearch('buil')
+    await typeSearch('builder')
     await waitFor(() => expect(Object.keys(release)).toHaveLength(2))
 
     await act(async () => {
@@ -375,9 +399,7 @@ describe('WorkforceCatalog filters', () => {
     render(<WorkforceCatalog initial={view([row()])} />)
     expect(screen.queryByTestId('catalog-loading')).toBeNull()
 
-    await act(async () => {
-      fireEvent.change(screen.getByTestId('catalog-search'), { target: { value: 'builder' } })
-    })
+    await typeSearch('builder')
 
     expect(screen.getByTestId('catalog-loading')).toBeTruthy()
     expect(screen.getByTestId('catalog-row-t1')).toBeTruthy()
@@ -450,7 +472,11 @@ describe('ProfileDrawer', () => {
     fetchMock.mockImplementation(async (url: string) =>
       url.includes('/profile')
         ? new Response(JSON.stringify({ ...withEffective, ...over }), { status: 200 })
-        : new Response(JSON.stringify(view([catalogRow])), { status: 200 }),
+        : // M55 R6: the drawer reads its pairs separately from its profile, and this fixture row is
+          // in none of them. `catalog-duplicates.test.tsx` is where that group is exercised.
+          url.includes('/duplicates')
+          ? new Response(JSON.stringify([]), { status: 200 })
+          : new Response(JSON.stringify(view([catalogRow])), { status: 200 }),
     )
     render(<WorkforceCatalog initial={view([catalogRow])} taxonomy={taxonomy} />)
     await act(async () => {
@@ -511,6 +537,8 @@ describe('ProfileDrawer', () => {
       'collaboration',
       'skills',
       'source',
+      // M55 R6's fourteenth, between Source and the persona's own words.
+      'duplicates',
       'body',
       'advanced',
     ])

@@ -5,12 +5,12 @@ import { useSearchParams } from 'next/navigation'
 import type { WorkforceCatalogFilters } from '@slave-of-ai/control'
 import { catalogFilterParams, parseCatalogFilters } from '../lib/catalogFilters'
 
-/** The five params this hook owns in the address bar, and the only ones it clears before writing
+/** The seven params this hook owns in the address bar, and the only ones it clears before writing
  *  its own back -- a `?tab=catalog` or a `?from=nav` that arrived on the link survives. */
-const FILTER_PARAMS = ['q', 'division', 'capability', 'source', 'skill'] as const
+const FILTER_PARAMS = ['q', 'division', 'capability', 'source', 'skill', 'active', 'duplicates'] as const
 
 /**
- * The catalog's five filters, carried in the URL (M46 R6).
+ * The catalog's seven filters, carried in the URL (M46 R6, widened by M55 R3).
  *
  * `window.history.replaceState`, NOT `router.replace` (plan erratum E11). `/workforce` is
  * `force-dynamic` with eight loaders, one of which scans the skills directories on disk;

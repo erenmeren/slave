@@ -532,15 +532,15 @@ describe('the catalog import surfaces', () => {
 
   // Counts no other token in the row can produce: `2` was satisfied by the `2026` in the
   // timestamp and `4` by the `m42` in the catalog name, so both assertions passed with every
-  // count span deleted (fix round 1, important 1). These four, in this order, can only come
-  // from the four cells.
-  it('lists the catalog imports with their counts, one cell per column', () => {
+  // count span deleted (fix round 1, important 1). These seven, in this order, can only come
+  // from the seven cells (M55 R7 widened four to seven).
+  it('lists the catalog imports with their seven counts, one cell per column', () => {
     render(
       <TestWorkforceClient
         initialTab="catalog"
         catalog={catalogPage([imported])}
         catalogImports={[
-          { id: 'i1', catalog: 'catalog-m42', directory: '/srv/catalog-m42', by: 'operator', finishedAt: '2026-09-10T08:30:00.000Z', created: 17, updated: 5, unchanged: 23, skipped: 9 },
+          { id: 'i1', catalog: 'catalog-m42', directory: '/srv/catalog-m42', by: 'operator', finishedAt: '2026-09-10T08:30:00.000Z', created: 17, updated: 5, unchanged: 23, skipped: 9, duplicates: { exact: 3, near: 11, overlapping: 7 } },
         ]}
       />,
     )
@@ -554,6 +554,10 @@ describe('the catalog import surfaces', () => {
       '5',
       '23',
       '9',
+      // M55 R7 / erratum E9: the same SEVEN numbers `list-imports` prints, in the same order.
+      '3',
+      '11',
+      '7',
     ])
   })
 

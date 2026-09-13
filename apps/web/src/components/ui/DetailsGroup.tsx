@@ -37,6 +37,10 @@ export type DetailsGroupName =
   | 'success'
   | 'collaboration'
   | 'source'
+  // M55 R6: which other catalog rows look like this one. The fourteenth of R6's groups, after
+  // `source`, and deliberately not folded into it: provenance answers "where did this come from" and
+  // this answers "who else is this", which are two questions with two different next actions.
+  | 'duplicates'
   // `body` is R6's thirteenth (M46 t4 fix round 1): the persona's own remaining prose is an
   // overridable field like any other, and it had no group to be edited in.
   | 'body'

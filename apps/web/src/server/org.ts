@@ -5,6 +5,7 @@ import {
   listCapabilities,
   listCatalogImports as listCatalogImportRows,
   listRunbooks,
+  listTemplateDuplicates,
   listWorkforceCatalog,
   readTemplateProfile,
   TEMPLATE_PICKER_MAX,
@@ -12,6 +13,7 @@ import {
   type ProviderCapabilities,
   type ProviderKind,
   type RunbookView,
+  type TemplateDuplicateView,
   type TemplateProfileView,
   type WorkforceCatalogFacets,
   type WorkforceCatalogFilters,
@@ -25,6 +27,7 @@ import {
   SUPERVISOR_PER_CALL_CAP_USD,
   type BreakerLevel,
   type CapabilityRecord,
+  type DuplicateCounts,
   type Result,
   type SlaveLifecycle,
   type SlaveStatus,
@@ -1063,6 +1066,25 @@ export async function readTemplateProfileView(
   return readTemplateProfile(templateId)
 }
 
+/** One pair as a `'use client'` component receives it: `TemplateDuplicateView` with its two `Date`s
+ *  turned into ISO strings, `CatalogRowView`'s own idiom. */
+export type TemplateDuplicateRowView = Omit<TemplateDuplicateView, 'detectedAt' | 'dismissedAt'> & {
+  readonly detectedAt: string
+  readonly dismissedAt: string | null
+}
+
+/** Every pair one template is in, DISMISSED ONES INCLUDED (M55 R6): the drawer is the one surface
+ *  that shows a dismissal, greyed, with a Restore beside it -- the chip on the row shows only the
+ *  undismissed ones, which is why the two reads are different and not one. */
+export async function listTemplateDuplicatesView(templateId: string): Promise<readonly TemplateDuplicateRowView[]> {
+  const rows = await listTemplateDuplicates({ templateId, includeDismissed: true })
+  return rows.map((row) => ({
+    ...row,
+    detectedAt: row.detectedAt.toISOString(),
+    dismissedAt: row.dismissedAt === null ? null : row.dismissedAt.toISOString(),
+  }))
+}
+
 /**
  * The capability taxonomy, under the web's own name for it (the `listWorkforceCatalogPage` idiom).
  *
@@ -1080,7 +1102,8 @@ export async function listCapabilityTaxonomy(): Promise<readonly CapabilityRecor
 export type TemplateProfileViewJson = TemplateProfileView
 
 /** M42 §2: the last ten import runs, for the catalog imports panel. Dates as ISO strings, for the
- *  same reason `listTemplates` above hands out one. */
+ *  same reason `listTemplates` above hands out one. The three duplicate counts ride along since
+ *  M55 R7 -- seven numbers here and seven in `list-imports`, out of one recorded report. */
 export async function listCatalogImports(): Promise<
   readonly {
     id: string
@@ -1092,6 +1115,7 @@ export async function listCatalogImports(): Promise<
     updated: number
     unchanged: number
     skipped: number
+    duplicates: DuplicateCounts
   }[]
 > {
   const rows = await listCatalogImportRows(10)
@@ -1105,6 +1129,9 @@ export async function listCatalogImports(): Promise<
     updated: row.updated,
     unchanged: row.unchanged,
     skipped: row.skipped,
+    // M55 R7 / plan erratum E9: the panel shows the same SEVEN numbers the CLI's `list-imports`
+    // prints. Dropping these three here was what made the panel say six of the seven.
+    duplicates: row.duplicates,
   }))
 }
 
