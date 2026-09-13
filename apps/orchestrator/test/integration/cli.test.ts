@@ -3585,10 +3585,19 @@ describe('the orchestrator CLI', () => {
       await prisma.$executeRawUnsafe('TRUNCATE TABLE "CatalogImport", "SlaveTemplate" RESTART IDENTITY CASCADE')
     })
 
-    const template = async (name: string, active: boolean): Promise<string> =>
+    const template = async (name: string, active: boolean, division?: string): Promise<string> =>
       (
         await prisma.slaveTemplate.create({
-          data: { name, role: 'backend', description: `${name} does one thing.`, active, capabilityKeys: ['backend.services'] },
+          data: {
+            name,
+            role: 'backend',
+            description: `${name} does one thing.`,
+            active,
+            capabilityKeys: ['backend.services'],
+            // Only where a case needs the DIVISION filter to have something to narrow: `template
+            // list`'s third column is `sourceDivision ?? role`, so a row without one still prints.
+            ...(division === undefined ? {} : { sourceDivision: division }),
+          },
         })
       ).id
 
@@ -3645,16 +3654,25 @@ describe('the orchestrator CLI', () => {
     })
 
     it('`template list --active` and `--inactive` each narrow it, wherever the flag is written', async (): Promise<void> => {
-      await template('M55 Live Persona', true)
-      await template('M55 Inert Persona', false)
+      await template('M55 Live Persona', true, 'engineering')
+      await template('M55 Inert Persona', false, 'engineering')
+      // A second inactive row in ANOTHER division, and it is what makes the `--inactive --division`
+      // case below discriminate at all (fix round 1, item 2).
+      await template('M55 Inert Elsewhere', false, 'design')
 
       const live = await runCli(['template', 'list', '--active'])
       expect(live.stdout).toContain('M55 Live Persona')
       expect(live.stdout).not.toContain('M55 Inert Persona')
 
-      // `--inactive` BEFORE another flag, which is the whole of plan erratum E3: a bare flag that is
-      // not in `VALUELESS` swallows whatever follows it.
+      // `--inactive` BEFORE a flag that TAKES A VALUE, which is the whole of plan erratum E3: a bare
+      // flag outside `VALUELESS` records the next token as its value and consumes it. The three
+      // assertions below are chosen so that they FAIL if `inactive` leaves the set: `--division`
+      // would then be swallowed, `engineering` dropped as a positional, and both inactive rows
+      // listed -- so the count would read `2 of 2` and `M55 Inert Elsewhere` would be on the page.
       const inert = await runCli(['template', 'list', '--inactive', '--division', 'engineering'])
+      expect(inert.stdout).toContain('1 of 1 template(s)')
+      expect(inert.stdout).toContain('M55 Inert Persona')
+      expect(inert.stdout).not.toContain('M55 Inert Elsewhere')
       expect(inert.stdout).not.toContain('M55 Live Persona')
     })
 
@@ -3683,18 +3701,40 @@ describe('the orchestrator CLI', () => {
       const pair = await prisma.templateDuplicate.create({
         data: { aId: low, bId: high, class: 'exact', basis: 'content_hash', score: 1 },
       })
+      // A second pair, of ANOTHER class and ALREADY dismissed. It exists so the `--class` filter has
+      // something to exclude, which is what makes the `--dismissed --class` case below discriminate
+      // (fix round 1, item 2). `@@unique([aId, bId])` is why it needs two templates of its own.
+      const c = await template('M55 Gamma', false)
+      const d = await template('M55 Delta', false)
+      const [lowCD, highCD] = c < d ? [c, d] : [d, c]
+      const nearPair = await prisma.templateDuplicate.create({
+        data: {
+          aId: lowCD,
+          bId: highCD,
+          class: 'near',
+          basis: 'body_shingles',
+          score: 0.9,
+          dismissedAt: new Date(),
+          dismissedBy: 'gate',
+        },
+      })
 
       const dismissed = await runCli(['template', 'duplicates', '--dismiss', pair.id, '--by', 'gate'])
       expect(dismissed.code).toBe(0)
       expect((await prisma.templateDuplicate.findUniqueOrThrow({ where: { id: pair.id } })).dismissedBy).toBe('gate')
 
-      // A dismissed pair is out of the default list and back under `--dismissed` -- written BEFORE
-      // another flag, which is plan erratum E3's rule ("every bare flag this milestone adds joins
-      // `VALUELESS`") applied to the one the erratum's own enumeration missed.
+      // Both pairs are dismissed now, so the default list is empty.
       expect((await runCli(['template', 'duplicates'])).stdout).toContain('no duplicate pair has been detected')
+      // `--dismissed` BEFORE a flag that TAKES A VALUE -- plan erratum E3's rule ("every bare flag
+      // this milestone adds joins `VALUELESS`") applied to the one the erratum's own enumeration
+      // missed. If `dismissed` left the set, `--class` would be swallowed and `exact` dropped as a
+      // positional: `includeDismissed` would still be on, BOTH dismissed pairs would print, and the
+      // `nearPair` assertion below would fail. That is what makes this a pin rather than a sentence.
       const showing = await runCli(['template', 'duplicates', '--dismissed', '--class', 'exact'])
       expect(showing.code).toBe(0)
+      expect(showing.stdout).toContain(pair.id)
       expect(showing.stdout).toContain('dismissed by gate')
+      expect(showing.stdout).not.toContain(nearPair.id)
 
       const restored = await runCli(['template', 'duplicates', '--restore', pair.id])
       expect(restored.code).toBe(0)

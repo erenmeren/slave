@@ -309,7 +309,9 @@ const USAGE = `usage: orchestrator <command> [options]
                                        after it would be swallowed as its value. NOTHING IMPORTED IS
                                        HIRABLE until somebody says so: every row arrives inactive,
                                        and --activate is that somebody saying so for this run.
-                                       --verbose prints one line per row instead of the counts.
+                                       --verbose prints one line per row AS WELL AS the counts: the
+                                       counts, the three duplicate numbers and the skips print
+                                       either way, and it only adds the rows below them.
                                        --allow-unknown-license imports a checkout with no LICENSE
                                        file at its root, which is otherwise refused, because nothing
                                        could record where those personas came from.
