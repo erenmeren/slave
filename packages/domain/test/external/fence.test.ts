@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { MARKERS } from '../../src/run-context/markers.js'
 import { ROUTING_LITERALS } from '../../src/handoff/contract.js'
 import {
+  EXTERNAL_ACTION_MAX_CHARS,
+  EXTERNAL_EVENT_NAME_MAX_CHARS,
   EXTERNAL_FENCE_CLOSE,
+  EXTERNAL_FENCE_FRAME_CHARS,
   EXTERNAL_FENCE_OPEN,
   EXTERNAL_FENCE_PREAMBLE,
   EXTERNAL_SUBJECT_MAX_CHARS,
@@ -224,5 +227,55 @@ describe('fenceExternalText (R8)', () => {
     const long = fenceExternalText('z'.repeat(5000))
     const body = long.split('\n')[2] ?? ''
     expect([...body]).toHaveLength(EXTERNAL_TEXT_MAX_CHARS)
+  })
+})
+
+describe('fenceExternalText with a budget (R8, fix-round-1 erratum E17)', () => {
+  it('cuts the QUOTE and never the block -- the fixed sentence and both tokens always survive', () => {
+    const fenced = fenceExternalText('z'.repeat(5000), 50)
+    expect(fenced.startsWith(EXTERNAL_FENCE_PREAMBLE)).toBe(true)
+    expect(fenced.endsWith(EXTERNAL_FENCE_CLOSE)).toBe(true)
+    expect(fenced.split(EXTERNAL_FENCE_OPEN)).toHaveLength(2)
+    expect(fenced.split(EXTERNAL_FENCE_CLOSE)).toHaveLength(2)
+    const body = fenced.split('\n')[2] ?? ''
+    expect([...body]).toHaveLength(50)
+    expect(body.endsWith('…')).toBe(true)
+  })
+
+  it('is the full text cap when nobody asks for one, so every existing caller is unchanged', () => {
+    expect(fenceExternalText('z'.repeat(5000))).toBe(fenceExternalText('z'.repeat(5000), EXTERNAL_TEXT_MAX_CHARS))
+  })
+
+  it('floors a zero or negative budget at one code point rather than inverting the block', () => {
+    for (const budget of [0, -1, -5000]) {
+      const fenced = fenceExternalText('the build is red', budget)
+      expect(fenced.split(EXTERNAL_FENCE_CLOSE), String(budget)).toHaveLength(2)
+      expect([...(fenced.split('\n')[2] ?? '')], String(budget)).toHaveLength(1)
+    }
+  })
+
+  it('never lengthens the block past the frame plus the budget, which is what a caller budgets with', () => {
+    for (const budget of [1, 10, 400, EXTERNAL_TEXT_MAX_CHARS]) {
+      const fenced = fenceExternalText('z'.repeat(5000), budget)
+      expect([...fenced].length, String(budget)).toBe(EXTERNAL_FENCE_FRAME_CHARS + budget)
+    }
+  })
+
+  it('states the frame as the strings themselves, so it cannot drift from them', () => {
+    expect(EXTERNAL_FENCE_FRAME_CHARS).toBe(
+      [...EXTERNAL_FENCE_PREAMBLE].length + [...EXTERNAL_FENCE_OPEN].length + [...EXTERNAL_FENCE_CLOSE].length + 3,
+    )
+  })
+})
+
+describe('the two label caps (fix-round-1 erratum E19)', () => {
+  it('bounds an event name and an action, generously but finitely', () => {
+    expect(EXTERNAL_EVENT_NAME_MAX_CHARS).toBe(100)
+    expect(EXTERNAL_ACTION_MAX_CHARS).toBe(100)
+  })
+
+  it('is a cap on a LABEL and not a budget for prose -- both are far under the body cap', () => {
+    expect(EXTERNAL_EVENT_NAME_MAX_CHARS).toBeLessThan(EXTERNAL_TITLE_MAX_CHARS)
+    expect(EXTERNAL_ACTION_MAX_CHARS).toBeLessThan(EXTERNAL_TITLE_MAX_CHARS)
   })
 })

@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest'
 import {
   EXTERNAL_EVENT_KINDS,
   EXTERNAL_KIND_LABEL,
+  EXTERNAL_REQUEST_FRAME_MAX_CHARS,
+  EXTERNAL_REQUEST_MAX_CHARS,
   composeExternalRequest,
   type ExternalEventKind,
 } from '../../src/external/request.js'
+import { MEMORY_BODY_MAX } from '../../src/memory/types.js'
+import { EXTERNAL_TEXT_MAX_CHARS } from '../../src/external/fence.js'
 import {
   EXTERNAL_FENCE_CLOSE,
   EXTERNAL_FENCE_OPEN,
@@ -129,5 +133,56 @@ describe('composeExternalRequest (R7, R8)', () => {
     for (const kind of EXTERNAL_EVENT_KINDS as readonly ExternalEventKind[]) {
       expect(composeExternalRequest(kind, ORIGIN, 't', 'b'), kind).not.toContain(kind)
     }
+  })
+})
+
+describe('the composed request is bounded, and the fence is what survives (fix-round-1 erratum E17)', () => {
+  const LONG = 'B'.repeat(5000)
+
+  it('is at most the memory body cap, for every kind, with or without a url', () => {
+    for (const kind of EXTERNAL_EVENT_KINDS as readonly ExternalEventKind[]) {
+      for (const origin of [ORIGIN, { ...ORIGIN, url: null }, { ...ORIGIN, ref: null }]) {
+        const composed = composeExternalRequest(kind, origin, 'T'.repeat(500), LONG)
+        expect([...composed].length, kind).toBeLessThanOrEqual(EXTERNAL_REQUEST_MAX_CHARS)
+      }
+    }
+  })
+
+  it('closes the fence exactly once even when the cap did the cutting', () => {
+    const composed = composeExternalRequest('issue_opened', ORIGIN, 'Checkout 500s on retry', LONG)
+    expect(composed.split(EXTERNAL_FENCE_OPEN)).toHaveLength(2)
+    expect(composed.split(EXTERNAL_FENCE_CLOSE)).toHaveLength(2)
+    expect(composed).toContain(EXTERNAL_FENCE_PREAMBLE)
+    expect(composed.indexOf(EXTERNAL_FENCE_CLOSE)).toBeGreaterThan(composed.indexOf(EXTERNAL_FENCE_OPEN))
+    // The cut lands in the QUOTE, which says so with an ellipsis.
+    const quote = composed.split(EXTERNAL_FENCE_OPEN)[1]?.split(EXTERNAL_FENCE_CLOSE)[0] ?? ''
+    expect(quote.trim().endsWith('…')).toBe(true)
+  })
+
+  it('leaves an ordinary delivery alone -- a body inside the budget keeps every character', () => {
+    const composed = composeExternalRequest('issue_opened', ORIGIN, 'Checkout 500s', 'Reproduced on staging.')
+    expect(composed).toContain('Reproduced on staging.')
+    expect(composed).not.toContain('…')
+  })
+
+  it('spends what is left after the frame, so a shorter frame buys the quote more room', () => {
+    const wide = composeExternalRequest('issue_opened', { ...ORIGIN, url: null }, 't', LONG)
+    const narrow = composeExternalRequest('issue_opened', ORIGIN, 't', LONG)
+    // Both at the cap; the one with no `Source:` line spends those characters on the quote instead.
+    const quoteOf = (text: string): string =>
+      text.split(EXTERNAL_FENCE_OPEN)[1]?.split(EXTERNAL_FENCE_CLOSE)[0] ?? ''
+    expect([...quoteOf(wide)].length).toBeGreaterThan([...quoteOf(narrow)].length)
+  })
+
+  it('is the same number as the memory body cap, which is WHY the cap exists', () => {
+    // Pinned rather than imported into `request.ts`: `memory/promote.ts` reads `external/origin.js`,
+    // and an import back the other way would close a cycle between the two folders.
+    expect(EXTERNAL_REQUEST_MAX_CHARS).toBe(MEMORY_BODY_MAX)
+  })
+
+  it('leaves the quote at least one code point in the worst case a frame can be', () => {
+    expect(EXTERNAL_REQUEST_FRAME_MAX_CHARS).toBeLessThan(EXTERNAL_REQUEST_MAX_CHARS)
+    // And the full body cap is bigger than what is left, which is why the recompose exists at all.
+    expect(EXTERNAL_TEXT_MAX_CHARS).toBeGreaterThan(EXTERNAL_REQUEST_MAX_CHARS - EXTERNAL_REQUEST_FRAME_MAX_CHARS)
   })
 })

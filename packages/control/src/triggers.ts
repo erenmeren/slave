@@ -231,12 +231,57 @@ export type IngestOutcome =
   | { readonly status: 'replayed'; readonly inboundEventId: string }
   | { readonly status: 'invalid'; readonly reason: 'payload_invalid' }
 
-/** The normalised payload as it goes into the `Json` column, with the cap enforced once (R4). A
- *  payload over `INBOUND_PAYLOAD_MAX_BYTES` drops its `body` and says `truncated: true` -- the same
- *  flag, with the same meaning, the normaliser already sets when it cut at a character cap. */
-function boundedPayload(payload: Record<string, unknown>): Record<string, unknown> {
-  if (Buffer.byteLength(JSON.stringify(payload), 'utf8') <= INBOUND_PAYLOAD_MAX_BYTES) return payload
-  return { ...payload, body: '', truncated: true }
+/**
+ * The order fields are given up in, longest and least load-bearing first (fix-round-1 erratum E19).
+ *
+ * `body` is the quoted prose and by far the largest; `title` is one line of the same prose; `url` is
+ * a link the row can be read without; `action` is a label the `eventKind` already implies. Only then
+ * `eventName`, which is the last thing that says WHAT arrived -- and by the arithmetic below it is
+ * never reached.
+ */
+const PAYLOAD_DROP_ORDER = ['body', 'title', 'url', 'action', 'eventName'] as const
+
+/** What each dropped field becomes: `null` where `InboundPayload` declares the field nullable, the
+ *  empty string where it does not, so a dropped row is still a readable `InboundPayload` rather than
+ *  a hole a consumer has to narrow around. */
+const DROPPED_VALUE: Record<(typeof PAYLOAD_DROP_ORDER)[number], string | null> = {
+  body: '',
+  title: '',
+  url: null,
+  action: null,
+  eventName: '',
+}
+
+/**
+ * The normalised payload as it goes into the `Json` column, with the BYTE cap enforced here and
+ * nowhere else (M54 R4, fix-round-1 erratum E19).
+ *
+ * The first version dropped `body` and returned WITHOUT measuring again, which is only sufficient if
+ * every other field is bounded -- and two were not. The normaliser now caps all seven (erratum E19),
+ * and this drops them in `PAYLOAD_DROP_ORDER`, RE-MEASURING after each one, until the row fits. The
+ * flag is the normaliser's own `truncated`, reused rather than doubled: the question a reader has is
+ * the same, is this stored text what arrived.
+ *
+ * **It cannot return a row over the cap.** The arithmetic, in code points times four bytes each:
+ * `eventName` 100, `action` 100, `title` 300, `body` 2000, plus `repository` at 201 and `ref` at 40
+ * ASCII characters (their regexes ARE their caps) and `url` under 500 UTF-16 units -- so the worst
+ * arrival is about 12 KiB and the worst row after ONE drop is about 4.5 KiB. The first drop
+ * therefore always suffices today; the four behind it exist so that a widened cap upstream degrades
+ * a ROW instead of overflowing a COLUMN, and after all five the residue is `repository`, `ref` and
+ * six empty fields -- under 400 bytes, whatever the caps say. `triggers.test.ts` pins both ends of
+ * that: the worst-case floor against `INBOUND_PAYLOAD_MAX_BYTES`, and the drop order itself.
+ *
+ * Exported for that test alone. It is a pure function over a bounded record and the only place in
+ * this milestone where a byte count decides anything, so it is worth being able to ask directly
+ * rather than through a delivery the normaliser can no longer be made to produce.
+ */
+export function boundedPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  let bounded = payload
+  for (const field of PAYLOAD_DROP_ORDER) {
+    if (Buffer.byteLength(JSON.stringify(bounded), 'utf8') <= INBOUND_PAYLOAD_MAX_BYTES) return bounded
+    bounded = { ...bounded, [field]: DROPPED_VALUE[field], truncated: true }
+  }
+  return bounded
 }
 
 /**

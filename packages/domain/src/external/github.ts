@@ -1,6 +1,12 @@
 import { z } from 'zod'
 import { err, ok, type Result } from '../result.js'
-import { EXTERNAL_TEXT_MAX_CHARS, EXTERNAL_TITLE_MAX_CHARS, sanitiseExternalText } from './fence.js'
+import {
+  EXTERNAL_ACTION_MAX_CHARS,
+  EXTERNAL_EVENT_NAME_MAX_CHARS,
+  EXTERNAL_TEXT_MAX_CHARS,
+  EXTERNAL_TITLE_MAX_CHARS,
+  sanitiseExternalText,
+} from './fence.js'
 import {
   EXTERNAL_REF_RE,
   EXTERNAL_URL_MAX_CHARS,
@@ -97,9 +103,25 @@ export function classifyGitHubDelivery(eventName: string, payload: GitHubDeliver
   return null
 }
 
-/** What `InboundEvent.payload` holds -- the NORMALISED delivery and never the raw body (M54 R4).
- *  Every string has been through the sanitiser and its cap, so the column is bounded by
- *  construction. */
+/**
+ * What `InboundEvent.payload` holds -- the NORMALISED delivery and never the raw body (M54 R4).
+ *
+ * EVERY string on this shape is bounded, and the bound is named beside the field (fix-round-1
+ * erratum E19 -- `eventName` and `action` used to be copied verbatim, which made the sentence this
+ * comment used to end with false and let a verified delivery write a megabyte into a column whose
+ * own constant says 8 KiB). The caps, in code points:
+ *
+ *  - `eventName` -- `EXTERNAL_EVENT_NAME_MAX_CHARS` (100), sanitised
+ *  - `action` -- `EXTERNAL_ACTION_MAX_CHARS` (100), sanitised
+ *  - `repository` -- 201, by `REPOSITORY_FULL_NAME_RE` itself, which refuses anything longer
+ *  - `ref` -- 40, by `EXTERNAL_REF_RE`, likewise
+ *  - `url` -- under `EXTERNAL_URL_MAX_CHARS` (500), by `safeUrl`, which drops a longer one to null
+ *  - `title` -- `EXTERNAL_TITLE_MAX_CHARS` (300), sanitised
+ *  - `body` -- `EXTERNAL_TEXT_MAX_CHARS` (2000), sanitised
+ *
+ * A code point is up to four BYTES, so the worst case is still larger than a comfortable row; the
+ * byte cap is enforced separately, once, in `boundedPayload` (`packages/control/src/triggers.ts`).
+ */
 export interface InboundPayload {
   readonly eventName: string
   readonly action: string | null
@@ -168,6 +190,9 @@ function shortSha(value: string | undefined): string | null {
  *  5. the URL -- dropped to `null` when it is not an `http(s)` url under the cap (R8 says so).
  *  6. the TEXT -- title and body through `sanitiseExternalText` at their own caps, with `truncated`
  *     saying whether the stored text is what arrived.
+ *  7. the LABELS -- the event name and the action through the same sanitiser at their own caps
+ *     (fix-round-1 erratum E19). Last, and after the classifier has read the RAW action, because
+ *     what is STORED and what is MATCHED are different questions.
  */
 export function normaliseGitHubDelivery(
   eventName: string,
@@ -222,20 +247,30 @@ export function normaliseGitHubDelivery(
 
   const safeTitle = sanitiseExternalText(title, EXTERNAL_TITLE_MAX_CHARS)
   const safeBody = sanitiseExternalText(body, EXTERNAL_TEXT_MAX_CHARS)
+  // The two LABELS a caller chooses, through the same sanitiser as the prose (erratum E19). The
+  // CLASSIFIER above reads the raw `payload.action`, deliberately: what is stored and what is
+  // matched against `GITHUB_PR_ACTIONS` are different questions, and capping before the comparison
+  // would let a padded `opened` classify as something it is not.
+  const safeEventName = sanitiseExternalText(eventName, EXTERNAL_EVENT_NAME_MAX_CHARS)
+  const action = payload.action ?? null
+  const safeAction = action === null ? null : sanitiseExternalText(action, EXTERNAL_ACTION_MAX_CHARS)
 
   return ok({
     kind: kind ?? 'custom',
     recognised,
     origin: { source: 'github', repository, ref, url },
     payload: {
-      eventName,
-      action: payload.action ?? null,
+      eventName: safeEventName,
+      action: safeAction,
       repository,
       ref,
       url,
       title: safeTitle,
       body: safeBody,
-      truncated: safeTitle !== title || safeBody !== body,
+      // Every field that can differ from what arrived, not only the two prose ones: a reader asking
+      // "is this what was sent" is asking about the whole row (D5).
+      truncated:
+        safeTitle !== title || safeBody !== body || safeEventName !== eventName || safeAction !== action,
     },
   })
 }

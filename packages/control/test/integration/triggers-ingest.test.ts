@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@slave-of-ai/db/client'
 import { EXTERNAL_FENCE_CLOSE, EXTERNAL_FENCE_PREAMBLE } from '@slave-of-ai/domain'
+import { requestChange } from '../../src/goal.js'
 import {
   EXTERNAL_IGNORED_REASONS,
   INBOUND_EVENT_STATUSES,
@@ -86,17 +87,15 @@ describe('ingestExternalEvent -- the happy path (M54 R4, R7)', () => {
     const types = (await prisma.executionEvent.findMany({ orderBy: { seq: 'asc' }, select: { type: true, actor: true } })).map(
       (event) => `${event.type}/${event.actor}`,
     )
-    // `memory_recorded` between them is M49's, not this milestone's: `writeGoalVersion` promotes
-    // every goal change past v1 to a `decision` memory after its commit (`goal.ts`'s
-    // `promotionFor({ kind: 'goal_changed' })`), and its actor is the DRAFT's `createdBy`, which
-    // `promotionFor` hard-codes as `human` in `@slave-of-ai/domain`. Asserted here rather than
-    // filtered out, because the list is only worth pinning if it is the whole list -- and the one
-    // `human` in it is a fact about M49's promoter that this task does not reach into the domain to
-    // change (carried, and named in the task report).
+    // `memory_recorded` between them is M49's: `writeGoalVersion` promotes every goal change past v1
+    // to a `decision` memory after its commit (`goal.ts`'s `promotionFor({ kind: 'goal_changed' })`).
+    // Its actor said `human` until fix-round-1 erratum E18, which is R5's lie one hop downstream --
+    // that row is exactly the artefact the next planning prompt reads as a decision somebody took.
+    // FOUR events, all `system`, and the list is pinned whole because a list worth pinning is.
     expect(types).toEqual([
       'external_received/system',
       'workspace_goal_set/system',
-      'memory_recorded/human',
+      'memory_recorded/system',
       'external_actioned/system',
     ])
   })
@@ -198,6 +197,108 @@ describe('ingestExternalEvent -- the happy path (M54 R4, R7)', () => {
     const payload = row.payload as { body: string; truncated: boolean }
     expect(payload.truncated).toBe(true)
     expect(payload.body).toBe('')
+  })
+})
+
+describe('what the delivery is REMEMBERED as (M54 R5, fix-round-1 errata E17, E18)', () => {
+  it('records the decision as the SYSTEM own, with no verifier, because nobody sat at a keyboard', async () => {
+    await ingestExternalEvent(identity(), {
+      deliveryId: 'd-1',
+      eventName: 'issues',
+      payload: issueOpened(fixture.repository),
+    })
+    const memory = await prisma.memory.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    expect(memory.createdBy).toBe('system')
+    expect(memory.verifiedBy).toBeNull()
+    expect(memory.status).toBe('verified')
+    expect(memory.title).toBe('Goal v2')
+  })
+
+  it('keeps the fence CLOSED in the memory body, for an issue too long to have survived the cut', async () => {
+    await ingestExternalEvent(identity(), {
+      deliveryId: 'd-1',
+      eventName: 'issues',
+      payload: issueOpened(fixture.repository, {
+        issue: {
+          number: 412,
+          title: 'Checkout 500s on retry',
+          // Longer than `MEMORY_BODY_MAX` minus the composed frame: before E17 this produced a
+          // `verified` memory holding an opening fence token and no closing one, rendered into a
+          // worker's prompt as one collapsed line.
+          body: 'B'.repeat(5000),
+          html_url: 'https://github.com/acme/checkout/issues/412',
+        },
+      }),
+    })
+    const memory = await prisma.memory.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    expect([...memory.body].length).toBeLessThanOrEqual(2000)
+    expect(memory.body).toContain(EXTERNAL_FENCE_PREAMBLE)
+    expect(memory.body.split(EXTERNAL_FENCE_CLOSE)).toHaveLength(2)
+    expect(memory.body.indexOf(EXTERNAL_FENCE_CLOSE)).toBeGreaterThan(memory.body.indexOf(EXTERNAL_FENCE_PREAMBLE))
+    // And the GOAL version, which carries the same request as one bullet: `composeGoal` collapses
+    // the entry's whitespace to single spaces (M45, `compose.ts:42`), so the fence there is one line
+    // rather than four -- opened and closed all the same, which is the property that matters.
+    const version = await prisma.goalVersion.findFirstOrThrow({ where: { version: 2 } })
+    expect(version.text.split(EXTERNAL_FENCE_CLOSE)).toHaveLength(2)
+    expect(version.text).toContain(EXTERNAL_FENCE_PREAMBLE)
+  })
+
+  it('says a person did it when a person did -- the same promoter, the other branch', async () => {
+    const changed = await requestChange(fixture.workspaceId, 'Please add retries')
+    if (!changed.ok) throw new Error(changed.error.kind)
+    const memory = await prisma.memory.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    expect(memory.createdBy).toBe('human')
+    expect(memory.verifiedBy).toBe('human')
+  })
+})
+
+describe('every stored string is bounded (M54 R4, fix-round-1 erratum E19)', () => {
+  it('caps an EVENT NAME a sender chose, which used to reach the column verbatim', async () => {
+    const outcome = await ingestExternalEvent(identity(), {
+      deliveryId: 'd-1',
+      eventName: 'z'.repeat(200_000),
+      payload: { repository: { full_name: fixture.repository } },
+    })
+    if (outcome.status !== 'ignored') throw new Error('narrowing')
+    const row = await prisma.inboundEvent.findUniqueOrThrow({ where: { id: outcome.inboundEventId } })
+    const payload = row.payload as { eventName: string; truncated: boolean }
+    expect([...payload.eventName]).toHaveLength(100)
+    expect(payload.truncated).toBe(true)
+    expect(Buffer.byteLength(JSON.stringify(row.payload), 'utf8')).toBeLessThanOrEqual(8192)
+  })
+
+  it('caps an ACTION a body carried, which used to as well', async () => {
+    const outcome = await ingestExternalEvent(identity(), {
+      deliveryId: 'd-1',
+      eventName: 'issues',
+      payload: { action: 'z'.repeat(200_000), repository: { full_name: fixture.repository } },
+    })
+    if (outcome.status !== 'ignored') throw new Error('narrowing')
+    const row = await prisma.inboundEvent.findUniqueOrThrow({ where: { id: outcome.inboundEventId } })
+    const payload = row.payload as { action: string; truncated: boolean }
+    expect([...payload.action]).toHaveLength(100)
+    expect(payload.truncated).toBe(true)
+    expect(Buffer.byteLength(JSON.stringify(row.payload), 'utf8')).toBeLessThanOrEqual(8192)
+  })
+
+  it('writes no row over the column cap for ANY of the ways a delivery can be large at once', async () => {
+    const outcome = await ingestExternalEvent(identity(), {
+      deliveryId: 'd-1',
+      eventName: '\u{1F642}'.repeat(5000),
+      payload: {
+        action: '\u{1F642}'.repeat(5000),
+        repository: { full_name: fixture.repository },
+        issue: {
+          number: 412,
+          title: '\u{1F642}'.repeat(5000),
+          body: '\u{1F642}'.repeat(5000),
+          html_url: `https://github.com/acme/checkout/issues/${'4'.repeat(400)}`,
+        },
+      },
+    })
+    if (outcome.status !== 'ignored') throw new Error('narrowing')
+    const row = await prisma.inboundEvent.findUniqueOrThrow({ where: { id: outcome.inboundEventId } })
+    expect(Buffer.byteLength(JSON.stringify(row.payload), 'utf8')).toBeLessThanOrEqual(8192)
   })
 })
 

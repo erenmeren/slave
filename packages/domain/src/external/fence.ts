@@ -32,6 +32,25 @@ export const EXTERNAL_SUBJECT_MAX_CHARS = 120
 export const EXTERNAL_TITLE_MAX_CHARS = 300
 
 /**
+ * The longest provider EVENT NAME and ACTION stored on `InboundEvent.payload` (fix-round-1 erratum
+ * E19).
+ *
+ * Both are attacker-chosen strings that used to reach the column verbatim: `eventName` is the
+ * `X-GitHub-Event` HEADER, and `action` is a body field the schema declares as a bare
+ * `z.string().optional()`. Neither had a cap, so a signature-verified delivery could write a
+ * megabyte-sized row into a column whose own constant says 8 KiB -- and neither went through the
+ * sanitiser, so `action` was the one place in this milestone where unsanitised external text landed
+ * in a stored column.
+ *
+ * One hundred code points, and generously: GitHub's longest real event name is `branch_protection_
+ * configuration` and its longest action is `ready_for_review`. The number is a BOUND on a label,
+ * not a budget for prose -- anything longer is not an event name, and storing the first hundred
+ * characters of it is enough for an operator to see what arrived.
+ */
+export const EXTERNAL_EVENT_NAME_MAX_CHARS = 100
+export const EXTERNAL_ACTION_MAX_CHARS = 100
+
+/**
  * Everything INVISIBLE (M54 R8, widened by fix-round-1 erratum E15).
  *
  * Two families, and the second is the one a first reading misses:
@@ -120,12 +139,30 @@ export function sanitiseExternalText(text: string, maxChars: number): string {
  * through `neutraliseMarkers` a second time. Nothing outside the fence is external prose: the
  * subject line is generated from a kind label, a validated repository, a validated ref and a
  * truncated, sanitised quote.
+ *
+ * `maxChars` is the QUOTE's budget, and it exists so that a caller who knows its own output will be
+ * truncated downstream can make the cut happen HERE instead (fix-round-1 erratum E17). A fence is
+ * only a fence while it closes: a later hard cut through the block leaves an opening token with no
+ * closing one, and a prompt assembler reading that has been handed an unterminated quotation --
+ * exactly the state R8 exists to prevent. Cutting inside the fence keeps the fixed sentence, keeps
+ * both tokens, and loses only the tail of somebody else's prose, which `sanitiseExternalText`
+ * already marks with an ellipsis.
+ *
+ * Floored at one code point: a budget of zero would produce a fence around nothing, and a negative
+ * one is a caller's arithmetic error rather than a request to invert the block.
  */
-export function fenceExternalText(text: string): string {
+export function fenceExternalText(text: string, maxChars: number = EXTERNAL_TEXT_MAX_CHARS): string {
   return [
     EXTERNAL_FENCE_PREAMBLE,
     EXTERNAL_FENCE_OPEN,
-    sanitiseExternalText(text, EXTERNAL_TEXT_MAX_CHARS),
+    sanitiseExternalText(text, Math.max(1, maxChars)),
     EXTERNAL_FENCE_CLOSE,
   ].join('\n')
 }
+
+/** The code points {@link fenceExternalText} adds AROUND the quote: the preamble, both tokens and
+ *  the three newlines that join the four lines. Derived from the strings themselves, so it cannot
+ *  drift from them, and used by `composeExternalRequest` to work out what budget is left for the
+ *  quote. */
+export const EXTERNAL_FENCE_FRAME_CHARS =
+  [...EXTERNAL_FENCE_PREAMBLE].length + [...EXTERNAL_FENCE_OPEN].length + [...EXTERNAL_FENCE_CLOSE].length + 3

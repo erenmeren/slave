@@ -5,6 +5,7 @@ import {
   HOOK_PATH_PREFIX,
   HOOK_REFUSAL_REASONS,
   INBOUND_PAYLOAD_MAX_BYTES,
+  boundedPayload,
   hookPathFor,
   hookRefusalLine,
   listExternalRepositories,
@@ -12,6 +13,14 @@ import {
   unmapExternalRepository,
   verifyHookDelivery,
 } from '../../src/triggers.js'
+import {
+  EXTERNAL_ACTION_MAX_CHARS,
+  EXTERNAL_EVENT_NAME_MAX_CHARS,
+  EXTERNAL_TEXT_MAX_CHARS,
+  EXTERNAL_TITLE_MAX_CHARS,
+  EXTERNAL_URL_MAX_CHARS,
+  REPOSITORY_FULL_NAME_MAX_CHARS,
+} from '@slave-of-ai/domain'
 import {
   TRIGGERS_ENV_VAR,
   TRIGGERS_SECRET,
@@ -341,5 +350,80 @@ describe('unmapExternalRepository and listExternalRepositories (M54 R12)', () =>
       expect(Object.keys(row)).not.toContain('secretSet')
       expect(Object.values(row)).not.toContain(TRIGGERS_SECRET)
     }
+  })
+})
+
+describe('boundedPayload -- the BYTE cap, which the code-point caps do not enforce (erratum E19)', () => {
+  // A four-byte character, so a code point and a byte are as far apart as Unicode lets them be.
+  const WIDE = '\u{1F642}'
+
+  /** The worst payload the normaliser can produce: every capped field at its cap, in the widest
+   *  character there is, and the two regex-bounded fields at the longest string their regex takes. */
+  const worstCase = (): Record<string, unknown> => ({
+    eventName: WIDE.repeat(EXTERNAL_EVENT_NAME_MAX_CHARS),
+    action: WIDE.repeat(EXTERNAL_ACTION_MAX_CHARS),
+    repository: 'a'.repeat(REPOSITORY_FULL_NAME_MAX_CHARS),
+    ref: 'a'.repeat(40),
+    url: `https://example.com/${'a'.repeat(EXTERNAL_URL_MAX_CHARS - 25)}`,
+    title: WIDE.repeat(EXTERNAL_TITLE_MAX_CHARS),
+    body: WIDE.repeat(EXTERNAL_TEXT_MAX_CHARS),
+    truncated: false,
+  })
+
+  const bytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), 'utf8')
+
+  it('leaves an ordinary payload exactly as it is, key for key', () => {
+    const payload = { eventName: 'issues', action: 'opened', repository: 'acme/checkout', body: 'x', truncated: false }
+    expect(boundedPayload(payload)).toEqual(payload)
+  })
+
+  it('brings the WORST payload the caps allow under the column cap, and says it truncated', () => {
+    const worst = worstCase()
+    expect(bytes(worst)).toBeGreaterThan(INBOUND_PAYLOAD_MAX_BYTES)
+    const bounded = boundedPayload(worst)
+    expect(bytes(bounded)).toBeLessThanOrEqual(INBOUND_PAYLOAD_MAX_BYTES)
+    expect(bounded['truncated']).toBe(true)
+    // ONE drop is enough today, and the case says so rather than leaving it to be discovered: the
+    // body is gone and the title is still there.
+    expect(bounded['body']).toBe('')
+    expect(bounded['title']).toBe(worst['title'])
+  })
+
+  it('drops in ORDER and re-measures, so a field that alone overflows takes the next one with it', () => {
+    // Not reachable through the normaliser -- every field above is capped well under this -- so it
+    // is asserted directly on the function, which is the thing that has to keep being true when a
+    // cap upstream grows or an eighth field arrives.
+    const huge = { eventName: 'issues', repository: 'acme/checkout', title: 'T'.repeat(9000), body: 'B'.repeat(9000), truncated: false }
+    const bounded = boundedPayload(huge)
+    expect(bytes(bounded)).toBeLessThanOrEqual(INBOUND_PAYLOAD_MAX_BYTES)
+    expect(bounded['body']).toBe('')
+    expect(bounded['title']).toBe('')
+    // And it stopped there: `url`, `action` and `eventName` are behind `title` in the order.
+    expect(bounded['eventName']).toBe('issues')
+  })
+
+  it('gives every field up rather than write a row over the cap, and the residue still fits', () => {
+    const monstrous = {
+      eventName: 'E'.repeat(9000),
+      action: 'A'.repeat(9000),
+      repository: 'acme/checkout',
+      ref: '#412',
+      url: `https://example.com/${'u'.repeat(9000)}`,
+      title: 'T'.repeat(9000),
+      body: 'B'.repeat(9000),
+      truncated: false,
+    }
+    const bounded = boundedPayload(monstrous)
+    expect(bytes(bounded)).toBeLessThanOrEqual(INBOUND_PAYLOAD_MAX_BYTES)
+    expect(bounded).toEqual({
+      eventName: '',
+      action: null,
+      repository: 'acme/checkout',
+      ref: '#412',
+      url: null,
+      title: '',
+      body: '',
+      truncated: true,
+    })
   })
 })

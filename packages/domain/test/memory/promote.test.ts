@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import { MEMORY_BODY_MAX, MEMORY_CAPABILITIES_MAX } from '../../src/memory/types.js'
 import { promotionFor } from '../../src/memory/promote.js'
 import { parseMemoryDraft } from '../../src/memory/provenance.js'
+import { EXTERNAL_FENCE_CLOSE, EXTERNAL_FENCE_OPEN } from '../../src/external/fence.js'
+import { composeExternalRequest } from '../../src/external/request.js'
+import type { ExternalOrigin } from '../../src/external/origin.js'
 
 describe('promotionFor: a finished implementation run (R2a)', () => {
   const input = {
@@ -151,7 +154,15 @@ describe('promotionFor: a person resolving a decision, and a goal that moved (R2
 
   it('records a goal change from v2 on, and never v1 (there was nothing to change)', () => {
     expect(
-      promotionFor({ kind: 'goal_changed', workspaceId: 'w1', version: 1, request: null, goal: 'Ship it', userId: 'u1' }),
+      promotionFor({
+        kind: 'goal_changed',
+        workspaceId: 'w1',
+        version: 1,
+        request: null,
+        goal: 'Ship it',
+        userId: 'u1',
+        origin: null,
+      }),
     ).toBeNull()
     const draft = promotionFor({
       kind: 'goal_changed',
@@ -160,6 +171,7 @@ describe('promotionFor: a person resolving a decision, and a goal that moved (R2
       request: 'Add an authentication path.',
       goal: 'Ship the checkout flow.\n\nAdd an authentication path.',
       userId: 'u1',
+      origin: null,
     })
     expect(draft?.type).toBe('decision')
     expect(draft?.title).toBe('Goal v3')
@@ -170,6 +182,80 @@ describe('promotionFor: a person resolving a decision, and a goal that moved (R2
     // on v14 handed a run fourteen decisions. The newest goal is the goal.
     expect(draft?.supersedesGoalDecisions).toBe(true)
     expect(draft?.supersedesTaskFacts).toBe(false)
+    // A person asked for this one, and that is what null MEANS on `origin` (M54 erratum E18).
+    expect(draft?.provenance.createdBy).toBe('human')
+    expect(draft?.verifiedBy).toBe('human')
+  })
+})
+
+describe('promotionFor: a goal change something OUTSIDE asked for (M54 R5, erratum E18)', () => {
+  const ORIGIN: ExternalOrigin = {
+    source: 'github',
+    repository: 'acme/checkout',
+    ref: '#412',
+    url: 'https://github.com/acme/checkout/issues/412',
+  }
+
+  const goalChange = (request: string, origin: ExternalOrigin | null): ReturnType<typeof promotionFor> =>
+    promotionFor({
+      kind: 'goal_changed',
+      workspaceId: 'w1',
+      version: 2,
+      request,
+      goal: 'Ship the checkout flow.',
+      userId: null,
+      origin,
+    })
+
+  it('says the SYSTEM took the decision, and names no verifier, because nobody did', () => {
+    const draft = goalChange('CI is red', ORIGIN)
+    expect(draft?.provenance.createdBy).toBe('system')
+    // `MEMORY_VERIFIERS` has no `system` member and is deliberately not widened here: null already
+    // means "nobody verified this", and it is the true answer.
+    expect(draft?.verifiedBy).toBeNull()
+    // Still a verified decision -- the standing requirement IS the authority. The two axes are
+    // separate, which is why `verifiedBy` is nullable.
+    expect(draft?.status).toBe('verified')
+  })
+
+  it('leaves a person own change exactly as it was -- the same call with a null origin', () => {
+    const draft = goalChange('CI is red', null)
+    expect(draft?.provenance.createdBy).toBe('human')
+    expect(draft?.verifiedBy).toBe('human')
+  })
+
+  it('has nowhere to put the origin, so it does not invent one -- provenance is seven strict fields', () => {
+    const draft = goalChange('CI is red', ORIGIN)
+    expect(Object.keys(draft?.provenance ?? {}).sort()).toEqual([
+      'createdBy',
+      'createdByUserId',
+      'goalVersion',
+      'runId',
+      'sourceKind',
+      'sourceRef',
+      'taskId',
+    ])
+    // The pointer a reader follows instead: the version, which carries `GoalVersion.origin`.
+    expect(draft?.provenance.goalVersion).toBe(2)
+    expect(draft?.provenance.sourceRef).toBe('2')
+    // And the draft still PARSES -- a widened provenance would have been refused by `.strict()`.
+    expect(parseMemoryDraft(draft).ok).toBe(true)
+  })
+
+  it('keeps the fence CLOSED through the memory body cap, for a body no cut could survive before', () => {
+    // M54 fix-round-1 erratum E17. The composed request is capped so that `bodyOf`'s hard cut at
+    // `MEMORY_BODY_MAX` -- which knows nothing about a fence -- never lands inside the block.
+    const request = composeExternalRequest('issue_opened', ORIGIN, 'Checkout 500s on retry', 'B'.repeat(5000))
+    const draft = goalChange(request, ORIGIN)
+    const body = draft?.body ?? ''
+    expect([...body].length).toBeLessThanOrEqual(MEMORY_BODY_MAX)
+    expect(body).toContain(EXTERNAL_FENCE_OPEN)
+    expect(body).toContain(EXTERNAL_FENCE_CLOSE)
+    // Exactly one of each, and the close is LAST of the two: an opened block that never closes is
+    // the failure this case exists for.
+    expect(body.split(EXTERNAL_FENCE_OPEN)).toHaveLength(2)
+    expect(body.split(EXTERNAL_FENCE_CLOSE)).toHaveLength(2)
+    expect(body.indexOf(EXTERNAL_FENCE_CLOSE)).toBeGreaterThan(body.indexOf(EXTERNAL_FENCE_OPEN))
   })
 })
 

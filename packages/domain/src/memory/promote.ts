@@ -1,3 +1,4 @@
+import type { ExternalOrigin } from '../external/origin.js'
 import { capCodePoints, MEMORY_BODY_MAX, MEMORY_CAPABILITIES_MAX, MEMORY_TITLE_MAX } from './types.js'
 import type { MemoryDraft } from './provenance.js'
 
@@ -60,6 +61,16 @@ export type PromotionInput =
       readonly request: string | null
       readonly goal: string
       readonly userId: string | null
+      /**
+       * WHERE the change was asked for, when something outside asked for it (M54 R5, fix-round-1
+       * erratum E18). Null for every version a person set, which is every version before M54 and
+       * every one set through the Settings form, the CLI or the Supervisor panel.
+       *
+       * Carried as the ORIGIN rather than as a boolean because it is the same value
+       * `writeGoalVersion` already holds for the row and the event, and a reader comparing the three
+       * should be comparing one thing three times.
+       */
+      readonly origin: ExternalOrigin | null
     }
   /** (d) A review or a verify turned the work down. */
   | {
@@ -209,6 +220,11 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
       if (input.version < 2) return null
       const body = bodyOf(input.request ?? input.goal)
       if (body === '') return null
+      // M54 R5, one hop downstream of it (fix-round-1 erratum E18). This row is the artefact the
+      // next planning prompt reads as a decision, and saying a PERSON took it when a webhook did is
+      // the same lie `workspace.goal_set` stopped telling: the Supervisor pipeline acted, nobody
+      // sat at a keyboard. `Actor` already has `system` and is not widened.
+      const external = input.origin !== null
       return {
         type: 'decision',
         scope: 'workspace',
@@ -220,7 +236,12 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
         status: 'verified',
         confidence: 'sourced',
         capabilities: [],
-        verifiedBy: 'human',
+        // `MEMORY_VERIFIERS` is `verification | review | human` and is deliberately NOT widened here
+        // (erratum E18): null is the value that already means "nobody verified this", and it is
+        // true. The row is still `verified` because the standing requirement IS the authority --
+        // whether a thing is verified and who nameably verified it are two axes, which is why
+        // `MemoryDraft.verifiedBy` is nullable.
+        verifiedBy: external ? null : 'human',
         supersedesTaskCandidates: false,
         // Final review, Important 1: the NEWEST goal is the goal. Every version used to stay
         // verified for ever, and a project on v14 handed a run fourteen decisions of the
@@ -228,9 +249,13 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
         supersedesGoalDecisions: true,
         supersedesTaskFacts: false,
         provenance: {
+          // `MemoryProvenance` is seven fields and `.strict()`, and none of them is a place to put
+          // an `ExternalOrigin` (erratum E18). It is NOT widened in this round: the origin stays on
+          // `GoalVersion.origin`, which `goalVersion` and `sourceRef` below both point at, and which
+          // is the pointer a reader of a provenance line follows anyway.
           sourceKind: 'goal',
           sourceRef: String(input.version),
-          createdBy: 'human',
+          createdBy: external ? 'system' : 'human',
           createdByUserId: input.userId,
           taskId: null,
           runId: null,

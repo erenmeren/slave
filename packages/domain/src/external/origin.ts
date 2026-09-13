@@ -33,6 +33,12 @@ export const EXTERNAL_SOURCE_LABEL: Record<ExternalSource, string> = { github: '
  */
 export const REPOSITORY_FULL_NAME_RE = /^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1,100}$/u
 
+/** The longest string {@link REPOSITORY_FULL_NAME_RE} accepts -- 100 + 1 + 100 -- as a NUMBER, for
+ *  the one caller that has to do arithmetic with it rather than test against it
+ *  (`composeExternalRequest`'s frame budget, fix-round-1 erratum E17). Pinned against the regex by a
+ *  case in `origin.test.ts`, so the two cannot drift. */
+export const REPOSITORY_FULL_NAME_MAX_CHARS = 201
+
 /**
  * What a ref may be: `#<digits>` (an issue or pull-request number, at most twelve digits) or a
  * 7-40 character lower-case hex sha (M54 R8).
@@ -42,6 +48,10 @@ export const REPOSITORY_FULL_NAME_RE = /^[A-Za-z0-9._-]{1,100}\/[A-Za-z0-9._-]{1
  * and an illegal label.
  */
 export const EXTERNAL_REF_RE = /^(?:#\d{1,12}|[0-9a-f]{7,40})$/u
+
+/** The longest string {@link EXTERNAL_REF_RE} accepts -- a 40-character sha, which is longer than
+ *  `#` plus twelve digits -- as a NUMBER, for the same one caller and pinned the same way. */
+export const EXTERNAL_REF_MAX_CHARS = 40
 
 /** The longest url this system will store or hand to a reader (M54 R8). A url over it is dropped
  *  to `null` rather than truncated: half a link is worse than no link. */

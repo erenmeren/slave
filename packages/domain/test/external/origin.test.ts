@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
+  EXTERNAL_REF_MAX_CHARS,
   EXTERNAL_REF_RE,
   EXTERNAL_SOURCES,
   EXTERNAL_SOURCE_LABEL,
   EXTERNAL_URL_MAX_CHARS,
+  REPOSITORY_FULL_NAME_MAX_CHARS,
   REPOSITORY_FULL_NAME_RE,
   externalOriginSchema,
   originLabel,
@@ -133,5 +135,23 @@ describe('originLabel (R9)', () => {
 
   it('never prints the url -- a sentence is not a link (R9)', () => {
     expect(originLabel(ISSUE)).not.toContain('https://')
+  })
+})
+
+describe('the two lengths stated as numbers (fix-round-1 erratum E17)', () => {
+  it('is the longest repository the regex accepts, and one more is refused', () => {
+    const longest = `${'a'.repeat(100)}/${'b'.repeat(100)}`
+    expect([...longest]).toHaveLength(REPOSITORY_FULL_NAME_MAX_CHARS)
+    expect(REPOSITORY_FULL_NAME_RE.test(longest)).toBe(true)
+    expect(REPOSITORY_FULL_NAME_RE.test(`a${longest}`)).toBe(false)
+  })
+
+  it('is the longest ref the regex accepts, and one more is refused', () => {
+    const longest = 'a'.repeat(40)
+    expect([...longest]).toHaveLength(EXTERNAL_REF_MAX_CHARS)
+    expect(EXTERNAL_REF_RE.test(longest)).toBe(true)
+    expect(EXTERNAL_REF_RE.test('a'.repeat(41))).toBe(false)
+    // The other shape is shorter, so the sha is what the number has to be.
+    expect([...`#${'9'.repeat(12)}`].length).toBeLessThan(EXTERNAL_REF_MAX_CHARS)
   })
 })

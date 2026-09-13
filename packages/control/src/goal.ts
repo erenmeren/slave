@@ -224,6 +224,10 @@ async function writeGoalVersion(
       request,
       goal: outcome.goal,
       userId: principal?.userId ?? null,
+      // M54 R5, fix-round-1 erratum E18: the same value the row and the event above carry, so the
+      // memory this change is remembered as says `system` when a delivery asked for it and `human`
+      // when a person did. One parameter, three places, one answer.
+      origin,
     })
     if (draft !== null) {
       const written = await recordMemory(draft, principal)

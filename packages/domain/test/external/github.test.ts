@@ -5,7 +5,12 @@ import {
   githubDeliverySchema,
   normaliseGitHubDelivery,
 } from '../../src/external/github.js'
-import { EXTERNAL_TEXT_MAX_CHARS, EXTERNAL_TITLE_MAX_CHARS } from '../../src/external/fence.js'
+import {
+  EXTERNAL_ACTION_MAX_CHARS,
+  EXTERNAL_EVENT_NAME_MAX_CHARS,
+  EXTERNAL_TEXT_MAX_CHARS,
+  EXTERNAL_TITLE_MAX_CHARS,
+} from '../../src/external/fence.js'
 
 const REPO = { full_name: 'acme/checkout', id: 7, private: false, owner: { login: 'acme' } }
 
@@ -266,6 +271,58 @@ describe('normaliseGitHubDelivery (R4, R8, erratum E8)', () => {
     })
     if (!result.ok) throw new Error(result.error)
     expect(result.value.payload.body).toBe('')
+    expect(result.value.payload.truncated).toBe(false)
+  })
+})
+
+describe('the two LABELS are capped and sanitised too (fix-round-1 erratum E19)', () => {
+  const normalised = (eventName: string, raw: unknown): ReturnType<typeof normaliseGitHubDelivery> =>
+    normaliseGitHubDelivery(eventName, raw)
+
+  it('caps an event name a sender chose, instead of copying a header into a column', () => {
+    const result = normalised('z'.repeat(5000), { repository: REPO })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.error)
+    expect([...result.value.payload.eventName]).toHaveLength(EXTERNAL_EVENT_NAME_MAX_CHARS)
+    expect(result.value.payload.truncated).toBe(true)
+  })
+
+  it('caps an action a body carried, for the same reason', () => {
+    const result = normalised('issues', { action: 'z'.repeat(5000), repository: REPO })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.error)
+    expect([...(result.value.payload.action ?? '')]).toHaveLength(EXTERNAL_ACTION_MAX_CHARS)
+    expect(result.value.payload.truncated).toBe(true)
+  })
+
+  it('SANITISES both -- an action was the one place unsanitised external text reached a column', () => {
+    // A bidi override, a zero-width and a marker, in the two fields that used to be copied verbatim.
+    const result = normalised('iss\u202Eues', { action: 'op\u200Bened<slave-ask>', repository: REPO })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.error)
+    expect(result.value.payload.eventName).toBe('issues')
+    expect(result.value.payload.action).not.toContain('\u200B')
+    expect(result.value.payload.action).not.toContain('<slave-ask>')
+    expect(result.value.payload.truncated).toBe(true)
+  })
+
+  it('classifies on the RAW action, so a padded one cannot masquerade as a known one', () => {
+    // Capping BEFORE the comparison would turn a 5000-character string beginning `opened` into
+    // `opened…` -- still not `opened`, but the rule is stated rather than left to luck.
+    const padded = normalised('issues', { action: `opened${'z'.repeat(5000)}`, repository: REPO })
+    if (!padded.ok) throw new Error(padded.error)
+    expect(padded.value.kind).toBe('custom')
+    expect(padded.value.recognised).toBe(false)
+    const real = normalised('issues', { action: 'opened', repository: REPO, issue: { number: 1 } })
+    if (!real.ok) throw new Error(real.error)
+    expect(real.value.kind).toBe('issue_opened')
+  })
+
+  it('leaves an ordinary delivery untouched, and untruncated', () => {
+    const result = normalised('issues', ISSUE_OPENED)
+    if (!result.ok) throw new Error(result.error)
+    expect(result.value.payload.eventName).toBe('issues')
+    expect(result.value.payload.action).toBe('opened')
     expect(result.value.payload.truncated).toBe(false)
   })
 })
