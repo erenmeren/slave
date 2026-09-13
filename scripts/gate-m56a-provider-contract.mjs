@@ -59,6 +59,7 @@
 // real-binary mode at all.
 
 import { execFileSync, spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, isAbsolute, join } from 'node:path'
@@ -134,6 +135,17 @@ const FAKE_CURSOR = join(repoRoot, 'scripts/gate-fakes/fake-cursor-agent.sh')
 // ruling a reviewer sees broken in the same commit that breaks it.
 const PAUSE_ADR = 'docs/decisions/0001-pause-semantics.md'
 const PAUSE_ADR_BYTES = 38_862
+
+// The hook plane, by name (spec §3 stage 12). Every one of these five is byte-identical to the tree
+// this milestone forked from -- `main` at `cff28066` -- and their sha256 digests are checked in at
+// `scripts/fixtures/m56a-goldens/hook-plane-sha256.json`, which is what stage 12 compares against.
+const HOOK_PLANE_SCRIPTS = [
+  'scripts/pause-gate.sh',
+  'scripts/cursor-shell-gate.sh',
+  'scripts/tool-result-tap.sh',
+  'scripts/lib/pause-flag.sh',
+  'scripts/lib/permissions.sh',
+]
 
 // The fixed inputs `scripts/fixtures/m56a-goldens/permissions-*.json` were captured with, so the
 // twelve comparisons are total rather than field-wise (spec §3 stage 2).
@@ -256,6 +268,22 @@ function isSubsequence(a, b) {
   let index = 0
   for (const item of b) if (index < a.length && a[index] === item) index += 1
   return index === a.length
+}
+
+/**
+ * A golden argv with one contiguous run of tokens taken out of it, or `null` when the run is not
+ * there (final review, Important 1).
+ *
+ * `null` rather than "the list unchanged": a variable pair the argv does not carry would remove
+ * nothing and leave the caller's comparison passing for a reason nobody intended. An empty run is
+ * a legitimate answer -- Cursor's plain argv has no variable half at all -- and is the one case
+ * that returns a copy.
+ */
+function withoutRun(list, run) {
+  if (run.length === 0) return [...list]
+  const at = list.findIndex((_, index) => run.every((token, offset) => list[index + offset] === token))
+  if (at === -1) return null
+  return [...list.slice(0, at), ...list.slice(at + run.length)]
 }
 
 /** GitHub's own heading anchor: lower-case, drop everything but letters, digits, spaces and
@@ -587,6 +615,15 @@ try {
   // dispatched on a literal would be the first hit its own grep reported, and answering that with
   // an allow-list entry for itself is exactly the widening that grep exists to make visible.
   const GOLDEN_ARGV_OF = { claude_code: argv.claude, cursor: argv.cursorPlain }
+  // WHAT EACH ARGV CARRIES BEYOND THE CONSTANT HALF, which is the whole of the other direction
+  // (final review, Important 1). A subsequence check alone is ONE-DIRECTIONAL: it catches a manifest
+  // flag the argv does not have and never an argv flag the manifest forgot, so `claudeFlags` could
+  // gain a flag tomorrow and `headlessFlags` would stay silently incomplete with this stage, and
+  // `manifest.test.ts`, both green -- and `headlessFlags` has no production consumer that would
+  // notice, because `claudeFlags`/`cursorFlags` are still the source. The manifest excludes exactly
+  // one thing per provider, the variable pair, so removing THAT must leave `headlessFlags` and
+  // nothing else. Cursor's plain argv is the constant half entire, hence the empty run.
+  const VARIABLE_ARGV_OF = { claude_code: ['--settings', argv.claudeSettingsPath], cursor: [] }
   for (const kind of PROVIDER_KINDS) {
     const { headlessFlags, neverPass } = manifestFor(kind).invocation
     const real = GOLDEN_ARGV_OF[kind]
@@ -595,6 +632,19 @@ try {
     if (!isSubsequence(headlessFlags, real)) {
       await fail(`stage 3: ${kind}'s headlessFlags are not an in-order subsequence of its argv`)
     }
+    const variable = VARIABLE_ARGV_OF[kind]
+    const constantHalf = withoutRun(real, variable)
+    if (constantHalf === null) {
+      await fail(
+        `stage 3: ${kind}'s golden argv does not carry the variable pair ${JSON.stringify(variable)}, ` +
+          `so the other direction cannot be checked: ${JSON.stringify(real)}`,
+      )
+    }
+    await assertEqual(
+      constantHalf,
+      [...headlessFlags],
+      `${kind}'s argv minus ${JSON.stringify(variable)} IS its headlessFlags, element for element`,
+    )
     console.log(`  ${kind}: neverPass ${JSON.stringify(neverPass)}`)
     for (const flag of neverPass) {
       for (const one of everyArgv) {
@@ -605,7 +655,10 @@ try {
 
   await assertThrows(() => claudeFlags({ settingsPath: 'settings.json' }), /absolute/, 'a relative --settings is refused')
   await assertThrows(() => cursorFlags({ resume: { sessionId: '  ' } }), /non-empty/, 'a blank --resume id is refused')
-  console.log('stage 3 complete: five argv shapes element for element, every never-pass flag absent, both refusals intact')
+  console.log(
+    'stage 3 complete: five argv shapes element for element, both headlessFlags checked in BOTH directions, every ' +
+      'never-pass flag absent, both refusals intact',
+  )
 
   // ================= Stage 4: capabilitiesOf, from two directions =================================
   console.log('\n=== stage 4: capabilitiesOf equals the golden AND equals the projection')
@@ -1209,17 +1262,28 @@ try {
     'CHILD_ENV_ALLOW, the same twelve names in the same order',
   )
 
-  for (const script of [
-    'scripts/pause-gate.sh',
-    'scripts/cursor-shell-gate.sh',
-    'scripts/tool-result-tap.sh',
-    'scripts/lib/pause-flag.sh',
-    'scripts/lib/permissions.sh',
-  ]) {
+  // AGAINST A GOLDEN, NEVER AGAINST `HEAD` (final review, Minor 4). `git show HEAD:<script>` compares
+  // this tree to its own last commit, so it only ever catches an UNCOMMITTED edit: a hook-plane
+  // script edited AND COMMITTED inside this milestone would pass it, which is exactly the change the
+  // stage exists to refuse. The golden holds the digests these five files carry on the tree M56a
+  // forked from, so what the stage asserts is what the milestone claimed -- the hook plane did not
+  // move AT ALL -- rather than "nobody has edited it since the last commit".
+  const hookPlaneGolden = readGolden('hook-plane-sha256.json')
+  await assertEqual(
+    Object.keys(hookPlaneGolden).sort(),
+    [...HOOK_PLANE_SCRIPTS].sort(),
+    'the golden pins every hook-plane script and no others',
+  )
+  for (const script of HOOK_PLANE_SCRIPTS) {
     const onDisk = readFileSync(join(repoRoot, script))
-    const committed = execFileSync('git', ['show', `HEAD:${script}`], { cwd: repoRoot, maxBuffer: 8 * 1024 * 1024 })
-    console.log(`  ${script}: ${onDisk.length} bytes on disk, ${committed.length} at HEAD`)
-    if (Buffer.compare(onDisk, committed) !== 0) await fail(`stage 12: ${script} differs from HEAD -- no hook-plane script may move in this milestone`)
+    const digest = createHash('sha256').update(onDisk).digest('hex')
+    console.log(`  ${script}: ${onDisk.length} bytes, sha256 ${digest} (golden ${hookPlaneGolden[script]})`)
+    if (digest !== hookPlaneGolden[script]) {
+      await fail(
+        `stage 12: ${script} is not the file this milestone forked from (sha256 ${digest}, golden ` +
+          `${hookPlaneGolden[script]}) -- no hook-plane script may move in this milestone`,
+      )
+    }
   }
 
   const statusAfter = execFileSync('git', ['status', '--porcelain'], { cwd: repoRoot, encoding: 'utf8' })

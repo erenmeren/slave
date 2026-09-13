@@ -122,7 +122,8 @@ export const CLAUDE_CODE_MANIFEST: ProviderCapabilityManifest = {
     cwd: 'worktree',
     envAllowlist: 'CHILD_ENV_ALLOW',
   },
-  // "The CLI lists nothing" -- there is no `claude models` (`packages/providers/src/models.ts:56-61`).
+  // "The CLI lists nothing" -- there is no `claude models`, which is why `listClaudeCodeModels`
+  // (`packages/providers/src/models.ts`) hands back this table instead of running one.
   modelDiscovery: { mode: 'configured', options: CLAUDE_CODE_MODELS },
   resume: { mode: 'session_id', flag: '--resume', neverPass: ['--fork-session'] },
   pause: {
@@ -132,9 +133,9 @@ export const CLAUDE_CODE_MANIFEST: ProviderCapabilityManifest = {
   events: {
     transport: 'stream_json',
     // Every semantic kind there is: ten from `parseStreamLine` and `usage`, which the adapter
-    // pushes from `parseStreamUsage` (`claude/adapter.ts:597`) rather than the line parser --
-    // which is why the gate's replay can only prove a subset and asserts the complement instead
-    // (plan erratum E15).
+    // pushes from `parseStreamUsage` (`claude/adapter.ts`) rather than the line parser -- which is
+    // why the gate's replay can only prove a subset and asserts the complement instead (plan
+    // erratum E15).
     produces: [
       'session_started',
       'tool_call',

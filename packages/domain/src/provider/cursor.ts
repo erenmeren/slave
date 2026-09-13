@@ -39,7 +39,8 @@ export const CURSOR_MANIFEST: ProviderCapabilityManifest = {
     envAllowlist: 'CHILD_ENV_ALLOW',
   },
   // The only provider whose model list is read from the live account rather than hand-pinned
-  // (`packages/providers/src/models.ts:80-90`, `<binary> models`, 10 s, never throws).
+  // (`listCursorModels` in `packages/providers/src/models.ts`: `<binary> models`, 10 s, never
+  // throws).
   modelDiscovery: { mode: 'listed', argv: ['models'] },
   resume: { mode: 'session_id', flag: '--resume', neverPass: ['--continue'] },
   pause: {

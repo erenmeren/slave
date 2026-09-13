@@ -63,8 +63,8 @@ export type ProviderModelDiscovery =
  * `neverPass` is the RESUME-specific list and overlaps the invocation's only where a flag is wrong
  * everywhere: Claude's `--fork-session` is both (it mints a new session id, ADR 0001 §3), Cursor's
  * `--continue` is only here (it picks "the previous session" by the CLI's own reckoning rather than
- * by id, `packages/providers/src/cursor/adapter.ts:263-265`) and is a perfectly ordinary flag for
- * anything that is not a resume.
+ * by id, `CursorAdapter.resume` in `packages/providers/src/cursor/adapter.ts`) and is a perfectly
+ * ordinary flag for anything that is not a resume.
  */
 export interface ProviderResume {
   readonly mode: 'session_id' | 'none'
@@ -84,10 +84,10 @@ export interface ProviderResume {
  *              because the gate refuses calls without suspending the run (Cursor's case, where ADR
  *              lines 320-326 and 332-337 collapse onto the same behaviour).
  *   `'none'`   neither hooks nor resume. DECLARABLE and UNREGISTRABLE: `admitAdapter`
- *              (`packages/providers/src/registry.ts:57-61`) refuses an adapter with neither
- *              capability, and the recap-based continuation the ADR describes at lines 327-333 has
- *              never been built. The manifest may spell it; the registry will refuse it; the spec's
- *              §7 carries the gap rather than pretending the bottom rung works.
+ *              (`packages/providers/src/registry.ts`) refuses an adapter with neither capability,
+ *              and the recap-based continuation the ADR describes at lines 327-333 has never been
+ *              built. The manifest may spell it; the registry will refuse it; the spec's §7 carries
+ *              the gap rather than pretending the bottom rung works.
  *
  * `adr` is the anchor, and the ADR gains NO new text for it: the ADR is the rationale, this row is
  * the claim.
@@ -123,7 +123,8 @@ export type ProviderStructuredOutput = 'native' | 'prompted' | 'none'
  *   `enforce`   is HOW MUCH of the matrix that mechanism can be trusted with -- `'all-tools'` when
  *               an unmatched name may be denied, `'known-tools'` when it may not, because the
  *               payload's casing cannot be matched against the vocabulary (Cursor's measured
- *               limitation, `packages/domain/src/permission/kinds.ts:235-247`).
+ *               limitation, `ENFORCE_BY_PROVIDER`'s own docstring in
+ *               `packages/domain/src/permission/kinds.ts`).
  *
  * `mechanism: 'none'` is what says the four non-brokered permission kinds are not answered for a
  * vendor: `read_secret` and `deploy_release` are answered for ANY CLI-shaped provider by M52's
@@ -230,8 +231,11 @@ export const providerManifestSchema = z
     invocation: z
       .object({
         binary: nonEmpty,
-        binEnvVar: z.string().regex(/^SLAVEOFAI_[A-Z]+_BIN$/),
-        argsEnvVar: z.string().regex(/^SLAVEOFAI_[A-Z]+_ARGS$/),
+        // `[A-Z][A-Z_]*` and not `[A-Z]+`: a vendor whose name is two words spells its stem with
+        // an underscore (`SLAVEOFAI_CLAUDE_CODE_BIN`), and a schema that refused one would refuse a
+        // provider before anybody had a reason to think about the variable's name.
+        binEnvVar: z.string().regex(/^SLAVEOFAI_[A-Z][A-Z_]*_BIN$/),
+        argsEnvVar: z.string().regex(/^SLAVEOFAI_[A-Z][A-Z_]*_ARGS$/),
         headlessFlags: z.array(nonEmpty).min(1),
         promptDelivery: z.enum(['flag', 'positional']),
         neverPass: z.array(nonEmpty),
@@ -307,11 +311,13 @@ export const PROVIDER_MANIFESTS: Record<ProviderKind, ProviderCapabilityManifest
 /**
  * THE reader. A kind in, its measured row out.
  *
- * The `undefined` branch is not dead code: `noUncheckedIndexedAccess` types the lookup as
- * possibly-absent, and a `ProviderKind` can reach this from an unchecked cast at the two
- * historical-backfill sites (`apps/orchestrator/src/sweep.ts:940`, `resume.ts:73`). A thrown
- * sentence naming the kind is what those get, rather than `undefined` propagating into a manifest
- * read and throwing on a property three frames later.
+ * The `undefined` branch is not dead code, and it is not `noUncheckedIndexedAccess` either: that
+ * flag governs INDEX SIGNATURES, and this is a mapped type over a literal union, so TypeScript
+ * types the lookup as PRESENT and no typed caller can reach the branch. It is here for the untyped
+ * one -- a `ProviderKind` reaches this from an unchecked cast at the two historical-backfill sites
+ * (`apps/orchestrator/src/sweep.ts:940`, `resume.ts:73`). A thrown sentence naming the kind is what
+ * those get, rather than `undefined` propagating into a manifest read and throwing on a property
+ * three frames later.
  */
 export function manifestFor(kind: ProviderKind): ProviderCapabilityManifest {
   const manifest = PROVIDER_MANIFESTS[kind]
@@ -321,8 +327,9 @@ export function manifestFor(kind: ProviderKind): ProviderCapabilityManifest {
 
 /**
  * The tool name a skill invocation arrives under, on the one provider that has skills
- * (`packages/domain/src/permission/kinds.ts:142`, and `apps/orchestrator/src/pump.ts:725` counts
- * them by it).
+ * (`CLAUDE_CODE_TOOLS`'s `run_commands` column in `packages/domain/src/provider/claude-code.ts`,
+ * which is where it moved this milestone, and `pumpRun`'s `tool_call` case in
+ * `apps/orchestrator/src/pump.ts`, which counts them by it).
  */
 export const SKILL_TOOL = 'Skill'
 

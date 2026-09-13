@@ -5,6 +5,7 @@ import { killWithEscalation, recordRunEvidence } from '@slave-of-ai/control'
 import { toExecutionEvent } from '@slave-of-ai/db'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import {
+  SKILL_TOOL,
   estimateCostUsd,
   providerRunsSkills,
   type GuardrailKind,
@@ -737,7 +738,7 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
         // 6/9) -- so writing a count that starts at zero refunds the tool-call budget every time
         // a slave pauses. Task 15's §3.3 ceiling reads this column.
         toolCalls += 1
-        if (event.toolName === 'Skill') {
+        if (event.toolName === SKILL_TOOL) {
           // `summary` is `"Skill <name>"` (`summaryFor` with `CLAUDE_SUMMARY_ARG_KEYS`'s leading
           // `'skill'` key, M14 Task 4) -- the name is everything after the first space. A `Skill`
           // call whose `input.skill` was missing or unreadable summarizes to the bare tool name,

@@ -672,7 +672,7 @@ the plan was**; **E18–E26 while it was executed**.
 
 **E21 (amends §3 stages 5 and 8)** — both greps are code-only (comment lines dropped) and both exclude `dist/`, `test/`, `*.test.*`; the allow-lists admit no comment.
 
-**E22 (amends §3 stages 2, 9 and Task 1's numbers)** — 19 golden files; Claude's governed vocabulary is 38 names; `ENFORCE_BY_PROVIDER` values are strings, so the derived-table proof is value equality against the golden, not identity.
+**E22 (amends §3 stages 2, 9 and Task 1's numbers)** — 21 golden files beside their README, 22 entries in `scripts/fixtures/m56a-goldens/` (`ls scripts/fixtures/m56a-goldens | wc -l`); the twenty-first is `hook-plane-sha256.json`, added by the final review's fix wave so stage 12 pins the five hook-plane scripts to the digests they carry on the tree this milestone forked from rather than to `HEAD`, which only ever catches an uncommitted edit. Claude's governed vocabulary is 38 names; `ENFORCE_BY_PROVIDER` values are strings, so the derived-table proof is value equality against the golden, not identity.
 
 **E23 (amends R1, E3 and R7)** — `brandRunId` is spelled `runId` in the domain; `implements SlaveRuntimeAdapter` needs a local type import beside the re-export; under `noUncheckedIndexedAccess` a `Checkpoint` literal spreads `checkpointRunFiles(kind, handle)` rather than reading `.settings`/`.hook` bare; `buildRegistry` throws when `build(...).kind !== kind`; two readers outside the plan's list (`tick.test.ts`, `model.test.ts`) moved from `id` to `kind`.
 

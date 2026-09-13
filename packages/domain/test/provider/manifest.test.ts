@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { PERMISSION_KINDS } from '../../src/permission/kinds.js'
 import { PROVIDER_KINDS, type ProviderKind } from '../../src/provider/kind.js'
@@ -70,8 +71,10 @@ describe('PROVIDER_MANIFESTS (R3)', () => {
       expect(binary, kind).not.toContain('/')
       // The `SLAVEOFAI_<PROVIDER>_BIN` convention, declared ONCE here instead of being spelled at
       // four sites in three files (R6). The pair always agree on their stem, which is what lets
-      // `buildAdapterRegistry`'s loop read both off the manifest.
-      expect(binEnvVar, kind).toMatch(/^SLAVEOFAI_[A-Z]+_BIN$/)
+      // `buildAdapterRegistry`'s loop read both off the manifest. The stem may hold an underscore,
+      // because a vendor may be two words (`SLAVEOFAI_CLAUDE_CODE_BIN`) -- the same regex the schema
+      // carries, spelled here so the two cannot drift apart silently.
+      expect(binEnvVar, kind).toMatch(/^SLAVEOFAI_[A-Z][A-Z_]*_BIN$/)
       expect(argsEnvVar, kind).toBe(binEnvVar.replace(/_BIN$/, '_ARGS'))
     }
   })
@@ -221,6 +224,59 @@ describe('the Cursor row (R3)', () => {
   it('says in words that its refusal is a BUDGET refusal and not an output-shape one (R8)', () => {
     expect(manifest.structuredOutput).toBe('prompted')
     expect(manifest.differences.join(' ')).toContain('it reports no cost, so a cap cannot be enforced')
+  })
+})
+
+/** The captured argv `scripts/gate-m56a-provider-contract.mjs` stage 3 compares against, read from
+ *  disk exactly as `derived.test.ts` reads its own goldens -- so this file cannot drift from the
+ *  bytes the gate uses. Only the three members this file needs are named. */
+interface GoldenArgv {
+  readonly claudeSettingsPath: string
+  readonly claude: readonly string[]
+  readonly cursorPlain: readonly string[]
+}
+
+const GOLDEN_ARGV = JSON.parse(readFileSync('scripts/fixtures/m56a-goldens/argv.json', 'utf8')) as GoldenArgv
+
+/** The real argv each manifest's `headlessFlags` is the constant half OF. A `Record<ProviderKind,
+ *  …>`, so a third provider is a build error here as well as in `PROVIDER_MANIFESTS`. */
+const GOLDEN_ARGV_OF: Record<ProviderKind, readonly string[]> = {
+  claude_code: GOLDEN_ARGV.claude,
+  cursor: GOLDEN_ARGV.cursorPlain,
+}
+
+/** What each argv carries BEYOND that constant half: Claude's one variable pair, which the manifest
+ *  deliberately excludes, and nothing at all for Cursor, whose plain argv IS the constant half. */
+const VARIABLE_ARGV: Record<ProviderKind, readonly string[]> = {
+  claude_code: ['--settings', GOLDEN_ARGV.claudeSettingsPath],
+  cursor: [],
+}
+
+describe('invocation.headlessFlags against the captured argv (R3, in BOTH directions)', () => {
+  it('is an in-order subsequence of the real argv -- nothing declared that is never passed', () => {
+    for (const kind of PROVIDER_KINDS) {
+      const flags = manifestFor(kind).invocation.headlessFlags
+      let index = 0
+      for (const token of GOLDEN_ARGV_OF[kind]) if (index < flags.length && flags[index] === token) index += 1
+      expect(index, kind).toBe(flags.length)
+    }
+  })
+
+  it('IS the argv minus its variable pair -- nothing passed that the manifest forgot to declare', () => {
+    // The direction a subsequence check cannot see, and the one that matters: `headlessFlags` has no
+    // production consumer -- `claudeFlags`/`cursorFlags` remain the source -- so a flag added to a
+    // builder tomorrow would leave the manifest silently incomplete with every subsequence assertion
+    // still green. Removing exactly what the manifest excludes must leave exactly what it declares.
+    for (const kind of PROVIDER_KINDS) {
+      const argv = [...GOLDEN_ARGV_OF[kind]]
+      const variable = VARIABLE_ARGV[kind]
+      if (variable.length > 0) {
+        const at = argv.findIndex((_, index) => variable.every((token, offset) => argv[index + offset] === token))
+        expect(at, `${kind}: the golden argv carries ${JSON.stringify(variable)}`).toBeGreaterThanOrEqual(0)
+        argv.splice(at, variable.length)
+      }
+      expect(argv, kind).toEqual([...manifestFor(kind).invocation.headlessFlags])
+    }
   })
 })
 

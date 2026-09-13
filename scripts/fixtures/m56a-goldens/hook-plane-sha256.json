@@ -1,0 +1,7 @@
+{
+  "scripts/pause-gate.sh": "27fa362f8949aaaf90dd34b499506fde2472ca3604a8e3de5db256375be6db9e",
+  "scripts/cursor-shell-gate.sh": "b8d3d761d86cc8ea4fcae54e462dc491db0f7d9497725a5307a3a87284e7af88",
+  "scripts/tool-result-tap.sh": "3241c94df099d3c6bd081c5ac22575f891bf21bcffaaee738de904aa83c5e341",
+  "scripts/lib/pause-flag.sh": "a1fb5d6e9e9bc1971da5de6ac71ac897343d74a85b4d4298315c31301d7f9b0c",
+  "scripts/lib/permissions.sh": "8cce5897bbb4c8976433030e899823d9d08a9c0ad9de1d9854ea5a5c9afe88a0"
+}
