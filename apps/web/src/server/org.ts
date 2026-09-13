@@ -1018,9 +1018,13 @@ function catalogRowViewOf(row: WorkforceCatalogRow): CatalogRowView {
  *  past the hundredth from every one of them. `TEMPLATE_PICKER_MAX` is the bound instead --
  *  `CATALOG_ENTRIES_MAX`'s own number -- and it deliberately does not filter on `active` either:
  *  R2 keeps every manual hire open on an inactive row, and a picker that hid them would close the
- *  one path R2 exists to keep open. */
+ *  one path R2 exists to keep open.
+ *
+ *  `facets: false` (final wave, minor 2): a `<select>` draws no filter menu, and this read sits
+ *  BESIDE `listWorkforceCatalogPage`'s on the same page load -- so the three unfiltered facet scans
+ *  were running twice for one render of `/workforce`. */
 export async function listTemplates(): Promise<readonly CatalogRowView[]> {
-  const page = await listWorkforceCatalog({}, { pageSize: TEMPLATE_PICKER_MAX })
+  const page = await listWorkforceCatalog({}, { pageSize: TEMPLATE_PICKER_MAX, facets: false })
   return page.rows.map(catalogRowViewOf)
 }
 
@@ -1077,7 +1081,10 @@ export type TemplateDuplicateRowView = Omit<TemplateDuplicateView, 'detectedAt' 
  *  that shows a dismissal, greyed, with a Restore beside it -- the chip on the row shows only the
  *  undismissed ones, which is why the two reads are different and not one. */
 export async function listTemplateDuplicatesView(templateId: string): Promise<readonly TemplateDuplicateRowView[]> {
-  const rows = await listTemplateDuplicates({ templateId, includeDismissed: true })
+  // `.rows`, because the control read now answers a PAGE (final wave, Important 2). One template's
+  // pairs are far below `TEMPLATE_DUPLICATES_LIMIT` -- a row cannot be in more pairs than the
+  // catalog has rows -- so the drawer needs the list and not the total.
+  const { rows } = await listTemplateDuplicates({ templateId, includeDismissed: true })
   return rows.map((row) => ({
     ...row,
     detectedAt: row.detectedAt.toISOString(),

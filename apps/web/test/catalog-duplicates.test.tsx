@@ -273,6 +273,24 @@ describe('the two new filter controls (M55 R3, R6)', () => {
 
     expect(screen.getByTestId('catalog-active-chip-active').getAttribute('aria-pressed')).toBe('true')
   })
+
+  /**
+   * Final wave, minor 7. `data-active` meant two things on one page -- a template's own boolean on
+   * the row's toggle, and which chip a filter is -- so `[data-active="true"]` matched both and a
+   * gate written against either would have been measuring the other half the time. The chip carries
+   * the WORD on `data-activation` now, the way its `data-source` sibling does.
+   */
+  it('leaves `data-active` to the ROW: the filter chip carries its word on `data-activation`', () => {
+    render(<WorkforceCatalog initial={view([row({ active: true })])} />)
+
+    const chip = screen.getByTestId('catalog-active-chip-active')
+    expect(chip.getAttribute('data-activation')).toBe('active')
+    expect(chip.hasAttribute('data-active')).toBe(false)
+
+    // One page, one meaning: the only `data-active` on it is the row's own state.
+    const bothMeanings = document.querySelectorAll('[data-active]')
+    expect([...bothMeanings].map((node) => node.getAttribute('data-testid'))).toEqual(['catalog-activate-t1'])
+  })
 })
 
 /**
@@ -397,6 +415,23 @@ describe('the profile drawer Duplicates group (M55 R6)', () => {
     const line = screen.getByTestId('profile-duplicate-p1')
     expect(line.textContent).toContain('Backend Architect')
     expect(within(line).queryByText('Core Builder')).toBeNull()
+  })
+
+  /**
+   * Final wave, minor 12. The pair arrives as JSON, so the class and the basis on it are whatever
+   * the SERVER knows -- and a browser still holding this bundle after a deploy that added a fourth
+   * class indexed the label table with it and rendered `undefined` beside a template's name.
+   */
+  it('says a word for a class this bundle does not know, and never prints `undefined`', async () => {
+    await openDrawer([{ ...pair(), class: 'transposed', basis: 'embedding' }])
+
+    const line = screen.getByTestId('profile-duplicate-p1')
+    expect(line.textContent).not.toContain('undefined')
+    expect(line.textContent).toContain('Backend Architect')
+    // The raw members stay where they always were -- on the attributes, never in the sentence.
+    expect(line.getAttribute('data-class')).toBe('transposed')
+    expect(line.textContent).not.toContain('transposed')
+    expect(line.textContent).not.toContain('embedding')
   })
 
   it('dismisses a pair through the pair own id, and never deletes anything', async () => {

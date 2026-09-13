@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { WorkforceCatalogFilters } from '@slave-of-ai/control'
-import { DUPLICATE_BASIS_LABEL, DUPLICATE_CLASS_LABEL, type CapabilityRecord } from '@slave-of-ai/domain'
+import { duplicateBasisLabel, duplicateClassLabel, type CapabilityRecord } from '@slave-of-ai/domain'
 import type { WorkforceCatalogView } from '../../server/org'
 import { catalogFilterParams } from '../../lib/catalogFilters'
 import { plural } from '../../lib/plural'
@@ -220,19 +220,21 @@ export function WorkforceCatalog({
                          * NAME as the second; the raw class, basis and score one attribute away; and
                          * the `title` carrying the sentence R9 requires, because the consequence of
                          * an undetected duplicate is a split record and the person looking at this
-                         * chip is the person who can act on it. */
+                         * chip is the person who can act on it. Both labels go through the domain's
+                         * guards (final wave, minor 12): the row came off the wire, and a class this
+                         * bundle does not know would otherwise read `undefined`. */
                         <span
                           data-testid={`catalog-duplicate-${row.id}`}
                           data-class={row.duplicate.class}
                           data-basis={row.duplicate.basis}
                           data-score={String(row.duplicate.score)}
                           title={
-                            `${DUPLICATE_BASIS_LABEL[row.duplicate.basis]} · ${row.duplicate.score.toFixed(3)} — ` +
+                            `${duplicateBasisLabel(row.duplicate.basis)} · ${row.duplicate.score.toFixed(3)} — ` +
                             'evidence is recorded per profile, so two rows split their own record.'
                           }
                           className="inline-flex items-center rounded-chip border border-line bg-bg-2 px-2 py-0.5 text-xs text-text-2"
                         >
-                          {`${DUPLICATE_CLASS_LABEL[row.duplicate.class]} ${row.duplicate.otherName}`}
+                          {`${duplicateClassLabel(row.duplicate.class)} ${row.duplicate.otherName}`}
                           {row.duplicateCount > 1 && ` +${String(row.duplicateCount - 1)}`}
                         </span>
                       )}

@@ -39,7 +39,18 @@ UPDATE "SlaveTemplate" SET "active" = true;
 -- by its name and its blurb the minute the migration lands; `template duplicates --recompute`
 -- writes the real value over it, and is also what fills "contentSha256", "bodyBands" and
 -- "recommendedSkills", none of which can be derived in SQL at all.
-UPDATE "SlaveTemplate" SET "searchText" = lower(coalesce("name", '') || ' ' || coalesce("description", ''));
+--
+-- The FOLD is `normalisePersona`'s own three passes (final wave, minor 10) -- NFC, lower case,
+-- every run of whitespace collapsed to one space, then trimmed -- because the QUERY side folds a
+-- search box's text with exactly that function. A floor folded any other way is a row that cannot
+-- be found by its own name: `lower()` alone leaves the double space in `Gate  Release Steward`
+-- standing, and `q` typed with one space would not match it until a recompute. What still differs
+-- is which case table each side uses -- `lower()` follows the database collation and `toLowerCase`
+-- follows Unicode -- and that difference too is written over by the first `--recompute`.
+UPDATE "SlaveTemplate"
+   SET "searchText" = btrim(
+         regexp_replace(lower(normalize(coalesce("name", '') || ' ' || coalesce("description", ''), NFC)), '\s+', ' ', 'g')
+       );
 
 CREATE TABLE "TemplateDuplicate" (
   "id"          TEXT NOT NULL,

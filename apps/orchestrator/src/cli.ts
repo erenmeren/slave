@@ -394,7 +394,9 @@ const USAGE = `usage: orchestrator <command> [options]
                                        import that was interrupted before it paired its rows; it may
                                        retire a pair that no longer looks alike. --dismiss says "I
                                        know" about one pair and keeps the row; --restore takes that
-                                       back. Nothing here ever deletes a template: that is
+                                       back. The list says \`N of M pair(s)\` and stops at two
+                                       hundred: narrow it with --template or --class to reach the
+                                       rest. Nothing here ever deletes a template: that is
                                        \`delete-template\`, and it asks twice.
   runbooks sync                        reconcile the runbook table against the checked-in list:
                                        adds what is missing, brings a seed row back to what the
@@ -2328,16 +2330,20 @@ export async function main(argv: readonly string[]): Promise<number> {
           return 0
         }
         const klass = oneOfFlag<DuplicateClass>(flags, 'class', [...DUPLICATE_CLASSES])
-        const rows = await listTemplateDuplicates({
+        const page = await listTemplateDuplicates({
           ...(flagText(flags, 'template') === undefined ? {} : { templateId: requireFlag(flags, 'template') }),
           ...(klass === undefined ? {} : { class: klass }),
           ...('dismissed' in flags ? { includeDismissed: true } : {}),
         })
-        if (rows.length === 0) {
+        if (page.rows.length === 0) {
           process.stdout.write('no duplicate pair has been detected\n')
           return 0
         }
-        for (const row of rows) {
+        // The COUNT first, `template list`'s own line (final wave, Important 2): the read stops at
+        // `TEMPLATE_DUPLICATES_LIMIT` and a list printed without its total looks complete when it is
+        // not -- narrow it with --template or --class to see the rest.
+        process.stdout.write(`${String(page.rows.length)} of ${String(page.total)} pair(s)\n`)
+        for (const row of page.rows) {
           // Labels, never keys: the class and the basis both come from the domain's own tables, and
           // the raw members appear nowhere in this line. The SCORE is printed to three decimals,
           // which is exactly what was stored.

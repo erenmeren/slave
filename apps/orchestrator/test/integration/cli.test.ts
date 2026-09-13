@@ -3694,6 +3694,37 @@ describe('the orchestrator CLI', () => {
       expect(result.stdout).not.toMatch(/\bcontent_hash\b/u)
     })
 
+    /**
+     * Final wave, Important 2. The read stops at `TEMPLATE_DUPLICATES_LIMIT` (two hundred) and this
+     * verb printed a bare list, so an operator past the cap read something that looked complete and
+     * was not. `template list` -- added in the same commit -- says `N of M` for exactly that reason.
+     * The sentence is pinned on a catalog a test can seed; the half the cap makes load-bearing (the
+     * total counts the filter's pairs, not the page's) is pinned in `duplicates.test.ts`.
+     */
+    it('`template duplicates` says how many pairs there ARE, the way `template list` does', async (): Promise<void> => {
+      const a = await template('M55 Alpha', false)
+      const b = await template('M55 Beta', false)
+      const c = await template('M55 Gamma', false)
+      const pairOf = async (left: string, right: string): Promise<void> => {
+        const [low, high] = left < right ? [left, right] : [right, left]
+        await prisma.templateDuplicate.create({
+          data: { aId: low, bId: high, class: 'overlapping', basis: 'capability_keys', score: 0.8 },
+        })
+      }
+      await pairOf(a, b)
+      await pairOf(a, c)
+
+      const all = await runCli(['template', 'duplicates'])
+      expect(all.code).toBe(0)
+      expect(all.stdout).toContain('2 of 2 pair(s)')
+
+      // And the count follows the FILTER, not the table: one template is in one of the two pairs.
+      const scoped = await runCli(['template', 'duplicates', '--template', b])
+      expect(scoped.stdout).toContain('1 of 1 pair(s)')
+      expect(scoped.stdout).toContain('M55 Beta')
+      expect(scoped.stdout).not.toContain('M55 Gamma')
+    })
+
     it('`template duplicates --dismiss` stamps it, and `--restore` takes it back', async (): Promise<void> => {
       const a = await template('M55 Alpha', false)
       const b = await template('M55 Beta', false)

@@ -29,7 +29,9 @@ export const CATALOG_ACTIVATIONS = ['active', 'inactive'] as const
 export type CatalogActivation = (typeof CATALOG_ACTIVATIONS)[number]
 
 /** ONE vocabulary (`CatalogFilterBar`'s own rule): the chip says exactly the word the catalog ROW
- *  says for the same fact. `data-active` still carries the boolean for a gate to read. */
+ *  says for the same fact. The chip's `data-activation` carries the WORD for a gate to read -- not
+ *  `data-active`, which is the ROW's boolean and was two facts under one name (final wave,
+ *  minor 7). */
 export const ACTIVATION_LABEL: Record<CatalogActivation, string> = {
   active: 'active',
   inactive: 'inactive',

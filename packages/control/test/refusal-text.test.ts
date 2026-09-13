@@ -102,3 +102,24 @@ describe('refusalText for invalid_model (M53 R9)', () => {
     expect(sentence).not.toMatch(/[\^$\\[\]*+]/)
   })
 })
+
+/**
+ * M55 R5/R8, plan erratum E5. The two kinds this milestone added, asserted VERBATIM: the
+ * `license_unknown` sentence is the only place an operator is told that `--allow-unknown-license`
+ * exists -- it is what a `import-catalog --dir` on a plain directory prints and then stops -- and
+ * `template_duplicate_not_found` names the PAIR rather than the template, which is the distinction
+ * the kind was added to make.
+ */
+describe('refusalText for the catalog kinds (M55 R5, R8)', () => {
+  it('says how to import a checkout with no LICENSE, in the sentence that refuses it', () => {
+    expect(refusalText({ kind: 'license_unknown', directory: '/srv/personas' })).toBe(
+      '/srv/personas has no LICENSE file at its root, so nothing can record where its personas came from: ' +
+        'pass --allow-unknown-license to import it anyway',
+    )
+  })
+
+  it('names the PAIR and not the template, because a missing pair is not a missing row', () => {
+    expect(refusalText({ kind: 'template_duplicate_not_found', pairId: 'p1' })).toBe('no duplicate pair with id p1')
+    expect(refusalText({ kind: 'template_not_found', templateId: 'p1' })).toBe('no template with id p1')
+  })
+})

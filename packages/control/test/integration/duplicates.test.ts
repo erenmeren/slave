@@ -549,9 +549,10 @@ describe('listTemplateDuplicates (M55 R6, R10)', () => {
     const b = await write({ name: 'Beta', spec: specOf({ body: 'same body words here now' }) })
     await writeTemplateDuplicates([a, b])
 
-    const rows = await listTemplateDuplicates()
+    const { rows, total } = await listTemplateDuplicates()
 
     expect(rows).toHaveLength(1)
+    expect(total).toBe(1)
     expect([rows[0]?.aName, rows[0]?.bName].sort()).toEqual(['Alpha', 'Beta'])
     expect(rows[0]?.class).toBe('exact')
     expect(rows[0]?.basis).toBe('content_hash')
@@ -563,8 +564,8 @@ describe('listTemplateDuplicates (M55 R6, R10)', () => {
     await write({ name: 'Gamma', spec: specOf({ body: words('zeta', 60) }) })
     await writeTemplateDuplicates([a, b])
 
-    expect(await listTemplateDuplicates({ templateId: a })).toHaveLength(1)
-    expect(await listTemplateDuplicates({ templateId: b })).toHaveLength(1)
+    expect((await listTemplateDuplicates({ templateId: a })).rows).toHaveLength(1)
+    expect((await listTemplateDuplicates({ templateId: b })).rows).toHaveLength(1)
   })
 
   it('hides a dismissed pair by default and shows it when asked, because it is greyed rather than gone', async (): Promise<void> => {
@@ -574,8 +575,9 @@ describe('listTemplateDuplicates (M55 R6, R10)', () => {
     const pairId = (await allPairs())[0]?.id as string
     await setTemplateDuplicateDismissal(pairId, true, 'operator')
 
-    expect(await listTemplateDuplicates()).toEqual([])
-    expect(await listTemplateDuplicates({ includeDismissed: true })).toHaveLength(1)
+    expect((await listTemplateDuplicates()).rows).toEqual([])
+    expect((await listTemplateDuplicates()).total).toBe(0)
+    expect((await listTemplateDuplicates({ includeDismissed: true })).rows).toHaveLength(1)
   })
 
   it('filters by class', async (): Promise<void> => {
@@ -583,8 +585,29 @@ describe('listTemplateDuplicates (M55 R6, R10)', () => {
     const b = await write({ name: 'Beta', spec: specOf({ body: 'same body words here now' }) })
     await writeTemplateDuplicates([a, b])
 
-    expect(await listTemplateDuplicates({ class: 'exact' })).toHaveLength(1)
-    expect(await listTemplateDuplicates({ class: 'near' })).toEqual([])
+    expect((await listTemplateDuplicates({ class: 'exact' })).rows).toHaveLength(1)
+    expect((await listTemplateDuplicates({ class: 'near' })).rows).toEqual([])
+  })
+
+  /**
+   * Final wave, Important 2. `TEMPLATE_DUPLICATES_LIMIT` is two hundred and a catalog that reaches
+   * it is a catalog no test may seed, so the cap is lowered through the read's OWN seam --
+   * `options.limit`, which the CLI does not pass and which clamps the same way the default does.
+   * What is pinned is the property the cap makes load-bearing: `total` counts the pairs the FILTER
+   * matches, not the pairs this page happens to be holding, so `N of M` can be honest.
+   */
+  it('counts every pair the filter matches, even when the page stops short of them', async (): Promise<void> => {
+    const a = await write({ name: 'Alpha', spec: specOf({ body: 'same body words here now' }) })
+    const b = await write({ name: 'Beta', spec: specOf({ body: 'same body words here now' }) })
+    const c = await write({ name: 'Gamma', spec: specOf({ body: 'same body words here now' }) })
+    await writeTemplateDuplicates([a, b, c])
+
+    const page = await listTemplateDuplicates({ limit: 1 })
+
+    expect(page.rows).toHaveLength(1)
+    expect(page.total).toBe(3)
+    // And the total answers the SAME where: a class nothing matches counts nothing.
+    expect((await listTemplateDuplicates({ class: 'near', limit: 1 })).total).toBe(0)
   })
 
   it('DELETING a template takes its pairs with it, and nothing else', async (): Promise<void> => {

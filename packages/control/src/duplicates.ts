@@ -145,10 +145,14 @@ function candidatePairs(rows: readonly ScanRow[], focus: ReadonlySet<string> | n
       for (const other of source) {
         if (taken.size >= DUPLICATE_CANDIDATES_MAX) break
         if (other === row.id || taken.has(other)) continue
-        taken.add(other)
         // Skipped when neither end is in focus: an import pairs the rows it touched against the
-        // whole catalog, and never re-pairs two rows it did not touch.
+        // whole catalog, and never re-pairs two rows it did not touch. BEFORE `taken.add` (final
+        // wave, minor 4): a partner this pass discards is not a partner this row TOOK, and charging
+        // it to the budget let a focused import spend a row's two hundred slots on pairs it then
+        // threw away -- so the two-hundred-and-first partner, the one actually in focus, was never
+        // reached.
         if (focus !== null && !focus.has(row.id) && !focus.has(other)) continue
+        taken.add(other)
         const [aId, bId] = orderedPair(row.id, other)
         pairs.set(`${aId}|${bId}`, { aId, bId })
       }
@@ -468,6 +472,14 @@ export interface TemplateDuplicateView {
   readonly bName: string
 }
 
+/** What one read of the pair table hands back: the page, and how many pairs the same filter matches
+ *  (final wave, Important 2). `listWorkforceCatalog`'s own shape, for its own reason -- a list cut
+ *  at {@link TEMPLATE_DUPLICATES_LIMIT} and printed without its total looks complete and is not. */
+export interface TemplateDuplicatePage {
+  readonly rows: readonly TemplateDuplicateView[]
+  readonly total: number
+}
+
 /**
  * The pairs, strongest first (M55 R6/R10).
  *
@@ -478,6 +490,11 @@ export interface TemplateDuplicateView {
  * Dismissed pairs are OUT by default and available on request: a dismissal is a person saying "I
  * know", not a person saying "delete this", and the row stays in the table forever with a Restore
  * beside it.
+ *
+ * `total` comes from a `count` over the SAME `where` (final wave, Important 2): the rows stop at
+ * {@link TEMPLATE_DUPLICATES_LIMIT} and an operator with more pairs than that was reading a list
+ * that looked like the whole answer. `template list` says `N of M` for exactly this reason, and
+ * this is its sibling verb.
  */
 export async function listTemplateDuplicates(
   options: {
@@ -486,43 +503,49 @@ export async function listTemplateDuplicates(
     readonly includeDismissed?: boolean
     readonly limit?: number
   } = {},
-): Promise<readonly TemplateDuplicateView[]> {
+): Promise<TemplateDuplicatePage> {
   const where: Prisma.TemplateDuplicateWhereInput = {
     ...(options.includeDismissed === true ? {} : { dismissedAt: null }),
     ...(options.class === undefined ? {} : { class: options.class }),
     ...(options.templateId === undefined ? {} : { OR: [{ aId: options.templateId }, { bId: options.templateId }] }),
   }
-  const rows = await prisma.templateDuplicate.findMany({
-    where,
-    orderBy: [{ class: 'asc' }, { score: 'desc' }, { id: 'asc' }],
-    take: Math.max(0, Math.min(options.limit ?? TEMPLATE_DUPLICATES_LIMIT, TEMPLATE_DUPLICATES_LIMIT)),
-    select: {
-      id: true,
-      class: true,
-      basis: true,
-      score: true,
-      detectedAt: true,
-      dismissedAt: true,
-      dismissedBy: true,
-      aId: true,
-      bId: true,
-      a: { select: { name: true } },
-      b: { select: { name: true } },
-    },
-  })
-  return rows.map((row) => ({
-    id: row.id,
-    class: row.class,
-    basis: row.basis,
-    score: row.score,
-    detectedAt: row.detectedAt,
-    dismissedAt: row.dismissedAt,
-    dismissedBy: row.dismissedBy,
-    aId: row.aId,
-    aName: row.a.name,
-    bId: row.bId,
-    bName: row.b.name,
-  }))
+  const [rows, total] = await Promise.all([
+    prisma.templateDuplicate.findMany({
+      where,
+      orderBy: [{ class: 'asc' }, { score: 'desc' }, { id: 'asc' }],
+      take: Math.max(0, Math.min(options.limit ?? TEMPLATE_DUPLICATES_LIMIT, TEMPLATE_DUPLICATES_LIMIT)),
+      select: {
+        id: true,
+        class: true,
+        basis: true,
+        score: true,
+        detectedAt: true,
+        dismissedAt: true,
+        dismissedBy: true,
+        aId: true,
+        bId: true,
+        a: { select: { name: true } },
+        b: { select: { name: true } },
+      },
+    }),
+    prisma.templateDuplicate.count({ where }),
+  ])
+  return {
+    rows: rows.map((row) => ({
+      id: row.id,
+      class: row.class,
+      basis: row.basis,
+      score: row.score,
+      detectedAt: row.detectedAt,
+      dismissedAt: row.dismissedAt,
+      dismissedBy: row.dismissedBy,
+      aId: row.aId,
+      aName: row.a.name,
+      bId: row.bId,
+      bName: row.b.name,
+    })),
+    total,
+  }
 }
 
 /**

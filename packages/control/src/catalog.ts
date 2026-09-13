@@ -1044,6 +1044,18 @@ export const CATALOG_PAGE_SIZE = 100
 export const TEMPLATE_PICKER_MAX = 500
 
 /**
+ * `%`, `_` and `\` as themselves, never as a pattern (final wave, minor 1).
+ *
+ * Prisma's `contains` compiles to `LIKE '%' || $1 || '%'`, and Postgres reads `%` and `_` INSIDE
+ * that parameter as wildcards with a backslash as the default escape. So `?q=%` matched every row
+ * in the catalog and `?q=a_b` matched `axb`: parameterised, so never an injection, but a wildcard
+ * language nobody documented and nobody asked for -- which is worse than no answer, because it
+ * looks like one. The backslash is replaced FIRST (one pass, one alternation), or it would escape
+ * the escapes this function just wrote.
+ */
+const escapeLikeWildcards = (text: string): string => text.replace(/[\\%_]/gu, (match) => `\\${match}`)
+
+/**
  * Every filter as a Prisma clause (M55 R3).
  *
  * This is what replaced `matches()`: seven dimensions that used to be an `Array#filter` over every
@@ -1053,9 +1065,10 @@ export const TEMPLATE_PICKER_MAX = 500
  * of others and only the `OR` sees all of them.
  *
  * `q` is folded with `normalisePersona`, the SAME function that folded the column (plan erratum
- * E12), and `mode: 'insensitive'` is deliberately absent: the column is already lower-cased by
- * construction, so asking Postgres for `ILIKE` over it would be strictly more work for the same
- * answer, on the one clause R3 itself calls a sequential scan.
+ * E12), then its `%`, `_` and `\` are escaped ({@link escapeLikeWildcards}) so a search box stays a
+ * search box and never a pattern language; `mode: 'insensitive'` is deliberately absent: the column
+ * is already lower-cased by construction, so asking Postgres for `ILIKE` over it would be strictly
+ * more work for the same answer, on the one clause R3 itself calls a sequential scan.
  */
 function catalogWhere(filters: WorkforceCatalogFilters): Prisma.SlaveTemplateWhereInput {
   const clauses: Prisma.SlaveTemplateWhereInput[] = []
@@ -1065,7 +1078,7 @@ function catalogWhere(filters: WorkforceCatalogFilters): Prisma.SlaveTemplateWhe
   if (filters.skill !== undefined) clauses.push({ recommendedSkills: { has: filters.skill } })
   if (filters.active !== undefined) clauses.push({ active: filters.active })
   const q = normalisePersona(filters.q ?? '')
-  if (q !== '') clauses.push({ searchText: { contains: q } })
+  if (q !== '') clauses.push({ searchText: { contains: escapeLikeWildcards(q) } })
   if (filters.duplicates !== undefined) {
     const some: Prisma.TemplateDuplicateWhereInput =
       filters.duplicates === 'none' ? { dismissedAt: null } : { dismissedAt: null, class: filters.duplicates }
@@ -1166,6 +1179,35 @@ async function rowDuplicatesFor(ids: readonly string[]): Promise<Map<string, Row
 }
 
 /**
+ * The three facet menus, over EVERY row and before any filter ran (M46 R6's rule).
+ *
+ * Its own function because it is now SKIPPABLE (final wave, minor 2): one `groupBy` and two
+ * `SELECT DISTINCT unnest(...)` whole-table scans are what a filter MENU costs, and a caller with
+ * no menu to draw -- `listTemplates()`, the company pickers' unfiltered read -- was paying for
+ * three of them on every `/workforce` load, beside the page's own three.
+ */
+async function readCatalogFacets(): Promise<WorkforceCatalogFacets> {
+  const [divisionGroups, capabilityRows, skillRows] = await Promise.all([
+    prisma.slaveTemplate.groupBy({ by: ['sourceDivision'], orderBy: { sourceDivision: 'asc' } }),
+    prisma.$queryRaw<{ value: string }[]>`
+      SELECT DISTINCT unnest("capabilityKeys") AS value FROM "SlaveTemplate" ORDER BY value ASC
+    `,
+    prisma.$queryRaw<{ value: string }[]>`
+      SELECT DISTINCT unnest("recommendedSkills") AS value FROM "SlaveTemplate" ORDER BY value ASC
+    `,
+  ])
+  return {
+    divisions: divisionGroups.flatMap((group) => (group.sourceDivision === null ? [] : [group.sourceDivision])),
+    capabilities: capabilityRows.map((row) => row.value),
+    skills: skillRows.map((row) => row.value),
+  }
+}
+
+/** What a caller that draws no filter menu gets back: three empty lists, and three scans it did not
+ *  run. Never a partial menu computed from the page, which is the thing R6 forbids. */
+const NO_FACETS: WorkforceCatalogFacets = { divisions: [], capabilities: [], skills: [] }
+
+/**
  * The Workforce Catalog's read model (M46 R6, rewritten by M55 R3).
  *
  * **Filtered and PAGED in the database.** It used to read every `SlaveTemplate`, build every
@@ -1180,7 +1222,9 @@ async function rowDuplicatesFor(ids: readonly string[]): Promise<Map<string, Row
  * filter menu built from the filtered rows collapses to whatever was already chosen, which makes it
  * impossible to change your mind. Each is its own bounded query rather than a fold over rows nobody
  * read: one `groupBy` for the divisions and one `SELECT DISTINCT unnest(...)` for each of the two
- * array columns.
+ * array columns. `options.facets: false` SKIPS all three and hands back empty lists (final wave,
+ * minor 2) -- for the caller that draws no menu, which is `listTemplates()` and which was paying
+ * for a second set of whole-table scans on every unfiltered `/workforce` load.
  *
  * A DIVISION is a directory a catalog was imported from, so both the menu and the clause read
  * `sourceDivision` alone (M46 plan erratum E22): a hand-made template whose `role` happens to spell
@@ -1189,11 +1233,11 @@ async function rowDuplicatesFor(ids: readonly string[]): Promise<Map<string, Row
  */
 export async function listWorkforceCatalog(
   filters: WorkforceCatalogFilters = {},
-  options: { readonly cursor?: string; readonly pageSize?: number } = {},
+  options: { readonly cursor?: string; readonly pageSize?: number; readonly facets?: boolean } = {},
 ): Promise<WorkforceCatalogPage> {
   const where = catalogWhere(filters)
   const take = Math.max(1, Math.min(options.pageSize ?? CATALOG_PAGE_SIZE, TEMPLATE_PICKER_MAX))
-  const [templates, total, divisionGroups, capabilityRows, skillRows] = await Promise.all([
+  const [templates, total, facets] = await Promise.all([
     prisma.slaveTemplate.findMany({
       where,
       select: CATALOG_ROW_SELECT,
@@ -1205,13 +1249,7 @@ export async function listWorkforceCatalog(
       ...(options.cursor === undefined ? {} : { cursor: { id: options.cursor }, skip: 1 }),
     }),
     prisma.slaveTemplate.count({ where }),
-    prisma.slaveTemplate.groupBy({ by: ['sourceDivision'], orderBy: { sourceDivision: 'asc' } }),
-    prisma.$queryRaw<{ value: string }[]>`
-      SELECT DISTINCT unnest("capabilityKeys") AS value FROM "SlaveTemplate" ORDER BY value ASC
-    `,
-    prisma.$queryRaw<{ value: string }[]>`
-      SELECT DISTINCT unnest("recommendedSkills") AS value FROM "SlaveTemplate" ORDER BY value ASC
-    `,
+    options.facets === false ? Promise.resolve(NO_FACETS) : readCatalogFacets(),
   ])
 
   const ids = templates.map((template) => template.id)
@@ -1250,11 +1288,7 @@ export async function listWorkforceCatalog(
 
   return {
     rows,
-    facets: {
-      divisions: divisionGroups.flatMap((group) => (group.sourceDivision === null ? [] : [group.sourceDivision])),
-      capabilities: capabilityRows.map((row) => row.value),
-      skills: skillRows.map((row) => row.value),
-    },
+    facets,
     total,
     // A page shorter than it asked for is the end of the answer -- `buildActivityHistory`'s own rule
     // (`apps/web/src/server/activity.ts:152-154`). A page that is exactly full hands back a cursor

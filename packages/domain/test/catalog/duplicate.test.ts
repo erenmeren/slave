@@ -18,6 +18,8 @@ import {
   bandKeysOf,
   bodyBandsOf,
   canonicalPersonaText,
+  duplicateBasisLabel,
+  duplicateClassLabel,
   classifyPair,
   contentHashOf,
   duplicateCountsSchema,
@@ -91,6 +93,29 @@ describe('the three vocabularies (R4, R5, R6)', () => {
       body_shingles: 'overlapping text',
       capability_keys: 'overlapping capabilities',
     })
+  })
+
+  /**
+   * Final wave, minor 12. A drawer and a catalog row index these tables with a value that arrived in
+   * a JSON response, and a `Record` over a union says nothing about a value the compiler never saw:
+   * a browser holding this bundle against a server that has learned a fourth class printed
+   * `undefined` beside a template's name.
+   */
+  it('answers a WORD for a class or a basis this version does not know, and never `undefined`', () => {
+    for (const member of DUPLICATE_CLASSES) expect(duplicateClassLabel(member)).toBe(DUPLICATE_CLASS_LABEL[member])
+    for (const member of DUPLICATE_BASES) expect(duplicateBasisLabel(member)).toBe(DUPLICATE_BASIS_LABEL[member])
+
+    // A fourth class and a fifth basis, as a deploy skew would hand them over.
+    expect(duplicateClassLabel('transposed')).toBe('Looks like')
+    expect(duplicateBasisLabel('embedding')).toBe('a kind of match this version does not know')
+    // Never the raw member (R6) and never the word `undefined`, whatever arrives -- an empty string
+    // included, which is what an absent field deserialises to.
+    for (const unknown of ['transposed', 'embedding', '']) {
+      for (const label of [duplicateClassLabel(unknown), duplicateBasisLabel(unknown)]) {
+        expect(label).not.toBe(unknown)
+        expect(label).not.toContain('undefined')
+      }
+    }
   })
 
   it('says the facet as a filter option, `none` included, and never the raw member itself', () => {

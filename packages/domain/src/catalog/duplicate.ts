@@ -54,6 +54,27 @@ export const DUPLICATE_BASIS_LABEL: Record<DuplicateBasis, string> = {
   capability_keys: 'overlapping capabilities',
 }
 
+/**
+ * The two labels for a class and a basis that arrived off the WIRE (final wave, minor 12).
+ *
+ * Both `Record`s above are total over the union the COMPILER checked and say nothing about a value
+ * it did not: a drawer and a catalog row read their pairs out of a JSON response, so a browser
+ * still holding this bundle against a server that has learned a fourth class would index the table
+ * with it and print `undefined` beside a template's name. These answer a word for anything the
+ * enums do not hold -- and never the raw member, which is R6's rule either way.
+ */
+export function duplicateClassLabel(value: string): string {
+  return (DUPLICATE_CLASSES as readonly string[]).includes(value)
+    ? DUPLICATE_CLASS_LABEL[value as DuplicateClass]
+    : 'Looks like'
+}
+
+export function duplicateBasisLabel(value: string): string {
+  return (DUPLICATE_BASES as readonly string[]).includes(value)
+    ? DUPLICATE_BASIS_LABEL[value as DuplicateBasis]
+    : 'a kind of match this version does not know'
+}
+
 /** What the filter's `<option>` says. The `<option value>` is the raw member, which is what a gate
  *  reads; this is what a person reads.
  *

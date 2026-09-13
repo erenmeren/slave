@@ -178,6 +178,27 @@ describe('listWorkforceCatalog: the seven filters, in the database (M55 R3)', ()
     expect((await listWorkforceCatalog({ q: 'rollout back' })).rows).toHaveLength(0)
   })
 
+  /**
+   * Final wave, minor 1. `contains` is `LIKE '%' || $1 || '%'`, so `%` and `_` inside the QUERY were
+   * wildcards: `?q=%` matched the whole catalog and `?q=a_b` matched `axb`. A search box is not a
+   * pattern language, and the one character that would have made it one is the one an operator
+   * types when they mean it literally.
+   */
+  it('treats `%` and `_` as CHARACTERS, because a search box is not a pattern language', async (): Promise<void> => {
+    await write({ name: 'Discount 50% Steward', description: 'Prices a thing.' })
+    await write({ name: 'Axb Literalist', description: 'Unrelated.' })
+    await write({ name: 'A_b Literalist', description: 'Unrelated.' })
+
+    // A lone `%` is a character nothing but the first row holds -- not "every row".
+    expect((await listWorkforceCatalog({ q: '%' })).rows.map((row) => row.name)).toEqual(['Discount 50% Steward'])
+    expect((await listWorkforceCatalog({ q: '%' })).total).toBe(1)
+    // And `_` is an underscore, not "any character".
+    expect((await listWorkforceCatalog({ q: 'a_b' })).rows.map((row) => row.name)).toEqual(['A_b Literalist'])
+    // A backslash is itself too, which is what makes the escaping reversible rather than a second
+    // pattern language one layer down.
+    expect((await listWorkforceCatalog({ q: '\\' })).rows).toEqual([])
+  })
+
   it('filters by duplicate CLASS, over both sides of the pair', async (): Promise<void> => {
     const a = await write({ name: 'Alpha' })
     const b = await write({ name: 'Beta' })
@@ -232,6 +253,24 @@ describe('listWorkforceCatalog: the facets and the row (M55 R3, R6)', () => {
     expect(page.facets.divisions).toEqual(['engineering', 'testing'])
     expect(page.facets.capabilities).toEqual(['backend.services', 'qa.test-strategy'])
     expect(page.facets.skills).toEqual(['systematic-debugging', 'writing-plans'])
+  })
+
+  /**
+   * Final wave, minor 2. `/workforce` loads the PAGE and the pickers' unpaged list in one render,
+   * and both routed through here -- so one page load ran the three unfiltered facet scans twice.
+   * The caller with no menu to draw says so, and gets the rows without them.
+   */
+  it('skips the facet scans for a caller that draws no menu, and still answers every row', async (): Promise<void> => {
+    await write({ name: 'Engineer', division: 'engineering', capabilityKeys: ['backend.services'], skills: ['writing-plans'] })
+    await write({ name: 'Tester', division: 'testing', capabilityKeys: ['qa.test-strategy'], skills: ['systematic-debugging'] })
+
+    const page = await listWorkforceCatalog({}, { facets: false })
+
+    expect(page.rows.map((row) => row.name)).toEqual(['Engineer', 'Tester'])
+    expect(page.total).toBe(2)
+    expect(page.facets).toEqual({ divisions: [], capabilities: [], skills: [] })
+    // And the default is unchanged: a caller that says nothing still gets the whole menu.
+    expect((await listWorkforceCatalog()).facets.divisions).toEqual(['engineering', 'testing'])
   })
 
   it('offers taxonomy KEYS as the capability facet, which is what a `has` clause can match', async (): Promise<void> => {

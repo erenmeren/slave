@@ -24,7 +24,12 @@ import { FieldLabel, INPUT_SHELL } from '../ui/FormControls'
  * ONE vocabulary (M46 fix round 1): the chip says exactly the word the catalog ROW says for the same
  * fact -- `imported` and `local`, `active` and `inactive` -- because a filter labelled `Made here`
  * beside rows labelled `local` is two names for one thing, and a person has to learn which is which
- * before they can use either. `data-source` and `data-active` still carry the values for a gate.
+ * before they can use either. `data-source` and `data-activation` still carry the values for a gate.
+ *
+ * `data-activation` and NOT `data-active` (final wave, minor 7): the catalog ROW beside these chips
+ * carries `data-active` for its own boolean, so one page had `[data-active="true"]` meaning both "a
+ * template that is hirable" and "the chip that filters for one". The chip now carries the WORD, the
+ * way its `data-source` sibling does, and the two selectors cannot collide.
  */
 const SOURCE_LABEL: Record<CatalogSource, string> = {
   imported: 'imported',
@@ -192,7 +197,7 @@ export function CatalogFilterBar({
               key={activation}
               type="button"
               data-testid={`catalog-active-chip-${activation}`}
-              data-active={String(activation === 'active')}
+              data-activation={activation}
               aria-pressed={pressed}
               onClick={() => set('active', pressed ? '' : activation)}
               className={`rounded-bubble border px-[9px] py-[3px] font-mono text-[10px] font-medium transition-colors ${

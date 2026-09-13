@@ -599,9 +599,10 @@ one command, inert until somebody says otherwise, with every pair it noticed nam
 is about.**
 
 ## 5. Errata — where execution corrects this spec
-Twelve were written while the plan was written and six more while it was executed; the long form of
-each — its evidence, its file citations and the alternatives rejected — is in
-`.superpowers/sdd/2026-09-13-m55-catalog-import/plan-notes.md` and in the task reports beside it.
+Twelve were written while the plan was written, six more while it was executed and one in the final
+fix wave; the long form of each — its evidence, its file citations and the alternatives rejected —
+is in `.superpowers/sdd/2026-09-13-m55-catalog-import/plan-notes.md` and in the task reports beside
+it.
 
 **E1 (amends R3 and R12)** — the capability facet's options become taxonomy KEYS, so
 `gate:m46-workforce-catalog` stage 2b DOES change, and it changes to the SKILL select: no persona in
@@ -685,6 +686,19 @@ about the whole table.
 **E18 (amends §3 stage 3)** — the gate's staffing task carries a `requiredRole`. A task with none is
 dropped by `loadSupervisorWorld`'s own task loop, exactly as the scheduler drops it, so a Supervisor
 handed one sees an empty board and raises no situation at all.
+
+**E19 (amends §3's documentation requirement)** — §3 asked for `README.md`'s gate count only
+("README 29 → 30 gates in both places", `:484-485`), and both of those edits were made. It never
+asked for the section an operator actually reads to run this milestone's headline verb, and three of
+R2, R3 and R8's changes contradict it: the documented `import-catalog` command now REFUSES a
+directory with no `LICENSE` at its root (R8) and `--allow-unknown-license` appeared in no document;
+nothing said that every imported row arrives INACTIVE (R2) and that `--activate` or
+`template activate` is what makes one hirable; and an install upgrading from M54 was told nowhere
+that erratum E8's SQL floor leaves `contentSha256` null, `bodyBands` empty, `recommendedSkills`
+empty and `searchText` name-and-description only until `template duplicates --recompute` runs once.
+The final fix wave writes those three into `README.md`'s "Importing a catalog" section, in the
+`capabilities backfill` / `backfill:evidence` upgrade notes' own style, plus the seven-number
+summary, `--verbose`, and `template list`'s five-hundred-row cap.
 
 ## 6. Carried backlog (M54 §6's list that M55 does not take, plus what M55 declines)
 From M54 §6 — which reproduces M53 §6, which reproduces M52 §5, which reproduces M51's own final-review

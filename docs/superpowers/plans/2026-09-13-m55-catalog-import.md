@@ -7054,10 +7054,10 @@ EOF
 
 ## Execution errata
 
-Eighteen errata were written against `docs/superpowers/specs/2026-09-13-m55-catalog-import-design.md`
+Nineteen errata were written against `docs/superpowers/specs/2026-09-13-m55-catalog-import-design.md`
 §5 — twelve while this plan was written (E1–E12, long form in
-`.superpowers/sdd/2026-09-13-m55-catalog-import/plan-notes.md`) and six while Task 6 ran. The six
-that correct THIS document are:
+`.superpowers/sdd/2026-09-13-m55-catalog-import/plan-notes.md`), six while Task 6 ran and one in the
+final fix wave. The six that correct THIS document, and the one that corrects the spec's §3, are:
 
 - **E13** — Task 6 Step 1's `nameOf` writes the SEED into every persona name. The step as planned
   named the three catalogs' personas identically, and `SlaveTemplate.name` is `@unique`: the
@@ -7076,3 +7076,9 @@ that correct THIS document are:
   measure a database holding exactly one generated catalog.
 - **E18** — the gate's staffing task carries a `requiredRole`; `loadSupervisorWorld` drops a task
   without one, so the Supervisor would have seen an empty board.
+- **E19** (against the SPEC's §3, repeated here so the two lists stay identical) — §3 asked for
+  `README.md`'s gate count and nothing else, so the "Importing a catalog" section still described
+  M42's behaviour: the documented command now refuses a directory with no `LICENSE` at its root,
+  nothing said that an imported row arrives inactive, and an upgrading install was never told to run
+  `template duplicates --recompute` once to finish erratum E8's floor. The final fix wave writes all
+  three into that section.

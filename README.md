@@ -432,8 +432,13 @@ directory of persona files and they become templates:
 
 ```bash
 npm run orchestrator -- import-catalog --dir /srv/personas --by you
+npm run orchestrator -- import-catalog --dir /srv/personas --activate --verbose
+npm run orchestrator -- import-catalog --dir /srv/personas --allow-unknown-license
 npm run orchestrator -- import-catalog --dir /srv/personas --role-map engineering=backend --dry-run
 npm run orchestrator -- list-imports
+npm run orchestrator -- template list [--division <d>] [--active | --inactive]
+npm run orchestrator -- template activate --template <id>
+npm run orchestrator -- template duplicates [--recompute]
 ```
 
 A persona is a Markdown file with a small front matter block — `name` and a non-empty body are the
@@ -451,7 +456,42 @@ reported with a reason — its name is already taken, its text is longer than a 
 file is not a persona at all — and the whole run is recorded, so `list-imports` and the Projects
 page can tell you afterwards what happened.
 
+**Nothing imported is hirable until somebody says so.** Every row an import creates arrives
+**inactive**, and an inactive template is invisible to the one thing that hires on its own: the
+Supervisor will not propose it when a project needs a capability nobody on the board provides. Pass
+`--activate` to import a directory ready to hire from, or turn one row on afterwards with
+`template activate --template <id>` (`template deactivate` puts it back). Activation changes nothing
+else: you can still hire from an inactive row by hand — `add-slave --template <id>` and the New
+slave drawer both take one — and a worker already hired from a row keeps working whatever happens to
+the row afterwards. `template list` says which rows are hirable, with the strongest duplicate signal
+beside each, and stops at five hundred rows: narrow it with `--division` or `--active` /
+`--inactive`.
+
+**A directory with no licence is refused before anything is written.** The import reads the first
+non-empty line of a `LICENSE`, `LICENSE.md` or `LICENSE.txt` at the root of the directory and
+records it on every row it creates, so a template can always say where its persona came from. A
+directory with none of those files is refused outright and nothing is written — pass
+`--allow-unknown-license` to import it anyway, and those rows will say the licence is unknown.
+
+Every run prints seven numbers: created, updated, unchanged and skipped, and then how many pairs of
+rows the import noticed look alike — the same persona text or name, most of the same text, or most
+of the same capabilities. `--verbose` adds one line per created and per updated row underneath them;
+the numbers print either way. The Catalog tab shows the same signal beside each row, and nothing in
+it ever deletes a template: `template duplicates --dismiss <pairId>` is how you say "I know" about a
+pair, and the row stays.
+
 `--dry-run` does the whole thing, database reads included, and writes nothing.
+
+**Upgrading from an earlier version: run `template duplicates --recompute` once.** The migration
+fills in what SQL can fill in — every template you already had is made active, so your workforce is
+not silently emptied, and the search box can find a row by its name and its blurb the minute it
+lands. It cannot fill in the rest: until the recompute runs, rows that predate this version have no
+content fingerprint, no text bands, no recommended-skills list and only half a search haystack — so
+the free-text box will not match them on their summary or their capabilities, the Skill filter will
+not offer what they ask for, and the duplicate pass cannot see their text at all. The recompute
+derives all four for every row and classifies the whole table; it is safe to run
+again as often as you like, it never deletes a template, and it is also the repair if an import is
+interrupted before it pairs its rows.
 
 ## Specialist profiles
 

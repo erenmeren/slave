@@ -1074,8 +1074,12 @@ try {
   if (afterRecomputeTwo !== beforeRecompute) {
     await fail('stage 6: running the recompute twice is not a no-op')
   }
-  // The listing that follows the recompute line in the SAME command (D50) names the pairs.
-  const listedPairIds = recomputeTwo.split('\n').slice(1).filter((line) => line.trim() !== '').map((line) => line.split('\t')[0])
+  // The listing that follows the recompute line in the SAME command (D50) names the pairs -- with
+  // the COUNT line between them (final wave, Important 2): the verb says `N of M pair(s)` the way
+  // `template list` does, because the read stops at two hundred and a bare list looked complete.
+  const recomputeLines = recomputeTwo.split('\n').filter((line) => line.trim() !== '')
+  await assertEqual(recomputeLines[1], '9 of 9 pair(s)', 'stage 6: the count line above the recompute listing')
+  const listedPairIds = recomputeLines.slice(2).map((line) => line.split('\t')[0])
   console.log(`stage 6: the recompute's own listing names ${String(listedPairIds.length)} pair(s)`)
   await assertEqual(listedPairIds.length, 9, 'stage 6: pairs the recompute listed beside its own summary line')
   console.log(

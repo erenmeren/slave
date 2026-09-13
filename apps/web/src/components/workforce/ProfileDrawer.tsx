@@ -3,8 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   capabilityIndex,
-  DUPLICATE_BASIS_LABEL,
-  DUPLICATE_CLASS_LABEL,
+  duplicateBasisLabel,
+  duplicateClassLabel,
   MAPPING_QUALITY_LABEL,
   PROFILE_FIELD_KIND,
   PROFILE_FIELD_LABEL,
@@ -392,7 +392,10 @@ export function ProfileDrawer({
                         data-score={String(pair.score)}
                         className={`flex flex-wrap items-center gap-2 text-xs ${pair.dismissedAt === null ? 'text-text-2' : 'text-text-3 opacity-60'}`}
                       >
-                        <span>{DUPLICATE_CLASS_LABEL[pair.class]}</span>
+                        {/* The two labels through the domain's GUARDS (final wave, minor 12):
+                          * `pair` was parsed out of a JSON response, so a server that has learned a
+                          * fourth class would otherwise print `undefined` beside a template name. */}
+                        <span>{duplicateClassLabel(pair.class)}</span>
                         {onOpenTemplate === undefined ? (
                           <span className="text-text-1">{otherName}</span>
                         ) : (
@@ -406,7 +409,7 @@ export function ProfileDrawer({
                           </button>
                         )}
                         <span className="font-mono text-[10px] text-text-3">{pair.score.toFixed(3)}</span>
-                        <span className="text-text-3">{DUPLICATE_BASIS_LABEL[pair.basis]}</span>
+                        <span className="text-text-3">{duplicateBasisLabel(pair.basis)}</span>
                         <span className="font-mono text-[10px] text-text-3">{pair.detectedAt.slice(0, 10)}</span>
                         <Button
                           variant="ghost"
