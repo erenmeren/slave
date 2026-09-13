@@ -605,26 +605,50 @@ describe('the Workforce page seeds the catalog from the URL (M46 M1)', () => {
     expect(listWorkforceCatalogPage).toHaveBeenCalledWith({})
   })
 
-  it('reads the catalog exactly once when no filter is in the URL, and the pickers share that read', async () => {
+  // M55 fix round 1. The pickers used to take `catalog.rows` on an unfiltered URL -- erratum E9's
+  // one read per page -- which was honest while that read was the whole table. It is a PAGE of a
+  // hundred now, so the same `??` would have hidden the hundred-and-first template from every
+  // `<select>` a company is staffed from, silently. `listTemplates()` is unconditional.
+  it('gives the pickers their OWN read on an UNFILTERED url, never the catalog page', async () => {
     const element = await renderPage({ tab: 'catalog' })
 
     expect(listWorkforceCatalogPage).toHaveBeenCalledTimes(1)
-    expect(listTemplates).not.toHaveBeenCalled()
-    // Erratum E9's one read per page: `templates` IS the catalog's rows, the same array.
-    expect(element.props.templates).toBe(element.props.catalog.rows)
+    expect(listTemplates).toHaveBeenCalledTimes(1)
+    expect(element.props.templates).not.toBe(element.props.catalog.rows)
   })
 
-  it('keeps the pickers unfiltered when the catalog is filtered, at the cost of one extra read', async () => {
-    // The New slave drawer and the company manager staff a company FROM `templates`; filtering it
-    // with the Catalog tab's search box would hide most of the catalog behind a box on another
-    // tab. The second read is paid only on a filtered URL.
-    listTemplates.mockResolvedValueOnce([templateRow(), templateRow({ id: 't2', name: 'Verifier' })])
+  it('hands the pickers MORE than a page when the catalog read is capped at one', async () => {
+    // The page's read is a page; `listTemplates()` is bounded at `TEMPLATE_PICKER_MAX` instead
+    // (erratum E2). Stubs stand in for both bounds: what this pins is that the prop comes from the
+    // unpaged loader, so the picker list is not capped by whatever the catalog page happens to hold.
+    const pageRows = Array.from({ length: 100 }, (_, index) => templateRow({ id: `p${String(index)}`, name: `Paged ${String(index)}` }))
+    const everyRow = [...pageRows, templateRow({ id: 'p100', name: 'The Hundred And First' })]
+    listWorkforceCatalogPage.mockResolvedValueOnce(catalogPage(pageRows))
+    listTemplates.mockResolvedValueOnce(everyRow)
 
-    const element = await renderPage({ source: 'local' })
+    const element = await renderPage({ tab: 'catalog' })
+
+    expect(element.props.catalog.rows).toHaveLength(100)
+    expect(element.props.templates).toHaveLength(101)
+    expect(element.props.templates.map((row) => row.name)).toContain('The Hundred And First')
+  })
+
+  it('keeps the pickers unfiltered when the catalog IS filtered -- the same list either way', async () => {
+    // The New slave drawer and the company manager staff a company FROM `templates`; filtering it
+    // with the Catalog tab's search box would hide most of the catalog behind a box on another tab.
+    const both = [templateRow(), templateRow({ id: 't2', name: 'Verifier' })]
+    listTemplates.mockResolvedValueOnce(both).mockResolvedValueOnce(both)
+
+    const filteredPage = await renderPage({ source: 'local' })
+    const unfilteredPage = await renderPage({})
 
     expect(listWorkforceCatalogPage).toHaveBeenCalledWith({ source: 'local' })
-    expect(listTemplates).toHaveBeenCalledTimes(1)
-    expect(element.props.templates.map((row) => row.name)).toEqual(['Hand Made', 'Verifier'])
+    // Called with NOTHING, both times: the picker list is independent of the catalog's filter.
+    expect(listTemplates).toHaveBeenCalledTimes(2)
+    expect(listTemplates).toHaveBeenNthCalledWith(1)
+    expect(listTemplates).toHaveBeenNthCalledWith(2)
+    expect(filteredPage.props.templates.map((row) => row.name)).toEqual(['Hand Made', 'Verifier'])
+    expect(unfilteredPage.props.templates.map((row) => row.name)).toEqual(['Hand Made', 'Verifier'])
   })
 
   it('still falls back to the Slaves tab for an unknown ?tab=', async () => {

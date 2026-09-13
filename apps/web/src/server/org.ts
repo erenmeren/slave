@@ -972,10 +972,15 @@ export interface WorkforceCatalogView {
 }
 
 /**
- * The Workforce Catalog page and its route (M46 R6), over ONE read (plan erratum E9):
- * `listWorkforceCatalog` already does the `findMany` plus the `companySlave.groupBy` that
- * `listTemplates` used to do here, and doing it twice on a page that renders both the catalog and
- * the company manager would be two queries for one answer.
+ * The Workforce Catalog page and its route (M46 R6), PAGED by M55 R3.
+ *
+ * M46 erratum E9 said this was the page's only catalog read -- "`listTemplates()` IS this call's
+ * `.rows`" -- and that was true while both were the same unbounded `findMany` plus the same
+ * `companySlave.groupBy`. M55 R3 made this one a PAGE of `CATALOG_PAGE_SIZE`, and a page cannot be
+ * the list a company is STAFFED FROM: `listTemplates` below is a second read now, with its own
+ * bound and no filters (erratum E2), and `workforce/page.tsx` takes it on every load. What E9 was
+ * protecting against -- two identical whole-table reads for one page -- no longer exists to be
+ * protected against, because neither of these two reads is that any more.
  */
 export async function listWorkforceCatalogPage(
   filters: WorkforceCatalogFilters = {},

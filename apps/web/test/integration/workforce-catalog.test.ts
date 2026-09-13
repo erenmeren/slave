@@ -1,4 +1,4 @@
-import { importCatalog, setProfile, setProfileOverrides } from '@slave-of-ai/control'
+import { CATALOG_PAGE_SIZE, importCatalog, setProfile, setProfileOverrides } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PROFILE_MAX_CHARS } from '@slave-of-ai/domain'
@@ -123,7 +123,7 @@ describe('the workforce catalog read model', () => {
     expect(page.rows.find((row) => row.name === 'Hand Made')?.importedAt).toBeNull()
   })
 
-  it('filters, and listTemplates is the unfiltered rows of the same read', async (): Promise<void> => {
+  it('filters, and listTemplates is the whole catalog whatever the filters say', async (): Promise<void> => {
     expect((await listWorkforceCatalogPage({ source: 'local' })).rows.map((row) => row.name)).toEqual(['Hand Made'])
     expect((await listWorkforceCatalogPage({ capability: 'qa.test-strategy' })).rows.map((row) => row.name)).toEqual([
       'Verifier',
@@ -379,5 +379,53 @@ describe('the workforce catalog read model', () => {
     }
     const view = await readTemplateProfileView(coreId)
     expect(view.ok && view.value.overridden).toEqual([])
+  })
+})
+
+/**
+ * M55 fix round 1. `listWorkforceCatalogPage` is a PAGE of `CATALOG_PAGE_SIZE` now, and
+ * `workforce/page.tsx` used to hand the company staffing pickers that page's `.rows` on any
+ * unfiltered load. This is the read that must never be capped by it: `listTemplates` is bounded at
+ * `TEMPLATE_PICKER_MAX` (erratum E2) instead, and the hundred-and-first template is what says so.
+ */
+describe('listTemplates is not a page (M55 E2)', () => {
+  const COUNT = CATALOG_PAGE_SIZE + 1
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    )
+    await prisma.slaveTemplate.createMany({
+      data: Array.from({ length: COUNT }, (_unused, index) => ({
+        name: `Picker Row ${String(index).padStart(4, '0')}`,
+        role: 'backend',
+        description: 'One of many.',
+      })),
+    })
+  })
+
+  afterAll(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  it('hands every template to the pickers while the catalog read stops at one page', async (): Promise<void> => {
+    const page = await listWorkforceCatalogPage()
+    const templates = await listTemplates()
+
+    expect(page.rows).toHaveLength(CATALOG_PAGE_SIZE)
+    expect(page.total).toBe(COUNT)
+    expect(templates).toHaveLength(COUNT)
+    // The one the page cannot reach, by name, so the assertion names the row rather than a number.
+    expect(templates.map((row) => row.name)).toContain(`Picker Row ${String(COUNT - 1).padStart(4, '0')}`)
+    expect(page.rows.map((row) => row.name)).not.toContain(`Picker Row ${String(COUNT - 1).padStart(4, '0')}`)
+  })
+
+  it('does not narrow the pickers when the catalog page is filtered to nothing', async (): Promise<void> => {
+    const filtered = await listWorkforceCatalogPage({ source: 'imported' })
+
+    expect(filtered.rows).toHaveLength(0)
+    expect(await listTemplates()).toHaveLength(COUNT)
   })
 })
