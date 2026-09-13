@@ -31,6 +31,12 @@
 //   1.  A fact is written at a TERMINAL transition and nowhere else: nothing while the run is live,
 //       exactly one the instant it concludes, still exactly one when the writer is called again by
 //       hand -- and NO ROW AT ALL for a run that failed at spawn, because nothing was attempted.
+//       Then FOUR more transitions, each named after the site it proves and each asserted on that
+//       run's own row (fix round 1): 1c the sweep's orphan arm (`recoveries`), 1b the operator's
+//       own stop through `cancel --run` (site 7, erratum E22 -- `stopped`, and the intervention
+//       counted), 1d the merge pass's integration settle under `autoMerge: true`, and 1e a run the
+//       PUMP concluded as failed. All three outcomes and both non-zero counters are written by a
+//       real transition somewhere in this gate rather than by the gate itself.
 //   2.  `attempt` and `verifiedFirstPass` are DERIVED: profile A passes first time, profile B fails
 //       once and passes on attempt 2 and is still not a first pass. Then, from the SCHEMA: no
 //       `attempt` column on `SlaveRun`, and no `attempt` key in a verify event's payload.
@@ -62,7 +68,7 @@
 // directory corrupts the on-disk build cache for both. Stop any running dev server first
 // (`pgrep -af "next dev"`).
 
-import { execFileSync, spawn } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { accessSync, constants, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
@@ -81,9 +87,11 @@ import {
   BESPOKE_PROFILE_LABEL,
   COST_PROVENANCE_WORD,
   EVIDENCE_MIN_SAMPLE,
+  EVIDENCE_OUTCOMES,
   EVIDENCE_OUTCOME_LABEL,
   GENERAL_DOMAIN,
   INSUFFICIENT_EVIDENCE,
+  MODEL_NOT_RECORDED_LABEL,
   MODEL_PRICES,
   NON_TERMINAL_RUN_STATUSES,
   domainLabel,
@@ -444,18 +452,21 @@ try {
    * R3): a RUN's child no longer inherits the daemon's environment at all, so every knob the fake
    * CLI reads rides on argv beside `--fixture`. `--review-fixture` is the one that makes the two
    * phases two phases (erratum E16).
+   *
+   * `fixture` is a parameter too, for ONE phase only: the fake's `crash` MODE writes half a stream
+   * and exits 1, which is how the pump's non-clean conclusion is reached (write site 3). Every
+   * fixture in `packages/providers/test/fixtures/` ends with a terminal `result` line -- measured,
+   * not assumed -- so `--work-fixture <anything>` can only ever produce a clean conclusion, and a
+   * gate that wanted a failed run out of one would be waiting forever.
    */
-  const daemonEnv = (reviewFixture) =>
+  const daemonEnv = ({ reviewFixture = 'review-approve', fixture = 'm8-flow', workFixture = 'complete' } = {}) =>
     loopbackChildEnv({
       SLAVEOFAI_CLAUDE_BIN: 'node',
       SLAVEOFAI_CLAUDE_ARGS: [
         FAKE_CLAUDE,
         '--fixture',
-        'm8-flow',
-        '--work-fixture',
-        'complete',
-        '--review-fixture',
-        reviewFixture,
+        fixture,
+        ...(fixture === 'm8-flow' ? ['--work-fixture', workFixture, '--review-fixture', reviewFixture] : []),
         '--line-delay-ms',
         String(LINE_DELAY_MS),
       ].join(' '),
@@ -484,24 +495,28 @@ try {
   }
 
   /** The backfill, as its own npm script runs it minus the `tsc --build` half this gate's preflight
-   *  has already insisted on. Never throws on a non-zero exit: the script's exit STATUS is part of
-   *  what stage 5 measures. */
+   *  has already insisted on.
+   *
+   *  THE EXIT STATUS IS PART OF WHAT STAGE 5 MEASURES, and it is measured by this function throwing:
+   *  the script exits 1 when it SKIPPED a run (every one of them named on stderr) or when a flag is
+   *  wrong, and on this database either would be a defect rather than a measurement. The failure
+   *  therefore carries both streams rather than a bare status, and stage 5 states the zero it
+   *  depends on out loud. */
   const runBackfill = (args) => {
-    try {
-      return execFileSync('node', ['--env-file=.env', BACKFILL, ...args], {
-        cwd: repoRoot,
-        env: loopbackChildEnv({}),
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-    } catch (error) {
-      // Exit 1 means it SKIPPED a run (every one of them named on stderr), which on this database
-      // would be a defect and not a measurement -- so the sentences come out with the status.
+    const result = spawnSync('node', ['--env-file=.env', BACKFILL, ...args], {
+      cwd: repoRoot,
+      env: loopbackChildEnv({}),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    if (result.error !== undefined && result.error !== null) throw result.error
+    if (result.status !== 0) {
       throw new Error(
-        `the backfill exited ${String(error.status)} for \`${args.join(' ')}\`\n` +
-          `  stdout: ${String(error.stdout)}\n  stderr: ${String(error.stderr)}`,
+        `the backfill exited ${String(result.status)} for \`${args.join(' ')}\`\n` +
+          `  stdout: ${String(result.stdout)}\n  stderr: ${String(result.stderr)}`,
       )
     }
+    return { status: result.status, stdout: String(result.stdout), stderr: String(result.stderr) }
   }
 
   /** The diagnostic throw: the state that made the call, not just "it timed out". */
@@ -559,11 +574,11 @@ try {
   }
 
   /** The real daemon, in the background -- the same thing an operator leaves running. */
-  function spawnDaemon(label, forWorkspaceId, reviewFixture) {
+  function spawnDaemon(label, forWorkspaceId, scripting = {}) {
     const proc = spawn(
       'node',
       [ORCHESTRATOR_CLI, 'daemon', '--workspace', forWorkspaceId, '--period', String(DAEMON_PERIOD_MS)],
-      { cwd: repoRoot, env: daemonEnv(reviewFixture), stdio: ['ignore', 'pipe', 'pipe'] },
+      { cwd: repoRoot, env: daemonEnv(scripting), stdio: ['ignore', 'pipe', 'pipe'] },
     )
     const state = { label, proc, output: '', exited: false }
     proc.stdout.on('data', (chunk) => {
@@ -584,7 +599,7 @@ try {
     })
     daemons.push(state)
     activeDaemon = state
-    console.log(`${label} spawned as pid ${String(proc.pid)} with --review-fixture ${reviewFixture}`)
+    console.log(`${label} spawned as pid ${String(proc.pid)}, scripted ${JSON.stringify(scripting)}`)
     return state
   }
 
@@ -693,6 +708,13 @@ try {
   // The reviewer is BESPOKE on purpose -- hired from no template, so its record keys on `slave:<id>`
   // (R1's other half) and its row wears the `Bespoke` chip stage 10 reads.
   const reviewer = await makeWorker({ name: 'Rei', templateId: null, runtimeRoles: [REVIEW_ROLE], capabilities: [] })
+  // C, D and E hold no runtime role and are dispatched by nothing: their records are the SHAPES
+  // stage 9 is about (a thin one, an ample one, one nobody has judged), written through the same
+  // writer below. E is also where the sweep's own conclusion lands in stage 1c, which is why all
+  // three exist from the start rather than being made up after the phases.
+  const workerC = await makeWorker({ name: 'Cal', templateId: templateC.id, runtimeRoles: [], capabilities: [] })
+  const workerD = await makeWorker({ name: 'Dex', templateId: templateD.id, runtimeRoles: [], capabilities: [] })
+  const workerE = await makeWorker({ name: 'Eli', templateId: templateE.id, runtimeRoles: [], capabilities: [] })
   const PROFILE_A = `template:${templateA.id}`
   const PROFILE_B = `template:${templateB.id}`
   const PROFILE_C = `template:${templateC.id}`
@@ -721,7 +743,7 @@ try {
   // ============================================================================================
   // PHASE A -- review-approve, and a verify that passes first time.
   // ============================================================================================
-  const daemonA = spawnDaemon('phase-a-daemon', workspace.id, 'review-approve')
+  const daemonA = spawnDaemon('phase-a-daemon', workspace.id, { reviewFixture: 'review-approve' })
 
   const taskA1 = await prisma.task.create({
     data: {
@@ -871,9 +893,10 @@ try {
   await assertEqual(spawnRun.status, 'failed', 'stage 1: the status of a run whose provisioning failed')
   await assertEqual(await evidenceCountFor(spawnRun.id), 0, 'stage 1: evidence rows for a run that failed at SPAWN')
   console.log(
-    'stage 1 PASSED: nothing while it was alive, exactly one the instant it concluded, still one after a second ' +
+    'stage 1a PASSED: nothing while it was alive, exactly one the instant it concluded, still one after a second ' +
       'call by hand, and NOTHING AT ALL for a dispatch that never started -- nothing was attempted. (The backfill ' +
-      'in stage 5 records that run as HISTORY, which is E23 and a different claim.)',
+      'in stage 5 records that run as HISTORY, which is E23 and a different claim. Sub-stages 1b to 1e below reach ' +
+      'four more of the seven write sites.)',
   )
 
   await stopDaemon(daemonA)
@@ -886,7 +909,7 @@ try {
   writeFileSync(verifyState, 'the next verify fails\n')
   console.log(`phase B: ${verifyState} seeded -- the first verify of this phase fails and removes it`)
 
-  const daemonB = spawnDaemon('phase-b-daemon', workspace.id, 'review-reject')
+  const daemonB = spawnDaemon('phase-b-daemon', workspace.id, { reviewFixture: 'review-reject' })
 
   const taskB1 = await prisma.task.create({
     data: {
@@ -1000,8 +1023,208 @@ try {
   )
 
   await stopDaemon(daemonB)
+
+  // ============================================================================================
+  // PHASE C -- the three transitions a clean conclusion cannot reach, each named after its site.
+  //
+  // Stage 1 above proves the property at write site 4 (the pump's clean conclusion) and proves the
+  // ABSENCE at a spawn failure. Four of the other six sites are reachable from a gate at a
+  // reasonable cost, and these are them (Task 3's hand-off table, task-3-report.md:365-373):
+  //
+  //   1c -- `sweep.ts`'s `reconcileOrphans` (site 5), driven by a `working` run with no pid that a
+  //         daemon's STARTUP pass finds. `recoveries` is the one column that tells a sweep's
+  //         conclusion from a pump's.
+  //   1b -- `stop.ts`'s `requestStop` (site 7, erratum E22 -- the newest site in the write path),
+  //         driven by the operator's own `cancel --run` verb. Whichever of site 7 and the pump's
+  //         stop claim (site 2) wins the race writes the fact, and the verb is idempotent on
+  //         `runId @unique`, so the gate asserts ONE row rather than which side wrote it.
+  //   1d -- `merge.ts`'s real merge (the integration settle), driven by `autoMerge: true` for this
+  //         phase only. Every other `integrated` value in this gate is a settle the gate made by
+  //         hand; this one is the site that settles it in production.
+  //
+  // The remaining two pump arms (the gate-failure halt and the stream-ended conclusion) are unit-
+  // tested by Task 3; 1e below drives the second of them anyway, because a `failed` outcome written
+  // by the PUMP is the one thing none of the stages above would ever produce.
+  // ============================================================================================
+  console.log(runCli(['set-runtime-roles', '--slave', workerB.id, '--roles', '']).trim())
+  console.log(runCli(['set-runtime-roles', '--slave', workerA.id, '--roles', WORK_ROLE]).trim())
+
+  // ---- 1c: the sweep's orphan arm (write site 5). ----------------------------------------------
+  // Seeded BEFORE the daemon starts, because `reconcileOrphans` is the startup pass over runs with
+  // no pid. No `taskId`: an orphan is a run whose process is gone, and this one is about the WRITE
+  // site rather than about a task.
+  const orphanRun = await prisma.slaveRun.create({
+    data: {
+      slaveId: workerE.id,
+      status: 'working',
+      kind: 'implementation',
+      provider: 'claude_code',
+      model: PIPELINE_MODEL,
+      pid: null,
+      startedAt: new Date(Date.now() - 60_000),
+    },
+  })
+  console.log(`stage 1c: orphan run ${orphanRun.id} seeded on ${workerE.name} (working, no pid) -- the sweep's own subject`)
+
+  const daemonC = spawnDaemon('phase-c-daemon', workspace.id, { reviewFixture: 'review-approve' })
+
+  const orphanRow = await waitUntil("the sweep's orphan arm to leave a fact", PIPELINE_TIMEOUT_MS, async () => {
+    const row = await evidenceFor(orphanRun.id)
+    if (row === null) {
+      const live = await runRow(orphanRun.id)
+      return { done: false, detail: `the orphan is ${live.status} with no row yet` }
+    }
+    return { done: true, value: row }
+  })
+  console.log(`stage 1c: the sweep's row = ${describeEvidence(orphanRow)}`)
+  await assertEqual(await evidenceCountFor(orphanRun.id), 1, 'stage 1c: rows for the swept run')
+  await assertEqual(orphanRow.outcome, 'failed', "stage 1c: the outcome the sweep's orphan arm maps to")
+  if (orphanRow.recoveries < 1) {
+    await fail(
+      `stage 1c: recoveries is ${String(orphanRow.recoveries)} -- the sweep calls the writer with ` +
+        "`recoveredBySweep: true`, and that column is the only thing that tells its conclusion from a pump's",
+    )
+  }
+  console.log(`stage 1c PASSED: a run nobody was driving was concluded by the sweep, and its row says so -- recoveries ${String(orphanRow.recoveries)}`)
+
+  // ---- 1b: the operator's own stop (write site 7, erratum E22). ---------------------------------
+  const taskC1 = await prisma.task.create({
+    data: {
+      workspaceId: workspace.id,
+      title: 'M53 Gate Task C1',
+      description: 'Seeded by gate:m53-evidence — the run a person stops.',
+      status: 'ready',
+      requiredRole: WORK_ROLE,
+      requiredCapabilities: [STAFF_CAPABILITY],
+      maxAttempts: 1,
+    },
+  })
+  const liveRunId = await waitUntil('a live run for a person to stop', PIPELINE_TIMEOUT_MS, async () => {
+    const row = await prisma.slaveRun.findFirst({ where: { taskId: taskC1.id, kind: 'implementation' }, orderBy: { startedAt: 'desc' } })
+    if (row === null) return { done: false, detail: 'no run row yet' }
+    if (row.status !== 'working') return { done: false, detail: `the run is ${row.status}` }
+    const started = await prisma.executionEvent.count({ where: { runId: row.id, type: dbType('run.started') } })
+    if (started === 0) return { done: false, detail: 'working, but no run.started event yet' }
+    return { done: true, value: row.id }
+  })
+  // THE VERB A PERSON TYPES. `cancel --run` is control's `requestStop`, which concludes the run
+  // itself and then calls the writer inside its own `concluded.count > 0` guard.
+  console.log(runCli(['cancel', '--run', liveRunId]).trim())
+  const stoppedRow = await waitUntil("the operator stop to leave a fact", PIPELINE_TIMEOUT_MS, async () => {
+    const row = await evidenceFor(liveRunId)
+    if (row === null) {
+      const live = await runRow(liveRunId)
+      return { done: false, detail: `the stopped run is ${live.status} with no row yet` }
+    }
+    return { done: true, value: row }
+  })
+  console.log(`stage 1b: the stopped run = ${describeRun(await runRow(liveRunId))}`)
+  console.log(`stage 1b: its row = ${describeEvidence(stoppedRow)}`)
+  await assertEqual(await evidenceCountFor(liveRunId), 1, 'stage 1b: rows for the stopped run -- ONE, whichever side won the race')
+  await assertEqual(stoppedRow.outcome, 'stopped', 'stage 1b: the outcome of a run a person stopped')
+  if (stoppedRow.humanInterventions < 1) {
+    await fail(
+      `stage 1b: humanInterventions is ${String(stoppedRow.humanInterventions)} -- a person reached in, and that is the ` +
+        'whole subject of the column (R5b)',
+    )
+  }
+  await assertEqual(stoppedRow.verifiedFirstPass, null, 'stage 1b: nobody judged a run that never finished')
+  console.log(
+    `stage 1b PASSED: ${EVIDENCE_OUTCOME_LABEL.stopped} — one row for the run a person stopped, with the intervention ` +
+      `counted (${String(stoppedRow.humanInterventions)})`,
+  )
+
+  // ---- 1d: the merge pass's own integration settle. --------------------------------------------
+  await prisma.workspace.update({ where: { id: workspace.id }, data: { autoMerge: true } })
+  console.log('stage 1d: autoMerge switched ON for one task -- the merge pass is the site that settles `integrated` in production')
+  const taskD1 = await prisma.task.create({
+    data: {
+      workspaceId: workspace.id,
+      title: 'M53 Gate Task D1',
+      description: 'Seeded by gate:m53-evidence — the task the merge pass really merges.',
+      status: 'ready',
+      requiredRole: WORK_ROLE,
+      requiredCapabilities: [STAFF_CAPABILITY],
+      maxAttempts: 2,
+    },
+  })
+  const merged = await waitUntil('the merge pass to settle the integration column', PIPELINE_TIMEOUT_MS, async () => {
+    const row = await prisma.slaveRun.findFirst({ where: { taskId: taskD1.id, kind: 'implementation' }, orderBy: { startedAt: 'desc' } })
+    if (row === null) return { done: false, detail: 'no run row yet' }
+    const evidence = await evidenceFor(row.id)
+    if (evidence === null) return { done: false, detail: `the run is ${row.status} with no row yet` }
+    if (evidence.integrated === null) {
+      const task = await prisma.task.findUniqueOrThrow({ where: { id: taskD1.id } })
+      return { done: false, detail: `the task is ${task.status} and integrated is still null` }
+    }
+    return { done: true, value: { run: row, evidence } }
+  })
+  const mergedTask = await prisma.task.findUniqueOrThrow({ where: { id: taskD1.id } })
+  console.log(`stage 1d: the merged task is ${mergedTask.status}, integratedAt ${String(mergedTask.integratedAt?.toISOString() ?? null)}`)
+  console.log(`stage 1d: its row = ${describeEvidence(merged.evidence)}`)
+  await assertEqual(merged.evidence.integrated, true, 'stage 1d: the integration column, settled by the merge pass itself')
+  if (mergedTask.integratedAt === null) {
+    await fail('stage 1d: the row says the work was integrated and `Task.integratedAt` is null -- the two must agree (M35)')
+  }
+  await assertEqual(merged.evidence.verifiedFirstPass, true, 'stage 1d: and the verify verdict on the same row')
+  console.log('stage 1d PASSED: the work reached the base branch and the column that says so was settled by the site that merged it')
+
+  await stopDaemon(daemonC)
+  await prisma.workspace.update({ where: { id: workspace.id }, data: { autoMerge: false } })
+  console.log('stage 1d: autoMerge switched back OFF -- every other row in this gate reads `integrated: null`, which is the ordinary shape')
+
+  // ============================================================================================
+  // PHASE D (1e) -- a run the PUMP concluded as failed: the fake's `crash` MODE writes half a
+  // stream and exits 1, and no `--work-fixture` can do this (every checked-in fixture ends with a
+  // terminal `result` line). This is the only `failed` outcome in this gate written by the pump.
+  // ============================================================================================
+  const daemonD = spawnDaemon('phase-d-daemon', workspace.id, { fixture: 'crash' })
+  const taskE1 = await prisma.task.create({
+    data: {
+      workspaceId: workspace.id,
+      title: 'M53 Gate Task E1',
+      description: 'Seeded by gate:m53-evidence — the run whose stream stops halfway.',
+      status: 'ready',
+      requiredRole: WORK_ROLE,
+      requiredCapabilities: [STAFF_CAPABILITY],
+      maxAttempts: 1,
+    },
+  })
+  const crashed = await waitUntil('a run the pump concluded as failed', PIPELINE_TIMEOUT_MS, async () => {
+    const row = await prisma.slaveRun.findFirst({ where: { taskId: taskE1.id, kind: 'implementation' }, orderBy: { startedAt: 'desc' } })
+    if (row === null) return { done: false, detail: 'no run row yet' }
+    const evidence = await evidenceFor(row.id)
+    if (evidence === null) return { done: false, detail: `the run is ${row.status} with no row yet` }
+    return { done: true, value: { run: row, evidence } }
+  })
+  console.log(`stage 1e: the crashed run = ${describeRun(crashed.run)}`)
+  console.log(`stage 1e: its row = ${describeEvidence(crashed.evidence)}`)
+  await assertEqual(crashed.run.status, 'failed', 'stage 1e: the status of a run whose stream stopped halfway')
+  await assertEqual(crashed.evidence.outcome, 'failed', 'stage 1e: the outcome on its row')
+  await assertEqual(await evidenceCountFor(crashed.run.id), 1, 'stage 1e: rows for the failed run')
+  await assertEqual(crashed.evidence.recoveries, 0, "stage 1e: recoveries -- a pump's conclusion is not a recovery, which is what 1c's 1 means")
+  const failedEvents = await prisma.executionEvent.count({ where: { runId: crashed.run.id, type: dbType('run.failed') } })
+  await assertEqual(failedEvents, 1, 'stage 1e: run.failed rows for it')
+  console.log(
+    `stage 1e PASSED: ${EVIDENCE_OUTCOME_LABEL.failed} — the pump concluded a run nobody could finish, and the fact ` +
+      'says so with no recovery claimed',
+  )
+
+  await stopDaemon(daemonD)
+
+  // The three outcomes this milestone HAS, all of them now written by a real transition rather than
+  // by this gate: a run that finished, one a person stopped, and two that failed (one concluded by
+  // the sweep, one by the pump).
+  const outcomes = await prisma.evidenceRecord.groupBy({ by: ['outcome'], where: { workspaceId: workspace.id }, _count: { _all: true } })
+  console.log(`stage 1: the outcomes the pipeline wrote in this project = ${JSON.stringify(outcomes.map((row) => [row.outcome, row._count._all]))}`)
+  await assertEqual(
+    outcomes.map((row) => row.outcome).sort(),
+    ['failed', 'stopped', 'succeeded'],
+    'stage 1: the distinct outcomes a real pipeline left behind in this project',
+  )
+
   const strayAfterPhases = findRealDaemonPids()
-  console.log(`orchestrator daemons still running after both phases: ${JSON.stringify(strayAfterPhases)}`)
+  console.log(`orchestrator daemons still running after every phase: ${JSON.stringify(strayAfterPhases)}`)
   if (strayAfterPhases.length > 0) await fail(`a daemon is still running (pid ${strayAfterPhases.join(', ')}) -- the rows below could move under this gate`)
 
   // ============================================================================================
@@ -1078,9 +1301,6 @@ try {
   console.log(`the record: profile B (${templateB.name}) = ${JSON.stringify(await counters(PROFILE_B))}`)
 
   // ---- Profiles C, D and E: the shapes stage 9 is about. ---------------------------------------
-  const workerC = await makeWorker({ name: 'Cal', templateId: templateC.id, runtimeRoles: [], capabilities: [] })
-  const workerD = await makeWorker({ name: 'Dex', templateId: templateD.id, runtimeRoles: [], capabilities: [] })
-  const workerE = await makeWorker({ name: 'Eli', templateId: templateE.id, runtimeRoles: [], capabilities: [] })
 
   // C: two terminal runs. A sample that EXISTS and is too thin -- R11's own case.
   for (let i = 0; i < 2; i += 1) {
@@ -1228,19 +1448,20 @@ try {
   // (a) A dry run writes NOTHING and says what it cannot know.
   const rowsBeforeDry = await prisma.evidenceRecord.count()
   const dry = runBackfill(['--dry-run'])
-  console.log(`stage 5: --dry-run printed:\n${dry}`)
+  console.log(`stage 5: --dry-run printed:\n${dry.stdout}`)
+  await assertEqual(dry.status, 0, "stage 5: --dry-run's exit status -- it attempts nothing, so it skips nothing")
   await assertEqual(await prisma.evidenceRecord.count(), rowsBeforeDry, 'stage 5: EvidenceRecord rows after --dry-run')
   for (const id of expectedCreated) {
-    if (!dry.includes(`would record run ${id}`)) await fail(`stage 5: --dry-run did not name ${id} among the runs it would create`)
+    if (!dry.stdout.includes(`would record run ${id}`)) await fail(`stage 5: --dry-run did not name ${id} among the runs it would create`)
   }
-  if (!dry.includes('--dry-run: nothing was written')) await fail('stage 5: --dry-run did not say that nothing was written')
-  if (!dry.includes('history is recorded, not judged')) await fail('stage 5: --dry-run did not say that history is recorded and never judged (E23)')
+  if (!dry.stdout.includes('--dry-run: nothing was written')) await fail('stage 5: --dry-run did not say that nothing was written')
+  if (!dry.stdout.includes('history is recorded, not judged')) await fail('stage 5: --dry-run did not say that history is recorded and never judged (E23)')
 
   // (b) The real pass creates exactly those rows.
   const first = runBackfill([])
-  console.log(`stage 5: the first real pass printed:\n${first}`)
-  const createdMatch = /created (\d+)/u.exec(first)
-  if (createdMatch === null) await fail(`stage 5: the summary line has no \`created N\` in it: ${JSON.stringify(first)}`)
+  console.log(`stage 5: the first real pass printed:\n${first.stdout}`)
+  const createdMatch = /created (\d+)/u.exec(first.stdout)
+  if (createdMatch === null) await fail(`stage 5: the summary line has no \`created N\` in it: ${JSON.stringify(first.stdout)}`)
   await assertEqual(Number(createdMatch[1]), expectedCreated.length, 'stage 5: the rows the backfill created')
   await assertEqual(await concludedWithoutRow(), [], 'stage 5: concluded runs still carrying no record')
 
@@ -1256,7 +1477,12 @@ try {
   await assertEqual(rederivedB1.verifiedFirstPass, false, 'stage 2/5: and its verdict, which the backfill never touched (E23)')
 
   // ...and it JUDGED none of them (E23).
-  const backfilledE = await prisma.evidenceRecord.findMany({ where: { profileKey: PROFILE_E }, orderBy: { runId: 'asc' } })
+  // The SIX runs profile E was seeded with, by id -- not "every row of profile E", because sub-stage
+  // 1c's swept orphan is a profile-E row too and the SWEEP wrote that one, not the backfill.
+  const backfilledE = await prisma.evidenceRecord.findMany({
+    where: { runId: { in: eRuns.map((row) => row.id) } },
+    orderBy: { runId: 'asc' },
+  })
   console.log(`stage 5: profile E's backfilled rows = ${JSON.stringify(backfilledE.map((row) => ({ runId: row.runId, attempt: row.attempt, verifiedFirstPass: row.verifiedFirstPass, reviewRejected: row.reviewRejected, integrated: row.integrated, settledAt: row.settledAt })))}`)
   await assertEqual(backfilledE.length, eRuns.length, "stage 5: profile E's rows after the backfill")
   for (const row of backfilledE) {
@@ -1274,8 +1500,12 @@ try {
   }
   const beforeSecond = await snapshot()
   const second = runBackfill([])
-  console.log(`stage 5: the second real pass printed:\n${second}`)
-  if (!second.includes('created 0')) await fail(`stage 5: the second pass did not report \`created 0\`: ${JSON.stringify(second)}`)
+  console.log(`stage 5: the second real pass printed:\n${second.stdout}`)
+  // THE EXIT STATUS, ONCE, ON THE PASS THAT MATTERS: `0` is "nothing was skipped", and the script
+  // exits 1 the moment a run reaches the writer and is refused. A second pass that created nothing
+  // AND skipped nothing is what "safe to run on a live database" means.
+  await assertEqual(second.status, 0, "stage 5: the second pass's exit status -- nothing created, and nothing skipped either")
+  if (!second.stdout.includes('created 0')) await fail(`stage 5: the second pass did not report \`created 0\`: ${JSON.stringify(second.stdout)}`)
   const afterSecond = await snapshot()
   if (beforeSecond !== afterSecond) {
     await fail('stage 5: the second pass changed at least one row -- the backfill is not idempotent to the byte')
@@ -1290,7 +1520,7 @@ try {
   const removedRow = await prisma.evidenceRecord.deleteMany({ where: { runId: reviewRun.run.id } })
   console.log(`stage 5: removed ${String(removedStarted.count)} run.started event(s) and ${String(removedRow.count)} row(s) for review run ${reviewRun.run.id}`)
   const third = runBackfill([])
-  console.log(`stage 5: the pass over a run whose history is incomplete printed:\n${third}`)
+  console.log(`stage 5: the pass over a run whose history is incomplete printed:\n${third.stdout}`)
   const repaired = await evidenceFor(reviewRun.run.id)
   console.log(`stage 5: the repaired row = ${describeEvidence(repaired)}`)
   if (repaired === null) await fail('stage 5: a run whose run.started event is gone got no row at all')
@@ -1470,13 +1700,25 @@ try {
       await fail(`stage 10: \`evidence list\` prints the word ${word} -- there is no universal score anywhere (R11)`)
     }
   }
-  if (!evidenceListing.includes(EVIDENCE_OUTCOME_LABEL.succeeded)) {
-    await fail(`stage 10: \`evidence list\` does not print the outcome LABEL ${JSON.stringify(EVIDENCE_OUTCOME_LABEL.succeeded)}`)
+  // ALL THREE outcome words, which this project now really has (sub-stages 1b, 1c and 1e), and NONE
+  // of the three enum members as a field of its own -- the CLI is the other surface `docs/ia.md`
+  // rule 3 applies to, and a run that finished says `Finished` rather than `succeeded`.
+  const listingFields = new Set(evidenceListing.split('\n').flatMap((line) => line.split('\t').map((field) => field.trim())))
+  for (const outcome of EVIDENCE_OUTCOMES) {
+    if (!evidenceListing.includes(EVIDENCE_OUTCOME_LABEL[outcome])) {
+      await fail(`stage 10: \`evidence list\` does not print the outcome LABEL ${JSON.stringify(EVIDENCE_OUTCOME_LABEL[outcome])}`)
+    }
+    if (listingFields.has(outcome)) {
+      await fail(`stage 10: \`evidence list\` prints the raw enum member ${JSON.stringify(outcome)} as a field of its own`)
+    }
   }
   if (!evidenceListing.includes(domainLabel(QA_DOMAIN))) {
     await fail(`stage 10: \`evidence list\` does not print the domain LABEL ${JSON.stringify(domainLabel(QA_DOMAIN))}`)
   }
-  console.log(`stage 10: the CLI prints ${JSON.stringify(EVIDENCE_OUTCOME_LABEL.succeeded)} and ${JSON.stringify(domainLabel(QA_DOMAIN))}, and no score of any kind`)
+  console.log(
+    `stage 10: the CLI prints ${JSON.stringify(EVIDENCE_OUTCOMES.map((outcome) => EVIDENCE_OUTCOME_LABEL[outcome]))} and ` +
+      `${JSON.stringify(domainLabel(QA_DOMAIN))}, no raw enum member in any field, and no score of any kind`,
+  )
 
   // ============================================================================================
   // The real web shell, on a free port, loopback-bound.
@@ -1755,18 +1997,36 @@ try {
       'at least one rate and draw a valued bar for each, and the two phrases mean two different things',
   )
 
-  // ---- Stage 10: no raw key is visible text, and no column is a score. --------------------------
-  const rawValues = new Set([
+  // ---- Stage 10: no raw key is visible text on EITHER table, and no column is a score. ----------
+  //
+  // ONE FOCUSED LIST PER TABLE (fix round 1, review item 2). A guard against a value that cannot
+  // reach the column it guards is decoration, and decoration in a gate reads as coverage. The
+  // by-profile table's columns are Profile · Repository · Attempted · three rates · three counts ·
+  // Median duration · Cost, so an `EvidenceOutcome` member or a domain key could never be a whole
+  // cell's text there -- those are asserted where they CAN appear: the outcome and provenance words
+  // in `evidence list`'s output (above), and the domain keys on the chip row (stage 3, where the
+  // chip's text is the LABEL and the key is on `data-domain` and `title`).
+  //
+  // What CAN go wrong on a cell of either table, and is therefore what is checked:
+  //   - a profile key printed instead of the profile's name (the uuid regex, and the exact keys);
+  //   - a JavaScript non-value leaking into a rate, a count or a figure (`null` is a MEANING in
+  //     three of these columns and must always be rendered as words, never as the word `null`);
+  //   - a bare provenance word with no figure beside it in the Cost cell, which is the raw
+  //     `SUM(costUsd)` R6 deleted wearing a word.
+  const NON_VALUES = ['null', 'undefined', 'NaN', 'true', 'false', '[object Object]']
+  const PROVENANCE_WORDS = Object.values(COST_PROVENANCE_WORD)
+  const profileRawValues = new Set([
     PROFILE_A, PROFILE_B, PROFILE_C, PROFILE_D, PROFILE_E, PROFILE_REVIEWER,
-    'succeeded', 'failed', 'stopped', 'reported', 'estimated', 'unmeasured',
-    STAFF_DOMAIN, QA_DOMAIN, GENERAL_DOMAIN, 'implementation', 'review',
+    ...NON_VALUES,
+    ...PROVENANCE_WORDS,
   ])
+  const KEY_PATTERN = /template:[0-9a-f-]{36}|slave:[0-9a-f-]{36}/u
   for (const row of rows) {
     for (const [index, cell] of row.cells.entries()) {
-      if (rawValues.has(cell.text)) {
+      if (profileRawValues.has(cell.text)) {
         await fail(`stage 10: cell ${String(index)} of ${String(row.profileKey)} is the raw value ${JSON.stringify(cell.text)} as VISIBLE text`)
       }
-      if (/template:[0-9a-f-]{36}|slave:[0-9a-f-]{36}/u.test(cell.text)) {
+      if (KEY_PATTERN.test(cell.text)) {
         await fail(`stage 10: cell ${String(index)} of ${String(row.profileKey)} prints a raw profile key: ${JSON.stringify(cell.text)}`)
       }
     }
@@ -1795,15 +2055,51 @@ try {
       }
     }
   }
-  const modelRowKeys = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-testid^="evidence-model-row-"]')].map((node) => ({
-      model: node.getAttribute('data-model'),
-      text: (node.querySelector('[data-testid="data-table-row"]')?.firstElementChild?.textContent ?? '').trim(),
-    })),
+  // ---- The by-model table, cell by cell -- the brief says BOTH tables. -------------------------
+  //
+  // A model id IS the label here (`sonnet`, `claude-sonnet-5`): that column names a thing whose own
+  // name is its id, and `docs/ia.md` rule 3 is about keys a person cannot read. The one row on this
+  // table whose key is not a word is the NULL-model group, and the rule for it is the opposite:
+  // it must say `Model not recorded` and never an empty cell, a `null`, or a blank.
+  const modelRows = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid^="evidence-model-row-"]')].map((wrapper) => {
+      const row = wrapper.querySelector('[data-testid="data-table-row"]')
+      return {
+        model: wrapper.getAttribute('data-model'),
+        cells: [...(row?.children ?? [])].map((cell) => (cell.textContent ?? '').trim()),
+        label: (row?.firstElementChild?.textContent ?? '').trim(),
+        title: row?.firstElementChild?.getAttribute('title') ?? null,
+      }
+    }),
   )
-  console.log(`stage 10: the by-model rows = ${JSON.stringify(modelRowKeys)}`)
-  if (modelRowKeys.length === 0) await fail('stage 10: the by-model table has no rows at all')
-  console.log('stage 10 PASSED: every visible cell is a word or a figure, every key is on a title or a data- attribute, and no column is a score')
+  console.log(`stage 10: the by-model rows = ${JSON.stringify(modelRows)}`)
+  if (modelRows.length === 0) await fail('stage 10: the by-model table has no rows at all')
+  const modelRawValues = new Set([...NON_VALUES, ...PROVENANCE_WORDS, ''])
+  for (const row of modelRows) {
+    for (const [index, text] of row.cells.entries()) {
+      if (modelRawValues.has(text)) {
+        await fail(`stage 10: cell ${String(index)} of the by-model row ${JSON.stringify(row.model)} reads ${JSON.stringify(text)} -- a cell says a word or a figure`)
+      }
+      if (KEY_PATTERN.test(text)) {
+        await fail(`stage 10: the by-model row ${JSON.stringify(row.model)} prints a raw profile key: ${JSON.stringify(text)}`)
+      }
+    }
+  }
+  const nullModelRow = modelRows.find((row) => row.model === '')
+  if (nullModelRow === undefined) {
+    console.log('stage 10: no null-model group on this table -- every run in this database recorded the model it ran on')
+  } else {
+    await assertEqual(nullModelRow.label, MODEL_NOT_RECORDED_LABEL, 'stage 10: what the null-model group calls itself')
+    await assertEqual(nullModelRow.title, null, 'stage 10: and it carries no title, because there is no id to put in one')
+  }
+  const namedModelRow = modelRows.find((row) => row.model !== '')
+  if (namedModelRow === undefined) await fail('stage 10: every by-model row is the null group -- the named-model half is unasserted')
+  await assertEqual(namedModelRow.label, namedModelRow.model, 'stage 10: a model names itself -- its id IS its word')
+  await assertEqual(namedModelRow.title, namedModelRow.model, 'stage 10: and it is on the title too')
+  console.log(
+    `stage 10 PASSED: ${String(rows.length)} by-profile and ${String(modelRows.length)} by-model rows, every visible ` +
+      'cell a word or a figure, every key on a title or a data- attribute, and no column on either table a score',
+  )
 
   // ---- Stage 11: the sort is what the caption says. --------------------------------------------
   const caption = (await page.getByTestId('evidence-sort-caption').textContent())?.trim() ?? ''
