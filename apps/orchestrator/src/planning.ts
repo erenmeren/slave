@@ -23,7 +23,7 @@ import {
 } from '@slave-of-ai/control'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
-import { runTokenHash, type SlaveRuntimeAdapter, type RunHandle } from '@slave-of-ai/providers'
+import { checkpointRunFiles, runTokenHash, type SlaveRuntimeAdapter, type RunHandle } from '@slave-of-ai/providers'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
@@ -625,9 +625,10 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       events: runAdapter.events(runId),
       cancel: () => runAdapter.cancel(runId),
       // `settingsPath`/`hookPath` come from the adapter's own report, not from anything dispatched
-      // here (M12 Task 2).
+      // here (M12 Task 2). `checkpointRunFiles` (M56a R7) is the one place the provider's own
+      // channel names are mapped onto those two columns.
       spawn: {
-        ...handle.runFiles,
+        ...checkpointRunFiles(resolved.provider, handle),
         pauseFlagPath,
         gitIdentity,
         // M12 Task 6/8: the provider this run actually started with, replayed verbatim on resume.

@@ -24,7 +24,13 @@ import {
   type WorkspaceId,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
-import { runTokenHash, type AdapterRegistry, type SlaveRuntimeAdapter, type RunHandle } from '@slave-of-ai/providers'
+import {
+  checkpointRunFiles,
+  runTokenHash,
+  type AdapterRegistry,
+  type SlaveRuntimeAdapter,
+  type RunHandle,
+} from '@slave-of-ai/providers'
 import { deliverAnswers } from './deliver.js'
 import { runMergePass } from './merge.js'
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
@@ -772,8 +778,10 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
       // recover it from once this process is gone. `settingsPath`/`hookPath` come from the
       // adapter's own report (`handle.runFiles`), not from anything this tick derived or wrote
       // itself (M12 Task 2) -- relayed into the checkpoint verbatim, never interpreted here.
+      // `checkpointRunFiles` (M56a R7) is the one place the provider's own channel names are
+      // mapped onto those two columns.
       spawn: {
-        ...handle.runFiles,
+        ...checkpointRunFiles(resolved.provider, handle),
         pauseFlagPath,
         gitIdentity: { name: slave.name, email: `${emailLocalPart(slave)}@slaveofai.local` },
         // Recorded so a pause's checkpoint carries the provider the run actually started with

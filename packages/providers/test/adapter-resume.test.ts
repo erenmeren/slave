@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { ClaudeCodeAdapter, type RunHandle, type StartRunInput } from '../src/claude/adapter.js'
 import type { Checkpoint } from '../src/claude/checkpoint.js'
+import { checkpointRunFiles } from '../src/contract/adapter.js'
 import { copyGateInto } from './helpers/gate-fixture.js'
 
 const FAKE = fileURLToPath(new URL('./fake-claude.mjs', import.meta.url))
@@ -153,9 +154,9 @@ describe('ClaudeCodeAdapter.resume', () => {
       // Equal to `startHandle.runFiles`'s own values here, deliberately -- these tests exercise
       // other parts of the contract. The divergence test below ("resumes using the checkpoint's
       // own spawn fields...") is the one that sets these to something different and proves which
-      // source actually reached the spawned process.
-      settingsPath: startHandle.runFiles.settingsPath,
-      hookPath: startHandle.runFiles.hookPath,
+      // source actually reached the spawned process. `checkpointRunFiles` (M56a R7) is how the
+      // adapter's CHANNELS become these two columns, here exactly as in the orchestrator.
+      ...checkpointRunFiles('claude_code', startHandle),
       gitAuthorName: input.gitIdentity.name,
       gitAuthorEmail: input.gitIdentity.email,
     }
@@ -221,7 +222,7 @@ describe('ClaudeCodeAdapter.resume', () => {
     expect(args).toContain('--permission-mode')
     expect(args).toContain('bypassPermissions')
     expect(args).toContain('--settings')
-    expect(args).toContain(startHandle.runFiles.settingsPath)
+    expect(args).toContain(startHandle.runFiles.settings)
     // Same worktree: cwd, echoed by the fake CLI's env-echo fixture.
     expect(payload?.['cwd']).toBe(checkpoint.worktreePath)
   })
@@ -260,7 +261,7 @@ describe('ClaudeCodeAdapter.resume', () => {
     const settingsIndex = args.indexOf('--settings')
     expect(settingsIndex).toBeGreaterThanOrEqual(0)
     expect(args[settingsIndex + 1]).toBe(divergentCheckpoint.settingsPath)
-    expect(args[settingsIndex + 1]).not.toBe(startHandle.runFiles.settingsPath)
+    expect(args[settingsIndex + 1]).not.toBe(startHandle.runFiles.settings)
 
     expect(env['GIT_AUTHOR_NAME']).toBe('Divergent Author')
     expect(env['GIT_AUTHOR_EMAIL']).toBe('divergent@example.com')
@@ -408,8 +409,7 @@ describe('ClaudeCodeAdapter.resume', () => {
         ...checkpoint,
         worktreePath: liveInput.worktreePath,
         pauseFlagPath: liveInput.pauseFlagPath,
-        settingsPath: handle.runFiles.settingsPath,
-        hookPath: handle.runFiles.hookPath,
+        ...checkpointRunFiles('claude_code', handle),
       }
 
       // A plain try/catch, not `await expect(...).rejects.toThrow(...)`: the latter's whole
@@ -475,8 +475,7 @@ describe('ClaudeCodeAdapter.resume', () => {
         ...checkpoint,
         worktreePath: liveInput.worktreePath,
         pauseFlagPath: liveInput.pauseFlagPath,
-        settingsPath: handle.runFiles.settingsPath,
-        hookPath: handle.runFiles.hookPath,
+        ...checkpointRunFiles('claude_code', handle),
       }
 
       let rejection: unknown
@@ -582,8 +581,7 @@ describe('ClaudeCodeAdapter.resume', () => {
         ...checkpoint,
         worktreePath: orphanInput.worktreePath,
         pauseFlagPath: orphanInput.pauseFlagPath,
-        settingsPath: handle.runFiles.settingsPath,
-        hookPath: handle.runFiles.hookPath,
+        ...checkpointRunFiles('claude_code', handle),
       }
       writeOrphanScript(resumePidFile)
       const resumedHandle = await orphanAdapter.resume(orphanRunId, orphanCheckpoint, null)

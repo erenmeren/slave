@@ -172,7 +172,7 @@ describe('CursorAdapter', () => {
 
   it('cannot pause mid-run but can resume a session', () => {
     const adapter = new CursorAdapter({ command: '/bin/true', gatePath })
-    expect(adapter.id).toBe('cursor')
+    expect(adapter.kind).toBe('cursor')
     // `gate` reads `'all-tools'`, measured, not assumed (M13 Task 9/10). The recorded run at
     // `packages/providers/test/fixtures/cursor/gate/run-2-flag-present.ndjson` shows the
     // `preToolUse` registration refusing both a shell command and a file write while the pause
@@ -188,7 +188,7 @@ describe('CursorAdapter', () => {
 
   it('is what buildRegistry resolves the cursor kind to, once given cursor options', () => {
     const registry = buildRegistry({ cursor: { command: 'cursor-agent', gatePath } })
-    expect(registry.resolve('cursor').id).toBe('cursor')
+    expect(registry.resolve('cursor').kind).toBe('cursor')
   })
 
   it("writes .cursor/hooks.json into the worktree, fail-closed, at every step it registers", async () => {
@@ -197,7 +197,7 @@ describe('CursorAdapter', () => {
     await drain(adapter, input.runId)
 
     const hooksPath = path.join(worktreePath, '.cursor', 'hooks.json')
-    expect(handle.runFiles).toEqual({ settingsPath: hooksPath, hookPath: gatePath })
+    expect(handle.runFiles).toEqual({ settings: hooksPath, hook: gatePath })
 
     const parsed: unknown = JSON.parse(readFileSync(hooksPath, 'utf8'))
     expect(parsed).toEqual({

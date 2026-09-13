@@ -6,6 +6,7 @@ import { createInterface } from 'node:readline'
 import { StringDecoder } from 'node:string_decoder'
 import type { RunId } from '@slave-of-ai/domain'
 import { capabilitiesOf } from '../capabilities.js'
+import type { ProviderCapabilities, RunHandle, SlaveRuntimeAdapter, StartRunInput } from '../contract/adapter.js'
 import { listClaudeCodeModels, type ModelListing } from '../models.js'
 import { AsyncEventQueue } from '../runtime/event-queue.js'
 import { preflightTap } from '../runtime/gate-preflight.js'
@@ -26,178 +27,21 @@ import { writeSettingsFile } from './settings.js'
 import { parseStreamLine, parseStreamResults, parseStreamUsage } from './stream.js'
 
 /**
- * What a runtime can promise. Every member has exactly one consumer in the system --
- * a capability nothing reads is a claim nothing checks, so it does not exist here.
- */
-export interface ProviderCapabilities {
-  /** Consumed by the pause strategy: can this runtime stop between tool calls? */
-  readonly canPauseMidRun: boolean
-  /** Consumed by the pause strategy: can a stopped session be continued? */
-  readonly canResumeSession: boolean
-  /** Consumed by gate semantics and the roster's provider mark. */
-  readonly gate: 'all-tools' | 'shell-only' | 'none'
-  /** Consumed by budget admission: does this runtime report spend in USD? */
-  readonly reportsCost: boolean
-  /**
-   * Consumed by M51's behavioural breaker: does this runtime say what came BACK from a tool call?
-   *
-   * A detector that cannot tell a finished call from a running one has no way to say a quiet
-   * twenty-minute build is not a loop, so a runtime answering `false` here would have to be read
-   * with the error-storm arm suppressed entirely. Both rows answer `true` today, each by its own
-   * proof (`capabilities.ts`) -- this exists so a third runtime that cannot is refused an arm
-   * rather than silently mis-judged by it.
-   */
-  readonly reportsToolResults: boolean
-}
-
-/**
- * Everything the adapter needs to spawn one run (spec §7, ADR 0001 §3/§5.5). `worktreePath` and
- * `pauseFlagPath` are supplied by the caller, already absolute.
+ * The contract, which is no longer declared here (M56a R1).
  *
- * M12 Decision of Record #1: no caller outside `packages/providers` may know that this runtime
- * keeps a settings file, a hook script, or where either lives -- `settingsPath` and `hookPath` used
- * to live here for exactly that reason, and both are gone now. `runDir` is the one opaque handle
- * the orchestrator still supplies (`packages/control`'s `runFilePaths`, an already-created, empty
- * per-run scratch directory); everything this adapter keeps inside it -- today just the settings
- * file this adapter writes and registers `hookPath` (a `ClaudeCodeAdapterOptions` constructor
- * option now, not a per-run input) into -- is this adapter's own business, reported back to the
- * caller opaquely on `RunHandle.runFiles` for the one thing a caller genuinely needs it for: a
- * resumed run finding the same files.
+ * It moved to `../contract/adapter.ts` -- a directory that belongs to neither vendor -- and is
+ * re-exported from this path because the whole tree imports it from here: `registry.ts:1`,
+ * `cursor/adapter.ts:12`, `capabilities.ts:1`, `index.ts:21` and `@slave-of-ai/control`'s own
+ * re-exports all resolve to the same symbols by the same names. Nothing about the interface was
+ * ever Claude-specific; it lived here because M3 built it here.
  */
-export interface StartRunInput {
-  readonly runId: RunId
-  readonly prompt: string
-  readonly worktreePath: string
-  readonly pauseFlagPath: string
-  readonly runDir: string
-  /**
-   * The permission matrix's resolved deny list for this run (M18 Task 5), already written to disk
-   * by the caller as `permissions.json` inside `runDir` (`packages/control`'s
-   * `writePermissionsFile`, called once per start AND once per resume) -- this adapter never
-   * resolves the matrix itself, only tells the child where to find the resolved file, exactly the
-   * way `pauseFlagPath` already works. Required, not optional: every dispatch site writes the file
-   * before calling `start()`, even when the resolved deny list is empty.
-   */
-  readonly permissionsFilePath: string
-  readonly gitIdentity: {
-    readonly name: string
-    readonly email: string
-  }
-  /**
-   * The resolved model override (M10 §6), already the caller's chosen value -- this adapter does
-   * not itself consult a worker/roster/template chain, `resolveRuntime` (M12 Task 8; defined in
-   * `packages/control/src/runtime.ts` since Task 9, re-exported from
-   * `apps/orchestrator/src/model.ts`) does that before calling `start()`. `undefined` means "no override": `--model` is
-   * omitted entirely rather than passed with some sentinel, so a legacy run with no override
-   * behaves exactly as it did before this field existed.
-   */
-  readonly model?: string
-  /**
-   * M52 R4: the PLAINTEXT run token this spawn's child carries, whose sha256 is already on the
-   * `SlaveRun` row and inside the `permissions.json` the caller just wrote. The adapter puts it in
-   * exactly one place -- the child's environment -- and never writes it anywhere.
-   *
-   * OPTIONAL for the same reason `resume`'s fourth parameter is (plan erratum E7): `Checkpoint` may
-   * not gain a field with no matching Prisma column, and a token file in `runDir` would be readable
-   * by every sibling run under the same uid. Optional cannot widen anything here -- an absent token
-   * means the key is absent from the child's environment, and the child then meets a `tokenHash` it
-   * cannot match, which denies every tool call rather than allowing one.
-   */
-  readonly runToken?: string
-}
-
-/** What `start()` reports back: enough to find and signal the process later. */
-export interface RunHandle {
-  readonly runId: RunId
-  readonly pid: number
-  /**
-   * The provider-private files this run needs in order to be resumed later, exactly as this
-   * adapter actually wrote them. The orchestrator relays these into the checkpoint verbatim and
-   * never interprets them -- only the adapter that produced them reads them back (`resume`, off
-   * `Checkpoint.settingsPath`/`Checkpoint.hookPath`). Named `settingsPath`/`hookPath` rather than
-   * something provider-neutral on purpose: the Postgres `Checkpoint` columns are frozen under
-   * those exact names for this milestone, and a second runtime whose run files do not fit this pair
-   * generalizes it in its own task, at the cost of one interface field.
-   */
-  readonly runFiles: { readonly settingsPath: string; readonly hookPath: string }
-}
-
-/**
- * The provider-neutral contract every runtime adapter implements (spec §7).
- *
- * Built incrementally across M3. This task (M3 Task 6) contributes `id`,
- * `getCapabilities`, `start`, `events` and `cancel`. `resume` /
- * `sendInstruction` (Task 9) extends this interface by TypeScript
- * declaration merging when that task lands -- this file deliberately does
- * not stub it ahead of that work.
- *
- * `requestPause` and `awaitPause` (M3 Task 8) briefly lived here too and are
- * gone (M12 Task 4, controller ruling). They only ever worked for a run
- * registered in *this adapter instance's own in-memory state*, but pause is
- * a cross-process control signal -- a CLI invocation, a web request and the
- * daemon each call it from a process that never called this run's
- * `start()` -- so nothing could ever call them for real (M12 Task 3 proved
- * this). Pause is a stateless flag-file write instead
- * (`packages/providers`'s `signalPause`); the adapter itself has no pause
- * method at all.
- */
-export interface SlaveRuntimeAdapter {
-  readonly id: string
-  getCapabilities(): ProviderCapabilities
-  /**
-   * The models an operator can pick for this provider (M25 §5.1) -- `listProviderModels(kind)`
-   * gives the same answer without an adapter.
-   */
-  listModels(): Promise<ModelListing>
-  start(input: StartRunInput): Promise<RunHandle>
-  events(runId: RunId): AsyncIterable<RuntimeEvent>
-  cancel(runId: RunId): Promise<void>
-}
-
-/**
- * `resume` (Task 9), declared here as a third declaration-merged block for the same reason the
- * pause block above is separate from Task 6's -- so the diff that added it stays legible against
- * this interface's own history.
- */
-export interface SlaveRuntimeAdapter {
-  /**
-   * Clears `checkpoint.pauseFlagPath`, **verifies it is actually absent**, then spawns
-   * `claude -p "<prompt>" --resume <checkpoint.sessionId>` in `checkpoint.worktreePath`, with the
-   * same `--settings` and permission posture the paused run used (ADR 0001 §5.7/§6). The
-   * verification is the point of the step, not ceremony: a flag file that survives the clear
-   * attempt makes the hook deny the resumed run's first tool call, and every one after it -- a
-   * resumed run that looks, from the outside, exactly like a run stuck in a pause loop, with no
-   * error anywhere to say why. `resume` never rewrites `checkpoint.sessionId` (ADR 0001 §5: a
-   * plain `--resume` reports the same UUID) and never passes `--fork-session`, which would mint a
-   * new one.
-   *
-   * `queuedInstruction` becomes the resume prompt verbatim when supplied. The CLI has no notion
-   * that a resume follows a pause -- it treats the prompt as an ordinary next turn (ADR 0001 §6).
-   * When `null` (no instruction queued), a generic continuation prompt is substituted: `-p` still
-   * needs *some* text in headless mode, and there is no queued operator instruction to supply it.
-   *
-   * Resuming a `runId` this adapter instance never itself `start()`-ed is the normal case, not an
-   * error -- that is exactly what surviving a daemon restart means (fix round 1). `checkpoint`
-   * alone carries everything the spawn needs (`settingsPath`, `hookPath`, `gitAuthorName`,
-   * `gitAuthorEmail`, alongside `worktreePath`/`pauseFlagPath`/`sessionId`), so `resume` does not
-   * look up any prior in-memory record of `runId` before spawning. `spawnChild` (below) registers
-   * a fresh `RunState` under `runId` regardless of whether one already existed, which is what
-   * makes `events()`/`cancel()` work against the resumed run afterwards -- the process is tracked
-   * from the moment it is spawned, not "untracked" for having no prior `start()` on this instance.
-   */
-  /**
-   * `runToken` (M52 R4) is the ROTATED token for this spawn -- a resume mints a fresh one, so a
-   * token recovered from an old worktree, an old process listing or a stale environment dump is
-   * dead the moment the run resumes. Optional and last, so the ~20 existing call sites compile
-   * unchanged; see `StartRunInput.runToken` for why optional cannot widen anything.
-   */
-  resume(
-    runId: RunId,
-    checkpoint: Checkpoint,
-    queuedInstruction: string | null,
-    runToken?: string,
-  ): Promise<RunHandle>
-}
+export type {
+  ProviderCapabilities,
+  RunFiles,
+  RunHandle,
+  SlaveRuntimeAdapter,
+  StartRunInput,
+} from '../contract/adapter.js'
 
 export interface ClaudeCodeAdapterOptions {
   /** The executable to spawn. Real usage: `'claude'`. Tests: `'node'` running the fake CLI. */
@@ -298,7 +142,7 @@ const DEFAULT_RESUME_PROMPT = 'Continue the paused run.'
 const DEFAULT_KILL_GRACE_MS = 5_000
 
 export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
-  readonly id = 'claude-code' as const
+  readonly kind = 'claude_code' as const
 
   private readonly command: string
   private readonly extraArgs: readonly string[]
@@ -447,7 +291,11 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         ...(tapPath === undefined ? {} : { toolResultsPath: toolResultsPathFor(input.runDir) }),
       }),
       startInput: input,
-      runFiles: { settingsPath, hookPath: this.hookPath },
+      // `settings` and `hook` are this provider's declared channels
+      // (`packages/domain/src/provider/claude-code.ts`'s `runFiles.channels`); the orchestrator maps
+      // them onto the checkpoint's two columns through `checkpointRunFiles` and never reads a key
+      // here by name.
+      runFiles: { settings: settingsPath, hook: this.hookPath },
     })
   }
 
@@ -805,7 +653,7 @@ export class ClaudeCodeAdapter implements SlaveRuntimeAdapter {
         ...(tapPath === undefined ? {} : { toolResultsPath: toolResultsPathFor(resumedInput.runDir) }),
       }),
       startInput: resumedInput,
-      runFiles: { settingsPath: checkpoint.settingsPath, hookPath: checkpoint.hookPath },
+      runFiles: { settings: checkpoint.settingsPath, hook: checkpoint.hookPath },
     })
   }
 

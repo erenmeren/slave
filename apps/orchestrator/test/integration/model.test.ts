@@ -63,7 +63,7 @@ function recordingAdapter(): Recorder {
   const inner = new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath: REAL_GATE })
   const starts: StartRunInput[] = []
   const adapter = {
-    id: inner.id,
+    kind: inner.kind,
     getCapabilities: () => inner.getCapabilities(),
     start: async (input: StartRunInput) => {
       starts.push(input)

@@ -14,6 +14,7 @@ export * from './runtime/pause-flag.js'
 // `preflightGate` (its thin, Claude-shaped wrapper), and the generic probe is
 // package-internal -- nothing outside `packages/providers` calls it.
 export { preflightTap, runGateScript, type AllowContract, type GateRunResult } from './runtime/gate-preflight.js'
+export * from './contract/adapter.js'
 export * from './claude/stream.js'
 export * from './claude/flags.js'
 export * from './claude/settings.js'

@@ -9,7 +9,7 @@ import { clearAndVerifyPauseFlagAbsent } from '../runtime/pause-flag.js'
 import { brokerChannelPathFor, buildChildEnv, permissionsFilePathFor, terminateChild } from '../runtime/process.js'
 import { isRecord } from '../runtime/summary.js'
 import type { RunOutcome, RuntimeEvent } from '../types.js'
-import type { SlaveRuntimeAdapter, ProviderCapabilities, RunHandle, StartRunInput } from '../claude/adapter.js'
+import type { SlaveRuntimeAdapter, ProviderCapabilities, RunHandle, StartRunInput } from '../contract/adapter.js'
 import type { Checkpoint } from '../claude/checkpoint.js'
 import { cursorFlags, cursorPreflightGate } from './flags.js'
 import { cursorHooksPath, writeCursorHooksFile } from './hooks.js'
@@ -17,18 +17,18 @@ import { parseCursorLine } from './stream.js'
 
 /**
  * The second `SlaveRuntimeAdapter` (M12 Task 12, spec §7). It implements the SAME interface
- * `ClaudeCodeAdapter` does -- `id`, `getCapabilities`, `start`, `events`, `cancel`, `resume` --
- * declared in `claude/adapter.ts`, which owns those types for the milestone. Nothing about that
+ * `ClaudeCodeAdapter` does -- `kind`, `getCapabilities`, `start`, `events`, `cancel`, `resume` --
+ * declared in `contract/adapter.ts`, which belongs to neither vendor (M56a R1). Nothing about that
  * interface is Claude-specific; what differs between the two runtimes lives entirely below.
  *
  * WHERE THIS DIVERGES FROM `ClaudeCodeAdapter`, AND WHY (each measured, not assumed):
  *
  * - **Its run files are `.cursor/hooks.json` in the WORKTREE, not a settings file in `runDir`.**
  *   `cursor-agent` has no `--settings`-style flag; it reads hooks from the workspace (Task 11 §3
- *   Q1), so per-run gate isolation comes from the run having its own worktree. `RunHandle.runFiles`
- *   still reports the pair as `{settingsPath, hookPath}` -- those Postgres columns are frozen for
- *   this milestone and Cursor's two files fit the pair exactly (the hooks file, the gate script),
- *   so no interface field had to be generalized.
+ *   Q1), so per-run gate isolation comes from the run having its own worktree. It reports them on
+ *   the `settings` and `hook` CHANNELS its manifest declares (M56a R7), and
+ *   `checkpointRunFiles` maps those onto `Checkpoint.settingsPath`/`.hookPath` -- which are still
+ *   the two columns, and still NOT NULL, because M56a runs no migration.
  *
  * - **The prompt is a POSITIONAL argument, not `-p <prompt>`.** `cursorFlags` returns flags only
  *   and the prompt is appended after them (Task 11 D1).
@@ -124,7 +124,7 @@ interface CursorRunState {
 }
 
 export class CursorAdapter implements SlaveRuntimeAdapter {
-  readonly id = 'cursor' as const
+  readonly kind = 'cursor' as const
 
   private readonly command: string
   private readonly gatePath: string
@@ -193,7 +193,7 @@ export class CursorAdapter implements SlaveRuntimeAdapter {
         brokerChannelPath: brokerChannelPathFor(input.runDir),
         ...(this.brokerCliPath === undefined ? {} : { brokerCliPath: this.brokerCliPath }),
       }),
-      runFiles: { settingsPath: hooksPath, hookPath: this.gatePath },
+      runFiles: { settings: hooksPath, hook: this.gatePath },
     })
   }
 
@@ -282,7 +282,7 @@ export class CursorAdapter implements SlaveRuntimeAdapter {
         brokerChannelPath: brokerChannelPathFor(dirname(checkpoint.pauseFlagPath)),
         ...(this.brokerCliPath === undefined ? {} : { brokerCliPath: this.brokerCliPath }),
       }),
-      runFiles: { settingsPath: checkpoint.settingsPath, hookPath: checkpoint.hookPath },
+      runFiles: { settings: checkpoint.settingsPath, hook: checkpoint.hookPath },
     })
   }
 

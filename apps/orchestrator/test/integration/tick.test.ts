@@ -145,7 +145,7 @@ function recordingAdapter(
   const starts: StartRunInput[] = []
   const cancelled: string[] = []
   const adapter = {
-    id: inner.id,
+    kind: inner.kind,
     getCapabilities: () => inner.getCapabilities(),
     start: async (input: StartRunInput) => {
       starts.push(input)

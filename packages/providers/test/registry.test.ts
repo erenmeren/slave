@@ -1,3 +1,4 @@
+import type { ProviderKind } from '@slave-of-ai/domain'
 import { describe, expect, it } from 'vitest'
 import type { SlaveRuntimeAdapter, ProviderCapabilities } from '../src/claude/adapter.js'
 import { admitAdapter, buildRegistry } from '../src/index.js'
@@ -5,7 +6,7 @@ import { admitAdapter, buildRegistry } from '../src/index.js'
 describe('buildRegistry', () => {
   it('resolves a configured kind to its adapter', () => {
     const registry = buildRegistry({ claudeCode: { command: 'claude', hookPath: '/tmp/g.sh' } })
-    expect(registry.resolve('claude_code').id).toBe('claude-code')
+    expect(registry.resolve('claude_code').kind).toBe('claude_code')
   })
 
   it('refuses an unconfigured kind rather than falling back to Claude', () => {
@@ -18,8 +19,8 @@ describe('buildRegistry', () => {
       claudeCode: { command: 'claude', hookPath: '/tmp/g.sh' },
       cursor: { command: 'cursor-agent', gatePath: '/tmp/shell-gate.sh' },
     })
-    expect(registry.resolve('claude_code').id).toBe('claude-code')
-    expect(registry.resolve('cursor').id).toBe('cursor')
+    expect(registry.resolve('claude_code').kind).toBe('claude_code')
+    expect(registry.resolve('cursor').kind).toBe('cursor')
   })
 })
 
@@ -31,10 +32,14 @@ describe('buildRegistry', () => {
  * refusal is unreachable through `buildRegistry`'s own option shape today and would be untested
  * until the day a third provider needed it -- which is the day it must already work. Nothing is
  * mocked; the stub simply IS an adapter that promises neither capability.
+ *
+ * It is handed the KIND it claims to be (M56a R1): the contract's `id: string` became
+ * `readonly kind: ProviderKind`, which cannot hold `'stub'` -- an adapter that does not know which
+ * provider it is was never something the registry could admit.
  */
-function stubAdapter(capabilities: ProviderCapabilities): SlaveRuntimeAdapter {
+function stubAdapter(kind: ProviderKind, capabilities: ProviderCapabilities): SlaveRuntimeAdapter {
   return {
-    id: 'stub',
+    kind,
     getCapabilities: (): ProviderCapabilities => capabilities,
     listModels: async () => ({ models: [], source: 'static' as const }),
     start: (): never => {
@@ -54,7 +59,7 @@ function stubAdapter(capabilities: ProviderCapabilities): SlaveRuntimeAdapter {
 
 describe('admitAdapter', () => {
   it('refuses an adapter that can neither pause mid-run nor resume a session', () => {
-    const useless = stubAdapter({
+    const useless = stubAdapter('cursor', {
       canPauseMidRun: false,
       canResumeSession: false,
       gate: 'none',
@@ -66,14 +71,14 @@ describe('admitAdapter', () => {
   })
 
   it('admits an adapter with either capability alone', () => {
-    const gateOnly = stubAdapter({
+    const gateOnly = stubAdapter('claude_code', {
       canPauseMidRun: true,
       canResumeSession: false,
       gate: 'all-tools',
       reportsCost: true,
       reportsToolResults: true,
     })
-    const resumeOnly = stubAdapter({
+    const resumeOnly = stubAdapter('cursor', {
       canPauseMidRun: false,
       canResumeSession: true,
       gate: 'none',
@@ -81,7 +86,7 @@ describe('admitAdapter', () => {
       reportsToolResults: false,
     })
 
-    expect(admitAdapter('claude_code', gateOnly).id).toBe('stub')
-    expect(admitAdapter('cursor', resumeOnly).id).toBe('stub')
+    expect(admitAdapter('claude_code', gateOnly).kind).toBe('claude_code')
+    expect(admitAdapter('cursor', resumeOnly).kind).toBe('cursor')
   })
 })
