@@ -1,9 +1,13 @@
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import type { ProviderKind } from '@slave-of-ai/providers'
 import {
+  bodyBandsOf,
+  catalogSearchText,
+  contentHashOf,
   effectiveProfileSpec,
   err,
   goalSha256,
+  normalisePersona,
   ok,
   overriddenFields,
   parsePersona,
@@ -17,6 +21,9 @@ import {
   renderProfileSpec,
   runbookFromProfileSpec,
   type CapabilityRecord,
+  type DuplicateBasis,
+  type DuplicateClass,
+  type DuplicateFacet,
   type MappingQuality,
   type ProfileOverridableField,
   type ProfileOverrides,
@@ -52,6 +59,10 @@ export interface ImportCatalogInput {
   readonly revision?: string | null
   /** M46 R4: the licence named by a LICENSE file at the catalog root, `MIT License` -> `MIT`. */
   readonly license?: string | null
+  /** M55 R2: create every row ACTIVE. Off by default, which is the whole ruling -- an import
+   *  produces a library, not a workforce. Never applied to a row being UPDATED: activation is a
+   *  person's decision and an import is not the moment to revisit it. */
+  readonly activate?: boolean
 }
 
 export type SkipReason = 'name_taken' | 'locally_edited' | 'profile_too_long' | 'invalid_persona'
@@ -250,6 +261,45 @@ export async function importCatalog(
 }
 
 /** One persona, decided and written (or not) on its own. */
+/** The four columns a template carries so the catalog can filter in the DATABASE (M55 R3/R4). */
+export interface DerivedCatalogColumns {
+  readonly contentSha256: string
+  readonly bodyBands: string[]
+  readonly searchText: string
+  readonly recommendedSkills: string[]
+}
+
+/**
+ * The ONE place the four denormalised columns are computed (M55 R3/R4, plan erratum E6).
+ *
+ * **Two of them come from UPSTREAM and two from EFFECTIVE, and that asymmetry is the whole point.**
+ * `contentSha256` and `bodyBands` answer "is this the same persona somebody PUBLISHED", so they read
+ * the importer's own `profileSpec` and never `profileOverrides` -- R4 says so in its own words, and a
+ * detector that changed its mind because an operator edited a summary would be reporting an
+ * operator's typing as a catalog fact. `searchText` and `recommendedSkills` back FILTERS over what
+ * the row DISPLAYS, and a catalog row displays the effective spec (`catalogRowOf` below), so a
+ * customised row must be findable by the words on it.
+ *
+ * Three callers, and they are all of them: `importRow`'s create and both of its update paths,
+ * `writeOverrides` (`./profile.ts`, which writes only the second pair), and -- once M55's duplicate
+ * pass lands -- the `--recompute` backfill. One function, so a fifth column later is one edit rather
+ * than five.
+ */
+export function derivedColumnsOf(input: {
+  readonly name: string
+  readonly description: string
+  readonly upstream: ProfileSpec
+  readonly overrides: ProfileOverrides
+}): DerivedCatalogColumns {
+  const effective = effectiveProfileSpec(input.upstream, input.overrides)
+  return {
+    contentSha256: contentHashOf(input.upstream),
+    bodyBands: [...bodyBandsOf(input.upstream)],
+    searchText: catalogSearchText({ name: input.name, description: input.description, spec: effective }),
+    recommendedSkills: [...effective.recommendedSkills],
+  }
+}
+
 async function importRow(
   entry: CatalogEntry,
   input: ImportCatalogInput,
@@ -358,6 +408,7 @@ async function importRow(
           // M46 R1: `profile` is DERIVED. A new row has no overrides, so the effective spec is the
           // upstream one and the rendered Markdown is what a run will be given.
           const profile = renderProfileSpec(upstream)
+          const derived = derivedColumnsOf({ name: draft.name, description: draft.description, upstream, overrides: {} })
           const row = await tx.slaveTemplate.create({
             data: {
               name: draft.name,
@@ -368,6 +419,9 @@ async function importRow(
               profileSpec: upstream as unknown as Prisma.InputJsonValue,
               capabilityKeys: [...capabilityKeys],
               unresolvedCapabilities: [...unresolvedCapabilities],
+              // M55 R2: inert unless the operator asked otherwise, on the row and only on CREATE.
+              active: input.activate === true,
+              ...derived,
               sourceId: draft.sourceId,
               sourceSha256: draft.sourceSha256,
               sourceDivision: draft.sourceDivision,
@@ -436,6 +490,15 @@ async function importRow(
         if (input.dryRun === true) return { kind: 'unchanged', row: structuredRow }
 
         const structuredProfile = renderProfileSpec(upstream)
+        // M46-E22's branch reaches here only for a row with NO overrides -- `setProfileOverrides`
+        // refuses a row with no spec, which the comment above already states -- so the effective
+        // spec is the upstream one and an empty patch is the honest second half.
+        const structuredDerived = derivedColumnsOf({
+          name: existing.name,
+          description: existing.description,
+          upstream,
+          overrides: {},
+        })
         // `importedAt` moves with the rest: the rendered Markdown opens with the line naming the
         // day this text was written from the file (`importedProfilePrefix`, read out of
         // `spec.source.importedAt`), and a column disagreeing with the sentence in the profile
@@ -448,6 +511,10 @@ async function importRow(
             profileSpec: upstream as unknown as Prisma.InputJsonValue,
             capabilityKeys: [...capabilityKeys],
             unresolvedCapabilities: [...unresolvedCapabilities],
+            // M55: the row is being structured for the first time, so it is also being given its
+            // four derived columns for the first time. `active` is NOT here -- an import never
+            // decides that for a row that already exists (R2).
+            ...structuredDerived,
             sourceRevision: input.revision ?? null,
             sourceLicense: input.license ?? null,
             importedAt,
@@ -479,6 +546,14 @@ async function importRow(
       const stored = profileOverridesSchema.safeParse(existing.profileOverrides ?? {})
       const overrides = stored.success ? stored.data : {}
       const profile = renderProfileSpec(effectiveProfileSpec(upstream, overrides))
+      // The one path where the overrides are real, so the one place the asymmetry shows: the two
+      // upstream columns move with the file, the two effective ones move with what the row shows.
+      const updatedDerived = derivedColumnsOf({
+        name: existing.name,
+        description: draft.description,
+        upstream,
+        overrides,
+      })
       const updatedRow: RowOutcome = { ...outcomeRow, overridesKept: overriddenFields(overrides).length }
 
       if (input.dryRun === true) return { kind: 'updated', row: updatedRow }
@@ -498,6 +573,7 @@ async function importRow(
           // stops being unresolved.
           capabilityKeys: [...capabilityKeys],
           unresolvedCapabilities: [...unresolvedCapabilities],
+          ...updatedDerived,
           description: draft.description,
           sourceSha256: draft.sourceSha256,
           sourceDivision: draft.sourceDivision,
@@ -657,6 +733,19 @@ export async function listCatalogImports(limit = 10): Promise<readonly CatalogIm
  * kilobyte spec is a megabyte of JSON to render a table, so the full effective profile is read one
  * row at a time by {@link readTemplateProfile} when a drawer opens.
  */
+/** The highest-class undismissed pair a catalog row is in, flattened for the chip beside it
+ *  (M55 R6). The OTHER template's name rather than its id, because the chip reads
+ *  `Duplicate of Backend Architect` and an id says nothing to the person reading it
+ *  (`docs/ia.md` rule 3); the id is beside it so the drawer can open that row. */
+export interface CatalogRowDuplicate {
+  readonly pairId: string
+  readonly class: DuplicateClass
+  readonly basis: DuplicateBasis
+  readonly score: number
+  readonly otherTemplateId: string
+  readonly otherName: string
+}
+
 export interface WorkforceCatalogRow {
   readonly id: string
   readonly name: string
@@ -692,6 +781,16 @@ export interface WorkforceCatalogRow {
    *  cleared (`null`) profile included: a badge that disagreed with what the next import will do
    *  is worse than no badge. */
   readonly rawOverride: boolean
+  /** M55 R2: whether the Supervisor may hire from this row. A manual hire ignores it. */
+  readonly active: boolean
+  readonly activationChangedAt: Date | null
+  readonly activationChangedBy: string | null
+  /** M55 R6: the highest-class UNDISMISSED pair, or null. */
+  readonly duplicate: CatalogRowDuplicate | null
+  /** How many undismissed pairs this row is in, so the chip can say `+N`. Exact, counted in
+   *  Postgres -- a truncated count would be a number that is wrong rather than a number that is
+   *  missing. */
+  readonly duplicateCount: number
 }
 
 export interface WorkforceCatalogFacets {
@@ -703,20 +802,32 @@ export interface WorkforceCatalogFacets {
 export interface WorkforceCatalogFilters {
   readonly q?: string
   readonly division?: string
+  /** A taxonomy KEY (M55 R3), not the persona's free text: the filter is `capabilityKeys: { has }`,
+   *  which is a clause Postgres can run, and the facet offers the same keys rendered through
+   *  `capabilityLabel`. */
   readonly capability?: string
   readonly source?: 'imported' | 'local'
   readonly skill?: string
+  /** M55 R2/R3. Absent means "either", which is not the same as `false`. */
+  readonly active?: boolean
+  /** M55 R6. `'none'` is the NOT of "in any undismissed pair"; absent is no filter at all. */
+  readonly duplicates?: DuplicateFacet
 }
 
 export interface WorkforceCatalogPage {
   readonly rows: readonly WorkforceCatalogRow[]
   readonly facets: WorkforceCatalogFacets
+  /** Every row this filter matches, from one `count` over the SAME `where` -- so the page can say
+   *  `showing 100 of 312` rather than counting what it happens to be holding. */
+  readonly total: number
+  /** The id to pass back as `options.cursor` for the next page, or null when this page is the end
+   *  of the answer. */
+  readonly nextCursor: string | null
 }
 
-/** The fourteen columns a row needs -- `profile` is NOT one of them (fix round 1, minor 3): the
- *  Markdown is up to sixteen kilobytes a row and nothing on a catalog card shows it. The one thing
- *  it was read for, the raw-override hash, is computed in Postgres instead and arrives as
- *  `rawOverride`. */
+/** The columns a row needs -- `profile` is NOT one of them (fix round 1, minor 3): the Markdown is
+ *  up to sixteen kilobytes a row and nothing on a catalog card shows it. The one thing it was read
+ *  for, the raw-override hash, is computed in Postgres instead and arrives as `rawOverride`. */
 interface CatalogTemplateRow {
   id: string
   name: string
@@ -733,12 +844,16 @@ interface CatalogTemplateRow {
   sourceLicense: string | null
   importedAt: Date | null
   capabilityKeys: string[]
+  active: boolean
+  activationChangedAt: Date | null
+  activationChangedBy: string | null
 }
 
 function catalogRowOf(
   template: CatalogTemplateRow,
   catalogSlaveCount: number,
   rawOverride: boolean,
+  duplicate: RowDuplicateRow | null,
 ): WorkforceCatalogRow {
   const spec = profileSpecSchema.safeParse(template.profileSpec)
   const overrides = profileOverridesSchema.safeParse(template.profileOverrides ?? {})
@@ -774,102 +889,255 @@ function catalogRowOf(
     // spec, and if a person edited its Markdown the importer skips it `locally_edited` on every
     // run. Hiding the chip there left the one row the operator has to act on looking ordinary.
     rawOverride,
+    active: template.active,
+    activationChangedAt: template.activationChangedAt,
+    activationChangedBy: template.activationChangedBy,
+    duplicate:
+      duplicate === null
+        ? null
+        : {
+            pairId: duplicate.pairId,
+            class: duplicate.class,
+            basis: duplicate.basis,
+            score: duplicate.score,
+            otherTemplateId: duplicate.otherId,
+            otherName: duplicate.otherName,
+          },
+    duplicateCount: duplicate?.n ?? 0,
   }
 }
 
-function matches(row: WorkforceCatalogRow, filters: WorkforceCatalogFilters): boolean {
-  if (filters.source !== undefined && row.source !== filters.source) return false
-  if (filters.division !== undefined && row.sourceDivision !== filters.division) return false
-  if (filters.capability !== undefined && !row.capabilities.includes(filters.capability)) return false
-  if (filters.skill !== undefined && !row.recommendedSkills.includes(filters.skill)) return false
-  const q = (filters.q ?? '').trim().toLowerCase()
-  if (q === '') return true
-  const haystack = [row.name, row.summary, row.description, ...row.capabilities, ...row.expertise]
-    .join('\n')
-    .toLowerCase()
-  return haystack.includes(q)
+/** How many rows a page of the Workforce Catalog holds (M55 R3). A hundred is what a person scrolls
+ *  before they filter instead, and it is two pages of the gate's own 120-row fixture -- deliberately
+ *  small enough that the batching and the paging are both exercised by a catalog a gate can read. */
+export const CATALOG_PAGE_SIZE = 100
+
+/** The bound on the UNPAGED read the company pickers take (plan erratum E2).
+ *
+ *  `apps/web`'s `listTemplates()` feeds `CompanyManager`, `CompanyDetail`, `TeamBlock` and
+ *  `NewSlaveDrawer` -- the `<select>`s a company is STAFFED FROM -- and its own docblock says it
+ *  must stay the whole catalog. `CATALOG_ENTRIES_MAX`'s number and `CATALOG_ENTRIES_MAX`'s
+ *  judgement: five hundred is more templates than any picker is usable with, and a bound is what
+ *  stops a five-thousand-row catalog from being rendered into a `<select>`. */
+export const TEMPLATE_PICKER_MAX = 500
+
+/**
+ * Every filter as a Prisma clause (M55 R3).
+ *
+ * This is what replaced `matches()`: seven dimensions that used to be an `Array#filter` over every
+ * row in the table. `capability` and `skill` are `has` clauses over `String[]` columns, `q` is a
+ * `contains` over the denormalised `searchText`, and `duplicates` is a relation filter over BOTH
+ * sides of a pair -- `aId < bId` is a writer's rule, so a row is the `a` of some pairs and the `b`
+ * of others and only the `OR` sees all of them.
+ *
+ * `q` is folded with `normalisePersona`, the SAME function that folded the column (plan erratum
+ * E12), and `mode: 'insensitive'` is deliberately absent: the column is already lower-cased by
+ * construction, so asking Postgres for `ILIKE` over it would be strictly more work for the same
+ * answer, on the one clause R3 itself calls a sequential scan.
+ */
+function catalogWhere(filters: WorkforceCatalogFilters): Prisma.SlaveTemplateWhereInput {
+  const clauses: Prisma.SlaveTemplateWhereInput[] = []
+  if (filters.source !== undefined) clauses.push({ sourceId: filters.source === 'imported' ? { not: null } : null })
+  if (filters.division !== undefined) clauses.push({ sourceDivision: filters.division })
+  if (filters.capability !== undefined) clauses.push({ capabilityKeys: { has: filters.capability } })
+  if (filters.skill !== undefined) clauses.push({ recommendedSkills: { has: filters.skill } })
+  if (filters.active !== undefined) clauses.push({ active: filters.active })
+  const q = normalisePersona(filters.q ?? '')
+  if (q !== '') clauses.push({ searchText: { contains: q } })
+  if (filters.duplicates !== undefined) {
+    const some: Prisma.TemplateDuplicateWhereInput =
+      filters.duplicates === 'none' ? { dismissedAt: null } : { dismissedAt: null, class: filters.duplicates }
+    const inEither: Prisma.SlaveTemplateWhereInput = {
+      OR: [{ duplicatesA: { some } }, { duplicatesB: { some } }],
+    }
+    clauses.push(filters.duplicates === 'none' ? { NOT: inEither } : inEither)
+  }
+  return clauses.length === 0 ? {} : { AND: clauses }
+}
+
+/** The columns one catalog row needs -- `profile` is NOT one of them (M46 fix round 1, minor 3):
+ *  the Markdown is up to sixteen kilobytes a row and nothing on a catalog card shows it. The one
+ *  thing it was read for, the raw-override hash, is computed in Postgres instead. */
+const CATALOG_ROW_SELECT = {
+  id: true,
+  name: true,
+  role: true,
+  description: true,
+  defaultModel: true,
+  provider: true,
+  profileSha256: true,
+  profileSpec: true,
+  profileOverrides: true,
+  sourceId: true,
+  sourceDivision: true,
+  sourceRevision: true,
+  sourceLicense: true,
+  importedAt: true,
+  capabilityKeys: true,
+  active: true,
+  activationChangedAt: true,
+  activationChangedBy: true,
+} as const
+
+/** One row of the top-pair-plus-count query below. `n` is cast to `int` in SQL because Postgres
+ *  `count(*)` is a `bigint`, which Prisma hands back as a `BigInt` that is not JSON-safe. */
+interface RowDuplicateRow {
+  templateId: string
+  pairId: string
+  class: DuplicateClass
+  basis: DuplicateBasis
+  score: number
+  otherId: string
+  otherName: string
+  n: number
 }
 
 /**
- * The Workforce Catalog's read model (M46 R6).
+ * The chip data for one page of rows (M55 R6): each row's HIGHEST-class undismissed pair, and how
+ * many it is in.
  *
- * **Filtered in memory, deliberately.** The facets live inside a JSON column, and the catalog is
- * hundreds of rows even after a full import -- a page's worth of memory. Postgres JSONB operators
- * through `$queryRaw` would buy nothing here and would put the filter vocabulary in SQL, where
- * M47's capability taxonomy cannot reuse it. If the catalog ever outgrows this, the join tables
- * arrive with M47's taxonomy and not before.
+ * ONE query, in raw SQL, for a reason the `rawOverride` predicate below it already states: Postgres
+ * is the right tool for "the best row per group", and the alternatives in Prisma are a `findMany`
+ * with a `take` that would truncate somebody's `+N` into a number that is WRONG rather than missing,
+ * or three round trips. `DISTINCT ON` would do half of it; `row_number()` beside `count()` does both
+ * halves in one pass.
  *
- * The FACETS are computed over every row, before filtering. A filter menu built from the filtered
- * rows collapses to whatever was already chosen, which makes it impossible to change your mind.
+ * `ORDER BY p.class ASC` is the class ranking, and it is not a coincidence: a Postgres enum compares
+ * in DECLARATION order, and `DuplicateClass` is declared `exact, near, overlapping` -- strongest
+ * first, which is exactly the order R4's arms are in. The schema says so beside the enum and a case
+ * in `catalog-page.test.ts` pins it.
  *
- * A DIVISION is a directory a catalog was imported from, so both the menu and the match read
- * `sourceDivision` alone (plan erratum E22): the facet list IS the definition of the word on this
- * surface, and a hand-made template whose `role` happens to spell "engineering" was never in that
- * directory. Hand-made rows are reached through `source: 'local'` and free text instead.
+ * Bounded by the PAGE: the `= ANY` takes at most `CATALOG_PAGE_SIZE` ids, and the aggregate is
+ * computed in Postgres over an index on `aId` (the unique pair index) and on `bId`.
  */
-export async function listWorkforceCatalog(filters: WorkforceCatalogFilters = {}): Promise<WorkforceCatalogPage> {
-  const [templates, catalogSlaveGroups, rawOverrides] = await Promise.all([
+async function rowDuplicatesFor(ids: readonly string[]): Promise<Map<string, RowDuplicateRow>> {
+  if (ids.length === 0) return new Map()
+  const rows = await prisma.$queryRaw<RowDuplicateRow[]>`
+    SELECT "templateId", "pairId", class, basis, score, "otherId", "otherName", n
+    FROM (
+      SELECT p."templateId",
+             p."pairId",
+             p.class,
+             p.basis,
+             p.score,
+             p."otherId",
+             t.name AS "otherName",
+             (count(*) OVER (PARTITION BY p."templateId"))::int AS n,
+             row_number() OVER (
+               PARTITION BY p."templateId"
+               ORDER BY p.class ASC, p.score DESC, p."pairId" ASC
+             ) AS rn
+      FROM (
+        SELECT d."aId" AS "templateId", d.id AS "pairId", d.class, d.basis, d.score, d."bId" AS "otherId"
+        FROM "TemplateDuplicate" d
+        WHERE d."dismissedAt" IS NULL AND d."aId" = ANY(${[...ids]}::text[])
+        UNION ALL
+        SELECT d."bId", d.id, d.class, d.basis, d.score, d."aId"
+        FROM "TemplateDuplicate" d
+        WHERE d."dismissedAt" IS NULL AND d."bId" = ANY(${[...ids]}::text[])
+      ) p
+      JOIN "SlaveTemplate" t ON t.id = p."otherId"
+    ) ranked
+    WHERE rn = 1
+  `
+  return new Map(rows.map((row) => [row.templateId, row] as const))
+}
+
+/**
+ * The Workforce Catalog's read model (M46 R6, rewritten by M55 R3).
+ *
+ * **Filtered and PAGED in the database.** It used to read every `SlaveTemplate`, build every
+ * effective spec in memory and filter the array; its own docblock argued that the catalog was
+ * "hundreds of rows even after a full import -- a page's worth of memory", which stopped being true
+ * on the day a full import became three hundred files and could become five thousand. Four
+ * denormalised columns pay for four of the seven clauses -- the M47 precedent, whose own sentence is
+ * that a filter vocabulary inside a JSON column cannot be a `where` -- and the page is a cursor over
+ * `(name, id)`, which is a total order because `id` is unique.
+ *
+ * **The FACETS are still computed over every row, before filtering** (M46 R6's rule, unchanged): a
+ * filter menu built from the filtered rows collapses to whatever was already chosen, which makes it
+ * impossible to change your mind. Each is its own bounded query rather than a fold over rows nobody
+ * read: one `groupBy` for the divisions and one `SELECT DISTINCT unnest(...)` for each of the two
+ * array columns.
+ *
+ * A DIVISION is a directory a catalog was imported from, so both the menu and the clause read
+ * `sourceDivision` alone (M46 plan erratum E22): a hand-made template whose `role` happens to spell
+ * "engineering" was never in that directory, and is reached through `source: 'local'` and free text
+ * instead.
+ */
+export async function listWorkforceCatalog(
+  filters: WorkforceCatalogFilters = {},
+  options: { readonly cursor?: string; readonly pageSize?: number } = {},
+): Promise<WorkforceCatalogPage> {
+  const where = catalogWhere(filters)
+  const take = Math.max(1, Math.min(options.pageSize ?? CATALOG_PAGE_SIZE, TEMPLATE_PICKER_MAX))
+  const [templates, total, divisionGroups, capabilityRows, skillRows] = await Promise.all([
     prisma.slaveTemplate.findMany({
-      select: {
-        id: true,
-        name: true,
-        role: true,
-        description: true,
-        defaultModel: true,
-        provider: true,
-        profileSha256: true,
-        profileSpec: true,
-        profileOverrides: true,
-        sourceId: true,
-        sourceDivision: true,
-        sourceRevision: true,
-        sourceLicense: true,
-        importedAt: true,
-        capabilityKeys: true,
-      },
-      orderBy: { name: 'asc' },
+      where,
+      select: CATALOG_ROW_SELECT,
+      // `name` then `id`: a total order, which is what a cursor needs -- two templates cannot share
+      // a name (`name @unique`), but the second key costs nothing and makes the order total by
+      // construction rather than by a constraint a later migration could relax.
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      take,
+      ...(options.cursor === undefined ? {} : { cursor: { id: options.cursor }, skip: 1 }),
     }),
-    prisma.companySlave.groupBy({ by: ['templateId'], _count: { _all: true } }),
-    // The raw-override predicate, computed in POSTGRES so the profile text stays there: it is the
-    // only reason a catalog listing would read a sixteen-kilobyte column it never displays.
-    // `sha256(convert_to(text,'UTF8'))` hex is byte-identical to `goalSha256` (the same digest over
-    // the same bytes), and `IS DISTINCT FROM` is what makes a CLEARED profile -- NULL against a
-    // recorded hash -- come back true, exactly as `importCatalog` reads it.
-    //
-    // The WHERE is on the STAMP, not on the spec (final wave, M5): a stamp is what an import
-    // leaves behind, so every row that has one has a profile an import wrote and a person may
-    // since have rewritten -- a pre-M46 row included. A hand-made template has no stamp and is
-    // simply absent from this result, which the `?? false` below reads as "no override".
-    prisma.$queryRaw<{ id: string; rawOverride: boolean }[]>`
-      SELECT id,
-             (CASE WHEN "profile" IS NULL THEN NULL ELSE encode(sha256(convert_to("profile", 'UTF8')), 'hex') END)
-               IS DISTINCT FROM "profileSha256" AS "rawOverride"
-      FROM "SlaveTemplate"
-      WHERE "profileSha256" IS NOT NULL
+    prisma.slaveTemplate.count({ where }),
+    prisma.slaveTemplate.groupBy({ by: ['sourceDivision'], orderBy: { sourceDivision: 'asc' } }),
+    prisma.$queryRaw<{ value: string }[]>`
+      SELECT DISTINCT unnest("capabilityKeys") AS value FROM "SlaveTemplate" ORDER BY value ASC
+    `,
+    prisma.$queryRaw<{ value: string }[]>`
+      SELECT DISTINCT unnest("recommendedSkills") AS value FROM "SlaveTemplate" ORDER BY value ASC
     `,
   ])
+
+  const ids = templates.map((template) => template.id)
+  const [catalogSlaveGroups, rawOverrides, duplicates] = await Promise.all([
+    ids.length === 0
+      ? Promise.resolve([])
+      : prisma.companySlave.groupBy({ by: ['templateId'], where: { templateId: { in: ids } }, _count: { _all: true } }),
+    // The raw-override predicate, computed in POSTGRES so the profile text stays there, and scoped
+    // to the PAGE's ids rather than to the whole table: it is the only reason a catalog listing
+    // would touch a sixteen-kilobyte column it never displays, and it should touch at most a
+    // hundred rows' worth of it. `sha256(convert_to(text,'UTF8'))` hex is byte-identical to
+    // `goalSha256`, and `IS DISTINCT FROM` is what makes a CLEARED profile -- NULL against a
+    // recorded hash -- come back true, exactly as `importCatalog` reads it.
+    ids.length === 0
+      ? Promise.resolve([])
+      : prisma.$queryRaw<{ id: string; rawOverride: boolean }[]>`
+          SELECT id,
+                 (CASE WHEN "profile" IS NULL THEN NULL ELSE encode(sha256(convert_to("profile", 'UTF8')), 'hex') END)
+                   IS DISTINCT FROM "profileSha256" AS "rawOverride"
+          FROM "SlaveTemplate"
+          WHERE "profileSha256" IS NOT NULL AND id = ANY(${ids}::text[])
+        `,
+    rowDuplicatesFor(ids),
+  ])
+
   const countByTemplate = new Map(catalogSlaveGroups.map((group) => [group.templateId, group._count._all] as const))
   const rawByTemplate = new Map(rawOverrides.map((row) => [row.id, row.rawOverride] as const))
-  const all = templates.map((template) =>
-    catalogRowOf(template, countByTemplate.get(template.id) ?? 0, rawByTemplate.get(template.id) ?? false),
+  const rows = templates.map((template) =>
+    catalogRowOf(
+      template,
+      countByTemplate.get(template.id) ?? 0,
+      rawByTemplate.get(template.id) ?? false,
+      duplicates.get(template.id) ?? null,
+    ),
   )
 
-  const divisions = new Set<string>()
-  const capabilities = new Set<string>()
-  const skills = new Set<string>()
-  for (const row of all) {
-    if (row.sourceDivision !== null) divisions.add(row.sourceDivision)
-    for (const capability of row.capabilities) capabilities.add(capability)
-    for (const skill of row.recommendedSkills) skills.add(skill)
-  }
-
   return {
-    rows: all.filter((row) => matches(row, filters)),
+    rows,
     facets: {
-      divisions: [...divisions].sort(),
-      capabilities: [...capabilities].sort(),
-      skills: [...skills].sort(),
+      divisions: divisionGroups.flatMap((group) => (group.sourceDivision === null ? [] : [group.sourceDivision])),
+      capabilities: capabilityRows.map((row) => row.value),
+      skills: skillRows.map((row) => row.value),
     },
+    total,
+    // A page shorter than it asked for is the end of the answer -- `buildActivityHistory`'s own rule
+    // (`apps/web/src/server/activity.ts:152-154`). A page that is exactly full hands back a cursor
+    // even when nothing follows it, which costs one empty request and never a missing row.
+    nextCursor: rows.length < take ? null : (rows[rows.length - 1]?.id ?? null),
   }
 }
 

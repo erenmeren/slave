@@ -1094,11 +1094,20 @@ describe('loadSupervisorWorld -- the capability facts (M47 R4)', () => {
   it('reads all three the moment one task names a capability, and carries the keys through', async () => {
     const f = await seed()
     await makeTask(f, { title: 'harden', status: 'ready', requiredCapabilities: ['security.application'] })
+    // `active: true` since M55 R2: the loader's `where` reads it, and a row written straight through
+    // Prisma takes the column's DEFAULT, which is an IMPORT's default and not a candidate.
     const template = await prisma.slaveTemplate.create({
-      data: { name: 'M47 World Reviewer', role: 'security', capabilityKeys: ['security.application'], sourceDivision: 'security' },
+      data: {
+        name: 'M47 World Reviewer',
+        role: 'security',
+        capabilityKeys: ['security.application'],
+        sourceDivision: 'security',
+        active: true,
+      },
     })
-    // A template that provides nothing can never cover a gap, so it is not in the index.
-    await prisma.slaveTemplate.create({ data: { name: 'M47 World Generalist', role: 'backend' } })
+    // A template that provides nothing can never cover a gap, so it is not in the index -- and it
+    // is ACTIVE, so the empty `capabilityKeys` is the only thing keeping it out.
+    await prisma.slaveTemplate.create({ data: { name: 'M47 World Generalist', role: 'backend', active: true } })
 
     const { world } = await loadSupervisorWorld(f.workspaceId, NOW)
     expect(world.tasks[0]?.requiredCapabilities).toEqual(['security.application'])
@@ -1147,10 +1156,10 @@ describe('loadSupervisorWorld -- the capability facts (M47 R4)', () => {
     const f = await seed()
     await makeTask(f, { title: 'harden', status: 'ready', requiredCapabilities: ['security.application'] })
     const source = await prisma.slaveTemplate.create({
-      data: { name: 'M47 World Backend', role: 'backend', capabilityKeys: ['backend.api-design'] },
+      data: { name: 'M47 World Backend', role: 'backend', capabilityKeys: ['backend.api-design'], active: true },
     })
     const target = await prisma.slaveTemplate.create({
-      data: { name: 'M47 World Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+      data: { name: 'M47 World Reviewer', role: 'security', capabilityKeys: ['security.application'], active: true },
     })
     await prisma.collaborationHint.create({
       data: { templateId: source.id, text: 'Ask the Security Reviewer before shipping.', targetTemplateId: target.id },

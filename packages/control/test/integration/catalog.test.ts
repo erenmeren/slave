@@ -13,6 +13,13 @@ import { setProfile, setProfileOverrides } from '../../src/profile.js'
 const CATALOG = 'catalog-m42'
 const DIRECTORY = '/tmp/catalog-m42'
 
+/** The five `beforeEach` hooks below shared this string character for character (M55 Task 2): one
+ *  `const` so a table added to one of them cannot be missing from the other four. `SlaveTemplate`
+ *  truncated CASCADE reaches `TemplateDuplicate` (M55) as well, which is why that table is not
+ *  named here (plan erratum E4). */
+const TRUNCATE_FOR_THIS_FILE =
+  'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE'
+
 const persona = (name: string, body = 'You build the core module and its tests.'): string =>
   `---\nname: ${name}\ndescription: ${name} does one thing well.\nvibe: One thing, well.\n---\n\n# ${name}\n\n${body}\n`
 
@@ -44,9 +51,7 @@ describe('importCatalog', () => {
     // `SlaveTemplate` truncated CASCADE reaches `RunbookTemplate` (M48's `sourceTemplateId`) and
     // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than left
     // to the cascade, so the reach is documented rather than accidental (M48 final review, I2).
-    await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
-    )
+    await prisma.$executeRawUnsafe(TRUNCATE_FOR_THIS_FILE)
   })
 
   it('(a) creates a template for a persona nobody has imported and whose name is free', async (): Promise<void> => {
@@ -483,9 +488,7 @@ describe('importCatalog and the structured profile (M46)', () => {
     // `SlaveTemplate` truncated CASCADE reaches `RunbookTemplate` (M48's `sourceTemplateId`) and
     // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than left
     // to the cascade, so the reach is documented rather than accidental (M48 final review, I2).
-    await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
-    )
+    await prisma.$executeRawUnsafe(TRUNCATE_FOR_THIS_FILE)
   })
 
   const structured = (slug: string, name: string, body?: string) => entry(slug, name, body)
@@ -775,9 +778,7 @@ describe('listWorkforceCatalog', () => {
     // `SlaveTemplate` truncated CASCADE reaches `RunbookTemplate` (M48's `sourceTemplateId`) and
     // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than left
     // to the cascade, so the reach is documented rather than accidental (M48 final review, I2).
-    await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
-    )
+    await prisma.$executeRawUnsafe(TRUNCATE_FOR_THIS_FILE)
   })
 
   const importTwo = async () =>
@@ -786,8 +787,16 @@ describe('listWorkforceCatalog', () => {
         catalog: CATALOG,
         directory: DIRECTORY,
         entries: [
-          entry('core-builder', 'Core Builder', '## Core Capabilities\n- Design the module boundary\n\n## Domain Expertise\n- Load-bearing code'),
-          entry('verifier', 'Verifier', '## Core Capabilities\n- Run the work back\n'),
+          // M55 erratum E1: one bullet each that the taxonomy RESOLVES, beside the free text that
+          // does not. The capability filter and the capability facet are `capabilityKeys` now --
+          // a vocabulary a `where` can run -- so a fixture whose every bullet is unresolved would
+          // have left both of them with nothing to be about.
+          entry(
+            'core-builder',
+            'Core Builder',
+            '## Core Capabilities\n- Design the module boundary\n- API design\n\n## Domain Expertise\n- Load-bearing code',
+          ),
+          entry('verifier', 'Verifier', '## Core Capabilities\n- Run the work back\n- Test strategy\n'),
         ],
         revision: 'rev1',
         license: 'MIT',
@@ -812,7 +821,9 @@ describe('listWorkforceCatalog', () => {
     expect(page.rows.find((row) => row.name === 'Hand Made')?.source).toBe('local')
     expect(page.rows.find((row) => row.name === 'Hand Made')?.structured).toBe(false)
     expect(page.facets.divisions).toEqual(['engineering'])
-    expect(page.facets.capabilities).toContain('Run the work back')
+    // The facet offers taxonomy KEYS (M55 erratum E1): the free text on a row is what the row
+    // SHOWS, and a key is what a `capabilityKeys: { has }` clause can match.
+    expect(page.facets.capabilities).toEqual(['backend.api-design', 'qa.test-strategy'])
   })
 
   it('narrows by search text over name, summary, capabilities and expertise', async (): Promise<void> => {
@@ -832,7 +843,7 @@ describe('listWorkforceCatalog', () => {
     await prisma.slaveTemplate.create({ data: { name: 'Hand Made Engineer', role: 'engineering' } })
     await importTwo()
 
-    expect((await listWorkforceCatalog({ capability: 'Run the work back' })).rows.map((row) => row.name)).toEqual(['Verifier'])
+    expect((await listWorkforceCatalog({ capability: 'qa.test-strategy' })).rows.map((row) => row.name)).toEqual(['Verifier'])
     expect((await listWorkforceCatalog({ division: 'engineering' })).rows.map((row) => row.name)).toEqual([
       'Core Builder',
       'Verifier',
@@ -843,7 +854,7 @@ describe('listWorkforceCatalog', () => {
     ])
     // Filtered rows, UNfiltered facets: a menu that collapsed to the one value already chosen
     // would be a menu you cannot change your mind in.
-    expect((await listWorkforceCatalog({ source: 'local' })).facets.capabilities).toContain('Design the module boundary')
+    expect((await listWorkforceCatalog({ source: 'local' })).facets.capabilities).toContain('backend.api-design')
   })
 
   it('marks a raw Markdown override, and does not mark a hand-made template as one', async (): Promise<void> => {
@@ -946,6 +957,54 @@ describe('listWorkforceCatalog', () => {
     if (!result.ok) return
     expect(result.value.skipped[0]?.reason).toBe('locally_edited')
   })
+
+  it('M55 E6: an override rewrites searchText, so the row is findable by the words it now shows', async (): Promise<void> => {
+    await importOne([entry('core-builder', 'Core Builder')])
+    const before = await prisma.slaveTemplate.findUniqueOrThrow({ where: { sourceId: `${CATALOG}/engineering/core-builder` } })
+
+    const result = await setProfileOverrides(before.id, { summary: 'A completely different sentence' }, 'operator')
+
+    expect(result.ok).toBe(true)
+    const after = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: before.id } })
+    expect(after.searchText).toContain('a completely different sentence')
+    expect(after.searchText).not.toBe(before.searchText)
+  })
+
+  it('M55 E6: an override does NOT move contentSha256 or bodyBands -- the classes are about the published persona', async (): Promise<void> => {
+    await importOne([entry('core-builder', 'Core Builder')])
+    const before = await prisma.slaveTemplate.findUniqueOrThrow({ where: { sourceId: `${CATALOG}/engineering/core-builder` } })
+
+    await setProfileOverrides(before.id, { summary: 'A completely different sentence' }, 'operator')
+
+    const after = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: before.id } })
+    expect(after.contentSha256).toBe(before.contentSha256)
+    expect(after.bodyBands).toEqual(before.bodyBands)
+  })
+
+  it('M55 R2: an import creates every row INACTIVE unless it was asked otherwise', async (): Promise<void> => {
+    await importOne([entry('core-builder', 'Core Builder')])
+    const inert = await prisma.slaveTemplate.findUniqueOrThrow({ where: { sourceId: `${CATALOG}/engineering/core-builder` } })
+    expect(inert.active).toBe(false)
+
+    await prisma.$executeRawUnsafe(TRUNCATE_FOR_THIS_FILE)
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')], activate: true }, 'operator')
+    const live = await prisma.slaveTemplate.findUniqueOrThrow({ where: { sourceId: `${CATALOG}/engineering/core-builder` } })
+    expect(live.active).toBe(true)
+  })
+
+  it('M55 R2: an import NEVER writes `active` on a row it updates, in either direction', async (): Promise<void> => {
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')], activate: true }, 'operator')
+    const created = await prisma.slaveTemplate.findUniqueOrThrow({ where: { sourceId: `${CATALOG}/engineering/core-builder` } })
+    expect(created.active).toBe(true)
+
+    // The file changed, so this is a real UPDATE -- and the flag is absent this time.
+    await importOne([entry('core-builder', 'Core Builder', 'A different body entirely, rewritten.')])
+
+    const updated = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: created.id } })
+    expect(updated.active).toBe(true)
+    expect(updated.profileSha256).not.toBe(created.profileSha256)
+  })
+
 })
 
 describe('readTemplateProfile', () => {
@@ -953,9 +1012,7 @@ describe('readTemplateProfile', () => {
     // `SlaveTemplate` truncated CASCADE reaches `RunbookTemplate` (M48's `sourceTemplateId`) and
     // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than left
     // to the cascade, so the reach is documented rather than accidental (M48 final review, I2).
-    await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
-    )
+    await prisma.$executeRawUnsafe(TRUNCATE_FOR_THIS_FILE)
   })
 
   it('hands back both halves, the merge and the stored Markdown', async (): Promise<void> => {
@@ -1082,9 +1139,7 @@ describe('persona runbooks (M48 R3)', () => {
     // `SlaveTemplate` truncated CASCADE reaches `RunbookTemplate` (M48's `sourceTemplateId`) and
     // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than left
     // to the cascade, so the reach is documented rather than accidental (M48 final review, I2).
-    await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
-    )
+    await prisma.$executeRawUnsafe(TRUNCATE_FOR_THIS_FILE)
     await prisma.runbookTemplate.deleteMany({ where: { source: 'persona' } })
   })
 

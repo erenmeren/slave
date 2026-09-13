@@ -16,6 +16,7 @@ import {
   type Result,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { derivedColumnsOf } from './catalog.js'
 import { lockSlave } from './org.js'
 import type { ControlRefusal } from './refusal.js'
 
@@ -320,6 +321,18 @@ async function writeOverrides(
       const next = change(stored.success ? stored.data : {})
       const overridden = overriddenFields(next)
       const profile = renderProfileSpec(effectiveProfileSpec(spec.data, next))
+      // M55 plan erratum E6: two of the four derived columns back filters over what the row
+      // DISPLAYS, and a row's displayed summary and skills are the EFFECTIVE ones -- so an override
+      // that changed them and left `searchText`/`recommendedSkills` alone would make the catalog's
+      // search box and skill filter point at words the row no longer shows. The other two
+      // (`contentSha256`, `bodyBands`) are deliberately NOT written here: the duplicate classes are
+      // about the persona somebody published, not about what an operator did to it since (R4).
+      const derived = derivedColumnsOf({
+        name: row.name,
+        description: row.description,
+        upstream: spec.data,
+        overrides: next,
+      })
 
       await tx.slaveTemplate.update({
         where: { id: templateId },
@@ -327,6 +340,8 @@ async function writeOverrides(
           profileOverrides: overridden.length === 0 ? Prisma.DbNull : (next as unknown as Prisma.InputJsonValue),
           profile,
           profileSha256: goalSha256(profile),
+          searchText: derived.searchText,
+          recommendedSkills: derived.recommendedSkills,
         },
       })
       return ok({ overridden })

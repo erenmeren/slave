@@ -49,6 +49,12 @@ function row(over: Partial<CatalogRowView> = {}): CatalogRowView {
     mappingQuality: 'full',
     overriddenFields: [],
     rawOverride: false,
+    // M55 R2/R6: a fixture row is an ordinary imported one -- inert, never toggled, in no pair.
+    active: false,
+    activationChangedAt: null,
+    activationChangedBy: null,
+    duplicate: null,
+    duplicateCount: 0,
     ...over,
   }
 }
@@ -60,6 +66,10 @@ const view = (rows: readonly CatalogRowView[]): WorkforceCatalogView => ({
     capabilities: ['Design the module boundary', 'Run the work back'],
     skills: ['writing-plans'],
   },
+  // A fixture IS the whole answer, so the honest total is what it holds and the honest cursor
+  // is the absence of one (M55 R3).
+  total: rows.length,
+  nextCursor: null,
 })
 
 /** Two taxonomy rows is the whole fixture this file needs: one the drawer can resolve, and the

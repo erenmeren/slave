@@ -132,6 +132,12 @@ function templateRow(over: Partial<CatalogRowView> = {}): CatalogRowView {
     mappingQuality: null,
     overriddenFields: [],
     rawOverride: false,
+    // M55 R2/R6: a hand-made row nobody toggled and nothing looks like.
+    active: false,
+    activationChangedAt: null,
+    activationChangedBy: null,
+    duplicate: null,
+    duplicateCount: 0,
     ...over,
   }
 }
@@ -147,6 +153,9 @@ const emptyEvidence = (): EvidencePage => ({
 const catalogPage = (rows: readonly CatalogRowView[]): WorkforceCatalogView => ({
   rows,
   facets: { divisions: [], capabilities: [], skills: [] },
+  // A fixture IS the whole answer (M55 R3): the total is what it holds and there is no next page.
+  total: rows.length,
+  nextCursor: null,
 })
 
 /** Every prop `WorkforceClient` takes, defaulted to the empty shape, so a case states only what it

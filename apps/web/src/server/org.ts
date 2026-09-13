@@ -7,6 +7,7 @@ import {
   listRunbooks,
   listWorkforceCatalog,
   readTemplateProfile,
+  TEMPLATE_PICKER_MAX,
   type ControlRefusal,
   type ProviderCapabilities,
   type ProviderKind,
@@ -951,16 +952,23 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
   return { rows: [...projectRows, ...catalogRows], departmentsByWorkspace, templatesByCompany }
 }
 
-/** One catalog row as a `'use client'` component receives it: `WorkforceCatalogRow` with its one
- *  `Date` turned into an ISO string, `GoalVersionView.createdAt`'s idiom. Every other field is
+/** One catalog row as a `'use client'` component receives it: `WorkforceCatalogRow` with its TWO
+ *  `Date`s turned into ISO strings, `GoalVersionView.createdAt`'s idiom. Every other field is
  *  already JSON, so this is the whole of the crossing. */
-export type CatalogRowView = Omit<WorkforceCatalogRow, 'importedAt'> & { readonly importedAt: string | null }
+export type CatalogRowView = Omit<WorkforceCatalogRow, 'importedAt' | 'activationChangedAt'> & {
+  readonly importedAt: string | null
+  readonly activationChangedAt: string | null
+}
 
 export interface WorkforceCatalogView {
   readonly rows: readonly CatalogRowView[]
   /** Computed over EVERY row, before the filters ran (M46 R6): a menu built from the filtered rows
    *  collapses to the value already chosen, which makes it impossible to change your mind. */
   readonly facets: WorkforceCatalogFacets
+  /** M55 R3: every row this filter matches, so the count sentence can say `showing 100 of 312`. */
+  readonly total: number
+  /** M55 R3: pass back as `?cursor=` for the next page; null when this page is the whole answer. */
+  readonly nextCursor: string | null
 }
 
 /**
@@ -969,20 +977,43 @@ export interface WorkforceCatalogView {
  * `listTemplates` used to do here, and doing it twice on a page that renders both the catalog and
  * the company manager would be two queries for one answer.
  */
-export async function listWorkforceCatalogPage(filters: WorkforceCatalogFilters = {}): Promise<WorkforceCatalogView> {
-  const page = await listWorkforceCatalog(filters)
+export async function listWorkforceCatalogPage(
+  filters: WorkforceCatalogFilters = {},
+  options: { readonly cursor?: string } = {},
+): Promise<WorkforceCatalogView> {
+  const page = await listWorkforceCatalog(filters, options)
   return {
-    rows: page.rows.map((row) => ({ ...row, importedAt: row.importedAt === null ? null : row.importedAt.toISOString() })),
+    rows: page.rows.map(catalogRowViewOf),
     facets: page.facets,
+    total: page.total,
+    nextCursor: page.nextCursor,
   }
 }
 
-/** Every slave template, unfiltered -- the shape `CompanyManager`'s member `<select>`, the New
- *  slave drawer and `WorkforceCatalog` take, `catalogSlaveCount` (M27 §5.1) included: how many
- *  catalog slaves a `deleteSlaveTemplate` on this row would cascade. A superset of what they read
- *  before M46; nothing they used has moved or changed shape. */
+/** The `Date` -> ISO crossing, in ONE place: both this page and the unpaged picker read below hand
+ *  the same rows to the same `'use client'` components, and two copies of the conversion is how one
+ *  of them ends up missing the next column that carries a date. */
+function catalogRowViewOf(row: WorkforceCatalogRow): CatalogRowView {
+  return {
+    ...row,
+    importedAt: row.importedAt === null ? null : row.importedAt.toISOString(),
+    activationChangedAt: row.activationChangedAt === null ? null : row.activationChangedAt.toISOString(),
+  }
+}
+
+/** Every slave template, UNPAGED and unfiltered -- the shape `CompanyManager`'s member `<select>`,
+ *  the New slave drawer and `company/TeamBlock` take, `catalogSlaveCount` (M27 §5.1) included: how
+ *  many catalog slaves a `deleteSlaveTemplate` on this row would cascade.
+ *
+ *  M55 plan erratum E2: this deliberately does NOT take `CATALOG_PAGE_SIZE`. These are the pickers a
+ *  company is STAFFED FROM, and a hundred-row page under them would silently hide every template
+ *  past the hundredth from every one of them. `TEMPLATE_PICKER_MAX` is the bound instead --
+ *  `CATALOG_ENTRIES_MAX`'s own number -- and it deliberately does not filter on `active` either:
+ *  R2 keeps every manual hire open on an inactive row, and a picker that hid them would close the
+ *  one path R2 exists to keep open. */
 export async function listTemplates(): Promise<readonly CatalogRowView[]> {
-  return (await listWorkforceCatalogPage()).rows
+  const page = await listWorkforceCatalog({}, { pageSize: TEMPLATE_PICKER_MAX })
+  return page.rows.map(catalogRowViewOf)
 }
 
 /** One runbook as the Workforce tab reads it (M48 R7): the whole runbook, plus the NAME of the

@@ -73,6 +73,11 @@ export async function createTemplate(
       data: {
         name,
         role,
+        // M55 R2: a template somebody typed by hand IS the deliberate act `--activate` stands for,
+        // so it is written active and explicitly. The column's DEFAULT is `false`, which is an
+        // IMPORT's default -- three hundred strangers' personas arriving at once -- and inheriting
+        // it here would make the New template form produce a row that does nothing.
+        active: true,
         ...(options?.description !== undefined ? { description: options.description } : {}),
         ...(options?.defaultModel !== undefined ? { defaultModel: options.defaultModel } : {}),
         ...(options?.provider !== undefined ? { provider: options.provider } : {}),
@@ -83,6 +88,60 @@ export async function createTemplate(
     if (isUniqueConstraintViolation(error)) return err({ kind: 'duplicate_name', name })
     throw error
   }
+}
+
+/**
+ * Turns a catalog template into a hiring candidate, or back out of being one (M55 R2).
+ *
+ * The ONE operator verb behind "never active by default". `loadCatalogEntries` reads the column and
+ * nothing else does: `formTeam` and `rankCandidates` are pure functions over a `SupervisorWorld`,
+ * and the honest place to say "this is not a candidate" is where candidates are LOADED, not where
+ * they are ranked.
+ *
+ * **It does not touch `CompanySlave` or `Slave`, ever.** `addCompanySlave`, `assignCompany`,
+ * `materialiseCompanySlave` and `add-slave --template` all keep working on an inactive row, because
+ * an operator naming a specific row by hand is the same deliberate act as activating it -- and a
+ * worker already hired from a template does not stop working when the template is deactivated.
+ *
+ * Locked check-then-update, the discipline every catalog verb in this file follows (spec section 5):
+ * `SELECT ... FOR UPDATE` serialises two operators toggling the same row in the same second, so the
+ * stamp that survives is the one whose write survived. Every refusal is reached BEFORE the update,
+ * so each is RETURNED; a refusal after the write would have to throw, or Prisma commits it
+ * (ADR 0003).
+ *
+ * `{ changed }` rather than `void`: an operator who types `template activate` twice should be told
+ * the second one did nothing, and a verb that answered `ok` either way would make the CLI print a
+ * sentence that is only sometimes true. A no-op writes NOTHING -- not even the stamp -- because
+ * `activationChangedAt` is a record of an act, and recording one for a request that changed nothing
+ * would say a person did something they did not do.
+ *
+ * **No event**, for the reason `setProfile`'s docblock already gives and M42 R5 wrote down:
+ * `ExecutionEvent.workspaceId` is NOT NULL and a template belongs to no project. The row's own
+ * `activationChangedAt`/`activationChangedBy` are the record.
+ *
+ * `by` is a NAME (plan erratum E13): the CLI passes `--by`'s operator name and the web passes the
+ * session's user id, which is exactly the pair `CatalogImport.by` already carries. A `Principal`
+ * would carry only a `userId` and would make a CLI stamp impossible.
+ */
+export async function setTemplateActivation(
+  templateId: string,
+  active: boolean,
+  by?: string,
+): Promise<Result<{ readonly changed: boolean }, ControlRefusal>> {
+  const outcome = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "SlaveTemplate" WHERE id = ${templateId} FOR UPDATE`
+    const row = await tx.slaveTemplate.findUnique({ where: { id: templateId }, select: { id: true, active: true } })
+    if (row === null) {
+      return { ok: false as const, error: { kind: 'template_not_found', templateId } as ControlRefusal }
+    }
+    if (row.active === active) return { ok: true as const, value: { changed: false } }
+    await tx.slaveTemplate.update({
+      where: { id: templateId },
+      data: { active, activationChangedAt: new Date(), activationChangedBy: by ?? null },
+    })
+    return { ok: true as const, value: { changed: true } }
+  })
+  return outcome.ok ? ok(outcome.value) : err(outcome.error)
 }
 
 /** Adds a company -- a persistent roster (M10 §4) -- to the catalog. */

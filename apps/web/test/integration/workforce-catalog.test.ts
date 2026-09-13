@@ -80,7 +80,11 @@ describe('the workforce catalog read model', () => {
             'Core Builder',
             '## Core Capabilities\n- Design the module boundary\n\n## Domain Expertise\n- Load-bearing code\n',
           ),
-          entry('verifier', 'Verifier', '## Core Capabilities\n- Run the work back\n'),
+          // M55 erratum E1: the capability facet and the capability filter are `capabilityKeys`
+          // now -- a vocabulary a `where` can run -- so one bullet in this fixture has to be a
+          // sentence the taxonomy RESOLVES. The core builder's stay unresolved, which is what
+          // keeps the free-text assertions below about free text.
+          entry('verifier', 'Verifier', '## Core Capabilities\n- Run the work back\n- Test strategy\n'),
         ],
         revision: 'rev1',
         license: 'MIT',
@@ -109,7 +113,7 @@ describe('the workforce catalog read model', () => {
     expect(core?.sourceLicense).toBe('MIT')
     expect(core?.structured).toBe(true)
     expect(core?.source).toBe('imported')
-    expect(page.facets.capabilities).toEqual(['Design the module boundary', 'Run the work back'])
+    expect(page.facets.capabilities).toEqual(['qa.test-strategy'])
     expect(page.facets.divisions).toEqual(['engineering'])
     // No `Date` survives the crossing into a `'use client'` prop -- the one thing this view exists
     // to do (`GoalVersionView.createdAt`'s idiom).
@@ -121,7 +125,7 @@ describe('the workforce catalog read model', () => {
 
   it('filters, and listTemplates is the unfiltered rows of the same read', async (): Promise<void> => {
     expect((await listWorkforceCatalogPage({ source: 'local' })).rows.map((row) => row.name)).toEqual(['Hand Made'])
-    expect((await listWorkforceCatalogPage({ capability: 'Run the work back' })).rows.map((row) => row.name)).toEqual([
+    expect((await listWorkforceCatalogPage({ capability: 'qa.test-strategy' })).rows.map((row) => row.name)).toEqual([
       'Verifier',
     ])
     const templates = await listTemplates()
@@ -134,7 +138,7 @@ describe('the workforce catalog read model', () => {
     const page = await listWorkforceCatalogPage({ source: 'local' })
 
     expect(page.rows).toHaveLength(1)
-    expect(page.facets.capabilities).toEqual(['Design the module boundary', 'Run the work back'])
+    expect(page.facets.capabilities).toEqual(['qa.test-strategy'])
   })
 
   it('reads one template’s whole profile, and reports a raw Markdown override', async (): Promise<void> => {

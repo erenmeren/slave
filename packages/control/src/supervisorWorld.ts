@@ -120,16 +120,23 @@ async function loadCompanyRoster(
   `
 }
 
-/** Every catalog template that provides ANY capability, plus whether a worker already here has a
- *  profile that recommends pairing with it (R5's advisory tie-break). Two queries, both bounded:
- *  a template with no `capabilityKeys` can never cover a gap, and the hint read is keyed on the
- *  templates the current roster came from. */
+/** Every ACTIVE catalog template that provides ANY capability, plus whether a worker already here
+ *  has a profile that recommends pairing with it (R5's advisory tie-break). Two queries, both
+ *  bounded: a template with no `capabilityKeys` can never cover a gap, and the hint read is keyed on
+ *  the templates the current roster came from.
+ *
+ *  **`active: true` is M55 R2's only gate, and this is the only place it is applied.** An import
+ *  produces a library, not a workforce: three hundred personas arriving on a Tuesday must not become
+ *  three hundred rankable candidates on the next tick. `formTeam` and `rankCandidates`
+ *  (`packages/domain/src/capability/team.ts`) are untouched -- they are pure functions over a
+ *  `SupervisorWorld`, and an inactive template simply is not in `SupervisorWorld.catalog`, so it can
+ *  never be a `TeamSource` of any kind and `hire_from_catalog` is never proposed for it. */
 async function loadCatalogEntries(
   tx: Prisma.TransactionClient,
   slaveRows: readonly { readonly id: string }[],
 ): Promise<readonly SupervisorCatalogEntry[]> {
   const templates = await tx.slaveTemplate.findMany({
-    where: { NOT: { capabilityKeys: { isEmpty: true } } },
+    where: { active: true, NOT: { capabilityKeys: { isEmpty: true } } },
     select: { id: true, name: true, capabilityKeys: true, sourceDivision: true, defaultModel: true },
     orderBy: { id: 'asc' },
     take: CATALOG_ENTRIES_MAX,
@@ -257,9 +264,19 @@ async function loadProfileEvidence(
   return [...byProfile.entries()].map(([profileKey, evidence]) => ({ profileKey, ...evidence }))
 }
 
-/** A bound, because a full catalog import is thousands of rows (M55) and a Supervisor world is
- *  built once a tick. Ordered by id, so the same thousand rows come back in the same order and
- *  `formTeam` is still deterministic when the bound bites. */
+/** A bound on the candidates a Supervisor world is built from, once a tick.
+ *
+ *  It used to say "a full catalog import is thousands of rows (M55)", and M55 is where that stopped
+ *  being the population this number bounds: since R2 the clause above reads ACTIVE rows, and active
+ *  is a person's decision one row at a time -- a far smaller and far more deliberate set than a
+ *  catalog. Five hundred SPECIALISTS somebody chose to make hirable is a workforce nobody has, and a
+ *  world built from more than that is a ranking nobody can read. The bound stays because a bound
+ *  that has never bitten is still the thing that stops one pathological install from building a
+ *  ten-thousand-candidate world every tick.
+ *
+ *  Ordered by id, so the same five hundred rows come back in the same order and `formTeam` is still
+ *  deterministic when the bound bites. The 501st ACTIVE template by id is invisible to the
+ *  Supervisor, which R2 narrows rather than closes and section 6 carries. */
 const CATALOG_ENTRIES_MAX = 500
 
 /**
