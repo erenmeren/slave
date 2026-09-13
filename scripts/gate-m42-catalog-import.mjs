@@ -133,7 +133,9 @@ const catalogTemplates = () =>
 const catalogImports = () =>
   prisma.catalogImport.findMany({ where: { catalog: CATALOG_NAME }, orderBy: { startedAt: 'asc' } })
 
-/** The fields stage 2 and stage 4 compare -- everything an import is allowed to move on a template. */
+/** The fields stage 2 and stage 4 compare -- everything an import is allowed to move on a template.
+ *  `active` is here since M55 R2: an import writes it on a row it CREATES and never on a row it
+ *  updates, so a snapshot that omitted it could not tell those two rules apart. */
 const snapshotOf = (template) =>
   JSON.stringify({
     id: template.id,
@@ -148,6 +150,7 @@ const snapshotOf = (template) =>
     importedAt: template.importedAt,
     defaultModel: template.defaultModel,
     provider: template.provider,
+    active: template.active,
   })
 
 /** Removes what a prior interrupted run left behind, in the same order the `finally` block uses:
@@ -213,13 +216,18 @@ async function dumpGateRows() {
     .findMany({ where: { OR: [{ sourceId: { startsWith: `${CATALOG_NAME}/` } }, { name: { in: GATE_TEMPLATE_NAMES } }] } })
     .catch(() => [])
   const imports = await catalogImports().catch(() => [])
+  // M55: `deleteGateTemplates` needs no new statement -- `TemplateDuplicate` cascades from
+  // `SlaveTemplate` (plan erratum E4) -- but a FAILURE has to be able to say what was detected.
+  const duplicates = await prisma.templateDuplicate
+    .findMany({ where: { OR: [{ a: { sourceId: { startsWith: `${CATALOG_NAME}/` } } }, { b: { sourceId: { startsWith: `${CATALOG_NAME}/` } } }] } })
+    .catch(() => [])
   const daemonTails = daemons.map((d) => ({
     label: d.label,
     pid: d.proc.pid ?? null,
     exited: d.exited,
     output: d.output.length > 6_000 ? `…${d.output.slice(-6_000)}` : d.output,
   }))
-  return JSON.stringify({ workspace, events, templates, imports, daemonTails }, (_key, value) =>
+  return JSON.stringify({ workspace, events, templates, imports, duplicates, daemonTails }, (_key, value) =>
     typeof value === 'bigint' ? value.toString() : value,
   )
 }
@@ -377,7 +385,11 @@ try {
 
   // ================= Stage 1: the first import ====================================================
 
-  const firstOutput = runCli(['import-catalog', '--dir', catalogDir, '--by', 'gate'])
+  // `--allow-unknown-license` on every import here (M55 R12a): `scripts/fixtures/catalog-m42/` is
+  // the ONE fixture catalog with no `LICENSE` file, and M55 R8 refuses a checkout whose licence
+  // nothing can name. Kept as an absence rather than fixed, so the fixture roster covers BOTH states
+  // -- the other four catalogs carry a LICENSE and never reach that refusal.
+  const firstOutput = runCli(['import-catalog', '--dir', catalogDir, '--by', 'gate', '--allow-unknown-license'])
   console.log(`stage 1 -- import-catalog printed:\n${firstOutput}`)
 
   const afterFirst = await catalogTemplates()
@@ -406,6 +418,9 @@ try {
     if (row.importedAt === null) await fail(`${expected.sourceId} has no importedAt`)
     if (row.defaultModel !== null) await fail(`${expected.sourceId} was given a model (${JSON.stringify(row.defaultModel)}); an import never chooses one (R3)`)
     if (row.provider !== null) await fail(`${expected.sourceId} was given a provider (${JSON.stringify(row.provider)}); an import never chooses one (R3)`)
+    // M55 R2: an import produces a library, not a workforce. Asserted where the other two
+    // "an import never decides this" defaults already are.
+    if (row.active !== false) await fail(`${expected.sourceId} arrived ACTIVE; nothing an import creates is hirable until somebody says so (M55 R2)`)
     if (row.profile === null) await fail(`${expected.sourceId} stored no profile`)
     const recomputed = goalSha256(row.profile)
     console.log(`    profileSha256 ${String(row.profileSha256)} vs goalSha256(profile) ${recomputed}`)
@@ -475,7 +490,7 @@ try {
 
   // ================= Stage 2: the same import again ===============================================
 
-  const secondOutput = runCli(['import-catalog', '--dir', catalogDir, '--by', 'gate'])
+  const secondOutput = runCli(['import-catalog', '--dir', catalogDir, '--by', 'gate', '--allow-unknown-license'])
   console.log(`stage 2 -- the same import again printed:\n${secondOutput}`)
 
   const importsAfterSecond = await catalogImports()
@@ -514,7 +529,7 @@ try {
   writeFileSync(verifierPath, `${readFileSync(verifierPath, 'utf8').trimEnd()}\n\n${VERIFIER_APPENDED}\n`)
   console.log(`rewrote both persona files in the copy: ${coreBuilderPath} (${String(statSync(coreBuilderPath).size)} bytes), ${verifierPath} (${String(statSync(verifierPath).size)} bytes)`)
 
-  const thirdOutput = runCli(['import-catalog', '--dir', catalogDir, '--by', 'gate'])
+  const thirdOutput = runCli(['import-catalog', '--dir', catalogDir, '--by', 'gate', '--allow-unknown-license'])
   console.log(`stage 3 -- import-catalog printed:\n${thirdOutput}`)
 
   const afterThird = new Map((await catalogTemplates()).map((row) => [row.sourceId, row]))
@@ -570,14 +585,18 @@ try {
   console.log(`stage 4 -- CatalogImport rows in the whole table before the dry run: ${String(importCountBefore)}`)
   for (const [sourceId, snapshot] of beforeDry) console.log(`  before: ${sourceId} ${snapshot}`)
 
-  // `--dry-run` LAST (erratum E11): `parseArgs` takes the next token as a flag's value, so a
-  // `--dry-run` anywhere else swallows the flag that follows it.
+  // TWO bare flags on one line. `--allow-unknown-license` is in the parser's `VALUELESS` set (M55
+  // plan erratum E3) and may sit anywhere; `--dry-run` deliberately is NOT -- E3 left the five older
+  // booleans under their documented rule -- so it still goes LAST (M42 erratum E11). Written the
+  // other way round, `--dry-run` would record `--allow-unknown-license` as its VALUE and swallow it,
+  // and this dry run would be refused for a licence nobody can name.
   const dryOutput = runCli([
     'import-catalog',
     '--dir',
     catalogDir,
     '--role-map',
     'engineering=backend,testing=reviewer',
+    '--allow-unknown-license',
     '--dry-run',
   ])
   console.log(`stage 4 -- the dry run printed:\n${dryOutput}`)
@@ -607,6 +626,13 @@ try {
   console.log('stage 4 complete: a --role-map dry run printed the role it would have translated and moved nothing at all')
 
   // ================= Stage 5: the imported persona in front of the model ==========================
+  //
+  // NO `template activate` ANYWHERE IN THIS STAGE, deliberately (M55 R2). Both templates are
+  // `active: false` -- stage 1 asserted it -- and this stage still builds a company from them,
+  // materialises a worker and dispatches a real run. That is the whole of "activation gates the
+  // SUPERVISOR and nothing else": an operator naming a specific row by hand is the same deliberate
+  // act as activating it, and a stage that needed a new step to keep passing would have been the
+  // proof that this ruling was wrong.
 
   repoPath = makeRepo()
   companyId = createdId(runCli(['create-company', '--name', COMPANY_NAME]), 'create-company')

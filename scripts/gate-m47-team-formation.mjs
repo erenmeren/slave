@@ -557,7 +557,9 @@ try {
   const head = execFileSync('git', ['-C', catalogDir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
   console.log(`the temp catalog repository's HEAD: ${head}`)
 
-  const importOutput = runCli(['import-catalog', '--dir', catalogDir, '--by', 'gate'])
+  // M55 R2: `--activate`, because this gate's whole subject is the Supervisor CHOOSING one of these
+  // personas, and nothing an import creates is a candidate until somebody says so.
+  const importOutput = runCli(['import-catalog', '--dir', catalogDir, '--by', 'gate', '--activate'])
   console.log(`stage 2 -- import-catalog printed:\n${importOutput}`)
 
   const imported = await catalogTemplates()

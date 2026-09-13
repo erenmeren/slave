@@ -3173,7 +3173,7 @@ describe('the orchestrator CLI', () => {
       expect(result.stderr).toMatch(/--enable and --disable are exclusive/)
     })
   })
-  // M42 t4: the import verbs. Every invocation writes `--dry-run` LAST -- `parseArgs` takes
+  // M42 t4: the import verbs. Every invocation still writes `--dry-run` LAST -- `parseArgs` takes
   // whatever follows a flag as its value (erratum E11), so `--dry-run --by me` would record
   // `dry-run: '--by'` and drop `--by` entirely.
   describe('import-catalog', () => {
@@ -3214,10 +3214,13 @@ describe('the orchestrator CLI', () => {
       for (const dir of catalogDirs) rmSync(dir, { recursive: true, force: true })
     })
 
-    it('imports a directory, prints a line per row, and records the run', async (): Promise<void> => {
+    // `--verbose`: M55 R7 moved the per-row lines behind it, and this case is the one that reads
+    // them. The SKIP lines are not behind it -- a skip is a thing the operator has to act on -- and
+    // the assertion below proves that by reading one out of a run that also asked for the rows.
+    it('imports a directory, prints a line per row under --verbose, and records the run', async (): Promise<void> => {
       const dir = catalogDir()
 
-      const result = await runCli(['import-catalog', '--dir', dir, '--by', 'operator'])
+      const result = await runCli(['import-catalog', '--dir', dir, '--by', 'operator', '--verbose'])
 
       expect(result.code).toBe(0)
       expect(result.stdout).toContain('created 1, updated 0, unchanged 0, skipped 1')
@@ -3249,6 +3252,65 @@ describe('the orchestrator CLI', () => {
       expect(result.stdout).toContain('structured 1')
       const row = await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'CLI Core Builder' } })
       expect(row.profileSpec).not.toBeNull()
+    })
+
+    // M55 R7: the counts are the DEFAULT report, and the per-row lines are what `--verbose` adds.
+    it('prints the counts, the three duplicate numbers and the skip breakdown without --verbose, and no per-row line', async (): Promise<void> => {
+      const dir = catalogDir()
+
+      const result = await runCli(['import-catalog', '--dir', dir, '--by', 'operator'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('created 1, updated 0, unchanged 0, skipped 1')
+      expect(result.stdout).toContain('duplicates: 0 exact, 0 near, 0 overlapping')
+      expect(result.stdout).toContain('skipped: 1 invalid_persona')
+      // The SKIP detail line is not behind --verbose; the created line is.
+      expect(result.stdout).toContain('skipped  invalid_persona')
+      expect(result.stdout).not.toContain('created  CLI Core Builder')
+    })
+
+    // M55 R2: every row arrives inactive, and --activate is the operator saying otherwise for this
+    // run. `gate:m47-team-formation` and `gate:m50-ephemeral` both drive `hire_from_catalog`, and
+    // this flag is the only reason their imported personas are candidates at all.
+    it('imports inactive by default and --activate is what makes a row a hiring candidate', async (): Promise<void> => {
+      const quiet = await runCli(['import-catalog', '--dir', catalogDir()])
+      expect(quiet.code).toBe(0)
+      expect((await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'CLI Core Builder' } })).active).toBe(false)
+
+      await prisma.$executeRawUnsafe('TRUNCATE TABLE "CatalogImport", "SlaveTemplate" RESTART IDENTITY CASCADE')
+      const activated = await runCli(['import-catalog', '--dir', catalogDir(), '--activate'])
+
+      expect(activated.code).toBe(0)
+      expect((await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'CLI Core Builder' } })).active).toBe(true)
+    })
+
+    // M55 R8. The refusal's CLI home: `throw new Error(refusalText(result.error))`, so the sentence
+    // the control layer wrote is what the operator reads, byte for byte, on a non-zero exit.
+    it('refuses a checkout with no LICENSE, and --allow-unknown-license is the way past it', async (): Promise<void> => {
+      const root = mkdtempSync(join(tmpdir(), 'cli-catalog-unlicensed-'))
+      catalogDirs.push(root)
+      mkdirSync(join(root, 'engineering'), { recursive: true })
+      writeFileSync(
+        join(root, 'engineering', 'core-builder.md'),
+        '---\nname: CLI Unlicensed Builder\ndescription: Builds the core.\n---\n\nYou build the core module.\n',
+      )
+
+      const refused = await runCli(['import-catalog', '--dir', root])
+
+      expect(refused.code).not.toBe(0)
+      expect(refused.stderr).toContain('has no LICENSE file at its root, so nothing can record where its personas came from')
+      expect(refused.stderr).toContain('pass --allow-unknown-license to import it anyway')
+      expect(await prisma.slaveTemplate.count()).toBe(0)
+
+      // `--allow-unknown-license` is BARE and may sit ANYWHERE (M55 plan erratum E3); `--dry-run` is
+      // NOT, and keeps its documented rule, so it goes LAST. Written in exactly the order
+      // `gate:m42-catalog-import`'s own dry run writes them, because the other order would record
+      // `--allow-unknown-license` as `--dry-run`'s VALUE and swallow it.
+      const allowed = await runCli(['import-catalog', '--dir', root, '--allow-unknown-license', '--dry-run'])
+
+      expect(allowed.code).toBe(0)
+      expect(allowed.stdout).toContain('DRY RUN')
+      expect(allowed.stdout).toContain('created 1, updated 0, unchanged 0, skipped 0')
     })
 
     it('a dry run prints what would happen and writes nothing at all', async (): Promise<void> => {
@@ -3439,7 +3501,10 @@ describe('the orchestrator CLI', () => {
       expect(result.stdout.indexOf('started-first-finished-last')).toBeLessThan(
         result.stdout.indexOf('started-later-finished-sooner'),
       )
-      expect(result.stdout).toContain('created 1, updated 0, unchanged 0, skipped 0  (/srv/one)')
+      // M55 plan erratum E9: the three duplicate counts join the four outcome counts on the row,
+      // and the header above says which slash is which.
+      expect(result.stdout).toContain('when  catalog  by  outcomes  duplicates exact/near/overlapping  directory')
+      expect(result.stdout).toContain('created 1, updated 0, unchanged 0, skipped 0  duplicates 0/0/0  (/srv/one)')
     })
 
     it('list-imports takes ten by default and --limit when it is given', async (): Promise<void> => {
@@ -3461,8 +3526,10 @@ describe('the orchestrator CLI', () => {
       const byDefault = await runCli(['list-imports'])
       const limited = await runCli(['list-imports', '--limit', '3'])
 
-      expect(byDefault.stdout.trimEnd().split('\n')).toHaveLength(10)
-      expect(limited.stdout.trimEnd().split('\n')).toHaveLength(3)
+      // `.slice(1)` drops the header line M55 erratum E9 added above the rows: what is being
+      // counted here is the rows, and the header is not one.
+      expect(byDefault.stdout.trimEnd().split('\n').slice(1)).toHaveLength(10)
+      expect(limited.stdout.trimEnd().split('\n').slice(1)).toHaveLength(3)
       // Newest first, so the eleventh run is in and the first is not.
       expect(byDefault.stdout).toContain('run-10')
       expect(byDefault.stdout).not.toContain('run-0 ')
@@ -3494,14 +3561,165 @@ describe('the orchestrator CLI', () => {
       expect(result.stdout).toContain('no catalog has been imported yet')
     })
 
-    it('help documents both verbs, the boolean flag going last, and the unknown-name warning', async (): Promise<void> => {
+    it('help documents both verbs, the three new flags, the boolean going last, and the unknown-name warning', async (): Promise<void> => {
       const printed = await runCli(['help'])
       const text = `${printed.stdout}${printed.stderr}`
 
       expect(text).toContain('import-catalog --dir <path>')
       expect(text).toContain('list-imports')
+      // `--dry-run` is NOT in the parser's `VALUELESS` set (M55 plan erratum E3 deliberately left
+      // the five older booleans alone), so its documented rule stands and the usage line still
+      // teaches it -- which is also why it is written after the three flags M55 adds.
       expect(text).toContain('write it LAST in the command')
+      expect(text).toContain('[--activate] [--verbose] [--allow-unknown-license] [--dry-run]')
+      expect(text).toContain('NOTHING IMPORTED IS')
       expect(text).toContain('a WARNING on stderr')
+    })
+  })
+
+  // M55 R7/R10: the four verbs a person types at one table, and the three flags a person passes to
+  // an import. `SlaveTemplate` is in no other case's way in this file, and `TemplateDuplicate`
+  // cascades from it (plan erratum E4), so one statement empties both.
+  describe('template and import-catalog (M55 R7, R10)', () => {
+    beforeEach(async (): Promise<void> => {
+      await prisma.$executeRawUnsafe('TRUNCATE TABLE "CatalogImport", "SlaveTemplate" RESTART IDENTITY CASCADE')
+    })
+
+    const template = async (name: string, active: boolean): Promise<string> =>
+      (
+        await prisma.slaveTemplate.create({
+          data: { name, role: 'backend', description: `${name} does one thing.`, active, capabilityKeys: ['backend.services'] },
+        })
+      ).id
+
+    it('`template activate` turns a row on and says so in words', async (): Promise<void> => {
+      const id = await template('M55 Inert Persona', false)
+
+      const result = await runCli(['template', 'activate', '--template', id, '--by', 'gate'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('M55 Inert Persona is now active')
+      const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id } })
+      expect(row.active).toBe(true)
+      expect(row.activationChangedBy).toBe('gate')
+    })
+
+    it('`template activate` on a row that is already on says the no-op rather than claiming a change', async (): Promise<void> => {
+      const id = await template('M55 Live Persona', true)
+
+      const result = await runCli(['template', 'activate', '--template', id])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('was already active')
+    })
+
+    it('`template deactivate` puts it back', async (): Promise<void> => {
+      const id = await template('M55 Live Persona', true)
+
+      const result = await runCli(['template', 'deactivate', '--template', id])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('is now inactive')
+      expect((await prisma.slaveTemplate.findUniqueOrThrow({ where: { id } })).active).toBe(false)
+    })
+
+    it('refuses a template id nobody wrote, with the control layer OWN sentence and a non-zero exit', async (): Promise<void> => {
+      const result = await runCli(['template', 'activate', '--template', '00000000-0000-4000-8000-000000000000'])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('no template with id 00000000-0000-4000-8000-000000000000')
+    })
+
+    it('`template list` prints one row per template, with the activation as a WORD and never as a boolean', async (): Promise<void> => {
+      await template('M55 Live Persona', true)
+      await template('M55 Inert Persona', false)
+
+      const result = await runCli(['template', 'list'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('M55 Live Persona')
+      expect(result.stdout).toContain('M55 Inert Persona')
+      expect(result.stdout).toContain('active')
+      expect(result.stdout).toContain('inactive')
+      expect(result.stdout).not.toMatch(/\btrue\b|\bfalse\b/u)
+    })
+
+    it('`template list --active` and `--inactive` each narrow it, wherever the flag is written', async (): Promise<void> => {
+      await template('M55 Live Persona', true)
+      await template('M55 Inert Persona', false)
+
+      const live = await runCli(['template', 'list', '--active'])
+      expect(live.stdout).toContain('M55 Live Persona')
+      expect(live.stdout).not.toContain('M55 Inert Persona')
+
+      // `--inactive` BEFORE another flag, which is the whole of plan erratum E3: a bare flag that is
+      // not in `VALUELESS` swallows whatever follows it.
+      const inert = await runCli(['template', 'list', '--inactive', '--division', 'engineering'])
+      expect(inert.stdout).not.toContain('M55 Live Persona')
+    })
+
+    it('`template duplicates` prints a pair with both NAMES and the class as a word', async (): Promise<void> => {
+      const a = await template('M55 Alpha', false)
+      const b = await template('M55 Beta', false)
+      const [low, high] = a < b ? [a, b] : [b, a]
+      await prisma.templateDuplicate.create({
+        data: { aId: low, bId: high, class: 'exact', basis: 'content_hash', score: 1 },
+      })
+
+      const result = await runCli(['template', 'duplicates'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('M55 Alpha')
+      expect(result.stdout).toContain('M55 Beta')
+      expect(result.stdout).toContain('Duplicate of')
+      expect(result.stdout).toContain('same persona text')
+      expect(result.stdout).not.toMatch(/\bcontent_hash\b/u)
+    })
+
+    it('`template duplicates --dismiss` stamps it, and `--restore` takes it back', async (): Promise<void> => {
+      const a = await template('M55 Alpha', false)
+      const b = await template('M55 Beta', false)
+      const [low, high] = a < b ? [a, b] : [b, a]
+      const pair = await prisma.templateDuplicate.create({
+        data: { aId: low, bId: high, class: 'exact', basis: 'content_hash', score: 1 },
+      })
+
+      const dismissed = await runCli(['template', 'duplicates', '--dismiss', pair.id, '--by', 'gate'])
+      expect(dismissed.code).toBe(0)
+      expect((await prisma.templateDuplicate.findUniqueOrThrow({ where: { id: pair.id } })).dismissedBy).toBe('gate')
+
+      // A dismissed pair is out of the default list and back under `--dismissed` -- written BEFORE
+      // another flag, which is plan erratum E3's rule ("every bare flag this milestone adds joins
+      // `VALUELESS`") applied to the one the erratum's own enumeration missed.
+      expect((await runCli(['template', 'duplicates'])).stdout).toContain('no duplicate pair has been detected')
+      const showing = await runCli(['template', 'duplicates', '--dismissed', '--class', 'exact'])
+      expect(showing.code).toBe(0)
+      expect(showing.stdout).toContain('dismissed by gate')
+
+      const restored = await runCli(['template', 'duplicates', '--restore', pair.id])
+      expect(restored.code).toBe(0)
+      expect((await prisma.templateDuplicate.findUniqueOrThrow({ where: { id: pair.id } })).dismissedAt).toBeNull()
+    })
+
+    it('refuses a pair id nobody wrote, with its own sentence', async (): Promise<void> => {
+      const result = await runCli(['template', 'duplicates', '--dismiss', '00000000-0000-4000-8000-000000000000'])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('no duplicate pair with id 00000000-0000-4000-8000-000000000000')
+    })
+
+    it('`template duplicates --recompute` says what it did, in numbers', async (): Promise<void> => {
+      const result = await runCli(['template', 'duplicates', '--recompute'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(/recomputed: \d+ pair/u)
+    })
+
+    it('refuses a fifth subcommand rather than silently listing', async (): Promise<void> => {
+      const result = await runCli(['template', 'merge'])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toContain('template takes list, activate, deactivate or duplicates')
     })
   })
 

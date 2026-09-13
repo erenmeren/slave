@@ -644,6 +644,11 @@ try {
         description: 'Seeded by gate:m53-evidence.',
         defaultModel: PIPELINE_MODEL,
         capabilityKeys: [...capabilities],
+        // M55 plan erratum E10: these stand in for catalog personas somebody already chose, and two
+        // of them carry capability keys -- which is exactly what made them Supervisor candidates
+        // before M55 R2 put `active` in front of that door. Written true so this gate measures the
+        // same world it measured before.
+        active: true,
       },
     })
     templateIds.push(row.id)

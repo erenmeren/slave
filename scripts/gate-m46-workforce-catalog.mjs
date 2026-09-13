@@ -117,8 +117,16 @@ const RAW_OVERRIDE = 'This is what I want this worker to be, in my own words.'
 /** A sentence only the persona FILE contains, on ONE line of it -- `body` keeps the persona's own
  *  line breaks, so a needle that spanned the wrap would never be found however right it read. */
 const CORE_BUILDER_BODY_SENTENCE = 'the slave that writes the module everything else stands on'
-/** The capability the facet menu offers that exactly one persona has. */
+/** The capability the facet menu offers that exactly one persona has. Stage 1 still asserts that the
+ *  core builder's own free-text capabilities include it; the FILTER no longer selects it (below). */
 const CORE_BUILDER_CAPABILITY = 'Design the module boundary'
+/** M55 plan erratum E1: stage 2b used to select a free-text capability bullet. The capability facet
+ *  is taxonomy KEYS since M55 R3, and none of this fixture's four personas resolves one -- their
+ *  bullets are prose, and `normaliseCapabilities` matches whole normalised strings. The SKILL facet
+ *  is the one this fixture populates: `gate-core-builder.md`'s front matter is the only `skills:`
+ *  key in `scripts/fixtures/`. The capability filter's own coverage is `gate:m55-catalog` stage 9,
+ *  which asserts that its options are labels and its values are keys. */
+const CORE_BUILDER_SKILL = 'writing-plans'
 
 /** Asks the OS for a free TCP port. `next dev -p <port>` still auto-increments if something grabs
  *  it between this call and the spawn, so the ready-wait parses the ACTUAL bound port back out of
@@ -722,19 +730,19 @@ try {
   console.log(`stage 2a -- "rollout" leaves ${await countText()}, and the URL is ${page.url()}`)
   if (!page.url().includes('q=rollout')) await fail(`stage 2: the URL does not carry the search: ${page.url()}`)
 
-  // 2b. the capability filter, off the facets the read model computed.
+  // 2b. the skill filter, off the facets the read model computed (erratum E1).
   await page.getByTestId('catalog-search').fill('')
   await waitUntil(async () => ((await rowIds()).length === baselineTotal + 4 ? true : `${String((await rowIds()).length)} rows`), 'the cleared search to put every row back')
-  await page.getByTestId('catalog-capability-select').selectOption(CORE_BUILDER_CAPABILITY)
+  await page.getByTestId('catalog-skill-select').selectOption(CORE_BUILDER_SKILL)
   await waitUntil(
     async () => {
       const ids = await rowIds()
       const text = await countText()
       return ids.length === 1 && ids[0] === coreId && text === '1 template' ? true : `rows ${JSON.stringify(ids)}, count ${JSON.stringify(text)}`
     },
-    'the capability filter to leave the core builder alone',
+    'the skill filter to leave the core builder alone',
   )
-  console.log(`stage 2b -- the capability ${JSON.stringify(CORE_BUILDER_CAPABILITY)} leaves ${await countText()}`)
+  console.log(`stage 2b -- the skill ${JSON.stringify(CORE_BUILDER_SKILL)} leaves ${await countText()}`)
 
   // 2c. the source chips. The POSITIVE half first, so the empty half below cannot pass vacuously:
   // the same search under `imported` finds exactly the four rows this run created.
@@ -878,7 +886,10 @@ try {
   // ============================================================================================
 
   appendFileSync(join(catalogDir, 'engineering', 'gate-core-builder.md'), `${CORE_BUILDER_APPENDED}\n`)
-  const secondOutput = runCli(['import-catalog', '--dir', catalogDir, '--by', 'gate'])
+  // `--verbose`: M55 R7 moved the per-row lines -- and `overrides kept N` is one of them -- behind
+  // that flag, because a three-hundred-file catalog's report is counts and not a wall of rows. The
+  // assertion below is about ONE row, so this is the run that asks for the rows.
+  const secondOutput = runCli(['import-catalog', '--dir', catalogDir, '--by', 'gate', '--verbose'])
   console.log(`stage 5 -- the re-import printed:\n${secondOutput}`)
   if (!secondOutput.includes('overrides kept 1')) await fail('stage 5: the report does not say the override was kept')
   const after = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: coreId } })

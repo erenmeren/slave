@@ -61,7 +61,9 @@ import {
   listPendingQuestions,
   listRunbooks,
   listStaffingPreferences,
+  listTemplateDuplicates,
   listUsers,
+  listWorkforceCatalog,
   loadSimulation,
   loadSupervisorWorld,
   mapExternalRepository,
@@ -72,6 +74,7 @@ import {
   readMemory,
   readRunbook,
   readTemplateProfile,
+  recomputeTemplateDuplicates,
   refusalText,
   rejectDecision,
   releaseWorker,
@@ -89,6 +92,8 @@ import {
   setRuntimeRoles,
   setSlavePermission,
   setStaffingPreference,
+  setTemplateActivation,
+  setTemplateDuplicateDismissal,
   setSlaveCapabilities,
   setSlaveModel,
   setSlaveRole,
@@ -106,6 +111,7 @@ import {
   syncRunbooks,
   supersedeMemory,
   syncSkillCatalog,
+  TEMPLATE_PICKER_MAX,
   tickSimulations,
   plural,
   unblockTask,
@@ -124,6 +130,10 @@ import {
   BROKER_CLIENT_TIMEOUT_MS,
   BROKER_OP_LABEL,
   COST_PROVENANCE_WORD,
+  DUPLICATE_BASIS_LABEL,
+  DUPLICATE_CLASSES,
+  DUPLICATE_CLASS_LABEL,
+  DUPLICATE_FACETS,
   EVIDENCE_OUTCOME_LABEL,
   EXTERNAL_KIND_LABEL,
   EXTERNAL_SOURCES,
@@ -154,6 +164,8 @@ import {
   workspaceId as brandWorkspaceId,
   type BrokerOp,
   type BreakerTripKind,
+  type DuplicateClass,
+  type DuplicateFacet,
   type ExternalSource,
   type MemoryStatus,
   type MemoryType,
@@ -281,7 +293,8 @@ const USAGE = `usage: orchestrator <command> [options]
   skills sync                          rescan the skill catalog from this host's disk:
                                        ~/.claude/skills, the plugin cache, and <repo>/.claude/skills
   import-catalog --dir <path> [--catalog <n>] [--division <d>[,<d>]]
-                 [--role-map <division>=<role>,...] [--by <name>] [--dry-run]
+                 [--role-map <division>=<role>,...] [--by <name>]
+                 [--activate] [--verbose] [--allow-unknown-license] [--dry-run]
                                        import a directory of persona files into the template
                                        catalog. Re-runnable: an unchanged file is left alone, a
                                        changed one updates the template it created, and a profile a
@@ -293,10 +306,17 @@ const USAGE = `usage: orchestrator <command> [options]
                                        gets a WARNING on stderr, not a refusal: every division that
                                        does exist is still imported. --dry-run decides everything
                                        and writes nothing -- write it LAST in the command, a flag
-                                       after it would be swallowed as its value.
+                                       after it would be swallowed as its value. NOTHING IMPORTED IS
+                                       HIRABLE until somebody says so: every row arrives inactive,
+                                       and --activate is that somebody saying so for this run.
+                                       --verbose prints one line per row instead of the counts.
+                                       --allow-unknown-license imports a checkout with no LICENSE
+                                       file at its root, which is otherwise refused, because nothing
+                                       could record where those personas came from.
   list-imports [--limit <n>]           the last catalog imports, newest first by the timestamp the
-                                       line shows, with their counts. --limit defaults to 10 and
-                                       must be a positive integer
+                                       line shows, with their four outcome counts and the three
+                                       duplicate counts that import noticed. --limit defaults to 10
+                                       and must be a positive integer
   create-template --name <n> --role <r> [--model <m> --provider <p>] [--description <d>]
                                        add a reusable slave template to the catalog. --model and
                                        --provider are a pair: give both or neither.
@@ -355,6 +375,25 @@ const USAGE = `usage: orchestrator <command> [options]
                                        materialised from, and add the runtime roles those project
                                        to. Only workers whose own capability set is empty; never
                                        one an operator has described by hand. Run once per project.
+  template list [--division <d>] [--active | --inactive] [--duplicates <exact|near|overlapping|none>]
+                                       every template, with whether it is hirable and the strongest
+                                       duplicate signal beside it. Nothing an import created is
+                                       hirable until \`template activate\` says so.
+  template activate --template <id>    make one template a hiring candidate: the Supervisor may
+  template deactivate --template <id>  propose it, and stops proposing it again. A worker already
+                                       hired from it keeps working either way, and \`add-slave
+                                       --template\` works on an inactive row -- naming a specific row
+                                       by hand is the same deliberate act as activating it.
+  template duplicates [--template <id>] [--class <exact|near|overlapping>] [--dismissed]
+                      [--recompute] [--dismiss <pairId>] [--restore <pairId>]
+                                       which catalog rows look like which. --recompute re-classifies
+                                       the WHOLE table and is also the backfill for a catalog
+                                       imported before this feature existed AND the repair after an
+                                       import that was interrupted before it paired its rows; it may
+                                       retire a pair that no longer looks alike. --dismiss says "I
+                                       know" about one pair and keeps the row; --restore takes that
+                                       back. Nothing here ever deletes a template: that is
+                                       \`delete-template\`, and it asks twice.
   runbooks sync                        reconcile the runbook table against the checked-in list:
                                        adds what is missing, brings a seed row back to what the
                                        list says, and never touches a persona or human row.
@@ -665,16 +704,33 @@ type Flags = Readonly<Record<string, string | readonly string[] | undefined>>
 const REPEATABLE: ReadonlySet<string> = new Set(['verify', 'setup', 'command'])
 
 /**
- * Flags that carry no value at all, so they may be written ANYWHERE in the command (M50 t3).
+ * Flags that carry no value at all, so they may be written ANYWHERE in the command (M50 t3, widened
+ * by M55 plan erratum E3).
  *
- * The parser below takes whatever follows a flag as its value, even another `--flag` -- which is
- * why every boolean this CLI already has (`--yes`, `--dry-run`, `--prompt`) is documented as going
- * LAST. `--temporary` cannot live under that rule: it is meaningless without `--for-task`, the two
- * are read as one phrase, and `hire ... --temporary --for-task <id>` would otherwise record
- * `--for-task` as the VALUE of `--temporary` and swallow the task id entirely. Listing the flag
- * here is the honest fix for the pair; the older booleans keep their documented rule.
+ * The parser below takes whatever follows a flag as its value, even another `--flag`, and then
+ * CONSUMES it -- which is why every boolean this CLI had before M50 (`--yes`, `--dry-run`,
+ * `--prompt`, `--markdown`, `--clear`) is documented as going LAST. That rule holds for ONE bare
+ * flag per command and no more: `--temporary` is meaningless without `--for-task`, the two are read
+ * as one phrase, and `hire ... --temporary --for-task <id>` would otherwise swallow the task id
+ * entirely. M55 puts three more on `import-catalog`, two on `template list` and two on `template
+ * duplicates`, so the same trap is now seven flags wide, and listing them here is the honest fix --
+ * which is E3's own rule: every bare flag this milestone adds joins this set.
+ *
+ * The five older booleans keep their documented rule, because moving a rule for a flag nobody is
+ * changing is a rename dressed as a fix -- so `--dry-run` is still written LAST, which is why
+ * `gate:m42-catalog-import`'s dry run reads `--allow-unknown-license --dry-run` and not the other
+ * way round.
  */
-const VALUELESS: ReadonlySet<string> = new Set(['temporary'])
+const VALUELESS: ReadonlySet<string> = new Set([
+  'temporary',
+  'activate',
+  'verbose',
+  'allow-unknown-license',
+  'recompute',
+  'active',
+  'inactive',
+  'dismissed',
+])
 
 /**
  * `--flag value`, `--flag=value`, and `--flag` on its own.
@@ -1256,16 +1312,21 @@ async function mustGetRun(runId: string) {
 }
 
 /**
- * The import report an operator reads (M42 §2).
+ * The import report an operator reads (M42 §2, rewritten by M55 R7).
  *
- * Counts first, then a line per row that CHANGED or was skipped -- with the reason on the skip,
- * because "3 skipped" without them is a number nobody can act on. `unchanged` rows are summarised
- * rather than listed: on a real catalog they are almost all of it, and an operator scanning for
- * what moved should not have to read three hundred lines saying nothing did. A drifting role is
- * printed on its own line: the template keeps the role it was created with, and an operator who
- * expected --role-map to change it needs to be told it did not.
+ * **Counts by default, lines only when asked.** A real catalog is three hundred files, and a
+ * three-hundred-line wall is not a report -- it is the thing an operator scrolls past to find the
+ * two rows that mattered. `--verbose` prints the per-row lines this used to print unconditionally.
+ *
+ * **The SKIPS still print every time.** A skip is a thing the operator has to act on, and a count of
+ * four with no reasons is not actionable. They get a breakdown line AND their own detail lines,
+ * because "2 name_taken" says how many and the lines say which.
+ *
+ * A drifting role is printed on its own line whatever the verbosity: the template keeps the role it
+ * was created with, and an operator who expected --role-map to change it needs to be told it did
+ * not.
  */
-function describeImport(report: ImportReport): string {
+function describeImport(report: ImportReport, verbose: boolean): string {
   const lines: string[] = []
   if (report.dryRun) lines.push('DRY RUN: nothing was written.')
   // M46 E22, final wave M4: the backfill writes a `profileSpec` onto a row whose FILE has not
@@ -1283,13 +1344,35 @@ function describeImport(report: ImportReport): string {
       `skipped ${String(report.skipped.length)}` +
       (structured > 0 ? `, structured ${String(structured)}` : ''),
   )
-  for (const row of report.created) lines.push(`  created  ${row.name}  [${row.role}]  ${row.sourceId}`)
-  for (const row of report.updated) {
-    // M46 D10: the count only when there IS one. An operator re-importing three hundred untouched
-    // rows does not need "overrides kept 0" three hundred times; the row that DID keep somebody's
-    // customisation through an upstream change is the one worth a word.
-    const kept = row.overridesKept !== undefined && row.overridesKept > 0 ? `  (overrides kept ${String(row.overridesKept)})` : ''
-    lines.push(`  updated  ${row.name}  [${row.role}]  ${row.sourceId}${kept}`)
+  // M55 R7: the three duplicate counts, always -- including three zeroes, which is a real answer
+  // ("nothing looked alike") and is what makes the line's absence impossible to misread as one.
+  lines.push(
+    `  duplicates: ${String(report.duplicates.exact)} exact, ${String(report.duplicates.near)} near, ` +
+      `${String(report.duplicates.overlapping)} overlapping` +
+      (report.scanTruncated ? ' (the scan was truncated: not every row was paired)' : ''),
+  )
+  if (report.skipped.length > 0) {
+    // The breakdown AND the detail lines below: this says how many of each reason, and those say
+    // which row. A `Map` keyed by the reason keeps the order the reasons first appeared in, which is
+    // the order the directory was walked.
+    const byReason = new Map<string, number>()
+    for (const row of report.skipped) byReason.set(row.reason, (byReason.get(row.reason) ?? 0) + 1)
+    lines.push(
+      `  skipped: ${[...byReason.entries()].map(([reason, count]) => `${String(count)} ${reason}`).join(', ')}`,
+    )
+  }
+  if (verbose) {
+    for (const row of report.created) lines.push(`  created  ${row.name}  [${row.role}]  ${row.sourceId}`)
+    for (const row of report.updated) {
+      // M46 D10: the count only when there IS one. An operator re-importing three hundred untouched
+      // rows does not need "overrides kept 0" three hundred times; the row that DID keep somebody's
+      // customisation through an upstream change is the one worth a word.
+      const kept =
+        row.overridesKept !== undefined && row.overridesKept > 0
+          ? `  (overrides kept ${String(row.overridesKept)})`
+          : ''
+      lines.push(`  updated  ${row.name}  [${row.role}]  ${row.sourceId}${kept}`)
+    }
   }
   for (const row of report.skipped) lines.push(`  skipped  ${row.reason}  ${row.name ?? row.sourceId}: ${row.detail}`)
   for (const row of [...report.created, ...report.updated, ...report.unchanged]) {
@@ -1726,6 +1809,11 @@ export async function main(argv: readonly string[]): Promise<number> {
       // `'dry-run' in flags`, not `!== undefined`: a bare flag's recorded value is `undefined`, the
       // repo's own `--yes`/`--clear` idiom.
       const dryRun = 'dry-run' in flags
+      // M55 R10, the same idiom for the same reason: a bare flag's recorded value IS `undefined`
+      // (`parseArgs`), so a `!== undefined` test would read every one of these as absent.
+      const activate = 'activate' in flags
+      const verbose = 'verbose' in flags
+      const allowUnknownLicense = 'allow-unknown-license' in flags
       const divisionText = flagText(flags, 'division')
       const divisions =
         divisionText === undefined
@@ -1813,11 +1901,23 @@ export async function main(argv: readonly string[]): Promise<number> {
           license: walk.license,
           ...(Object.keys(roleMap).length > 0 ? { roleMap } : {}),
           ...(dryRun ? { dryRun: true } : {}),
+          ...(activate ? { activate: true } : {}),
+          ...(allowUnknownLicense ? { allowUnknownLicense: true } : {}),
+          // M55 R7: one line per batch of a hundred rows and one at the end. The VERB reports and
+          // THIS prints -- `packages/control` writes to no stream, so a progress line is a callback
+          // rather than a `console.log` buried in a control module.
+          onProgress: (progress) => {
+            process.stdout.write(
+              `  … ${String(progress.done)}/${String(progress.total)} rows — ` +
+                `created ${String(progress.created)}, updated ${String(progress.updated)}, ` +
+                `unchanged ${String(progress.unchanged)}, skipped ${String(progress.skipped)}\n`,
+            )
+          },
         },
         operatorName(flags),
       )
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(describeImport(result.value))
+      process.stdout.write(describeImport(result.value, verbose))
       return 0
     }
 
@@ -1842,11 +1942,16 @@ export async function main(argv: readonly string[]): Promise<number> {
         process.stdout.write('no catalog has been imported yet\n')
         return 0
       }
+      // The header names the three slashed numbers ONCE, above the rows, because `0/0/0` on its own
+      // is a shape and not an answer (M55 plan erratum E9: seven numbers, not six).
+      process.stdout.write('when  catalog  by  outcomes  duplicates exact/near/overlapping  directory\n')
       for (const row of rows) {
         process.stdout.write(
           `${row.finishedAt.toISOString()}  ${row.catalog}  by ${row.by ?? 'nobody named'}  ` +
             `created ${String(row.created)}, updated ${String(row.updated)}, unchanged ${String(row.unchanged)}, ` +
-            `skipped ${String(row.skipped)}  (${row.directory})\n`,
+            `skipped ${String(row.skipped)}  ` +
+            `duplicates ${String(row.duplicates.exact)}/${String(row.duplicates.near)}/${String(row.duplicates.overlapping)}  ` +
+            `(${row.directory})\n`,
         )
       }
       return 0
@@ -2126,6 +2231,126 @@ export async function main(argv: readonly string[]): Promise<number> {
         return 0
       }
       throw new Error('capabilities takes sync, add, backfill or list')
+    }
+
+    case 'template': {
+      // `template list | activate | deactivate | duplicates` -- the `capabilities`/`runbooks`/
+      // `memories` shape in this file (the sub-verb is a POSITIONAL read off raw argv, because
+      // `parseArgs` collects only flags), for its own reason: four sibling top-level verbs for one
+      // table would read as four unrelated features.
+      //
+      // It is NOT called `templates`: `create-template`, `set-profile --template` and
+      // `show-profile --template` already spell the noun singular, and two spellings of one noun in
+      // one CLI is one more thing an operator has to remember.
+      const sub = argv[1] ?? 'list'
+
+      if (sub === 'list') {
+        const activeFlag = 'active' in flags
+        const inactiveFlag = 'inactive' in flags
+        if (activeFlag && inactiveFlag) throw new Error('--active and --inactive are opposites: pass one or neither')
+        const duplicates = oneOfFlag<DuplicateFacet>(flags, 'duplicates', [...DUPLICATE_FACETS])
+        const page = await listWorkforceCatalog(
+          {
+            ...(flagText(flags, 'division') === undefined ? {} : { division: requireFlag(flags, 'division') }),
+            ...(activeFlag ? { active: true } : {}),
+            ...(inactiveFlag ? { active: false } : {}),
+            ...(duplicates === undefined ? {} : { duplicates }),
+          },
+          { pageSize: TEMPLATE_PICKER_MAX },
+        )
+        // The COUNT first, because `template list` on a full catalog prints hundreds of lines and an
+        // operator piping it into `head` should still learn how many there were.
+        process.stdout.write(`${String(page.rows.length)} of ${String(page.total)} template(s)\n`)
+        for (const row of page.rows) {
+          // Tab-separated, the shape every other list verb here uses. Five columns an operator can
+          // cut, and the two that name a vocabulary print WORDS (`docs/ia.md` rule 3): `active` /
+          // `inactive` for a boolean nobody should read as `true`, and the class label for a pair.
+          const signal =
+            row.duplicate === null
+              ? '-'
+              : `${DUPLICATE_CLASS_LABEL[row.duplicate.class]} ${row.duplicate.otherName}` +
+                (row.duplicateCount > 1 ? ` (+${String(row.duplicateCount - 1)})` : '')
+          process.stdout.write(
+            `${row.id}\t${row.name}\t${row.sourceDivision ?? row.role}\t${row.active ? 'active' : 'inactive'}\t${signal}\n`,
+          )
+        }
+        return 0
+      }
+
+      if (sub === 'activate' || sub === 'deactivate') {
+        const templateId = requireFlag(flags, 'template')
+        const active = sub === 'activate'
+        const result = await setTemplateActivation(templateId, active, operatorName(flags))
+        if (!result.ok) throw new Error(refusalText(result.error))
+        // The NAME, read back after the write, because an operator types an id and reads a name --
+        // and because "it worked" without saying what worked is the sentence somebody runs twice.
+        const row = await prisma.slaveTemplate.findUnique({ where: { id: templateId }, select: { name: true } })
+        const name = row?.name ?? templateId
+        process.stdout.write(
+          result.value.changed
+            ? `${name} is now ${active ? 'active' : 'inactive'}\n`
+            : `${name} was already ${active ? 'active' : 'inactive'}\n`,
+        )
+        return 0
+      }
+
+      if (sub === 'duplicates') {
+        // `--recompute` FIRST, so `template duplicates --recompute` prints what the pass did and
+        // then the pairs it left behind -- one command, one picture.
+        if ('recompute' in flags) {
+          const scan = await recomputeTemplateDuplicates()
+          const total = scan.counts.exact + scan.counts.near + scan.counts.overlapping
+          process.stdout.write(
+            `recomputed: ${String(total)} pair(s) -- ${String(scan.counts.exact)} exact, ` +
+              `${String(scan.counts.near)} near, ${String(scan.counts.overlapping)} overlapping; ` +
+              `${String(scan.created)} new, ${String(scan.updated)} re-classified, ${String(scan.removed)} retired, ` +
+              `${String(scan.backfilled)} row(s) backfilled` +
+              (scan.truncated ? ' (the scan was truncated: not every row was paired)' : '') +
+              '\n',
+          )
+        }
+        const dismiss = flagText(flags, 'dismiss')
+        const restore = flagText(flags, 'restore')
+        if (dismiss !== undefined && restore !== undefined) {
+          throw new Error('--dismiss and --restore are opposites: pass one or neither')
+        }
+        if (dismiss !== undefined || restore !== undefined) {
+          const pairId = dismiss ?? (restore as string)
+          const result = await setTemplateDuplicateDismissal(pairId, dismiss !== undefined, operatorName(flags))
+          if (!result.ok) throw new Error(refusalText(result.error))
+          process.stdout.write(
+            result.value.changed
+              ? `${pairId} is now ${dismiss !== undefined ? 'dismissed' : 'showing again'}\n`
+              : `${pairId} was already ${dismiss !== undefined ? 'dismissed' : 'showing'}\n`,
+          )
+          return 0
+        }
+        const klass = oneOfFlag<DuplicateClass>(flags, 'class', [...DUPLICATE_CLASSES])
+        const rows = await listTemplateDuplicates({
+          ...(flagText(flags, 'template') === undefined ? {} : { templateId: requireFlag(flags, 'template') }),
+          ...(klass === undefined ? {} : { class: klass }),
+          ...('dismissed' in flags ? { includeDismissed: true } : {}),
+        })
+        if (rows.length === 0) {
+          process.stdout.write('no duplicate pair has been detected\n')
+          return 0
+        }
+        for (const row of rows) {
+          // Labels, never keys: the class and the basis both come from the domain's own tables, and
+          // the raw members appear nowhere in this line. The SCORE is printed to three decimals,
+          // which is exactly what was stored.
+          process.stdout.write(
+            `${row.id}\t${DUPLICATE_CLASS_LABEL[row.class]}\t${row.aName} / ${row.bName}\t` +
+              `${row.score.toFixed(3)}\t${DUPLICATE_BASIS_LABEL[row.basis]}\t` +
+              `${row.detectedAt.toISOString().slice(0, 10)}` +
+              (row.dismissedAt === null ? '' : `\tdismissed by ${row.dismissedBy ?? 'nobody named'}`) +
+              '\n',
+          )
+        }
+        return 0
+      }
+
+      throw new Error('template takes list, activate, deactivate or duplicates')
     }
 
     case 'runbooks': {

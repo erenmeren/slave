@@ -540,7 +540,9 @@ try {
   const head = execFileSync('git', ['-C', catalogDir, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
   console.log(`the temp catalog repository's HEAD: ${head}`)
 
-  console.log(`stage 1 -- import-catalog printed:\n${runCli(['import-catalog', '--dir', catalogDir, '--by', 'gate'])}`)
+  // M55 R2: `--activate`, for the same reason `gate:m47-team-formation` passes it -- this gate
+  // drives `hire_from_catalog`, and nothing an import creates is a candidate until somebody says so.
+  console.log(`stage 1 -- import-catalog printed:\n${runCli(['import-catalog', '--dir', catalogDir, '--by', 'gate', '--activate'])}`)
 
   const imported = await catalogTemplates()
   console.log(`stage 1 -- imported ${String(imported.length)} template(s): ${JSON.stringify(imported.map((row) => row.name))}`)
