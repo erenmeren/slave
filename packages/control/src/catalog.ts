@@ -5,11 +5,13 @@ import {
   catalogSearchText,
   contentHashOf,
   effectiveProfileSpec,
+  emptyDuplicateCounts,
   err,
   goalSha256,
   normalisePersona,
   ok,
   overriddenFields,
+  parseDuplicateCounts,
   parsePersona,
   personaErrorText,
   personaToProfileSpec,
@@ -23,6 +25,7 @@ import {
   type CapabilityRecord,
   type DuplicateBasis,
   type DuplicateClass,
+  type DuplicateCounts,
   type DuplicateFacet,
   type MappingQuality,
   type ProfileOverridableField,
@@ -31,6 +34,7 @@ import {
   type Result,
 } from '@slave-of-ai/domain'
 import { listCapabilities, syncCapabilityTaxonomy } from './capability.js'
+import { writeTemplateDuplicates } from './duplicates.js'
 import { isUniqueConstraintViolation } from './prisma-errors.js'
 import type { ControlRefusal } from './refusal.js'
 
@@ -63,9 +67,35 @@ export interface ImportCatalogInput {
    *  produces a library, not a workforce. Never applied to a row being UPDATED: activation is a
    *  person's decision and an import is not the moment to revisit it. */
   readonly activate?: boolean
+  /** M55 R8: import a catalog whose licence nothing could name. Off by default -- a checkout with no
+   *  LICENSE at its root is a checkout nothing can record the provenance of, and M46's whole Source
+   *  record is the thing that would be empty. */
+  readonly allowUnknownLicense?: boolean
+  /** M55 R7: one call per batch of {@link IMPORT_BATCH_SIZE} rows and one at the end.
+   *
+   *  A CALLBACK and not a `console.log`, because `packages/control` writes to no stream: the verb
+   *  decides and writes, the CLI prints, and a verb that printed would put a progress line in the
+   *  middle of the web process's log the first time a route called it. */
+  readonly onProgress?: (progress: ImportProgress) => void
 }
 
 export type SkipReason = 'name_taken' | 'locally_edited' | 'profile_too_long' | 'invalid_persona'
+
+/** How many rows an import reports on, and how many ids a post-pass puts in one `IN` list
+ *  (M55 R7). NOT a transaction boundary: the row loop is still ONE TRANSACTION PER ROW (M42 R2), and
+ *  a batch is a unit of REPORTING and of bounded reads and nothing else. */
+export const IMPORT_BATCH_SIZE = 100
+
+/** Where an import has got to. `done` counts rows DECIDED, not rows written -- a skipped row is a
+ *  row this import is finished with. */
+export interface ImportProgress {
+  readonly done: number
+  readonly total: number
+  readonly created: number
+  readonly updated: number
+  readonly unchanged: number
+  readonly skipped: number
+}
 
 export interface RowOutcome {
   readonly sourceId: string
@@ -100,6 +130,12 @@ export interface ImportReport {
   readonly updated: readonly RowOutcome[]
   readonly unchanged: readonly RowOutcome[]
   readonly skipped: readonly SkippedRow[]
+  /** M55 R7: how many undismissed pairs of each class this import's rows are in, after its fourth
+   *  post-pass ran. Rides inside the existing `report` Json column -- `CatalogImport` gains no
+   *  counter column, because the row IS the record (M42 R5) and `RowOutcome[]` already lives there. */
+  readonly duplicates: DuplicateCounts
+  /** The duplicate pass hit `DUPLICATE_SCAN_MAX` and did not pair every row (R4). */
+  readonly scanTruncated: boolean
 }
 
 /**
@@ -176,6 +212,16 @@ export async function importCatalog(
   by?: string,
 ): Promise<Result<ImportReport, ControlRefusal>> {
   if (input.entries.length === 0) return err({ kind: 'catalog_empty', directory: input.directory })
+  // M55 R8, in `catalog_empty`'s own position -- BEFORE `syncCapabilityTaxonomy` and before a single
+  // row is read, so a refused import has touched nothing at all. Second rather than first because an
+  // empty directory is the more basic fact about what the operator pointed at.
+  //
+  // `null` AND `undefined` both refuse: the CLI always passes what its walk found, so `undefined`
+  // means a caller made no claim about a licence at all, and "nobody said" is exactly the state this
+  // refusal is about. `allowUnknownLicense` is the one way past it.
+  if ((input.license ?? null) === null && input.allowUnknownLicense !== true) {
+    return err({ kind: 'license_unknown', directory: input.directory })
+  }
   const roleMap = normaliseRoleMap(input.roleMap)
   if (!roleMap.ok) return roleMap
 
@@ -191,7 +237,7 @@ export async function importCatalog(
   const unchanged: RowOutcome[] = []
   const skipped: SkippedRow[] = []
 
-  for (const entry of input.entries) {
+  for (const [index, entry] of input.entries.entries()) {
     const outcome = await importRow(entry, input, roleMap.value, startedAt, taxonomy)
     // A `switch` with a `never` default rather than an if/else chain whose last arm is a silent
     // catch-all: a fifth outcome added later must be routed HERE deliberately, and the compiler is
@@ -214,33 +260,69 @@ export async function importCatalog(
         throw new Error(`unhandled import outcome: ${JSON.stringify(unreachable)}`)
       }
     }
+    const done = index + 1
+    // One line per batch, and one at the end however short the last batch is: an operator watching
+    // three hundred files go past needs the FINAL number, and `done % 100` alone would never produce
+    // it for a catalog of 296.
+    if (done % IMPORT_BATCH_SIZE === 0 || done === input.entries.length) {
+      input.onProgress?.({
+        done,
+        total: input.entries.length,
+        created: created.length,
+        updated: updated.length,
+        unchanged: unchanged.length,
+        skipped: skipped.length,
+      })
+    }
   }
-
-  const report = { created, updated, unchanged, skipped }
 
   // A dry run changed nothing, so it records nothing: a `CatalogImport` row is the record of an
   // import that HAPPENED, and one that says "0 created" for a run that never intended to create
   // anything would make the list unreadable.
   if (input.dryRun === true) {
-    return ok({ importId: null, dryRun: true, catalog: input.catalog, directory: input.directory, ...report })
+    return ok({
+      importId: null,
+      dryRun: true,
+      catalog: input.catalog,
+      directory: input.directory,
+      created,
+      updated,
+      unchanged,
+      skipped,
+      // A preview writes no pair, so it noticed none. Reporting the pairs it WOULD have written
+      // would mean running the whole pass for a run that changes nothing, which is the one thing a
+      // dry run promises not to cost.
+      duplicates: emptyDuplicateCounts(),
+      scanTruncated: false,
+    })
   }
+
+  const touched = [...created, ...updated, ...unchanged].flatMap((outcome) =>
+    outcome.templateId === null ? [] : [outcome.templateId],
+  )
 
   // R5, plan erratum E11: hints resolve against EVERY template, so a sentence naming a persona
   // that is imported later in the same run still finds it. Per template it is a replace, under
   // `@@unique([templateId, text])`, so a re-import can never double an edge.
-  await writeCollaborationHints(
-    [...created, ...updated, ...unchanged].flatMap((outcome) => (outcome.templateId === null ? [] : [outcome.templateId])),
-    taxonomy,
-  )
-
+  //
   // R3: a persona's own process becomes a runbook. AFTER the row loop for `writeCollaborationHints`'
   // own reason -- the draft is derived from the stored `profileSpec` and the template id, and both
   // exist only once the row is written. One query per translated persona, never one per stage.
   // Nothing here touches a `SlaveTemplate` row, so the per-row counts M42/M46/M47 pin are untouched.
-  await writePersonaRunbooks(
-    [...created, ...updated, ...unchanged].flatMap((outcome) => (outcome.templateId === null ? [] : [outcome.templateId])),
-    taxonomy,
-  )
+  //
+  // Both are chunked by the same number, so a `findMany({ where: { id: { in } } })` never carries a
+  // three-hundred-element -- or five-thousand-element -- `IN` list (M55 R7).
+  for (const chunk of batched(touched)) await writeCollaborationHints(chunk, taxonomy)
+  for (const chunk of batched(touched)) await writePersonaRunbooks(chunk, taxonomy)
+
+  // The FOURTH post-pass (R7), here for `writeCollaborationHints`' own reason (M42 plan erratum
+  // E11): a persona imported later in the same run is not in the table while an earlier row is being
+  // written, so pairing before the loop ends would miss every pair inside the run. NOT chunked --
+  // it forms pairs ACROSS the whole set, and chunking it would be chunking the question. Its own
+  // three bounds are what keep it finite.
+  const scan = await writeTemplateDuplicates(touched)
+
+  const report = { created, updated, unchanged, skipped, duplicates: scan.counts, scanTruncated: scan.truncated }
 
   const row = await prisma.catalogImport.create({
     data: {
@@ -258,6 +340,16 @@ export async function importCatalog(
   })
 
   return ok({ importId: row.id, dryRun: false, catalog: input.catalog, directory: input.directory, ...report })
+}
+
+/** An id list, in `IMPORT_BATCH_SIZE` pieces. One helper, so the post-passes chunk the same way and
+ *  a fourth cannot forget to. */
+function batched(ids: readonly string[]): readonly (readonly string[])[] {
+  const out: string[][] = []
+  for (let index = 0; index < ids.length; index += IMPORT_BATCH_SIZE) {
+    out.push([...ids.slice(index, index + IMPORT_BATCH_SIZE)])
+  }
+  return out
 }
 
 /** One persona, decided and written (or not) on its own. */
@@ -690,6 +782,10 @@ export interface CatalogImportView {
   readonly updated: number
   readonly unchanged: number
   readonly skipped: number
+  /** M55 R7: read back out of `report`, so `list-imports` and the web panel show the same seven
+   *  numbers (plan erratum E9). Three zeroes for every import recorded before this milestone, which
+   *  is true: nothing was looking. */
+  readonly duplicates: DuplicateCounts
 }
 
 /**
@@ -708,7 +804,7 @@ export interface CatalogImportView {
  * table into a web response.
  */
 export async function listCatalogImports(limit = 10): Promise<readonly CatalogImportView[]> {
-  return prisma.catalogImport.findMany({
+  const rows = await prisma.catalogImport.findMany({
     orderBy: { finishedAt: 'desc' },
     take: Math.max(0, Math.min(limit, 100)),
     select: {
@@ -722,8 +818,25 @@ export async function listCatalogImports(limit = 10): Promise<readonly CatalogIm
       updated: true,
       unchanged: true,
       skipped: true,
+      report: true,
     },
   })
+  return rows.map((row) => ({
+    id: row.id,
+    catalog: row.catalog,
+    directory: row.directory,
+    by: row.by,
+    startedAt: row.startedAt,
+    finishedAt: row.finishedAt,
+    created: row.created,
+    updated: row.updated,
+    unchanged: row.unchanged,
+    skipped: row.skipped,
+    // Validated at READ, the `profileSpecSchema` idiom: a column only ever written by this
+    // repository is still a column a person can edit with `psql`, and a reader that trusted it would
+    // print `3.5 exact` on an import panel.
+    duplicates: parseDuplicateCounts((row.report as { duplicates?: unknown } | null)?.duplicates),
+  }))
 }
 
 /**

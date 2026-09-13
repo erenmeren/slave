@@ -48,6 +48,15 @@ describe('the simulation never reaches a real tool (spec §8)', () => {
       expect(source, `${file} mentions a real inbound delivery`).not.toMatch(
         /InboundEvent|ExternalRepository|ingestExternalEvent/,
       )
+      // M55: the three nouns by NAME, the way the cases above name `@slave-of-ai/providers`, the
+      // broker, the evidence table and the inbound delivery. A `SimulationRun` binds to a `Company`
+      // and reads a role off a roster row's TEMPLATE relation (`simulation/read.ts:222`) -- never
+      // through the catalog LIST -- so a simulated roster cannot be narrowed by activation and
+      // cannot carry a duplicate pair. Stated as a scan rather than as a convention, because a
+      // convention is what a future refactor does not read.
+      expect(source, `${file} mentions catalog activation or a duplicate pair`).not.toMatch(
+        /TemplateDuplicate|setTemplateActivation|recomputeTemplateDuplicates/,
+      )
     }
   })
 })

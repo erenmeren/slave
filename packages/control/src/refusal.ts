@@ -374,6 +374,14 @@ export type ControlRefusal =
    *  a mistyped path far more often than an empty catalog, and writing a `CatalogImport` row saying
    *  "nothing happened" would hide that. */
   | { readonly kind: 'catalog_empty'; readonly directory: string }
+  /** M55 R8: the directory has no LICENSE file at its root, so nothing can record where its
+   *  personas came from. A STATE, not a missing id -- 409 by `refusalStatus`'s suffix rule, which is
+   *  the right answer: the catalog is there and readable, and what is absent is a fact about it. */
+  | { readonly kind: 'license_unknown'; readonly directory: string }
+  /** M55 R5, plan erratum E5: a `TemplateDuplicate` id nobody wrote. `template_not_found` would name
+   *  the wrong noun and tell an operator a TEMPLATE is missing when a PAIR is, and answering `ok`
+   *  for a row that does not exist is the pretending `{ changed }` exists to avoid. */
+  | { readonly kind: 'template_duplicate_not_found'; readonly pairId: string }
   /** A `--role-map` entry with an empty half. Refused rather than dropped: silently discarding part
    *  of what an operator typed is how a template ends up dispatchable as something nobody meant --
    *  `normaliseRoles`' own reasoning. */
@@ -648,6 +656,13 @@ export function refusalText(refusal: ControlRefusal): string {
       return `task ${refusal.taskId} is ${refusal.status}: only a task in backlog, ready or blocked can be cancelled`
     case 'catalog_empty':
       return `no persona was found under ${refusal.directory}: nothing was imported`
+    case 'license_unknown':
+      return (
+        `${refusal.directory} has no LICENSE file at its root, so nothing can record where its personas came from: ` +
+        'pass --allow-unknown-license to import it anyway'
+      )
+    case 'template_duplicate_not_found':
+      return `no duplicate pair with id ${refusal.pairId}`
     case 'profile_not_structured':
       return `template ${refusal.templateId} has no structured profile to customise: import its catalog first, or edit its profile as Markdown`
     case 'invalid_profile_overrides':

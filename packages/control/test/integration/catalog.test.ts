@@ -7,7 +7,13 @@ import {
   renderProfileSpec,
 } from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { importCatalog, listCatalogImports, listWorkforceCatalog, readTemplateProfile } from '../../src/catalog.js'
+import {
+  IMPORT_BATCH_SIZE,
+  importCatalog,
+  listCatalogImports,
+  listWorkforceCatalog,
+  readTemplateProfile,
+} from '../../src/catalog.js'
 import { setProfile, setProfileOverrides } from '../../src/profile.js'
 
 const CATALOG = 'catalog-m42'
@@ -43,8 +49,8 @@ const entry = (
 
 const importOne = async (
   entries: readonly ReturnType<typeof entry>[],
-  options: { roleMap?: Record<string, string>; dryRun?: boolean } = {},
-) => importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries, ...options }, 'operator')
+  options: { roleMap?: Record<string, string>; dryRun?: boolean; activate?: boolean } = {},
+) => importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries, license: 'MIT', ...options }, 'operator')
 
 describe('importCatalog', () => {
   beforeEach(async (): Promise<void> => {
@@ -343,7 +349,7 @@ describe('importCatalog', () => {
     }
 
     const result = await importCatalog(
-      { catalog: CATALOG, directory: DIRECTORY, entries: [testing], roleMap: { ' testing ': ' reviewer ' } },
+      { catalog: CATALOG, directory: DIRECTORY, entries: [testing], roleMap: { ' testing ': ' reviewer ' }, license: 'MIT' },
       'operator',
     )
 
@@ -362,6 +368,7 @@ describe('importCatalog', () => {
         directory: DIRECTORY,
         entries: [entry('core-builder', 'Core Builder')],
         roleMap: { engineering: 'backend', ' engineering ': 'frontend' },
+        license: 'MIT',
       },
       'operator',
     )
@@ -530,7 +537,7 @@ describe('importCatalog and the structured profile (M46)', () => {
   })
 
   it('re-renders an updated row from the NEW upstream and the operator\u2019s untouched overrides, and counts them', async (): Promise<void> => {
-    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')] }, 'operator')
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], license: 'MIT' }, 'operator')
     const template = await prisma.slaveTemplate.findFirstOrThrow()
     await setProfileOverrides(template.id, { summary: 'Mine, and it stays mine.' }, 'operator')
 
@@ -539,6 +546,7 @@ describe('importCatalog and the structured profile (M46)', () => {
         catalog: CATALOG,
         directory: DIRECTORY,
         entries: [structured('core-builder', 'Core Builder', 'You build the core module AND its documentation.')],
+        license: 'MIT',
       },
       'operator',
     )
@@ -557,7 +565,7 @@ describe('importCatalog and the structured profile (M46)', () => {
   })
 
   it('skips locally_edited for a RAW Markdown override and leaves the operator\u2019s words alone (R5)', async (): Promise<void> => {
-    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')] }, 'operator')
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], license: 'MIT' }, 'operator')
     const template = await prisma.slaveTemplate.findFirstOrThrow()
     await setProfile({ templateId: template.id }, 'This is what I want this worker to be, in my own words.', 'operator')
 
@@ -566,6 +574,7 @@ describe('importCatalog and the structured profile (M46)', () => {
         catalog: CATALOG,
         directory: DIRECTORY,
         entries: [structured('core-builder', 'Core Builder', 'A rewritten body for the same file.')],
+        license: 'MIT',
       },
       'operator',
     )
@@ -586,7 +595,7 @@ describe('importCatalog and the structured profile (M46)', () => {
   // stayed frozen with no profile at all. `setProfileOverrides(id, {})` re-renders the effective
   // spec and re-stamps the hash, so the row rejoins the catalog.
   it('an empty overrides patch lifts a RAW override and hands the row back to the importer', async (): Promise<void> => {
-    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')] }, 'operator')
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], license: 'MIT' }, 'operator')
     const template = await prisma.slaveTemplate.findFirstOrThrow()
     await setProfile({ templateId: template.id }, 'This is what I want this worker to be, in my own words.', 'operator')
 
@@ -608,6 +617,7 @@ describe('importCatalog and the structured profile (M46)', () => {
         catalog: CATALOG,
         directory: DIRECTORY,
         entries: [structured('core-builder', 'Core Builder', 'A rewritten body for the same file.')],
+        license: 'MIT',
       },
       'operator',
     )
@@ -621,7 +631,7 @@ describe('importCatalog and the structured profile (M46)', () => {
 
   // The same row read the way the drawer reads it: no raw override left to clear.
   it('an empty overrides patch clears the raw-override flag the drawer reads', async (): Promise<void> => {
-    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')] }, 'operator')
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], license: 'MIT' }, 'operator')
     const template = await prisma.slaveTemplate.findFirstOrThrow()
     await setProfile({ templateId: template.id }, 'my own words', 'operator')
     expect((await readTemplateProfile(template.id)).ok).toBe(true)
@@ -636,7 +646,7 @@ describe('importCatalog and the structured profile (M46)', () => {
   })
 
   it('a structured customisation is NOT locally_edited -- that is what re-stamping the hash buys', async (): Promise<void> => {
-    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')] }, 'operator')
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], license: 'MIT' }, 'operator')
     const template = await prisma.slaveTemplate.findFirstOrThrow()
     await setProfileOverrides(template.id, { constraints: ['Mine'] }, 'operator')
 
@@ -645,6 +655,7 @@ describe('importCatalog and the structured profile (M46)', () => {
         catalog: CATALOG,
         directory: DIRECTORY,
         entries: [structured('core-builder', 'Core Builder', 'A rewritten body for the same file.')],
+        license: 'MIT',
       },
       'operator',
     )
@@ -656,10 +667,10 @@ describe('importCatalog and the structured profile (M46)', () => {
   })
 
   it('reports overridesKept 0 on a row nobody has customised', async (): Promise<void> => {
-    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')] }, 'operator')
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], license: 'MIT' }, 'operator')
 
     const result = await importCatalog(
-      { catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder', 'Changed.')] },
+      { catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder', 'Changed.')], license: 'MIT' },
       'operator',
     )
 
@@ -727,7 +738,7 @@ describe('importCatalog and the structured profile (M46)', () => {
     const before = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: created.id } })
 
     const result = await importCatalog(
-      { catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], revision: 'rev-m46' },
+      { catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], revision: 'rev-m46', license: 'MIT' },
       'operator',
     )
 
@@ -741,12 +752,12 @@ describe('importCatalog and the structured profile (M46)', () => {
 
   it('an unchanged file keeps the revision it came from (E22)', async (): Promise<void> => {
     await importCatalog(
-      { catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], revision: 'rev1' },
+      { catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], revision: 'rev1', license: 'MIT' },
       'operator',
     )
 
     const again = await importCatalog(
-      { catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], revision: 'rev2' },
+      { catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], revision: 'rev2', license: 'MIT' },
       'operator',
     )
 
@@ -762,7 +773,7 @@ describe('importCatalog and the structured profile (M46)', () => {
     const before = await preM46Row()
 
     const result = await importCatalog(
-      { catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], dryRun: true },
+      { catalog: CATALOG, directory: DIRECTORY, entries: [structured('core-builder', 'Core Builder')], dryRun: true, license: 'MIT' },
       'operator',
     )
 
@@ -881,7 +892,7 @@ describe('listWorkforceCatalog', () => {
         '## Core Capabilities\n- Split a module in two\n\n## Domain Expertise\n- Legacy code\n\n' +
         '## Critical Rules\n- You MUST never leave a red test behind\n',
     }
-    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [skilled], revision: 'rev1' }, 'operator')
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [skilled], revision: 'rev1', license: 'MIT' }, 'operator')
     await importTwo()
 
     const page = await listWorkforceCatalog({ skill: 'refactoring' })
@@ -950,6 +961,7 @@ describe('listWorkforceCatalog', () => {
         catalog: CATALOG,
         directory: DIRECTORY,
         entries: [entry('core-builder', 'Core Builder', 'A rewritten body for the same file.')],
+        license: 'MIT',
       },
       'operator',
     )
@@ -987,13 +999,13 @@ describe('listWorkforceCatalog', () => {
     expect(inert.active).toBe(false)
 
     await prisma.$executeRawUnsafe(TRUNCATE_FOR_THIS_FILE)
-    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')], activate: true }, 'operator')
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')], activate: true, license: 'MIT' }, 'operator')
     const live = await prisma.slaveTemplate.findUniqueOrThrow({ where: { sourceId: `${CATALOG}/engineering/core-builder` } })
     expect(live.active).toBe(true)
   })
 
   it('M55 R2: an import NEVER writes `active` on a row it updates, in either direction', async (): Promise<void> => {
-    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')], activate: true }, 'operator')
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')], activate: true, license: 'MIT' }, 'operator')
     const created = await prisma.slaveTemplate.findUniqueOrThrow({ where: { sourceId: `${CATALOG}/engineering/core-builder` } })
     expect(created.active).toBe(true)
 
@@ -1016,7 +1028,7 @@ describe('readTemplateProfile', () => {
   })
 
   it('hands back both halves, the merge and the stored Markdown', async (): Promise<void> => {
-    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')] }, 'operator')
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')], license: 'MIT' }, 'operator')
     const template = await prisma.slaveTemplate.findFirstOrThrow()
     await setProfileOverrides(template.id, { summary: 'Mine.' }, 'operator')
 
@@ -1050,7 +1062,7 @@ describe('readTemplateProfile', () => {
     if (!result.ok) expect(result.error.kind).toBe('template_not_found')
   })
   it('says rawOverride when a person wrote the Markdown over a structured profile', async (): Promise<void> => {
-    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')] }, 'operator')
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')], license: 'MIT' }, 'operator')
     const template = await prisma.slaveTemplate.findFirstOrThrow()
     await setProfile({ templateId: template.id }, 'my own words', 'operator')
 
@@ -1066,7 +1078,7 @@ describe('readTemplateProfile', () => {
   })
 
   it('says rawOverride for a CLEARED profile too (fix round 1, minor 2)', async (): Promise<void> => {
-    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')] }, 'operator')
+    await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')], license: 'MIT' }, 'operator')
     const template = await prisma.slaveTemplate.findFirstOrThrow()
     await setProfile({ templateId: template.id }, null, 'operator')
 
@@ -1144,7 +1156,7 @@ describe('persona runbooks (M48 R3)', () => {
   })
 
   it('writes one runbook for a persona with a multi-step workflow and none for a persona without', async (): Promise<void> => {
-    const report = await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow, withoutWorkflow] })
+    const report = await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow, withoutWorkflow], license: 'MIT' })
     expect(report.ok).toBe(true)
     const rows = await prisma.runbookTemplate.findMany({ where: { source: 'persona' }, orderBy: { key: 'asc' } })
     expect(rows.map((row) => row.key)).toEqual(['persona-m48-flow-reviewer'])
@@ -1152,16 +1164,16 @@ describe('persona runbooks (M48 R3)', () => {
   })
 
   it('re-importing the same persona updates its runbook rather than adding a second', async (): Promise<void> => {
-    await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow] })
-    await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow] })
+    await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow], license: 'MIT' })
+    await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow], license: 'MIT' })
     expect(await prisma.runbookTemplate.count({ where: { source: 'persona' } })).toBe(1)
   })
 
   // Plan erratum E15: the upsert keys on `key`, and an operator's row wins.
   it('never overwrites a human runbook that happens to hold the key', async (): Promise<void> => {
-    await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow] })
+    await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow], license: 'MIT' })
     await prisma.runbookTemplate.update({ where: { key: 'persona-m48-flow-reviewer' }, data: { source: 'human', name: 'Mine' } })
-    await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow] })
+    await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow], license: 'MIT' })
     expect((await prisma.runbookTemplate.findUniqueOrThrow({ where: { key: 'persona-m48-flow-reviewer' } })).name).toBe('Mine')
     await prisma.runbookTemplate.deleteMany({ where: { key: 'persona-m48-flow-reviewer' } })
   })
@@ -1169,7 +1181,7 @@ describe('persona runbooks (M48 R3)', () => {
   // M42/M46/M47 all pin these counts, and the runbook pass must not move one of them: it runs
   // AFTER the row loop, like M47's hint pass, and touches no `SlaveTemplate` row.
   it('leaves the per-row counts exactly as they were', async (): Promise<void> => {
-    const first = await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow, withoutWorkflow] })
+    const first = await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow, withoutWorkflow], license: 'MIT' })
     expect(first.ok).toBe(true)
     if (!first.ok) return
     expect(first.value.created).toHaveLength(2)
@@ -1177,10 +1189,157 @@ describe('persona runbooks (M48 R3)', () => {
     expect(first.value.unchanged).toEqual([])
     expect(first.value.skipped).toEqual([])
 
-    const again = await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow, withoutWorkflow] })
+    const again = await importCatalog({ catalog: M48_CATALOG, directory: '/tmp', entries: [withWorkflow, withoutWorkflow], license: 'MIT' })
     expect(again.ok).toBe(true)
     if (!again.ok) return
     expect(again.value.created).toEqual([])
     expect(again.value.unchanged).toHaveLength(2)
+  })
+})
+
+describe('importCatalog: the licence (M55 R8)', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(TRUNCATE_FOR_THIS_FILE)
+  })
+
+  it('REFUSES a catalog whose licence it cannot name, before a single row is read', async (): Promise<void> => {
+    const result = await importCatalog(
+      { catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')], license: null },
+      'operator',
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toEqual({ kind: 'license_unknown', directory: DIRECTORY })
+    // Nothing at all: not a template, not an import record, not a pair. Three counts, because
+    // "writes nothing" is three tables and only looking at all three proves it.
+    expect(await prisma.slaveTemplate.count()).toBe(0)
+    expect(await prisma.catalogImport.count()).toBe(0)
+    expect(await prisma.templateDuplicate.count()).toBe(0)
+  })
+
+  it('refuses a catalog that named no licence AT ALL, the same way', async (): Promise<void> => {
+    const result = await importCatalog(
+      { catalog: CATALOG, directory: DIRECTORY, entries: [entry('core-builder', 'Core Builder')] },
+      'operator',
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.kind).toBe('license_unknown')
+  })
+
+  it('imports it anyway when asked, and records the licence as unknown rather than inventing one', async (): Promise<void> => {
+    const result = await importCatalog(
+      {
+        catalog: CATALOG,
+        directory: DIRECTORY,
+        entries: [entry('core-builder', 'Core Builder')],
+        license: null,
+        allowUnknownLicense: true,
+      },
+      'operator',
+    )
+
+    expect(result.ok).toBe(true)
+    const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { sourceId: `${CATALOG}/engineering/core-builder` } })
+    expect(row.sourceLicense).toBeNull()
+  })
+
+  it('refuses an EMPTY directory before it refuses an unlicensed one -- the more basic fact wins', async (): Promise<void> => {
+    const result = await importCatalog({ catalog: CATALOG, directory: DIRECTORY, entries: [], license: null }, 'operator')
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error.kind).toBe('catalog_empty')
+  })
+})
+
+describe('importCatalog: batches, progress and the widened report (M55 R7)', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(TRUNCATE_FOR_THIS_FILE)
+  })
+
+  /** Two files whose PERSONA TEXT is identical -- only the front-matter name differs, and a name is
+   *  not a `profileSpec` field, so the canonical text the hash is taken over is the same string.
+   *  The names have to differ: a second template claiming a name already taken is `name_taken`, and
+   *  a skipped row is not a row to pair. `entry`'s own helper cannot be used, because it writes the
+   *  name into both the description and an `# H1`. */
+  const twin = (slug: string, name: string): ReturnType<typeof entry> => ({
+    sourceId: `${CATALOG}/engineering/${slug}`,
+    division: 'engineering',
+    slug,
+    path: `${DIRECTORY}/engineering/${slug}.md`,
+    text: `---\nname: ${name}\ndescription: Two files, one persona.\nvibe: One thing, well.\n---\n\nYou build the core module and its tests, and you write down what you changed.\n`,
+  })
+
+  it('spells the batch size once', () => {
+    expect(IMPORT_BATCH_SIZE).toBe(100)
+  })
+
+  it('reports progress once per batch and once at the end, with running counts', async (): Promise<void> => {
+    const entries = Array.from({ length: 250 }, (_, index) => entry(`persona-${String(index)}`, `Persona ${String(index)}`))
+    const seen: { done: number; total: number; created: number }[] = []
+
+    const result = await importCatalog(
+      {
+        catalog: CATALOG,
+        directory: DIRECTORY,
+        entries,
+        license: 'MIT',
+        onProgress: (progress) => seen.push({ done: progress.done, total: progress.total, created: progress.created }),
+      },
+      'operator',
+    )
+
+    expect(result.ok).toBe(true)
+    expect(seen.map((line) => line.done)).toEqual([100, 200, 250])
+    expect(seen.every((line) => line.total === 250)).toBe(true)
+    expect(seen[2]?.created).toBe(250)
+  })
+
+  it('carries the duplicate counts and the truncation flag on the report', async (): Promise<void> => {
+    const result = await importOne([twin('first', 'First Persona'), twin('second', 'Second Persona')])
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.duplicates).toEqual({ exact: 1, near: 0, overlapping: 0 })
+    expect(result.value.scanTruncated).toBe(false)
+  })
+
+  it('writes those counts INTO the CatalogImport row, so list-imports reads the same numbers', async (): Promise<void> => {
+    await importOne([twin('first', 'First Persona'), twin('second', 'Second Persona')])
+
+    const views = await listCatalogImports(1)
+
+    expect(views[0]?.duplicates).toEqual({ exact: 1, near: 0, overlapping: 0 })
+  })
+
+  it('reads three ZEROES back out of an import recorded before this milestone', async (): Promise<void> => {
+    await prisma.catalogImport.create({
+      data: {
+        catalog: CATALOG,
+        directory: DIRECTORY,
+        by: 'operator',
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        created: 1,
+        updated: 0,
+        unchanged: 0,
+        skipped: 0,
+        report: { created: [], updated: [], unchanged: [], skipped: [] },
+      },
+    })
+
+    expect((await listCatalogImports(1))[0]?.duplicates).toEqual({ exact: 0, near: 0, overlapping: 0 })
+  })
+
+  it('a DRY RUN writes no pair and reports no duplicate', async (): Promise<void> => {
+    const result = await importOne([twin('first', 'First Persona'), twin('second', 'Second Persona')], { dryRun: true })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.duplicates).toEqual({ exact: 0, near: 0, overlapping: 0 })
+    expect(await prisma.templateDuplicate.count()).toBe(0)
   })
 })

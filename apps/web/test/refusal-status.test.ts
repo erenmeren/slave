@@ -133,6 +133,11 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   // unanswered.
   external_repository_not_found: true,
   external_repository_mapped: true,
+  // M55 R8/R5 (plan erratum E5): the milestone's two. `license_unknown` answers 409 by the suffix
+  // rule, which is right -- an unlicensed checkout is a STATE, not a missing id.
+  // `template_duplicate_not_found` answers 404, and joins the not-found list below.
+  license_unknown: true,
+  template_duplicate_not_found: true,
 }
 
 const ALL = Object.keys(ALL_KINDS) as ControlRefusal['kind'][]
@@ -165,13 +170,14 @@ const TODAYS_NOT_FOUND_KINDS = [
   'memory_not_found',
   'credential_not_found',
   'external_repository_not_found',
+  'template_duplicate_not_found',
 ] as const satisfies readonly ControlRefusal['kind'][]
 
 describe('refusalStatus', () => {
-  it('is 404 for exactly the twenty-two kinds ending in _not_found today', () => {
+  it('is 404 for exactly the twenty-three kinds ending in _not_found today', () => {
     const bySuffix = ALL.filter((kind) => kind.endsWith('_not_found')).sort()
     expect(bySuffix).toEqual([...TODAYS_NOT_FOUND_KINDS].sort())
-    expect(bySuffix).toHaveLength(22)
+    expect(bySuffix).toHaveLength(23)
   })
 
   it('maps every kind in the taxonomy to 404 iff it ends in _not_found, 409 otherwise', () => {

@@ -3190,6 +3190,10 @@ describe('the orchestrator CLI', () => {
         join(root, 'divisions.json'),
         JSON.stringify({ divisions: { engineering: { label: 'Engineering' }, design: { label: 'Design' } } }),
       )
+      // M55 R8: an import refuses a checkout whose licence nothing can name, so every fixture that
+      // expects an import to SUCCEED has to name one. `--allow-unknown-license` is the other half of
+      // that rule and belongs to the cases that are about it.
+      writeFileSync(join(root, 'LICENSE'), 'MIT License\n\nPermission is hereby granted.\n')
       writeFileSync(
         join(root, 'engineering', 'core-builder.md'),
         '---\nname: CLI Core Builder\ndescription: Builds the core.\n---\n\nYou build the core module.\n',
@@ -3374,6 +3378,7 @@ describe('the orchestrator CLI', () => {
       catalogDirs.push(root)
       mkdirSync(join(root, 'engineering'), { recursive: true })
       mkdirSync(join(root, 'testing'), { recursive: true })
+      writeFileSync(join(root, 'LICENSE'), 'MIT License\n\nPermission is hereby granted.\n')
       writeFileSync(join(root, 'engineering', 'core-builder.md'), '---\nname: Plumbed Builder\n---\n\nYou build.\n')
       writeFileSync(join(root, 'testing', 'qa-lead.md'), '---\nname: Plumbed QA Lead\n---\n\nYou test.\n')
 
