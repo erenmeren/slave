@@ -78,3 +78,4 @@ jobs:
       - run: npm run gate:m50-ephemeral
       - run: npm run gate:m51-breaker
       - run: npm run gate:m52-broker
+      - run: npm run gate:m53-evidence
