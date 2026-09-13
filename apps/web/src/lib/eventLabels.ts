@@ -39,6 +39,11 @@ export const EVENT_PREFIX_LABEL: Readonly<Record<string, string>> = {
   // so `readableEventType` reads `Staffing · preference changed` as a sentence -- and because
   // `Preferences` is a settings word and this family is a decision about people.
   'staffing.*': 'Staffing',
+  // M54 R9: a delivery from a repository somebody connected. `External` rather than `Webhooks` or
+  // `Triggers`, so `readableEventType` reads `External · received` and `External · actioned` as
+  // sentences -- and because the person reading the rail is asking where something came from, not
+  // which mechanism carried it.
+  'external.*': 'External',
 }
 
 export function eventPrefixLabel(prefix: string): string {

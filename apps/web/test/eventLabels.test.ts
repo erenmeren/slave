@@ -44,6 +44,12 @@ describe('EVENT_PREFIX_LABEL', () => {
     expect(readableEventType('memory.changed')).toBe('Knowledge · changed')
   })
 
+  it('names M54 family, so the rail never prints its key', () => {
+    expect(eventPrefixLabel('external.*')).toBe('External')
+    expect(readableEventType('external.received')).toBe('External · received')
+    expect(readableEventType('external.actioned')).toBe('External · actioned')
+  })
+
   it('still falls back to the key for a family this build has never heard of', () => {
     expect(eventPrefixLabel('nothing.*')).toBe('nothing.*')
     expect(readableEventType('nothing.happened')).toBe('nothing · happened')

@@ -143,6 +143,11 @@ export const TYPES_BY_KIND = {
     // `permission.changed` -- it carries no taskId, it is not a run outcome, and an operator asking
     // "what changed about this project" is who reads it.
     'staffing.preference_changed',
+    // M54 R5: a delivery arriving, and the requirement it changed. The `workspace` chip for
+    // `workspace.goal_set`'s own reason -- neither carries a taskId or a runId, and the person
+    // reading them is asking what changed about this project.
+    'external.received',
+    'external.actioned',
   ],
 } as const satisfies Record<ActivityKind, readonly DomainEventType[]>
 

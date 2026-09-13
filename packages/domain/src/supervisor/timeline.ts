@@ -142,6 +142,12 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   'supervisor.decided': null,
   'supervisor.proposed': null,
   'supervisor.failed': null,
+  // M54 R5: BOTH null, the `org.changed` precedent. A delivery arriving is plumbing and most
+  // deliveries are ignored; the organisational-narrative entry for "the requirement changed" is the
+  // `workspace.goal_set` these two bracket, which is already on `user_request` and now carries the
+  // origin -- so the story reads as one request and not three.
+  'external.received': null,
+  'external.actioned': null,
 }
 
 /**

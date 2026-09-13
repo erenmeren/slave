@@ -4,6 +4,8 @@ import {
   DECIDERS,
   DECISION_STATUSES,
   EVIDENCE_OUTCOMES,
+  EXTERNAL_EVENT_KINDS,
+  EXTERNAL_SOURCES,
   MEMORY_SCOPES,
   MEMORY_SOURCE_KINDS,
   MEMORY_STATUSES,
@@ -115,6 +117,32 @@ describe('database enums match the domain unions', () => {
 
   it('CredentialKind is the three the operator can name', async () => {
     expect(await enumValues('CredentialKind')).toEqual(['api_key', 'deploy_token', 'git_token'])
+  })
+
+  // M54: the four new enums. Two are pinned against the DOMAIN's own arrays, because pure functions
+  // in `packages/domain` decide from them; two are pinned against LITERALS, because they are spelled
+  // in `packages/control/src/triggers.ts` (plan erratum E9) and `packages/db` cannot import that
+  // package -- it imports THIS one. `CredentialKind`'s assertion above is the same shape for the
+  // same reason.
+  it('ExternalSource matches EXTERNAL_SOURCES, member for member', async () => {
+    expect(await enumValues('ExternalSource')).toEqual([...EXTERNAL_SOURCES].sort())
+  })
+
+  it('ExternalEventKind matches EXTERNAL_EVENT_KINDS, member for member', async () => {
+    expect(await enumValues('ExternalEventKind')).toEqual([...EXTERNAL_EVENT_KINDS].sort())
+  })
+
+  it('InboundEventStatus is the three a row moves through, and it moves at most once', async () => {
+    expect(await enumValues('InboundEventStatus')).toEqual(['actioned', 'ignored', 'received'])
+  })
+
+  it('ExternalIgnoredReason is the four a delivery can be ignored for', async () => {
+    expect(await enumValues('ExternalIgnoredReason')).toEqual([
+      'request_refused',
+      'unmapped_repository',
+      'unrecognised_event',
+      'workspace_archived',
+    ])
   })
 
   it('ProviderKind matches the domain\u2019s PERMISSION_PROVIDERS, so the permission tables key on the same two', async () => {

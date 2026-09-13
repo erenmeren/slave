@@ -39,10 +39,14 @@ const ROSTER: readonly { name: string; template: string }[] = [
 /**
  * Truncate-and-reseed rather than upsert. Upserts have to guess which rows correspond, and a
  * seed that guesses drifts from the schema silently. This one is idempotent by construction.
+ *
+ * `InboundEvent` is NAMED here and `ExternalRepository` is not (M54 plan erratum E5): the second
+ * cascades from `Workspace`, and the first cannot -- its `workspaceId` is nullable, carries no
+ * relation, and is `null` on exactly the rows a delivery for an unmapped repository leaves behind.
  */
 export async function seed(): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "MemorySource", "Memory", "CatalogImport", "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "CollaborationHint", "RunbookTemplate", "Capability", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "MemorySource", "Memory", "InboundEvent", "CatalogImport", "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "CollaborationHint", "RunbookTemplate", "Capability", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
 
   // M47 R1: the taxonomy is DATA, and a seeded database has it. Written straight through Prisma

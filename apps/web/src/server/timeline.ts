@@ -12,6 +12,8 @@ import {
   MEMORY_TYPE_LABEL,
   isResolvedDecision,
   laneFor,
+  originLabel,
+  parseExternalOrigin,
   replanSentence,
   type BreakerTripKind,
   type BrokerOp,
@@ -363,6 +365,21 @@ function titleFor(
             ? named.model
             : 'somebody'
       return `asked for ${who} on ${what}`
+    }
+    // M54 R9: neither payload carries a `title`, so without a case each would read as its own type
+    // name. The kind's LABEL and the origin's SENTENCE, both off the payload -- no join, and a row
+    // read a year from now still says what it was about in the vocabulary of the day it was written.
+    case 'external.received': {
+      const kindLabel = payload['kindLabel']
+      const what = typeof kindLabel === 'string' && kindLabel !== '' ? kindLabel.toLowerCase() : 'an external event'
+      const origin = parseExternalOrigin(payload['origin'])
+      return origin === null ? `heard about ${what}` : `heard about ${what} ${originLabel(origin)}`
+    }
+    case 'external.actioned': {
+      const version = payload['goalVersion']
+      const origin = parseExternalOrigin(payload['origin'])
+      const where = origin === null ? '' : ` ${originLabel(origin)}`
+      return `changed the requirement to v${typeof version === 'number' ? String(version) : '?'}${where}`
     }
     default: {
       const title = payload['title']

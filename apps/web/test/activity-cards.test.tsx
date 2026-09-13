@@ -184,6 +184,31 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     to: { templateId: 't1', templateName: 'Backend Developer', model: 'opus' },
     by: 'u1',
   },
+  'external.received': {
+    inboundEventId: 'i1',
+    kind: 'issue_opened',
+    kindLabel: 'Issue opened',
+    deliveryId: 'd-7f3c',
+    origin: {
+      source: 'github',
+      repository: 'acme/checkout',
+      ref: '#412',
+      url: 'https://github.com/acme/checkout/issues/412',
+    },
+  },
+  'external.actioned': {
+    inboundEventId: 'i1',
+    kind: 'issue_opened',
+    kindLabel: 'Issue opened',
+    origin: {
+      source: 'github',
+      repository: 'acme/checkout',
+      ref: '#412',
+      url: 'https://github.com/acme/checkout/issues/412',
+    },
+    goalVersion: 7,
+    sha256: 'abc123',
+  },
 }
 
 function fixtureFor(type: DomainEventType): ActivityEventRow {
@@ -1036,5 +1061,39 @@ describe('the run.tool_result and run.breaker cards', () => {
     const event = baseEvent('run.breaker', { level: 'steered', trip: 'no_progress', count: 2, detail: '2 quiet beats' })
     render(<Card event={event} {...CARD_PROPS} />)
     expect(screen.getByTestId('breaker-detail').textContent).toBe('2 quiet beats')
+  })
+})
+
+// M54 R9: both cards are registered in THIS task, because `ACTIVITY_CARDS`' `satisfies` is
+// exhaustive over `DomainEventType` and a type with no card fails the build (M53 plan erratum E13).
+describe('the external delivery cards', () => {
+  it('prints the kind label and the origin sentence, never their keys (M54 R9)', () => {
+    const Card = ACTIVITY_CARDS['external.received']
+    render(<Card event={fixtureFor('external.received')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('external-kind').textContent).toBe('Issue opened')
+    expect(screen.getByTestId('external-kind').getAttribute('data-external-kind')).toBe('issue_opened')
+    expect(screen.getByTestId('external-kind').getAttribute('data-external-source')).toBe('github')
+    expect(screen.getByTestId('external-origin').textContent).toContain('from GitHub')
+    expect(screen.getByTestId('external-origin').textContent).toContain('acme/checkout#412')
+  })
+
+  it('never renders the delivery id, and never a raw key as visible text', () => {
+    const Card = ACTIVITY_CARDS['external.received']
+    const { container } = render(<Card event={fixtureFor('external.received')} {...CARD_PROPS} />)
+    // Every card in this registry carries the same collapsed `payload` disclosure, which
+    // pretty-prints the whole payload (`ActivityCard.tsx:172-191`) -- `docs/ia.md` rule 3 keeps a
+    // raw value reachable THERE, and in `title` and `data-` attributes. What R9 forbids is the
+    // card's own WORDS printing one, so the assertion is over everything it draws BUT that panel.
+    const json = screen.getByTestId('payload-json').textContent ?? ''
+    const words = (container.textContent ?? '').replace(json, '')
+    expect(words).not.toContain('d-7f3c')
+    expect(words).not.toContain('issue_opened')
+    expect(words).not.toContain('github')
+  })
+
+  it('the actioned card names the version the delivery produced', () => {
+    const Card = ACTIVITY_CARDS['external.actioned']
+    render(<Card event={fixtureFor('external.actioned')} {...CARD_PROPS} />)
+    expect(screen.getByTestId('external-goal-version').textContent).toContain('goal v7')
   })
 })

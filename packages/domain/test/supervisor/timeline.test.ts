@@ -15,8 +15,18 @@ describe('LANE_BY_TYPE', () => {
     expect(Object.keys(LANE_BY_TYPE).sort()).toEqual(Object.keys(EVENT_TYPE_BY_DOMAIN_TYPE).sort())
   })
 
-  it('lanes every event type -- 59 as of M53', () => {
-    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(59)
+  it('lanes every event type -- 61 as of M54', () => {
+    expect(Object.keys(LANE_BY_TYPE)).toHaveLength(61)
+  })
+
+  it('puts BOTH external events on NO lane -- a delivery arriving is plumbing (M54 R5)', () => {
+    // The `org.changed` precedent (`timeline.ts:132`). Most deliveries are ignored, and the
+    // organisational-narrative entry for "the requirement changed" is the `workspace.goal_set` these
+    // two bracket -- which is already on `user_request` and now carries the origin, so the story
+    // reads as ONE request and not three.
+    expect(LANE_BY_TYPE['external.received']).toBeNull()
+    expect(LANE_BY_TYPE['external.actioned']).toBeNull()
+    expect(LANE_BY_TYPE['workspace.goal_set']).toBe('user_request')
   })
 
   it('puts a staffing preference on NO lane -- project configuration is not the organisation story', () => {

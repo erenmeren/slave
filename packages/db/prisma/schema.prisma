@@ -146,6 +146,9 @@ model Workspace {
   /// M53 R3/R9: the facts this project's runs produced, and the staffing decisions taken about it.
   evidence            EvidenceRecord[]
   staffingPreferences StaffingPreference[]
+  /// M54 R6: the external repositories mapped to this project. `InboundEvent` has no relation -- a
+  /// delivery's record outlives its mapping (R4).
+  externalRepositories ExternalRepository[]
 
   @@index([adoptedFromSimulationId])
 }
@@ -169,6 +172,15 @@ model GoalVersion {
   /// one: every version written before M45, and every version written by the Settings editor or
   /// by `set-goal`, was a statement of the goal rather than a request to change it.
   request     String?
+  /// M54 R5: where this version came from, when something OUTSIDE asked for it -- an
+  /// `ExternalOrigin` (`packages/domain/src/external/origin.ts`), validated by `externalOriginSchema`
+  /// on the way in and parsed back with `parseExternalOrigin` on the way out. Null is the ordinary
+  /// state and the common one: every version a person set, and every version written before this
+  /// milestone.
+  ///
+  /// This schema's first `Json` column holding a validated domain object on a HISTORY row, which is
+  /// stated rather than hidden: the next one has a precedent to copy, or a reason not to.
+  origin      Json?
   createdAt   DateTime @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -580,6 +592,43 @@ enum CredentialKind {
   api_key
 }
 
+/// M54 R5: where an inbound delivery came from. One member -- a GitLab adapter is an additive
+/// migration and one classifier (spec section 4), and the enum is what makes that cost a file
+/// rather than a rename.
+enum ExternalSource {
+  github
+}
+
+/// M54 R7: what kind of thing happened outside. Closed at five, and `composeExternalRequest`
+/// (`packages/domain/src/external/request.ts`) has an arm for every one, so the union is total and a
+/// sixth fails the TypeScript build before it ever reaches this enum.
+enum ExternalEventKind {
+  issue_opened
+  ci_failure
+  pr_event
+  deployment_failure
+  custom
+}
+
+/// M54 R4: a delivery's status, SET ONCE and moved AT MOST ONCE -- `received` on insert, then to
+/// `ignored` or to `actioned`. A row still reading `received` is a process that died mid-flight,
+/// which is a fact worth being able to see rather than a state to pretend away.
+enum InboundEventStatus {
+  received
+  ignored
+  actioned
+}
+
+/// M54 R4/R6/R7/R11: why a delivery changed nothing. Four members (plan erratum E10): the repository
+/// is mapped to no project, the delivery is not one this adapter recognises, the project is
+/// archived, or `requestChange` itself refused it (a byte-equal repeat).
+enum ExternalIgnoredReason {
+  unmapped_repository
+  unrecognised_event
+  workspace_archived
+  request_refused
+}
+
 enum ProviderKind {
   claude_code
   cursor
@@ -649,6 +698,90 @@ model BrokerBinding {
   credential Credential? @relation(fields: [credentialId], references: [id])
 
   @@unique([workspaceId, op])
+}
+
+/// M54 R6: one external repository, mapped BY HAND to one workspace.
+///
+/// A table and not a `Workspace` column: a checkout can have more than one external identity in
+/// principle, and N workspaces already share one `repoPath` by design (`Workspace.repoPath` carries
+/// no unique constraint and `createWorkspace` never checks for a sibling). And not DERIVED: nothing
+/// in this tree has ever run `git remote get-url` or read `.git/config`, and making ingestion depend
+/// on live git I/O would be a bigger new capability than a row.
+///
+/// `hookId` is a column here rather than a table of its own, because the hook is not an entity: it
+/// is the opaque half of a url an operator pastes into a provider's settings, and it selects the
+/// SECRET. The WORKSPACE is resolved by payload (`source`, `repositoryFullName`), so one
+/// organisation-level hook delivering for several repositories resolves each delivery to the
+/// repository it is actually about.
+///
+/// `secretEnvVar` is the NAME of the variable the WEB process reads at verification time. The value
+/// is never here, never evented, never logged, never echoed and never printed by any CLI verb --
+/// `Credential`'s own rule. Deliberately NOT a `Credential` row and deliberately not a
+/// `CredentialKind` member: a `Credential` is bindable to a brokered operation through
+/// `BrokerBinding.credentialId`, and `packages/control/src/broker.ts:228-237` hands that row's
+/// `envVar` to the executor -- so a webhook signing secret registered as a `Credential` would
+/// acquire a path into a command a WORKER asks for.
+model ExternalRepository {
+  id                 String         @id @default(uuid())
+  workspaceId        String
+  source             ExternalSource
+  /// `owner/repo`, held to `REPOSITORY_FULL_NAME_RE` by `mapExternalRepository` before it is stored,
+  /// because this string is printed as words beside a project's requirement.
+  repositoryFullName String
+  /// The opaque half of `/api/hooks/<source>/<hookId>`. Unique, because it is what a delivery
+  /// arrives addressed to.
+  hookId             String         @unique @default(uuid())
+  secretEnvVar       String
+  createdAt          DateTime       @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  /// One external repository maps to at most ONE workspace in v1 (R6). The fan-out to several is
+  /// carried backlog: guessing which of two projects a CI failure belongs to is not something this
+  /// milestone will invent.
+  @@unique([source, repositoryFullName])
+  @@index([workspaceId])
+}
+
+/// M54 R4: one row per DELIVERY -- this milestone's fact table, in `EvidenceRecord`'s shape.
+///
+/// The FIRST write of the ingestion path: the mapping lookup that precedes it is a read, and this
+/// lands before any `ExecutionEvent` and before any `GoalVersion`. The unique index below -- not a
+/// pre-read -- is the replay guard: a `create` that throws P2002 returns immediately with the
+/// existing row's id and writes nothing else at all.
+///
+/// `hookId` carries NO foreign key to `ExternalRepository`: a delivery's record must survive its
+/// mapping being removed, and `ExecutionEvent.workspaceId` is the same bare-String-no-relation shape
+/// for the same reason. `workspaceId` is nullable and also carries no relation -- a delivery for a
+/// repository nobody mapped resolves to no workspace and is recorded anyway -- which is why this
+/// table's NAME is in `packages/db/src/seed.ts`'s TRUNCATE list (plan erratum E5): no cascade could
+/// reach it.
+///
+/// `payload` is the NORMALISED payload and never the raw body. Every string in it has been through
+/// `sanitiseExternalText` and its cap, so the column is bounded by construction well under
+/// `INBOUND_PAYLOAD_MAX_BYTES`; the raw body is held only for the length of the verification and is
+/// never persisted, so the signing secret cannot be reconstructed from anything this table holds.
+model InboundEvent {
+  id            String                 @id @default(uuid())
+  hookId        String
+  source        ExternalSource
+  /// The provider's own correlation id (`X-GitHub-Delivery`). The idempotency key, and the reason a
+  /// delivery that arrives twice is answered once.
+  deliveryId    String
+  eventKind     ExternalEventKind
+  receivedAt    DateTime               @default(now())
+  workspaceId   String?
+  status        InboundEventStatus     @default(received)
+  /// Why nothing happened. Without it, "why did my webhook do nothing" has no answer but the server
+  /// log, which R10 deliberately keeps off every HTTP response.
+  ignoredReason ExternalIgnoredReason?
+  /// Which version this delivery produced. Without it, that question can only be inferred from
+  /// `receivedAt`.
+  goalVersion   Int?
+  payload       Json
+
+  @@unique([hookId, deliveryId])
+  @@index([workspaceId, receivedAt])
 }
 
 model SkillProvider {
@@ -1596,6 +1729,11 @@ enum EventType {
   /// M53 R9: a person said who -- or what model -- should take one capability on this project, or
   /// took that decision back. `to: null` is the clear.
   staffing_preference_changed @map("staffing.preference_changed")
+  /// M54 R5: a signed delivery arrived for a mapped project, and -- when it was one of the four kinds
+  /// this build recognises and the project is live -- the version of the requirement it produced.
+  /// Both `actor: system`; both carry the same nested `origin`.
+  external_received           @map("external.received")
+  external_actioned           @map("external.actioned")
 }
 
 model ExecutionEvent {

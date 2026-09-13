@@ -10,6 +10,8 @@ import {
   MEMORY_STATUS_LABEL,
   MEMORY_TYPE_LABEL,
   TOOL_DENIED_LABEL,
+  originLabel,
+  parseExternalOrigin,
   type BreakerTripKind,
   type BrokerOp,
   type BrokerRefusalReason,
@@ -436,7 +438,7 @@ function ToolResultCard(props: ActivityCardProps): ReactElement {
         <span data-testid="tool-result-name">{payload.toolName}</span>
         {payload.errorClass !== null && (
           <>
-            {' \u00b7 '}
+            {' · '}
             <span data-testid="tool-result-class" title={payload.errorClass} data-error-class={payload.errorClass}>
               {TOOL_ERROR_LABEL[payload.errorClass] ?? payload.errorClass}
             </span>
@@ -497,9 +499,9 @@ function BreakerCard(props: ActivityCardProps): ReactElement {
         <span data-testid="breaker-trip" title={payload.trip} data-breaker-trip={payload.trip}>
           {BREAKER_TRIP_LABEL[payload.trip]}
         </span>
-        {' \u00b7 '}
+        {' · '}
         <span data-testid="breaker-count">{plural(payload.count, 'time')}</span>
-        {' \u00b7 '}
+        {' · '}
         <span data-testid="breaker-detail" title={payload.detail}>
           {breakerDetailText(payload.trip, payload.detail)}
         </span>
@@ -1016,11 +1018,11 @@ function SlaveMessageReassignedCard(props: ActivityCardProps): ReactElement {
         <span data-testid="reassigned-to" className="font-mono">
           {payload.to.slaveId}
         </span>
-        {' \u00b7 by '}
+        {' · by '}
         <span data-testid="reassigned-actor">{payload.actor}</span>
         {payload.decisionId !== null && (
           <>
-            {' \u00b7 '}
+            {' · '}
             <DecisionRef id={payload.decisionId} />
           </>
         )}
@@ -1073,7 +1075,7 @@ function SupervisorDecidedCard(props: ActivityCardProps): ReactElement {
         <span data-testid="supervisor-tier" className="text-text-3">
           ({payload.tier}, by {payload.decidedBy})
         </span>
-        {' \u00b7 '}
+        {' · '}
         <DecisionRef id={payload.decisionId} />
       </Transition>
     </ActivityCard>
@@ -1098,7 +1100,7 @@ function SupervisorProposedCard(props: ActivityCardProps): ReactElement {
         <span data-testid="supervisor-subject" className="font-mono">
           {payload.subjectId}
         </span>
-        {' \u00b7 awaiting a human until '}
+        {' · awaiting a human until '}
         {/* The STAMP, not "in 24h": this row is read weeks later as often as live, and a duration
           * computed against now would then describe a proposal that expired long ago. Trimmed to
           * minutes -- `expirePendingDecisions` runs per tick, so seconds are a precision the
@@ -1106,7 +1108,7 @@ function SupervisorProposedCard(props: ActivityCardProps): ReactElement {
         <span data-testid="supervisor-expires" className="font-mono">
           {payload.expiresAt.slice(0, 16).replace('T', ' ')}
         </span>
-        {' \u00b7 '}
+        {' · '}
         <DecisionRef id={payload.decisionId} />
       </Transition>
     </ActivityCard>
@@ -1119,7 +1121,7 @@ function SupervisorAppliedCard(props: ActivityCardProps): ReactElement {
     <ActivityCard {...props}>
       <Transition tone="working" label="supervisor applied">
         <span data-testid="supervisor-action">{payload.action.kind}</span>
-        {' \u00b7 '}
+        {' · '}
         <DecisionRef id={payload.decisionId} />
       </Transition>
     </ActivityCard>
@@ -1136,7 +1138,7 @@ function SupervisorResolvedCard(props: ActivityCardProps): ReactElement {
     <ActivityCard {...props}>
       <Transition tone={payload.outcome === 'approved' ? 'idle' : 'warn'} label={`supervisor ${payload.outcome}`}>
         <DecisionRef id={payload.decisionId} />
-        {payload.reason !== null && <span data-testid="supervisor-reason">{` \u00b7 ${payload.reason}`}</span>}
+        {payload.reason !== null && <span data-testid="supervisor-reason">{` · ${payload.reason}`}</span>}
       </Transition>
     </ActivityCard>
   )
@@ -1148,9 +1150,9 @@ function SupervisorFailedCard(props: ActivityCardProps): ReactElement {
     <ActivityCard {...props}>
       <Transition tone="danger" label="supervisor action failed">
         <span data-testid="supervisor-action">{payload.action.kind}</span>
-        {' \u00b7 '}
+        {' · '}
         <span data-testid="supervisor-reason">{payload.reason}</span>
-        {' \u00b7 '}
+        {' · '}
         <DecisionRef id={payload.decisionId} />
       </Transition>
     </ActivityCard>
@@ -1373,6 +1375,86 @@ function StaffingPreferenceChangedCard(props: ActivityCardProps): ReactElement {
 }
 
 /**
+ * M54 R9: a signed delivery arrived for this project.
+ *
+ * Registered HERE rather than in a later web task, because `ACTIVITY_CARDS`' `satisfies` is
+ * exhaustive over `DomainEventType` and a type with no card fails the BUILD (M53 plan erratum E13).
+ *
+ * The card prints the kind's LABEL and the origin's SENTENCE, both built from the payload -- the raw
+ * `source` stays on `data-external-source` and the raw `kind` on `data-external-kind`
+ * (`docs/ia.md` rule 3). It never renders the `deliveryId`: that is a correlation id for an
+ * operator's log and not a word for a page (R9).
+ *
+ * `idle`, not `working`: a delivery arriving is plumbing, and most deliveries are ignored.
+ */
+function ExternalReceivedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    inboundEventId: string
+    kind: string
+    kindLabel: string
+    deliveryId: string
+    origin: { source: string; repository: string; ref: string | null; url: string | null }
+  }
+  const origin = parseExternalOrigin(payload.origin)
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label="external event">
+        <span
+          data-testid="external-kind"
+          title={payload.kind}
+          data-external-kind={payload.kind}
+          data-external-source={payload.origin.source}
+        >
+          {payload.kindLabel}
+        </span>
+        {origin !== null && (
+          <span data-testid="external-origin" title={payload.origin.repository}>
+            {` · ${originLabel(origin)}`}
+          </span>
+        )}
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+/** M54 R9: the delivery became a new version of the project's requirement. `working`, not `idle`:
+ *  something is now going to happen about it -- the delta re-plan reads the new version on the next
+ *  tick, and the `goal v<n>` stamp is what a reader follows from here. */
+function ExternalActionedCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as {
+    inboundEventId: string
+    kind: string
+    kindLabel: string
+    origin: { source: string; repository: string; ref: string | null; url: string | null }
+    goalVersion: number
+    sha256: string
+  }
+  const origin = parseExternalOrigin(payload.origin)
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="working" label="requirement changed">
+        <span
+          data-testid="external-kind"
+          title={payload.kind}
+          data-external-kind={payload.kind}
+          data-external-source={payload.origin.source}
+        >
+          {payload.kindLabel}
+        </span>
+        {origin !== null && (
+          <span data-testid="external-origin" title={payload.origin.repository}>
+            {` · ${originLabel(origin)}`}
+          </span>
+        )}
+        <span data-testid="external-goal-version" className="text-text-3">
+          {` · goal v${String(payload.goalVersion)}`}
+        </span>
+      </Transition>
+    </ActivityCard>
+  )
+}
+
+/**
  * One card component per `DomainEventType`. `satisfies` (not a type annotation) is load-bearing:
  * it keeps each entry's own component type while still failing the build the moment a type is
  * missing, doubled, or misspelled — the same exhaustiveness idiom `EVENT_TYPE_BY_DOMAIN_TYPE`
@@ -1438,4 +1520,6 @@ export const ACTIVITY_CARDS = {
   'broker.refused': BrokerRefusedCard,
   'permission.changed': PermissionChangedCard,
   'staffing.preference_changed': StaffingPreferenceChangedCard,
+  'external.received': ExternalReceivedCard,
+  'external.actioned': ExternalActionedCard,
 } satisfies Record<DomainEventType, (props: ActivityCardProps) => ReactElement>

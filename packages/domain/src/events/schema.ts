@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import { err, ok, type Result } from '../result.js'
 import { BREAKER_TRIP_KINDS } from '../breaker/detect.js'
+import { externalOriginSchema } from '../external/origin.js'
+import { EXTERNAL_EVENT_KINDS } from '../external/request.js'
 import { MEMORY_SCOPES, MEMORY_SOURCE_KINDS, MEMORY_STATUSES, MEMORY_TYPES } from '../memory/types.js'
 import { ACTION_KINDS, DECIDERS, TIERS } from '../supervisor/actions.js'
 import { SITUATION_KINDS } from '../supervisor/situations.js'
@@ -272,6 +274,11 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       // produced. Optional, and null on every version written by `set-goal` or by the Settings
       // editor -- those set a whole goal rather than asking for a change.
       request: z.string().min(1).optional(),
+      // M54 R5: WHERE this version came from, when something outside asked for it. Optional and
+      // absent on every version a person set and on every row written before this milestone -- the
+      // same back-compat reason `request` and `version` above carry, and the same reason
+      // `packages/events/src/read.ts` throws on a row it cannot parse.
+      origin: externalOriginSchema.optional(),
     }),
   }),
   z.object({
@@ -731,6 +738,60 @@ export const executionEventSchema = z.discriminatedUnion('type', [
         from: staffingPreferenceSide,
         to: staffingPreferenceSide,
         by: z.string().min(1).nullable(),
+      })
+      .strict(),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('external.received'),
+    /**
+     * M54 R5: a signed delivery arrived for a project this installation has mapped.
+     *
+     * `actor: 'system'` and there is no fourth `Actor` member: `actor` answers "what kind of thing
+     * wrote this", and the honest answer for an ingestion is the same `system` the Supervisor's own
+     * writes use (`packages/control/src/supervisor.ts:468-469`). What "GitHub told us" needs is
+     * PROVENANCE, and that is `origin` -- the same nested key `external.actioned` and
+     * `GoalVersion.origin` carry, so one name means one thing in all three places.
+     *
+     * `kindLabel` rides beside `kind` for `staffing.preference_changed`'s reason: a row read a year
+     * from now must still say what it was about in the vocabulary of the day it was written, and a
+     * card must print a word without a join.
+     *
+     * `deliveryId` is the provider's own correlation id. It is HERE, in an operator's event log, and
+     * on no page (R9).
+     */
+    payload: z
+      .object({
+        inboundEventId: z.string().min(1),
+        kind: z.enum(EXTERNAL_EVENT_KINDS),
+        kindLabel: z.string().min(1),
+        deliveryId: z.string().min(1),
+        origin: externalOriginSchema,
+      })
+      .strict(),
+  }),
+  z.object({
+    ...envelope,
+    type: z.literal('external.actioned'),
+    /**
+     * M54 R5: that delivery became a new version of the project's requirement.
+     *
+     * The pair to `external.received`, and the two BRACKET the `workspace.goal_set` between them --
+     * which is the entry the six-lane timeline actually shows, on `user_request`, now carrying the
+     * same origin. A delivery that was ignored has a `received` and no `actioned`, which is what
+     * makes "did anything come of it" a question the log answers.
+     *
+     * No `deliveryId`: this event is about the VERSION, and the row that carries the delivery id is
+     * one `inboundEventId` away.
+     */
+    payload: z
+      .object({
+        inboundEventId: z.string().min(1),
+        kind: z.enum(EXTERNAL_EVENT_KINDS),
+        kindLabel: z.string().min(1),
+        origin: externalOriginSchema,
+        goalVersion: z.number().int().positive(),
+        sha256: z.string().min(1),
       })
       .strict(),
   }),

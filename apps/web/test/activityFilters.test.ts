@@ -15,6 +15,15 @@ describe('TYPES_BY_KIND', () => {
 })
 
 describe('parseActivityFilters', () => {
+  // M54 R5: both external events join the `workspace` chip, beside `workspace.goal_set` and
+  // `org.changed` -- neither carries a taskId or a runId.
+  it('expands kinds=workspace to a list that includes both external events', () => {
+    const result = parseActivityFilters(new URLSearchParams('kinds=workspace'))
+    if (!result.ok) throw new Error(result.error)
+    expect(result.filters.types).toContain('external.received')
+    expect(result.filters.types).toContain('external.actioned')
+  })
+
   it('parses lists and expands kinds into the types union', () => {
     const result = parseActivityFilters(new URLSearchParams('slaves=a1,a2&kinds=guardrails&types=run.output'))
     if (!result.ok) throw new Error(result.error)
@@ -55,11 +64,15 @@ describe('parseActivityFilters', () => {
   // with the Supervisor's five decision events; M40 t1 with the two delta re-plan events; M48 t1
   // with `workspace.runbook_adopted`; M49 t1 with the two memory events; M50 t1 with
   // `slave.released`, which is a change to the project's roster like `org.changed` beside it;
-  // M52 t1 with `permission.changed`.
-  it('expands kinds=workspace to the created, goal, plan, re-plan, runbook, memory, company-assigned, settings-changed, org-changed, archived, restored, slave-configuration and supervisor event types', () => {
+  // M52 t1 with `permission.changed`; M54 t1 with the two external delivery events.
+  it('expands kinds=workspace to the created, goal, plan, re-plan, runbook, memory, company-assigned, settings-changed, org-changed, archived, restored, slave-configuration, supervisor and external event types', () => {
     const result = parseActivityFilters(new URLSearchParams('kinds=workspace'))
     if (!result.ok) throw new Error(result.error)
     expect([...result.filters.types].sort()).toEqual([
+      // M54 R5: a delivery arriving and the requirement it changed -- neither carries a taskId or a
+      // runId, and the person reading them is asking what changed about this project.
+      'external.actioned',
+      'external.received',
       'memory.changed',
       'memory.recorded',
       'org.changed',
