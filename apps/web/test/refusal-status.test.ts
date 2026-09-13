@@ -127,6 +127,12 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   // of them is "the request does not make sense against what is here", never "this is not a thing".
   broker_refused: true,
   credential_not_found: true,
+  // M54 R11: the operator's two, on the MAPPING verbs. Authentication is not here and never will be
+  // -- `verifyHookDelivery` answers a `HookRefusalReason`, because `refusalStatus` maps `*_not_found`
+  // to 404 and a `hook_not_found` refusal would answer a stranger the one question R1 exists to leave
+  // unanswered.
+  external_repository_not_found: true,
+  external_repository_mapped: true,
 }
 
 const ALL = Object.keys(ALL_KINDS) as ControlRefusal['kind'][]
@@ -158,13 +164,14 @@ const TODAYS_NOT_FOUND_KINDS = [
   'runbook_not_found',
   'memory_not_found',
   'credential_not_found',
+  'external_repository_not_found',
 ] as const satisfies readonly ControlRefusal['kind'][]
 
 describe('refusalStatus', () => {
-  it('is 404 for exactly the twenty-one kinds ending in _not_found today', () => {
+  it('is 404 for exactly the twenty-two kinds ending in _not_found today', () => {
     const bySuffix = ALL.filter((kind) => kind.endsWith('_not_found')).sort()
     expect(bySuffix).toEqual([...TODAYS_NOT_FOUND_KINDS].sort())
-    expect(bySuffix).toHaveLength(21)
+    expect(bySuffix).toHaveLength(22)
   })
 
   it('maps every kind in the taxonomy to 404 iff it ends in _not_found, 409 otherwise', () => {

@@ -39,6 +39,15 @@ describe('the simulation never reaches a real tool (spec §8)', () => {
       expect(source, `${file} mentions evidence, ranking or a staffing preference`).not.toMatch(
         /EvidenceRecord|rankCandidates|StaffingPreference/,
       )
+      // M54 R13: the three nouns by NAME, the way the cases above name `@slave-of-ai/providers`, the
+      // broker and the evidence table. `ingestExternalEvent` INGESTS a signed delivery from a real
+      // provider for a real `Workspace`; `injectExternalEvent` (`simulation/write.ts:329`) INJECTS a
+      // sector's own simulated event into a `SimulationRun`'s journal, gated by a signed-in
+      // operator's session. Different verbs, different tables, different callers, no shared code --
+      // and the name collision is STATED rather than renamed, in both doc comments and here.
+      expect(source, `${file} mentions a real inbound delivery`).not.toMatch(
+        /InboundEvent|ExternalRepository|ingestExternalEvent/,
+      )
     }
   })
 })

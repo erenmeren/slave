@@ -40,10 +40,16 @@ export const CREDENTIAL_KIND_LABEL: Record<CredentialKind, string> = {
  * A SHAPE check, never a lookup. The name is stored and handed to the executor; whether the variable
  * is set on this host is a question for execution time, and the broker's `credential_unset` is the
  * refusal that answers it.
+ *
+ * EXPORTED since M54 (plan erratum E1): `mapExternalRepository` validates a webhook secret's variable
+ * name and must reuse this rule rather than re-spell it -- an operator who mistypes a variable for a
+ * deploy token and one who mistypes it for a hook should read the same sentence.
  */
-const ENV_VAR_RE = /^[A-Z][A-Z0-9_]{0,127}$/u
+export const ENV_VAR_RE = /^[A-Z][A-Z0-9_]{0,127}$/u
 
-const ENV_VAR_RULE =
+/** The sentence {@link ENV_VAR_RE} refuses with, as `invalid_name`'s `detail`. Exported beside the
+ *  regex for the same reason. */
+export const ENV_VAR_RULE =
   'an environment variable name must be upper-case letters, digits and underscores, ' +
   'start with a letter, and be at most 128 characters'
 

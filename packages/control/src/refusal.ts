@@ -7,7 +7,12 @@
  * convention: it is defined here (M12 Task 7) ahead of the budget admission logic (Task 9) that
  * will actually raise it.
  */
-import { BROKER_REFUSAL_LABEL, type BrokerRefusalReason } from '@slave-of-ai/domain'
+import {
+  BROKER_REFUSAL_LABEL,
+  EXTERNAL_SOURCE_LABEL,
+  type BrokerRefusalReason,
+  type ExternalSource,
+} from '@slave-of-ai/domain'
 import { sectors } from '@slave-of-ai/simulation'
 import { plural } from './plural.js'
 
@@ -389,6 +394,24 @@ export type ControlRefusal =
    *  suffix rule -- and a credential in ANOTHER project reads back the same as "does not exist"
    *  from a scoped caller's side of the boundary (`message_not_found`'s rule). */
   | { readonly kind: 'credential_not_found'; readonly name: string }
+  /** M54 R11: `triggers unmap` named a repository this project has no mapping for -- including one
+   *  mapped to ANOTHER project, which reads back the same as "does not exist" from a scoped caller's
+   *  side of the boundary (`message_not_found`'s rule). 404 by `refusalStatus`'s suffix rule.
+   *
+   *  Carries the SOURCE and the REPOSITORY and not the mapping's id: those two are what an operator
+   *  typed and what they can retype, and the id is a uuid nobody has. */
+  | { readonly kind: 'external_repository_not_found'; readonly source: ExternalSource; readonly repository: string }
+  /** M54 R11: `triggers map` named a repository something already maps -- this project or another.
+   *  409: both exist and the request does not make sense against them. `workspaceId` is carried
+   *  because "already mapped" without saying WHERE leaves an operator with nothing to do next; the
+   *  CLI resolves it to a NAME and prints that, which is that surface's own boundary. `refusalText`
+   *  below never prints the id itself -- see the case there for why. */
+  | {
+      readonly kind: 'external_repository_mapped'
+      readonly source: ExternalSource
+      readonly repository: string
+      readonly workspaceId: string
+    }
 
 /**
  * The word a person reads for `live_runs`'s `entity` (M27 final review, Important finding 3).
@@ -641,5 +664,20 @@ export function refusalText(refusal: ControlRefusal): string {
       return `${refusal.op}: ${BROKER_REFUSAL_LABEL[refusal.reason].toLowerCase()}`
     case 'credential_not_found':
       return `there is no credential "${refusal.name}" in this project: add it with \`credential add\` first`
+    case 'external_repository_not_found':
+      // The LABEL, never the key (`docs/ia.md` rule 3): this sentence is printed by the CLI and
+      // returned by a route, and `github` is not a word.
+      return `this project has no ${EXTERNAL_SOURCE_LABEL[refusal.source]} mapping for "${refusal.repository}"`
+    case 'external_repository_mapped':
+      // The refusal CARRIES `workspaceId` and this sentence deliberately does not PRINT it: a uuid is
+      // not a word a person can act on, and `triggers map` (M54 Task 4) resolves it to the project's
+      // NAME before it prints its own line -- which is what makes the union's doc comment above true.
+      // This is the generic fallback every other surface reads, and it says the two things that are
+      // true without a second read: something already holds this mapping, and unmapping it where it
+      // lives is the way out.
+      return (
+        `${refusal.repository} on ${EXTERNAL_SOURCE_LABEL[refusal.source]} is already mapped to a project; ` +
+        `unmap it there first with: triggers unmap --source ${refusal.source} --repository ${refusal.repository}`
+      )
   }
 }

@@ -1,5 +1,16 @@
-import { prisma } from '@slave-of-ai/db/client'
-import { type GoalDiff, type Result, composeGoal, err, goalDiff, goalSha256, ok, promotionFor } from '@slave-of-ai/domain'
+import { Prisma, prisma } from '@slave-of-ai/db/client'
+import {
+  type ExternalOrigin,
+  type GoalDiff,
+  type Result,
+  composeGoal,
+  err,
+  goalDiff,
+  goalSha256,
+  ok,
+  parseExternalOrigin,
+  promotionFor,
+} from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { recordMemory } from './memory.js'
 import type { Principal } from './principal.js'
@@ -35,7 +46,7 @@ export async function setGoal(
   // Checked here as well as inside the writer: a blank goal is refused before a transaction is
   // opened at all, exactly as it always was.
   if (goal.trim() === '') return err({ kind: 'invalid_goal' })
-  const result = await writeGoalVersion(workspaceId, () => goal, principal, options.request ?? null)
+  const result = await writeGoalVersion(workspaceId, () => goal, principal, options.request ?? null, null)
   return result.ok ? ok({ version: result.value.version, sha256: result.value.sha256 }) : result
 }
 
@@ -59,15 +70,29 @@ export async function setGoal(
  * a double submit must not write two versions and arm two delta re-plans. `goal_unchanged` and
  * `invalid_goal` are unreachable from here -- composition always appends a dated entry, and a
  * non-blank request always composes a non-blank document.
+ *
+ * `options.origin` is M54 R5: WHERE this change was asked for, when something outside asked for it.
+ * A FIFTH parameter rather than a widening of `at` into an options bag, because `at` is already the
+ * fourth and is passed positionally by existing tests -- churning those files would be this
+ * milestone editing code it has no business in. When an origin is present the version's row and its
+ * `workspace.goal_set` both carry it, and both say `actor: 'system'`: an external-origin version is
+ * not a person, and saying it is would be the one lie this milestone is most tempted to tell.
  */
 export async function requestChange(
   workspaceId: string,
   request: string,
   principal?: Principal,
   at: Date = new Date(),
+  options: { readonly origin?: ExternalOrigin } = {},
 ): Promise<Result<{ readonly version: number; readonly sha256: string; readonly goal: string }, ControlRefusal>> {
   if (request.trim() === '') return err({ kind: 'invalid_request' })
-  return writeGoalVersion(workspaceId, (previous) => composeGoal(previous, request, at), principal, request.trim())
+  return writeGoalVersion(
+    workspaceId,
+    (previous) => composeGoal(previous, request, at),
+    principal,
+    request.trim(),
+    options.origin ?? null,
+  )
 }
 
 /**
@@ -92,6 +117,8 @@ async function writeGoalVersion(
   textOf: (previous: string | null) => string,
   principal: Principal | undefined,
   request: string | null,
+  // M54 R5. Null for every version a person set, which is every version before this milestone.
+  origin: ExternalOrigin | null,
 ): Promise<Result<{ readonly version: number; readonly sha256: string; readonly goal: string }, ControlRefusal>> {
   const outcome = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
@@ -142,7 +169,19 @@ async function writeGoalVersion(
 
     const version = workspace.goalVersion + 1
     await tx.goalVersion.create({
-      data: { workspaceId, version, text: goal, sha256, setByUserId: principal?.userId ?? null, request },
+      data: {
+        workspaceId,
+        version,
+        text: goal,
+        sha256,
+        setByUserId: principal?.userId ?? null,
+        request,
+        // Spread, not `origin: origin ?? undefined`: a version a person set must carry NO `origin`
+        // key at all, so a reader can tell "nobody outside asked for this" from "something did and
+        // the column will not parse". The cast is the one `catalog.ts` and `supervisor.ts` already
+        // make for a validated structure going into a `Json` column.
+        ...(origin === null ? {} : { origin: origin as unknown as Prisma.InputJsonValue }),
+      },
     })
     await tx.workspace.update({
       where: { id: workspaceId },
@@ -155,11 +194,21 @@ async function writeGoalVersion(
   await appendEvent({
     type: 'workspace.goal_set',
     workspaceId,
-    actor: 'human',
+    // M54 R5: `actor: 'human'` was hard-coded here since M40. An ingestion is not a person, and
+    // `system` is the convention this repository already states for a system-authored write
+    // (`supervisor.ts:468-469`). The LANE is unaffected: `workspace.goal_set` is not one of
+    // `laneFor`'s actor-sensitive types, so the USER REQUEST lane still carries it either way.
+    actor: origin === null ? 'human' : 'system',
     // Spread, not `request: request ?? undefined`: a `workspace.goal_set` written by `set-goal`
     // must carry NO `request` key at all, so a reader can tell "no request was made" from "a
     // request was made and was empty" without asking which verb wrote the row.
-    payload: { goal: outcome.goal, version: outcome.version, sha256: outcome.sha256, ...(request === null ? {} : { request }) },
+    payload: {
+      goal: outcome.goal,
+      version: outcome.version,
+      sha256: outcome.sha256,
+      ...(request === null ? {} : { request }),
+      ...(origin === null ? {} : { origin }),
+    },
     userId: principal?.userId ?? null,
   })
 
@@ -199,6 +248,10 @@ export interface GoalVersionView {
   /** The line-level difference against the PREVIOUS version, or null for the first one -- v1 is
    *  the requirement's beginning and has nothing to be compared with. */
   readonly diff: GoalDiff | null
+  /** M54 R5/R9: where this version came from, or null for one a person set. Parsed rather than cast
+   *  -- a hand-edited `Json` column that will not parse reads back as "no origin", which renders as
+   *  nothing at all (`handoffOf`'s own rule). */
+  readonly origin: ExternalOrigin | null
 }
 
 /**
@@ -221,7 +274,7 @@ export async function listGoalVersions(
   const rows = await prisma.goalVersion.findMany({
     where: { workspaceId },
     orderBy: { version: 'desc' },
-    select: { version: true, text: true, sha256: true, setByUserId: true, createdAt: true },
+    select: { version: true, text: true, sha256: true, setByUserId: true, createdAt: true, origin: true },
   })
 
   return ok(
@@ -234,6 +287,7 @@ export async function listGoalVersions(
         setByUserId: row.setByUserId,
         createdAt: row.createdAt.toISOString(),
         diff: previous === undefined ? null : goalDiff(previous.text, row.text),
+        origin: parseExternalOrigin(row.origin),
       }
     }),
   )

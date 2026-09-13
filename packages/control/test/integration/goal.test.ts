@@ -552,3 +552,82 @@ describe('requestChange', () => {
     expect(reloaded.goalVersion).toBe(4)
   })
 })
+
+describe('requestChange with an origin (M54 R5)', () => {
+  const ORIGIN = {
+    source: 'github' as const,
+    repository: 'acme/checkout',
+    ref: '#412',
+    url: 'https://github.com/acme/checkout/issues/412',
+  }
+
+  let fixture: Fixture
+
+  // The same TRUNCATE and the same `seed()` every describe above uses -- this block adds no fixture
+  // of its own, it only calls `setGoal` first so there is a v1 for the amendment to follow.
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+    )
+    fixture = await seed()
+    await setGoal(fixture.workspace.id, 'Make checkout reliable.')
+  })
+
+  it('stamps the column, the event payload and the actor -- all three, from one parameter', async () => {
+    const result = await requestChange(fixture.workspace.id, 'CI is red', undefined, new Date(), { origin: ORIGIN })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.error.kind)
+    expect(result.value.version).toBe(2)
+
+    const row = await prisma.goalVersion.findFirstOrThrow({ where: { workspaceId: fixture.workspace.id, version: 2 } })
+    expect(row.origin).toEqual(ORIGIN)
+
+    const event = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, type: 'workspace_goal_set' },
+      orderBy: { seq: 'desc' },
+    })
+    expect(event.actor).toBe('system')
+    expect((event.payload as { origin?: unknown }).origin).toEqual(ORIGIN)
+  })
+
+  it('leaves a person own request exactly as it was -- null column, `human` actor, no origin key', async () => {
+    const result = await requestChange(fixture.workspace.id, 'Please add retries')
+    if (!result.ok) throw new Error(result.error.kind)
+    const row = await prisma.goalVersion.findFirstOrThrow({ where: { workspaceId: fixture.workspace.id, version: result.value.version } })
+    expect(row.origin).toBeNull()
+    const event = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, type: 'workspace_goal_set' },
+      orderBy: { seq: 'desc' },
+    })
+    expect(event.actor).toBe('human')
+    expect(Object.keys(event.payload as object)).not.toContain('origin')
+  })
+
+  it('refuses a byte-equal repeat with `duplicate_request`, origin or no origin', async () => {
+    await requestChange(fixture.workspace.id, 'CI is red', undefined, new Date(), { origin: ORIGIN })
+    const again = await requestChange(fixture.workspace.id, 'CI is red', undefined, new Date(), { origin: ORIGIN })
+    expect(again.ok).toBe(false)
+    if (again.ok) throw new Error('expected a refusal')
+    expect(again.error.kind).toBe('duplicate_request')
+  })
+
+  it('answers the origin back through listGoalVersions, parsed rather than cast (R9)', async () => {
+    await requestChange(fixture.workspace.id, 'CI is red', undefined, new Date(), { origin: ORIGIN })
+    const history = await listGoalVersions(fixture.workspace.id)
+    if (!history.ok) throw new Error(history.error.kind)
+    // Newest first: v2 is the amendment, v1 is the goal a person set.
+    expect(history.value[0]?.origin).toEqual(ORIGIN)
+    expect(history.value[1]?.origin).toBeNull()
+  })
+
+  it('answers null for a column a hand edit broke, rather than throwing on a history page', async () => {
+    await requestChange(fixture.workspace.id, 'CI is red', undefined, new Date(), { origin: ORIGIN })
+    await prisma.goalVersion.updateMany({
+      where: { workspaceId: fixture.workspace.id, version: 2 },
+      data: { origin: { source: 'myspace' } },
+    })
+    const history = await listGoalVersions(fixture.workspace.id)
+    if (!history.ok) throw new Error(history.error.kind)
+    expect(history.value[0]?.origin).toBeNull()
+  })
+})

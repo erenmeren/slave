@@ -13,7 +13,10 @@ const POST_URL = '/api/w/w1/goal'
 const HISTORY_URL = '/api/w/w1/goal/history'
 
 /** The two versions of a goal, as `listGoalVersions` returns them: newest first, each row's diff
- *  against the row below it, and `null` for the first version -- which replaced nothing. */
+ *  against the row below it, and `null` for the first version -- which replaced nothing.
+ *
+ *  `origin: null` on both since M54 R5: both were set by a person, which is what null MEANS on that
+ *  field. A version something outside asked for is Task 5's case, on this milestone's own surfaces. */
 const HISTORY: readonly GoalVersionView[] = [
   {
     version: 2,
@@ -22,6 +25,7 @@ const HISTORY: readonly GoalVersionView[] = [
     setByUserId: 'u-1',
     createdAt: '2026-09-10T11:30:00.000Z',
     diff: { added: ['and the refunds flow'], removed: [] },
+    origin: null,
   },
   {
     version: 1,
@@ -30,6 +34,7 @@ const HISTORY: readonly GoalVersionView[] = [
     setByUserId: null,
     createdAt: '2026-09-09T08:00:00.000Z',
     diff: null,
+    origin: null,
   },
 ]
 
