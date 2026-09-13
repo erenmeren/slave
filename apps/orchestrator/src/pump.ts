@@ -6,6 +6,7 @@ import { toExecutionEvent } from '@slave-of-ai/db'
 import { Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   estimateCostUsd,
+  providerRunsSkills,
   type GuardrailKind,
   type SlaveId,
   type RunId,
@@ -14,6 +15,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import {
+  capabilitiesOf,
   classifyGateEvent,
   PERMISSION_DENY_REASON_PREFIX,
   parsePermissionDenyReason,
@@ -148,9 +150,15 @@ function readPauseRequester(pauseFlagPath: string | undefined): string | null {
  * Claude's, and `writeStreamUsage` below persists that figure, for ANY provider, whenever the
  * stream actually reported it (`outcome.tokens` non-null). This function's name describes what
  * it still gates: the skills tally, and only the skills tally.
+ *
+ * M56a erratum E7: `providerRunsSkills` is the manifest's own answer -- a provider's skills
+ * mechanism IS the `Skill` tool in its governed toolbox -- rather than this file naming a vendor.
+ * The literal it replaces read `!== 'cursor'` and stood for exactly this fact; mapping it onto
+ * `canPauseMidRun`, which is `false` for the same one provider today, would have been
+ * behaviour-identical and false.
  */
 function runtimeReportsUsage(spawn: PumpRunInput['spawn']): boolean {
-  return spawn?.provider !== 'cursor'
+  return providerRunsSkills(spawn?.provider ?? 'claude_code')
 }
 
 /**
@@ -464,7 +472,14 @@ async function recordCursorPauseIfRequested(input: {
     payload: unknown,
   ) => Promise<void>
 }): Promise<boolean> {
-  if (input.spawn?.provider !== 'cursor') return false
+  // M56a R9: the capability, not the vendor. `capabilitiesOf(provider).canPauseMidRun` is the
+  // boolean this literal always stood for, and this function's own docstring already explained the
+  // branch in capability terms -- "`claude_code` cannot enter this function's body at all" -- which
+  // is now true of the code as well as of the comment. The three answers are unchanged: an absent
+  // `spawn`, an absent `provider` (optional on `PumpRunInput`, and a fixture that never pauses need
+  // not invent one) and Claude all return `false`, the last two through the historical-fact default
+  // this file's neighbours already use.
+  if (input.spawn === undefined || capabilitiesOf(input.spawn.provider ?? 'claude_code').canPauseMidRun) return false
   // A run that reported a clean terminal result AND had nothing denied finished; the pause request
   // lost the race and does not get to reclassify it. Everything else -- no terminal result, an
   // errored one, or a clean one whose calls this system's own pause gate blocked -- reaches the

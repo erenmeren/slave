@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '../packages/db/dist/index.js'
 import { prisma } from '../packages/db/dist/client.js'
 
+import { fakeProviderBins } from './lib/child-env.mjs'
 import { gateStateDir } from './lib/state-dir.mjs'
 
 // M52 Task 6 fix round 1. This gate spawns a real daemon and builds its child environment by hand
@@ -94,18 +95,22 @@ try {
   // hands back three chained tasks with no side effect; a review prompt -- containing `"verdict"`
   // -- replays `review-approve`; any other prompt is a work run that leaves a real commit before
   // replaying `complete`, so the merge pass downstream has something to merge).
+  const daemonEnv = {
+    ...process.env,
+    SLAVEOFAI_CLAUDE_BIN: 'node',
+    SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture m8-flow`,
+    // M32 item 7: the CLI refuses to start if the two lines above ever go missing, rather
+    // than falling back to the real `claude`.
+    SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
+  }
   daemon = spawn(
     'node',
     [ORCHESTRATOR_CLI, 'daemon', '--workspace', workspace.id, '--period', '500'],
     {
-      env: {
-        ...process.env,
-        SLAVEOFAI_CLAUDE_BIN: 'node',
-        SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture m8-flow`,
-        // M32 item 7: the CLI refuses to start if the two lines above ever go missing, rather
-        // than falling back to the real `claude`.
-        SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
-      },
+      // M56a R10: that refusal covers every registered provider now, so this daemon names the
+      // rehearsal fake for the ones this gate never dispatches. One helper, not one literal per
+      // gate (plan erratum E11), and it fills only what the literal above left unset.
+      env: { ...daemonEnv, ...fakeProviderBins(daemonEnv) },
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   )

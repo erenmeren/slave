@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { err, ok, type Result } from '@slave-of-ai/domain'
+import { err, ok, type ProviderKind, type Result } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { listCapabilities } from '../capability.js'
 import { admitRoster, AssignmentRefused, assignCompanyTx, type AssignReport } from '../org.js'
@@ -33,7 +33,7 @@ export interface AdoptionPreview {
   /** `autoMerge` is `false` and stays `false` (§1 principle 3): adoption never switches on a merge
    *  a person did not ask for, so the type says so rather than the drawer remembering to. */
   readonly settings: { readonly maxConcurrentRuns: number; readonly maxAttempts: number; readonly autoMerge: false }
-  readonly model: { readonly provider: 'claude_code' | 'cursor'; readonly model: string } | null
+  readonly model: { readonly provider: ProviderKind; readonly model: string } | null
   /** Every project with no company and no archive date, by name. Adoption's only legal targets. */
   readonly workspaces: readonly { readonly id: string; readonly name: string }[]
 }
@@ -130,7 +130,7 @@ function proposedSettings(definition: LoadedDefinition): { readonly maxConcurren
 
 /** The run's model as a roster override would carry it -- both columns or neither (the pair rule,
  *  M12 Task 7). Null for a `rules` run, which never chose one. */
-function modelOf(summary: LoadedSimulation['summary']): { readonly provider: 'claude_code' | 'cursor'; readonly model: string } | null {
+function modelOf(summary: LoadedSimulation['summary']): { readonly provider: ProviderKind; readonly model: string } | null {
   if (summary.decisionProvider !== 'llm' || summary.modelProvider === null || summary.model === null) return null
   return { provider: summary.modelProvider, model: summary.model }
 }

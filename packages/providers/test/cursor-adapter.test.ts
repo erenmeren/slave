@@ -187,7 +187,7 @@ describe('CursorAdapter', () => {
   })
 
   it('is what buildRegistry resolves the cursor kind to, once given cursor options', () => {
-    const registry = buildRegistry({ cursor: { command: 'cursor-agent', gatePath } })
+    const registry = buildRegistry({ cursor: { command: 'cursor-agent', scripts: { hookPath: gatePath, gatePath } } })
     expect(registry.resolve('cursor').kind).toBe('cursor')
   })
 

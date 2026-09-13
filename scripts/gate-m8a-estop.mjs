@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '../packages/db/dist/index.js'
 import { prisma } from '../packages/db/dist/client.js'
 
+import { fakeProviderBins } from './lib/child-env.mjs'
 import { gateStateDir } from './lib/state-dir.mjs'
 
 // M52 Task 6 fix round 1. This gate spawns a real daemon and builds its child environment by hand
@@ -59,6 +60,11 @@ process.env.SLAVEOFAI_CLAUDE_ARGS = `${FAKE_CLAUDE} --fixture hook-deny --line-d
 // M32 item 7: and every one of those children refuses to start if the two lines above are ever
 // lost, instead of falling back to the real `claude`.
 process.env.SLAVEOFAI_REQUIRE_FAKE_CLI = '1'
+// M56a R10: that refusal covers every registered provider now. This gate wires its children
+// through `process.env` rather than a per-spawn literal, so the rehearsal fake for every provider
+// it never dispatches is assigned here, once -- and only for a variable nothing has already set,
+// so an operator's own choice still wins (plan erratum E11).
+Object.assign(process.env, fakeProviderBins(process.env))
 
 /** Same as `milestone-gate.test.ts`'s `makeRepo` -- a real repository, because the orchestrator's
  *  tick provisions a real worktree in it regardless of which CLI it spawns. */

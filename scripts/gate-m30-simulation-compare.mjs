@@ -231,7 +231,10 @@ function spawnDaemon() {
     cwd: repoRoot,
     // M32 item 7: belt, braces AND a refusal -- with the flag set the daemon will not start at
     // all if `SLAVEOFAI_CLAUDE_BIN` beside it ever goes missing.
-    env: { ...loopbackChildEnv(), SLAVEOFAI_CLAUDE_BIN: 'node', SLAVEOFAI_REQUIRE_FAKE_CLI: '1' },
+    // M56a R10: the fake-CLI wiring goes THROUGH `loopbackChildEnv` rather than over the top of
+    // it, so the helper sees `SLAVEOFAI_REQUIRE_FAKE_CLI` and arms the rehearsal fake of every
+    // other registered provider -- which the widened `fakeCliRefusal` now requires (E11).
+    env: loopbackChildEnv({ SLAVEOFAI_CLAUDE_BIN: 'node', SLAVEOFAI_REQUIRE_FAKE_CLI: '1' }),
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   proc.stdout.on('data', (chunk) => process.stdout.write(`[daemon] ${chunk}`))

@@ -85,7 +85,7 @@ import { chromium } from 'playwright-core'
 import { collectWorktrees } from '../apps/orchestrator/dist/collect.js'
 import { WORKTREE_TTL_MS } from '../packages/control/dist/collect.js'
 import { prisma } from '../packages/db/dist/client.js'
-import { loopbackChildEnv } from './lib/child-env.mjs'
+import { fakeProviderBins, loopbackChildEnv } from './lib/child-env.mjs'
 
 const PASS_LINE =
   'a repo attached, a tree collected, a log read, a roster edited, a hand-off drawn, a name on the event'
@@ -406,10 +406,13 @@ try {
       },
     })
 
+    // M32 item 7: `SLAVEOFAI_REQUIRE_FAKE_CLI` makes the daemon refuse to start if the fake
+    // wiring beside it ever goes missing, instead of spawning the real `claude`. M56a R10: that
+    // refusal covers every registered provider now, so `fakeProviderBins` names the rehearsal fake
+    // for the ones this gate never dispatches -- only where this literal left one unset (E11).
+    const daemonEnv = { ...process.env, SLAVEOFAI_CLAUDE_BIN: 'node', SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture m8a-flow`, SLAVEOFAI_REQUIRE_FAKE_CLI: '1' }
     daemon = spawn('node', [ORCHESTRATOR_CLI, 'daemon', '--workspace', workspaceId, '--period', '500'], {
-      // M32 item 7: `SLAVEOFAI_REQUIRE_FAKE_CLI` makes the daemon refuse to start if the fake
-      // wiring beside it ever goes missing, instead of spawning the real `claude`.
-      env: { ...process.env, SLAVEOFAI_CLAUDE_BIN: 'node', SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture m8a-flow`, SLAVEOFAI_REQUIRE_FAKE_CLI: '1' },
+      env: { ...daemonEnv, ...fakeProviderBins(daemonEnv) },
       stdio: ['ignore', 'pipe', 'pipe'],
     })
     daemon.stdout.on('data', (chunk) => process.stdout.write(`[daemon] ${chunk}`))

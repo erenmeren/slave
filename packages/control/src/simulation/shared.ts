@@ -1,5 +1,5 @@
 import { Prisma } from '@slave-of-ai/db/client'
-import { err, ok, type Result } from '@slave-of-ai/domain'
+import { err, ok, type ProviderKind, type Result } from '@slave-of-ai/domain'
 import {
   sectorFor, sectors, type AnySectorPlugin, type EngineDefinition, type EngineState, type JournalEntry, type SectorName,
 } from '@slave-of-ai/simulation'
@@ -21,7 +21,7 @@ export interface SimulationSummary {
   readonly sector: SectorName
   readonly mode: 'simulation'
   readonly decisionProvider: 'rules' | 'llm'
-  readonly modelProvider: 'claude_code' | 'cursor' | null
+  readonly modelProvider: ProviderKind | null
   readonly model: string | null
   readonly maxModelCostUsd: number | null
   readonly llmRoles: readonly string[]

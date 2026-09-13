@@ -13,6 +13,9 @@ const execFileAsync = promisify(execFile)
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const CLI = join(repoRoot, 'apps/orchestrator/dist/cli.js')
 const FAKE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
+/** M56a R10: `fakeCliRefusal` covers every registered provider, so a child that asks for fakes has
+ *  to name this one too. The gate rehearsal fake, which exists and is not `cursor-agent`. */
+const FAKE_CURSOR = join(repoRoot, 'scripts', 'gate-fakes', 'fake-cursor-agent.sh')
 
 /**
  * Spec §16, the milestone gate. Every step is driven from the CLI, because "M3 is done when, from
@@ -39,6 +42,7 @@ async function runCli(args: readonly string[], extraEnv: NodeJS.ProcessEnv = {})
         SLAVEOFAI_CLAUDE_BIN: 'node',
         SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
         SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
+        SLAVEOFAI_CURSOR_BIN: FAKE_CURSOR,
         ...extraEnv,
       },
     })

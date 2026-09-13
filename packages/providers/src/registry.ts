@@ -1,6 +1,8 @@
-import { ClaudeCodeAdapter, type SlaveRuntimeAdapter, type ClaudeCodeAdapterOptions } from './claude/adapter.js'
-import { CursorAdapter, type CursorAdapterOptions } from './cursor/adapter.js'
-import type { ProviderKind } from './types.js'
+import { PROVIDER_KINDS, type ProviderKind } from '@slave-of-ai/domain'
+import { ClaudeCodeAdapter } from './claude/adapter.js'
+import type { SlaveRuntimeAdapter } from './contract/adapter.js'
+import { CursorAdapter } from './cursor/adapter.js'
+import { parseCursorModels, type ModelOption } from './models.js'
 
 /**
  * Thrown by `AdapterRegistry.resolve` for a kind nothing was configured to serve.
@@ -53,8 +55,21 @@ export class UnregistrableProviderError extends Error {
  * actually has neither capability. Both shipped adapters declare `canResumeSession: true`, so the
  * rule is unreachable through `buildRegistry`'s option shape today -- and an untested rule that
  * first runs on the day a third provider arrives is the rule most likely to be wrong then.
+ *
+ * M56a R1: it also asserts the adapter IS the kind it is being registered under. The contract's
+ * `id: string` became `readonly kind: ProviderKind` precisely so this check could exist -- a plain
+ * `Error`, not a named class, because nothing catches it: a table whose entry builds the other
+ * vendor's adapter is a wiring bug in this file and is meant to stop the process at build time,
+ * where a registry that resolved `'cursor'` to a Claude adapter would be exactly the silent
+ * substitution `UnknownProviderError`'s docstring exists to rule out.
  */
 export function admitAdapter(kind: ProviderKind, adapter: SlaveRuntimeAdapter): SlaveRuntimeAdapter {
+  if (adapter.kind !== kind) {
+    throw new Error(
+      `adapter registered under ${JSON.stringify(kind)} reports kind ${JSON.stringify(adapter.kind)}: ` +
+        'a registry that admitted it would resolve one provider to the other vendor\'s runtime.',
+    )
+  }
   const capabilities = adapter.getCapabilities()
   if (!capabilities.canPauseMidRun && !capabilities.canResumeSession) throw new UnregistrableProviderError(kind)
   return adapter
@@ -76,26 +91,105 @@ export interface AdapterRegistry {
 }
 
 /**
- * Builds a registry from adapter construction options, once per process
+ * Everything a process has to supply to build ONE provider's adapter (M56a R6).
+ *
+ * One shape for every provider, rather than two option types a caller has to know apart: the
+ * command and its extra argv are per-kind (read from that manifest's `binEnvVar`/`argsEnvVar`), and
+ * `scripts` is the SAME object for every entry -- four paths a deployment owns, of which each
+ * registration takes the ones its adapter needs. `buildAdapterRegistry` therefore builds one
+ * `scripts` and hands it to every kind, which is what makes adding a provider one entry rather than
+ * one more option block and two more environment reads.
+ */
+export interface ProviderWiring {
+  readonly command: string
+  readonly extraArgs?: readonly string[]
+  readonly scripts: {
+    /** Claude's `PreToolUse` gate (`scripts/pause-gate.sh`). */
+    readonly hookPath: string
+    /** Claude's `PostToolUse` tap (`scripts/tool-result-tap.sh`). Optional: a deployment that has
+     *  not installed it runs perfectly well without it. */
+    readonly tapPath?: string
+    /** Cursor's shell gate (`scripts/cursor-shell-gate.sh`). A separate path from `hookPath` on
+     *  purpose: the two vendors' gates answer different protocols, and pointing one at the other's
+     *  script produces a gate that looks installed and blocks every call, or one that blocks none. */
+    readonly gatePath: string
+    /** The orchestrator CLI a worker runs to ask the broker for an operation (M52 R3). */
+    readonly brokerCliPath?: string
+  }
+}
+
+/**
+ * What this package knows how to build for one kind (M56a R6).
+ *
+ * `adapterName` is the class's own name, read by the Settings page's adapter card
+ * (`apps/web/src/server/settings.ts`) so that surface stops carrying its own copy of the two.
+ * `parseModels` is present for a provider whose models are LISTED and absent for one whose models
+ * are configured -- `PROVIDER_ADAPTERS`'s own test asserts that correspondence against the manifest
+ * rather than leaving it to a reader.
+ */
+export interface ProviderRegistration {
+  readonly adapterName: string
+  build(wiring: ProviderWiring): SlaveRuntimeAdapter
+  parseModels?(stdout: string): readonly ModelOption[]
+}
+
+/**
+ * Every adapter this package can build, by kind (M56a R6).
+ *
+ * A `Record<ProviderKind, …>`, like `PROVIDER_MANIFESTS`, and for the same reason: the two fail
+ * TOGETHER. A third kind added to the union is a build error here and there at the same moment, so
+ * a registration without a manifest -- an adapter nobody measured -- cannot exist.
+ *
+ * This is what a new provider ADDS: one entry, a constructor call, and for a `listed` provider a
+ * parser. It is not what a new provider WIDENS: `buildRegistry` below is a loop and names no vendor.
+ */
+export const PROVIDER_ADAPTERS: Record<ProviderKind, ProviderRegistration> = {
+  claude_code: {
+    adapterName: 'ClaudeCodeAdapter',
+    build: (wiring) =>
+      new ClaudeCodeAdapter({
+        command: wiring.command,
+        ...(wiring.extraArgs === undefined ? {} : { extraArgs: wiring.extraArgs }),
+        hookPath: wiring.scripts.hookPath,
+        ...(wiring.scripts.tapPath === undefined ? {} : { tapPath: wiring.scripts.tapPath }),
+        ...(wiring.scripts.brokerCliPath === undefined ? {} : { brokerCliPath: wiring.scripts.brokerCliPath }),
+      }),
+  },
+  cursor: {
+    adapterName: 'CursorAdapter',
+    build: (wiring) =>
+      new CursorAdapter({
+        command: wiring.command,
+        ...(wiring.extraArgs === undefined ? {} : { extraArgs: wiring.extraArgs }),
+        gatePath: wiring.scripts.gatePath,
+        ...(wiring.scripts.brokerCliPath === undefined ? {} : { brokerCliPath: wiring.scripts.brokerCliPath }),
+      }),
+    // The SAME function object `listProviderModels` dispatches to (`models.ts`'s
+    // `MODEL_STDOUT_PARSERS`), and `registry.test.ts` pins the two together for every kind. The
+    // parser is named from here rather than the other way round because `models.ts` must stay a
+    // leaf: it is imported by both adapters, which this module constructs (ruling P12a).
+    parseModels: parseCursorModels,
+  },
+}
+
+/**
+ * Builds a registry from the wiring a process was given, once per process
  * (`apps/orchestrator/src/cli.ts`'s `buildAdapterRegistry`) -- the same one call `buildAdapter`
- * used to make before this task, just handing back something that can hold more than one kind of
+ * used to make before M12 Task 5, just handing back something that can hold more than one kind of
  * adapter instead of exactly one.
  *
- * Widened by M12 Task 12 with a second, still OPTIONAL field. Both are optional and neither is
- * defaulted: a deployment that was never given a Cursor gate script must refuse `'cursor'` rather
- * than construct an adapter around a path nobody checked, and an existing caller that passes only
- * `claudeCode` keeps building exactly the registry it built before this field existed.
+ * `Partial<Record<ProviderKind, ProviderWiring>>` (M56a R6) rather than one named optional field per
+ * vendor: every entry is still OPTIONAL and none is defaulted, and the rule that made them optional
+ * is unchanged -- a deployment that was never given a Cursor gate script must refuse `'cursor'`
+ * rather than construct an adapter around a path nobody checked. What a registry resolves remains
+ * what a process was CONFIGURED with, not what this package can build.
  */
-export function buildRegistry(options: {
-  readonly claudeCode?: ClaudeCodeAdapterOptions
-  readonly cursor?: CursorAdapterOptions
-}): AdapterRegistry {
+export function buildRegistry(options: Partial<Record<ProviderKind, ProviderWiring>>): AdapterRegistry {
   const adapters = new Map<ProviderKind, SlaveRuntimeAdapter>()
-  if (options.claudeCode !== undefined) {
-    adapters.set('claude_code', admitAdapter('claude_code', new ClaudeCodeAdapter(options.claudeCode)))
-  }
-  if (options.cursor !== undefined) {
-    adapters.set('cursor', admitAdapter('cursor', new CursorAdapter(options.cursor)))
+  for (const kind of PROVIDER_KINDS) {
+    const wiring = options[kind]
+    if (wiring === undefined) continue
+    adapters.set(kind, admitAdapter(kind, PROVIDER_ADAPTERS[kind].build(wiring)))
   }
 
   return {

@@ -14,6 +14,12 @@ import { fakeCliRefusal } from './require-fake-cli.js'
  * not returned: `cli.ts`'s thin wrapper passes `process.env` straight through, so the throw
  * propagates from the same call site it always has, and `main`'s own catch turns it into a message
  * and exit 1.
+ *
+ * SINCE M56a R10 THE REFUSAL IT RAISES IS NOT ONLY ABOUT CLAUDE. `fakeCliRefusal` checks every
+ * registered provider's binary, so this function throws when `SLAVEOFAI_CURSOR_BIN` is missing too
+ * -- which is correct and deliberate: a process that spawns one vendor's CLI under
+ * `SLAVEOFAI_REQUIRE_FAKE_CLI` is a process that must not be able to spawn the other's by accident
+ * either, and the two adapters are configured unconditionally in the same registry.
  */
 export function claudeCommandFrom(env: NodeJS.ProcessEnv): { readonly command: string; readonly extraArgs?: readonly string[] } {
   const refusal = fakeCliRefusal(env)

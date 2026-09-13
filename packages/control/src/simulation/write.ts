@@ -1,6 +1,7 @@
 import { Prisma, prisma } from '@slave-of-ai/db/client'
-import { err, ok, type Result } from '@slave-of-ai/domain'
+import { err, manifestFor, ok, type ProviderKind, type Result } from '@slave-of-ai/domain'
 import { runUntil, sectorFor, type AnySectorPlugin, type DecisionExtras, type DecisionProvider } from '@slave-of-ai/simulation'
+import { isProviderKind } from '../org.js'
 import { isUniqueConstraintViolation } from '../prisma-errors.js'
 import type { Principal } from '../principal.js'
 import type { ControlRefusal } from '../refusal.js'
@@ -17,7 +18,7 @@ function validateNameAndSeed(name: string, seed: number | undefined): ControlRef
   return null
 }
 
-type ValidatedLlmInput = { readonly modelProvider: 'claude_code'; readonly model: string; readonly maxModelCostUsd: number }
+type ValidatedLlmInput = { readonly modelProvider: ProviderKind; readonly model: string; readonly maxModelCostUsd: number }
 
 /** The three `invalid_simulation_input` detail strings an `llm` run's missing field can produce
  *  (M31a §3). Exported (fix round 1, Minor #3) so `apps/web`'s own request-shape check -- the
@@ -29,19 +30,30 @@ export const LLM_INPUT_MESSAGES = {
   maxModelCostUsdPositive: 'maxModelCostUsd must be a positive number',
 } as const
 
-/** `createSimulation`'s `decisionProvider: 'llm'` guard (M31a §3): `modelProvider` must be
- *  `claude_code` -- `cursor` gets its own reason (it reports no cost, so a cap can never be
- *  enforced), anything else is simply not a provider this ever configures -- then `model` a
- *  non-empty text and `maxModelCostUsd` a positive finite number. Returns the trimmed, narrowed
- *  values a `rules` run never needs to carry. */
+/** `createSimulation`'s `decisionProvider: 'llm'` guard (M31a §3): the provider must be one this
+ *  system can CAP -- a provider that reports no cost can never have a budget enforced against it --
+ *  then `model` a non-empty text and `maxModelCostUsd` a positive finite number. Returns the
+ *  trimmed, narrowed values a `rules` run never needs to carry.
+ *
+ *  M56a R6: the check is the provider's own COST axis, not a vendor name. The two sentences an
+ *  operator reads are unchanged, and so are the two answers -- `cursor` is a kind whose manifest
+ *  reports no cost, anything else is not a kind at all -- but the ORDER of the tests is reversed,
+ *  because a manifest can only be asked for about a real `ProviderKind`.
+ *
+ *  `manifestFor(kind).usageCost === 'reported'` rather than the runtime package's `reportsCost`
+ *  projection, which is the same axis read through one more hop: nothing under
+ *  `packages/control/src/simulation/` may import the package that SPAWNS a provider, and
+ *  `packages/control/test/simulation-boundary.test.ts` scans these files for exactly that. The
+ *  manifest is the source both readings project from, and it lives in the domain, which a
+ *  simulation may read. */
 function validateLlmInput(input: { readonly modelProvider?: string; readonly model?: string; readonly maxModelCostUsd?: number }): Result<ValidatedLlmInput, ControlRefusal> {
   if (input.modelProvider === undefined) return err({ kind: 'invalid_simulation_input', detail: LLM_INPUT_MESSAGES.modelProviderRequired })
-  if (input.modelProvider === 'cursor') return err({ kind: 'unsupported_model_provider', provider: 'cursor', reason: 'it reports no cost, so a cap cannot be enforced' })
-  if (input.modelProvider !== 'claude_code') return err({ kind: 'unsupported_model_provider', provider: input.modelProvider, reason: 'it is not a configured provider' })
+  if (!isProviderKind(input.modelProvider)) return err({ kind: 'unsupported_model_provider', provider: input.modelProvider, reason: 'it is not a configured provider' })
+  if (manifestFor(input.modelProvider).usageCost !== 'reported') return err({ kind: 'unsupported_model_provider', provider: input.modelProvider, reason: 'it reports no cost, so a cap cannot be enforced' })
   const model = input.model?.trim()
   if (model === undefined || model === '') return err({ kind: 'invalid_simulation_input', detail: LLM_INPUT_MESSAGES.modelRequired })
   if (input.maxModelCostUsd === undefined || !Number.isFinite(input.maxModelCostUsd) || input.maxModelCostUsd <= 0) return err({ kind: 'invalid_simulation_input', detail: LLM_INPUT_MESSAGES.maxModelCostUsdPositive })
-  return ok({ modelProvider: 'claude_code', model, maxModelCostUsd: input.maxModelCostUsd })
+  return ok({ modelProvider: input.modelProvider, model, maxModelCostUsd: input.maxModelCostUsd })
 }
 
 /** The one insert both `createSimulation` and `cloneSimulation` make: the row plus its seq-0
@@ -74,7 +86,7 @@ export async function createSimulation(
     /** M31a §3: which decides the run's actions. Defaults to `rules` -- the M29/M30 behaviour --
      *  so every existing caller is unaffected. */
     readonly decisionProvider?: 'rules' | 'llm'
-    readonly modelProvider?: 'claude_code' | 'cursor'
+    readonly modelProvider?: ProviderKind
     readonly model?: string
     readonly maxModelCostUsd?: number
   },

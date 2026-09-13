@@ -232,7 +232,15 @@ export async function applyModelDecision(
     const usageSeq = (lastUsage?.seq ?? -1) + 1
     await tx.simulationModelUsage.create({
       data: {
-        simulationId, seq: usageSeq, provider: 'claude_code', costUsd: outcome.costUsd, tokensIn: outcome.tokens?.input ?? null, tokensOut: outcome.tokens?.output ?? null,
+        simulationId,
+        seq: usageSeq,
+        // M56a R6: the run's OWN provider, not a constant. `SimulationModelUsage.provider` is NOT
+        // NULL and `SimulationRun.modelProvider` is nullable, so the historical-fact default is
+        // spelled -- the same one `sweep.ts` and `resume.ts` use for a pre-M12 row. It is
+        // unreachable in practice: a `rules` run never reaches this function and an `llm` run
+        // cannot be created without a `modelProvider`.
+        provider: row.modelProvider ?? 'claude_code',
+        costUsd: outcome.costUsd, tokensIn: outcome.tokens?.input ?? null, tokensOut: outcome.tokens?.output ?? null,
         simTime: row.simTime, role,
       },
     })

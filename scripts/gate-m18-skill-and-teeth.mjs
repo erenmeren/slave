@@ -54,7 +54,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
-import { loopbackChildEnv } from './lib/child-env.mjs'
+import { fakeProviderBins, loopbackChildEnv } from './lib/child-env.mjs'
 import { chromium } from 'playwright-core'
 import { appendEvent } from '../packages/events/dist/index.js'
 import { isAlive } from '../packages/control/dist/index.js'
@@ -622,6 +622,14 @@ try {
   // ============================================================================================
   // Stage 1: Enforcement -- a matrix deny survives the run, and the Activity page shows it.
   // ============================================================================================
+  const denyDaemonEnvBase = {
+    ...process.env,
+    SLAVEOFAI_CLAUDE_BIN: 'node',
+    SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture permission-matrix-deny`,
+    // M32 item 7: and the child refuses to start at all if those two ever go missing.
+    SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
+  }
+  const denyDaemonEnv = { ...denyDaemonEnvBase, ...fakeProviderBins(denyDaemonEnvBase) }
   daemon = spawn(
     'node',
     [ORCHESTRATOR_CLI, 'daemon', '--workspace', workspaceId, '--period', '500'],
@@ -631,13 +639,10 @@ try {
       // fixture through `fake-claude.mjs`, regardless of what the outer `SLAVEOFAI_CLAUDE_BIN`
       // precondition named -- `buildAdapterRegistry` (`apps/orchestrator/src/cli.ts`) reads these
       // once, at THIS child's own start, so it never sees the outer value at all.
-      env: {
-        ...process.env,
-        SLAVEOFAI_CLAUDE_BIN: 'node',
-        SLAVEOFAI_CLAUDE_ARGS: `${FAKE_CLAUDE} --fixture permission-matrix-deny`,
-        // M32 item 7: and the child refuses to start at all if those two ever go missing.
-        SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
-      },
+      // M56a R10: that refusal covers every registered provider now, so `fakeProviderBins` names
+      // the rehearsal fake for the ones this gate never dispatches -- only where the literal above
+      // left one unset, so the inner override still wins (plan erratum E11).
+      env: denyDaemonEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   )

@@ -14,6 +14,7 @@ import {
   handoffCanonicalJson,
   neutraliseMarkers,
   parseHandoffContract,
+  providerRunsSkills,
   renderHandoff,
   renderRunContext,
   stageOrder,
@@ -217,8 +218,10 @@ export async function injectSkills(input: {
 }): Promise<SkillInjection> {
   const nothing = { copied: [], missing: [], shadowedByRepo: [] } as const
   // Cursor has no skills mechanism at all (spec §9, a stated non-goal): copying files it will
-  // never read would be a prompt that promises capabilities the run does not have.
-  if (input.provider === 'cursor') return { ...nothing, provider_unsupported: true, no_worktree: false }
+  // never read would be a prompt that promises capabilities the run does not have. M56a erratum E7:
+  // asked of the manifest -- a provider's skills mechanism is the `Skill` tool in its governed
+  // toolbox -- so a third runtime answers this on the day its manifest lands.
+  if (!providerRunsSkills(input.provider)) return { ...nothing, provider_unsupported: true, no_worktree: false }
   if (input.worktreePath === null) return { ...nothing, provider_unsupported: false, no_worktree: true }
 
   const worktreePath = input.worktreePath

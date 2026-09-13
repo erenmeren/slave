@@ -25,6 +25,9 @@ const execFileAsync = promisify(execFile)
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const CLI = join(repoRoot, 'apps/orchestrator/dist/cli.js')
 const FAKE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
+/** M56a R10: `fakeCliRefusal` covers every registered provider, so a child that asks for fakes has
+ *  to name this one too. The gate rehearsal fake, which exists and is not `cursor-agent`. */
+const FAKE_CURSOR = join(repoRoot, 'scripts', 'gate-fakes', 'fake-cursor-agent.sh')
 
 interface CliResult {
   readonly stdout: string
@@ -51,6 +54,7 @@ async function runCli(args: readonly string[], extraEnv: NodeJS.ProcessEnv = {})
         SLAVEOFAI_CLAUDE_BIN: 'node',
         SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
         SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
+        SLAVEOFAI_CURSOR_BIN: FAKE_CURSOR,
         ...extraEnv,
       },
     })
@@ -76,6 +80,7 @@ async function runCliWithStdin(args: readonly string[], input: string, extraEnv:
         SLAVEOFAI_CLAUDE_BIN: 'node',
         SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
         SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
+        SLAVEOFAI_CURSOR_BIN: FAKE_CURSOR,
         ...extraEnv,
       },
     })
@@ -1268,6 +1273,7 @@ describe('the orchestrator CLI', () => {
         SLAVEOFAI_CLAUDE_BIN: 'node',
         SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
         SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
+        SLAVEOFAI_CURSOR_BIN: FAKE_CURSOR,
       },
     })
 
@@ -1309,6 +1315,7 @@ describe('the orchestrator CLI', () => {
         SLAVEOFAI_CLAUDE_BIN: 'node',
         SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture hang`,
         SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
+        SLAVEOFAI_CURSOR_BIN: FAKE_CURSOR,
       },
     })
     try {
@@ -2587,6 +2594,7 @@ describe('the orchestrator CLI', () => {
           SLAVEOFAI_CLAUDE_BIN: 'node',
           SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture decision`,
           SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
+          SLAVEOFAI_CURSOR_BIN: FAKE_CURSOR,
         },
       })
       try {
@@ -4275,6 +4283,7 @@ describe('the orchestrator CLI', () => {
           SLAVEOFAI_CLAUDE_BIN: 'node',
           SLAVEOFAI_CLAUDE_ARGS: `${FAKE} --fixture complete`,
           SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
+          SLAVEOFAI_CURSOR_BIN: FAKE_CURSOR,
           SLAVEOFAI_STATE_DIR: stateDir,
           FAKE_DEPLOY_TOKEN: CREDENTIAL_PLACEHOLDER,
         },

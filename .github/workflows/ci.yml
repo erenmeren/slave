@@ -36,6 +36,10 @@ jobs:
           --health-cmd "pg_isready -U slaveofai" --health-interval 5s --health-timeout 5s --health-retries 20
     env:
       SLAVEOFAI_CLAUDE_BIN: ${{ github.workspace }}/scripts/gate-fakes/fake-claude.sh
+      # M56a R10: the spend net covers every registered binary now, and this is the outermost net --
+      # a gate whose own child environment forgot the Cursor fake still meets a job-wide one. The
+      # repository already had this fake; nothing here is new but the line that arms it.
+      SLAVEOFAI_CURSOR_BIN: ${{ github.workspace }}/scripts/gate-fakes/fake-cursor-agent.sh
       # M32 item 7: job-wide, beside the binary it is about. Every gate in this job drives the fake
       # CLI; with this set the orchestrator refuses to start rather than falling back to the real
       # `claude` if the line above ever goes missing, so a broken CI env cannot quietly spend.

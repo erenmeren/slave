@@ -1,26 +1,81 @@
-import type { ProviderKind } from '@slave-of-ai/domain'
+import { PROVIDER_KINDS, manifestFor, type ProviderKind } from '@slave-of-ai/domain'
 import { describe, expect, it } from 'vitest'
-import type { SlaveRuntimeAdapter, ProviderCapabilities } from '../src/claude/adapter.js'
-import { admitAdapter, buildRegistry } from '../src/index.js'
+import type { ProviderCapabilities, SlaveRuntimeAdapter } from '../src/contract/adapter.js'
+import { MODEL_STDOUT_PARSERS, PROVIDER_ADAPTERS, admitAdapter, buildRegistry, type ProviderWiring } from '../src/index.js'
 
-describe('buildRegistry', () => {
+/** The wiring a process actually hands a registry: one command and the four script paths, the same
+ *  object for every kind (`apps/orchestrator/src/cli.ts`'s `buildAdapterRegistry`). */
+const wiring = (command: string): ProviderWiring => ({
+  command,
+  scripts: {
+    hookPath: '/opt/slaveofai/pause-gate.sh',
+    gatePath: '/opt/slaveofai/cursor-shell-gate.sh',
+    brokerCliPath: '/opt/slaveofai/cli.js',
+  },
+})
+
+describe('PROVIDER_ADAPTERS (R6)', () => {
+  it('has exactly the members of PROVIDER_KINDS, so a registration without a manifest cannot exist', () => {
+    expect(Object.keys(PROVIDER_ADAPTERS).sort()).toEqual([...PROVIDER_KINDS].sort())
+  })
+
+  it('names the class each entry builds, which is what the Settings card prints', () => {
+    expect(PROVIDER_ADAPTERS.claude_code.adapterName).toBe('ClaudeCodeAdapter')
+    expect(PROVIDER_ADAPTERS.cursor.adapterName).toBe('CursorAdapter')
+  })
+
+  it('gives a parser to exactly the providers whose models are LISTED, and to no others', () => {
+    for (const kind of PROVIDER_KINDS) {
+      const listed = manifestFor(kind).modelDiscovery.mode === 'listed'
+      expect(typeof PROVIDER_ADAPTERS[kind].parseModels === 'function', kind).toBe(listed)
+    }
+  })
+
+  it('registers the SAME parser `listProviderModels` dispatches to, so the two cannot drift', () => {
+    // The fact is the function, named in two places because the registration and the listing reach
+    // it from opposite ends of the package (`models.ts` must not import `registry.ts` -- see
+    // `MODEL_STDOUT_PARSERS`' own docstring for the cycle that would be). This is what keeps a
+    // future `listed` provider from being registered with one parser and read with another.
+    for (const kind of PROVIDER_KINDS) {
+      expect(PROVIDER_ADAPTERS[kind].parseModels, kind).toBe(MODEL_STDOUT_PARSERS[kind])
+    }
+  })
+
+  it('builds an adapter that knows which kind it is', () => {
+    for (const kind of PROVIDER_KINDS) {
+      expect(PROVIDER_ADAPTERS[kind].build(wiring('/bin/true')).kind, kind).toBe(kind)
+    }
+  })
+})
+
+describe('buildRegistry (R6)', () => {
   it('resolves a configured kind to its adapter', () => {
-    const registry = buildRegistry({ claudeCode: { command: 'claude', hookPath: '/tmp/g.sh' } })
+    const registry = buildRegistry({ claude_code: wiring('claude') })
     expect(registry.resolve('claude_code').kind).toBe('claude_code')
   })
 
   it('refuses an unconfigured kind rather than falling back to Claude', () => {
-    const registry = buildRegistry({ claudeCode: { command: 'claude', hookPath: '/tmp/g.sh' } })
+    const registry = buildRegistry({ claude_code: wiring('claude') })
     expect(() => registry.resolve('cursor')).toThrow(/cursor/)
   })
 
+  it('refuses EVERY kind when it was given nothing -- configured, not buildable, is the question', () => {
+    const registry = buildRegistry({})
+    for (const kind of PROVIDER_KINDS) expect(() => registry.resolve(kind), kind).toThrow(/no adapter is registered/)
+  })
+
   it('builds both shipped adapters, each of which has at least one of the two pause capabilities', () => {
-    const registry = buildRegistry({
-      claudeCode: { command: 'claude', hookPath: '/tmp/g.sh' },
-      cursor: { command: 'cursor-agent', gatePath: '/tmp/shell-gate.sh' },
-    })
+    const registry = buildRegistry({ claude_code: wiring('claude'), cursor: wiring('cursor-agent') })
     expect(registry.resolve('claude_code').kind).toBe('claude_code')
     expect(registry.resolve('cursor').kind).toBe('cursor')
+  })
+
+  it('is a map over the union, so adding a provider is an ENTRY and not a widened signature', () => {
+    // The shape assertion R6 exists for: every kind can be wired by name, in a loop, with no
+    // function signature naming any vendor.
+    const everything = Object.fromEntries(PROVIDER_KINDS.map((kind) => [kind, wiring('/bin/true')]))
+    const registry = buildRegistry(everything)
+    for (const kind of PROVIDER_KINDS) expect(registry.resolve(kind).kind, kind).toBe(kind)
   })
 })
 
@@ -88,5 +143,22 @@ describe('admitAdapter', () => {
 
     expect(admitAdapter('claude_code', gateOnly).kind).toBe('claude_code')
     expect(admitAdapter('cursor', resumeOnly).kind).toBe('cursor')
+  })
+
+  it('refuses an adapter that is not the kind it is being registered under (M56a R1)', () => {
+    // The contract's own docstring promises "a registry that can assert an adapter is the kind it
+    // was registered under" -- this is that assertion. It is unreachable through
+    // `PROVIDER_ADAPTERS` today, because each entry constructs the class whose `kind` is its own
+    // key; it exists so that the day an entry is copied and one half edited, the registry says so
+    // instead of resolving `'cursor'` to a Claude adapter.
+    const impostor = stubAdapter('claude_code', {
+      canPauseMidRun: false,
+      canResumeSession: true,
+      gate: 'none',
+      reportsCost: false,
+      reportsToolResults: false,
+    })
+
+    expect(() => admitAdapter('cursor', impostor)).toThrow(/registered under "cursor".*"claude_code"/)
   })
 })

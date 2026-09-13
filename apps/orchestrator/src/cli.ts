@@ -146,6 +146,7 @@ import {
   MODEL_NOT_RECORDED_LABEL,
   PERMISSION_LABEL,
   PERMISSION_RUN_KINDS,
+  PROVIDER_KINDS,
   SLAVE_LIFECYCLES,
   SLAVE_LIFECYCLE_LABEL,
   SUPERVISOR_DEFAULT_MODEL,
@@ -157,6 +158,7 @@ import {
   domainLabel,
   filterFresh,
   grantsFor,
+  manifestFor,
   observe,
   provenanceLine,
   runContextManifestSchema,
@@ -181,6 +183,7 @@ import {
   decideWithModel,
   type AdapterRegistry,
   type ProviderKind,
+  type ProviderWiring,
 } from '@slave-of-ai/providers'
 import { REQUEST_LINE_MAX_BYTES, brokerReplySchema, isBrokerRefusalReason, type BrokerReplyRead } from './broker.js'
 import { readCatalogDirectory } from './catalog.js'
@@ -190,6 +193,7 @@ import { replanVerdict } from './replan.js'
 import { renderReplanPreview } from './runContext.js'
 import { deliverAnswers } from './deliver.js'
 import { claudeCommandFrom } from './claude-command.js'
+import { fakeCliRefusal } from './require-fake-cli.js'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
 import { executeResume } from './resume.js'
 import { supervise } from './supervisor.js'
@@ -947,40 +951,53 @@ function cursorGatePath(): string {
  * deployment that has no `cursor-agent` on its PATH refuses at spawn time with a message naming
  * the binary, which is a better answer than `invalid_provider` -- that refusal means "this process
  * was never wired for that provider", and after this task it would be false.
+ *
+ * M56a R6: a LOOP over `PROVIDER_KINDS`, not one option block per vendor. Each kind's command comes
+ * from its own manifest's `binEnvVar` (falling back to the binary it names), its extra argv from
+ * `argsEnvVar`, and every kind is handed the SAME four script paths -- so the
+ * `SLAVEOFAI_<PROVIDER>_BIN` convention is declared once, in the manifest, instead of being spelled
+ * at four sites in three files. Both kinds stay configured unconditionally, for the reason above.
+ *
+ * EXPORTED (M56a §3 stage 5): the gate builds this registry in a process with both bin variables
+ * set and asserts both kinds resolve to adapters whose `kind` fields are the two `ProviderKind`
+ * members. Importing this module runs nothing -- `main()` is guarded by the `argv[1]` check at the
+ * bottom of this file, which exists for exactly that reason.
  */
-function buildAdapterRegistry(): AdapterRegistry {
-  const cursorExtra = process.env['SLAVEOFAI_CURSOR_ARGS']
+export function buildAdapterRegistry(): AdapterRegistry {
+  // The refusal `claudeCommandFrom` used to raise on the way past. Asked ONCE here, because it is
+  // about every registered binary now and not only the one this loop happens to read first
+  // (M56a R10) -- and asked BEFORE anything is constructed, so a mis-armed process refuses to start
+  // rather than refusing at its first dispatch.
+  const refusal = fakeCliRefusal(process.env)
+  if (refusal !== null) throw new Error(refusal)
+
   const tap = tapPath()
-  return buildRegistry({
-    claudeCode: {
-      ...claudeCommand(),
-      // M12 Task 2: the hook path is a fact about this adapter instance now, not a per-run input --
-      // it used to be threaded through `TickDeps`/`DaemonDeps` and into every `adapter.start()`
-      // call; now it is set once, here.
-      hookPath: hookPath(),
-      // M51 R6: the PostToolUse tap, beside the gate and carried the same way. A conditional spread
-      // because `exactOptionalPropertyTypes` treats an explicit `undefined` as a different (and
-      // disallowed) thing from the key being absent -- and an absent `tapPath` is exactly what "run
-      // as we did before M51" means to the adapter: no registration, no tailer, no env var, no
-      // pre-flight.
-      ...(tap === undefined ? {} : { tapPath: tap }),
-      // M52 erratum E6 / Task 2's carried C3: the ONE place `brokerCliPath` is set. Nothing set it
-      // before this task, so `SLAVEOFAI_BROKER_CLI` was absent from every child and a worker had no
-      // way to find an orchestrator CLI at all.
-      brokerCliPath: brokerCliPath(),
-    },
-    cursor: {
-      // Injectable through the environment for the same reason `SLAVEOFAI_CLAUDE_BIN` is: the gate
-      // has to drive a fake CLI and the real one down the same code path, and a flag only tests
-      // pass is a flag nobody runs.
-      command: process.env['SLAVEOFAI_CURSOR_BIN'] ?? 'cursor-agent',
-      ...(cursorExtra === undefined || cursorExtra === '' ? {} : { extraArgs: cursorExtra.split(' ') }),
-      gatePath: cursorGatePath(),
-      // Both runtimes, from the same reading: a worker's broker client is the orchestrator's own
-      // CLI whichever vendor is driving the worker.
-      brokerCliPath: brokerCliPath(),
-    },
-  })
+  const scripts = {
+    // M12 Task 2: the hook path is a fact about the adapter instance, not a per-run input -- it used
+    // to be threaded through `TickDeps`/`DaemonDeps` and into every `adapter.start()` call.
+    hookPath: hookPath(),
+    gatePath: cursorGatePath(),
+    // M52 erratum E6 / Task 2's carried C3: the ONE place `brokerCliPath` is set, for both runtimes,
+    // from the same reading -- a worker's broker client is the orchestrator's own CLI whichever
+    // vendor is driving.
+    brokerCliPath: brokerCliPath(),
+    // M51 R6: a conditional spread because `exactOptionalPropertyTypes` treats an explicit
+    // `undefined` as a different (and disallowed) thing from the key being absent -- and an absent
+    // `tapPath` is exactly what "run as we did before M51" means to the adapter.
+    ...(tap === undefined ? {} : { tapPath: tap }),
+  }
+
+  const wiring: Partial<Record<ProviderKind, ProviderWiring>> = {}
+  for (const kind of PROVIDER_KINDS) {
+    const { binEnvVar, argsEnvVar, binary } = manifestFor(kind).invocation
+    const extra = process.env[argsEnvVar]
+    wiring[kind] = {
+      command: process.env[binEnvVar] ?? binary,
+      ...(extra === undefined || extra === '' ? {} : { extraArgs: extra.split(' ') }),
+      scripts,
+    }
+  }
+  return buildRegistry(wiring)
 }
 
 /**
@@ -2943,8 +2960,11 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (decisionProviderText !== undefined && decisionProviderText !== 'rules' && decisionProviderText !== 'llm') throw new Error('--decision-provider must be rules or llm')
       const decisionProvider = decisionProviderText as 'rules' | 'llm' | undefined
       const modelProviderText = flagText(flags, 'model-provider')
-      if (modelProviderText !== undefined && modelProviderText !== 'claude_code' && modelProviderText !== 'cursor') throw new Error('--model-provider must be claude_code or cursor')
-      const modelProvider = modelProviderText as 'claude_code' | 'cursor' | undefined
+      // M56a R6: membership is asked of `PROVIDER_KINDS`, not spelled a second time. The sentence
+      // an operator reads is byte-identical (plan erratum E9) -- it names what they have to type,
+      // and a list rendered from the union would read the same today and be a different string.
+      if (modelProviderText !== undefined && !(PROVIDER_KINDS as readonly string[]).includes(modelProviderText)) throw new Error('--model-provider must be claude_code or cursor')
+      const modelProvider = modelProviderText as ProviderKind | undefined
       const model = flagText(flags, 'model')
       const maxModelCostUsdText = flagText(flags, 'max-model-cost-usd')
       const maxModelCostUsd = maxModelCostUsdText !== undefined ? Number(maxModelCostUsdText) : undefined

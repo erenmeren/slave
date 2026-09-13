@@ -90,7 +90,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
-import { loopbackChildEnv } from './lib/child-env.mjs'
+import { fakeProviderBins, loopbackChildEnv } from './lib/child-env.mjs'
 import { chromium } from 'playwright-core'
 import { isAlive, syncSkillCatalog } from '../packages/control/dist/index.js'
 import { prisma } from '../packages/db/dist/client.js'
@@ -1139,6 +1139,8 @@ try {
   // ============================================================================================
   // Stage 4b (first half): a fake-CLI run reaches `working`.
   // ============================================================================================
+  const daemonEnvBase = { ...process.env, SLAVEOFAI_CLAUDE_ARGS: `--step-gap-ms ${FAKE_STEP_GAP_MS}`, SLAVEOFAI_REQUIRE_FAKE_CLI: '1' }
+  const daemonEnv = { ...daemonEnvBase, ...fakeProviderBins(daemonEnvBase) }
   daemon = spawn('node', [ORCHESTRATOR_CLI, 'daemon', '--workspace', workspaceId, '--period', '500'], {
     cwd: repoRoot,
     // THE STEP GAP RIDES ON ARGV, NOT IN THE ENVIRONMENT (M52 R3). `buildChildEnv` used to spread
@@ -1153,7 +1155,11 @@ try {
     // executable under `scripts/gate-fakes/`; the flag carries that same promise INTO the daemon,
     // which would otherwise fall back to the real `claude` if the variable were ever lost between
     // here and there.
-    env: { ...process.env, SLAVEOFAI_CLAUDE_ARGS: `--step-gap-ms ${FAKE_STEP_GAP_MS}`, SLAVEOFAI_REQUIRE_FAKE_CLI: '1' },
+    //
+    // M56a R10: that refusal covers every registered provider now, so `fakeProviderBins` names the
+    // rehearsal fake for the ones this gate never dispatches -- and only for a variable this
+    // literal (or the operator's own environment) left unset (plan erratum E11).
+    env: daemonEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   daemon.stdout.on('data', (chunk) => {

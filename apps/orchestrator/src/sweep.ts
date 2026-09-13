@@ -24,7 +24,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { NON_TERMINAL_RUN_STATUSES } from './world.js'
-import type { AdapterRegistry } from '@slave-of-ai/providers'
+import type { AdapterRegistry, ProviderKind } from '@slave-of-ai/providers'
 import { resolveAdapter } from './provider.js'
 
 export interface SweepDeps {
@@ -937,7 +937,10 @@ async function stopForBehaviour(
   // this run already claimed into `stopping`, which nothing in this file sweeps.
   let cancelError: unknown = null
   try {
-    const adapter = resolveAdapter(deps.registry, (run.provider ?? 'claude_code') as 'claude_code' | 'cursor')
+    // M56a erratum E8: the cast names the union, not its members -- the row's `provider` column is
+    // `string | null` to this function and `?? 'claude_code'` is the historical-fact default the
+    // arm above uses for the same reason.
+    const adapter = resolveAdapter(deps.registry, (run.provider ?? 'claude_code') as ProviderKind)
     await adapter.cancel(brandRunId(run.id))
   } catch (error) {
     cancelError = error

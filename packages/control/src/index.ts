@@ -13,9 +13,12 @@ export * from './runtime.js'
  * app to the providers package, which it otherwise has no business importing from: it must never
  * construct an adapter.
  *
- * Note the spelling, which is a real trap on this seam: `'claude_code'` is the `ProviderKind`
- * (the Postgres enum, the column, this type); `'claude-code'` is the ADAPTER ID
- * (`ClaudeCodeAdapter.id`), which is what `overview.ts` used to hardcode.
+ * One spelling on this seam since M56a R1: an adapter's `kind` is a `ProviderKind`
+ * (`ClaudeCodeAdapter.kind` is `'claude_code'` -- the Postgres enum, the column, this type). It used
+ * to be `id: string`, spelled `'claude-code'` with a HYPHEN, which is the value `overview.ts` once
+ * hardcoded; that property is gone, and the trap it left behind is worth remembering only because
+ * an old row, an old log line or an old fixture can still carry the hyphenated form, and it is not
+ * a member of this union.
  */
 export type { ProviderKind } from '@slave-of-ai/providers'
 /**

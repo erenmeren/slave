@@ -1040,7 +1040,13 @@ describe('tick', () => {
     // The REAL registry, not the test's own `singleAdapterRegistry` stub (which ignores `kind`
     // entirely and would silently paper over exactly the bug under test here) -- built with only
     // `claude_code` configured, matching production today (Cursor is Task 12's).
-    const realRegistry = buildRegistry({ claudeCode: { command: 'node', extraArgs: [FAKE, '--fixture', 'complete'], hookPath: REAL_GATE } })
+    const realRegistry = buildRegistry({
+      claude_code: {
+        command: 'node',
+        extraArgs: [FAKE, '--fixture', 'complete'],
+        scripts: { hookPath: REAL_GATE, gatePath: REAL_GATE },
+      },
+    })
 
     const report = await tick({ ...deps, registry: realRegistry })
 
