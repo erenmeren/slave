@@ -80,3 +80,4 @@ jobs:
       - run: npm run gate:m52-broker
       - run: npm run gate:m53-evidence
       - run: npm run gate:m54-triggers
+      - run: npm run gate:m55-catalog
