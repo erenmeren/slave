@@ -626,9 +626,61 @@ table that used to hold a copy derives from it, and the tree fails the build or 
 second copy appears.**
 
 ## 6. Errata — where execution corrects this spec
-None yet. Errata are added while the plan is written and while it is executed, each as
-`**En (amends Rx)** — <one-line claim>.` with its reasoning and file citations, the way M50's fifteen,
-M51's, M52's fifteen, M53's, M54's twenty-three and M55's were.
+Twenty-six, each as `**En (amends Rx)** — <one-line claim>.` with its citation, the way M50's
+fifteen, M51's, M52's fifteen, M53's, M54's twenty-three and M55's were. **E1–E17 were written while
+the plan was**; **E18–E26 while it was executed**.
+
+**E1 (amends R3 and §2)** — `RuntimeEventKind` does not exist and the domain may not import the type it would be derived from, so `packages/domain/src/provider/events.ts` DECLARES it (thirteen members) and `packages/providers/src/types.ts` is pinned to it in both directions with the `_AssertNever` idiom it already carries: `grep -rn RuntimeEventKind` over `packages/`, `apps/` and `scripts/` returned nothing, the only thing of that shape being `RuntimeEvent['kind']`, an inline union at `packages/providers/src/types.ts:79-190`, and `packages/domain` may never import the package that spawns a child at module scope.
+
+**E2 (amends R2 and R3)** — `ModelOption` moves to the domain with the union and `CLAUDE_CODE_MODELS` moves into Claude's manifest, both re-exported from the paths they already had: R2 says it moves "only the union" and cannot, because a manifest that holds a model table needs a type for one (`packages/providers/src/models.ts:8-12,62-74`), and `packages/providers/test/models.test.ts:31` asserts `listing.models).toBe(CLAUDE_CODE_MODELS)` by IDENTITY, so it must be the same array object.
+
+**E3 (amends R1's verified note)** — `adapter.id` has SIX readers and one CONSTRUCTOR, not one reader: beside `packages/providers/test/cursor-adapter.test.ts:175` there are `:191` and `registry.test.ts:8,21,22,84,85`, and `registry.test.ts:35-52`'s `stubAdapter` constructs `id: 'stub'`, which `readonly kind: ProviderKind` cannot hold — so the stub takes a `kind` parameter and the three `resolve(...).id` reads become `.kind` against the enum spelling.
+
+**E4 (amends R4)** — `capabilitiesOf` must keep returning THE SAME OBJECT for a kind and the `const unhandled: never` guard cannot survive inside it: `packages/providers/test/capabilities.test.ts:41` asserts `adapter.getCapabilities()).toBe(capabilitiesOf('claude_code'))` by identity, so the projection runs ONCE at module load into a frozen `Record<ProviderKind, ProviderCapabilities>`, and the guard moves onto `PROVIDER_MANIFESTS`' own totality, where a third kind is a build error for every axis at the same moment.
+
+**E5 (amends §3 stage 1)** — stage 1's grep excludes `test/` and `*.test.*` exactly as stage 8's does: ten test files spell the two members as a literal deliberately, and one of them is the pin R2 itself rests on (`packages/providers/test/types.test.ts:11`, whose comment says it exists so a change to the list is a change a reviewer sees), with `packages/domain/test/permission/kinds.test.ts:134,141,150,222` — the file §3's "moved pins" paragraph says is UNCHANGED and re-run — among the rest.
+
+**E6 (amends §3 stage 8 and its allow-list)** — the allow-list gains four gate scripts, by name, with a reason each: the grep covers `scripts/` and therefore matches `scripts/gate-m12-providers.mjs:538,541`, `scripts/gate-m13-runtime.mjs:838,891,991,994`, `scripts/gate-m31a-llm-decisions.mjs:406,453` and `scripts/gate-m31b-software-sector.mjs:536,580`, every one of them an ASSERTION that a recorded row carries the provider the gate dispatched — which is what a test does and must keep doing.
+
+**E7 (amends R9 and §2)** — `apps/orchestrator/src/pump.ts:153` is NOT a `canPauseMidRun` read, and a site §2 never names is: `:153` is `runtimeReportsUsage`, whose one consumer writes `skillCalls: Prisma.DbNull`, and it is the same fact as `apps/orchestrator/src/runContext.ts:221`'s `injectSkills` ("Cursor has no skills mechanism at all") — both become `providerRunsSkills(kind)`, which reads `SKILL_TOOL` out of the manifest's governed toolbox (`packages/domain/src/permission/kinds.ts:142`). Only `pump.ts:467` was ever the pause capability.
+
+**E8 (amends R2 and §4)** — the union has TEN production copies, not five: beside R2's five, `grep -rn "'claude_code' *| *'cursor'"` finds `packages/control/src/simulation/write.ts:77`, `apps/orchestrator/src/sweep.ts:940`, `apps/orchestrator/src/cli.ts:2714` and `apps/web/src/components/sim/AdoptDrawer.tsx:36` — a CLIENT component, which takes the union as a TYPE import (erased at compile time) rather than the value import that would drag an adapter into a browser bundle.
+
+**E9 (amends R2 and §4 row 9)** — `--model-provider must be claude_code or cursor` stays exactly that sentence (`apps/orchestrator/src/cli.ts:2713`): the MEMBERSHIP test derives through `isProviderKind` (`packages/control/src/org.ts:21`), the SENTENCE does not, for §4 row 25's stated reason that prose is not derivable, and `oneOfFlag` (`cli.ts:1024`) would reword it to "must be one of claude_code, cursor" — a behaviour change in a milestone whose whole claim is that there is none. Carried.
+
+**E10 (amends R6)** — the usage row writes `row.modelProvider ?? 'claude_code'` and the `??` is a backfill rather than a dispatch: `SimulationModelUsage.provider` is `ProviderKind` NOT NULL (`packages/db/prisma/schema.prisma:1892`) while `SimulationRun.modelProvider` is nullable (`:1827`), so the bare read does not compile; it is the same historical-fact default four other files already carry for a pre-M12 row, and stage 8's grep does not match a `??`.
+
+**E11 (amends R10)** — widening the spend net refuses 28 gate scripts and 7 test environments, not only CI, and the fix is one helper plus a handful of one-line spreads: `fakeCliRefusal` is called by `claudeCommandFrom` (`apps/orchestrator/src/claude-command.ts:19`) on EVERY process that sets `SLAVEOFAI_REQUIRE_FAKE_CLI=1`, and before this milestone none of them set `SLAVEOFAI_CURSOR_BIN` because there was nothing to set. The default lands in `scripts/lib/child-env.mjs`'s `loopbackChildEnv`, CONDITIONALLY, so `gate:m13-runtime` still drives the real binaries.
+
+**E12 (amends R3 and §3 stage 3)** — `headlessFlags` is an in-order SUBSEQUENCE of the golden argv, not a prefix: `claudeFlags` (`packages/providers/src/claude/flags.ts:31-40`) puts the variable `--settings <path>` pair INSIDE its constant half and `--include-hook-events` after it, and a prefix assertion would pass a golden that dropped the last token entirely.
+
+**E13 (amends §3 stage 6)** — `checkpointRunFiles` is the only place a `RunHandle`'s files are MAPPED ONTO the two columns; it is not the only place the pair is written: `apps/orchestrator/src/pump.ts:315-316` (the `Checkpoint` row's own `create`), `apps/orchestrator/src/resume.ts:111-112,180-182` (rebuilt FROM a stored row) and `packages/providers/src/claude/adapter.ts:356,679-680` (`writeSettingsFile`'s two arguments, a settings file and a hook script and not a checkpoint at all) each spell them, and none of those reads a handle — so the stage greps the word `runFiles` and carries the persistence-side sites on a checked-in allow-list with a reason each.
+
+**E14 (amends R3, R5 and §4 row 13)** — three line citations are stale: `TOOL_VOCABULARY` is `packages/domain/src/permission/kinds.ts:177-185` (the spec says `:78-86`) and `ENFORCE_BY_PROVIDER` is `:248-251` (the spec says `:149-152`, twice); `TOOLS_BY_KIND` at `:111-163` is correct.
+
+**E15 (amends §3 stage 11)** — `usage` never comes out of `parseStreamLine`, so the replay cannot pin it and the complement assertion does: the event is pushed by the ADAPTER (`packages/providers/src/claude/adapter.ts:597`) from `parseStreamUsage`, so stage 11 keeps its subset assertion and gains the one that actually pins the row — `RUNTIME_EVENT_KINDS` minus Claude's `produces` is exactly `['ignored','unparsable']`, while Cursor's six are named one by one.
+
+**E16 (amends R10 and §4 row 18)** — `versionOf` keeps its `bin: string` parameter and only the env lookup inside it derives: `apps/web/test/integration/settings-snapshot.test.ts:34` injects `async (bin) => (bin === 'claude' ? '2.1.234' : null)`, and `buildProviderAdapters`'s whole testability rests on that resolver being keyed on the binary NAME — so the two-branch override becomes a lookup in `BIN_ENV_VAR`, one `Object.fromEntries` over `PROVIDER_MANIFESTS`, and not one line of that test file's three existing cases moves.
+
+**E17 (amends §3 stage 10)** — the settings-card half of stage 10 cannot run inside a `.mjs` gate and runs in the web test that already exists: `apps/web` is a Next app with no `dist` (`scripts/gate-m29-simulation.mjs:80` and `scripts/gate-m30-simulation-compare.mjs:88` both say so), so `buildProviderAdapters` is asserted against the golden inside `apps/web/test/integration/settings-snapshot.test.ts` and the GATE asserts the same golden against `PROVIDER_MANIFESTS`, `PROVIDER_LABEL` and `PROVIDER_ADAPTERS`, with `slavesBound` excluded from both.
+
+**E18 (amends R6)** — `validateLlmInput` reads `manifestFor(kind).usageCost` from the domain, not `capabilitiesOf(kind).reportsCost` from providers: `packages/control/test/simulation-boundary.test.ts` source-scans `simulation/*.ts` for the `@slave-of-ai/providers` specifier; the projection is `usageCost === 'reported'` by R4, so the same axis is read one derivation earlier and both refusal sentences are byte-identical.
+
+**E19 (amends §4 and R3's ledger)** — `LEDGER_AXES` has 16 entries (Hooks, Run files, Measured against and Tool vocabulary are rows), the test asserts rows == axes both ways, the escape rule runs over data rows only, and the ADR link is relative (`../decisions/…`).
+
+**E20 (amends R10 and E11)** — `fakeProviderBins(env)` fills only ABSENT variables and arms only when `env.SLAVEOFAI_REQUIRE_FAKE_CLI === '1'`; ten gate scripts needed an edit (the four hand-built ones plus m14/m18/m23's hand-built envs and m30/m31a/m31b, which set the flag over `loopbackChildEnv()`), and seven test env literals.
+
+**E21 (amends §3 stages 5 and 8)** — both greps are code-only (comment lines dropped) and both exclude `dist/`, `test/`, `*.test.*`; the allow-lists admit no comment.
+
+**E22 (amends §3 stages 2, 9 and Task 1's numbers)** — 19 golden files; Claude's governed vocabulary is 38 names; `ENFORCE_BY_PROVIDER` values are strings, so the derived-table proof is value equality against the golden, not identity.
+
+**E23 (amends R1, E3 and R7)** — `brandRunId` is spelled `runId` in the domain; `implements SlaveRuntimeAdapter` needs a local type import beside the re-export; under `noUncheckedIndexedAccess` a `Checkpoint` literal spreads `checkpointRunFiles(kind, handle)` rather than reading `.settings`/`.hook` bare; `buildRegistry` throws when `build(...).kind !== kind`; two readers outside the plan's list (`tick.test.ts`, `model.test.ts`) moved from `id` to `kind`.
+
+**E24 (amends §3 stage 10 and E17)** — `settings-cards.json`'s `version`/`state`/`slavesBound` are placeholders every comparator skips or normalises; the golden is never rewritten.
+
+**E25 (amends R12 and §7)** — on 2026-09-13 the operator installed `codex` (codex-cli 0.154.0) and `gemini` (0.59.0) but holds no account for either; both remain unmeasurable, so M56b/M56c stay blocked and the "installed and measurable" condition is unchanged.
+
+**E26 (amends E13 and §3 stage 6)** — the `runFiles` allow-list carries TEN files, not six: E13 was written before the manifest existed, and `packages/domain/src/provider/manifest.ts` (which DECLARES `ProviderRunFiles`), `claude-code.ts` and `cursor.ts` (which hold the axis) and `ledger.ts` (which renders it as the ledger's "Run files" row) all spell the word under a package's `src/`. Declaring the axis is what the stage protects, so the four files that declare it are on the list with a reason rather than failing the grep that exists to keep the MAPPING in one place — which is still `checkpointRunFiles` and nothing else.
 
 ## 7. Carried backlog (M55 §6's list that M56a does not take, plus what M56a declines)
 From M55 §6 — which reproduces M54 §6, M53 §6, M52 §5 and M51's own final-review deferred list —
@@ -653,7 +705,7 @@ m14 PNG nondeterminism; mapper M6/M7/E23; `WorkforceClient`'s bare `<details>`; 
 M48's six; M49's seven; `HandoffContract.evidenceRequired`; `broker.executed` with no consumer; a
 moved checkout splitting its own evidence; the absent GIN index; M54's nine; and M55's fourteen.
 
-**Newly carried by this milestone, from what it declined** (eleven):
+**Newly carried by this milestone, from what it declined** (twelve):
 1. **M56b — the Codex CLI**, BLOCKED on the binary. `which codex` answers `not found` on the operator's
    machine; every axis of R3's manifest is a measurement, and `capabilities.ts:81-85` forbids filling
    one from a vendor's documentation. The spec is written after an install and a measured spike, and
@@ -698,3 +750,21 @@ moved checkout splitting its own evidence; the absent GIN index; M54's nine; and
     returns `null` rather than `0` for it, which is the true answer, and a `reportsCost: false`
     provider remains permanently refused an llm-decision simulation for the budget reason
     `write.ts:39` gives.
+12. **M56a's own measurement half, DEFERRED pending the operator's word** (R11b, §3).
+    `gate:m12-providers` and `gate:m13-runtime` spawn the real, paid `claude` and `cursor-agent`;
+    both are UNCHANGED by this milestone, and that is the claim they prove. Task 6 asked for the
+    spend and no answer had arrived, so NEITHER WAS RUN — a rehearsal against the fakes proves the
+    script and not the provider, and this milestone does not get to claim otherwise (R11: the two
+    halves of "green" are different things). The fake-CLI half IS green: all 31 CI gates pass,
+    `gate:m56a-provider-contract` among them. Both binaries are installed on the operator's machine
+    as of 2026-09-13 — `claude 2.1.270` at `~/.local/bin/claude` and `cursor-agent
+    2026.09.10-fd3934a` at `~/.local/bin/cursor-agent` — and both have drifted from the versions the
+    manifests record (`claude 2.1.269`, measured 2026-09-12; `cursor-agent 2026.08.25-3e8eec8`,
+    measured 2026-08-29). That drift is a line here and never an assertion in a test: `cursor-agent`
+    self-updates between runs and `claude` does too, which is why `ProviderMeasurement` records a
+    version beside every value rather than pinning one. **Whoever runs the two gates must run them
+    from a shell where `SLAVEOFAI_REQUIRE_FAKE_CLI` is UNSET** — `env | grep
+    SLAVEOFAI_REQUIRE_FAKE_CLI` was empty in the shell Task 6 ran in, and it has to stay that way:
+    since R10 `loopbackChildEnv` arms BOTH fakes whenever that flag is set, so a shell carrying it
+    would silently rehearse instead of measure. `gate:m13-runtime` also needs `CHROMIUM_PATH`, and
+    its own header names every variable it refuses to start without.
