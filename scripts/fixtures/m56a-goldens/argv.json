@@ -1,0 +1,49 @@
+{
+  "claudeSettingsPath": "/tmp/m56a-golden/settings.json",
+  "claude": [
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--permission-mode",
+    "bypassPermissions",
+    "--settings",
+    "/tmp/m56a-golden/settings.json",
+    "--include-hook-events"
+  ],
+  "cursorPlain": [
+    "--print",
+    "--output-format",
+    "stream-json",
+    "--trust",
+    "--force"
+  ],
+  "cursorModel": [
+    "--print",
+    "--output-format",
+    "stream-json",
+    "--trust",
+    "--force",
+    "--model",
+    "auto"
+  ],
+  "cursorResume": [
+    "--print",
+    "--output-format",
+    "stream-json",
+    "--trust",
+    "--force",
+    "--resume",
+    "m56a-golden-session"
+  ],
+  "cursorModelAndResume": [
+    "--print",
+    "--output-format",
+    "stream-json",
+    "--trust",
+    "--force",
+    "--model",
+    "auto",
+    "--resume",
+    "m56a-golden-session"
+  ]
+}

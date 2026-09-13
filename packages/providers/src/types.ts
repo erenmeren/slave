@@ -1,40 +1,17 @@
 import type { ToolErrorClass } from './tool-result.js'
+import { RUNTIME_EVENT_KINDS, type RuntimeEventKind } from '@slave-of-ai/domain'
 
 /**
- * Which runtime a run is on. A plain string union, not a re-export of the Postgres enum
- * (`packages/db`'s generated `ProviderKind`) -- `packages/providers` does not depend on
- * `@slave-of-ai/db` at runtime (it is a devDependency only, for test fixtures), and this type is
- * the package's own vocabulary for it, kept in sync with the Prisma enum's literal spellings by
- * hand. `'cursor'` has no adapter yet (M12 Series D); it exists here because `signalPause`
- * (`pause-signal.ts`) already dispatches on it.
- */
-export type ProviderKind = 'claude_code' | 'cursor'
-
-/**
- * Every member of `ProviderKind`, as data (M12 Task 13 fix round 1). The canonical source for any
- * SERVER-side caller that needs to enumerate the kinds to validate an untrusted string --
- * `packages/control/src/org.ts`'s `isProviderKind` is the reason this exists. A hand rolled list
- * with no link back to the type is exactly the failure this guards against: a third kind added to
- * the union above without a matching entry here now fails the BUILD (see
- * `_ProviderKindsComplete` below) instead of leaving a validator silently two-wide. Mirrors
- * `capabilitiesOf`'s own `const unhandled: never` idiom (`capabilities.ts`) -- one canonical
- * table beats several that agree today.
+ * Which runtime a run is on.
  *
- * NOT re-exported for CLIENT use: `apps/web/src/components/ProviderSelect.tsx` carries its own
- * copy of this exact list, guarded by the identical `satisfies`/`Exclude` idiom, because a value
- * import of anything from this package's barrel (`index.ts`) drags `claude/adapter.ts` and
- * `cursor/adapter.ts` -- both `node:child_process` at module scope -- into whatever bundles it,
- * and neither adapter has a `sideEffects: false` escape hatch. Two independently-guarded lists,
- * not one shared value, is the deliberate trade against that risk; see `ProviderSelect.tsx`'s own
- * docstring for the client half of this reasoning.
+ * MOVED to `@slave-of-ai/domain` (M56a R2) and re-exported here so every existing import resolves
+ * to the same symbol by the same path. The domain is where it can be reached from: this package's
+ * barrel re-exports two adapters that import `node:child_process` at module scope, so a VALUE
+ * import of anything from it -- even a two-string list -- forces a client bundle to evaluate
+ * Node-only code, and four of the five packages that needed to enumerate these members could not.
+ * See `packages/domain/src/provider/kind.ts` for the full reasoning and the completeness guard.
  */
-export const PROVIDER_KINDS = ['claude_code', 'cursor'] as const satisfies readonly ProviderKind[]
-
-// Compile-time completeness check: `satisfies` above proves every element of `PROVIDER_KINDS` is
-// a `ProviderKind` (soundness); this proves the reverse -- every `ProviderKind` is IN
-// `PROVIDER_KINDS` (completeness) -- so omitting a member is a build error, not a silent gap.
-type _AssertNever<T extends never> = T
-type _ProviderKindsComplete = _AssertNever<Exclude<ProviderKind, (typeof PROVIDER_KINDS)[number]>>
+export { PROVIDER_KINDS, type ProviderKind } from '@slave-of-ai/domain'
 
 /**
  * `RunOutcome` is the normalized shape of the CLI's terminal `result` event.
@@ -188,3 +165,20 @@ export type RuntimeEvent =
   | { readonly kind: 'terminated'; readonly outcome: RunOutcome }
   | { readonly kind: 'ignored'; readonly line: string }
   | { readonly kind: 'unparsable'; readonly line: string }
+
+/**
+ * `RuntimeEvent['kind']` and the domain's `RuntimeEventKind` are the same thirteen names, pinned in
+ * BOTH directions (M56a erratum E1).
+ *
+ * A provider manifest declares which kinds its stream can produce, and the manifest lives in
+ * `@slave-of-ai/domain`, which cannot import this file. So the domain declares the NAMES and this
+ * is what keeps the two honest: a fourteenth variant added above without a member in
+ * `RUNTIME_EVENT_KINDS` fails here, and a member there that is not a variant fails here too. The
+ * `_AssertNever` idiom is `PROVIDER_KINDS`' own, one file over.
+ */
+type _AssertNever<T extends never> = T
+type _EventKindsSound = _AssertNever<Exclude<RuntimeEventKind, RuntimeEvent['kind']>>
+type _EventKindsComplete = _AssertNever<Exclude<RuntimeEvent['kind'], RuntimeEventKind>>
+// A value read of the list, so the import above is not elided and the two checks above cannot be
+// silently dropped by an "unused import" cleanup.
+export const RUNTIME_EVENT_KIND_COUNT = RUNTIME_EVENT_KINDS.length

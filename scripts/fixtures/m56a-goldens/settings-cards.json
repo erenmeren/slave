@@ -1,0 +1,34 @@
+[
+  {
+    "kind": "claude_code",
+    "label": "Claude Code",
+    "state": "connected",
+    "version": "<resolver>",
+    "adapter": "ClaudeCodeAdapter",
+    "capabilities": { "gate": "all-tools", "reportsCost": true, "canPauseMidRun": true }
+  },
+  {
+    "kind": "cursor",
+    "label": "Cursor",
+    "state": "connected",
+    "version": "<resolver>",
+    "adapter": "CursorAdapter",
+    "capabilities": { "gate": "all-tools", "reportsCost": false, "canPauseMidRun": false }
+  },
+  {
+    "kind": "codex",
+    "label": "OpenAI Codex",
+    "state": "later",
+    "version": null,
+    "adapter": "CodexAdapter — planned",
+    "capabilities": null
+  },
+  {
+    "kind": "gemini",
+    "label": "Gemini",
+    "state": "later",
+    "version": null,
+    "adapter": "GeminiAdapter — planned",
+    "capabilities": null
+  }
+]

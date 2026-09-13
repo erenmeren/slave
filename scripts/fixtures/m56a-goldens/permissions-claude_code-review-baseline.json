@@ -1,0 +1,190 @@
+{
+  "version": 2,
+  "runId": "00000000-0000-4000-8000-000000000m56",
+  "tokenHash": "4ce62587f7f5ed0fb6c23613fc1477717d0259d97629109cf61b9fa860003dc5",
+  "enforce": "all-tools",
+  "grants": [
+    "read_repo",
+    "run_commands"
+  ],
+  "allow": [
+    {
+      "tool": "Read",
+      "kind": "read_repo"
+    },
+    {
+      "tool": "Glob",
+      "kind": "read_repo"
+    },
+    {
+      "tool": "Grep",
+      "kind": "read_repo"
+    },
+    {
+      "tool": "NotebookRead",
+      "kind": "read_repo"
+    },
+    {
+      "tool": "TodoWrite",
+      "kind": "read_repo"
+    },
+    {
+      "tool": "ToolSearch",
+      "kind": "read_repo"
+    },
+    {
+      "tool": "TaskOutput",
+      "kind": "read_repo"
+    },
+    {
+      "tool": "ListAgents",
+      "kind": "read_repo"
+    },
+    {
+      "tool": "Monitor",
+      "kind": "read_repo"
+    },
+    {
+      "tool": "LSP",
+      "kind": "read_repo"
+    },
+    {
+      "tool": "ListMcpResourcesTool",
+      "kind": "read_repo"
+    },
+    {
+      "tool": "ReadMcpResourceTool",
+      "kind": "read_repo"
+    },
+    {
+      "tool": "ReadMcpResourceDirTool",
+      "kind": "read_repo"
+    },
+    {
+      "tool": "Bash",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "BashOutput",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "KillShell",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "Task",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "TaskStop",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "Skill",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "Workflow",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "SendMessage",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "EnterWorktree",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "ExitWorktree",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "EnterPlanMode",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "ExitPlanMode",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "CronCreate",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "CronDelete",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "CronList",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "ScheduleWakeup",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "RemoteTrigger",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "PushNotification",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "ReportFindings",
+      "kind": "run_commands"
+    },
+    {
+      "tool": "DesignSync",
+      "kind": "run_commands"
+    }
+  ],
+  "vocabulary": {
+    "Read": "read_repo",
+    "Glob": "read_repo",
+    "Grep": "read_repo",
+    "NotebookRead": "read_repo",
+    "TodoWrite": "read_repo",
+    "ToolSearch": "read_repo",
+    "TaskOutput": "read_repo",
+    "ListAgents": "read_repo",
+    "Monitor": "read_repo",
+    "LSP": "read_repo",
+    "ListMcpResourcesTool": "read_repo",
+    "ReadMcpResourceTool": "read_repo",
+    "ReadMcpResourceDirTool": "read_repo",
+    "Write": "write_repo",
+    "Edit": "write_repo",
+    "NotebookEdit": "write_repo",
+    "Bash": "run_commands",
+    "BashOutput": "run_commands",
+    "KillShell": "run_commands",
+    "Task": "run_commands",
+    "TaskStop": "run_commands",
+    "Skill": "run_commands",
+    "Workflow": "run_commands",
+    "SendMessage": "run_commands",
+    "EnterWorktree": "run_commands",
+    "ExitWorktree": "run_commands",
+    "EnterPlanMode": "run_commands",
+    "ExitPlanMode": "run_commands",
+    "CronCreate": "run_commands",
+    "CronDelete": "run_commands",
+    "CronList": "run_commands",
+    "ScheduleWakeup": "run_commands",
+    "RemoteTrigger": "run_commands",
+    "PushNotification": "run_commands",
+    "ReportFindings": "run_commands",
+    "DesignSync": "run_commands",
+    "WebFetch": "network_fetch",
+    "WebSearch": "network_fetch"
+  },
+  "prefixes": [
+    {
+      "prefix": "mcp__",
+      "kind": "network_fetch"
+    }
+  ]
+}

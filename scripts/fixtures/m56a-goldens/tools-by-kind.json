@@ -1,0 +1,74 @@
+{
+  "read_repo": {
+    "claude_code": [
+      "Read",
+      "Glob",
+      "Grep",
+      "NotebookRead",
+      "TodoWrite",
+      "ToolSearch",
+      "TaskOutput",
+      "ListAgents",
+      "Monitor",
+      "LSP",
+      "ListMcpResourcesTool",
+      "ReadMcpResourceTool",
+      "ReadMcpResourceDirTool"
+    ],
+    "cursor": [
+      "read"
+    ]
+  },
+  "write_repo": {
+    "claude_code": [
+      "Write",
+      "Edit",
+      "NotebookEdit"
+    ],
+    "cursor": [
+      "edit"
+    ]
+  },
+  "run_commands": {
+    "claude_code": [
+      "Bash",
+      "BashOutput",
+      "KillShell",
+      "Task",
+      "TaskStop",
+      "Skill",
+      "Workflow",
+      "SendMessage",
+      "EnterWorktree",
+      "ExitWorktree",
+      "EnterPlanMode",
+      "ExitPlanMode",
+      "CronCreate",
+      "CronDelete",
+      "CronList",
+      "ScheduleWakeup",
+      "RemoteTrigger",
+      "PushNotification",
+      "ReportFindings",
+      "DesignSync"
+    ],
+    "cursor": [
+      "shell"
+    ]
+  },
+  "network_fetch": {
+    "claude_code": [
+      "WebFetch",
+      "WebSearch"
+    ],
+    "cursor": []
+  },
+  "read_secret": {
+    "claude_code": [],
+    "cursor": []
+  },
+  "deploy_release": {
+    "claude_code": [],
+    "cursor": []
+  }
+}

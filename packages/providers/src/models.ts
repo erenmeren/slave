@@ -1,15 +1,16 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { CLAUDE_CODE_MANIFEST, type ModelOption } from '@slave-of-ai/domain'
 import type { ProviderKind } from './types.js'
 
 const run = promisify(execFile)
 
-/** One entry of a provider's model list: the id the CLI accepts after `--model`, and a label. */
-export interface ModelOption {
-  readonly id: string
-  readonly label: string
-  readonly default?: true
-}
+/**
+ * One entry of a provider's model list. MOVED to `@slave-of-ai/domain` (M56a erratum E2) because a
+ * `configured` provider's manifest holds its own model table and the domain cannot import this
+ * package; re-exported here so `ModelListing` and every caller keep the path they have.
+ */
+export type { ModelOption } from '@slave-of-ai/domain'
 
 /**
  * A provider's selectable models (M25 §5.1). `account` means the list was read from the
@@ -54,24 +55,20 @@ export function parseCursorModels(stdout: string): readonly ModelOption[] {
 }
 
 /**
- * The Claude Code CLI's `--model` accepts an alias for the latest model of a family
- * (`claude --help`: 'fable', 'opus', 'sonnet') or a full id. It lists nothing, so this table is
- * pinned by hand to the CLI version `ClaudeCodeAdapter` was last measured with and is updated
- * with the adapter. `default` is the CLI's own choice when no `--model` is passed.
+ * The Claude Code CLI's selectable models -- MOVED into that provider's manifest
+ * (`packages/domain/src/provider/claude-code.ts`) and re-exported here under the same name.
+ *
+ * THE SAME ARRAY OBJECT, deliberately: `listClaudeCodeModels()` hands it back by reference and
+ * `test/models.test.ts:31` asserts `listing.models).toBe(CLAUDE_CODE_MODELS)`. A copy here would
+ * satisfy `toEqual` and fail that line, which is the test doing exactly its job.
+ *
+ * The ternary is the discriminated union's narrowing and not defensiveness: `modelDiscovery` is a
+ * union and TypeScript will not read `options` off it without the check. The `[]` arm is
+ * unreachable for the row above it, and `models.test.ts`'s own `slice(0, 5)` case -- which an
+ * empty list would fail -- is what says so.
  */
-export const CLAUDE_CODE_MODELS: readonly ModelOption[] = [
-  { id: 'default', label: "default (the CLI's current default)", default: true },
-  { id: 'fable', label: 'fable (latest Fable)' },
-  { id: 'opus', label: 'opus (latest Opus)' },
-  { id: 'sonnet', label: 'sonnet (latest Sonnet)' },
-  { id: 'haiku', label: 'haiku (latest Haiku)' },
-  { id: 'claude-fable-5-1', label: 'Claude Fable 5.1' },
-  { id: 'claude-fable-5', label: 'Claude Fable 5' },
-  { id: 'claude-opus-5', label: 'Claude Opus 5' },
-  { id: 'claude-opus-4-8', label: 'Claude Opus 4.8' },
-  { id: 'claude-sonnet-5', label: 'Claude Sonnet 5' },
-  { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5' },
-]
+export const CLAUDE_CODE_MODELS: readonly ModelOption[] =
+  CLAUDE_CODE_MANIFEST.modelDiscovery.mode === 'configured' ? CLAUDE_CODE_MANIFEST.modelDiscovery.options : []
 
 export function listClaudeCodeModels(): ModelListing {
   return { models: CLAUDE_CODE_MODELS, source: 'static' }

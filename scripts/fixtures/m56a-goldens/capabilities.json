@@ -1,0 +1,16 @@
+{
+  "claude_code": {
+    "canPauseMidRun": true,
+    "canResumeSession": true,
+    "gate": "all-tools",
+    "reportsCost": true,
+    "reportsToolResults": true
+  },
+  "cursor": {
+    "canPauseMidRun": false,
+    "canResumeSession": true,
+    "gate": "all-tools",
+    "reportsCost": false,
+    "reportsToolResults": true
+  }
+}

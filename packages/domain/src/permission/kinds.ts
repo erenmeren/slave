@@ -1,3 +1,6 @@
+import { PROVIDER_KINDS, type ProviderKind } from '../provider/kind.js'
+import { manifestFor } from '../provider/manifest.js'
+
 /**
  * What a worker may DO, as data (M52 R1).
  *
@@ -32,13 +35,23 @@ export const PERMISSION_KINDS = [
 
 export type PermissionKind = (typeof PERMISSION_KINDS)[number]
 
-/** The two providers a permission resolves against. The same two members `packages/db`'s
- *  `ProviderKind` enum carries, spelled here because `packages/domain` may not depend on
- *  `@slave-of-ai/providers` (which imports `node:child_process` at module scope) -- and
- *  `packages/db`'s enum is held to this list by `packages/db/test/integration/enum-parity.test.ts`
- *  rather than by a type. */
-export const PERMISSION_PROVIDERS = ['claude_code', 'cursor'] as const
-export type PermissionProvider = (typeof PERMISSION_PROVIDERS)[number]
+/**
+ * The two providers a permission resolves against.
+ *
+ * BOTH NAMES ARE ALIASES NOW (M56a R2): the union has ONE declaration, in
+ * `packages/domain/src/provider/kind.ts`, and these two names are what the permission vocabulary
+ * has always called it. They are kept rather than replaced because `docs/ia.md` rule 2 is that
+ * nothing is removed, only moved: `packages/db/test/integration/enum-parity.test.ts:148-151` pins
+ * the Postgres enum to `PERMISSION_PROVIDERS` by that name, `writePermissionsFile` indexes
+ * `ENFORCE_BY_PROVIDER` and `TOOL_VOCABULARY` with a `PermissionProvider`, and
+ * `apps/web/src/components/SlavePanel.tsx:97-101` reads both in a client component.
+ *
+ * The old docstring's reason for a SECOND copy -- "spelled here because `packages/domain` may not
+ * depend on `@slave-of-ai/providers`" -- is answered rather than contradicted: the union moved INTO
+ * this package, so the dependency it was avoiding no longer exists.
+ */
+export const PERMISSION_PROVIDERS = PROVIDER_KINDS
+export type PermissionProvider = ProviderKind
 
 /**
  * The three run kinds a baseline is keyed on -- `RunKind`'s members, spelled here for
@@ -107,60 +120,21 @@ export const PERMISSION_LABEL: Record<PermissionKind, string> = {
  * silent wall -- which is the safety property R1 states and the hand-typed first cut did not have.
  *
  * `read_secret` and `deploy_release` name NOTHING on purpose (see their members above).
+ *
+ * DERIVED, since M56a R5, from each provider's own manifest rather than written here: a provider's
+ * tool vocabulary is a fact about that provider, and it now lives in the row that holds every other
+ * fact about it (`packages/domain/src/provider/claude-code.ts`, `provider/cursor.ts`). Not one value
+ * moved -- `packages/domain/test/provider/derived.test.ts` pins the whole table against a golden
+ * captured before the migration, and `kinds.test.ts` below still derives the Claude column from the
+ * real CLI's own recording.
  */
-export const TOOLS_BY_KIND: Record<PermissionKind, Record<PermissionProvider, readonly string[]>> = {
-  read_repo: {
-    claude_code: [
-      'Read',
-      'Glob',
-      'Grep',
-      'NotebookRead',
-      'TodoWrite',
-      'ToolSearch',
-      'TaskOutput',
-      'ListAgents',
-      'Monitor',
-      'LSP',
-      'ListMcpResourcesTool',
-      'ReadMcpResourceTool',
-      'ReadMcpResourceDirTool',
-    ],
-    cursor: ['read'],
-  },
-  write_repo: { claude_code: ['Write', 'Edit', 'NotebookEdit'], cursor: ['edit'] },
-  // `BashOutput` and `KillShell` go with `Bash` and not with a fourth kind: they operate on a shell
-  // this worker already started, so a grant that covered one and not the others would leave a run
-  // able to start a command and unable to read it. Everything after `KillShell` is rule (b): it can
-  // DO something, or start something that can, which is the same power and so the same grant.
-  run_commands: {
-    claude_code: [
-      'Bash',
-      'BashOutput',
-      'KillShell',
-      'Task',
-      'TaskStop',
-      'Skill',
-      'Workflow',
-      'SendMessage',
-      'EnterWorktree',
-      'ExitWorktree',
-      'EnterPlanMode',
-      'ExitPlanMode',
-      'CronCreate',
-      'CronDelete',
-      'CronList',
-      'ScheduleWakeup',
-      'RemoteTrigger',
-      'PushNotification',
-      'ReportFindings',
-      'DesignSync',
-    ],
-    cursor: ['shell'],
-  },
-  network_fetch: { claude_code: ['WebFetch', 'WebSearch'], cursor: [] },
-  read_secret: { claude_code: [], cursor: [] },
-  deploy_release: { claude_code: [], cursor: [] },
-}
+export const TOOLS_BY_KIND: Record<PermissionKind, Record<PermissionProvider, readonly string[]>> =
+  Object.fromEntries(
+    PERMISSION_KINDS.map((kind) => [
+      kind,
+      Object.fromEntries(PROVIDER_KINDS.map((provider) => [provider, manifestFor(provider).toolVocabulary[kind]])),
+    ]),
+  ) as Record<PermissionKind, Record<PermissionProvider, readonly string[]>>
 
 /**
  * Every governed tool name to the kind that governs it, DERIVED from {@link TOOLS_BY_KIND} rather
@@ -244,11 +218,14 @@ export const BASELINE_GRANTS: Record<PermissionRunKind, readonly PermissionKind[
  * the gate is told, in the file it reads, to enforce only the names it can trust: `shell`, which
  * arrives through `beforeShellExecution`'s `default_tool` accommodation and is the one Cursor path
  * that has ever been enforceable. Stated in the matrix copy, not left implicit.
+ *
+ * DERIVED, since M56a R5, from each provider's own manifest (`toolRestrictions.enforce`) rather
+ * than written here: how much of the matrix a gate can be trusted with is a fact about the
+ * provider, and it now lives in the row that holds every other fact about it.
  */
-export const ENFORCE_BY_PROVIDER: Record<PermissionProvider, 'all-tools' | 'known-tools'> = {
-  claude_code: 'all-tools',
-  cursor: 'known-tools',
-}
+export const ENFORCE_BY_PROVIDER: Record<PermissionProvider, 'all-tools' | 'known-tools'> = Object.fromEntries(
+  PROVIDER_KINDS.map((provider) => [provider, manifestFor(provider).toolRestrictions.enforce]),
+) as Record<PermissionProvider, 'all-tools' | 'known-tools'>
 
 /**
  * What a `run.tool_denied` card prints (`docs/ia.md` rule 3, plan erratum E2).

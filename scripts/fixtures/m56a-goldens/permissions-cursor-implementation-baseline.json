@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "runId": "00000000-0000-4000-8000-000000000m56",
+  "tokenHash": "4ce62587f7f5ed0fb6c23613fc1477717d0259d97629109cf61b9fa860003dc5",
+  "enforce": "known-tools",
+  "grants": [
+    "read_repo",
+    "write_repo",
+    "run_commands"
+  ],
+  "allow": [
+    {
+      "tool": "read",
+      "kind": "read_repo"
+    },
+    {
+      "tool": "edit",
+      "kind": "write_repo"
+    },
+    {
+      "tool": "shell",
+      "kind": "run_commands"
+    }
+  ],
+  "vocabulary": {
+    "read": "read_repo",
+    "edit": "write_repo",
+    "shell": "run_commands"
+  },
+  "prefixes": [
+    {
+      "prefix": "mcp__",
+      "kind": "network_fetch"
+    }
+  ]
+}
