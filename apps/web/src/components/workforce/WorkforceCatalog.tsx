@@ -62,6 +62,16 @@ export function WorkforceCatalog({
   const { filters, setFilters } = useCatalogFilters()
   const [page, setPage] = useState<WorkforceCatalogView>(initial)
   const [staleError, setStaleError] = useState(false)
+  /**
+   * What a refused WRITE said, in the words the control layer used (fix round 1, item 3).
+   *
+   * The only write this component owns is the activation toggle, and it used to swallow its refusal:
+   * a 404 on a row somebody deleted in another tab, or a 401 on an expired session, looked exactly
+   * like a click that did not register. The row's word is still only re-read on success -- what is
+   * added is the sentence saying why it did not move. `DangerConfirm` shows the delete's refusal
+   * itself, which is why the toggle is the one control here that needed a slot of its own.
+   */
+  const [writeError, setWriteError] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [open, setOpen] = useState<{
     readonly id: string
@@ -151,6 +161,13 @@ export function WorkforceCatalog({
       {staleError && (
         <Alert variant="error" testId="catalog-stale">
           could not refresh the catalog — showing the last answer.
+        </Alert>
+      )}
+      {/* The refusal's own sentence, from `refusalText` through the route: a word a person can act
+        * on, never a kind or a status code (`docs/ia.md` rule 3). */}
+      {writeError !== null && (
+        <Alert variant="error" testId="catalog-error">
+          {writeError}
         </Alert>
       )}
       <span data-testid="catalog-count" className="text-xs text-text-3">
@@ -265,6 +282,7 @@ export function WorkforceCatalog({
                           method: 'POST',
                           body: { active: !row.active },
                         }).then((error) => {
+                          setWriteError(error)
                           if (error === null) reload(filters)
                         })
                       }}

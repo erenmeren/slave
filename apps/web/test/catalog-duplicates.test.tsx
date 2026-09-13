@@ -98,6 +98,27 @@ describe('the activation toggle (M55 R2, R6)', () => {
     })
   })
 
+  // Fix round 1, item 3: a refused write used to change nothing and say nothing, which is exactly
+  // what a click that never registered looks like.
+  it('says what a refused activation said, in the refusal own words', async () => {
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).includes('/activation')
+        ? new Response(JSON.stringify({ error: 'no template with id t1' }), { status: 404 })
+        : new Response(JSON.stringify(view([row()])), { status: 200 }),
+    )
+    render(<WorkforceCatalog initial={view([row({ active: false })])} />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('catalog-activate-t1'))
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('catalog-error').textContent).toBe('no template with id t1')
+    })
+    // The word on the row is still the truth: it is only re-read on success.
+    expect(screen.getByTestId('catalog-activate-t1').textContent).toBe('inactive')
+  })
+
   it('does NOT open the drawer -- the toggle is an action ON the row, not a way INTO it', async () => {
     render(<WorkforceCatalog initial={view([row()])} />)
 
@@ -407,6 +428,27 @@ describe('the profile drawer Duplicates group (M55 R6)', () => {
       '/api/org/duplicates/p1/dismissal',
       expect.objectContaining({ method: 'POST', body: JSON.stringify({ dismissed: false }) }),
     )
+  })
+
+  // Fix round 1, item 3: the drawer has had `profile-error` since M46 and every other write in the
+  // file uses it. The dismissal ignoring it was a regression against the file's own convention.
+  it('says what a refused dismissal said, in the drawer own error slot', async () => {
+    await openDrawer()
+    fetchMock.mockImplementation(async (url: string) =>
+      String(url).includes('/dismissal')
+        ? new Response(JSON.stringify({ error: 'no duplicate pair with id p1' }), { status: 404 })
+        : new Response(JSON.stringify([pair()]), { status: 200 }),
+    )
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('profile-duplicate-dismiss-p1'))
+    })
+
+    await waitFor(() => {
+      expect(screen.getByTestId('profile-error').textContent).toBe('no duplicate pair with id p1')
+    })
+    // Nothing was dismissed, so the control still offers the same act.
+    expect(screen.getByTestId('profile-duplicate-dismiss-p1').textContent).toBe('Dismiss')
   })
 
   it('says nothing else looks like this row when there is no pair at all', async () => {

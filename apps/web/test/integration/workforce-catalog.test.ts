@@ -7,6 +7,9 @@ import { GET as catalogGET } from '../../src/app/api/org/catalog/route.js'
 import { GET as profileGET, PUT as profilePUT } from '../../src/app/api/org/templates/[templateId]/profile/route.js'
 import { PATCH as overridesPATCH } from '../../src/app/api/org/templates/[templateId]/overrides/route.js'
 import { DELETE as overrideDELETE } from '../../src/app/api/org/templates/[templateId]/overrides/[field]/route.js'
+import { POST as activationPOST } from '../../src/app/api/org/templates/[templateId]/activation/route.js'
+import { GET as templateDuplicatesGET } from '../../src/app/api/org/templates/[templateId]/duplicates/route.js'
+import { POST as dismissalPOST } from '../../src/app/api/org/duplicates/[pairId]/dismissal/route.js'
 
 /**
  * The one `next/headers` mock this file needs (`route-principal.test.ts`'s hoisted-holder idiom).
@@ -56,7 +59,20 @@ const putRequest = (body: unknown, raw?: string): Request =>
     headers: { 'content-type': 'application/json' },
   })
 
+const postRequest = (body: unknown, raw?: string): Request =>
+  new Request('http://x/api/org/write', {
+    method: 'POST',
+    body: raw ?? JSON.stringify(body),
+    headers: { 'content-type': 'application/json' },
+  })
+
+const pairParams = (pairId: string): { params: Promise<{ pairId: string }> } => ({
+  params: Promise.resolve({ pairId }),
+})
+
 const catalogRequest = (query = ''): Request => new Request(`http://x/api/org/catalog${query}`)
+
+const UNKNOWN_ID = '00000000-0000-4000-8000-000000000000'
 
 async function coreBuilderId(): Promise<string> {
   return (await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'Core Builder' } })).id
@@ -358,6 +374,111 @@ describe('the workforce catalog read model', () => {
         fieldParams('00000000-0000-4000-8000-000000000000', 'summary'),
       )
       expect(missing.status).toBe(404)
+    })
+  })
+
+  describe('POST /api/org/templates/:id/activation (M55 R2/R6)', () => {
+    it('writes the column, stamps who did it, and is idempotent', async (): Promise<void> => {
+      const coreId = await coreBuilderId()
+
+      const on = await activationPOST(postRequest({ active: true }), templateParams(coreId))
+      expect(on.status).toBe(200)
+      expect(await on.json()).toEqual({ ok: true })
+      const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: coreId } })
+      expect(row.active).toBe(true)
+      expect(row.activationChangedAt).not.toBeNull()
+
+      const again = await activationPOST(postRequest({ active: true }), templateParams(coreId))
+      expect(again.status).toBe(200)
+      expect((await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: coreId } })).active).toBe(true)
+    })
+
+    // Fix round 1, important 2 + item 4: a body this route cannot read is 400 -- what every other
+    // malformed body under `api/org/**` answers -- and the schema is STRICT, so an unknown key is
+    // one of those bodies rather than a field silently dropped.
+    it('is 400 for a body it cannot read, an unknown key included, and writes nothing', async (): Promise<void> => {
+      const coreId = await coreBuilderId()
+
+      for (const body of [{}, { active: 'true' }, { active: null }, { active: true, unknown: 1 }, []]) {
+        const response = await activationPOST(postRequest(body), templateParams(coreId))
+        expect(response.status).toBe(400)
+        expect(await response.json()).toEqual({ error: 'the body must be { "active": boolean }' })
+      }
+      const malformed = await activationPOST(postRequest(undefined, 'not json'), templateParams(coreId))
+      expect(malformed.status).toBe(400)
+
+      expect((await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: coreId } })).active).toBe(false)
+    })
+
+    it('is 404 for a template nobody wrote -- the verb refusal, mapped', async (): Promise<void> => {
+      const response = await activationPOST(postRequest({ active: true }), templateParams(UNKNOWN_ID))
+
+      expect(response.status).toBe(404)
+      expect(await response.json()).toEqual({ error: `no template with id ${UNKNOWN_ID}` })
+    })
+  })
+
+  describe('the duplicate pair routes (M55 R5/R6)', () => {
+    /** One pair, written straight through Prisma: `writeTemplateDuplicates` is the producer and this
+     *  is about the two ROUTES. `aId < bId` is the writer's rule, so the ids are ordered here. */
+    const writePair = async (): Promise<{ pairId: string; coreId: string }> => {
+      const coreId = await coreBuilderId()
+      const verifier = await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'Verifier' } })
+      const [aId, bId] = [coreId, verifier.id].sort((left, right) => left.localeCompare(right))
+      const pair = await prisma.templateDuplicate.create({
+        data: { aId: aId ?? coreId, bId: bId ?? verifier.id, class: 'exact', basis: 'content_hash', score: 1 },
+      })
+      return { pairId: pair.id, coreId }
+    }
+
+    it('reads every pair a template is in, and an empty list for a template in none', async (): Promise<void> => {
+      const { pairId, coreId } = await writePair()
+
+      const response = await templateDuplicatesGET(new Request('http://x'), templateParams(coreId))
+      expect(response.status).toBe(200)
+      const pairs = (await response.json()) as { id: string; detectedAt: string; dismissedAt: string | null }[]
+      expect(pairs.map((pair) => pair.id)).toEqual([pairId])
+      expect(typeof pairs[0]?.detectedAt).toBe('string')
+      expect(pairs[0]?.dismissedAt).toBeNull()
+
+      // A template id nobody wrote is 200 and an empty list, never a 404 (the route's own docblock).
+      const unknown = await templateDuplicatesGET(new Request('http://x'), templateParams(UNKNOWN_ID))
+      expect(unknown.status).toBe(200)
+      expect(await unknown.json()).toEqual([])
+    })
+
+    it('dismisses a pair and restores it, and never deletes one', async (): Promise<void> => {
+      const { pairId } = await writePair()
+
+      const dismissed = await dismissalPOST(postRequest({ dismissed: true }), pairParams(pairId))
+      expect(dismissed.status).toBe(200)
+      expect((await prisma.templateDuplicate.findUniqueOrThrow({ where: { id: pairId } })).dismissedAt).not.toBeNull()
+
+      const restored = await dismissalPOST(postRequest({ dismissed: false }), pairParams(pairId))
+      expect(restored.status).toBe(200)
+      expect((await prisma.templateDuplicate.findUniqueOrThrow({ where: { id: pairId } })).dismissedAt).toBeNull()
+      expect(await prisma.templateDuplicate.count()).toBe(1)
+    })
+
+    it('is 400 for a body it cannot read, an unknown key included, and writes nothing', async (): Promise<void> => {
+      const { pairId } = await writePair()
+
+      for (const body of [{}, { dismissed: 'true' }, { dismissed: true, unknown: 1 }]) {
+        const response = await dismissalPOST(postRequest(body), pairParams(pairId))
+        expect(response.status).toBe(400)
+        expect(await response.json()).toEqual({ error: 'the body must be { "dismissed": boolean }' })
+      }
+      const malformed = await dismissalPOST(postRequest(undefined, 'not json'), pairParams(pairId))
+      expect(malformed.status).toBe(400)
+
+      expect((await prisma.templateDuplicate.findUniqueOrThrow({ where: { id: pairId } })).dismissedAt).toBeNull()
+    })
+
+    it('is 404 for a pair nobody wrote -- erratum E5 own refusal, mapped', async (): Promise<void> => {
+      const response = await dismissalPOST(postRequest({ dismissed: true }), pairParams(UNKNOWN_ID))
+
+      expect(response.status).toBe(404)
+      expect(await response.json()).toEqual({ error: `no duplicate pair with id ${UNKNOWN_ID}` })
     })
   })
 

@@ -561,6 +561,40 @@ describe('the catalog import surfaces', () => {
     ])
   })
 
+  /**
+   * Fix round 1, important 1: `Overlapping` was the raw class member with one capital letter, on the
+   * tab whose gate scans for exactly that word. The header now comes from `DUPLICATE_CLASS_LABEL`,
+   * and this case is what says so if it ever drifts back.
+   */
+  it('heads the seven counts with words, never with a raw class member', () => {
+    render(
+      <TestWorkforceClient
+        initialTab="catalog"
+        catalog={catalogPage([imported])}
+        catalogImports={[
+          { id: 'i1', catalog: 'catalog-m42', directory: '/srv/catalog-m42', by: 'operator', finishedAt: '2026-09-10T08:30:00.000Z', created: 1, updated: 0, unchanged: 0, skipped: 0, duplicates: { exact: 0, near: 0, overlapping: 0 } },
+        ]}
+      />,
+    )
+
+    const panel = screen.getByTestId('catalog-imports')
+    expect(within(panel).getAllByTestId('data-table-header-cell').map((cell) => cell.textContent)).toEqual([
+      'When',
+      'Catalog',
+      'By',
+      'Created',
+      'Updated',
+      'Unchanged',
+      'Skipped',
+      'Same',
+      'Similar',
+      'Overlaps',
+    ])
+    for (const member of ['exact', 'near', 'overlapping', 'content_hash', 'capability_keys']) {
+      expect(panel.textContent?.toLowerCase()).not.toContain(member)
+    }
+  })
+
   it('says so when nothing has been imported', () => {
     render(<TestWorkforceClient initialTab="catalog" />)
 

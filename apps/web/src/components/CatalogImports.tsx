@@ -20,7 +20,30 @@ export interface CatalogImportRow {
 }
 
 const COLUMNS = '150px 1fr 110px 70px 70px 80px 70px 70px 70px 90px'
-const HEADER = ['When', 'Catalog', 'By', 'Created', 'Updated', 'Unchanged', 'Skipped', 'Same', 'Similar', 'Overlapping'] as const
+
+/**
+ * The last header is READ OUT OF THE LABEL TABLE, and the other two are not (fix round 1,
+ * important 1).
+ *
+ * `packages/domain/src/catalog/duplicate.ts` states R6's rule in its own words: no surface prints
+ * `exact`, `near`, `overlapping`, `content_hash` or `capability_keys` as visible text, "and a label
+ * identical to its member is that member printed". `Overlapping` was that member with one capital
+ * letter, on the very tab the milestone's gate scans for the word. `Same` and `Similar` are English
+ * for what their columns count and collide with no member at all; the third column's word comes from
+ * the table that exists precisely so nobody has to invent one.
+ */
+const HEADER = [
+  'When',
+  'Catalog',
+  'By',
+  'Created',
+  'Updated',
+  'Unchanged',
+  'Skipped',
+  'Same',
+  'Similar',
+  DUPLICATE_CLASS_LABEL.overlapping,
+] as const
 
 /** The three duplicate columns say what they COUNT, never the raw class member (`docs/ia.md` rule
  *  3) -- and each cell's `title` carries the class's own label table sentence, so the word on the

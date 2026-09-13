@@ -417,6 +417,11 @@ export function ProfileDrawer({
                               method: 'POST',
                               body: { dismissed: pair.dismissedAt === null },
                             }).then((error) => {
+                              // The file's own convention for every other write in it (fix round 1,
+                              // item 3): the refusal lands in the Alert two hundred lines up rather
+                              // than nowhere at all, and a dismissal that did not happen stops
+                              // looking like a click that did not register.
+                              setErrorText(error)
                               if (error !== null) return
                               reloadDuplicates()
                               onChanged()
