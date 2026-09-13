@@ -7049,3 +7049,30 @@ EOF
 **3. Type consistency.** `DuplicateClass`, `DuplicateBasis`, `DuplicateFacet`, `DUPLICATE_CLASSES`, `DUPLICATE_BASES`, `DUPLICATE_FACETS`, the three label tables, the seven constants, `MINHASH_MULTIPLIERS`, `canonicalPersonaText`, `normalisePersona`, `contentHashOf`, `shinglesOf`, `minhashOf`, `bandKeysOf`, `bodyBandsOf`, `jaccard`, `orderedPair`, `DuplicateCandidate`, `DuplicateVerdict`, `classifyPair`, `DuplicateCounts`, `emptyDuplicateCounts`, `duplicateCountsSchema`, `parseDuplicateCounts`, `SEARCH_TEXT_MAX_CHARS` and `catalogSearchText` are spelt ONCE (Task 1 Steps 3 and 7) and consumed under those names in Task 2 (`derivedColumnsOf`, `catalogWhere`), Task 3 (`classifyAll`, `writePair`, `listTemplateDuplicates`), Task 4 (the CLI's label lookups and its two `oneOfFlag` vocabularies) and Task 5 (the chip, the two selects, the drawer group). `DuplicateCounts` is the single shape FOUR producers and three consumers agree on: `writeTemplateDuplicates` and `recomputeTemplateDuplicates` return one, `ImportReport.duplicates` and `CatalogImportView.duplicates` carry one, `parseDuplicateCounts` reconstructs one from a `Json` column, and `describeImport`, `list-imports` and `CatalogImports.tsx` each read the same three keys — so a fourth class is a build error in seven places rather than a silent `undefined` in one. `CatalogRowDuplicate` has one definition (Task 2 Step 7) and three consumers (the chip, its `title`, and `template list`'s signal column), and nothing constructs one by hand. `TemplateDuplicateView` has one definition (Task 3 Step 4) and two consumers, one of which (`TemplateDuplicateRowView`, Task 5 Step 3) is an `Omit`-and-restate of its two `Date`s — the `CatalogRowView` idiom, so a field added to the control type arrives in the web type for free. `DuplicateScanResult` is returned by both passes and `recomputeTemplateDuplicates` widens it with `backfilled` rather than declaring a second shape. The one asymmetry, named: `WorkforceCatalogFilters.active` is a `boolean | undefined` while the URL carries `active`/`inactive`/absent — three states either way, and `catalogFilterParams`/`parseCatalogFilters` are the one place the two spellings meet, with a round-trip case pinning them.
 
 **What the self-review pass FIXED, inline.** Four gaps, all now closed. **(a)** Task 2's `listWorkforceCatalog` originally kept the existing whole-table `rawOverride` raw query, which would have read the `profile` column of every row in the catalog to render a hundred of them — the exact cost R3 exists to remove, left in place by an edit that only looked at the `findMany` above it. It is now scoped with `id = ANY(...)` over the page's ids, and both id-scoped reads are skipped entirely when the page is empty. **(b)** Task 2 Step 10's `listTemplates` was first written as `listWorkforceCatalogPage({}, {})`, which would have silently taken `CATALOG_PAGE_SIZE` and hidden the hundred-and-first template from every company picker; erratum E2 was written from that discovery, and the function now calls the control verb directly with `TEMPLATE_PICKER_MAX` and maps the two dates itself. **(c)** Task 3's candidate search was first written as banding alone, which is what R4's prose emphasises — and banding cannot find an `exact` pair whose two rows share the same NAME and no shingle, nor an `overlapping` pair, which by definition shares no text. Four inverted indexes replaced it, filled strongest-first so a crowded capability bucket cannot spend the whole `DUPLICATE_CANDIDATES_MAX` budget, and the three arms that are not `near` now have candidates to be found in. **(d)** Task 4's `template list` first called `listWorkforceCatalog()` with no options, which would have printed the first hundred templates under a header claiming to be the catalog; it passes `TEMPLATE_PICKER_MAX` and prints `N of M` so a truncated list says it is one. Nothing else moved: the spec-coverage walk found a task for every R-section and every one of the twelve gate stages, and the placeholder scan found nothing to remove.
+
+---
+
+## Execution errata
+
+Eighteen errata were written against `docs/superpowers/specs/2026-09-13-m55-catalog-import-design.md`
+§5 — twelve while this plan was written (E1–E12, long form in
+`.superpowers/sdd/2026-09-13-m55-catalog-import/plan-notes.md`) and six while Task 6 ran. The six
+that correct THIS document are:
+
+- **E13** — Task 6 Step 1's `nameOf` writes the SEED into every persona name. The step as planned
+  named the three catalogs' personas identically, and `SlaveTemplate.name` is `@unique`: the
+  unlicensed and `--activate` catalogs would have imported nothing but a hundred and twenty
+  `name_taken` skips each.
+- **E14** — Task 6 Step 1's `ORDINARY_PAIRS` removes the eleven two-label sets the planted personas
+  hold. As planned, the ordinary persona at index 55 drew exactly the second exact pair's two labels
+  and the one at 106 drew the third's, which is a capability Jaccard of 1.0 and three `overlapping`
+  rows nobody planted.
+- **E15** — `NEAR_APPENDED` is sixteen and `MISS_APPENDED` twenty-six, sized against
+  `canonicalPersonaText`'s 149 shingles rather than the sixty-word body the step's arithmetic used.
+- **E16** — Task 6 Step 2 stage 1's "the same directory again under `--verbose`: 120 per-row lines"
+  cannot happen: `describeImport` prints a row per CREATED and per UPDATED row and none for an
+  unchanged one. The positive half moved to the third catalog's `--activate --verbose` import.
+- **E17** — the unlicensed and `--activate` catalogs are imported after stage 10, so stages 5–10
+  measure a database holding exactly one generated catalog.
+- **E18** — the gate's staffing task carries a `requiredRole`; `loadSupervisorWorld` drops a task
+  without one, so the Supervisor would have seen an empty board.

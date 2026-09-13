@@ -599,9 +599,92 @@ one command, inert until somebody says otherwise, with every pair it noticed nam
 is about.**
 
 ## 5. Errata — where execution corrects this spec
-None yet. Errata are added while the plan is written and while it is executed, each as
-`**En (amends Rx)** — <one-line claim>.` with its reasoning and file citations, the way M50's fifteen,
-M51's, M52's fifteen, M53's and M54's were.
+Twelve were written while the plan was written and six more while it was executed; the long form of
+each — its evidence, its file citations and the alternatives rejected — is in
+`.superpowers/sdd/2026-09-13-m55-catalog-import/plan-notes.md` and in the task reports beside it.
+
+**E1 (amends R3 and R12)** — the capability facet's options become taxonomy KEYS, so
+`gate:m46-workforce-catalog` stage 2b DOES change, and it changes to the SKILL select: no persona in
+`scripts/fixtures/catalog-m46/` resolves a single capability key, and `catalog-skill-select` on
+`writing-plans` is the facet that fixture populates.
+
+**E2 (amends R3 and §2)** — `listTemplates()` must not page. `listWorkforceCatalog` takes
+`options.pageSize` clamped at `TEMPLATE_PICKER_MAX = 500`, and the company pickers pass it: a
+`take: 100` under that call would hide the hundred-and-first template from every `<select>` a company
+is staffed from, silently.
+
+**E3 (amends R10 and M42 erratum E11)** — every bare flag this milestone adds joins `VALUELESS`
+(`activate`, `verbose`, `allow-unknown-license`, `recompute`, `active`, `inactive`, `dismissed`),
+because `parseArgs` consumes the token after a flag even when that token starts with `--`.
+
+**E4 (amends R12 and M54 erratum E5)** — `"TemplateDuplicate"` does NOT join `db:seed`'s TRUNCATE
+list: it cascades from `"SlaveTemplate"`, which is already named there, and naming it would be that
+statement's first redundant entry.
+
+**E5 (amends R5, R10 and §2)** — TWO refusal kinds land here, not one: `license_unknown` (409) and
+`template_duplicate_not_found` (404). `TODAYS_NOT_FOUND_KINDS` moves from 22 to 23.
+
+**E6 (amends R3 and R4)** — two of the four derived columns come from the EFFECTIVE spec
+(`searchText`, `recommendedSkills`) and two from the UPSTREAM one (`contentSha256`, `bodyBands`), and
+`writeOverrides` rewrites exactly the first two — the duplicate classes are about the persona
+somebody published, and the search box is about the row an operator sees.
+
+**E7 (amends R4)** — the 96 MinHash multiplier pairs are BOUNDED (`a` odd and under 2²², `b` under
+`MINHASH_PRIME`, the shingle hash reduced before the multiply) so `(a·h + b)` is exact in a double.
+Unbounded, a permutation silently stops being a permutation above 2⁵³.
+
+**E8 (amends R3 and the global constraints)** — the migration's `searchText` backfill is
+name + description ONLY and is a FLOOR rather than the value: the real one needs
+`effectiveProfileSpec`'s JSONB merge, which no SQL in this repository may reimplement.
+`template duplicates --recompute` writes the real value over it.
+
+**E9 (amends R7 and §3 stage 1)** — an import report carries SEVEN numbers, not six: four outcomes
+plus three duplicate counts.
+
+**E10 (amends R12)** — `gate:m53-evidence` creates catalog personas WITHOUT importing, so its
+`makeTemplate` gains `active: true`; R12's list of five gates missed it.
+
+**E11 (amends §3's fixture)** — `gen-catalog.mjs` composes its capability bullets out of
+`CAPABILITY_SEED`'s own LABELS. `normaliseCapabilities` matches a WHOLE normalised bullet against the
+taxonomy, so invented words resolve to nothing and three of the twelve stages would measure an empty
+list.
+
+**E12 (amends R3)** — the free-text clause lower-cases the QUERY with `normalisePersona` and drops
+`mode: 'insensitive'`: the column is already folded by definition, and `ILIKE` over it is the same
+answer for strictly more work.
+
+**E13 (amends §3's fixture)** — the generator writes its SEED into every persona NAME.
+`SlaveTemplate.name` is `@unique` and the gate generates THREE catalogs (licensed, unlicensed,
+`--activate`); without the seed in the name the second and third meet the first as a hundred and
+twenty `name_taken` skips each and import nothing at all.
+
+**E14 (amends §3's fixture)** — the ordinary personas' capability pairs EXCLUDE the eleven two-label
+sets the planted personas hold. Two rows holding the same two labels have a capability Jaccard of
+1.0, so an ordinary persona drawing a planted pair's labels would be an `overlapping` row nobody
+planted and stage 5's "exactly nine" would be measuring eleven.
+
+**E15 (amends §3's fixture)** — the near and near-miss tails are sized against
+`canonicalPersonaText`'s shingles, not the body's. One of these personas is 149 shingles and not 64,
+so the plan's "three words" gives 0.98 and its "twenty-four" gives 0.86 — a near-MISS that is a
+`near` pair. Sixteen appended words give 0.903 (the spec's "about 90%") and twenty-six give 0.701
+(the spec's "≈0.7"), and the gate recomputes both from the two stored specs rather than trusting the
+arithmetic.
+
+**E16 (amends §3 stage 1)** — `--verbose` adds a line per CREATED and per UPDATED row and NONE for an
+unchanged one, so "the same import under `--verbose` prints 120 per-row lines" cannot be true of a
+re-import. The unchanged re-run proves the half that is true (no per-row line at any verbosity) and
+the `--activate --verbose` import of the third catalog proves the other (120 `created` lines against
+stage 1's zero).
+
+**E17 (amends §3 stages 5–11)** — the unlicensed and `--activate` catalogs are imported AFTER stage
+10. Two catalogs built from one construction hold a hundred and twenty pairs of personas with
+identical capability sets — a real `overlapping` signal every time, correctly detected — and stages 5
+to 10 are the ones that count pairs. Importing them last is what lets stage 5 say "exactly nine"
+about the whole table.
+
+**E18 (amends §3 stage 3)** — the gate's staffing task carries a `requiredRole`. A task with none is
+dropped by `loadSupervisorWorld`'s own task loop, exactly as the scheduler drops it, so a Supervisor
+handed one sees an empty board and raises no situation at all.
 
 ## 6. Carried backlog (M54 §6's list that M55 does not take, plus what M55 declines)
 From M54 §6 — which reproduces M53 §6, which reproduces M52 §5, which reproduces M51's own final-review
