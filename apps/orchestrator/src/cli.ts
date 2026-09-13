@@ -563,8 +563,13 @@ const USAGE = `usage: orchestrator <command> [options]
                                        narrows to one project and omitting it is every project,
                                        because a profile works on more than one; --domain narrows by
                                        containment, so a run whose task asked for two domains shows
-                                       under either. History from before this milestone is filled in
-                                       by npm run backfill:evidence, never from here.
+                                       under either. THE MOST RECENT 200 rows, newest first: a line
+                                       per run is a page of history and not a window on all of it.
+                                       History from before this milestone -- and any run whose fact
+                                       a crash lost between its conclusion and its write -- is
+                                       filled in by npm run backfill:evidence, never from here; that
+                                       script is idempotent, safe on a live database, and judges
+                                       nothing it records.
   staffing prefer --capability <key> [--template <id>] [--model <m>] [--workspace <id>] [--by <username>]
                                        say who -- or what model -- should take one capability on
                                        this project. Name a profile, a model, or both; naming
@@ -3024,6 +3029,11 @@ export async function main(argv: readonly string[]): Promise<number> {
      * that wrote one by hand would be a second derivation with a person's hand in it. Filling in
      * history is `npm run backfill:evidence`, a script an operator runs deliberately, and not a
      * subcommand somebody reaches by tab completion (plan decision D30).
+     *
+     * `listEvidence` caps at 200 rows (`packages/control/src/evidence.ts`'s
+     * `LIST_EVIDENCE_LIMIT`) and this verb takes no `--limit`. The cap is NAMED in the usage text
+     * (final wave, carried minor): an operator who reads 200 lines and is told nothing cannot tell
+     * whether that is the whole record or the top of it.
      */
     case 'evidence': {
       const sub = argv[1] ?? 'list'

@@ -31,7 +31,16 @@ export const EVIDENCE_OUTCOME_LABEL: Record<EvidenceOutcome, string> = {
 
 /** The outcome for a run's status, or `null` while the run can still move. Total over `RunStatus`,
  *  by construction rather than by a second list: everything not in
- *  {@link NON_TERMINAL_RUN_STATUSES} is one of the three. */
+ *  {@link NON_TERMINAL_RUN_STATUSES} is one of the three.
+ *
+ *  THE CAST IS THE ASSUMPTION, WRITTEN DOWN (final wave, carried T1 minor). `status as
+ *  EvidenceOutcome` holds only while `RunStatus`'s terminal members are exactly
+ *  {@link EVIDENCE_OUTCOMES}: a tenth member that is terminal would arrive here as an outcome
+ *  nobody decided on, and nothing fails the build for it -- `EVERY_RUN_STATUS` in
+ *  `test/evidence/outcome.test.ts` catches a REMOVED member and not an added one, and the
+ *  enum-parity case pins Postgres to `EVIDENCE_OUTCOMES` rather than to `RunStatus`. So: a new
+ *  terminal run status is a change to this file first, and a row saying `stopped` for something
+ *  else is what skipping it costs. */
 export function evidenceOutcomeOf(status: RunStatus): EvidenceOutcome | null {
   if ((NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(status)) return null
   return status as EvidenceOutcome

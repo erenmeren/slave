@@ -78,6 +78,9 @@ async function seedMergingTask(
     /** M48 R6, fix round 1: the runbook stage this task belongs to, whose gates the post-rebase
      *  re-verify now runs too. `undefined` is every task planned before that milestone. */
     readonly stage?: string
+    /** M53 erratum E24: how many attempts this task has left. `1` is the task whose next failure
+     *  is its last, which is the only shape a merge failure may settle `integrated: false` for. */
+    readonly maxAttempts?: number
   } = {},
 ): Promise<MergingTask> {
   const task = await prisma.task.create({
@@ -87,7 +90,7 @@ async function seedMergingTask(
       description: 'make it work',
       status: 'merging',
       requiredRole: 'backend',
-      maxAttempts: 5,
+      maxAttempts: input.maxAttempts ?? 5,
       ...(input.stage === undefined ? {} : { stage: input.stage }),
     },
   })
@@ -623,10 +626,12 @@ describe('integration settles only where work actually reached the base branch (
     expect(row.settledAt).toBeNull()
   })
 
-  it('settles FALSE on a post-rebase gate that RAN and said no', async (): Promise<void> => {
+  it('settles NOTHING on a post-rebase gate that said no while the task can still be re-done (E24)', async (): Promise<void> => {
     // `failMerge` caller 2, `result.kind === 'failed'`: the gate ran against the rebased tree and
-    // turned it down. The commits did not reach the base branch and the reason they did not is the
-    // work itself.
+    // turned it down -- so the work IS judged. It is not yet a verdict: the task goes back to
+    // `rework` with four attempts left, and a gate that fails once and passes the second time is
+    // the ordinary case. A `false` written here could never be taken back (E1), and this column is
+    // the ranker's third rate.
     const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: ['exit 7'] })
     const { taskId } = await seedMergingTask(workspace)
     const implRunId = await implEvidenceFor(taskId)
@@ -634,13 +639,32 @@ describe('integration settles only where work actually reached the base branch (
     await runMergePass(brandWorkspaceId(workspace.id))
 
     expect(await eventTypesFor(workspace.id)).toContain('task.merge_failed')
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('rework')
+    const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })
+    expect(row.integrated).toBeNull()
+    expect(row.settledAt).toBeNull()
+  })
+
+  it('settles FALSE when that same gate failure spends the task’s LAST attempt (E24)', async (): Promise<void> => {
+    // The integration ENDS here: the task is `failed`, nothing will merge this work, and "it never
+    // reached the base branch" is a fact rather than a guess about the next attempt.
+    const workspace = await seedWorkspace({ autoMerge: true, verifyCommands: ['exit 7'] })
+    const { taskId } = await seedMergingTask(workspace, { maxAttempts: 1 })
+    const implRunId = await implEvidenceFor(taskId)
+
+    await runMergePass(brandWorkspaceId(workspace.id))
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: taskId } })).status).toBe('failed')
     expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })).integrated).toBe(false)
   })
 
-  it('settles FALSE on a rebase that CONFLICTED -- the branch no longer applies', async (): Promise<void> => {
+  it('settles NOTHING on a rebase that CONFLICTED, and TRUE when the work later lands (E24)', async (): Promise<void> => {
     // `failMerge` caller 1. The base branch moved under the task: `main` now touches the same line
-    // the task's own commit does, so the rebase cannot replay it. Nobody ran a command to decide
-    // that; the work itself is what does not fit.
+    // the task's own commit does, so the rebase cannot replay it. That is judged -- the branch is
+    // what does not fit -- and it is also the most retryable failure there is: somebody resolves
+    // the conflict and the same work lands. E24's whole point is the SECOND half of this case: the
+    // column is still null, so the later merge settles `true` over it as a first settle, which E1
+    // permits and which a `false` written at the conflict would have made impossible forever.
     const workspace = await seedWorkspace({ autoMerge: true })
     const { taskId } = await seedMergingTask(workspace, { fileName: 'clash.txt', content: 'from the task\n' })
     const implRunId = await implEvidenceFor(taskId)
@@ -652,7 +676,14 @@ describe('integration settles only where work actually reached the base branch (
 
     const failure = await prisma.executionEvent.findFirstOrThrow({ where: { taskId, type: 'task_merge_failed' } })
     expect((failure.payload as { reason: string }).reason).toMatch(/conflicted/u)
-    expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })).integrated).toBe(false)
+    expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })).integrated).toBeNull()
+
+    // The retry, made literal: the work reaches the base branch on a later pass.
+    await settleTaskEvidence(taskId, { kind: 'integration', integrated: true })
+
+    const settled = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: implRunId } })
+    expect(settled.integrated).toBe(true)
+    expect(settled.settledAt).not.toBeNull()
   })
 
   it('settles NOTHING when the post-rebase verify could not RUN -- that is not the worker being judged', async (): Promise<void> => {

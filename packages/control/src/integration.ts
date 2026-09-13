@@ -48,6 +48,13 @@ export async function confirmIntegration(
   // and the row it settles is the IMPLEMENTER's -- the person confirming a merge is judging the
   // work, not the confirmation. A crash between the two leaves an event with no fact rather than a
   // fact with no event, which is the direction R7's backfill can repair.
-  await settleTaskEvidence(taskId, { kind: 'integration', integrated: true })
+  //
+  // AND IT MAY NOT FAIL THE CONFIRMATION (final wave, Minor 6): `integratedAt` is written and
+  // `task.integrated` is appended, so the operator's action is done. A rejected promise here would
+  // report "this task was not confirmed" about a task that was -- and the second press answers
+  // `already_integrated`, which reads as a refusal of something that never happened.
+  await settleTaskEvidence(taskId, { kind: 'integration', integrated: true }).catch((error: unknown) => {
+    console.warn(`[integration] task ${taskId} was confirmed, but its evidence settle failed: ${String(error)}`)
+  })
   return ok(undefined)
 }

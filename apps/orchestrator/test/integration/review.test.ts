@@ -521,6 +521,16 @@ describe('dispatchReviews', () => {
 
     const firstRun = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'review' } })
     expect(firstRun.status).toBe('failed')
+    // M53 erratum E26: THE OUTCOME FOLLOWS THE RUN'S FINAL STATUS. The pump concluded this run
+    // `succeeded` and wrote its fact; `concludeReview` then walked it back to `failed` inside
+    // `verifyConcludedRun`, and `amendRunOutcome` is what keeps the stored row from saying
+    // "Finished" about it. Before this the row was only ever corrected by a backfill, so the same
+    // row's outcome depended on whether a repair script had been run.
+    const fact = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: firstRun.id } })
+    expect(fact.outcome).toBe('failed')
+    // A review run receives no verdict, and an amend is not one: all three stay null.
+    expect([fact.verifiedFirstPass, fact.reviewRejected, fact.integrated]).toEqual([null, null, null])
+    expect(fact.settledAt).toBeNull()
     const afterFirst = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
     expect(afterFirst.status).toBe('reviewing')
     // M41 Task 3b: an invalid verdict leaves the task where it is (this branch's policy) but hands

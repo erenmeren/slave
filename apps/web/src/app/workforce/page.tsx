@@ -68,6 +68,7 @@ export default async function WorkforcePage({
   const query = queryOf(params)
   const filters = parseCatalogFilters(query)
   const filtered = Object.keys(filters).length > 0
+  const initialTab = TAB_IDS.find((id) => id === tab) ?? 'slaves'
   const [slaves, teams, workspaces, companies, roster, catalog, allTemplates, catalogImports, skills, taxonomy, runbooks, evidence] =
     await Promise.all([
       listAllSlaves(),
@@ -89,9 +90,17 @@ export default async function WorkforcePage({
       // M53 R12: the sixth tab's two aggregates, seeded with the domain the URL already claims to
       // be filtering by -- the `parseCatalogFilters` precedent one line up. Both are `GROUP BY`s,
       // so the filter has to be applied where the grouping happens and cannot be a client concern.
-      buildEvidencePage({ domain: query.get('domain') }),
+      //
+      // ONLY FOR THE TAB THAT SHOWS THEM (final wave). Unfiltered, neither aggregate is served by
+      // any of `EvidenceRecord`'s four indexes -- `(profileKey, model, repositoryKey)` cannot
+      // answer `GROUP BY profileKey, repositoryKey`, the GIN index answers only `domains &&`, and
+      // there is no `workspaceId` here -- so this is a sequential scan and a hash aggregate that
+      // grows by one row per run forever. Paying it on every `/workforce` load, five sixths of
+      // which are another tab, is the one read in this milestone that gets worse with age. The tab
+      // asks for it by URL, and `WorkforceClient` asks the server again when somebody selects the
+      // tab from another one.
+      initialTab === 'evidence' ? buildEvidencePage({ domain: query.get('domain') }) : Promise.resolve(null),
     ])
-  const initialTab = TAB_IDS.find((id) => id === tab) ?? 'slaves'
   return (
     <WorkforceClient
       initialTab={initialTab}

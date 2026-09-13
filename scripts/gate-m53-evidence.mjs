@@ -82,6 +82,7 @@ import { gateStateDir } from './lib/state-dir.mjs'
 import { prisma } from '../packages/db/dist/client.js'
 import { EVENT_TYPE_BY_DOMAIN_TYPE } from '../packages/db/dist/enums.js'
 import { createUser, deleteUser, recordRunEvidence } from '../packages/control/dist/index.js'
+import { appendEvent } from '../packages/events/dist/index.js'
 import {
   BASELINE_GRANTS,
   BESPOKE_PROFILE_LABEL,
@@ -894,9 +895,9 @@ try {
   await assertEqual(await evidenceCountFor(spawnRun.id), 0, 'stage 1: evidence rows for a run that failed at SPAWN')
   console.log(
     'stage 1a PASSED: nothing while it was alive, exactly one the instant it concluded, still one after a second ' +
-      'call by hand, and NOTHING AT ALL for a dispatch that never started -- nothing was attempted. (The backfill ' +
-      'in stage 5 records that run as HISTORY, which is E23 and a different claim. Sub-stages 1b to 1e below reach ' +
-      'four more of the seven write sites.)',
+      'call by hand, and NOTHING AT ALL for a dispatch that never started -- nothing was attempted. (Erratum E25: ' +
+      'the backfill in stage 5 agrees, and leaves that run recordless too -- a run with no `run.started` never ran. ' +
+      'Sub-stages 1b to 1e below reach four more of the eight write sites.)',
   )
 
   await stopDaemon(daemonA)
@@ -1251,6 +1252,19 @@ try {
         endedAt,
       },
     })
+    // THE RUN STARTED, and the event says so (erratum E25). Every row this gate seeds stands for a
+    // run that really ran, and `run.started` is what separates one of those from a dispatch that
+    // failed at spawn -- the distinction stage 5's backfill now makes. Appended BEFORE the write so
+    // the derivation reads the same history a live run's would.
+    await appendEvent({
+      type: 'run.started',
+      workspaceId: workspace.id,
+      ...(taskId === null ? {} : { taskId }),
+      slaveId,
+      runId: row.id,
+      actor: 'system',
+      payload: { sessionId: `gate-m53-${row.id}` },
+    })
     const recorded = await recordRunEvidence(row.id)
     if (!recorded.ok) await fail(`could not record the seeded run ${row.id}: ${JSON.stringify(recorded.error)}`)
     return row
@@ -1344,6 +1358,19 @@ try {
         endedAt: new Date(),
       },
     })
+    // The same `run.started` every other seeded run carries (E25): these six stand for runs that
+    // really ran on an installation that predates the record, which is exactly what the backfill
+    // in stage 5 exists to fill in. Without it they would be indistinguishable from a dispatch that
+    // never started, and the backfill would rightly skip them.
+    await appendEvent({
+      type: 'run.started',
+      workspaceId: workspace.id,
+      taskId: backendTask.id,
+      slaveId: workerE.id,
+      runId: row.id,
+      actor: 'system',
+      payload: { sessionId: `gate-m53-${row.id}` },
+    })
     eRuns.push(row)
   }
   console.log(`stage 5: profile E (${templateE.name}) has ${String(eRuns.length)} concluded runs and no record at all -- the backfill's subject`)
@@ -1430,19 +1457,57 @@ try {
   // "Concluded" is a STATUS everywhere in this milestone, and the array asked is the SAME one
   // `evidenceOutcomeOf` and the backfill's own walk read -- never a `terminalAt` predicate, which is
   // the trap Task 4's fix round removed.
+  //
+  // AND "IT RAN" IS AN EVENT (erratum E25). A concluded run with no `run.started` never started --
+  // a dispatch that failed at spawn -- and the pipeline writes no fact for it, so the backfill must
+  // not either. The two lists below are therefore kept apart: the runs a pass SHOULD create, and
+  // the runs it must leave alone however often it is run.
+  const startedRunIds = async () =>
+    new Set(
+      (await prisma.executionEvent.findMany({ where: { type: dbType('run.started') }, select: { runId: true } }))
+        .map((row) => row.runId)
+        .filter((id) => id !== null),
+    )
+  const concludedRunIds = async () =>
+    (
+      await prisma.slaveRun.findMany({
+        where: { status: { notIn: [...NON_TERMINAL_RUN_STATUSES] } },
+        select: { id: true },
+        orderBy: { id: 'asc' },
+      })
+    ).map((row) => row.id)
+  const recordedRunIds = async () =>
+    new Set((await prisma.evidenceRecord.findMany({ select: { runId: true } })).map((row) => row.runId))
   const concludedWithoutRow = async () => {
-    const concluded = await prisma.slaveRun.findMany({
-      where: { status: { notIn: [...NON_TERMINAL_RUN_STATUSES] } },
-      select: { id: true },
-      orderBy: { id: 'asc' },
-    })
-    const recorded = new Set((await prisma.evidenceRecord.findMany({ select: { runId: true } })).map((row) => row.runId))
-    return concluded.filter((row) => !recorded.has(row.id)).map((row) => row.id)
+    const [concluded, recorded, started] = [await concludedRunIds(), await recordedRunIds(), await startedRunIds()]
+    return concluded.filter((id) => !recorded.has(id) && started.has(id))
+  }
+  // Every concluded run with no `run.started`, whether or not it already carries a row: that is
+  // exactly the set the walk counts as `never started`. One of them here DOES have a row -- 1c's
+  // orphan, seeded by hand as a run with no process and concluded by the sweep, which wrote its
+  // fact at the moment it swept it. Being skipped by the repair pass is the correct answer for it
+  // too: the row is already there and this script would only re-derive it.
+  const neverStartedConcluded = async () => {
+    const [concluded, started] = [await concludedRunIds(), await startedRunIds()]
+    return concluded.filter((id) => !started.has(id))
+  }
+  const neverStartedWithoutRow = async () => {
+    const recorded = await recordedRunIds()
+    return (await neverStartedConcluded()).filter((id) => !recorded.has(id))
   }
   const expectedCreated = await concludedWithoutRow()
-  console.log(`stage 5: ${String(expectedCreated.length)} concluded run(s) carry no record yet: ${JSON.stringify(expectedCreated)}`)
+  const expectedNeverStarted = await neverStartedConcluded()
+  const expectedRecordless = await neverStartedWithoutRow()
+  console.log(`stage 5: ${String(expectedCreated.length)} concluded run(s) that STARTED carry no record yet: ${JSON.stringify(expectedCreated)}`)
+  console.log(`stage 5: ${String(expectedNeverStarted.length)} concluded run(s) NEVER STARTED: ${JSON.stringify(expectedNeverStarted)}`)
+  console.log(`stage 5: of those, ${String(expectedRecordless.length)} carry no record and must still carry none afterwards: ${JSON.stringify(expectedRecordless)}`)
   if (!expectedCreated.includes(eRuns[0].id)) {
     await fail("stage 5: profile E's runs are not among the unrecorded concluded runs -- the stage would not be measuring a backfill")
+  }
+  // The spawn failure stage 1 asserted has no row. It is a run that never started, so it is the
+  // subject of the OTHER half of E25 -- and the backfill has to leave it exactly as stage 1 left it.
+  if (!expectedRecordless.includes(spawnRun.id)) {
+    await fail(`stage 5: the spawn-failure run ${spawnRun.id} is not among the never-started unrecorded runs -- E25's two halves are not both measurable here`)
   }
 
   // (a) A dry run writes NOTHING and says what it cannot know.
@@ -1456,6 +1521,16 @@ try {
   }
   if (!dry.stdout.includes('--dry-run: nothing was written')) await fail('stage 5: --dry-run did not say that nothing was written')
   if (!dry.stdout.includes('history is recorded, not judged')) await fail('stage 5: --dry-run did not say that history is recorded and never judged (E23)')
+  // ...and it does NOT offer to create a run that never started (E25). A dry run counts those --
+  // the decision is a read it really makes -- and must never name one among the rows it would write.
+  for (const id of expectedRecordless) {
+    if (dry.stdout.includes(`would record run ${id}`)) {
+      await fail(`stage 5: --dry-run offered to record ${id}, a run with no run.started event -- nothing was ever attempted on it (E25)`)
+    }
+  }
+  if (!new RegExp(`never started ${String(expectedNeverStarted.length)}\\b`, 'u').test(dry.stdout)) {
+    await fail(`stage 5: --dry-run did not report \`never started ${String(expectedNeverStarted.length)}\`: ${JSON.stringify(dry.stdout)}`)
+  }
 
   // (b) The real pass creates exactly those rows.
   const first = runBackfill([])
@@ -1463,7 +1538,15 @@ try {
   const createdMatch = /created (\d+)/u.exec(first.stdout)
   if (createdMatch === null) await fail(`stage 5: the summary line has no \`created N\` in it: ${JSON.stringify(first.stdout)}`)
   await assertEqual(Number(createdMatch[1]), expectedCreated.length, 'stage 5: the rows the backfill created')
-  await assertEqual(await concludedWithoutRow(), [], 'stage 5: concluded runs still carrying no record')
+  await assertEqual(await concludedWithoutRow(), [], 'stage 5: concluded runs that STARTED and still carry no record')
+  // E25, the half a repair script could quietly get wrong: the runs that never started are still
+  // there, still concluded, and still carry no fact -- the same answer stage 1 asserted of the live
+  // pipeline. A profile's `attempted` count now says the same thing whether or not this ran.
+  await assertEqual(await neverStartedWithoutRow(), expectedRecordless, 'stage 5: never-started runs after a real pass -- unchanged, and still unrecorded')
+  await assertEqual(await evidenceCountFor(spawnRun.id), 0, 'stage 5: evidence rows for the spawn failure, after the backfill (E25)')
+  if (!new RegExp(`never started ${String(expectedNeverStarted.length)}\\b`, 'u').test(first.stdout)) {
+    await fail(`stage 5: the real pass did not report \`never started ${String(expectedNeverStarted.length)}\`: ${JSON.stringify(first.stdout)}`)
+  }
 
   // The other half of stage 2's derivation, and the only place it can honestly be measured: a row is
   // written when its run concludes, and the `task.rework` its failed verify causes is appended
@@ -1512,18 +1595,44 @@ try {
   }
   console.log(`stage 5: the whole table is byte-equal across two passes (${String(beforeSecond.length)} characters of JSON, recordedAt included)`)
 
-  // (d) A run whose `run.started` is gone still gets a row -- with zeros in the event-derived
-  // counters and nulls in the three judgement columns. The REVIEW run is the subject on purpose: its
-  // judgement columns are null by the writer's own rule (D16), so what this measures is the
+  // (d) TWO HALVES OF ONE RULE (erratum E25), on one run, in order.
+  //
+  // First: a run with NO `run.started` is a run that never started, and the backfill leaves it
+  // alone -- the same answer the pipeline's own spawn-failure arms give, which is the whole point
+  // of having one rule instead of two. Then, with the event put back: a run that DID start and
+  // whose history is otherwise incomplete is recorded honestly, with zeros in the event-derived
+  // counters and nulls in the three judgement columns. The REVIEW run is the subject on purpose:
+  // its judgement columns are null by the writer's own rule (D16), so what this measures is the
   // backfill's own derivation and not a verdict it inherited.
+  const startedEvents = await prisma.executionEvent.findMany({ where: { runId: reviewRun.run.id, type: dbType('run.started') } })
   const removedStarted = await prisma.executionEvent.deleteMany({ where: { runId: reviewRun.run.id, type: dbType('run.started') } })
   const removedRow = await prisma.evidenceRecord.deleteMany({ where: { runId: reviewRun.run.id } })
   console.log(`stage 5: removed ${String(removedStarted.count)} run.started event(s) and ${String(removedRow.count)} row(s) for review run ${reviewRun.run.id}`)
+  const skippedPass = runBackfill([])
+  console.log(`stage 5: the pass over a run with no run.started printed:\n${skippedPass.stdout}`)
+  await assertEqual(await evidenceCountFor(reviewRun.run.id), 0, 'stage 5: rows for a run with no run.started event -- it never started, so it has no fact (E25)')
+  if (!new RegExp(`never started ${String(expectedNeverStarted.length + 1)}\\b`, 'u').test(skippedPass.stdout)) {
+    await fail(`stage 5: the pass did not count the review run among the never started: ${JSON.stringify(skippedPass.stdout)}`)
+  }
+
+  // The event back, exactly as it was -- the run really did run, and the gate is not allowed to
+  // leave this database saying otherwise.
+  const wasStarted = startedEvents[0]
+  if (wasStarted === undefined) await fail('stage 5: the review run had no run.started event to remove -- (d) would measure nothing')
+  await appendEvent({
+    type: 'run.started',
+    workspaceId: workspace.id,
+    taskId: wasStarted.taskId,
+    slaveId: wasStarted.slaveId,
+    runId: reviewRun.run.id,
+    actor: 'system',
+    payload: wasStarted.payload,
+  })
   const third = runBackfill([])
   console.log(`stage 5: the pass over a run whose history is incomplete printed:\n${third.stdout}`)
   const repaired = await evidenceFor(reviewRun.run.id)
   console.log(`stage 5: the repaired row = ${describeEvidence(repaired)}`)
-  if (repaired === null) await fail('stage 5: a run whose run.started event is gone got no row at all')
+  if (repaired === null) await fail('stage 5: a run that started, whose other events are gone, got no row at all')
   await assertEqual(
     [repaired.attempt, repaired.reworkCycles, repaired.humanInterventions, repaired.recoveries],
     [1, 0, 0, 0],
@@ -1536,7 +1645,8 @@ try {
   )
   console.log(
     'stage 5 PASSED: a dry run wrote nothing and said what it could not know, the real pass created exactly the ' +
-      'rows history was missing, a second pass was byte-equal to the first, and nothing anywhere was judged by it',
+      'rows history was missing and NOT ONE row for a run that never started (E25 -- the spawn failure stage 1 ' +
+      'asserted is still recordless), a second pass was byte-equal to the first, and nothing anywhere was judged by it',
   )
 
   // ============================================================================================

@@ -1591,12 +1591,18 @@ describe('the world M53 hands the ranker (R8, R9, R10, errata E7/E8)', () => {
   it('reads NOTHING when no staffable task asks for a capability (erratum E8)', async (): Promise<void> => {
     await seedEvidenceRows(fixture, 6)
     await setStaffingPreference(fixture.workspaceId, { capability: 'backend.services', model: 'opus' })
+    await prisma.slavePermission.create({ data: { slaveId: fixture.slaveId, kind: 'run_commands', mode: 'deny' } })
     await prisma.task.updateMany({ where: { workspaceId: fixture.workspaceId }, data: { requiredCapabilities: [] } })
     const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
     expect(world.evidence).toEqual([])
     expect(world.staffingPreferences).toEqual([])
     expect(world.company).toEqual([])
     expect(world.catalog).toEqual([])
+    // ...and the DENIES wait on the same gate (final wave, R10). The only reader of `deniedKinds`
+    // is the ranker's permission step, and the ranker runs only where the four above run -- so an
+    // ungated load was one indexed query per tick, on every project forever, for a list nobody
+    // would read. The deny row above exists and is deliberately not carried here.
+    for (const slave of world.slaves) expect(slave.deniedKinds).toEqual([])
   })
 
   it('reads no denials query at all when the workspace holds no `SlavePermission` row', async (): Promise<void> => {

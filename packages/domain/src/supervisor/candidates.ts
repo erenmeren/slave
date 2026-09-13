@@ -154,14 +154,22 @@ export function teamPlanOf(world: SupervisorWorld): TeamPlan {
     // and a map with a row per worker would say "we looked" where nothing was refused.
     if (slave.deniedKinds.length > 0) deniedKinds.set(slave.id, slave.deniedKinds)
   }
+  // `profileKeyOf` and never a `template:` literal written out here (final wave): R1's key has one
+  // spelling, in `evidence/derive.ts`, and a second one beside it is how the world's keys and the
+  // record's keys eventually stop matching for a reason nobody can see. Both kinds always carry a
+  // template (`CompanySlave.templateId` is NOT NULL, and a catalog entry IS one), so both resolve
+  // to `template:<id>`; the `slaveId` half is what the helper falls back to and neither needs.
   for (const worker of world.company) {
     templateOf.set(worker.companySlaveId, worker.templateId)
-    profileKeys.set(worker.companySlaveId, `template:${worker.templateId}`)
+    profileKeys.set(
+      worker.companySlaveId,
+      profileKeyOf({ slaveId: worker.companySlaveId, hiredFromTemplateId: worker.templateId }),
+    )
   }
   for (const entry of world.catalog) {
     templateOf.set(entry.templateId, entry.templateId)
     modelOf.set(entry.templateId, entry.defaultModel)
-    profileKeys.set(entry.templateId, `template:${entry.templateId}`)
+    profileKeys.set(entry.templateId, profileKeyOf({ slaveId: entry.templateId, hiredFromTemplateId: entry.templateId }))
   }
 
   const ranking: TeamRanking = {

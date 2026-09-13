@@ -2,6 +2,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
+  amendRunOutcome,
   evidenceByModel,
   evidenceByProfile,
   evidenceForProfiles,
@@ -209,6 +210,79 @@ describe('settleTaskEvidence (erratum E2)', () => {
   it('is a silent no-op for a task with no implementation run at all', async (): Promise<void> => {
     await prisma.slaveRun.update({ where: { id: fixture.runId }, data: { kind: 'review' } })
     await expect(settleTaskEvidence(fixture.taskId, { kind: 'integration', integrated: true })).resolves.toBeUndefined()
+  })
+
+  it('finds a run whose STATUS concluded even though `terminalAt` was never written', async (): Promise<void> => {
+    // The second definition of "concluded" the final wave removed from here. `SlaveRun.terminalAt`
+    // has only been written by the pump since M5 Task 12, so a pre-M5 run the backfill records
+    // carries null -- and a settle that filtered on it could never find that row, while a NEWER
+    // such run being skipped means the verdict lands on an OLDER run's row.
+    await recordRunEvidence(fixture.runId)
+    await prisma.slaveRun.update({ where: { id: fixture.runId }, data: { terminalAt: null } })
+
+    await settleTaskEvidence(fixture.taskId, { kind: 'verify', verdict: 'passed' })
+
+    expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: fixture.runId } })).verifiedFirstPass).toBe(true)
+  })
+})
+
+/**
+ * M53 erratum E26: the outcome follows the run's FINAL status.
+ *
+ * Three sites walk a run back from `succeeded` to `failed` AFTER the pump has concluded it and
+ * written its fact. This verb is what keeps the stored row honest at those three, and the whole of
+ * what it may touch is one column.
+ */
+describe('amendRunOutcome (erratum E26)', () => {
+  it('re-derives the outcome of a run walked back from succeeded to failed', async (): Promise<void> => {
+    await recordRunEvidence(fixture.runId)
+    expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: fixture.runId } })).outcome).toBe('succeeded')
+    await prisma.slaveRun.update({ where: { id: fixture.runId }, data: { status: 'failed' } })
+
+    const result = await amendRunOutcome(fixture.runId)
+
+    expect(result.ok).toBe(true)
+    expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: fixture.runId } })).outcome).toBe('failed')
+  })
+
+  it('touches NOTHING else: not a judgement column, not `recordedAt`, not `settledAt`', async (): Promise<void> => {
+    await recordRunEvidence(fixture.runId)
+    await recordRunEvidence(fixture.runId, { settle: { kind: 'verify', verdict: 'passed' } })
+    const before = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: fixture.runId } })
+    await prisma.slaveRun.update({ where: { id: fixture.runId }, data: { status: 'failed' } })
+
+    await amendRunOutcome(fixture.runId)
+
+    const after = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: fixture.runId } })
+    expect(after).toEqual({ ...before, outcome: 'failed' })
+  })
+
+  it('is idempotent, and CREATES no row for a run nobody recorded', async (): Promise<void> => {
+    await prisma.slaveRun.update({ where: { id: fixture.runId }, data: { status: 'stopped' } })
+
+    expect((await amendRunOutcome(fixture.runId)).ok).toBe(true)
+    expect(await prisma.evidenceRecord.count()).toBe(0)
+
+    await recordRunEvidence(fixture.runId)
+    await amendRunOutcome(fixture.runId)
+    await amendRunOutcome(fixture.runId)
+    expect(await prisma.evidenceRecord.count()).toBe(1)
+    expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: fixture.runId } })).outcome).toBe('stopped')
+  })
+
+  it('writes nothing for a run that can still move -- there is no outcome to follow yet', async (): Promise<void> => {
+    await recordRunEvidence(fixture.runId)
+    await prisma.slaveRun.update({ where: { id: fixture.runId }, data: { status: 'working' } })
+
+    expect((await amendRunOutcome(fixture.runId)).ok).toBe(true)
+
+    expect((await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: fixture.runId } })).outcome).toBe('succeeded')
+  })
+
+  it('refuses a runId that names no run, before any write (R13, erratum E3)', async (): Promise<void> => {
+    const result = await amendRunOutcome('00000000-0000-0000-0000-000000000000')
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error.kind).toBe('run_not_found')
   })
 })
 

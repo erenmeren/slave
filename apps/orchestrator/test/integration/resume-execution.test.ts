@@ -369,6 +369,15 @@ describe('executing a resume intent from the daemon', () => {
       expect(task.lastRejectionReason).toBeNull()
 
       expect(await prisma.executionEvent.count({ where: { runId, type: 'run_failed' } })).toBe(1)
+
+      // M53 R3, erratum E25: THE EIGHTH WRITE SITE. This run is not a spawn failure in the sense R3
+      // means -- it STARTED, produced output and paused, and only the RESUME could not be spawned.
+      // "Nothing was attempted" is untrue here, so it gets exactly one fact, like every other
+      // terminal transition, and the profile's record stops depending on whether anybody ever ran
+      // the repair script.
+      const fact = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId } })
+      expect(fact.outcome).toBe('failed')
+      expect(await prisma.evidenceRecord.count({ where: { runId } })).toBe(1)
     }, 60_000)
 
     it('parks the task failed at maxAttempts and starts no run on the next tick', async (): Promise<void> => {

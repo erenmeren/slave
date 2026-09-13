@@ -239,8 +239,9 @@ export function formTeam(input: TeamInput): TeamPlan {
   const proposals: TeamProposal[] = []
   const outstanding = new Set(missing)
 
-  // 1. The existing capable worker: idle first (a busy worker's roles must not change under its
-  // own run), then slave id. Grouped BY WORKER (fix round 1) so one person who provides three of
+  // 1. The existing capable worker, chosen by the SIX STEPS (M53 R8) and no longer by "idle first,
+  // then slave id" -- availability is step 4 of seven now, and the loop below says so where it
+  // builds the field. Grouped BY WORKER (fix round 1) so one person who provides three of
   // the gaps is one proposal covering three, not three proposals naming the same person -- the
   // same minimality rule the other two tiers already followed, and the same `covers` list a reader
   // uses to see what one decision buys.

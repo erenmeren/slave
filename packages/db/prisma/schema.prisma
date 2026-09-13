@@ -995,6 +995,11 @@ model EvidenceRecord {
   /// all three null forever: a reviewer receives no verdict.
   verifiedFirstPass Boolean?
   reviewRejected    Boolean?
+  /// `integrated` is the one of the three that is NOT a one-per-run verdict (erratum E24): a merge
+  /// can fail and be retried, so `false` is written only where the integration ENDS -- a judged
+  /// failure that spent the task's last attempt -- and `true` where the commits reached the base
+  /// branch. A retryable merge failure leaves it null, and a later successful merge settles `true`
+  /// over that null as a first settle.
   integrated        Boolean?
   /// The `task.rework` events appended after this run started. 0 or 1 in today's pipeline; an Int
   /// and not a Boolean because nothing guarantees one and a column that could silently be 2 must be

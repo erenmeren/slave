@@ -471,6 +471,36 @@ become advisory relationships — shown on the profile and on the Organization t
 tie between two equally capable candidates, and never, under any circumstance, allowed to decide
 who does the work.
 
+## The record
+
+Every run that finishes leaves one row: which profile and which model did it, on which checkout,
+what the task asked for, what happened, which attempt it was, and — as three separate figures,
+never one sum — what it cost when anybody measured it. Workforce → **Evidence** shows it two ways,
+per profile and per model, and the Supervisor reads the same rows when it picks who to staff.
+Nothing here is a score: there is no rating column, the sort is stated in words under each table,
+and a rate whose own sample is too small says "Insufficient evidence" instead of a percentage.
+
+```bash
+npm run orchestrator -- evidence list [--workspace <id>] [--domain <d>]   # the 200 most recent rows
+npm run orchestrator -- staffing prefer --capability <key> [--template <id>] [--model <m>]
+npm run backfill:evidence
+```
+
+**Existing projects: run `backfill:evidence` once.** The Evidence tab is empty on every
+installation that predates it, because the rows are written as runs conclude and nothing rewrites
+history on its own. The script walks every concluded run that ever started and calls the same
+writer the pipeline calls, so a filled-in row is identical to a live one. It is safe to run while
+the daemon is running, it can be run again as often as you like (a second pass writes the same
+bytes), and it **records history without judging it** — a backfilled run's verify, review and
+integration columns stay "not judged yet", because a verdict belongs to the moment somebody
+reached it. It is also the repair: if a crash lands between a run's conclusion and its row, this
+puts the row back. `--dry-run` says what it would do and writes nothing.
+
+One thing moved rather than disappearing: `/analytics` no longer shows a `Spend` tile or a
+per-slave cost table. A single sum silently mixed the runs whose cost was reported, the ones whose
+cost was estimated from tokens, and the ones nobody measured at all — so the money is on the
+Evidence tab now, where each figure says which of the three it is.
+
 ## Runbooks
 
 A runbook is the way a project works, written down: an ordered list of stages, each with an

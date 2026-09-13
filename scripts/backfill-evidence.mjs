@@ -4,7 +4,7 @@
 //   npm run backfill:evidence -- --batch 500
 //   npm run backfill:evidence -- --dry-run
 //
-// Walks every CONCLUDED `SlaveRun`, in `id` order, in bounded batches, and calls the SAME
+// Walks every CONCLUDED `SlaveRun` THAT EVER STARTED, in `id` order, in bounded batches, and calls the SAME
 // `recordRunEvidence` the pipeline calls. There is one derivation in this system and this script
 // does not add a second: a rule written twice is a rule that eventually disagrees with itself, and
 // the thing it would disagree about here is whether a profile is any good.
@@ -33,8 +33,8 @@
 // pass. `alreadyJudged` below counts rows that were ALREADY judged, by the pipeline, before this
 // script ran; it is a reading and never a write.
 //
-// SAFE ON A LIVE DATABASE, and this is the second reason it exists. Seven transitions write a fact
-// the moment a run concludes (plan erratum E22), and a crash between the terminal status write and
+// SAFE ON A LIVE DATABASE, and this is the second reason it exists. Eight transitions write a fact
+// the moment a run concludes (plan errata E22 and E25), and a crash between the terminal status write and
 // its evidence write leaves a run with no fact that nothing re-derives on its own. THIS IS THE
 // REPAIR: it is idempotent, it goes through the one writer, it reads and writes in bounded batches
 // rather than locking a table, and it settles nothing. Run it while the daemon is running.
@@ -50,13 +50,32 @@
 // operator how many rows were already there — that is a report about the pass, read once per batch
 // in a single query, and it gates nothing.
 //
-// RUNS WHOSE EVENTS ARE INCOMPLETE are the normal case on an old database, and they are recorded
-// honestly rather than skipped: the run-local columns (outcome, duration, cost, provenance, kind and
-// all four dimension keys) come from the `SlaveRun` ROW, which always exists; the event-derived
-// counters read a count over a possibly-empty set and record zero, because a count over nothing IS
-// zero; and the three JUDGEMENT columns stay null -- "nobody judged this, or the record of the
-// judgement is gone" -- rather than settling `false`, which would manufacture a failure. A `false`
-// written here could never be taken back (erratum E1) and it feeds a staffing decision.
+// A RUN THAT NEVER STARTED IS NOT HISTORY, AND IS SKIPPED (erratum E25, final wave). The
+// discriminator is one event: `run.started`, appended by the pump the moment a child is actually
+// running (`pump.ts:715`). A `SlaveRun` row without one is a dispatch that failed at spawn -- the
+// worktree could not be provisioned, the CLI could not be started -- and R3 says those write NO
+// fact: nothing was attempted, and a profile whose dispatches failed to spawn has not been
+// evidenced about. The pipeline's three spawn-failure arms stay silent, and this script now agrees
+// with them instead of quietly filling in rows the live system refuses: before the final wave, a
+// profile's `attempted` count, the by-model table and the step-6 duration median all changed
+// depending on whether an operator had ever run this script, because each of those rows
+// contributed a sub-second duration nobody worked. They are counted as `never started` and named
+// in neither the created nor the skipped total.
+//
+// THE COST OF THAT RULE, STATED: a run that really ran and whose `run.started` event was later
+// deleted is indistinguishable here from one that never started, and this script will not record
+// it. That is the price of having ONE rule for the live sites and the repair, and it is the right
+// way round -- inventing history for a dispatch that never happened is worse than declining to
+// re-create history somebody deleted.
+//
+// RUNS WHOSE EVENTS ARE OTHERWISE INCOMPLETE are the normal case on an old database, and they are
+// recorded honestly rather than skipped: the run-local columns (outcome, duration, cost, provenance,
+// kind and all four dimension keys) come from the `SlaveRun` ROW, which always exists; the
+// event-derived counters read a count over a possibly-empty set and record zero, because a count
+// over nothing IS zero; and the three JUDGEMENT columns stay null -- "nobody judged this, or the
+// record of the judgement is gone" -- rather than settling `false`, which would manufacture a
+// failure. A `false` written here could never be taken back (erratum E1) and it feeds a staffing
+// decision.
 //
 // A run this script cannot record is COUNTED AND REPORTED, never fatal: one unreadable row must not
 // stop an operator filling in five years of history. The counters name the two classes apart --
@@ -74,7 +93,8 @@
 // cannot know which runs the writer would refuse: `skipped`, `skippedSimulation` and
 // `skippedIncomplete` come back `null` rather than `0`, and the summary says so instead of printing
 // a clean pass nobody measured. What it CAN know it names: every run it would create is printed by
-// id as it is reached.
+// id as it is reached, and `skippedNeverStarted` is a NUMBER even in a dry run -- that decision is
+// a read this pass really makes, not an answer only the writer has.
 //
 // IT IS NOT A MIGRATION. `20260913090000_m53_evidence` is additive DDL and carries no data statement
 // at all; the data arrives here, run once by a person who chose to run it. That is ADR 0003's
@@ -107,6 +127,7 @@ export async function backfillEvidence({ batchSize = 200, dryRun = false, record
   let alreadyJudged = 0
   let skippedSimulation = 0
   let skippedIncomplete = 0
+  let skippedNeverStarted = 0
 
   for (;;) {
     // A CURSOR and never an OFFSET: an offset re-reads and re-sorts everything it skips, which on a
@@ -137,30 +158,54 @@ export async function backfillEvidence({ batchSize = 200, dryRun = false, record
       ).map((row) => [row.runId, row.settledAt]),
     )
 
-    /** What this run was before the pass touched it -- counted once, whether written or dry-run. */
+    // DID THIS RUN EVER START? One query per batch on the `(runId, seq)` index -- the same index
+    // the derivation's own event read is bounded by, never a predicate on `type` alone -- and the
+    // answer is the whole of erratum E25's rule: a `SlaveRun` row with no `run.started` event is a
+    // dispatch that failed at spawn, the pipeline writes no fact for it, and neither does this.
+    const started = new Set(
+      (
+        await prisma.executionEvent.findMany({
+          where: { runId: { in: runs.map((run) => run.id) }, type: 'run_started' },
+          select: { runId: true },
+        })
+      ).map((row) => row.runId),
+    )
+
+    /** What this run was before the pass touched it -- the `alreadyPresent` half, counted once. */
     const countPresence = (runId) => {
-      if (!before.has(runId)) {
-        created += 1
-        return
-      }
       alreadyPresent += 1
       // The row was judged by the PIPELINE, before this script ran. Counted so a repair pass can be
       // read; never written to (erratum E23).
       if (before.get(runId) !== null) alreadyJudged += 1
     }
 
+    /** The runs the writer answered `ok` for and that had no row before: candidates for `created`,
+     *  confirmed against the table below rather than assumed. */
+    const wrote = []
+
     for (const run of runs) {
       scanned += 1
+      // E25: never started, so nothing was attempted and there is no fact. Before the dry-run
+      // branch, because this is a decision and not a write -- a dry run that named this run among
+      // the ones it would create would be describing a pass that will not happen.
+      if (!started.has(run.id)) {
+        skippedNeverStarted += 1
+        continue
+      }
       // --dry-run decides everything and writes nothing. The run it would CREATE is named as it is
       // reached -- a count alone is not something an operator can check against their own records.
       if (dryRun) {
-        if (!before.has(run.id)) process.stdout.write(`backfill: would record run ${run.id}\n`)
-        countPresence(run.id)
+        if (before.has(run.id)) countPresence(run.id)
+        else {
+          process.stdout.write(`backfill: would record run ${run.id}\n`)
+          created += 1
+        }
         continue
       }
       const result = await recordOne(run.id)
       if (result.ok) {
-        countPresence(run.id)
+        if (before.has(run.id)) countPresence(run.id)
+        else wrote.push(run.id)
       } else {
         if (result.error.kind === 'run_not_found') skippedSimulation += 1
         else skippedIncomplete += 1
@@ -168,6 +213,17 @@ export async function backfillEvidence({ batchSize = 200, dryRun = false, record
         // log is missing, and `refusalText` is the sentence this system already has for it.
         process.stderr.write(`backfill: skipped run ${run.id}: ${refusalText(result.error)}\n`)
       }
+    }
+
+    // `created` IS MEASURED, NOT ASSUMED (final wave, carried T4 minor). `recordRunEvidence`
+    // answers `ok` without writing anything when the run it reads is no longer terminal -- a run
+    // this walk saw as concluded and a resume claimed a moment later -- so counting a create on
+    // every `ok` reports rows that do not exist. One read per batch, over the ids the writer
+    // accepted and nothing else, and a write-less `ok` then lands in no counter at all: it is
+    // `scanned`, and honestly nothing more.
+    if (wrote.length > 0) {
+      const now = await prisma.evidenceRecord.findMany({ where: { runId: { in: wrote } }, select: { runId: true } })
+      created += now.length
     }
     cursor = runs[runs.length - 1].id
   }
@@ -187,6 +243,11 @@ export async function backfillEvidence({ batchSize = 200, dryRun = false, record
     skipped: dryRun ? null : skippedSimulation + skippedIncomplete,
     skippedSimulation: dryRun ? null : skippedSimulation,
     skippedIncomplete: dryRun ? null : skippedIncomplete,
+    // A NUMBER IN BOTH MODES (E25), and deliberately not part of `skipped` above: "this run never
+    // started" is decided by a read a dry run really makes, while every other skip is an answer
+    // only the writer has. Kept apart in the summary too -- a run that never ran is not a row this
+    // pass failed to record.
+    skippedNeverStarted,
   }
 }
 
@@ -197,7 +258,8 @@ const USAGE = `usage: npm run backfill:evidence -- [--batch <n>] [--dry-run]
                 changes how often the database is asked and never what the pass records.
   --dry-run     decide everything, write nothing, and name by id every run it would create. A dry
                 run hands no run to the writer, so it cannot report what would be skipped, and it
-                does not pretend to.
+                does not pretend to -- but it does count the runs that never started, which is a
+                read and not a refusal.
 
 Fills in the record for every concluded run that has none, and re-derives the ones that do -- safe
 to run on a live database, and the repair when a crash lost a run's evidence write.
@@ -205,6 +267,9 @@ to run on a live database, and the repair when a crash lost a run's evidence wri
 History is recorded, not judged: a backfilled run's verify, review and integration columns stay
 "not judged yet". A verdict is the live pipeline's act at the moment somebody reached it, and this
 script never settles one.
+
+A run with no run.started event never ran -- a dispatch that failed at spawn -- and is skipped and
+counted as "never started", exactly as the pipeline writes no fact for it.
 `
 
 /** `--batch <n>`, a positive integer, and `--dry-run`. Anything else is a typo worth refusing. */
@@ -236,12 +301,15 @@ function summaryOf(report) {
   const facts =
     `scanned ${report.scanned}, ${report.dryRun ? 'would record' : 'recorded'} ${report.recorded} ` +
     `(${report.dryRun ? 'would create' : 'created'} ${report.created}, ` +
-    `already present ${report.alreadyPresent}, already judged ${report.alreadyJudged})`
+    `already present ${report.alreadyPresent}, already judged ${report.alreadyJudged}), ` +
+    `never started ${report.skippedNeverStarted}`
   // The judgement sentence on EVERY pass, not only in the usage text: the operator who reads this
   // line is the one about to believe the record is complete (erratum E23).
   const judged =
     'history is recorded, not judged: a backfilled run\'s verify, review and integration columns stay\n' +
-    '"not judged yet", and the already judged count above was judged by the pipeline, never here.\n'
+    '"not judged yet", and the already judged count above was judged by the pipeline, never here.\n' +
+    'never started = runs with no run.started event: a dispatch that failed to spawn attempted\n' +
+    'nothing, so it has no fact here and none in the pipeline either.\n'
   if (report.dryRun) {
     return (
       `${facts}\n` +

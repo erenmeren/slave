@@ -12,6 +12,7 @@ import {
   type TaskStatus,
 } from '@slave-of-ai/domain'
 import {
+  amendRunOutcome,
   listCapabilities,
   loadSupervisorWorld,
   readRunbookById,
@@ -510,6 +511,12 @@ interface ConcludingRun {
  */
 async function failRun(run: ConcludingRun, workspaceId: string, reason: string): Promise<void> {
   await prisma.slaveRun.updateMany({ where: { id: run.id, status: 'succeeded' }, data: { status: 'failed' } })
+  // M53 erratum E26: THE OUTCOME FOLLOWS THE RUN'S FINAL STATUS. The pump concluded this run
+  // `succeeded` and wrote its fact before `verifyConcludedRun` ever called into this file, so
+  // without this line the stored row says "Finished" about a run this function just failed. The
+  // verb re-derives ONE column, settles nothing, creates nothing, and is a no-op for a run with no
+  // row -- and its Result is discarded for the reason every other evidence call site discards it.
+  await amendRunOutcome(run.id)
   await appendEvent({
     type: 'run.failed',
     workspaceId,

@@ -1355,7 +1355,15 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
   // M53 R3: the fourth and last of this file's terminal transitions. Below the `concluded.count ===
   // 0` early return above, so a run somebody else had already concluded is theirs to record, and
   // after the emit pair, so the row and the events a backfill would re-derive it from agree.
-  await recordRunEvidence(runId)
+  //
+  // AND IT MAY NOT THROW PAST THIS FUNCTION (final wave, Minor 6). This is the CLEAN conclusion,
+  // and the caller runs `verifyConcludedRun` next -- the pass that moves the TASK. A rejected
+  // promise here would leave a succeeded run whose task never advanced, for a write the comment in
+  // this file's gate-failure arm already calls the least load-bearing thing in it: the fact is
+  // re-derivable from the row and its events, and `npm run backfill:evidence` is the repair.
+  await recordRunEvidence(runId).catch((error: unknown) => {
+    console.warn(`[pump] run ${runId} concluded, but its evidence write failed: ${String(error)}`)
+  })
 
   return outcome
 }

@@ -95,7 +95,16 @@ export async function requestStop(
     // event, exactly like the other six: the fact belongs to whoever actually concluded the run,
     // and `recordRunEvidence` is idempotent on `runId`, so the pump winning or losing the race is
     // harmless either way -- one row, `outcome: 'stopped'`, one human intervention counted.
-    await recordRunEvidence(run.id)
+    //
+    // AND IT MAY NOT FAIL THE STOP (final wave, Minor 6). The run is already `stopped`, the child
+    // is already signalled and `run.stopped` is already appended -- everything an operator asked
+    // for has happened. A database hiccup inside the fact write would otherwise propagate out of
+    // this verb and report the cancel as failed, which is both wrong and the kind of wrong that
+    // makes somebody press it again. The fact is the least load-bearing thing here and is
+    // re-derivable: `npm run backfill:evidence` is the repair, and it says so.
+    await recordRunEvidence(run.id).catch((error: unknown) => {
+      console.warn(`[stop] run ${run.id} was stopped, but its evidence write failed: ${String(error)}`)
+    })
   }
   return ok(undefined)
 }

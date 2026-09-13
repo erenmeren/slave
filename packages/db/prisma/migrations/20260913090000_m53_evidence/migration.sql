@@ -1,7 +1,8 @@
 -- M53: the fact table, the staffing decision, and one event type.
 --
 -- ADDITIVE ONLY, and with NO DATA STATEMENT AT ALL -- the one difference from M52's migration in
--- this directory. Two enums, two tables, three indexes and one `EventType` member; every existing
+-- this directory. Two enums, two tables, five indexes (four on `EvidenceRecord`, counting its
+-- `runId` unique, and `StaffingPreference`'s own unique) and one `EventType` member; every existing
 -- row, column, index and constraint is untouched. The HISTORY arrives from
 -- `scripts/backfill-evidence.mjs` (R7), run once by an operator, which calls the same
 -- `recordRunEvidence` the pipeline calls -- so there is one derivation rather than a second one

@@ -168,7 +168,9 @@ async function loadCatalogEntries(
  *
  * One `findMany` over `SlavePermission` where the mode is `deny`, keyed on the slave ids the caller
  * already holds, grouped into a map. SKIPPED ENTIRELY -- an empty map and no query at all -- when
- * there are no workers, the bounded-loader rule {@link loadDenials} states for its own id list.
+ * there are no workers, the bounded-loader rule {@link loadDenials} states for its own id list,
+ * and (final wave) when the board asks for no capability: the caller's own `asksForCapabilities`
+ * gate, because the only reader of this map is the ranker's permission step.
  *
  * NOT a `$queryRaw`, unlike the three loaders it sits beside (plan decision D19): those are raw
  * because they group `ExecutionEvent` payloads, which Prisma cannot express. `SlavePermission` is a
@@ -906,15 +908,23 @@ export async function loadSupervisorWorld(
         ? await loadProfileEvidence(tx, [
             ...new Set([
               ...slaveRows.map((row) => profileKeyOf({ slaveId: row.id, hiredFromTemplateId: row.hiredFromTemplateId })),
-              ...companyRows.map((row) => `template:${row.templateId}`),
-              ...catalogRows.map((row) => `template:${row.templateId}`),
+              // `profileKeyOf` and never a `template:` literal (final wave): R1's key has one
+              // spelling, and both kinds always carry a template, so both answer `template:<id>`.
+              ...companyRows.map((row) => profileKeyOf({ slaveId: row.companySlaveId, hiredFromTemplateId: row.templateId })),
+              ...catalogRows.map((row) => profileKeyOf({ slaveId: row.templateId, hiredFromTemplateId: row.templateId })),
             ]),
           ])
         : []
 
-      // M53 R10 (plan erratum E7). One query for the whole board, never one per worker, and none at
-      // all on a project with no workers.
-      const deniedKinds = await loadDeniedKinds(tx, slaveRows.map((row) => row.id))
+      // M53 R10 (plan erratum E7). One query for the whole board, never one per worker, none at all
+      // on a project with no workers -- and none at all on a project with no staffing question,
+      // which is the gate the final wave added: `deniedKinds` is read by the RANKER's permission
+      // step and by nothing else, and the ranker runs only where the preference, the record, the
+      // roster and the catalog above already run. Ungated, this was one indexed `findMany` per tick
+      // on every project forever, for a list nobody would read.
+      const deniedKinds = asksForCapabilities
+        ? await loadDeniedKinds(tx, slaveRows.map((row) => row.id))
+        : new Map<string, readonly PermissionKind[]>()
 
       const runbooks = canRecommend ? await loadRunbooks(tx) : []
 

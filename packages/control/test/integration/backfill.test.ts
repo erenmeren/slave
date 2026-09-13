@@ -115,8 +115,10 @@ describe('backfillEvidence (M53 R7)', () => {
     const report = await backfillEvidence({ batchSize: 2 })
 
     expect(report.recorded).toBe(3)
-    // The live runs are not "skipped" by a branch: `terminalAt IS NOT NULL` is the walk's own
-    // `where`, so they are never scanned at all. A run still moving is evidence about nothing.
+    // The live runs are not "skipped" by a branch: `status NOT IN NON_TERMINAL_RUN_STATUSES` is the
+    // walk's own `where` -- a STATUS and never a `terminalAt` predicate, which is the second
+    // definition of "concluded" Task 4's fix round removed -- so they are never scanned at all. A
+    // run still moving is evidence about nothing.
     expect(report.scanned).toBe(3)
     expect(await prisma.evidenceRecord.count()).toBe(3)
   })
@@ -171,9 +173,33 @@ describe('backfillEvidence (M53 R7)', () => {
     )
   })
 
-  it('records a run whose `run.started` event has been REMOVED, with zeros and nulls (R7)', async (): Promise<void> => {
+  it('SKIPS a run with no `run.started` event -- it never ran, so it has no fact (E25)', async (): Promise<void> => {
+    // The spawn-failure shape: a `SlaveRun` row exists and is terminal, and nothing ever started.
+    // R3 says the pipeline's own spawn-failure arms write no fact for it -- "nothing was attempted,
+    // and a profile whose dispatches failed to spawn has not been evidenced about" -- and before
+    // erratum E25 this script recorded one anyway, so a profile's attempted count, the by-model
+    // table and the duration median all moved the first time an operator ran the repair.
+    const neverStarted = await seedTerminalRun(fixture)
+    await prisma.executionEvent.deleteMany({ where: { runId: neverStarted } })
+    const ran = await seedTerminalRun(fixture)
+
+    const report = await backfillEvidence({})
+
+    expect(await prisma.evidenceRecord.count({ where: { runId: neverStarted } })).toBe(0)
+    expect(await prisma.evidenceRecord.count({ where: { runId: ran } })).toBe(1)
+    expect(report.scanned).toBe(2)
+    expect(report.created).toBe(1)
+    // Counted APART from the writer's refusals: nobody refused this row, and it is not a row the
+    // pass failed to record.
+    expect(report.skippedNeverStarted).toBe(1)
+    expect(report.skipped).toBe(0)
+  })
+
+  it('records a run that STARTED whose other events are gone, with zeros and nulls (R7)', async (): Promise<void> => {
     const runId = await seedTerminalRun(fixture)
-    await prisma.executionEvent.deleteMany({ where: { runId } })
+    // Everything except the one event that says it ran. This is the "incomplete history" case R7 is
+    // actually about: the run happened, and the record of what happened during it is partial.
+    await prisma.executionEvent.deleteMany({ where: { runId, type: { not: 'run_started' } } })
 
     await backfillEvidence({})
 
@@ -286,11 +312,25 @@ describe('backfillEvidence (M53 R7)', () => {
     expect(dry.skippedSimulation).toBeNull()
     expect(dry.skippedIncomplete).toBeNull()
     expect(dry.dryRun).toBe(true)
+    // ...and `skippedNeverStarted` IS a number, in both modes (E25): whether a run ever started is
+    // decided by a read this pass really makes, not by an answer only the writer has.
+    expect(dry.skippedNeverStarted).toBe(0)
 
     // A real pass measures them, and says so with numbers.
     const real = await backfillEvidence({})
     expect(real.skipped).toBe(0)
     expect(real.dryRun).toBe(false)
+  })
+
+  it('--dry-run counts a never-started run and does not offer to record it (E25)', async (): Promise<void> => {
+    const neverStarted = await seedTerminalRun(fixture)
+    await prisma.executionEvent.deleteMany({ where: { runId: neverStarted } })
+
+    const { report, printed } = await capturingStdout(() => backfillEvidence({ dryRun: true }))
+
+    expect(report.skippedNeverStarted).toBe(1)
+    expect(report.created).toBe(0)
+    expect(printed).not.toContain(`would record run ${neverStarted}`)
   })
 
   it('nothing simulated crosses into the record (R6, R13)', async (): Promise<void> => {

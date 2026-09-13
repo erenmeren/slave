@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import type { CapabilityRecord } from '@slave-of-ai/domain'
 import type { AllSlavesPage, CatalogRowView, ProjectTeamRow, RosterCompany, RunbookRowView, WorkforceCatalogView } from '../../server/org'
 import type { OverviewSnapshot, SlaveCardData } from '../../server/overview'
@@ -91,9 +91,14 @@ export function WorkforceClient({
   /** The sixth tab's two tables (M53 R12), read on the SERVER under the `?domain=` the URL already
    *  claims to be filtering by -- both are `GROUP BY`s, and no amount of client work can narrow an
    *  aggregate that has already happened. */
-  readonly evidence: EvidencePage
+  /** NULL when the page was not built for this tab (final wave): both of its aggregates are
+   *  unindexed `GROUP BY`s over a table that grows by one row per run, so the server builds them
+   *  only for `?tab=evidence`. Selecting the tab from another one asks the server again --
+   *  {@link select} below -- which is the `EvidenceTab`'s own domain-chip idiom. */
+  readonly evidence: EvidencePage | null
 }): React.JSX.Element {
   const searchParams = useSearchParams()
+  const router = useRouter()
   const [tab, setTab] = useState<WorkforceTab>(initialTab)
   const [newOpen, setNewOpen] = useState(false)
   /**
@@ -146,6 +151,14 @@ export function WorkforceClient({
     const query = new URLSearchParams(searchParams)
     query.set('tab', next)
     window.history.replaceState(null, '', `/workforce?${query.toString()}`)
+    // ...and then, for the Evidence tab alone, ASK THE SERVER (final wave). Five of the six tabs
+    // render from a prop this page was built with and a switch is local state; the sixth is two
+    // grouped aggregates the page deliberately does not read unless the URL asks for them, so the
+    // first switch onto it has nothing to render. `router.refresh()` after a `replaceState` is
+    // exactly what `EvidenceTab`'s own domain chip does for the same reason -- Next re-reads the
+    // query just written -- and it stacks no history entry. Once the page has the data, selecting
+    // the tab again is local like the other five.
+    if (next === 'evidence' && evidence === null) router.refresh()
   }
 
   return (
@@ -195,7 +208,15 @@ export function WorkforceClient({
       )}
       {tab === 'skills' && <SkillsClient page={skills} />}
       {tab === 'runbooks' && <RunbooksTab runbooks={runbooks} taxonomy={taxonomy} />}
-      {tab === 'evidence' && <EvidenceTab page={evidence} />}
+      {tab === 'evidence' &&
+        (evidence === null ? (
+          // The server is being asked for it right now (see `select`). `LoadingState` and not an
+          // empty table: "nothing has a record yet" is a claim this page cannot make while it is
+          // still reading.
+          <LoadingState testId="evidence-loading" message="Reading the record…" />
+        ) : (
+          <EvidenceTab page={evidence} />
+        ))}
       <NewSlaveDrawer
         open={newOpen}
         onClose={() => setNewOpen(false)}

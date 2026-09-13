@@ -13,6 +13,7 @@ import {
 } from '@slave-of-ai/domain'
 import {
   admitProvider,
+  amendRunOutcome,
   listCapabilities,
   readRunbookById,
   refusalText,
@@ -301,6 +302,10 @@ async function failPlanningRun(
   reason: string,
 ): Promise<void> {
   await prisma.slaveRun.updateMany({ where: { id: run.id, status: 'succeeded' }, data: { status: 'failed' } })
+  // M53 erratum E26, the same walk-back and the same amend as `replan.ts`'s `failRun`: the pump
+  // wrote this run's fact when it concluded it `succeeded`, and the outcome has to follow the
+  // status this line just wrote.
+  await amendRunOutcome(run.id)
   await appendEvent({
     type: 'run.failed',
     workspaceId,

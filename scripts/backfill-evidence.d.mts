@@ -22,6 +22,10 @@ import type { Result } from '@slave-of-ai/domain'
  * `alreadyJudged` is a READING, never a write (erratum E23): the rows that already carried a verdict
  * when this pass found them, settled by the live pipeline. This script settles nothing — a
  * backfilled run's verify, review and integration columns stay "not judged yet".
+ *
+ * `skippedNeverStarted` is a NUMBER in both modes (erratum E25): a run with no `run.started` event
+ * never ran, so it has no fact here and none in the pipeline either, and deciding that is a read a
+ * dry run really makes.
  */
 export interface BackfillReport {
   readonly dryRun: boolean
@@ -33,6 +37,7 @@ export interface BackfillReport {
   readonly skipped: number | null
   readonly skippedSimulation: number | null
   readonly skippedIncomplete: number | null
+  readonly skippedNeverStarted: number
 }
 
 export interface BackfillOptions {

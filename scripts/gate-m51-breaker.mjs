@@ -806,9 +806,15 @@ try {
   // can be an `applied` action at all is that its text is a constant no model has ever seen.
   await assertEqual(decision.action.text, steerText, 'stage 2b: the steer sentence')
 
-  const paused = await waitUntil('the seeded run to be claimed into pause_requested', RUNG_TIMEOUT_MS, async () => {
+  // WAIT ON STATEMENT TWO, NEVER ON STATEMENT ONE (M53 final wave; pre-existing race). `steerRun`
+  // is two writes and an append: `requestPause` claims the status, appends `run.pause_requested`,
+  // and only then does `steerRun`'s own conditioned `updateMany` write `queuedMessage` and
+  // increment `breakerSteers`. Waiting for the STATUS and then asserting the other two is a read
+  // of a write that may not have happened yet -- which is what flaked under a full ladder's load
+  // and passed alone. Waiting for `queuedMessage` waits for the last of the three.
+  const paused = await waitUntil('the seeded run to be steered (pause_requested, with the sentence queued onto it)', RUNG_TIMEOUT_MS, async () => {
     const row = await runRow(seededRun.id)
-    if (row.status === 'pause_requested') return { done: true, value: row }
+    if (row.status === 'pause_requested' && row.queuedMessage !== null) return { done: true, value: row }
     return { done: false, detail: describeRun(row) }
   })
   console.log(`stage 2b: the steered run = ${describeRun(paused)}`)

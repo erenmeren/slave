@@ -153,10 +153,18 @@ function Unrecorded({ testId }: { readonly testId: string }): React.JSX.Element 
  * The LABEL and never the key (`docs/ia.md` rule 3), and one function rather than a sentence written
  * twice.
  */
-function EvidenceEmpty({ testId, domain }: { readonly testId: string; readonly domain: string | null }): React.JSX.Element {
-  return (
-    <EmptyState testId={testId} message={domain === null ? NO_RECORD_AT_ALL : `No record in ${domain} yet.`} />
-  )
+function EvidenceEmpty({
+  testId,
+  domainLabel: label,
+}: {
+  readonly testId: string
+  /** The domain in WORDS, or null for "no filter at all". Named `domainLabel` and not `domain`
+   *  (final wave): it has always received `currentLabel`, and a parameter called `domain` beside a
+   *  `data-domain` carrying the raw key reads as a key-vs-label bug in the one component whose
+   *  subject is keys versus labels. */
+  readonly domainLabel: string | null
+}): React.JSX.Element {
+  return <EmptyState testId={testId} message={label === null ? NO_RECORD_AT_ALL : `No record in ${label} yet.`} />
 }
 
 /**
@@ -243,7 +251,7 @@ export function EvidenceTab({
       <Panel title="by profile">
         <div data-testid="evidence-table-profile">
           {page.byProfile.length === 0 ? (
-            <EvidenceEmpty testId="evidence-profile-empty" domain={currentLabel} />
+            <EvidenceEmpty testId="evidence-profile-empty" domainLabel={currentLabel} />
           ) : (
             <DataTable columns={PROFILE_COLUMNS} header={[...PROFILE_HEADER]}>
               {page.byProfile.map((row, index) => (
@@ -257,7 +265,7 @@ export function EvidenceTab({
       <Panel title="by model">
         <div data-testid="evidence-table-model">
           {page.byModel.length === 0 ? (
-            <EvidenceEmpty testId="evidence-model-empty" domain={currentLabel} />
+            <EvidenceEmpty testId="evidence-model-empty" domainLabel={currentLabel} />
           ) : (
             <DataTable columns={MODEL_COLUMNS} header={[...MODEL_HEADER]}>
               {page.byModel.map((row, index) => (

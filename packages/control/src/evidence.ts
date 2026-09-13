@@ -7,6 +7,7 @@ import {
   evidenceOutcomeOf,
   err,
   humanInterventionsFrom,
+  NON_TERMINAL_RUN_STATUSES,
   normaliseRepositoryKey,
   ok,
   profileKeyOf,
@@ -26,7 +27,8 @@ import type { ControlRefusal } from './refusal.js'
  * THE ONE WRITER of `EvidenceRecord`, and the one place a run becomes a fact (M53 R3).
  *
  * Everything else in this milestone reads. The pipeline calls this at a run's terminal transition
- * (`pump.ts`'s four arms and `sweep.ts`'s two), the four verdict sites call it again to SETTLE, and
+ * -- eight sites: `pump.ts`'s four arms, `sweep.ts`'s two, `stop.ts`'s own (erratum E22) and
+ * `tick.ts`'s failed resume (erratum E25) -- the four verdict sites call it again to SETTLE, and
  * `scripts/backfill-evidence.mjs` calls exactly the same function over history -- which is what
  * makes "a fact is re-derivable from events" true by construction rather than by assertion. A
  * second derivation, in SQL or in a script, would be a second answer to one question.
@@ -62,7 +64,10 @@ const RUN_SELECT = {
   tokensOut: true,
   stopRequestedBy: true,
   startedAt: true,
-  terminalAt: true,
+  // `terminalAt` is deliberately NOT here (final wave, carried T2 minor): every column in this
+  // select is read by the derivation below, and `durationMs` is `startedAt -> endedAt`. A
+  // `terminalAt` nobody reads is the second definition of "concluded" this milestone spent a fix
+  // round removing from the backfill.
   endedAt: true,
   slave: {
     select: {
@@ -82,18 +87,24 @@ const RUN_SELECT = {
  * `(runId, seq)` for this run's own pause/resume/start -- the two indexes `ExecutionEvent` actually
  * carries. Never a predicate on `type` and `ts` alone, which is the unindexed full-history scan
  * `loadDenials`'s own docstring measures and refuses (`supervisorWorld.ts:340-352`).
+ *
+ * On the GLOBAL client and taking no `tx` (final wave, carried T2 minor): the one caller has never
+ * had a transaction to pass, and a parameter that only ever receives `prisma` reads as a promise
+ * this function can join somebody's snapshot -- which it cannot, because `recordRunEvidence` opens
+ * none.
  */
-async function eventCountsFor(
-  tx: Prisma.TransactionClient,
-  run: { readonly id: string; readonly taskId: string | null; readonly workspaceId: string },
-): Promise<{
+async function eventCountsFor(run: {
+  readonly id: string
+  readonly taskId: string | null
+  readonly workspaceId: string
+}): Promise<{
   readonly runStartedSeq: bigint | null
   readonly reworkSeqs: readonly bigint[]
   readonly unblockedSeqs: readonly bigint[]
   readonly pauseRequested: number
   readonly resumeRequested: number
 }> {
-  const own = await tx.executionEvent.findMany({
+  const own = await prisma.executionEvent.findMany({
     where: { runId: run.id, type: { in: ['run_started', 'run_pause_requested', 'run_resume_requested'] } },
     select: { seq: true, type: true },
     orderBy: { seq: 'asc' },
@@ -101,7 +112,7 @@ async function eventCountsFor(
   const taskRows =
     run.taskId === null
       ? []
-      : await tx.executionEvent.findMany({
+      : await prisma.executionEvent.findMany({
           where: { workspaceId: run.workspaceId, taskId: run.taskId, type: { in: ['task_rework', 'task_unblocked'] } },
           select: { seq: true, type: true },
           orderBy: { seq: 'asc' },
@@ -143,7 +154,7 @@ export async function recordRunEvidence(
   if (outcome === null) return ok(undefined)
 
   const workspaceId = run.slave.team.workspaceId
-  const counts = await eventCountsFor(prisma, { id: run.id, taskId: run.taskId, workspaceId })
+  const counts = await eventCountsFor({ id: run.id, taskId: run.taskId, workspaceId })
   const attempt = attemptFrom(counts.reworkSeqs, counts.runStartedSeq)
   // The taxonomy, read once per call and only when there is something to resolve. An empty list
   // answers `general` without a query at all.
@@ -270,15 +281,58 @@ async function applySettle(
  * Silent when there is nothing to settle: a task whose implementation run has no evidence row (a
  * database that predates this milestone, a run that never concluded) is not an error, it is a run
  * nobody recorded.
+ *
+ * "CONCLUDED" IS A STATUS HERE TOO (final wave, carried minor). This selected `terminalAt: { not:
+ * null }` until the final wave -- the second definition of "concluded" Task 4's fix round removed
+ * from the backfill as "a trap" (`stats.ts:123-127`: only the pump has written that column, and
+ * only since M5 Task 12). The two disagreed exactly on the rows the backfill exists for: a
+ * pre-M5 run the repair script records could never be found by a settle, and skipping a newer
+ * such run means a verdict lands on an OLDER run's row. One definition, and it is the array
+ * `evidenceOutcomeOf` reads.
  */
 export async function settleTaskEvidence(taskId: string, settle: EvidenceSettle): Promise<void> {
   const run = await prisma.slaveRun.findFirst({
-    where: { taskId, kind: 'implementation', terminalAt: { not: null } },
+    where: { taskId, kind: 'implementation', status: { notIn: [...NON_TERMINAL_RUN_STATUSES] } },
     orderBy: { startedAt: 'desc' },
     select: { id: true },
   })
   if (run === null) return
+  // The Result is DISCARDED, and that is a decision rather than an oversight (final wave, carried
+  // minor): the two refusals this call can answer are `run_not_found` -- unreachable, the row was
+  // just read -- and nothing else, because a settle with no row to settle writes nothing and
+  // answers ok. The caller is a verdict site whose real work has already committed, and there is
+  // no answer it could act on. The FAILURE mode that matters (a rejected promise) is handled at
+  // the call sites that must not fail an operator's action for a fact.
   await recordRunEvidence(run.id, { settle })
+}
+
+/**
+ * Re-derive ONLY a recorded run's `outcome`, from the run's own current status (M53 erratum E26).
+ *
+ * The outcome follows the run's FINAL status. Three sites walk a run back after the pump has
+ * already concluded it `succeeded` and written its fact -- `replan.ts`'s `failRun`,
+ * `planning.ts`'s `failPlanningRun` and `review.ts`'s unparsable-verdict arm, all three inside
+ * `verifyConcludedRun` -- and without this the stored row keeps saying `Finished` about a run the
+ * `SlaveRun` table says failed. A later backfill silently corrected it, which is the actual
+ * defect: the same row's outcome depended on whether a repair script had been run.
+ *
+ * ONE COLUMN. It never touches a judgement column (E1 owns those: they move off null exactly once
+ * and never back), never touches `recordedAt` or `settledAt`, and never CREATES a row -- an
+ * `updateMany` on the run's own row writes nothing when nobody recorded it. Idempotent by
+ * construction: re-deriving the same status writes the same value.
+ *
+ * Refuses like {@link recordRunEvidence} does, before any write and for the same reason: a runId
+ * naming no `SlaveRun` is `run_not_found`, which is also the simulation boundary's tripwire. A run
+ * that can still move answers ok and writes nothing -- there is no outcome to follow yet.
+ */
+export async function amendRunOutcome(runId: string): Promise<Result<void, ControlRefusal>> {
+  const run = await prisma.slaveRun.findUnique({ where: { id: runId }, select: { status: true } })
+  if (run === null) return err({ kind: 'run_not_found', runId })
+
+  const outcome = evidenceOutcomeOf(run.status)
+  if (outcome === null) return ok(undefined)
+  await prisma.evidenceRecord.updateMany({ where: { runId }, data: { outcome } })
+  return ok(undefined)
 }
 
 /**

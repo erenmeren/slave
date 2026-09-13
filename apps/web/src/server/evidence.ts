@@ -17,8 +17,11 @@ import {
  * becomes `Insufficient evidence`, the sentence the sort is stated in, and the chips.
  *
  * GLOBAL, not per project: `/workforce` has no workspace scope, and R1's record spans every project
- * this installation holds. `EvidenceFilter.workspaceId` exists for the per-project read a later
- * milestone may want and is null here.
+ * this installation holds. CONTROL's own filter (`packages/control/src/evidence.ts`'s
+ * `EvidenceFilter`) carries a `workspaceId` for the per-project read a later milestone may want,
+ * and this module never passes one -- which is why {@link EvidenceFilter} below, the filter this
+ * page actually has, is one field. The two types share a name and are deliberately not the same
+ * shape; the docstring said otherwise until the final wave.
  */
 
 /** The chip row above both tables: the raw key for `data-domain` and the URL, the word for the eye

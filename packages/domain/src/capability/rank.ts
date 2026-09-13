@@ -71,7 +71,10 @@ export interface RankEvidence {
   readonly integrationJudged: number
   readonly integrated: number
   /** Median `actualCostUsd` over the profile's `reported` and `estimated` rows. Null when none of
-   *  them was measured -- which ties at step 6 rather than winning it. */
+   *  them was measured -- which LOSES step 6 to any measured figure and ties only with another
+   *  unmeasured one (erratum E20, and `compareMeasured` below is where that rule lives). The
+   *  sentence this docstring carried until the final wave said the opposite, which was the rule
+   *  E20 overturned: an abstention that tied with everything made the comparator non-transitive. */
   readonly medianCostUsd: number | null
   readonly medianDurationMs: number | null
 }

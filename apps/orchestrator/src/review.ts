@@ -9,7 +9,14 @@ import {
   type GuardrailKind,
   type RunId,
 } from '@slave-of-ai/domain'
-import { admitProvider, refusalText, runFilePaths, settleTaskEvidence, writePermissionsFile } from '@slave-of-ai/control'
+import {
+  admitProvider,
+  amendRunOutcome,
+  refusalText,
+  runFilePaths,
+  settleTaskEvidence,
+  writePermissionsFile,
+} from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { appendEvent } from '@slave-of-ai/events'
 import { runTokenHash, type SlaveRuntimeAdapter, type RunHandle } from '@slave-of-ai/providers'
@@ -67,6 +74,10 @@ export async function concludeReview(runId: RunId): Promise<void> {
       where: { id: runId, status: 'succeeded' },
       data: { status: 'failed' },
     })
+    // M53 erratum E26: the third walk-back. A review run's row carries no verdict of its own (the
+    // writer refuses to settle one), so this amends exactly one column -- the outcome, which the
+    // pump wrote as `succeeded` and this branch has just made `failed`.
+    await amendRunOutcome(runId)
     // Hand the claim back (M41 Task 3b) so the next dispatch can take it -- the task deliberately
     // stays `reviewing` (this branch's own policy, below), and a `reviewing` task still pointing at
     // this now-terminal run is one no dispatch could ever claim again. BEFORE the event, not after:

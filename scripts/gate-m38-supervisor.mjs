@@ -405,12 +405,19 @@ try {
     await fail('a review run exists while nobody holds the reviewer role -- the proposal was applied, not proposed')
   }
 
-  const proposedEvent = await prisma.executionEvent.findFirst({
-    where: { workspaceId, type: 'supervisor_proposed' },
-    orderBy: { seq: 'asc' },
+  // WAIT ON STATEMENT TWO, NEVER ON STATEMENT ONE (M53 final wave; pre-existing race). The decision
+  // ROW and its `supervisor.proposed` EVENT are two writes: the wait above returns the moment the
+  // row exists, so reading the event straight afterwards asserts a write that may still be in
+  // flight -- which is what flaked under a full ladder's load and passed alone.
+  const proposedEvent = await waitUntil('the supervisor.proposed event for the pending proposal', SUPERVISOR_TIMEOUT_MS, async (note) => {
+    const row = await prisma.executionEvent.findFirst({
+      where: { workspaceId, type: 'supervisor_proposed' },
+      orderBy: { seq: 'asc' },
+    })
+    note(row === null ? 'the decision row exists, its event has not committed yet' : 'appended')
+    return row
   })
-  console.log(`supervisor.proposed event: ${proposedEvent === null ? 'none' : JSON.stringify(proposedEvent.payload)}`)
-  if (proposedEvent === null) await fail('no supervisor.proposed event was appended for the pending proposal')
+  console.log(`supervisor.proposed event: ${JSON.stringify(proposedEvent.payload)}`)
   if (proposedEvent.payload.decisionId !== proposal.id) {
     await fail(`the supervisor.proposed event names decision ${String(proposedEvent.payload.decisionId)}, expected ${proposal.id}`)
   }

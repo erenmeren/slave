@@ -59,8 +59,11 @@ async function failMerge(input: {
    * so a workspace with no verify commands would mark down every worker whose task reached this
    * pass.
    *
-   * Required rather than defaulted: the four callers are the whole question, and a default is how
-   * the fifth one gets it wrong silently.
+   * Required rather than defaulted: the FOUR callers are the whole question, and a default is how
+   * a fifth one would get it wrong silently.
+   *
+   * A JUDGEMENT IS NOT YET A VERDICT (erratum E24, final wave): being judged is necessary for
+   * `integrated: false` and no longer sufficient -- see the settle below.
    */
   readonly judged: boolean
 }): Promise<void> {
@@ -71,14 +74,6 @@ async function failMerge(input: {
     actor: 'system',
     payload: { reason: input.reason },
   })
-
-  // M53 R4: `false` means somebody looked at this work and it did not land -- a rebase that
-  // conflicted, a post-rebase gate that ran and said no, a merge git refused. It does NOT mean
-  // "this pass ended badly": a verify that could not run and a dirty shared checkout leave the
-  // column null, because nobody judged the work and E1's rule is that a judgement column moves off
-  // null exactly once, so a false written here can never be corrected later. Before the escalation
-  // count, which is about the WORKSPACE rather than about this attempt.
-  if (input.judged) await settleTaskEvidence(input.taskId, { kind: 'integration', integrated: false })
 
   const failureCount = await prisma.executionEvent.count({
     where: { taskId: input.taskId, type: 'task_merge_failed' },
@@ -104,7 +99,32 @@ async function failMerge(input: {
 
   // The same rework machinery a failed verify or a rejected review uses: attempt counted, reason
   // on the slave-facing channel the next run's prompt reads from.
-  await rejectTask(brandTaskId(input.taskId), input.reason)
+  const rejected = await rejectTask(brandTaskId(input.taskId), input.reason)
+
+  // M53 R4 + erratum E24: `integrated: false` is settled where the INTEGRATION ENDS, and nowhere
+  // else.
+  //
+  // R4 said "`false` on `task.merge_failed`" and this pass did exactly that until the final wave.
+  // The defect was in the rule: `verifiedFirstPass` and `reviewRejected` are one-per-run verdicts,
+  // and integration is not. Every failure here sends the task back to `rework` with its attempts
+  // still on it -- a conflicted rebase, a gate that was flaky this once, a merge git refused while
+  // the base branch moved -- and the work is then re-done and merged again. A `false` written at
+  // the first failure could never be taken back (E1: a judgement column moves off null exactly
+  // once), so the implementer's row would say "this never reached the base branch" about work that
+  // later did, and that column is the ranker's third rate.
+  //
+  // So two things must both be true. `judged`: somebody looked at the branch and it is the branch
+  // that is wrong (a verify that could not run and a dirty shared checkout are neither). AND
+  // `rejected.exhausted`: this failure spent the task's last attempt, so the task is `failed` now
+  // and nothing will merge this work -- which is what makes `false` a fact rather than a guess
+  // about the next attempt. Anything else leaves the column NULL, which reads as "not judged yet"
+  // everywhere and lets a later successful merge settle `true` over it as a FIRST settle.
+  //
+  // The workspace halt above is deliberately NOT one of the two: a halt can be cleared, and the
+  // task keeps every attempt it has left.
+  if (input.judged && rejected.exhausted) {
+    await settleTaskEvidence(input.taskId, { kind: 'integration', integrated: false })
+  }
 
   // `rejectTask` does not know this column -- it is Task 3's, added after `verify.ts` was written.
   await prisma.task.update({ where: { id: input.taskId }, data: { mergeClaimedAt: null } })
@@ -210,7 +230,10 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       workspaceId,
       taskKey,
       reason: `rebase onto ${workspace.baseBranch} conflicted: ${message}`,
-      // The branch no longer applies to the base branch. That is the work.
+      // The branch no longer applies to the base branch. That is the work -- so it is JUDGED. It
+      // still settles nothing unless this failure spent the task's last attempt (E24): the task
+      // goes back to rework, the conflict is resolved and the work merges, and a `false` written
+      // here could never be taken back.
       judged: true,
     })
     return
@@ -247,8 +270,11 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
     const reason =
       result.kind === 'failed' ? `post-rebase verify failed: ${failed} exited ${String(result.exitCode)}` : result.output
     // `failed` is a gate that RAN and said no -- a verdict on the rebased tree. `not_configured`
-    // and `could_not_run` are this project's configuration and this machine's, and settle nothing
-    // (the same two kinds `verify.ts`'s `advance` refuses to charge an attempt for).
+    // and `could_not_run` are this project's configuration and this machine's, and are not a
+    // judgement at all (the same two kinds `verify.ts`'s `advance` refuses to charge an attempt
+    // for). Even `failed` settles nothing while the task can still be re-done and merged again
+    // (E24): a gate that fails once and passes the second time is the ordinary case this rule is
+    // about.
     await failMerge({ taskId: task.id, workspaceId, taskKey, reason, judged: result.kind === 'failed' })
     return
   }
@@ -287,7 +313,8 @@ export async function runMergePass(workspaceId: WorkspaceId): Promise<void> {
       workspaceId,
       taskKey,
       reason: `merge of ${branch} onto ${workspace.baseBranch} failed: ${message}`,
-      // The same class as the rebase above: the branch would not go onto the base branch.
+      // The same class as the rebase above: the branch would not go onto the base branch, and the
+      // same E24 rule applies -- `main` moving under a task is not a verdict on the worker.
       judged: true,
     })
     return

@@ -146,6 +146,10 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
   const [pending, preferenceRows, templates] = await Promise.all([
     listDecisions(workspaceId, { pending: true }),
     listStaffingPreferences(workspaceId),
+    // TWO COLUMNS, and deliberately not `listTemplates()` beside it (final wave, carried minor):
+    // that helper is `listWorkforceCatalogPage().rows`, a whole catalog page with its per-template
+    // grouped counts, and this control is a pick list of names. The read stays here rather than
+    // becoming a third catalog verb nobody else would call.
     prisma.slaveTemplate.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
   ])
   const preferences = await preferencesByCapability(preferenceRows)

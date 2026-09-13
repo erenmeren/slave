@@ -4,6 +4,7 @@ import {
   type ModelDecider,
   claimResume,
   pauseActiveRuns,
+  recordRunEvidence,
   refusalText,
   runFilePaths,
   writePermissionsFile,
@@ -437,6 +438,14 @@ async function resumeRequestedRuns(deps: TickDeps): Promise<void> {
  * already concluded is never clobbered, the same task release, the same `run.failed` event. This is
  * the only place a failed resume spawn is ever concluded -- see the doc comment above
  * `resumeRequestedRuns` for why nothing else in a running daemon would ever get to it.
+ *
+ * M53 R3, erratum E25: THE EIGHTH WRITE SITE. This one looks like the three spawn-failure arms that
+ * deliberately write no fact, and it is not one: those conclude a run that never started, and this
+ * conclusion is conditioned on `resuming` -- a run that started, produced output, paused, and had
+ * a real duration and a real cost before a resume could not be spawned for it. "Nothing was
+ * attempted" is simply untrue here, and until the final wave this run was invisible to the record
+ * until somebody ran the repair script. The rule that separates the two is one fact: a run with a
+ * `run.started` event ran.
  */
 async function concludeFailedResume(
   deps: TickDeps,
@@ -497,6 +506,15 @@ async function concludeFailedResume(
     runId: run.id,
     actor: 'system',
     payload: { reason: `resume failed to spawn: ${error instanceof Error ? error.message : String(error)}` },
+  })
+
+  // M53 R3 / erratum E25: the fact, after the status write this arm made and after the event, the
+  // same order and for the same reasons as `pump.ts`'s four arms and `sweep.ts`'s two. Inside the
+  // `concluded.count === 0` early return above, so a run somebody else concluded is theirs to
+  // record. Idempotent on `runId`, and its Result is discarded like the other seven sites': a fact
+  // is the least load-bearing thing in this arm and the backfill can re-derive it.
+  await recordRunEvidence(run.id).catch((error: unknown) => {
+    console.warn(`[tick] run ${run.id} was concluded, but its evidence write failed: ${String(error)}`)
   })
 
   // The task's own terminal, not just the run's. Without it an exhausted task drops off the board

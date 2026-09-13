@@ -302,7 +302,32 @@ describe('WorkforceClient tabs (M44 R1)', () => {
     fireEvent.click(screen.getByTestId('workforce-tab-catalog'))
     expect(replaceState).toHaveBeenCalledWith(null, '', '/workforce?from=nav&tab=catalog')
     expect(routerReplace).not.toHaveBeenCalled()
+    expect(routerRefresh).not.toHaveBeenCalled()
     replaceState.mockRestore()
+  })
+
+  // M53 final wave: the Evidence tab is the one tab the page does not read unless the URL asks for
+  // it -- two unindexed `GROUP BY`s over a table that grows by one row per run. So selecting it
+  // from another tab has to ask the SERVER, which is `EvidenceTab`'s own domain-chip idiom
+  // (replaceState, then `router.refresh()`), and until the answer arrives the tab says it is
+  // reading rather than claiming nobody has a record.
+  it('asks the server for the record the first time the Evidence tab is selected', () => {
+    render(<TestWorkforceClient evidence={null} />)
+
+    fireEvent.click(screen.getByTestId('workforce-tab-evidence'))
+
+    expect(routerRefresh).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('evidence-loading')).toBeTruthy()
+    expect(screen.queryByTestId('evidence-table-profile')).toBeNull()
+  })
+
+  it('asks nothing at all when the page already arrived with the record', () => {
+    render(<TestWorkforceClient />)
+
+    fireEvent.click(screen.getByTestId('workforce-tab-evidence'))
+
+    expect(routerRefresh).not.toHaveBeenCalled()
+    expect(screen.getByTestId('evidence-table-profile')).toBeTruthy()
   })
 
   // `+ New slave` opens the catalog form (M25 Task 8) and belongs to the Slaves tab alone: it
@@ -545,7 +570,12 @@ describe('the Workforce page seeds the catalog from the URL (M46 M1)', () => {
 
   const renderPage = async (searchParams: Record<string, string>) =>
     (await WorkforcePage({ searchParams: Promise.resolve(searchParams) })) as unknown as {
-      props: { catalog: WorkforceCatalogView; templates: readonly CatalogRowView[]; initialTab: WorkforceTab }
+      props: {
+        catalog: WorkforceCatalogView
+        templates: readonly CatalogRowView[]
+        initialTab: WorkforceTab
+        evidence: EvidencePage | null
+      }
     }
 
   it('passes the URL\u2019s filters into the catalog read', async () => {
@@ -603,5 +633,23 @@ describe('the Workforce page seeds the catalog from the URL (M46 M1)', () => {
     buildEvidencePage.mockClear()
     await renderPage({ tab: 'evidence' })
     expect(buildEvidencePage).toHaveBeenCalledWith({ domain: null })
+  })
+
+  // M53 final wave: the two aggregates are unfiltered `GROUP BY`s over a table that grows by one
+  // row per run forever, and none of `EvidenceRecord`'s four indexes can serve them. Five of the
+  // six tabs paid for that read and rendered none of it.
+  it('does not group the whole record for a load of any other tab', async () => {
+    buildEvidencePage.mockClear()
+    const slavesTab = await renderPage({ tab: 'slaves' })
+    expect(buildEvidencePage).not.toHaveBeenCalled()
+    // ...and the tab strip is handed an honest "not read", never an empty page that would render
+    // as "no run has left a record yet".
+    expect(slavesTab.props.evidence).toBeNull()
+
+    await renderPage({})
+    expect(buildEvidencePage).not.toHaveBeenCalled()
+
+    await renderPage({ tab: 'evidence' })
+    expect(buildEvidencePage).toHaveBeenCalledTimes(1)
   })
 })
