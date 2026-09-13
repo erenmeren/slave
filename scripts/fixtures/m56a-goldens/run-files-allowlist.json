@@ -1,0 +1,26 @@
+{
+  "claim": "`checkpointRunFiles` is the only place a RunHandle's run files are MAPPED ONTO Checkpoint.settingsPath/.hookPath. It is not the only place that PAIR of column names is written: the checkpoint's own row, and two rebuilds FROM a stored row, also spell them, and none of those reads a handle.",
+  "runFilesMayAppearIn": [
+    "packages/providers/src/contract/adapter.ts",
+    "packages/providers/src/claude/adapter.ts",
+    "packages/providers/src/cursor/adapter.ts",
+    "apps/orchestrator/src/tick.ts",
+    "apps/orchestrator/src/planning.ts",
+    "apps/orchestrator/src/review.ts",
+    "packages/domain/src/provider/manifest.ts",
+    "packages/domain/src/provider/claude-code.ts",
+    "packages/domain/src/provider/cursor.ts",
+    "packages/domain/src/provider/ledger.ts"
+  ],
+  "runFilesNote": "The last four are M56a's own doing and were not in the plan's erratum E13, which was written before the manifest existed: `manifest.ts` DECLARES the `ProviderRunFiles` axis, the two vendor rows hold it, and `ledger.ts` renders it as the ledger's \"Run files\" row. Declaring the axis is what this stage protects, so the files that declare it belong on the list rather than failing the grep that exists to keep the mapping in one place.",
+  "columnPairMayAppearIn": [
+    { "path": "packages/providers/src/contract/adapter.ts", "why": "`checkpointRunFiles` itself -- the mapping" },
+    { "path": "packages/providers/src/claude/checkpoint.ts", "why": "the `Checkpoint` interface's own two fields" },
+    { "path": "packages/providers/src/claude/adapter.ts", "why": "`writeSettingsFile({ settingsPath, hookPath })` -- a settings file and a hook script, not a checkpoint -- and `resume()` reading the pair back off a stored row" },
+    { "path": "packages/providers/src/cursor/adapter.ts", "why": "`resume()` reading the same pair back" },
+    { "path": "apps/orchestrator/src/pump.ts", "why": "the `Checkpoint` row's own `create` -- the persistence side" },
+    { "path": "apps/orchestrator/src/resume.ts", "why": "rebuilds the adapter's `Checkpoint` input and the pump's `spawn` FROM a stored row" },
+    { "path": "packages/db/prisma/schema.prisma", "why": "the schema, which is where the two columns are declared, and from which the generated client is written" }
+  ],
+  "commentOnlyIn": ["apps/orchestrator/src/tick.ts", "apps/orchestrator/src/planning.ts", "apps/orchestrator/src/review.ts"]
+}

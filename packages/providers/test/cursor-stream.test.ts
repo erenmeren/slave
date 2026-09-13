@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { manifestFor } from '@slave-of-ai/domain'
 import { describe, expect, it } from 'vitest'
 import { parseCursorLine } from '../src/cursor/stream.js'
 import { hashToolInput } from '../src/hash.js'
@@ -650,17 +651,27 @@ describe('parseCursorLine, the tool_call summary', () => {
 })
 
 describe('parseCursorLine, exhaustiveness of RuntimeEvent', () => {
-  it('produces only the seven kinds this parser is allowed to produce', () => {
+  it('produces only the eight kinds this parser is allowed to produce', () => {
     // The complement of R4, stated positively, so adding a branch that
-    // returns a seventh kind fails here and not in Task 12's adapter.
+    // returns a ninth kind fails here and not in Task 12's adapter.
+    //
+    // DERIVED since M56a (§3 stage 11): the allow-list is Cursor's own
+    // manifest row plus the two kinds no vendor produces -- `ignored` and
+    // `unparsable` are what a PARSER makes of a line, which is why no
+    // manifest may claim them. It was a hand-written seven-name array, and
+    // deriving it widens it to eight: the added member is `permission_denied`,
+    // a branch this parser genuinely has (`cursor/stream.ts:342`) that no
+    // fixture line reaches. This is a `toContain` allow-list, so every
+    // assertion it made before still passes -- and under-claiming the branch
+    // would let a consumer suppress an arm that really fires.
+    const allowed = [...manifestFor('cursor').events.produces, 'ignored', 'unparsable']
+    expect(allowed).toHaveLength(8)
     const produced = new Set<RuntimeEvent['kind']>()
     for (const line of [...lines, '', '{bad', JSON.stringify({ type: 'result' })]) {
       produced.add(parseCursorLine(line).kind)
     }
     for (const kind of produced) {
-      expect(['session_started', 'text', 'tool_call', 'tool_result', 'terminated', 'ignored', 'unparsable']).toContain(
-        kind,
-      )
+      expect(allowed).toContain(kind)
     }
   })
 })

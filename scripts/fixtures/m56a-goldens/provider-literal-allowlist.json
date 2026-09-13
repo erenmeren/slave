@@ -1,0 +1,50 @@
+{
+  "pattern": "case '(claude_code|cursor)'  |  [!=]== *'(claude_code|cursor)'",
+  "scanned": ["packages", "apps", "scripts"],
+  "excluded": ["dist/", "test/", "*.test.*", "comment lines"],
+  "notMatched": "A `?? 'claude_code'` historical backfill is not a dispatch and is not matched by the pattern: `apps/orchestrator/src/sweep.ts`, `resume.ts`, `packages/control/src/pause.ts`, `resume.ts` and `packages/control/src/simulation/llm.ts` each carry one, every one of them a fact about rows written before M12 when there was no other adapter that could have produced them.",
+  "files": [
+    {
+      "path": "packages/domain/src/provider/claude-code.ts",
+      "why": "the manifest module: this row IS the literal, and every other table in the tree derives from it"
+    },
+    {
+      "path": "packages/domain/src/provider/cursor.ts",
+      "why": "the second manifest module, for the same reason"
+    },
+    {
+      "path": "packages/db/prisma/schema.prisma",
+      "why": "the Postgres enum -- the sixth site a third provider touches, and the one no TypeScript derivation can write"
+    },
+    {
+      "path": "packages/db/src/seed.ts",
+      "why": "seeds fixture rows with a provider VALUE; not a dispatch on a kind"
+    },
+    {
+      "path": "packages/db/src/generated/enums.ts",
+      "why": "generated from the schema by `prisma generate`; nobody edits it, and git does not track it"
+    },
+    {
+      "path": "scripts/gate-m12-providers.mjs",
+      "why": "asserts a dispatched run RECORDED the provider it was dispatched with (:538, :541) -- an assertion about data, which is what a test does and must keep doing"
+    },
+    {
+      "path": "scripts/gate-m13-runtime.mjs",
+      "why": "the same assertion, four times (:838, :891, :991, :994), across both providers"
+    },
+    {
+      "path": "scripts/gate-m31a-llm-decisions.mjs",
+      "why": "asserts the simulation's stored `modelProvider` and its usage rows (:406, :453); the llm-decision path is claude_code-only by a BUDGET rule, and that gate is where that is proven"
+    },
+    {
+      "path": "scripts/gate-m31b-software-sector.mjs",
+      "why": "the same two assertions (:536, :580)"
+    }
+  ],
+  "mustStillMatch": [
+    "scripts/gate-m12-providers.mjs",
+    "scripts/gate-m13-runtime.mjs",
+    "scripts/gate-m31a-llm-decisions.mjs",
+    "scripts/gate-m31b-software-sector.mjs"
+  ]
+}

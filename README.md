@@ -987,7 +987,7 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m42-catalog-import`, `gate:m44-ux-foundation`, `gate:m45-project-experience`,
 `gate:m46-workforce-catalog`, `gate:m47-team-formation`, `gate:m48-runbooks`, `gate:m49-memory`,
 `gate:m50-ephemeral`, `gate:m51-breaker`, `gate:m52-broker`, `gate:m53-evidence`,
-`gate:m54-triggers` and `gate:m55-catalog` on every push — `m36` stops the orchestrator and starts it again
+`gate:m54-triggers`, `gate:m55-catalog` and `gate:m56a-provider-contract` on every push — `m36` stops the orchestrator and starts it again
 mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was
 given the persona and the skills it was assigned, `m38` drives a real daemon until the Supervisor
 proposes the staffing a reviewer-less project needs, waits for a human to approve it, unblocks a
@@ -1080,8 +1080,12 @@ none of them, a single `template activate` makes exactly one of them the answer,
 activated by a click in the browser reaches the same state. It plants three pairs that are the
 same persona, three that are nearly the same and three that claim the same work, plus three that
 are just under each threshold, and finds exactly the nine — with the reason beside each one, the
-score to three decimals, and nothing deleted by any of it. That is
-30 gates. Tests and gates share one Postgres --
+score to three decimals, and nothing deleted by any of it,
+and `m56a` proves a refactor changed nothing: twelve permission verdicts byte for byte, both flag
+builders' argv element for element, both capability rows two different ways, one paused run per
+provider whose two checkpoint columns hold the two files its adapter actually wrote, and a grep that
+fails the build the moment a second copy of the provider list appears anywhere in the tree. That is
+31 gates. Tests and gates share one Postgres --
 run one at a time.
 
 ## Learn more
