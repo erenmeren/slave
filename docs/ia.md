@@ -113,7 +113,7 @@ waiting on them.
 | `/w/:id/activity` Activity | What happened, in order | keep (tab 5) | The event-type rail reads words; the raw prefix is on `data-prefix` and in `title` | M52 adds the two brokered-operation cards and the permission change, and the tool-denial card finally prints the operation's name instead of its key. M53 adds the staffing-preference card. M54 adds the two external-delivery cards, and the rail gains an `External` family: what arrived, what it was about, and which goal version it produced |
 | `/w/:id/settings` Settings | Goal, runtime, permissions, danger | keep (tab 6) | Emergency stop uses the one destructive recipe | M52 turns the permission matrix into six OPERATIONS with words for column headers, a third click that takes a decision back, and copy that says what is enforced where instead of saying it is not enforced at all. M54 adds one line to the goal history: the version a connected repository asked for says which repository, and which issue or commit. Connecting a repository is a CLI act (`triggers map`) and deliberately not a form — it has to be paired with exporting a variable into the web process's environment and pasting a url into a provider's settings, and a form that could do only the first would imply the other two happened |
 | `/w/:id/graph` Graph | Five structural views of the project | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Graph` and by URL; all five modes intact; the mode nav is a real tablist now | M47 lifted the org mode's content into an Organization tab; Graph stays. M57 re-homed it from the `Advanced ▾` menu to the sidebar's `VIEWS` chips; the route and all five modes are unchanged |
-| `/w/:id/office` Office | The team as a pixel office | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Office` and by URL; the canvas gains a label and a text line saying what it shows | M57 re-homed it from the `Advanced ▾` menu to the sidebar's `VIEWS` chips; the route and all five modes are unchanged |
+| `/w/:id/office` Office | The team as a pixel office | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Office` and by URL; the canvas gains a label and a text line saying what it shows | M57 re-homed it from the `Advanced ▾` menu to the sidebar's `VIEWS` chips; the route is unchanged |
 | `/analytics?workspace=:id` Analytics | Spend and throughput for THIS project | **reached from the project** | The third item in `Advanced ▾`, carrying the project's `?workspace=` scope; the route and the scope are the global page's, unchanged and bookmarkable | M53 did it: the per-slave table and the Spend tile are gone — the first because it counted one project's materialised workers, the second because its figure was a raw `SUM(costUsd)` with no provenance — and the route, its five remaining tiles and its `?workspace=` scope are unchanged, with a line pointing at Workforce → Evidence |
 
 ## Panels that stay where they are, deliberately
@@ -128,11 +128,11 @@ waiting on them.
   who decided each one and when is a raw value and lives under a nested `Advanced`, beside the
   sentence that says a run kind granted it.
 - `HaltBanner` keeps its own component rather than becoming an `Alert`: four gates key off it.
-- M57 closed this: the board is five columns (Queued / In progress / Review / Blocked / Done), the
-  columns are phases and the card's pill is `USER_TASK_LABEL` — the domain's own word — so there is
-  one task vocabulary and not two. `COLUMN_FOR_STATUS` stays a total `Record<TaskStatus,
-  BoardColumn>`, which is what makes a fourteenth status a build failure rather than an invisible
-  task.
+- M57 closed the board's two vocabularies: it is five columns (Queued / In progress / Review /
+  Blocked / Done), the columns are phases and the card's pill is `USER_TASK_LABEL` — the domain's
+  own word — so there is one task vocabulary and not two. `COLUMN_FOR_STATUS` stays a total
+  `Record<TaskStatus, BoardColumn>`, which is what makes a fourteenth status a build failure rather
+  than an invisible task.
 - The Overview's own `Advanced ▾` is gone in M57 and each of its four panels has a home: the
   Supervisor panel is the RIGHT PANEL on every project page, `blocked · needs you` is the
   Overview's own **Needs you** card (which shows all four kinds `buildNeedsYou` finds, not one),

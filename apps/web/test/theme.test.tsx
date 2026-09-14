@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { render, screen, act, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ThemeProvider, useTheme, THEME_STORAGE_KEY } from '../src/components/theme/ThemeProvider.js'
@@ -153,5 +155,35 @@ describe('the theme provider', () => {
     vi.stubGlobal('localStorage', blown)
     expect(() => render(<ThemeProvider><Probe /></ThemeProvider>)).not.toThrow()
     expect(screen.getByTestId('mode').textContent).toBe('system')
+  })
+})
+
+/**
+ * M57 erratum E20 — the SERVER end of the same string, which is the end that was actually broken.
+ *
+ * The case above pins the client end: `ThemeProvider` writes and reads `THEME_STORAGE_KEY`, and its
+ * value is `'theme'`. That was never wrong. What was wrong is that `app/layout.tsx` — a SERVER
+ * component — imported the constant out of a `'use client'` module, so Next handed it a client
+ * reference instead of the string and the pre-hydration script shipped as
+ * `localStorage.getItem(undefined)`: it stamped nothing, and every load flashed for a pinned
+ * operator. No render-based test can see that, because in a test both sides import the same real
+ * module; only a real Next build draws the boundary. So this reads the LAYOUT'S SOURCE and pins the
+ * import it must not go back to making — the cheapest thing that fails if somebody "tidies" the two
+ * imports back into one.
+ */
+describe("the pre-hydration script's key crosses the RSC boundary as a string", () => {
+  // `process.cwd()`, not `import.meta.url`: this file runs under jsdom, where the module's own url
+  // is an `http:` one and `fileURLToPath` refuses it. Vitest's cwd is the repository root (the
+  // config's own), and `readFileSync` throws by path if that ever stops being true -- which is a
+  // loud failure rather than a quiet pass.
+  const layout = readFileSync(resolve(process.cwd(), 'apps/web/src/app/layout.tsx'), 'utf8')
+
+  it('takes THEME_STORAGE_KEY from the plain module, never from the client one', () => {
+    expect(layout).toContain("import { THEME_STORAGE_KEY } from '../lib/themeStorage'")
+    expect(layout).not.toMatch(/import\s*\{[^}]*THEME_STORAGE_KEY[^}]*\}\s*from\s*'\.\.\/components\/theme\/ThemeProvider'/)
+  })
+
+  it('interpolates it into the script rather than spelling it twice', () => {
+    expect(layout).toContain('localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)})')
   })
 })

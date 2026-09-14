@@ -19,8 +19,10 @@
 // against an empty page; a pending `SupervisorDecision`, so the sidebar count, the dock badge and
 // the Needs-you card all have the same real number to agree about; and two `workspace.goal_set`
 // events carrying the operator's own typed words, one of them backdated a day, so the Supervisor's
-// "a thread is a local calendar day" is proved by two days rather than asserted. `git status` after
-// a green run has to be empty.
+// "a thread is a local calendar day" is proved by two days rather than asserted; and a staffed
+// catalog company with two `createSimulation` runs on it, so stage 10 can sweep `/sim/:id` and
+// `/sim/compare` instead of naming them and walking past. `git status` after a green run has to be
+// empty.
 //
 // The ten stages:
 //   1. THEME. A first visit stamps no `data-theme` and writes no `localStorage.theme` -- absent IS
@@ -44,8 +46,11 @@
 //   8. ELEVEN NUMBERS out of the M57 handoff README, read off a real browser's `getComputedStyle`.
 //   9. NO RAW ENUM TOKEN is visible text on any of those twelve routes -- `gate-m44`'s stage 4,
 //      with its blocklist DERIVED from the shipped enums rather than typed here.
-//  10. NOTHING WAS REMOVED, ONLY MOVED (`docs/ia.md` rule 2, and R11's whole argument):
-//      twenty-one destinations, every one of them answering 200 with the sidebar on it.
+//  10. NOTHING WAS REMOVED, ONLY MOVED (`docs/ia.md` rule 2, and R11's whole argument): EVERY route
+//      that document's two tables name -- twenty-one answering 200 inside the shell, and four more
+//      (`/analytics`, `/login`, `/sim/:id`, `/sim/compare`) answering 200 with a marker of their
+//      own, because `/login` renders no tree (ruling T3-3) and the other three are not in the
+//      per-project sweep above.
 //
 // THE GATE ASSERTS, IT NEVER FIXES. Every stage prints every measured value before asserting it.
 //
@@ -64,6 +69,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { loopbackChildEnv } from './lib/child-env.mjs'
 import { chromium } from 'playwright-core'
+import { createSimulation } from '../packages/control/dist/index.js'
 import { prisma } from '../packages/db/dist/client.js'
 import { CAPABILITY_SEED } from '../packages/db/dist/capabilities.js'
 import { EVENT_TYPE_BY_DOMAIN_TYPE, RUN_STATUSES, TASK_STATUSES } from '../packages/db/dist/enums.js'
@@ -101,6 +107,22 @@ const WORKSPACE_NAME = `${WORKSPACE_PREFIX} A ${STAMP}`
 const OTHER_WORKSPACE_NAME = `${WORKSPACE_PREFIX} B ${STAMP}`
 const TEAM_NAME = 'M57 Gate Department'
 const SLAVE_NAME = 'M57 Gate Worker'
+// The simulation fixture stage 10's `/sim/:id` and `/sim/compare` need. Suffixed and prefixed like
+// the workspaces above, and torn down by exact id in `finally`.
+const TEMPLATE_PREFIX = 'M57 Gate Clerk'
+const TEMPLATE_NAME = `${TEMPLATE_PREFIX} ${STAMP}`
+const COMPANY_PREFIX = 'M57 Gate Trading'
+const COMPANY_NAME = `${COMPANY_PREFIX} ${STAMP}`
+const SIMULATION_A_NAME = `m57 gate A ${STAMP}`
+const SIMULATION_B_NAME = `m57 gate B ${STAMP}`
+/** The trade sector's own roster shape (`gate-m29-simulation.mjs`'s ROSTER, which `gate-m44` also
+ *  copies): four departments, one catalog slave each, which is what `plugin.rosterFits` asks for. */
+const SIM_ROSTER = [
+  ['Sales', 'M57 Gate Sonia'],
+  ['Purchasing', 'M57 Gate Pete'],
+  ['Operations', 'M57 Gate Olga'],
+  ['Finance', 'M57 Gate Fin'],
+]
 
 /** The operator's own words, on the `request` member M45 R3 put on `workspace.goal_set`'s payload.
  *  Stage 7 reads the older one back off the older thread's operator bubble -- which is the whole
@@ -171,6 +193,25 @@ async function findFreePort() {
 /** Removes anything a prior interrupted run left behind, by NAME PREFIX, in the same FK order the
  *  `finally` block below uses. Safe against an empty database. */
 async function preflightCleanup() {
+  // `SimulationRun.company` is `onDelete: Restrict` -- the runs go before their company, and the
+  // company before the template its roster points at (`gate-m29-simulation.mjs`'s order).
+  const staleCompanies = await prisma.company.findMany({
+    where: { name: { startsWith: COMPANY_PREFIX } },
+    select: { id: true, name: true },
+  })
+  for (const company of staleCompanies) {
+    console.log(`preflight: removing leftover company ${company.id} (${company.name}) and its simulation runs`)
+    await prisma.simulationRun.deleteMany({ where: { companyId: company.id } }).catch(() => {})
+    await prisma.company.delete({ where: { id: company.id } }).catch(() => {})
+  }
+  const staleTemplates = await prisma.slaveTemplate.findMany({
+    where: { name: { startsWith: TEMPLATE_PREFIX } },
+    select: { id: true, name: true },
+  })
+  for (const template of staleTemplates) {
+    console.log(`preflight: removing leftover template ${template.id} (${template.name})`)
+    await prisma.slaveTemplate.delete({ where: { id: template.id } }).catch(() => {})
+  }
   const stale = await prisma.workspace.findMany({
     where: { name: { startsWith: WORKSPACE_PREFIX } },
     select: { id: true, name: true },
@@ -203,6 +244,10 @@ let otherWorkspaceId = null
 let teamId = null
 let slaveId = null
 let decisionId = null
+let templateId = null
+let companyId = null
+let simulationAId = null
+let simulationBId = null
 /** The browser console, newest last, for `fail()`'s dump. */
 const browserConsole = []
 
@@ -387,12 +432,39 @@ try {
     data: { type: GOAL_SET, workspaceId, actor: 'human', payload: { version: 2, request: SEEDED_REQUEST_TODAY } },
   })
 
+  // TWO SIMULATION RUNS, so `docs/ia.md`'s `/sim/:id` and `/sim/compare` rows are SWEPT rather than
+  // skipped (fix round 1, ruling T9-1). Built through `createSimulation` -- ONE existing control
+  // verb, the same one `gate-m29-simulation.mjs` and `gate-m44-ux-foundation.mjs` call -- over a
+  // company this gate staffs itself, so the run's `definition`/`state` are the sector plugin's own
+  // rather than a hand-built JSON blob nobody ships. `decisionProvider` is left at its default
+  // `rules`, which is what keeps this gate's "spends nothing" true: nothing steps either run, and a
+  // rules run could not reach a model if something did.
+  //
+  // TWO of them, because `/sim/compare` refuses a single id (`compareSimulations` requires two
+  // DIFFERENT runs of the same sector) and `notFound()`s without `?a=` and `?b=` at all -- so one
+  // run would leave that row unswept for a second time.
+  const template = await prisma.slaveTemplate.create({ data: { name: TEMPLATE_NAME, role: 'clerk' } })
+  templateId = template.id
+  const company = await prisma.company.create({ data: { name: COMPANY_NAME } })
+  companyId = company.id
+  for (const [department, memberName] of SIM_ROSTER) {
+    const companyTeam = await prisma.companyTeam.create({ data: { companyId, name: department } })
+    await prisma.companySlave.create({ data: { companyTeamId: companyTeam.id, templateId, name: memberName } })
+  }
+  for (const [name, policy] of [[SIMULATION_A_NAME, 'A'], [SIMULATION_B_NAME, 'B']]) {
+    const created = await createSimulation({ companyId, name, sector: 'trade', policy, seed: 5 })
+    if (!created.ok) throw new Error(`could not create the fixture simulation ${name}: ${JSON.stringify(created.error)}`)
+    if (simulationAId === null) simulationAId = created.value.id
+    else simulationBId = created.value.id
+  }
+
   console.log('stage 0 PASSED: the fixture rows the ten stages need')
   console.log(`  workspace ${workspaceId} (${WORKSPACE_NAME}) · second workspace ${otherWorkspaceId} (${OTHER_WORKSPACE_NAME})`)
   console.log(`  team ${teamId} · slave ${slaveId} (${SLAVE_NAME})`)
   console.log(`  tasks: ${JSON.stringify(COLUMN_FIXTURE)}`)
   console.log(`  SupervisorDecision ${decisionId} no_reviewer/proposed/pending/model`)
   console.log(`  two workspace.goal_set events, one dated ${YESTERDAY_DAY} and one today`)
+  console.log(`  Company ${companyId} (${COMPANY_NAME}) · SlaveTemplate ${templateId} · SimulationRun ${simulationAId} (A) and ${simulationBId} (B)`)
 
   // ---- The real web shell, on a free port, loopback-bound. -------------------------------------
   const preferredPort = await findFreePort()
@@ -706,16 +778,46 @@ try {
   // ============================================================================================
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
   await waitVisible(page.getByTestId('needs-you-card'), 'the Needs you card')
-  const before = await page.evaluate(() => ({
-    rows: document.querySelectorAll('[data-testid="needs-you-row"]').length,
-    count: document.querySelector('[data-testid="sidebar-needs-you"]')?.textContent?.trim() ?? null,
-  }))
+  // SCOPED to the seeded project's own row (fix round 1). An unscoped
+  // `querySelector('[data-testid="sidebar-needs-you"]')` answers the FIRST badge in the tree, which
+  // is whichever project sorts first by name in whatever database this gate is pointed at -- not
+  // necessarily this one. The badge is a span inside the project's own anchor, so the descendant
+  // selector is exact.
+  const before = await page.evaluate(
+    (id) => ({
+      rows: document.querySelectorAll('[data-testid="needs-you-row"]').length,
+      count: document.querySelector(`[data-project-id="${id}"] [data-testid="sidebar-needs-you"]`)?.textContent?.trim() ?? null,
+    }),
+    workspaceId,
+  )
   console.log(`stage 5: before = ${JSON.stringify(before)}`)
   await clickUntil(page.getByTestId('needs-you-approve').first(), async () => (await page.getByTestId('needs-you-row').count()) < before.rows, 'Approve on the needs-you row')
   const resolved = await prisma.supervisorDecision.count({ where: { workspaceId, status: 'pending' } })
   console.log(`stage 5: rows ${before.rows} -> ${await page.getByTestId('needs-you-row').count()}, pending in the database -> ${resolved}`)
   if (resolved !== 0) await fail(`stage 5: Approve left ${resolved} pending decisions in the database`)
-  console.log('stage 5 PASSED: approved in place, through the route that already existed')
+  // AND THE COUNT, not only the row (fix round 1). Read after a RELOAD rather than polled in place,
+  // and that is a fact about the tree rather than a convenience: `SidebarTree` refetches
+  // `GET /api/sidebar` on a pathname change and, on a `ShellFacts` wake-up, at most once per ten
+  // seconds -- and that throttle DROPS the wake-up rather than scheduling it (spec erratum E22,
+  // `SidebarTree.tsx:105-108`). Every wake-up this approval produces lands inside the window this
+  // page's own mount opened, so an in-place poll would be waiting for a fetch the component has
+  // already decided not to make. A reload re-reads the tree SERVER-side, which is the database, and
+  // that is the number the row and the count have to agree about.
+  const expectedCount = String(Number(before.count) - 1)
+  await gotoReliably(`${baseUrl}/w/${workspaceId}`)
+  const afterCount = await waitUntil(
+    `the sidebar needs-you count to fall to ${expectedCount}`,
+    ACTION_TIMEOUT_MS,
+    async () => {
+      const seen = await page.evaluate(
+        (id) => document.querySelector(`[data-project-id="${id}"] [data-testid="sidebar-needs-you"]`)?.textContent?.trim() ?? null,
+        workspaceId,
+      )
+      return seen === expectedCount ? { done: true, value: seen } : { done: false, detail: JSON.stringify(seen) }
+    },
+  )
+  console.log(`stage 5: the sidebar count ${JSON.stringify(before.count)} -> ${JSON.stringify(afterCount)}`)
+  console.log('stage 5 PASSED: approved in place, through the route that already existed, and the row and the count went together')
 
   // ============================================================================================
   // Stage 6: five columns, against a grouped read of the same tasks.
@@ -884,6 +986,12 @@ try {
       await waitVisible(page.getByTestId('live-events'), 'the live-events river on the Overview')
     }
     const { shown, hidden } = await readVisibleText()
+    // A page that rendered NOTHING passes a negative assertion trivially (fix round 1). Every route
+    // in this sweep waits for its own structural marker first, so zero rendered strings means the
+    // scan read a document the page had not filled -- not that the page is clean.
+    if (shown.length === 0) {
+      await fail(`stage 9 (${target.name}): no rendered text at all -- a negative assertion over an empty page proves nothing`)
+    }
     const offenders = []
     for (const entry of shown) {
       for (const token of RAW_TOKENS) {
@@ -915,8 +1023,23 @@ try {
 
   // ============================================================================================
   // Stage 10: nothing was removed, only moved (docs/ia.md rule 2, and M57 R11's whole argument).
+  //
+  // THE INVENTORY IS `docs/ia.md`'S OWN, ALL OF IT (fix round 1, ruling T9-1). The global-surfaces
+  // table names `/`, `/workforce` (six `?tab=` values), `/slaves`, `/skills`, `/analytics`,
+  // `/sim`, `/sim/:id`, `/sim/compare`, `/settings` and `/login`; the project table names the seven
+  // `/w/:id/*` destinations and `/analytics?workspace=:id`. The global constraints make this stage
+  // the PROOF of rule 2, and a listed route the proof skips is a hole in the proof -- so the four
+  // this stage used to walk past (bare `/analytics`, `/login`, `/sim/:id`, `/sim/compare`) are in it
+  // now.
+  //
+  // TWO TIERS, because the routes are not all the same shape:
+  //   - SHELL routes answer 200 AND render the Primary navigation landmark, which is the frame this
+  //     milestone rebuilt.
+  //   - EDGE routes answer 200 and one marker of their own. `/login` is the one that cannot take
+  //     the shell assertion: ruling T3-3 renders the frame there but NOT the tree body, and this
+  //     stage should assert what that ruling decided rather than what the other twenty do.
   // ============================================================================================
-  const EVERY_ROUTE = [
+  const SHELL_ROUTES = [
     '/', '/workforce', '/workforce?tab=slaves', '/workforce?tab=departments', '/workforce?tab=catalog',
     '/workforce?tab=skills', '/workforce?tab=runbooks', '/workforce?tab=evidence',
     '/slaves', '/skills', '/settings', '/sim', `/analytics?workspace=${workspaceId}`,
@@ -924,15 +1047,42 @@ try {
     `/w/${workspaceId}/knowledge`, `/w/${workspaceId}/activity`, `/w/${workspaceId}/settings`,
     `/w/${workspaceId}/graph`, `/w/${workspaceId}/office`,
   ]
-  for (const route of EVERY_ROUTE) {
+  /** `[route, marker, alsoTheShell]`. The marker is one element only that page draws, so a 200 that
+   *  rendered somebody else's page could not pass. */
+  const EDGE_ROUTES = [
+    // The GLOBAL analytics page, unscoped -- `docs/ia.md`'s own row, distinct from the
+    // `?workspace=`-scoped one above it in SHELL_ROUTES.
+    ['/analytics', 'kpi-tile', true],
+    // Loopback mode has no accounts, so this page says so instead of rendering a form
+    // (`app/login/page.tsx:25`). NOT asserted to carry the tree: ruling T3-3.
+    ['/login', 'login-unconfigured', false],
+    [`/sim/${simulationAId}`, 'sim-company', true],
+    // `?a=`/`?b=` are not optional: `app/sim/compare/page.tsx:12` `notFound()`s without them and
+    // `compareSimulations` refuses two ids that are the same. Both fixture runs are the same
+    // company and the same sector, which is the pair the page is for.
+    [`/sim/compare?a=${simulationAId}&b=${simulationBId}`, 'sim-compare-strip', true],
+  ]
+  for (const route of SHELL_ROUTES) {
     const response = await page.goto(`${baseUrl}${route}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
     const status = response === null ? null : response.status()
-    console.log(`stage 10: ${route} -> ${String(status)}`)
+    console.log(`stage 10 (shell): ${route} -> ${String(status)}`)
     // 200 or a 307 that landed on a 200 (the two redirects `next.config.ts` owns).
     if (status !== 200) await fail(`stage 10: ${route} answered ${String(status)} -- ia.md rule 2 says every destination still answers`)
     await waitVisible(page.getByRole('navigation', { name: 'Primary' }), `the sidebar on ${route}`)
   }
-  console.log(`stage 10 PASSED: ${EVERY_ROUTE.length} destinations, all of them still there`)
+  for (const [route, marker, alsoTheShell] of EDGE_ROUTES) {
+    const response = await page.goto(`${baseUrl}${route}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+    const status = response === null ? null : response.status()
+    console.log(`stage 10 (edge): ${route} -> ${String(status)} (marker [data-testid=${marker}])`)
+    if (status !== 200) await fail(`stage 10: ${route} answered ${String(status)} -- ia.md rule 2 says every destination still answers`)
+    await waitVisible(page.getByTestId(marker), `${route}'s own marker [data-testid=${marker}]`)
+    if (alsoTheShell) await waitVisible(page.getByRole('navigation', { name: 'Primary' }), `the sidebar on ${route}`)
+  }
+  console.log(
+    `stage 10 PASSED: ${SHELL_ROUTES.length} destinations answering 200 inside the shell and ` +
+      `${EDGE_ROUTES.length} answering 200 with a marker of their own (one of them, /login, deliberately ` +
+      'without the tree) -- every route docs/ia.md names',
+  )
 
   console.log(`PASS: ${PASS_LINE}`)
   exitCode = 0
@@ -954,6 +1104,13 @@ try {
     await prisma.executionEvent.deleteMany({ where: { workspaceId: id } }).catch(() => {})
     await prisma.workspace.delete({ where: { id } }).catch(() => {})
   }
+  // `SimulationRun.company` is `onDelete: Restrict`, so the runs go before their company, and the
+  // company before the template its roster points at.
+  for (const id of [simulationAId, simulationBId]) {
+    if (id !== null) await prisma.simulationRun.delete({ where: { id } }).catch(() => {})
+  }
+  if (companyId !== null) await prisma.company.delete({ where: { id: companyId } }).catch(() => {})
+  if (templateId !== null) await prisma.slaveTemplate.delete({ where: { id: templateId } }).catch(() => {})
   if (diagDir !== null && exitCode === 0) rmSync(diagDir, { recursive: true, force: true })
   await prisma.$disconnect().catch(() => {})
 }
