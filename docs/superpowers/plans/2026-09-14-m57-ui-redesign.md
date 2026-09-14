@@ -13,7 +13,7 @@
 Plan-time errata E1–E9, every one read out of the code before a line of this plan's code was written. Each is to be appended to the spec's §7 during execution in the one-line `**En (amends Rx)** — <claim>.` form.
 
 - **E1 (amends R14c) — there is no clear-halt route, and there is no clear-halt CONTROL VERB either.** The spec's R14c already says the route is missing. It is worse than that: `grep -rn "clearHalt\|clear-halt" packages/ apps/` finds only `apps/orchestrator/src/cli.ts:1718-1729`, a `case 'clear-halt'` that runs `prisma.workspace.update({ where: { id }, data: { haltedReason: null, haltedAt: null } })` inline, returns no `Result`, and appends no event. So Task 4 adds `clearHalt(workspaceId)` to `packages/control/src/emergency.ts` — a `Result<{ cleared: boolean }, ControlRefusal>` holding exactly those two columns and nothing else — rewrites the CLI case to call it, and points the new route at it. **No event is appended, because the CLI appends none**, and a milestone whose claim is that nothing changed may not start writing history the CLI does not write. `emergencyStop`'s own `guardrail.tripped` is untouched.
-- **E2 (amends R7) — the `Pause all` label cannot be derived from `ShellFacts`, and needs one more number.** R7 says the split button's left half flips `Pause all` ⇄ `Resume all`. `ShellFacts.counts` carries `slavesWorking` and `tasksActive` and nothing about PAUSED runs, so the header cannot tell "everything is paused" from "nothing is running". `ShellFacts.counts` gains one member, `runsPaused: number` — `prisma.slaveRun.count({ where: { slave: { team: { workspaceId } }, status: 'paused' } })`, folded into the `Promise.all` `buildShellFacts` already makes. Every publisher of `ShellFacts` is a page client that spreads a snapshot's `shellFacts` verbatim, so the five of them are untouched; the two that BUILD the object by hand (`OverviewClient.tsx:188-200` and `server/tasks.ts`) gain one line each. `useShellFacts.ts`'s `sameFacts` gains the corresponding comparison — without it the header would not re-render when the last run pauses.
+- **E2 (amends R7) — the `Pause all` label cannot be derived from `ShellFacts`, and needs one more number.** R7 says the split button's left half flips `Pause all` ⇄ `Resume all`. `ShellFacts.counts` carries `slavesWorking` and `tasksActive` and nothing about PAUSED runs, so the header cannot tell "everything is paused" from "nothing is running". `ShellFacts.counts` gains one member, **`slavesPaused: number`** — the `deriveSlaveStatus` projection `buildShellFacts` already runs over the `SlaveRun` rows it has fetched, asked for `'paused'` and deduped by `slaveId`, with no new query (spec erratum E13 corrects this erratum: the draft counted paused RUNS here and paused SLAVES in the client literal, and there is no `Slave.status` column to count either way). Every publisher of `ShellFacts` is a page client that spreads a snapshot's `shellFacts` verbatim, so the five of them are untouched; the two that BUILD the object by hand (`OverviewClient.tsx:192-195` and `server/tasks.ts`) gain one line each, counting SLAVES under the same name. `useShellFacts.ts`'s `sameFacts` gains the corresponding comparison — without it the header would not re-render when the last run pauses.
 - **E3 (amends R5) — `buildSidebarTree` must not call `listProjects()`.** `listProjects` (`apps/web/src/server/org.ts:159`) makes six grouped queries plus a `findMany` with a nested `include` of every team's every slave, and returns spend, avatars and task counts the tree does not draw. It is the PROJECTS PAGE's read model and running it in the ROOT layout would put it on every page in the product. `buildSidebarTree` is its own four-query read — `workspace.findMany` (id, name, archivedAt, haltedReason, autoMerge), `task.groupBy` by `{workspaceId, status}`, `task.groupBy` by `{workspaceId}` where `{status:'done', integratedAt:null}`, and `supervisorDecision.groupBy` by `{workspaceId}` where `{status:'pending'}` — and it derives `needsYouCount` through the domain's own `needsYou(...)`, exactly the way `listProjects` does at `:317-328`, so the two numbers cannot drift.
 - **E4 (amends R8) — `useSelectedId` cannot be the provider's source of truth without a mirror, and the mirror belongs in the PAGE, not in the provider.** `useSelectedId` is a hook over `?slave=`/`?task=` that three page clients already call. The provider lives in the root layout and must not know those parameter names. So each owning page client keeps its `useSelectedId` call verbatim and adds one `useEffect` that calls `open('task', …)` / `close()` as the selection changes; `RightPanel` renders whatever the provider holds. `WorkforceClient` is deliberately NOT given that effect: `/workforce` is a global route with no third column (R8), and its `SlavePanel` stays in the page frame.
 - **E5 (amends R8) — the two panels' `onClose` must close the PROVIDER as well as the URL, and the provider's `close()` must clear the URL.** Passing `onClose={() => selectTask(null)}` alone would blank the URL and leave the provider holding a mode; clicking the panel's own `»` would clear the provider and leave `?task=` in the URL for the next reload to restore. Both page clients therefore pass an `onClose` that does both, and the provider is given the page's clearer through the same effect that opens it (`open(mode, { payload, onClose })`), so `RightPanel`'s header `»` and the panel's own close do the same thing.
@@ -41,7 +41,7 @@ Plan-time errata E1–E9, every one read out of the code before a line of this p
 - **NO NEW EVENT TYPE.** The catalogue stays at 61. `packages/domain/src/events/schema.ts`, `packages/db/src/enums.ts`, `packages/events/src/append.ts`, `apps/web/src/lib/activityFilters.ts`, `apps/web/src/lib/eventLabels.ts` and `docs/event-model.md` are in no task's file list. R9's threads are a GROUPING over rows that already exist.
 - **NO NEW CONTROL VERB but one**, and it is a move rather than an addition: `clearHalt` (erratum E1) holds the two-column update `apps/orchestrator/src/cli.ts:1718-1729` already performs inline, and the CLI case is rewritten to call it so the tree ends with one copy and not two. `packages/domain`, `packages/db`, `packages/events` and `apps/orchestrator` are otherwise in no task's file list.
 - Refusals are `ok()` / `err()`; **a refusal after a write inside `$transaction` must throw**. This milestone adds no refusal kind and changes no refusal text.
-- **Untouched and asserted so:** `decide()`, `evaluateGuardrails`, `workspaceSpend`, `emergencyStop`'s own body, `pauseActiveRuns`'s own body, `requestPause`/`requestResume`, `requestChange`, `approveDecision`/`rejectDecision`, `listDecisions`, `buildSupervisorView`, `buildNeedsYou`, `buildOverviewSnapshot`, `buildActivityPage`, `buildTasksSnapshot`, `buildKnowledge`, `buildOrganization`, `buildAnalytics`, `buildEvidencePage`, `buildSkillsPage`, `buildProviderAdapters`, every `packages/providers` file, and all five hook-plane shell scripts. Each appears in NO task's file list.
+- **Untouched and asserted so — their BODIES are untouched; COMMENT LINES may be corrected:** `decide()`, `evaluateGuardrails`, `workspaceSpend`, `emergencyStop`'s own body, `pauseActiveRuns`'s own body, `requestPause`/`requestResume`, `requestChange`, `approveDecision`/`rejectDecision`, `listDecisions`, `buildSupervisorView`, `buildNeedsYou`, `buildOverviewSnapshot`, `buildActivityPage`, `buildTasksSnapshot`, `buildKnowledge`, `buildOrganization`, `buildAnalytics`, `buildEvidencePage`, `buildSkillsPage`, `buildProviderAdapters`, every `packages/providers` file, and all five hook-plane shell scripts. No task changes what any of them DOES. **A comment is not behaviour**: this milestone deletes four components whose names are cited in prose in nine files, and a comment that names a component which no longer exists is a worse defect than the edit that fixes it. Those nine are listed in Task 4's Files block as "comment-only edits", by path and line, and each is a one-line prose change with no code on it.
 - Anything touching the database goes under `test/integration/` and is named `*.test.ts` — `vitest.config.ts`'s `integration` project includes `**/test/integration/**/*.test.ts` only (no `.tsx`), and only that project loads `test-setup/require-database.ts`. Component tests are `*.test.tsx` under `apps/web/test/` with `// @vitest-environment jsdom` as the **first line of the file**.
 - **Run directories live under `SLAVEOFAI_STATE_DIR`** in tests and gates (M52 C1). `scripts/gate-m57-ui-redesign.mjs` gets its root from `gateStateDir()` through `loopbackChildEnv` and adds nothing of its own.
 - **The DEV-DB rule.** Any scratch script that touches Prisma runs with `DATABASE_URL="$TEST_DATABASE_URL"`, and nothing outside `test-setup/` ever TRUNCATEs. The gates run against the development database through `--env-file=.env` and clean up only the rows they created, by exact name.
@@ -85,7 +85,7 @@ Plan-time errata E1–E9, every one read out of the code before a line of this p
 | `app/api/w/[workspaceId]/clear-halt/route.ts` | `POST` → `clearHalt` |
 | `app/api/w/[workspaceId]/supervisor/threads/route.ts` | `GET` → `buildSupervisorThreads` |
 
-**Modified:** `app/globals.css` (tokens), `app/layout.tsx` (fonts, `<head>` script, providers, `AppShell`), `app/w/[workspaceId]/layout.tsx` (the header's facts only), `lib/taskColumns.ts` (five columns), `server/shell.ts` (+`runsPaused`), `hooks/useShellFacts.ts` (+one comparison), `components/OverviewClient.tsx`, `components/TasksClient.tsx`, `components/ProjectsClient.tsx`, `components/SlavePanel.tsx` (ONE className), `components/TaskDetailPanel.tsx` (ONE className), `components/workforce/WorkforceClient.tsx`, and the page clients each page task names.
+**Modified:** `app/globals.css` (tokens), `app/layout.tsx` (fonts, `<head>` script, providers, `AppShell`), `app/w/[workspaceId]/layout.tsx` (the header's facts only), `lib/taskColumns.ts` (five columns), `server/shell.ts` (+`slavesPaused`), `hooks/useShellFacts.ts` (+one comparison), `components/OverviewClient.tsx`, `components/TasksClient.tsx`, `components/ProjectsClient.tsx`, `components/SlavePanel.tsx` (ONE className), `components/TaskDetailPanel.tsx` (ONE className), `components/workforce/WorkforceClient.tsx`, and the page clients each page task names.
 
 **Deleted:** `components/Sidebar.tsx`, `components/project/ProjectHeader.tsx`, `components/project/ProjectTabs.tsx`, `components/project/ProjectSwitcher.tsx`, `components/project/OverviewAdvanced.tsx`, `apps/web/test/project-tabs.test.tsx`.
 
@@ -520,7 +520,7 @@ Create `apps/web/test/theme.test.tsx`. The `// @vitest-environment jsdom` line m
 
 ```tsx
 // @vitest-environment jsdom
-import { render, screen, act } from '@testing-library/react'
+import { render, screen, act, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ThemeProvider, useTheme, THEME_STORAGE_KEY } from '../src/components/theme/ThemeProvider.js'
 
@@ -603,17 +603,20 @@ describe('the theme provider', () => {
     expect(THEME_STORAGE_KEY).toBe('theme')
   })
 
-  it('restores a stored choice on mount', () => {
+  it('restores a stored choice AFTER mount -- never during hydration (scan finding 51)', async (): Promise<void> => {
     window.localStorage.setItem(THEME_STORAGE_KEY, 'dark')
     render(<ThemeProvider><Probe /></ThemeProvider>)
-    expect(screen.getByTestId('mode').textContent).toBe('dark')
+    // `waitFor`, not a bare read: the first render is deliberately `system` on both sides of
+    // hydration, and an effect corrects it a tick later. Asserting the first render would be
+    // asserting the bug.
+    await waitFor(() => expect(screen.getByTestId('mode').textContent).toBe('dark'))
     expect(screen.getByTestId('resolved').textContent).toBe('dark')
   })
 
-  it('ignores a stored value that is not one of the three', () => {
+  it('ignores a stored value that is not one of the three', async (): Promise<void> => {
     window.localStorage.setItem(THEME_STORAGE_KEY, 'neon')
     render(<ThemeProvider><Probe /></ThemeProvider>)
-    expect(screen.getByTestId('mode').textContent).toBe('system')
+    await waitFor(() => expect(screen.getByTestId('mode').textContent).toBe('system'))
   })
 
   it('survives a localStorage that throws (private mode, blocked site data)', () => {
@@ -694,18 +697,29 @@ const ThemeContext = createContext<ThemeState | null>(null)
 const DARK_QUERY = '(prefers-color-scheme: dark)'
 
 export function ThemeProvider({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
-  // `useState` with an initialiser, not `useEffect`: the FIRST client render must already agree
-  // with what the pre-hydration script stamped, or React would paint one frame of the default
-  // before correcting itself -- the very flash the script exists to prevent. It is safe because
-  // this component is a client component and its first render on the client is the hydration
-  // render; on the server `window` is undefined and the initialiser answers `system`, which is
-  // what the server-rendered markup (no attribute) says.
-  const [theme, setThemeState] = useState<ThemeChoice>(() =>
-    typeof window === 'undefined' ? 'system' : readStored(),
-  )
-  const [systemDark, setSystemDark] = useState<boolean>(() =>
-    typeof window === 'undefined' ? false : (window.matchMedia?.(DARK_QUERY).matches ?? false),
-  )
+  // `'system'` on the server AND on the first client render, then corrected by an effect (M57
+  // erratum, scan finding 51).
+  //
+  // The tempting version reads `localStorage` in the `useState` initialiser so the first client
+  // render already agrees with the stored choice. It does not work: the initialiser runs on the
+  // HYDRATION render, so React compares a client tree that says `dark` against a server tree that
+  // said `system`, and every node rendered from `theme` -- the sidebar pill's `data-theme-mode`,
+  // its glyph and word, Settings' segmented control -- mismatches and logs a hydration error on
+  // every page load for anybody who has chosen a theme.
+  //
+  // THE FLASH IS NOT THIS COMPONENT'S JOB. The inline `<head>` script has already stamped
+  // `data-theme` before the first paint, and the stylesheet is what paints -- so the page is the
+  // right colour from the first frame whatever React thinks. What this state drives is the two
+  // CONTROLS that say which mode is selected, and those correcting themselves one tick after
+  // hydration is invisible.
+  const [theme, setThemeState] = useState<ThemeChoice>('system')
+  const [systemDark, setSystemDark] = useState(false)
+
+  // The read, after mount. `useEffect` never runs on the server and never during hydration, so
+  // there is nothing for React to compare.
+  useEffect((): void => {
+    setThemeState(readStored())
+  }, [])
 
   // `system` must FOLLOW the operating system while the page is open, not only on load -- a person
   // whose machine flips at sunset should see this flip with it (README "Interactions": "system
@@ -949,7 +963,7 @@ MSG
 - Create: `apps/web/src/app/api/sidebar/route.ts`
 - Create: `apps/web/test/routes.test.ts`
 - Create: `apps/web/test/integration/sidebar-tree.test.ts`
-- Modify: `apps/web/src/server/shell.ts` (add `counts.runsPaused` — erratum E2)
+- Modify: `apps/web/src/server/shell.ts` (add `counts.slavesPaused` — plan erratum E2, spec erratum E13)
 - Modify: `apps/web/src/hooks/useShellFacts.ts` (one more comparison in `sameFacts`)
 - Modify: `apps/web/src/components/OverviewClient.tsx` (one line in the hand-built `shellFacts`)
 - Modify: `apps/web/src/server/tasks.ts` (if it hand-builds `shellFacts`; if it calls `buildShellFacts`, no edit — check first)
@@ -960,7 +974,7 @@ MSG
   - `lib/routes.ts`: `export type Section = 'overview' | 'tasks' | 'organization' | 'knowledge' | 'activity' | 'settings'`; `export type ViewId = 'graph' | 'office' | 'analytics'`; `export const SECTIONS: readonly { id: Section; label: string; href: (workspaceId: string) => string }[]`; `export const VIEWS: readonly { id: ViewId; label: string; href: (workspaceId: string) => string }[]`; `export function sectionOf(pathname: string): Section | null`; `export function viewOf(pathname: string): ViewId | null`; `export function workspaceIdOf(pathname: string): string | null`; `export function isGlobalRoute(pathname: string): boolean`; `export interface Crumb { readonly text: string; readonly last: boolean }`; `export function breadcrumbOf(pathname: string, projectName: string | null): readonly Crumb[]`.
   - `server/sidebar.ts`: `export interface SidebarProject { readonly id: string; readonly name: string; readonly archived: boolean; readonly status: UserWorkspaceState; readonly statusLabel: string; readonly needsYouCount: number; readonly tasksActive: number }` and `export async function buildSidebarTree(): Promise<readonly SidebarProject[]>`.
   - `GET /api/sidebar` → `SidebarProject[]`.
-  - `ShellFacts.counts.runsPaused: number`.
+  - `ShellFacts.counts.slavesPaused: number`.
 
 - [ ] **Step 1: Write the failing test for `lib/routes.ts`**
 
@@ -1594,7 +1608,7 @@ export async function GET(): Promise<Response> {
 }
 ```
 
-- [ ] **Step 10: Add `runsPaused` to `ShellFacts` (erratum E2)**
+- [ ] **Step 10: Add `slavesPaused` to `ShellFacts` (plan erratum E2, spec erratum E13)**
 
 The header's left button has to say `Pause all` or `Resume all`, and nothing in `ShellFacts` can
 tell "everything is paused" from "nothing is running". Three edits.
@@ -1604,37 +1618,54 @@ after the `tasksActive` member, add:
 
 ```ts
     /**
-     * Runs of this workspace sitting at `paused` (M57 R7, plan erratum E2). The header's split
-     * button reads `Resume all` instead of `Pause all` when this is positive and `slavesWorking`
-     * is zero — the two together are the only way to tell "everything is paused" from "nothing is
-     * running", and the second must not offer to pause an idle project.
+     * SLAVES of this workspace whose derived status is `paused` (M57 R7, plan erratum E2, spec
+     * erratum E13). The header's split button reads `Resume all` instead of `Pause all` when this
+     * is positive and `slavesWorking` is zero — the two together are the only way to tell
+     * "everything is paused" from "nothing is running", and the second must not offer to pause an
+     * idle project.
+     *
+     * SLAVES and not RUNS, and deduped, for exactly the reason `slavesWorking` beside it is: one
+     * slave with two live rows is one slave. The draft of this plan counted paused RUNS here and
+     * paused SLAVES in `OverviewClient`'s hand-built literal, and `sameFacts` compared the two
+     * across a route change — so the button's label flipped depending on which page you were on.
      */
-    readonly runsPaused: number
+    readonly slavesPaused: number
 ```
 
 **(b)** In the same file, add a fifth entry to the `Promise.all` in `buildShellFacts` (after
 `workspaceSpend(workspaceId)`), and widen the destructuring:
 
 ```ts
-  const [runs, tasksActive, spendGroups, spendTotal, runsPaused] = await Promise.all([
+  const [runs, tasksActive, spendGroups, spendTotal] = await Promise.all([
 ```
 
-…and as the new last element of the array:
+…**and nothing is added to that array.** There is **no `Slave.status` column** — a slave's status is
+DERIVED from its live runs — so the count comes from the `runs` this function has ALREADY fetched,
+beside the `slavesWorking` line that does the same thing for the same reason. Immediately after the
+existing `const slavesWorking = new Set(…)` block, add:
 
 ```ts
-    // One count, in the same round trip as the four reads already here rather than a fifth
-    // roundtrip after the fact -- "is there anything to resume" is as much a part of "what the
-    // header shows" as the budget bar beside it.
-    prisma.slaveRun.count({ where: { slave: { team: { workspaceId } }, status: 'paused' } }),
+  // The same derivation, the same dedupe, one word apart (spec erratum E13). `deriveSlaveStatus`
+  // is the domain's, so this number and the `paused` pill on the same slave's card cannot come to
+  // disagree -- and `SlaveCardData.status` on the client is that identical projection, which is
+  // what makes `OverviewClient`'s own literal below equal to this one BY CONSTRUCTION rather than
+  // by coincidence. Zero extra queries: `runs` is already in hand.
+  const slavesPaused = new Set(
+    runs.filter((run) => deriveSlaveStatus(toRunState(run)) === 'paused').map((run) => run.slaveId),
+  ).size
 ```
 
-…and in the returned object, `counts: { slavesWorking, tasksActive, runsPaused },`.
+…and in the returned object, `counts: { slavesWorking, tasksActive, slavesPaused },`. `NON_TERMINAL_RUN_STATUSES`
+already includes `paused` (it is why a paused run is still fetched here), so nothing about the query
+changes; verify that with `grep -n "NON_TERMINAL_RUN_STATUSES" -A 3 packages/domain/src/` before
+relying on it, and if `paused` is NOT in that list, widen the `status: { in: … }` to include it and
+say so in the task report.
 
 **(c)** In `apps/web/src/hooks/useShellFacts.ts`, inside `sameFacts`, add one comparison after the
 `tasksActive` line:
 
 ```ts
-    a.counts.runsPaused === b.counts.runsPaused &&
+    a.counts.slavesPaused === b.counts.slavesPaused &&
 ```
 
 Without it the store would suppress the notification that the last run just paused, and the header's
@@ -1648,10 +1679,19 @@ grep -rn "slavesWorking" apps/web/src apps/web/test | grep -v "server/shell.ts"
 
 Every hit is either a page client spreading a snapshot's `shellFacts` verbatim (nothing to do) or a
 place that BUILDS the object literal (one line to add). At the time of writing those are
-`apps/web/src/components/OverviewClient.tsx:190-193` (add `runsPaused: view.slaves.filter((a) => a.status === 'paused').length,` after `tasksActive`) and **every test fixture that spells a whole
-`ShellFacts`** — `apps/web/test/shell.test.tsx:201,228`, `apps/web/test/project-layout.test.tsx:11`
-and any others the grep finds (add `runsPaused: 0,`). Fix each hit the grep reports; `tsc` will list
-any you miss, because `counts` is a `readonly` object literal type with no optional members.
+`apps/web/src/components/OverviewClient.tsx:192-195` (add
+`slavesPaused: view.slaves.filter((a) => a.status === 'paused').length,` after `tasksActive` —
+the SAME projection `buildShellFacts` derives, which is the whole point of erratum E13) and **every
+test fixture that spells a whole `ShellFacts`** — `apps/web/test/shell.test.tsx:202,229`,
+`apps/web/test/project-layout.test.tsx:11` and any others the grep finds (add `slavesPaused: 0,`).
+Fix each hit the grep reports; `tsc` will list any you miss, because `counts` is a `readonly` object
+literal type with no optional members.
+
+*(Every file-and-line citation in this plan was taken against `c828f8c8` and several drift by one or
+two lines — `ProjectsClient.tsx:35-41` is really `:34-40`, `gate-m44` "line 610" is `:611`,
+`gate-m18` "863" is `:861`, `gate-m11` "444-447" is `:442-446`, `cli.ts` "1718-1729" is
+`:1718-1728`. Treat every line number in this plan as a HINT and the quoted text as the contract:
+search for the text, not the number.)*
 
 - [ ] **Step 12: Run everything this task touched**
 
@@ -1885,7 +1925,7 @@ Create `apps/web/src/components/shell/SidebarTree.tsx`:
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { SECTIONS, VIEWS, sectionOf, viewOf, workspaceIdOf } from '../../lib/routes'
 import type { SidebarProject } from '../../server/sidebar'
 import { useShellFacts } from '../../hooks/useShellFacts'
@@ -1934,6 +1974,7 @@ const PROJECT_DOT: Record<SidebarProject['status'], string> = {
 export function SidebarTree({ initial }: { readonly initial: readonly SidebarProject[] }): React.JSX.Element {
   const pathname = usePathname()
   const [projects, setProjects] = useState<readonly SidebarProject[]>(initial)
+  const lastPathname = useRef(pathname)
   const openId = workspaceIdOf(pathname)
   const facts = useShellFacts(openId)
   const section = sectionOf(pathname)
@@ -1946,7 +1987,22 @@ export function SidebarTree({ initial }: { readonly initial: readonly SidebarPro
   // `live · —` rather than inventing one.
   const stream = useStreamState(openId ?? '')
 
+  // THROTTLE (spec erratum E11, scan finding 23). `pathname` may fire this at will -- a
+  // navigation is rare and a person just did it. `facts` may not: `sameFacts` compares twelve live
+  // figures, and spend, `slavesWorking`, `tasksActive` and `slavesPaused` all move several times a
+  // minute while a run is live, so an unthrottled effect fires `GET /api/sidebar` -- four queries
+  // -- at roughly the stream's own cadence, for a tree whose rows change when somebody creates or
+  // archives a project. A ref, not state: bumping it must not re-render.
+  const lastFetchedAt = useRef(0)
+  const SIDEBAR_REFETCH_MS = 10_000
+
   useEffect((): void => {
+    const now = Date.now()
+    // A pathname change always refetches; a facts change waits its turn.
+    const forced = lastPathname.current !== pathname
+    lastPathname.current = pathname
+    if (!forced && now - lastFetchedAt.current < SIDEBAR_REFETCH_MS) return
+    lastFetchedAt.current = now
     let cancelled = false
     void (async (): Promise<void> => {
       try {
@@ -2240,7 +2296,7 @@ export interface RightPanelState {
    * thing (plan erratum E5). A mode opened without one closes the panel and leaves the URL, which
    * is a bug the type cannot prevent, so the parameter is required.
    */
-  readonly open: (mode: RightPanelMode, content: React.ReactNode, onClose: () => void) => void
+  readonly open: (mode: RightPanelMode, content: React.ReactNode, onClose: () => void, key?: string) => void
   /** Hand the slot back to its default, calling the owner's clearer on the way. */
   readonly close: () => void
   readonly collapse: () => void
@@ -2257,18 +2313,32 @@ export function RightPanelProvider({ children }: { readonly children: React.Reac
   // inside `close`.
   const onCloseRef = useRef<(() => void) | null>(null)
 
-  const open = useCallback((next: RightPanelMode, node: React.ReactNode, onClose: () => void): void => {
-    onCloseRef.current = onClose
-    setMode(next)
-    setContent(node)
-    // Opening something ALWAYS un-collapses: a click that produces no visible change is a click a
-    // person repeats.
-    setCollapsed(false)
-  }, [])
+  /** What is currently open, as a string, so a re-`open()` with the same mode and the same subject
+   *  can be told from a genuinely new one. A ref because reading it must not re-render. */
+  const openKeyRef = useRef<string | null>(null)
+
+  const open = useCallback(
+    (next: RightPanelMode, node: React.ReactNode, onClose: () => void, key?: string): void => {
+      onCloseRef.current = onClose
+      setMode(next)
+      setContent(node)
+      // Un-collapse only when something NEW is being opened (scan finding 21). A person who
+      // collapsed the panel on a live project would otherwise have it re-open within a second and
+      // permanently: the owning page re-runs its mirror effect on every SSE frame, and an
+      // unconditional `setCollapsed(false)` turns that into an un-collapse loop. A click that
+      // produces no visible change is a click a person repeats — so a genuinely new subject still
+      // un-collapses, and only a re-assertion of the same one does not.
+      const nextKey = `${next}:${key ?? ''}`
+      if (openKeyRef.current !== nextKey) setCollapsed(false)
+      openKeyRef.current = nextKey
+    },
+    [],
+  )
 
   const close = useCallback((): void => {
     const onClose = onCloseRef.current
     onCloseRef.current = null
+    openKeyRef.current = null
     setMode(null)
     setContent(null)
     onClose?.()
@@ -2384,8 +2454,12 @@ const TRACK: Record<RightWidth, string> = {
  * states a minimum width rather than a breakpoint. This is a deliberate reduction in responsive
  * behaviour, it is named in the spec (R4) and in `docs/ia.md`, and it is not an oversight.
  *
- * A server component: it renders no state and takes only nodes, so it does not have to be `'use
- * client'` and the root layout can keep its server-rendered first paint.
+ * It declares no `'use client'` and holds no state — it takes nodes and arranges them. That does
+ * NOT make it a server component in the built tree: Task 5's `'use client'` `ShellFrame` imports it
+ * directly, which pulls it into the client bundle (scan finding 44). What the absence of the
+ * directive actually buys is that it can be rendered from EITHER side — the root layout composes
+ * `<SidebarTree initial={projects}/>` on the server and hands it down as a prop through client
+ * providers, so the server's own read still reaches the first paint.
  */
 export function AppShell({
   sidebar,
@@ -2460,6 +2534,18 @@ export const metadata = { title: 'Slave of AI' }
 export const dynamic = 'force-dynamic'
 
 export default async function RootLayout({ children }: { children: React.ReactNode }): Promise<React.JSX.Element> {
+  // GATED ON A PRINCIPAL (spec erratum E11, scan finding 55). Without this, `/login` — the one page
+  // in the product a signed-out person can reach — opens a database connection and lists every
+  // project before anybody has authenticated. `GET /api/sidebar` has always been gated; the layout
+  // read was not.
+  //
+  // `currentPrincipal`, NOT `requirePrincipal`: this is a layout, not an authorisation boundary,
+  // and it must render (with an empty tree) rather than return a 401 `Response`. In loopback mode
+  // there is no account to name and `currentPrincipal` answers `null` for everybody — so read
+  // `apps/web/src/server/principal.ts:24-44` first and use whichever helper answers "is this
+  // installation gated at all", falling back to reading the tree unconditionally when it is not.
+  // A sidebar that is empty for every loopback operator would be a worse bug than the one this
+  // fixes.
   const projects = await buildSidebarTree()
   return (
     <html lang="en" className={FONT_VARIABLES} suppressHydrationWarning>
@@ -2490,16 +2576,31 @@ grep -rn "components/Sidebar" apps/web/src apps/web/test scripts
 ```
 
 Expected after the `git rm`: the grep reports only `apps/web/test/shell.test.tsx:4`. Rewrite that
-file's first half: **delete lines 4 (the `Sidebar` import), 67–72 (the `navRow` helper) and the
+file's first half: **delete line 4 (the `Sidebar` import), lines 67–72 (the `navRow` helper) and the
 whole `describe('the shell', …)` block down to its closing `})`** — those eight cases are now
 `apps/web/test/sidebar-tree.test.tsx`'s twelve — and leave the file's second half
-(`describe('the halt banner shows on every page', …)`, its two cases and every mock and stub above
-them) exactly as it is. Also delete the now-unused `import { Sidebar }` and the `afterEach` that
-resets `pathname` inside the deleted block. The file keeps its name: what it still tests is that the
-halt banner reaches every page, which is a shell claim.
+(`describe('the halt banner shows on every page', …)` and its two cases) exactly as it is. The file
+keeps its name: what it still tests is that the halt banner reaches every page, which is a shell
+claim.
 
-Then add `runsPaused: 0,` to the two `ShellFacts` literals in that file if Task 2's Step 11 has not
-already (check with `grep -n runsPaused apps/web/test/shell.test.tsx`).
+**Two module-scope bindings go with that block** (scan finding 33), and the repo's `noUnusedLocals`
+makes leaving them an ERROR rather than a warning: `routerReplace` (`:11`) is read only by the
+`next/navigation` mock, and `pathname` (`:10`) only by that mock and the deleted `afterEach`. Neither
+remaining case navigates, so collapse the mock to what they need:
+
+```tsx
+vi.mock('next/navigation', () => ({
+  usePathname: () => '/w/w1',
+  useRouter: () => ({ replace: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}))
+```
+
+…and delete the `let pathname = …` and `const routerReplace = …` lines above it, and the
+`afterEach(() => { pathname = '/w/w1' })` inside the deleted describe.
+
+Then add `slavesPaused: 0,` to the two `ShellFacts` literals in that file if Task 2's Step 11 has not
+already (check with `grep -n slavesPaused apps/web/test/shell.test.tsx`).
 
 - [ ] **Step 12: Update `gate-m44-ux-foundation.mjs`**
 
@@ -2541,11 +2642,18 @@ add:
   console.log('stage 1: the tree root is Projects → /')
 ```
 
-**Edit 2 — stage 2's Advanced menu (lines 676 and 694–743).** That whole block — `waitVisible` on
-`project-tab-overview`, the three `clickUntil`s on `project-advanced`, the href reads for
-`advanced-item-graph`/`advanced-item-office`, and the Escape-refocus check — asserts a MENU that no
-longer exists. Replace the block from the `waitVisible(page.getByTestId('project-tab-overview')…)`
-line down to the `console.log` that ends the Escape check with:
+**Edit 2 — stage 2's Advanced menu (lines ~676 and ~694–743).** That block — `waitVisible` on
+`project-tab-overview`, the `stripLabels` scrape, the three `clickUntil`s on `project-advanced`, the
+href reads for `advanced-item-graph`/`advanced-item-office`, and the Escape-refocus check — asserts
+a MENU and a TAB STRIP that no longer exist. Replace it from the
+`waitVisible(page.getByTestId('project-tab-overview')…)` line down to the `console.log` that ends
+the Escape check.
+
+**Three assertions in that block are NOT about the menu and must survive** (scan finding 26): the
+tab-LABEL check (`EXPECTED_TABS`, `:692-695`) and the two "not decoration: both routes still
+render" checks (`graph-canvas` at `:716-718`, `office-canvas` at `:719-722`). The labels move onto
+the tree's section rows, and the two canvas checks are copied across unchanged — they are the whole
+point of `docs/ia.md` rule 2 and `gate-m57` stage 10 only asks for a 200. The replacement:
 
 ```js
   await waitVisible(page.getByTestId('sidebar-section'), "the project's section rows in the tree")
@@ -2556,6 +2664,21 @@ line down to the `console.log` that ends the Escape check with:
   const EXPECTED_SECTIONS = ['overview', 'tasks', 'organization', 'knowledge', 'activity', 'settings']
   if (JSON.stringify(sectionIds) !== JSON.stringify(EXPECTED_SECTIONS)) {
     await fail(`stage 2: the tree's sections are ${JSON.stringify(sectionIds)}, expected ${JSON.stringify(EXPECTED_SECTIONS)}`)
+  }
+  // The LABEL assertion the tab strip used to carry, re-pointed at the rows that carry those words
+  // now. `Organization` became `Team` in M57 R6 -- a label change over an unchanged route -- and
+  // this line is where a reviewer sees that, in the same commit as the component.
+  const sectionLabels = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="sidebar-section"]')].map((row) =>
+      // The Tasks row carries a count in its own text, the way the tab's badge did; the label is
+      // what is left.
+      (row.textContent ?? '').replace(/\d+$/, '').trim(),
+    ),
+  )
+  console.log(`stage 2: section labels = ${JSON.stringify(sectionLabels)}`)
+  const EXPECTED_LABELS = ['Overview', 'Tasks', 'Team', 'Knowledge', 'Activity', 'Settings']
+  if (JSON.stringify(sectionLabels) !== JSON.stringify(EXPECTED_LABELS)) {
+    await fail(`stage 2: the tree's section labels are ${JSON.stringify(sectionLabels)}, expected ${JSON.stringify(EXPECTED_LABELS)}`)
   }
   // M57 R11: what `Advanced ▾` held is three VISIBLE chips now. No menu to open, and therefore no
   // Escape-refocus contract to hold -- the destinations are the promise `docs/ia.md` makes, and
@@ -2578,19 +2701,54 @@ line down to the `console.log` that ends the Escape check with:
   if (viewHrefs.analytics !== `/analytics?workspace=${workspaceId}`) {
     await fail(`stage 2: the Analytics chip points at ${JSON.stringify(viewHrefs.analytics)}, expected /analytics?workspace=${workspaceId}`)
   }
-  console.log('stage 2 PASSED: six section rows and three VIEWS chips, every destination unchanged')
+  // NOT DECORATION: both routes still render (M44's own two checks, kept verbatim -- a chip that
+  // points at a page nobody can draw is a chip that lies).
+  await gotoReliably(`${baseUrl}/w/${workspaceId}/graph`)
+  await waitVisible(page.getByTestId('graph-canvas'), "the Graph route's canvas, reached from VIEWS")
+  console.log('stage 2: /w/<id>/graph rendered graph-canvas')
+  await gotoReliably(`${baseUrl}/w/${workspaceId}/office`)
+  await waitVisible(page.getByTestId('office-canvas'), "the Office route's canvas, reached from VIEWS")
+  console.log('stage 2: /w/<id>/office rendered office-canvas')
+  await gotoReliably(`${baseUrl}/w/${workspaceId}`)
+
+  console.log('stage 2 PASSED: six section rows with the right words, three VIEWS chips, and both canvases still drawing')
 ```
 
-**Edit 3 — stage 5's Overview disclosure (around line 842).** `overview-advanced-toggle` is gone.
-Delete the `const toggle = page.getByTestId('overview-advanced-toggle')` line and the `clickUntil`
-that follows it; whatever that block then waited for is visible without a click now. Read the
-surrounding twenty lines and keep every assertion that is not about the disclosure.
+**Edit 3 — the Overview disclosure, inside stage 3/4's page loop (lines 842–846).** The real block
+is four lines and there is no `clickUntil` in it (scan finding 11) — quoted exactly:
 
-**Edit 4 — stage 5's Supervisor proposal (around line 930).** Replace the selector:
+```js
+      const toggle = page.getByTestId('overview-advanced-toggle')
+      await waitVisible(toggle, "the Overview's Advanced disclosure")
+      await toggle.click()
+      await waitVisible(page.getByTestId('live-events'), 'the live-events river under Advanced')
+```
+
+Replace all four with the one that is left, because the river is on the page without a click now
+(Task 4 Step 12 leaves it rendered directly; Task 6 re-homes it under `recent-changes`):
+
+```js
+      await waitVisible(page.getByTestId('live-events'), 'the live-events river on the Overview')
+```
+
+**Edit 4 — the Supervisor proposal, also inside stage 3/4's page loop (lines 921–933).** *(The
+draft of this plan called Edits 3 and 4 "stage 5"; they are in the stage 3/4 loop at `:831-940` —
+scan finding 35.)*
+
+Two selectors move, not one. Line 930's panel-scoped chip:
 
 ```js
       const kindChip = page.locator('[data-testid="right-panel"] [data-testid="supervisor-proposal-kind"]').first()
 ```
+
+…and line 933's `timeline-decisions`-scoped chip is **unchanged**: `SupervisorTimeline` renders
+`ProposalRow`, which Task 5 extracts rather than deletes (spec erratum E18), so that half of the
+comparison keeps working exactly as it does today. Line 921's
+`waitVisible(page.getByTestId('supervisor-decision-meta'))` is **also unchanged**, because Task 5's
+`SupervisorThreadPanel` emits that testid with the same semantics — the projected sentence, with the
+whole raw record in `title`. **Both of those are Task 5's promises**: if Task 5 has not landed when
+this gate is run at the end of Task 4, the two lines fail, and the honest answer is to run this gate
+again at the end of Task 5 rather than to weaken it here. Note that in the task report.
 
 **Edit 5 — stage 7's collapse (lines ~1090–1110).** The 212 px/52 px collapse is gone with
 `Sidebar.tsx` (R4). Replace the whole stage-7 body with the new floor:
@@ -2678,18 +2836,20 @@ MSG
 - Create: `apps/web/src/app/api/w/[workspaceId]/runs/resume-all/route.ts`
 - Create: `apps/web/src/app/api/w/[workspaceId]/clear-halt/route.ts`
 - Create: `apps/web/src/server/runFanout.ts`
+- Create: `apps/web/src/components/shell/ShellFactsSeed.tsx` (spec erratum E12)
 - Create: `apps/web/test/header.test.tsx`
 - Create: `apps/web/test/integration/fanout-routes.test.ts`
 - Modify: `apps/orchestrator/src/cli.ts` (the `clear-halt` case only — lines 1718–1729)
 - Modify: `apps/web/src/app/layout.tsx` (`header={<Header />}`)
 - Modify: `apps/web/src/app/w/[workspaceId]/layout.tsx` (drop `ProjectHeader`/`ProjectTabs`)
 - Modify: `scripts/gate-m11-shell.mjs` (445–447), `scripts/gate-m14-fidelity.mjs` (941), `scripts/gate-m18-skill-and-teeth.mjs` (845, 846, 863), `scripts/gate-m47-team-formation.mjs` (966), `scripts/gate-m49-memory.mjs` (1534–1547)
-- Rewrite: `apps/web/test/project-layout.test.tsx`, `apps/web/test/project-header.test.tsx` (renamed in place to test the new header — see Step 10)
-- Delete: `apps/web/src/components/project/ProjectHeader.tsx`, `apps/web/src/components/project/ProjectTabs.tsx`, `apps/web/src/components/project/ProjectSwitcher.tsx`, `apps/web/src/components/project/OverviewAdvanced.tsx`, `apps/web/test/project-tabs.test.tsx`
+- Rewrite: `apps/web/test/project-layout.test.tsx`
+- **Comment-only edits** (spec's Global Constraints: a comment is not behaviour). Each of these names a component this task deletes, in prose, with no code on the line. One line each, and NOTHING else in these files moves: `apps/web/src/server/overview.ts:239`, `apps/web/src/server/org.ts:78`, `apps/web/src/hooks/useShellFacts.ts:8,11`, `apps/web/src/components/ui/Tabs.tsx:58`, `apps/web/src/components/ui/useModalDismiss.ts:87`, `apps/web/src/components/SlavePanel.tsx:474`, `apps/web/src/components/ProjectsClient.tsx:217`, and `scripts/gate-m52-broker.mjs:1383-1386` (which explains a scoped locator by naming the Overview's `Advanced` disclosure).
+- Delete: `apps/web/src/components/project/ProjectHeader.tsx`, `apps/web/src/components/project/ProjectTabs.tsx`, `apps/web/src/components/project/ProjectSwitcher.tsx`, `apps/web/src/components/project/OverviewAdvanced.tsx`, `apps/web/test/project-tabs.test.tsx`, **`apps/web/test/project-header.test.tsx`** (deleted, not rewritten — Step 12 says why, and the earlier draft's "renamed in place" was wrong)
 
 **Interfaces:**
-- Consumes from Task 2: `breadcrumbOf`, `workspaceIdOf`, `isGlobalRoute`, `ShellFacts.counts.runsPaused`. From Task 3: `useHeaderActionNode`, `AppShell`.
-- Produces, for Tasks 5–9: `Header` (no props — it reads the pathname, `useShellFacts` and the header-action context); `clearHalt(workspaceId: string): Promise<Result<{ readonly cleared: boolean }, ControlRefusal>>` from `@slave-of-ai/control`; `resumeActiveRuns(workspaceId, requestedBy, principal?): Promise<{ requested: string[]; refused: string[] }>` from `apps/web/src/server/runFanout.ts`; the three routes; testids `app-header`, `breadcrumb`, `halted-pill`, `pause-all`, `stop-split`, `stop-cancel`, `header-action`.
+- Consumes from Task 2: `breadcrumbOf`, `workspaceIdOf`, `isGlobalRoute`, `ShellFacts.counts.slavesPaused`. From Task 3: `useHeaderActionNode`, `AppShell`.
+- Produces, for Tasks 5–9: `Header({ projects }: { projects: readonly SidebarProject[] })` — it reads the pathname, the header-action context and `useShellFacts`, and takes the tree as a prop so it can name the project on every route (spec erratum E12); `ShellFactsSeed({ facts }: { facts: ShellFacts })`; `clearHalt(workspaceId: string): Promise<Result<{ readonly cleared: boolean }, ControlRefusal>>` from `@slave-of-ai/control`; `resumeActiveRuns(workspaceId, requestedBy, principal?): Promise<{ requested: string[]; refused: string[] }>` from `apps/web/src/server/runFanout.ts`; the three routes; testids `app-header`, `breadcrumb`, `halted-pill`, `pause-all`, `stop-split`, `stop-cancel`, `budget-bar`, `header-error`, `header-action`.
 
 - [ ] **Step 1: Add `clearHalt` to the control package (erratum E1)**
 
@@ -3024,7 +3184,7 @@ Create `apps/web/test/header.test.tsx`:
 import { render, screen, act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Header } from '../src/components/shell/Header.js'
-import { HeaderActionProvider } from '../src/components/shell/HeaderActionProvider.js'
+import { HeaderActionProvider, useHeaderAction } from '../src/components/shell/HeaderActionProvider.js'
 import type { ShellFacts } from '../src/server/shell.js'
 
 let pathname = '/w/w1/tasks'
@@ -3040,7 +3200,7 @@ vi.mock('../src/hooks/useShellFacts', () => ({ useShellFacts: () => facts }))
 function shellFacts(overrides: Partial<ShellFacts['status']> = {}, counts: Partial<ShellFacts['counts']> = {}): ShellFacts {
   return {
     workspace: { id: 'w1', name: 'Checkout rewrite' },
-    counts: { slavesWorking: 2, tasksActive: 5, runsPaused: 0, ...counts },
+    counts: { slavesWorking: 2, tasksActive: 5, slavesPaused: 0, ...counts },
     guardrails: { budgetUsd: 40, maxConcurrentRuns: 3, runTimeoutMs: 3_600_000, maxAttempts: 3 },
     status: { goal: 'Ship it', spentUsd: 12.4, unmeasuredRuns: 0, haltedReason: null, ...overrides },
   }
@@ -3059,8 +3219,12 @@ afterEach((): void => {
   vi.unstubAllGlobals()
 })
 
+const PROJECTS = [
+  { id: 'w1', name: 'Checkout rewrite', archived: false, status: 'working' as const, statusLabel: 'WORKING', needsYouCount: 0, tasksActive: 5 },
+]
+
 function renderHeader(): void {
-  render(<HeaderActionProvider><Header /></HeaderActionProvider>)
+  render(<HeaderActionProvider><Header projects={PROJECTS} /></HeaderActionProvider>)
 }
 
 describe('the header', () => {
@@ -3097,7 +3261,7 @@ describe('the header', () => {
   it('says Pause all while anything is working, and Resume all once everything is paused', () => {
     renderHeader()
     expect(screen.getByTestId('pause-all').textContent).toBe('Pause all')
-    facts = shellFacts({}, { slavesWorking: 0, runsPaused: 3 })
+    facts = shellFacts({}, { slavesWorking: 0, slavesPaused: 3 })
     renderHeader()
     expect(screen.getAllByTestId('pause-all').at(-1)?.textContent).toBe('Resume all')
   })
@@ -3158,17 +3322,26 @@ describe('the header', () => {
     expect(screen.queryByTestId('header-action')).toBeNull()
     render(
       <HeaderActionProvider>
-        <Header />
+        <Header projects={PROJECTS} />
         <SetsAction />
       </HeaderActionProvider>,
     )
     expect(screen.getAllByTestId('header-action').at(-1)?.textContent).toBe('+ New project')
   })
+
+  it('names the project on a route whose page publishes no ShellFacts (spec erratum E12)', () => {
+    pathname = '/w/w1/organization'
+    facts = null
+    renderHeader()
+    // The name comes from the TREE, so it is there even though nothing published.
+    expect(screen.getByTestId('breadcrumb').getAttribute('data-crumbs')).toBe('Projects/Checkout rewrite/Team')
+  })
 })
 
-/** A page that declares a header action, the way `ProjectsClient` will. */
+/** A page that declares a header action, the way `ProjectsClient` will. `useHeaderAction` is a
+ *  static import at the top of this file (scan finding 17): `require` is not defined in a vitest
+ *  ESM module and threw a `ReferenceError` in the draft of this plan. */
 function SetsAction(): null {
-  const { useHeaderAction } = require('../src/components/shell/HeaderActionProvider.js') as typeof import('../src/components/shell/HeaderActionProvider.js')
   useHeaderAction(<button type="button">+ New project</button>, [])
   return null
 }
@@ -3195,6 +3368,7 @@ import { breadcrumbOf, workspaceIdOf } from '../../lib/routes'
 import { formatUsd } from '../../lib/realMoney'
 import { postControl } from '../../lib/postControl'
 import { useShellFacts } from '../../hooks/useShellFacts'
+import type { SidebarProject } from '../../server/sidebar'
 import { useHeaderActionNode } from './HeaderActionProvider'
 
 /** The three shapes the right half of the split button takes (README "Shell" → Header). A halted
@@ -3214,11 +3388,18 @@ type StopState = 'idle' | 'armed' | 'halted'
  * signature and the new one draws a plain `--line` rule; `project-header-hairline` is in §3's
  * removed column with "nothing" beside it.
  */
-export function Header(): React.JSX.Element {
+export function Header({ projects }: { readonly projects: readonly SidebarProject[] }): React.JSX.Element {
   const pathname = usePathname()
   const workspaceId = workspaceIdOf(pathname)
   const facts = useShellFacts(workspaceId)
   const action = useHeaderActionNode()
+  // THE NAME COMES FROM THE TREE (spec erratum E12). `useShellFacts` carries a name too, but only
+  // five of the eight project page clients publish to it -- `/organization`, `/knowledge` and
+  // `/office` publish nothing -- so a breadcrumb that read the name from that store alone would say
+  // the workspace ID on three routes. The tree is read server-side by the root layout and is
+  // complete on every route by construction. `ShellFactsSeed` (Step 9b) fills the store for the
+  // budget and the halt state on those same three routes.
+  const projectName = projects.find((project) => project.id === workspaceId)?.name ?? facts?.workspace.name ?? null
   const [armed, setArmed] = useState(false)
   const [pending, setPending] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
@@ -3228,7 +3409,7 @@ export function Header(): React.JSX.Element {
   // navigation is a destructive control a person did not mean to leave cocked.
   useEffect((): void => setArmed(false), [workspaceId, halted])
 
-  const crumbs = breadcrumbOf(pathname, facts?.workspace.name ?? null)
+  const crumbs = breadcrumbOf(pathname, projectName)
   const stopState: StopState = halted ? 'halted' : armed ? 'armed' : 'idle'
 
   const post = async (url: string): Promise<void> => {
@@ -3238,10 +3419,10 @@ export function Header(): React.JSX.Element {
     setErrorText(result.ok ? null : result.error)
   }
 
-  // `runsPaused` beside `slavesWorking` is what tells "everything is paused" from "nothing is
+  // `slavesPaused` beside `slavesWorking` is what tells "everything is paused" from "nothing is
   // running" (plan erratum E2) -- and an idle project must not be offered a Resume that would
   // resume nothing.
-  const resuming = facts !== null && facts.counts.slavesWorking === 0 && facts.counts.runsPaused > 0
+  const resuming = facts !== null && facts.counts.slavesWorking === 0 && facts.counts.slavesPaused > 0
   const budgetUsd = facts?.guardrails.budgetUsd ?? null
   const spent = facts?.status.spentUsd ?? 0
   const ratio = budgetUsd === null || budgetUsd <= 0 ? 0 : spent / budgetUsd
@@ -3379,41 +3560,104 @@ Expected: PASS, 12 tests.
 
 - [ ] **Step 11: Mount the header, and strip the project layout**
 
-In `apps/web/src/app/layout.tsx`, import `Header` and pass it:
+In `apps/web/src/app/layout.tsx`, import `Header` and pass it — **with the tree**, which is what
+lets it name the project on every route (spec erratum E12):
 
 ```tsx
 import { Header } from '../components/shell/Header'
 ```
 
 ```tsx
-              <AppShell sidebar={<SidebarTree initial={projects} />} header={<Header />} right={null} rightWidth="none">
+              <AppShell sidebar={<SidebarTree initial={projects} />} header={<Header projects={projects} />} right={null} rightWidth="none">
 ```
 
 Replace the whole of `apps/web/src/app/w/[workspaceId]/layout.tsx` with:
 
 ```tsx
 import type React from 'react'
+import { buildShellFacts } from '../../../server/shell'
+import { ShellFactsSeed } from '../../../components/shell/ShellFactsSeed'
 
 export const dynamic = 'force-dynamic'
 
 /**
- * The project layout renders its page and nothing else (M57 R4/R7).
+ * The project layout seeds the shell's facts and renders its page (M57 R4/R7, spec erratum E12).
  *
- * Until M57 it mounted `ProjectHeader` and `ProjectTabs` as siblings of `{children}`, and made
- * three server reads to feed them. All three of those facts are somewhere else now: the header is
- * mounted by the ROOT layout and reads `hooks/useShellFacts.ts`, the workspace list is the sidebar
- * tree's server read, and the archived flag is drawn by the pages that can act on it (the Projects
- * card and the project Settings danger zone). Three reads on every navigation between a project's
- * tabs, for a header that is no longer here, is the cost this removal returns.
+ * Until M57 it mounted `ProjectHeader` and `ProjectTabs` as siblings of `{children}` and made THREE
+ * server reads to feed them. Two of those are gone: the workspace list is the sidebar tree's server
+ * read now, and the archived flag is drawn by the pages that can act on it (the Projects card, the
+ * project Settings danger zone).
  *
- * It stays as a file rather than being deleted: the segment is what gives every page below it the
- * `[workspaceId]` param, and `dynamic = 'force-dynamic'` here is what keeps the whole subtree out
- * of the static cache.
+ * `buildShellFacts` STAYS, and that is the erratum. The header is mounted by the ROOT layout and
+ * reads `hooks/useShellFacts.ts` — a store only five of this segment's eight page clients publish
+ * into. `/organization`, `/knowledge` and `/office` publish nothing, so without this seed the
+ * budget figure and the entire `Pause all | Stop ▾` cluster would vanish on three of a project's
+ * own pages. One read per MOUNT of this segment (Next keeps a shared layout mounted across soft
+ * navigations between its siblings, so a Tasks→Team→Activity hop reuses it), and a page that DOES
+ * stream overwrites the seed on its first snapshot.
+ *
+ * It stays as a file rather than being deleted for a second reason too: the segment is what gives
+ * every page below it the `[workspaceId]` param, and `dynamic = 'force-dynamic'` here is what keeps
+ * the whole subtree out of the static cache.
  */
-export default function ProjectLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return <>{children}</>
+export default async function ProjectLayout({
+  params,
+  children,
+}: {
+  params: Promise<{ workspaceId: string }>
+  children: React.ReactNode
+}): Promise<React.JSX.Element> {
+  const { workspaceId } = await params
+  const facts = await buildShellFacts(workspaceId)
+  return (
+    <>
+      {facts !== null && <ShellFactsSeed facts={facts} />}
+      {children}
+    </>
+  )
 }
 ```
+
+- [ ] **Step 11b: Write `ShellFactsSeed`**
+
+Create `apps/web/src/components/shell/ShellFactsSeed.tsx`:
+
+```tsx
+'use client'
+
+import { useEffect } from 'react'
+import { publishShellFacts } from '../../hooks/useShellFacts'
+import type { ShellFacts } from '../../server/shell'
+
+/**
+ * Puts the project layout's server-read facts into the module store the header reads (spec
+ * erratum E12).
+ *
+ * It renders NOTHING. It exists because `useShellFacts` is a module-level `useSyncExternalStore`
+ * publisher — the shape M24 was forced into when the header was a sibling of `{children}` — and
+ * only five of this segment's eight page clients publish into it. Three pages
+ * (`/organization`, `/knowledge`, `/office`) never did, and before this component the header simply
+ * had nothing to show on them.
+ *
+ * A page that DOES stream publishes its own snapshot on mount and on every refetch, which
+ * overwrites this seed with something fresher — so this is a floor, never a ceiling, and there is
+ * no ordering to get right between the two.
+ *
+ * The retraction is keyed on the workspace alone, exactly as every page client's is: folding it
+ * into the publish effect's cleanup would retract and re-publish on every re-render, and the header
+ * would blink through its empty state in between.
+ */
+export function ShellFactsSeed({ facts }: { readonly facts: ShellFacts }): null {
+  useEffect((): void => {
+    publishShellFacts(facts.workspace.id, facts)
+  }, [facts])
+  useEffect((): (() => void) => () => publishShellFacts(facts.workspace.id, null), [facts.workspace.id])
+  return null
+}
+```
+
+Add one case to `apps/web/test/project-layout.test.tsx` (Step 12's rewrite) asserting the seed is
+mounted for a known workspace and absent for an unknown one.
 
 - [ ] **Step 12: Delete the four components and their tests**
 
@@ -3426,7 +3670,20 @@ git rm apps/web/src/components/project/ProjectHeader.tsx \
 grep -rn "ProjectHeader\|ProjectTabs\|ProjectSwitcher\|OverviewAdvanced" apps/web/src apps/web/test scripts
 ```
 
-Every hit the grep reports must be fixed in THIS task. The known ones:
+Every hit the grep reports must be dealt with in THIS task, and they come in two kinds.
+
+**Kind one: real imports and elements.** Listed below.
+
+**Kind two: comment-only references** — nine files whose PROSE names a component this task deletes,
+with no code on the line (scan findings 13 and 14). They are in the Files block above, by path and
+line. Edit the sentence, change nothing else in the file, and do not let the grep's noise pull a
+protected module into this task: `server/overview.ts` and `server/org.ts` are on the Global
+Constraints' "untouched" list, and that list now says in as many words that a comment is not
+behaviour. `scripts/gate-m52-broker.mjs:1383-1386` is the ninth — its comment explains why a locator
+is scoped by naming the Overview's `Advanced` disclosure, which stops existing here; rewrite the
+sentence, leave the locator alone, and note that Task 8's gate loop re-runs m52.
+
+The real ones:
 - `apps/web/src/components/OverviewClient.tsx` — the `<OverviewAdvanced …/>` element and its import.
   **Delete both.** Its four children are re-homed by later tasks (R11): the Supervisor panel is
   Task 5's right panel, `BlockedPanel` becomes Task 6's **Needs you** card, and `LiveEventsPanel`
@@ -3439,10 +3696,12 @@ Every hit the grep reports must be fixed in THIS task. The known ones:
   arrays (lines 863 and 892: drop the trailing `'overview-advanced'` member), the
   `overview-advanced-toggle` click, the three `advanced-link-*` cases and the two
   `advanced-panel-supervisor` cases. Delete those cases; keep every other case in the file.
-- `apps/web/test/project-header.test.tsx` — **delete the file** (`git rm`). Everything it pinned is
-  either gone (`project-switcher*`, `project-goal`, `project-header-hairline`, `connection`) or is
-  re-asserted in `apps/web/test/header.test.tsx` (`budget`, `budget-unmeasured`, the halted state).
-  `project-archived` moves to the Projects page's own test, where the chip now lives.
+- `apps/web/test/project-header.test.tsx` — **delete the file** (`git rm`; the Files list above says
+  the same, and an earlier draft of this plan said "rewrite" in one place and "delete" in the other
+  — scan finding 12). Everything it pinned is either gone (`project-switcher*`, `project-goal`,
+  `project-header-hairline`, `connection`) or is re-asserted in `apps/web/test/header.test.tsx`
+  (`budget`, `budget-unmeasured`, the halted state). `project-archived` moves to the Projects page's
+  own test, where the chip now lives.
 - `apps/web/test/project-layout.test.tsx` — rewrite it to the one thing the layout still does:
 
 ```tsx
@@ -3523,7 +3782,7 @@ same six values, read off the tree instead of the strip):
 ```js
   // M57 R5: the project's sections are the sidebar tree's rows now, and each carries its ROUTE
   // SEGMENT on `data-section` -- the same six ids the tab strip carried, with two labels changed.
-  const sectionIds = await page
+  const tabs = await page
     .locator('[data-testid="sidebar-section"]')
     .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-section') ?? ''))
   const knowledgeRow = page.locator('[data-testid="sidebar-section"][data-section="knowledge"]')
@@ -3531,7 +3790,9 @@ same six values, read off the tree instead of the strip):
   const knowledgeHref = await knowledgeRow.first().getAttribute('href')
 ```
 
-…then read the surrounding assertions and keep every one of them: the id set, the label text
+**The binding keeps the name `tabs`** (scan finding 28): the `assertEqual(tabs, [...])` two lines
+below is outside this replacement and renaming the left-hand side alone is a `ReferenceError`. Then
+read the surrounding assertions and keep every one of them: the id set, the label text
 (`Knowledge`, unchanged) and the href (`/w/<id>/knowledge`, unchanged).
 
 - [ ] **Step 14: Run every gate this task touched**
@@ -3593,6 +3854,10 @@ MSG
 - Modify: `apps/web/src/components/TaskDetailPanel.tsx` (ONE className, line 263)
 - Modify: `apps/web/src/components/OverviewClient.tsx` (mirror `?slave=` into the provider)
 - Modify: `apps/web/src/components/TasksClient.tsx` (mirror `?task=` into the provider)
+- Create: `apps/web/src/components/supervisor/ProposalRow.tsx` (**extracted**, not written — spec erratum E18)
+- Modify: `apps/web/src/components/project/SupervisorTimeline.tsx` (one import line)
+- Modify: `apps/web/test/overview-components.test.tsx`, `apps/web/test/tasks-components.test.tsx` (wrap in `RightPanelProvider` — Step 16b)
+- Delete: `apps/web/src/components/SupervisorPanel.tsx`, `apps/web/test/supervisor-panel.test.tsx`
 
 **Interfaces:**
 - Consumes from Task 3: `useRightPanel`, `RightPanelMode`, `AppShell`'s `right`/`rightWidth`. From Task 2: `workspaceIdOf`, `isGlobalRoute`.
@@ -3601,7 +3866,8 @@ MSG
   - `export interface SupervisorThread { readonly id: string; readonly title: string; readonly when: string; readonly messages: readonly SupervisorMessage[] }`
   - `export async function buildSupervisorThreads(workspaceId: string, now?: Date): Promise<readonly SupervisorThread[]>` (newest thread first)
   - `GET /api/w/:id/supervisor/threads`
-  - testids `right-panel`, `right-dock`, `dock-supervisor`, `dock-activity`, `dock-badge`, `panel-collapse`, `supervisor-thread`, `supervisor-thread-row`, `supervisor-message`, `supervisor-decision-card`, `supervisor-composer`.
+  - testids `right-panel`, `right-dock`, `dock-supervisor`, `dock-activity`, `dock-badge`, `panel-collapse`, `panel-close`, `supervisor-thread`, `supervisor-thread-row`, `supervisor-history`, `supervisor-new`, `supervisor-message`, `supervisor-decision-card`, `supervisor-decision-approve`, `supervisor-decision-decline`, `supervisor-empty`, `supervisor-composer` (the WRAPPER), `supervisor-request-input`, `supervisor-request-send`, `supervisor-request-result` (SUCCESS), `supervisor-request-error` (refusal), and — carried over from the panel this task deletes — `supervisor-decision-meta` and `supervisor-proposal-kind` (spec errata E17, E18).
+  - `ProposalRow`, re-exported from `apps/web/src/components/supervisor/ProposalRow.tsx` with every one of its own testids unchanged.
 
 - [ ] **Step 1: Write the failing test for the thread reader**
 
@@ -4185,7 +4451,7 @@ import { usePathname } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { workspaceIdOf } from '../../lib/routes'
 import { useShellFacts } from '../../hooks/useShellFacts'
-import { SupervisorThreadPanel } from '../supervisor/SupervisorThreadPanel'
+import { SupervisorThreadPanel, type PendingDecision } from '../supervisor/SupervisorThreadPanel'
 import { RightPanel } from './RightPanel'
 import { RightPanelDock } from './RightPanelDock'
 import { useRightPanel } from './RightPanelProvider'
@@ -4207,8 +4473,13 @@ export function RightPanelHost(): React.JSX.Element | null {
   const workspaceId = workspaceIdOf(pathname)
   const facts = useShellFacts(workspaceId)
   const { collapsed } = useRightPanel()
-  const [pending, setPending] = useState(0)
+  const [pending, setPending] = useState<readonly PendingDecision[]>([])
 
+  // ONE fetch of this endpoint on this page (scan finding 22). The draft had this component fetch
+  // `/api/w/:id/supervisor` for the dock's badge and `SupervisorThreadPanel` fetch the SAME endpoint
+  // for the SAME `pending` array — two identical round trips per wake-up, for one number and one
+  // list that are the same list. The host owns the fetch and passes the list down; the panel reads
+  // `pending.length` for nothing and the dock reads it for the badge.
   useEffect((): void => {
     if (workspaceId === null) return
     let cancelled = false
@@ -4216,10 +4487,10 @@ export function RightPanelHost(): React.JSX.Element | null {
       try {
         const response = await fetch(`/api/w/${workspaceId}/supervisor`)
         if (!response.ok) return
-        const view = (await response.json()) as { pending?: readonly unknown[] }
-        if (!cancelled) setPending(view.pending?.length ?? 0)
+        const view = (await response.json()) as { pending?: readonly PendingDecision[] }
+        if (!cancelled) setPending(view.pending ?? [])
       } catch {
-        /* the badge stays as it was: a count that fails to refresh is better than one that lies */
+        /* the list stays as it was: a count that fails to refresh is better than one that lies */
       }
     })()
     return (): void => {
@@ -4228,10 +4499,10 @@ export function RightPanelHost(): React.JSX.Element | null {
   }, [workspaceId, facts])
 
   if (workspaceId === null) return null
-  if (collapsed) return <RightPanelDock workspaceId={workspaceId} pendingDecisions={pending} />
+  if (collapsed) return <RightPanelDock workspaceId={workspaceId} pendingDecisions={pending.length} />
   return (
     <RightPanel title="Supervisor">
-      <SupervisorThreadPanel workspaceId={workspaceId} />
+      <SupervisorThreadPanel workspaceId={workspaceId} pending={pending} />
     </RightPanel>
   )
 }
@@ -4391,18 +4662,26 @@ Create `apps/web/src/components/supervisor/SupervisorThreadPanel.tsx`:
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { SITUATION_LABEL } from '@slave-of-ai/domain'
-import { postControl } from '../../lib/postControl'
+import { postControl, postJson } from '../../lib/postControl'
 import { useShellFacts } from '../../hooks/useShellFacts'
 import type { SupervisorThread } from '../../server/supervisorThreads'
 
 /** Exactly what this panel reads off `GET /api/w/:id/supervisor` — the pending proposals, and
  *  nothing else. The full `SupervisorView` carries a report, recent decisions, questions and two
  *  settings; none of them belongs in a conversation, and a narrow local type is what stops one
- *  drifting in. */
-interface PendingDecision {
+ *  drifting in.
+ *
+ *  EXPORTED because `RightPanelHost` does the fetching (scan finding 22) and hands the list down. */
+export interface PendingDecision {
   readonly id: string
   readonly situationKind: string
   readonly situation: { readonly summary?: string }
+  /** The whole record, for `supervisor-decision-meta`'s `title` (spec erratum E18) — the four
+   *  fields `SupervisorPanel.tsx:557` put there before this panel replaced it. Optional because a
+   *  row written by an older build carries none. */
+  readonly tier?: string
+  readonly status?: string
+  readonly decidedBy?: string
 }
 
 /**
@@ -4419,27 +4698,30 @@ interface PendingDecision {
  * the composer and scrolls to the end of today's thread, which is what "new conversation" means
  * when a conversation is a day.
  */
-export function SupervisorThreadPanel({ workspaceId }: { readonly workspaceId: string }): React.JSX.Element {
+export function SupervisorThreadPanel({
+  workspaceId,
+  pending,
+}: {
+  readonly workspaceId: string
+  /** The pending proposals, fetched ONCE by `RightPanelHost` and handed down (scan finding 22):
+   *  the dock's badge and this panel's decision cards are the same list, and fetching it twice per
+   *  wake-up was two round trips for one fact. */
+  readonly pending: readonly PendingDecision[]
+}): React.JSX.Element {
   const facts = useShellFacts(workspaceId)
   const [threads, setThreads] = useState<readonly SupervisorThread[]>([])
-  const [pending, setPending] = useState<readonly PendingDecision[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [draft, setDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
+  /** The SUCCESS line `gate-m45` stage 5 waits for after a send (spec erratum E17). */
+  const [resultText, setResultText] = useState<string | null>(null)
 
   const load = useCallback(async (): Promise<void> => {
     try {
-      const [threadResponse, viewResponse] = await Promise.all([
-        fetch(`/api/w/${workspaceId}/supervisor/threads`),
-        fetch(`/api/w/${workspaceId}/supervisor`),
-      ])
-      if (threadResponse.ok) setThreads((await threadResponse.json()) as readonly SupervisorThread[])
-      if (viewResponse.ok) {
-        const view = (await viewResponse.json()) as { pending?: readonly PendingDecision[] }
-        setPending(view.pending ?? [])
-      }
+      const response = await fetch(`/api/w/${workspaceId}/supervisor/threads`)
+      if (response.ok) setThreads((await response.json()) as readonly SupervisorThread[])
     } catch {
       // Keep what is on screen. A conversation that empties itself because one poll failed is
       // worse than one that is a few seconds behind.
@@ -4458,16 +4740,25 @@ export function SupervisorThreadPanel({ workspaceId }: { readonly workspaceId: s
   )
   const decisionById = useMemo(() => new Map(pending.map((decision) => [decision.id, decision])), [pending])
 
+  // `postJson`, not `postControl`: the route answers `{ok, version, sha256, goal}` and the VERSION
+  // is the thing the success line names -- which is what `gate-m45` stage 5 asserts ("expected it
+  // to name goal v3"). `postJson` (`apps/web/src/lib/postControl.ts:84`) exists for exactly this
+  // route; its own docstring says it was added so `project/SupervisorRequest.tsx` would not grow a
+  // second `fetch` idiom, and this panel is that component's successor.
   const send = async (): Promise<void> => {
     const text = draft.trim()
     if (text.length === 0 || busy) return
     setBusy(true)
-    const result = await postControl(`/api/w/${workspaceId}/goal/request`, { request: text })
+    setErrorText(null)
+    const answerBody = await postJson<{ version: number }>(`/api/w/${workspaceId}/goal/request`, { request: text })
     setBusy(false)
-    if (result.ok) {
+    if (answerBody.ok) {
       setDraft('')
+      // The SAME sentence `project/SupervisorRequest.tsx:47` produced, because it is the sentence
+      // the gate was written against (spec erratum E17).
+      setResultText(`goal v${String(answerBody.data.version)} saved — the next tick re-plans it as a delta`)
       await load()
-    } else setErrorText(result.error)
+    } else setErrorText(answerBody.error)
   }
 
   const answer = async (decisionId: string, verdict: 'approve' | 'reject'): Promise<void> => {
@@ -4568,16 +4859,39 @@ export function SupervisorThreadPanel({ workspaceId }: { readonly workspaceId: s
                   <div
                     data-testid="supervisor-decision-card"
                     data-decision-id={decision.id}
+                    // Spec §3 says the CARD carries both; the draft put this one on the inner `<p>`
+                    // (scan finding 29).
+                    data-situation-kind={decision.situationKind}
                     className="mt-[10px] rounded-panel border border-[color-mix(in_oklab,var(--s-waiting)_45%,var(--line))] bg-card p-3"
                   >
                     <span className="inline-flex rounded-chip bg-[color-mix(in_oklab,var(--s-waiting)_14%,transparent)] px-[7px] py-[2px] font-mono text-[10.5px] font-medium text-s-waiting">
                       DECISION
                     </span>
-                    {/* The LABEL, never the member (`docs/ia.md` rule 3); the raw kind is on the
-                      * node for a gate and a hover. */}
-                    <p data-situation-kind={decision.situationKind} title={decision.situationKind} className="mt-[6px] font-medium text-t1">
+                    {/* `supervisor-proposal-kind`, carried over from the panel this task deletes
+                      * (spec erratum E18): `gate-m44:930` reads this chip's TEXT and its `title`
+                      * and compares them with the timeline's copy of the same proposal. Same
+                      * semantics as `SupervisorPanel.tsx:253` — the domain's label, the raw member
+                      * in `title`, and the member itself as the runtime fallback for a kind this
+                      * bundle has no label for. */}
+                    <span
+                      data-testid="supervisor-proposal-kind"
+                      title={decision.situationKind}
+                      className="ml-2 font-mono text-[10.5px] text-t3"
+                    >
                       {SITUATION_LABEL[decision.situationKind as keyof typeof SITUATION_LABEL] ?? decision.situationKind}
-                      {decision.situation.summary !== undefined && `: ${decision.situation.summary}`}
+                    </span>
+                    {/* `supervisor-decision-meta`, also carried over (`SupervisorPanel.tsx:557`):
+                      * the projected sentence, with the WHOLE record one hover away. `gate-m44:921`
+                      * waits on this element, unscoped. */}
+                    <span
+                      data-testid="supervisor-decision-meta"
+                      title={`${decision.situationKind} · ${decision.tier ?? '—'} · ${decision.status ?? 'pending'} · ${decision.decidedBy ?? '—'}`}
+                      className="mt-[4px] block text-[10.5px] text-t3"
+                    >
+                      {SITUATION_LABEL[decision.situationKind as keyof typeof SITUATION_LABEL] ?? decision.situationKind} · waiting for you
+                    </span>
+                    <p className="mt-[6px] font-medium text-t1">
+                      {decision.situation.summary ?? 'The Supervisor has proposed something.'}
                     </p>
                     <div className="mt-[10px] flex gap-[6px]">
                       <button
@@ -4617,15 +4931,27 @@ export function SupervisorThreadPanel({ workspaceId }: { readonly workspaceId: s
         })}
       </div>
 
-      <div className="flex flex-none flex-col gap-2 border-t border-line px-[14px] pb-[14px] pt-3">
+      {/* `supervisor-composer` is on the WRAPPER and the two control testids are on the controls,
+        * from the moment this file is written (spec erratum E17). An earlier draft put
+        * `supervisor-composer` on the `<textarea>` and had Task 6 rename it; a testid that moves
+        * mid-milestone is a testid two tasks disagree about. */}
+      <div data-testid="supervisor-composer" className="flex flex-none flex-col gap-2 border-t border-line px-[14px] pb-[14px] pt-3">
+        {/* TWO lines, not one with two moods. `gate-m45` stage 5 clicks Send *until*
+          * `supervisor-request-result` is visible and then asserts its text names `v3` — so that
+          * testid has to be the SUCCESS line. The refusal is its own element beside it. */}
+        {resultText !== null && (
+          <span data-testid="supervisor-request-result" className="text-[12.5px] text-t2">
+            {resultText}
+          </span>
+        )}
         {errorText !== null && (
-          <span role="alert" className="text-[12.5px] text-s-blocked">
+          <span role="alert" data-testid="supervisor-request-error" className="text-[12.5px] text-s-blocked">
             {errorText}
           </span>
         )}
         <div className="flex items-end gap-2 rounded-[11px] border border-line2 bg-card py-2 pl-3 pr-2">
           <textarea
-            data-testid="supervisor-composer"
+            data-testid="supervisor-request-input"
             rows={2}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -4642,7 +4968,7 @@ export function SupervisorThreadPanel({ workspaceId }: { readonly workspaceId: s
           />
           <button
             type="button"
-            data-testid="supervisor-send"
+            data-testid="supervisor-request-send"
             disabled={busy || draft.trim().length === 0}
             onClick={() => void send()}
             className="rounded-card border-0 bg-accent px-3 py-[7px] text-[12.5px] font-semibold text-accent-ink disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
@@ -4702,24 +5028,31 @@ element in the root layout with a `<ShellFrame …>` and create
 'use client'
 
 import type React from 'react'
+import type { SidebarProject } from '../../server/sidebar'
 import { AppShell } from './AppShell'
 import { Header } from './Header'
 import { RightPanelHost } from './RightPanelHost'
 import { useRightWidth } from './RightColumn'
 
 /** The one client component that knows both what route this is and whether the panel is
- *  collapsed — the two facts the grid's third track is sized from. `sidebar` is passed in rather
- *  than imported so the root layout's SERVER read of the tree still reaches it as a prop. */
+ *  collapsed — the two facts the grid's third track is sized from.
+ *
+ *  `sidebar` is passed in as a NODE rather than imported, so the root layout's SERVER read of the
+ *  tree still reaches it; `projects` is passed as DATA as well, because `Header` needs the same
+ *  list to name the project in the breadcrumb on the three routes that publish no `ShellFacts`
+ *  (spec erratum E12) and this component is the only thing between the layout and it. */
 export function ShellFrame({
   sidebar,
+  projects,
   children,
 }: {
   readonly sidebar: React.ReactNode
+  readonly projects: readonly SidebarProject[]
   readonly children: React.ReactNode
 }): React.JSX.Element {
   const rightWidth = useRightWidth()
   return (
-    <AppShell sidebar={sidebar} header={<Header />} right={<RightPanelHost />} rightWidth={rightWidth}>
+    <AppShell sidebar={sidebar} header={<Header projects={projects} />} right={<RightPanelHost />} rightWidth={rightWidth}>
       {children}
     </AppShell>
   )
@@ -4733,7 +5066,9 @@ The root layout's body becomes:
         <ThemeProvider>
           <RightPanelProvider>
             <HeaderActionProvider>
-              <ShellFrame sidebar={<SidebarTree initial={projects} />}>{children}</ShellFrame>
+              <ShellFrame sidebar={<SidebarTree initial={projects} />} projects={projects}>
+                {children}
+              </ShellFrame>
             </HeaderActionProvider>
           </RightPanelProvider>
         </ThemeProvider>
@@ -4752,18 +5087,22 @@ comment):
 ```tsx
       // M57 R8: it renders inside the shell's 372px slot now, which owns the width, the surface
       // and the position -- so this element is a plain column that fills its parent. Not one line
-      // below this header moved.
-      className="flex h-full w-full flex-col gap-4 overflow-y-auto p-4"
+      // below this header moved, and the slide-in stays: this panel is mounted fresh per slave, so
+      // the animation still replays on every open and switch by construction.
+      className="flex h-full w-full flex-col gap-4 overflow-y-auto p-4 motion-safe:animate-[panel-in_160ms_ease-out]"
 ```
 
-In `apps/web/src/components/TaskDetailPanel.tsx`, line 263, the same:
+In `apps/web/src/components/TaskDetailPanel.tsx`, line 263, the same — **and it keeps
+`shadow-resting` as well** (scan finding 43), because its own comment says
+`tasks-components.test.tsx` asserts on `container.querySelector('aside')` and both classes are part
+of what that file reads:
 
 ```tsx
-      className="flex h-full w-full flex-col gap-4 overflow-y-auto p-4"
+      className="flex h-full w-full flex-col gap-4 overflow-y-auto p-4 shadow-resting motion-safe:animate-[panel-in_160ms_ease-out]"
 ```
 
-**Nothing else in either file changes.** Both keep every testid, every control POST, every
-`DetailsGroup`, and their `onClose` props.
+**Nothing else in either file changes, and the element stays an `<aside>`.** Both keep every testid,
+every control POST, every `DetailsGroup`, and their `onClose` props.
 
 - [ ] **Step 16: Mirror the two selections into the provider (erratum E4/E5)**
 
@@ -4776,9 +5115,23 @@ block at the end of the returned fragment and add, beside the other effects:
   // restores -- this only MIRRORS it into the shell's right panel, which is where the panel is
   // drawn now. The clearer handed to `open` is the same one the panel's own close used, so the
   // slot's `»`, the slot's `✕` and the panel's own control all clear the URL together.
-  const { open: openPanel, close: closePanel } = useRightPanel()
+  //
+  // THE DEPENDENCY LIST IS `selectedSlave?.id` AND NOTHING ELSE (scan finding 21). `liveEvents` and
+  // `view` change identity on every SSE frame, and an effect that re-`open()`s several times a
+  // second is an effect that fights the person who just collapsed the panel. What the panel reads
+  // out of those two is read at OPEN time and refreshed by its own props on the next genuine open;
+  // the fourth argument to `open` is the content KEY, which is what lets the provider tell a
+  // re-assertion of the same slave from a new one.
+  //
+  // AND IT HANDLES THE CLEAR. `?slave=` can go away by navigation rather than by the close button
+  // — a link, a Back — and an effect that only ever opens would leave the provider holding a stale
+  // `slave` mode over a page that has no selection.
+  const { open: openPanel, close: closePanel, mode: panelMode } = useRightPanel()
   useEffect((): void => {
-    if (selectedSlave === null) return
+    if (selectedSlave === null) {
+      if (panelMode === 'slave') closePanel()
+      return
+    }
     openPanel(
       'slave',
       <SlavePanel
@@ -4796,13 +5149,46 @@ block at the end of the returned fragment and add, beside the other effects:
         }}
       />,
       () => selectSlave(null),
+      selectedSlave.id,
     )
-  }, [selectedSlave, liveEvents, workspaceId, view.workspace.haltedReason, openPanel, closePanel, selectSlave])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately keyed on the SELECTION
+    // and not on the snapshot: see the note above. `panelMode` is read, not depended on, for the
+    // same reason (it changes when this effect's own `close()` lands).
+  }, [selectedSlave?.id])
 ```
 
 …with `import { useRightPanel } from './shell/RightPanelProvider'` added. Do the same in
 `apps/web/src/components/TasksClient.tsx` for `selectedTask` / `'task'` / `TaskDetailPanel`, with
-its own props (`task`, `workspaceId`, `workspaceGoalVersion`, `onClose`).
+its own props (`task`, `workspaceId`, `workspaceGoalVersion`, `onClose`), the same
+`[selectedTask?.id]` dependency list, the same `if (selectedTask === null) { if (panelMode === 'task') closePanel(); return }`
+guard, and `selectedTask.id` as the content key.
+
+- [ ] **Step 16b: Wrap the two test files in `RightPanelProvider`**
+
+`useRightPanel` throws outside its provider — deliberately, because a silently inert panel would
+hide a wiring bug — and Step 16 has just made `OverviewClient` and `TasksClient` call it. Two large
+test files render those two bare (scan finding 5): `apps/web/test/overview-components.test.tsx`
+(`describe('OverviewClient')`, around `:825`, `:834`, `:847`) and
+`apps/web/test/tasks-components.test.tsx` (`describe('TasksClient')`, around `:803`). **The hook
+keeps throwing**; the tests gain the provider, because a test that renders a page without the
+shell's providers is a test rendering a tree that does not exist.
+
+In each file, add the import and one helper, and route every `render(<OverviewClient …/>)` /
+`render(<TasksClient …/>)` through it:
+
+```tsx
+import { RightPanelProvider } from '../src/components/shell/RightPanelProvider.js'
+
+/** Every page client in the shell runs inside the root layout's providers. A test that renders one
+ *  bare is rendering a tree that does not exist -- and `useRightPanel` says so by throwing. */
+function renderInShell(ui: React.ReactElement): ReturnType<typeof render> {
+  return render(<RightPanelProvider>{ui}</RightPanelProvider>)
+}
+```
+
+Then `grep -n "render(<OverviewClient\|render(<TasksClient\|rerender(<OverviewClient\|rerender(<TasksClient" apps/web/test/overview-components.test.tsx apps/web/test/tasks-components.test.tsx`
+and convert each hit. A `rerender` returned by `renderInShell` must be given the same wrapper, so
+write those as `rerender(<RightPanelProvider><OverviewClient …/></RightPanelProvider>)`.
 
 **`apps/web/src/components/workforce/WorkforceClient.tsx` is NOT changed** (erratum E4):
 `/workforce` is a global route with no third column, and its `SlavePanel` stays in the page frame,
@@ -4822,15 +5208,83 @@ call site a wrapper that restores the old geometry — replace the `<SlavePanel 
         </div>
 ```
 
+- [ ] **Step 16c: Extract `ProposalRow`, then delete `SupervisorPanel` (spec erratum E18)**
+
+`SupervisorPanel.tsx` is mounted only by `OverviewAdvanced`, which Task 4 deleted — so from the end
+of Task 4 it renders nowhere, and this task is where it goes. **It cannot simply be deleted**:
+`project/SupervisorTimeline.tsx:11` imports `ProposalRow` from it, that timeline is Task 6's Recent
+changes, and four gates read testids only `ProposalRow` emits.
+
+**(a) Move `ProposalRow` and everything it needs.** Create
+`apps/web/src/components/supervisor/ProposalRow.tsx` and move into it, VERBATIM: `ProposalRow`
+itself, `DraftEditor`, `actionText`, and the types and imports those three need (`Decision`,
+`Question`, `SITUATION_LABEL`, `Button`, `Chip`, and whatever else `tsc` names). Change not one
+character of their bodies and not one testid. Then in `SupervisorTimeline.tsx`, change line 11 to
+`import { ProposalRow } from '../supervisor/ProposalRow'`.
+
+**(b) Census every testid `SupervisorPanel` emits, before deleting it.** Run this and paste the
+output into the task report:
+
+```bash
+grep -o 'data-testid="[a-z0-9-]*"' apps/web/src/components/SupervisorPanel.tsx |
+  sed 's/.*data-testid="//;s/"//' | sort -u > "$SCRATCHPAD/sp-testids.txt"
+while read -r t; do
+  printf '%-32s gates=[%s] tests=[%s]\n' "$t" \
+    "$(grep -rln -- "$t" scripts/gate-*.mjs 2>/dev/null | xargs -r -n1 basename | tr '\n' ' ')" \
+    "$(grep -rln -- "$t" apps/web/test/ 2>/dev/null | xargs -r -n1 basename | tr '\n' ' ')"
+done < "$SCRATCHPAD/sp-testids.txt"
+```
+
+Against `c828f8c8` it reports **thirty-one** testids, and exactly four of them are read by a gate:
+
+| testid | read by | after this task |
+|---|---|---|
+| `supervisor-approve` | `gate-m45`, `gate-m47` | **survives** — emitted by `ProposalRow`, which (a) moved |
+| `supervisor-proposal` | `gate-m44`, `gate-m45`, `gate-m47`, `gate-m50` | **survives** — same |
+| `supervisor-proposal-kind` | `gate-m44` (twice: once scoped to the panel, once to `timeline-decisions`) | **both survive** — the timeline's through `ProposalRow`, the panel-scoped one re-emitted by `SupervisorThreadPanel`'s decision card (Step 12) with the panel-scope re-pointed to `right-panel` in Task 4's Edit 4 |
+| `supervisor-decision-meta` | `gate-m44` (unscoped `waitVisible`) | **survives** — re-emitted by `SupervisorThreadPanel`'s decision card (Step 12), same semantics |
+
+The other twenty-seven — `supervisor-panel`, `supervisor-enabled`, `supervisor-profile-input/-save`,
+`supervisor-draft*` (eight), `supervisor-decision-row/-rationale`, `supervisor-next`,
+`supervisor-done`, `supervisor-stuck-row/-empty`, `supervisor-question-row/-questions-empty`,
+`supervisor-pending-empty`, `supervisor-error`, `supervisor-reject/-reject-reason`,
+`supervisor-proposal-action/-rationale/-summary` — are read **only** by
+`apps/web/test/supervisor-panel.test.tsx` (and, for the six that `ProposalRow` emits, by
+`supervisor-timeline.test.tsx`, which keeps working because `ProposalRow` does).
+
+**If your census disagrees with that table, the table is what is stale — trust the census, and say
+so in the task report.**
+
+**(c) Delete the panel and its test.**
+
+```bash
+git rm apps/web/src/components/SupervisorPanel.tsx apps/web/test/supervisor-panel.test.tsx
+grep -rn "SupervisorPanel" apps/web/src apps/web/test scripts
+```
+
+The grep must come back empty except for comment-only prose (which Task 4's Files block already
+covers) — in particular, `SupervisorTimeline.tsx` must now import from
+`../supervisor/ProposalRow` and nothing may still import from `../SupervisorPanel`.
+
+`supervisor-panel.test.tsx` dies with the component it tests: every case in it renders
+`SupervisorPanel`, and the six that exercise `ProposalRow` are duplicated by
+`supervisor-timeline.test.tsx`'s own approve/reject cases, which render the same row through the
+timeline and survive untouched. Nothing is lost that another test does not already say.
+
 - [ ] **Step 17: Run everything this task touched, then the suite**
 
 ```bash
 npx vitest run apps/web/test/right-panel.test.tsx apps/web/test/supervisor-thread-panel.test.tsx \
   apps/web/test/integration/supervisor-threads.test.ts apps/web/test/slave-panel.test.tsx \
   apps/web/test/task-detail-panel.test.tsx apps/web/test/overview-components.test.tsx \
-  apps/web/test/tasks-components.test.tsx apps/web/test/workforce-page.test.tsx
+  apps/web/test/tasks-components.test.tsx apps/web/test/workforce-page.test.tsx \
+  apps/web/test/supervisor-timeline.test.tsx
 npx vitest run 2>&1 | tail -20
 ```
+
+*(`supervisor-timeline.test.tsx` is in that list because Step 16c moved the component it renders
+half of. It must pass with NO edit — that is the whole point of extracting `ProposalRow` instead of
+deleting it. If it fails, the extraction dropped something.)*
 
 *(The panel tests render `SlavePanel`/`TaskDetailPanel` directly, so the className change is the
 only thing that can move them — and only if one of them asserts the class string. Read the failure
@@ -4875,10 +5329,15 @@ MSG
 - Modify: `apps/web/src/components/OverviewClient.tsx`
 - Modify: `apps/web/src/components/project/ProjectBrief.tsx` (**eight tiles → four**, R17)
 - Modify: `apps/web/src/components/SlaveCard.tsx` (**card → row**, R18)
-- Modify: `apps/web/src/components/project/SupervisorTimeline.tsx` (the Recent-changes row look)
-- Modify: `scripts/gate-m45-project-experience.mjs` (lines 95–104, 770–780, 794–805 — see Step 9)
-- Modify: `apps/web/test/projects-page.test.tsx`, `apps/web/test/overview-components.test.tsx`, `apps/web/test/slave-card.test.tsx`, `apps/web/test/brief.test.tsx` (whichever of the last two exist — `ls apps/web/test | grep -iE "slave-card|brief"`)
-- Delete: `apps/web/src/components/TopStrip.tsx`
+- Modify: `apps/web/src/components/project/SupervisorTimeline.tsx` (the Recent-changes row look; and it keeps its own `SupervisorRequest` cases' component until Step 7g deletes it)
+- Modify: `apps/web/src/components/ui/AvatarTile.tsx` (+ `apps/web/test/avatar-tile.test.tsx` if one exists — `ls apps/web/test | grep -i avatar`): a `size` prop, spec erratum in Step 5c
+- Modify: `scripts/gate-m45-project-experience.mjs` — `EXPECTED_BRIEF_FACTS` at `:95-104`, the `wants` table at `:761-780`, the `changes` block at `:795-808` (Step 8; the draft called it Step 9 and drifted two of the three ranges)
+- Modify: `apps/web/test/projects-page.test.tsx`, `apps/web/test/overview-components.test.tsx`, **`apps/web/test/project-brief.test.tsx`** (28 cases pinning the eight-tile brief — Step 8b has the per-case list), **`apps/web/test/supervisor-timeline.test.tsx`** (its `describe('SupervisorRequest')` block, five cases, dies with the component in Step 7g)
+- Delete: `apps/web/src/components/TopStrip.tsx`, `apps/web/src/components/project/SupervisorRequest.tsx`
+
+*(There is no `apps/web/test/slave-card.test.tsx` and no `apps/web/test/brief.test.tsx` — the draft
+of this plan named both. Every `card-*` case lives in `overview-components.test.tsx`; the brief's
+cases are in `project-brief.test.tsx`.)*
 
 **Interfaces:**
 - Consumes from Task 3: `useHeaderAction`. From Task 2: nothing new. From earlier milestones, unchanged: `ProjectRow` (`server/org.ts:94`), `OverviewSnapshot` (`server/overview.ts:230-377`), `NeedsYouItem` (`server/needsYou.ts:26`), `ProjectBrief` the DTO (`server/brief.ts`), `SupervisorTimeline`, `RunbookPanel`, `LiveEventsPanel`, `MergeQueuePanel`, `KpiStrip`, `AvatarTile`, `StatusPill`, `ProgressBar`.
@@ -4925,7 +5384,7 @@ afterEach((): void => { vi.unstubAllGlobals() })
 
 describe('the Needs you card', () => {
   it('lists one row per item, with the kind on the node and the chip in words', () => {
-    render(<NeedsYouCard workspaceId="w1" items={ITEMS} onRefresh={vi.fn()} />)
+    render(<NeedsYouCard workspaceId="w1" items={ITEMS} />)
     const rows = screen.getAllByTestId('needs-you-row')
     expect(rows.map((row) => row.getAttribute('data-kind'))).toEqual(['decision', 'blocked_task'])
     expect(rows[0]?.textContent).toContain('DECISION')
@@ -4934,24 +5393,30 @@ describe('the Needs you card', () => {
   })
 
   it('answers a decision in place, through the EXISTING approve route', async (): Promise<void> => {
-    const onRefresh = vi.fn()
-    render(<NeedsYouCard workspaceId="w1" items={ITEMS} onRefresh={onRefresh} />)
+    render(<NeedsYouCard workspaceId="w1" items={ITEMS} />)
     act((): void => { screen.getByTestId('needs-you-approve').click() })
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/supervisor/decisions/d-1/approve', expect.objectContaining({ method: 'POST' })),
     )
-    await waitFor(() => expect(onRefresh).toHaveBeenCalled())
   })
 
   it('offers a blocked task a link to itself, never an Approve it cannot answer', () => {
-    render(<NeedsYouCard workspaceId="w1" items={ITEMS} onRefresh={vi.fn()} />)
+    render(<NeedsYouCard workspaceId="w1" items={ITEMS} />)
     const rows = screen.getAllByTestId('needs-you-row')
     expect(rows[1]?.querySelector('[data-testid="needs-you-approve"]')).toBeNull()
     expect(rows[1]?.querySelector('a')?.getAttribute('href')).toBe('/w/w1/tasks?task=t-1')
   })
 
+  it('gives EVERY row a chip with the raw kind in title and a working link (gate-m45 stage 3)', () => {
+    render(<NeedsYouCard workspaceId="w1" items={ITEMS} />)
+    for (const row of screen.getAllByTestId('needs-you-row')) {
+      expect(row.querySelector('[data-testid="chip"]')?.getAttribute('title')).toBe(row.getAttribute('data-kind'))
+      expect(row.querySelector('a')?.getAttribute('href')).toBeTruthy()
+    }
+  })
+
   it('says nothing needs you, rather than drawing an empty card', () => {
-    render(<NeedsYouCard workspaceId="w1" items={[]} onRefresh={vi.fn()} />)
+    render(<NeedsYouCard workspaceId="w1" items={[]} />)
     expect(screen.queryByTestId('needs-you-row')).toBeNull()
     expect(screen.getByTestId('needs-you-empty').textContent).toContain('Nothing needs you right now')
   })
@@ -4998,18 +5463,24 @@ const KIND: Record<NeedsYouItem['kind'], { readonly label: string; readonly tone
  * Only a DECISION gets buttons. A blocked task needs a person to look at it, a question needs an
  * answer typed somewhere, and finished work needs `confirmIntegration` — which has no web route
  * and inventing one is not this milestone's decision to make (`server/needsYou.ts:21-24` records
- * that, and it is still true). Each of those three gets a link to the surface that CAN resolve it.
+ * that, and it is still true). EVERY row gets a link to the surface that can resolve it, the two
+ * buttons included.
+ *
+ * IT TAKES NO `onRefresh` (scan finding 25). `useOverview` returns
+ * `{snapshot, actionLines, liveEvents, connection, error, latencyMs}` and exposes no refetch, and
+ * `router.refresh()` is a full server re-render rather than the snapshot refetch this would want.
+ * It does not need one: approving or rejecting a decision APPENDS AN EVENT, the page's own
+ * `EventSource` wakes on it, and `useOverview` refetches the snapshot 250 ms later — which is the
+ * same path every other control on this page relies on, and the one `postControl`'s own docstring
+ * calls "the event-driven refetch loop owning truth". The gate polls for the row to disappear
+ * rather than asserting it immediately.
  */
 export function NeedsYouCard({
   workspaceId,
   items,
-  onRefresh,
 }: {
   readonly workspaceId: string
   readonly items: readonly NeedsYouItem[]
-  /** The page's own refetch — an answered decision must leave this list, and the list is the
-   *  page's snapshot, not this component's state. */
-  readonly onRefresh: () => void
 }): React.JSX.Element {
   const [busy, setBusy] = useState<string | null>(null)
   const [errorText, setErrorText] = useState<string | null>(null)
@@ -5018,8 +5489,9 @@ export function NeedsYouCard({
     setBusy(decisionId)
     const result = await postControl(`/api/w/${workspaceId}/supervisor/decisions/${decisionId}/${verdict}`)
     setBusy(null)
-    if (result.ok) onRefresh()
-    else setErrorText(result.error)
+    // No local refetch and no optimistic removal: the POST appended an event, the page's stream
+    // wakes on it, and the snapshot this component's `items` come from is refetched 250 ms later.
+    if (!result.ok) setErrorText(result.error)
   }
 
   if (items.length === 0) {
@@ -5060,16 +5532,35 @@ export function NeedsYouCard({
               data-kind={item.kind}
               className="flex items-center gap-[14px] border-b border-line px-4 py-3 last:border-b-0"
             >
-              <span className={`rounded-nav bg-[color-mix(in_oklab,var(--${kind.tone})_14%,transparent)] px-2 py-[2px] font-mono text-[11px] font-medium text-${kind.tone}`}>
+              {/* `ui/Chip` with `title={item.kind}`, NOT a bare span (scan finding 61).
+                * `gate-m45` stage 3 reads every needs-you row as
+                * `{kind: row.querySelector('[data-testid="chip"]')?.getAttribute('title'), href: row.querySelector('a')?.getAttribute('href')}`
+                * and asserts the four kinds sort to `['blocked_task','decision','integrate','question']`
+                * with a working link on each. `ProjectBrief`'s old rows were `<Chip tone title>` +
+                * `<Link>`, which is where that shape came from -- so the card inherits it rather
+                * than inventing one, and that stage needs no edit. */}
+              <Chip tone={kind.tone} title={item.kind}>
                 {kind.label}
-              </span>
+              </Chip>
               <span className="min-w-0 flex-1">
                 <span className="block truncate font-medium text-t1">{item.title}</span>
                 <span className="block text-[12.5px] text-t3">
                   waiting since {new Date(item.since).toLocaleString()}
                 </span>
               </span>
-              {item.decisionId !== null ? (
+              {/* EVERY row carries a link, decision rows included (scan finding 61): `gate-m45`
+                * stage 3 asserts `row.querySelector('a')` resolves on all four kinds and then
+                * NAVIGATES to each href. A decision row gets its two buttons AND an `Open →`
+                * beside them -- which is also what the README draws ("Answer here, or open the
+                * item"). */}
+              <Link
+                data-testid="needs-you-open"
+                href={item.href}
+                className="flex-none rounded-card border border-line2 px-3 py-[6px] text-[13px] text-t1 hover:bg-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              >
+                Open →
+              </Link>
+              {item.decisionId !== null && (
                 <span className="flex flex-none gap-[6px]">
                   <button
                     type="button"
@@ -5090,14 +5581,6 @@ export function NeedsYouCard({
                     Decline
                   </button>
                 </span>
-              ) : (
-                <Link
-                  data-testid="needs-you-open"
-                  href={item.href}
-                  className="flex-none rounded-card border border-line2 px-3 py-[6px] text-[13px] text-t1 hover:bg-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-                >
-                  Open →
-                </Link>
               )}
             </div>
           )
@@ -5114,15 +5597,18 @@ field with two complete literal class strings, exactly the way `ui/StatusPill.ts
 already do for the same reason:
 
 ```tsx
-const KIND: Record<NeedsYouItem['kind'], { readonly label: string; readonly chip: string }> = {
-  decision: { label: 'DECISION', chip: 'bg-[color-mix(in_oklab,var(--s-waiting)_14%,transparent)] text-s-waiting' },
-  blocked_task: { label: 'BLOCKED', chip: 'bg-[color-mix(in_oklab,var(--s-blocked)_14%,transparent)] text-s-blocked' },
-  question: { label: 'QUESTION', chip: 'bg-[color-mix(in_oklab,var(--s-planning)_14%,transparent)] text-s-planning' },
-  integrate: { label: 'READY', chip: 'bg-[color-mix(in_oklab,var(--s-waiting)_14%,transparent)] text-s-waiting' },
+/** The word and the TONE for each kind. `ui/Chip` owns the fill and the border (it takes a
+ *  `StatusTone` and paints it with the same `1a`/`3d` alphas `StatusPill` uses), so there is no
+ *  class string here at all — which is also why Tailwind's static-scan problem does not arise. */
+const KIND: Record<NeedsYouItem['kind'], { readonly label: string; readonly tone: StatusTone }> = {
+  decision: { label: 'DECISION', tone: 'waiting' },
+  blocked_task: { label: 'BLOCKED', tone: 'blocked' },
+  question: { label: 'QUESTION', tone: 'planning' },
+  integrate: { label: 'READY', tone: 'waiting' },
 }
 ```
 
-…and the span becomes `className={`rounded-nav px-2 py-[2px] font-mono text-[11px] font-medium ${kind.chip}`}`.
+…imported as `import { Chip } from '../ui/Chip'` and `import type { StatusTone } from '../ui/StatusPill'`.
 
 - [ ] **Step 4: Run it and watch it pass**
 
@@ -5325,9 +5811,21 @@ own that now. `const { objective, … }` destructuring drops `objective`, `needs
 **(f) `WORK_WORDS`** gains a `fill` per entry, spelled literally:
 
 ```tsx
+/**
+ * FIVE keys and FIVE distinct fills (spec §6 deviation 3, scan finding 71).
+ *
+ * The keys are the READ MODEL's (`ProjectBriefFacts['work']`), not the README's — the README draws
+ * `working / planning / review / blocked / done` and `server/brief.ts` counts
+ * `working / verifying / review / waiting / done`. Changing the buckets is a read-model change and
+ * a `gate:m45` change, which is a different milestone's work.
+ *
+ * What this milestone does owe the README is FIVE segments a person can tell apart: the draft gave
+ * `working` and `verifying` the same fill, so two of the five read as one bar. `verifying` takes
+ * `--s-planning`, which is the tone nothing else in this bar uses.
+ */
 const WORK_WORDS: readonly { readonly key: keyof ProjectBriefFacts['work']; readonly word: string; readonly fill: string }[] = [
   { key: 'working', word: 'WORKING', fill: 'bg-s-working' },
-  { key: 'verifying', word: 'VERIFYING', fill: 'bg-s-working' },
+  { key: 'verifying', word: 'VERIFYING', fill: 'bg-s-planning' },
   { key: 'review', word: 'IN REVIEW', fill: 'bg-s-review' },
   { key: 'waiting', word: 'WAITING', fill: 'bg-s-waiting' },
   { key: 'done', word: 'DONE', fill: 'bg-s-done' },
@@ -5345,6 +5843,48 @@ Every remaining hit is in `apps/web/src/components/OverviewClient.tsx` (the elem
 delete both) and in `apps/web/test/overview-components.test.tsx` (Step 9). **No gate script reads
 any `strip-*` testid** — the census is in spec §3's removed table — and the bare `strip` is kept by
 (a).
+
+- [ ] **Step 5c: Give `AvatarTile` a size, so one row can be 30px without moving five other surfaces**
+
+The README's Team row draws a 30 px avatar; `ui/AvatarTile.tsx` is `h-7 w-7` (28 px) and renders on
+six surfaces (`grep -rln AvatarTile apps/web/src`). Editing the literal would resize `TaskCard`,
+`AllSlavesTable`, `ProjectsClient` and `GraphDrawer` — four surfaces this milestone says it is not
+touching — and leaving it alone makes Task 9's `30px` assertion fail against a 28 px component
+(scan finding 57). A prop, defaulted to what every existing caller already gets:
+
+```tsx
+export function AvatarTile({
+  name,
+  tone,
+  size = 'sm',
+}: {
+  readonly name: string
+  readonly tone: StatusTone
+  /**
+   * `sm` (28 px, `h-7 w-7`) is the handoff's original and stays the DEFAULT, so not one of the five
+   * existing call sites moves a pixel. `md` (30 px) is the M57 Overview Team row's
+   * (README "Overview" → Team rows: "30px avatar tile (18% tint)"), and it is the only caller that
+   * passes it. `gate:m14-fidelity` measures both, each scoped to the surface it belongs to.
+   */
+  readonly size?: 'sm' | 'md'
+}): React.JSX.Element {
+  return (
+    <span
+      data-testid="avatar-tile"
+      data-tone={tone}
+      data-size={size}
+      title={name}
+      className={`inline-flex ${size === 'md' ? 'h-[30px] w-[30px]' : 'h-7 w-7'} shrink-0 items-center justify-center rounded-tile border font-mono text-[11px] font-semibold ${TONE_FILL[tone]} ${TONE_BORDER[tone]} ${TONE_TEXT[tone]}`}
+    >
+      {initialsOf(name)}
+    </span>
+  )
+}
+```
+
+Update the docstring's "28×28" sentence to name both sizes. If `apps/web/test/avatar-tile.test.tsx`
+exists, add one case asserting the default is `h-7 w-7` and `size="md"` is `h-[30px]`; if it does
+not, add those two assertions to the row case in Step 8b instead.
 
 - [ ] **Step 5b: Turn `SlaveCard` into the README's Team row (R18)**
 
@@ -5382,9 +5922,10 @@ and every POST — and replace only the returned JSX and the footer button.
         </span>
       )}
 
-      {/* 1. The 30px avatar tile at an 18% tint. `AvatarTile` owns the recipe and `gate:m14` reads
-        * its width and height scoped to this row, so its size moves in ONE place (Task 9). */}
-      <AvatarTile name={slave.name} tone={tone} />
+      {/* 1. The 30px avatar tile (README "Overview" → Team rows). `size="md"` is the prop Step 5c
+        * adds to `AvatarTile`: that primitive renders on five other surfaces this milestone does
+        * not touch, so its 28px default stays the default and this row opts in. */}
+      <AvatarTile name={slave.name} tone={tone} size="md" />
 
       {/* 2. Name and role. */}
       <button
@@ -5426,12 +5967,20 @@ and every POST — and replace only the returned JSX and the footer button.
 
       {/* 5. ONE primary button (README "One action cluster"). Its testid follows its ACTION, so
         * `gate:m14-fidelity:1295` still finds `card-pause` on a working row. `Unblock` is
-        * accent-filled -- the README's one emphasised row action. */}
+        * accent-filled -- the README's one emphasised row action.
+        *
+        * `slave.taskStatus`, NEVER `slave.status` (spec erratum E14). `SlaveCardData.status` is a
+        * `SlaveStatus` -- `idle | starting | working | pausing | paused | resuming | stopping` --
+        * with no `blocked` member at all, so comparing it against `'blocked'` does not even
+        * compile. The README's Unblock is about a blocked TASK, which is the field
+        * `cardStateFor` already reads at `SlaveCard.tsx:86`. Verify the member's name on
+        * `SlaveCardData` (`server/overview.ts`) before transcribing: if it is not `taskStatus`,
+        * use whatever `cardStateFor`'s second argument is fed from. */}
       {waitingFor !== null ? (
         <RowButton testId="card-answer" accent onClick={() => onOpen(slave.id)}>
           Answer
         </RowButton>
-      ) : slave.status === 'blocked' ? (
+      ) : slave.taskStatus === 'blocked' ? (
         <RowButton testId="card-unblock" accent onClick={() => onOpen(slave.id)}>
           Unblock
         </RowButton>
@@ -5501,10 +6050,15 @@ function RowButton({
 above), `card-step`, `card-percent`, `card-skill-chip`, `card-queue-chip`, `card-waiting-for`,
 `card-resume-requested`, the `ProgressBar`, `RuntimeRoleChips`, `provider-chip`, `action-line`,
 `card-message` and `card-stop` — **every one of them is already in `SlavePanel`**, which the row's
-`⋯` and its name both open. Delete the `FooterButton` helper and the now-unused imports (`Chip`,
-`ProgressBar`, `RuntimeRoleChips`, `ShellOnlyMark`, `TONE_BORDER`) — `tsc` names them. **No gate
-script reads any of those testids**; the census is in spec §3's removed table, and the one gate hit
-on this file (`gate-m14-fidelity:1295`, `card-pause`) is preserved above.
+`⋯` and its name both open. Delete the `FooterButton` helper, the now-unused imports (`Chip`, `ProgressBar`,
+`RuntimeRoleChips`, `ShellOnlyMark`, `TONE_BORDER`) **and the now-unused LOCALS** — which
+`noUnusedLocals` makes errors rather than warnings, and which `tsc` reports differently from the
+imports (scan finding 70): `canStop` (only `card-stop` read it), `line` and the `slave.actionLine`
+fallback it wraps (only `action-line` read them), and the `liveActionLine` parameter itself. Leave
+`canPause`, `canResume`, `showResume`, `waitingFor`, `state`, `tone`, `pulse`, `label`, `flashing`
+and `taskRef` — the row reads every one. **No gate script reads any of the removed testids**; the
+census is in spec §3's removed table, and the one gate hit on this file
+(`gate-m14-fidelity:1295`, `card-pause`) is preserved above.
 
 - [ ] **Step 6: Restyle the Projects page**
 
@@ -5560,16 +6114,32 @@ return. Keep the `show archived` checkbox exactly where it is, on the right of t
 **(d) The card.** In `ProjectCard`, change ONLY the class strings and add the two rows the README
 adds; every `data-testid` in that function is kept verbatim (`project-card`, `project-archived`,
 `project-description`, `project-needs-you`, `team-overflow`, `project-unmeasured`,
-`restore-project`, `restore-project-error`, `assign-company-button`). The outer element becomes:
+`restore-project`, `restore-project-error`, `assign-company-button`).
+
+**The recipe lands ON the surface, not on a wrapper** (scan finding 24). Today the function returns
+`<div data-testid="project-card" className="flex flex-col gap-2">` wrapping a `<Card>` that draws
+the actual bordered surface — so putting the README's border and radius on the outer `div` would
+render a bordered card inside a bordered card, and `gate-m57` stage 8 and the rewritten `gate-m14`
+both measure `[data-testid="project-card"]`'s `border-radius` as `14px`. `ui/Card` already takes
+`testId` and `className` (M44 R3 widened it for exactly this), so the wrapper goes and the testid
+moves onto `Card`:
 
 ```tsx
-    <div
-      data-testid="project-card"
-      className={`flex flex-col gap-3 rounded-page-card border bg-card p-4 px-[18px] shadow-card transition-colors hover:border-line2 ${
-        project.needsYou > 0 ? 'border-[color-mix(in_oklab,var(--s-waiting)_45%,var(--line))]' : 'border-line'
+    <Card
+      testId="project-card"
+      className={`gap-3 rounded-page-card p-4 px-[18px] shadow-card ${
+        project.needsYou > 0 ? 'border-[color-mix(in_oklab,var(--s-waiting)_45%,var(--line))]' : ''
       }`}
     >
 ```
+
+`Card`'s own base classes are `flex w-full flex-col gap-2 rounded-card border p-3 text-left
+transition-colors` plus `border-line bg-bg-2 hover:border-line-hover`, and a caller's `className` is
+appended after them — so `gap-3`, `rounded-page-card`, `p-4 px-[18px]` and the needs-you border each
+override their counterpart, and `bg-bg-2` is `var(--card)` through Task 1's alias layer. Check the
+rendered result against the README rather than assuming the cascade: if `rounded-card` wins over
+`rounded-page-card` because both are single-class utilities of the same specificity in source order,
+pass the radius as an arbitrary value (`rounded-[14px]`) and say so in the task report.
 
 …the project name becomes `text-[16px] font-semibold tracking-[-.2px] text-t1`, the company ·
 runbook line `text-[12.5px] text-t3`, the goal line `min-h-[40px] text-[13.5px] leading-[1.45] text-t2`,
@@ -5646,15 +6216,15 @@ Projects card; read `server/overview.ts`'s `workspace` shape first and pass the 
 **(b) Band 2 — the Needs-you card**, and the `BlockedPanel` it replaces:
 
 ```tsx
-          <NeedsYouCard workspaceId={workspaceId} items={view.needsYou} onRefresh={refresh} />
+          <NeedsYouCard workspaceId={workspaceId} items={view.needsYou} />
 ```
 
 Delete the `<BlockedPanel …/>` element Task 4 Step 12 left on the page and its import — the
 Needs-you card is its four-kind superset (`grep -rn BlockedPanel apps/web/src` afterwards; if
 `OverviewClient.tsx` still EXPORTS it for another reader, keep the export and delete only the
-element). `refresh` is whatever `useOverview` exposes for a manual refetch: **read
-`apps/web/src/hooks/useOverview.ts` first**, and if it exposes none, pass `() => router.refresh()`
-with `useRouter` from `next/navigation`.
+element). **No `onRefresh` is passed** (scan finding 25): `useOverview` exposes no refetch, and the
+card does not need one — approve and reject append events, this page's own stream wakes on them, and
+the snapshot is refetched 250 ms later by the loop every other control here already rides.
 
 **(c) Band 3 — the four fact tiles**, which is `ProjectBrief` after Step 5:
 
@@ -5668,12 +6238,23 @@ with `useRouter` from `next/navigation`.
   // README "Overview" → Supervisor tile: `Runbook <name> · stage 3/5 Verify`. Composed here rather
   // than in `server/brief.ts` because `ProjectBrief` the DTO has no runbook field and this
   // milestone adds no read-model field -- `view.runbook` is already on the snapshot for the panel
-  // below. Read `server/runbook.ts`'s own shape and correct these three member names against it.
-  const runbookLine =
-    view.runbook === null
-      ? null
-      : `Runbook ${view.runbook.name} · stage ${String(view.runbook.currentStageIndex + 1)}/${String(view.runbook.stages.length)} ${view.runbook.currentStageName}`
+  // below.
+  //
+  // `RunbookPanelView` is `{adopted: RunbookOption | null, currentStage: string | null, stages,
+  // recommendations, all, pendingDecision}` (`server/runbook.ts:34-57`): the NAME is on `adopted`,
+  // the stage's name is `currentStage`, and there is no index at all -- it is derived from
+  // `stages`. A project with no adopted runbook has no line.
+  const runbookLine = ((): string | null => {
+    const runbook = view.runbook
+    if (runbook?.adopted == null) return null
+    const stageIndex = runbook.stages.findIndex((stage) => stage.name === runbook.currentStage)
+    const position = stageIndex < 0 ? '' : ` · stage ${String(stageIndex + 1)}/${String(runbook.stages.length)}`
+    return `Runbook ${runbook.adopted.name}${position}${runbook.currentStage === null ? '' : ` ${runbook.currentStage}`}`
+  })()
 ```
+
+*(`RunbookStageView`'s own member may be `name`, `key` or `label` — read `server/runbook.ts` and use
+the one that holds the stage's word. `tsc` names it if you guess wrong.)*
 
 Delete `<TopStrip snapshot={view} />` and its import (Step 5g).
 
@@ -5695,22 +6276,17 @@ GRID becomes a rows container, because `SlaveCard` is a row now:
               * grid itself is `SlaveCard`'s own (R18); this owns only the surface around them. */}
             <div className="overflow-hidden rounded-panel-card border border-line bg-card">
               {view.slaves.map((slave) => (
-                <SlaveCard
-                  key={slave.id}
-                  slave={slave}
-                  liveActionLine={actionLines[slave.id] ?? null}
-                  workspaceId={workspaceId}
-                  onOpen={selectSlave}
-                />
+                // THREE props. `liveActionLine` is gone with the `action-line` the row no longer
+                // draws (Step 5b) -- the panel the `⋯` opens renders the live line already. The
+                // component's signature and this call site change together, in the same step.
+                <SlaveCard key={slave.id} slave={slave} workspaceId={workspaceId} onOpen={selectSlave} />
               ))}
             </div>
           </section>
 ```
 
-`SlaveCard` keeps its four props: `liveActionLine` is still passed and still accepted, even though
-the row no longer draws an `action-line` — **delete the prop from the component's signature and from
-this call site together**, or `tsc` will name it. (It is one of the five facts that moved into
-`SlavePanel`; the panel renders the live line already.)
+If `actionLines` has no other reader in this file after that, delete the destructuring of it from
+the `useOverview(...)` call too — `noUnusedLocals` makes an unused local an error, not a warning.
 
 **(e) Band 5 — Recent changes**, which is `SupervisorTimeline` restyled, plus the two panels Task 4
 parked on the page:
@@ -5754,21 +6330,37 @@ panel behind one would mean editing the domain in a milestone that promised not 
 `SupervisorRequest` is deleted per Step 7g below.
 
 **(g) The Supervisor request box.** It is the right panel's composer now, and two boxes posting to
-one route is one box too many. `gate:m45-project-experience` asserts `supervisor-request-input`,
-`supervisor-request-send` and `supervisor-request-result`, so the testids MOVE rather than die: in
-`apps/web/src/components/supervisor/SupervisorThreadPanel.tsx` (Task 5), rename the textarea's
-testid to `supervisor-request-input`, the Send button's to `supervisor-request-send`, and give the
-`role="alert"` error span `data-testid="supervisor-request-result"`; keep `supervisor-composer` on
-the wrapping `<div>`. Then update `apps/web/test/supervisor-thread-panel.test.tsx`'s composer case to
-query `supervisor-request-input`, and:
+one route is one box too many.
+
+**Task 6 renames nothing** (spec erratum E17). Task 5 already wrote `SupervisorThreadPanel` with
+`supervisor-composer` on the composer WRAPPER, `supervisor-request-input` on the textarea,
+`supervisor-request-send` on the button, `supervisor-request-result` on the SUCCESS line and
+`supervisor-request-error` on the refusal — so every testid `gate:m45` reads is already emitted, in
+the right places, by the component that is already on screen. All this step does is take the old box
+off the page and delete it.
 
 ```bash
-git rm apps/web/src/components/project/SupervisorRequest.tsx
-ls apps/web/test | grep -i supervisor-request && git rm apps/web/test/supervisor-request.test.tsx
 grep -rn "SupervisorRequest" apps/web/src apps/web/test
 ```
 
-Delete the element and the import from `OverviewClient.tsx`; the grep must come back empty.
+Against `c828f8c8` that reports THREE things, and each has an instruction:
+1. `apps/web/src/components/project/SupervisorRequest.tsx` — the component. `git rm` it.
+2. `apps/web/src/components/OverviewClient.tsx` — the element and its import. Delete both.
+3. **`apps/web/test/supervisor-timeline.test.tsx:4` and its `describe('SupervisorRequest')` block at
+   `:323-380`, five cases** (scan finding 9). There is no `supervisor-request.test.tsx`; the cases
+   live inside the timeline's file. Delete that whole `describe` and the import on line 4, and leave
+   every one of the file's own 27 `SupervisorTimeline` cases untouched. **Before deleting, check
+   each of the five against `apps/web/test/supervisor-thread-panel.test.tsx`** — "sends the words and
+   reports the version it made", "will not send an empty request" and "shows a refusal without
+   clearing what was typed" are behaviours the composer still has, and any of the three that the
+   thread panel's own suite does not already cover moves there rather than dying.
+
+```bash
+git rm apps/web/src/components/project/SupervisorRequest.tsx
+grep -rn "SupervisorRequest" apps/web/src apps/web/test
+```
+
+The second grep must come back empty.
 
 - [ ] **Step 8: Edit `gate-m45-project-experience.mjs` — three places, every assertion carried over**
 
@@ -5887,23 +6479,58 @@ in rows and the changes in the timeline".
 keeps that tile, that key and all five spans, so **that gate is not edited**. `gate-m45`'s stage 2
 (the timeline's lanes, entries and `title` attributes) and stage 3 are not edited either.
 
-- [ ] **Step 8b: Update the component tests**
+- [ ] **Step 8b: Update the component tests, by name and by case**
 
 ```bash
 npx vitest run apps/web/test/projects-page.test.tsx apps/web/test/overview-components.test.tsx \
-  apps/web/test/slave-card.test.tsx apps/web/test/brief.test.tsx 2>&1 | tail -40
+  apps/web/test/project-brief.test.tsx apps/web/test/supervisor-timeline.test.tsx 2>&1 | tail -60
 ```
 
-Read each failure and fix it in the TEST where the test pinned a layout this task deliberately moved,
-and in the COMPONENT where it pinned a contract. Specifically:
-- `overview-components.test.tsx`'s `strip-value-*` cases (lines ~178–224) assert the six raw board
-  counts. Those counts fold into the Work tile, so **re-point each to its `brief-work-<key>` span**
-  and drop the two that had no word (`strip-value-spend` is the Cost tile's big figure;
-  `strip-value-blocked` is the Needs-you card's row count).
-- Its `order` arrays become `['project-title', 'needs-you-card', 'strip', 'team', 'recent-changes']`.
-- `slave-card.test.tsx`'s `card-message`, `card-stop`, `card-step`, `card-percent`,
-  `card-skill-chip`, `card-queue-chip` and `action-line` cases move to `slave-panel.test.tsx` if an
-  equivalent case is not already there, and are deleted here otherwise. Add one case for the row:
+*(Those are the four real paths. The draft of this plan named `slave-card.test.tsx` and
+`brief.test.tsx`; neither exists — scan findings 58 and 59.)*
+
+**`apps/web/test/project-brief.test.tsx` — 28 cases, and each one has a verdict.** It opens with
+`describe('ProjectBrief')` at `:57` and a second `describe('the cost tile after M51 R7')` at `:271`.
+
+- **KEEP, unchanged** — the whole second describe (`:271-338`, six cases): the cost tile keeps its
+  headline expression and all five `brief-cost-*` spans, which is why `gate:m51-breaker` needs no
+  edit either. Also keep `:66` (the knowledge line is a link INSIDE latest-verified, not a ninth
+  tile), `:90` (the Supervisor word with the raw state in `title`), `:97` (the work counts in the
+  domain's words, dimming a zero), `:109` and `:122` (the two money sentences), `:210` and `:216`
+  (latest-verified's empty and kind cases), `:253` (no budget figure on an unbudgeted project), and
+  `:258` (the clock is read off the stamp).
+- **REWRITE** — `:58` ("renders exactly the eight facts"): the array becomes
+  `['work', 'cost', 'supervisor', 'latest-verified']` and the title says four.
+- **DELETE** — every case whose tile is gone: `:75` and `:83` (objective — its fact is the page's
+  title row now, asserted in `overview-components.test.tsx`), `:201` (the objective's version chip),
+  `:130`, `:148`, `:166` (needs-you and its five-row cap — the Needs-you CARD has its own test file
+  and no cap), `:182` (the team's five-row cap — the Team rows show everybody), `:223`, `:234`,
+  `:245` (the team rows' content, lifecycle marker and handler — all three move to the `SlaveCard`
+  row cases below).
+- **MOVE, do not delete** — `:234` ("marks a temporary specialist and greys one whose engagement is
+  over") is an M50 `docs/ia.md` promise. The row keeps `card-lifecycle-chip` and the released
+  `opacity-60`, so this case is rewritten against `SlaveCard` in `overview-components.test.tsx`
+  rather than dropped.
+- **ADD** — the two cases at the end of this step.
+
+**`apps/web/test/overview-components.test.tsx`:**
+- The `strip-value-*` cases: `strip-tile` at `:157`, the six counts at `:178-188`, the two tone
+  cases at `:218-224`, and `strip-supervisor-spend` at `:201` and `:206`. Re-point the six counts to
+  their `brief-work-<key>` spans. **Three do not have one** (scan finding 65) and each goes
+  somewhere different: `strip-value-spend` is the Cost tile's headline figure;
+  `strip-value-blocked` is the Needs-you card's row count; and `strip-supervisor-spend`
+  (`'supervisor $0.25 · 2 at $1.00'`) is the Cost tile's own `brief-cost-unmeasured-calls` span,
+  which `gate:m51-breaker` also reads. `strip-tile` itself is deleted.
+- The `order` arrays (`:863`, `:892`) become
+  `['project-title', 'needs-you-card', 'strip', 'team', 'recent-changes']`.
+- The `card-message`, `card-stop`, `card-step`, `card-percent`, `card-skill-chip`,
+  `card-queue-chip`, `card-task-ref`, `card-waiting-for`, `card-resume-requested`, `provider-chip`
+  and `action-line` cases: **check `apps/web/test/slave-panel.test.tsx` for an equivalent first.**
+  Spec §3's removed table says which facts are genuinely in the panel and under what testid — and
+  says plainly that `card-percent` and `card-queue-chip` are NOT carried there by any testid. A case
+  with an equivalent in the panel's suite is deleted here; one without is deleted here too, with the
+  fact recorded in spec §3 rather than silently dropped.
+- Add the `SlaveCard` row cases and the two Overview cases below.
 
 ```tsx
   it('is a row on the README grid, with one primary button and a ⋯ (M57 R18)', () => {
@@ -5940,9 +6567,10 @@ Add the two Overview cases the new structure earns:
 ```bash
 npx vitest run 2>&1 | tail -20
 pgrep -af vitest || echo "no vitest running"
-# m45 is the gate Step 8 edited; m51 reads the cost tile and must pass WITHOUT an edit; m14 is
-# not in CI but is run here because this task moved every selector it measures on the Overview --
-# it will FAIL on the numbers until Task 9 rewrites them, and that failure must be ONLY numbers.
+# m45 is the gate Step 8 edited; m51 reads the cost tile and must pass WITHOUT an edit.
+# `gate:m14-fidelity` is deliberately NOT here: the Global Constraints give it to Task 9 alone,
+# because it rewrites thirteen PNGs and running it before `git add` would commit them from the
+# wrong task. Its numbers are expected to be red from here until Task 9 rewrites them.
 for g in m44-ux-foundation m45-project-experience m47-team-formation m49-memory m51-breaker; do
   echo "=== $g ==="; npm run "gate:$g" 2>&1 | tail -12; echo "exit=${PIPESTATUS[0]}"
 done
@@ -5983,10 +6611,15 @@ MSG
 - Modify: `apps/web/src/components/TaskCard.tsx` (class strings and the label only)
 - Create: `apps/web/src/components/TaskList.tsx`
 - Create: `apps/web/src/components/TaskFilters.tsx`
-- Modify: `apps/web/src/components/OrganizationClient.tsx` (class strings; the page is "Team" now)
-- Modify: `apps/web/src/components/KnowledgeClient.tsx` (class strings)
-- Modify: `apps/web/test/taskColumns.test.ts` (or create — check `ls apps/web/test | grep -i column`)
-- Modify: `apps/web/test/tasks-components.test.tsx`
+- Create: `apps/web/src/components/ui/Segmented.tsx` + `apps/web/test/segmented.test.tsx`
+- Modify: `apps/web/src/components/organization/OrganizationClient.tsx` (class strings; the page is "Team" now)
+- Modify: `apps/web/src/components/knowledge/KnowledgeClient.tsx` (class strings)
+- Modify: `apps/web/src/components/graph/ExecutionNodes.tsx` (**nothing to edit — see Step 3b**), `apps/web/test/graph-exec.test.ts`, `apps/web/test/tones.test.ts` (spec erratum E16)
+- Modify: `apps/web/test/taskColumns.test.ts` (it exists), `apps/web/test/tasks-components.test.tsx`
+
+*(The two client paths are nested — `components/organization/` and `components/knowledge/` — not
+top-level, which is where the draft of this plan looked; the same is true of
+`components/sim/SimulationsClient.tsx` in Task 8. Scan finding 15.)*
 
 **Interfaces:**
 - Consumes from Task 3: `useHeaderAction`. From earlier milestones, unchanged: `TaskBoardItem`, `TasksSnapshot`, `USER_TASK_LABEL`, `userTaskStatus`, `CARD_STATE_TONE`, `TONE_DOT`.
@@ -5998,7 +6631,11 @@ Create (or extend) `apps/web/test/taskColumns.test.ts`:
 
 ```ts
 import { describe, expect, it } from 'vitest'
-import { TASK_STATUSES } from '@slave-of-ai/domain'
+// `@slave-of-ai/db`, NOT the domain (scan finding 19): `TASK_STATUSES` is at
+// `packages/db/src/enums.ts:81` and no such export exists under `packages/domain/src`. The file
+// this extends already imports it — as `ALL_STATUSES` — so REUSE THE EXISTING BINDING rather than
+// adding a second import of the same array under a second name.
+import { TASK_STATUSES as ALL_STATUSES } from '@slave-of-ai/db'
 import { BOARD_COLUMNS, COLUMN_FOR_STATUS, COLUMN_STATE } from '../src/lib/taskColumns.js'
 
 describe('the board columns', () => {
@@ -6025,7 +6662,7 @@ describe('the board columns', () => {
   })
 
   it('leaves no status without a column -- the Record s totality is the build-time guard', () => {
-    for (const status of TASK_STATUSES) {
+    for (const status of ALL_STATUSES) {
       expect(BOARD_COLUMNS, status).toContain(COLUMN_FOR_STATUS[status])
     }
   })
@@ -6042,7 +6679,10 @@ describe('the board columns', () => {
 })
 ```
 
-*(`TASK_STATUSES` — check the exported name with `grep -rn "TASK_STATUSES\|TaskStatus =" packages/domain/src/`, and if the domain exports no such array, iterate `Object.keys(COLUMN_FOR_STATUS)` instead and assert its length is 13.)*
+*(`apps/web/test/taskColumns.test.ts` ALREADY EXISTS and already imports that array as
+`ALL_STATUSES`. Open it first: this step rewrites its four cases rather than creating a file, and
+its existing "covers every TaskStatus" and "resolves every column tone through the one tone table"
+cases carry over with only the expected values changed.)*
 
 - [ ] **Step 2: Run it and watch it fail**
 
@@ -6125,6 +6765,149 @@ npx tsc --build 2>&1 | tail -20
 Expected: PASS, and `tsc` names every other reader of `BoardColumn` that spelled an old column name
 (`TasksClient.tsx`'s `grid-cols-6`, `TaskColumn.tsx`, and any test). Fix each.
 
+- [ ] **Step 4b: The Graph's Execution mode, and the tone a card changes (spec erratum E16)**
+
+`BOARD_COLUMNS`, `COLUMN_FOR_STATUS` and `COLUMN_STATE` have a THIRD production consumer that Step 3
+silently rewires: `apps/web/src/components/graph/ExecutionNodes.tsx:5` imports all three, and its
+own docstring says why — "the board and this graph must never disagree about which column a
+`merging` task belongs to, and two tables that agree today are two tables that disagree after the
+first edit." **So there is nothing to edit in that file**: the pipeline becomes five stages, in the
+new order, with the new tones, by construction. That is the design working, and it is the reason
+spec §6's "the Graph canvas is out of scope" means its RENDERING and not its vocabulary.
+
+Two tests pin the old literals and must move with it:
+
+- `apps/web/test/graph-exec.test.ts:47` — `it('emits the six stages in BOARD_COLUMNS order, …')`.
+  Retitle it to five and change the expected `stages.map((node) => node.id)` array to the five
+  `stage:`-prefixed names. `:126` asserts a `running` task's node reads
+  `column === 'In Progress'`; the new spelling is **`'In progress'`** (lower-case `p` — scan
+  finding 45, and the same rename hits `column-count-In progress` in `tasks-components.test.tsx`).
+- `apps/web/test/tones.test.ts:223-240` — `it("is the column's state for every status except the
+  four that are not their column")`. Its `waiting` branch asserts
+  `COLUMN_FOR_STATUS['waiting'] === 'In Progress'`: same lower-case fix. **And `assigned` changes
+  answer**: it was `In Progress` → `working` and is now `Queued` → `planning`, so
+  `cardStateForTask('assigned')` returns `'planning'`. That is a real, user-visible change — an
+  assigned task's card stops being painted the colour of work in flight — and it is named in spec
+  erratum E16 rather than discovered in a screenshot. Add an explicit case for it:
+
+```ts
+  it('paints an assigned task as queued, not as working (M57 R10, spec erratum E16)', () => {
+    // Until M57 `assigned` sat on the In Progress column and inherited its `working` tone. The
+    // README puts it in Queued, and a task nobody has started should not look like one in flight.
+    expect(COLUMN_FOR_STATUS.assigned).toBe('Queued')
+    expect(cardStateForTask('assigned')).toBe('planning')
+  })
+```
+
+- [ ] **Step 4c: Write `ui/Segmented`, so the segmented control is written ONCE**
+
+Five surfaces in this milestone draw the same control — Tasks' Board/List, Knowledge's
+All/Verified/Candidates, Workforce's two sub-segments, Settings' Appearance and the project
+Settings permission matrix's three-way — and the draft of this plan told an implementer to copy a
+three-line `segment()` recipe into two of them and re-spell it in a third (scan finding 46a). One
+primitive, in `components/ui/`, where the other twenty live:
+
+```tsx
+'use client'
+
+/**
+ * The handoff's segmented control (README: "1px `--line2` border, radius 8-9, 2px padding; the
+ * chosen segment takes `--sel`, weight 600 and `--t1`").
+ *
+ * ONE implementation for the five surfaces that draw it (M57 R21): Tasks' Board/List, Knowledge's
+ * three filters, Workforce's two sub-segments, Settings' Appearance, and the permission matrix's
+ * three-way. Presentational and uncontrolled-free: the caller owns `value` and `onChange`, so a
+ * segment that navigates and a segment that sets state are the same component.
+ *
+ * `testIdPrefix` is required rather than defaulted, because every one of those five surfaces has a
+ * gate or a test that names its segments and a shared default would make four of them collide.
+ */
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+  ariaLabel,
+  testIdPrefix,
+}: {
+  readonly options: readonly { readonly id: T; readonly label: string; readonly count?: number }[]
+  readonly value: T
+  readonly onChange: (next: T) => void
+  readonly ariaLabel: string
+  readonly testIdPrefix: string
+}): React.JSX.Element {
+  return (
+    <span
+      role="group"
+      aria-label={ariaLabel}
+      data-testid={testIdPrefix}
+      data-value={value}
+      className="inline-flex gap-[2px] rounded-card border border-line2 p-[2px]"
+    >
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          data-testid={`${testIdPrefix}-${option.id}`}
+          aria-pressed={option.id === value}
+          onClick={() => onChange(option.id)}
+          className={`rounded-nav border-0 px-[10px] py-1 text-[13px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+            option.id === value ? 'bg-sel font-semibold text-t1' : 'bg-transparent text-t2 hover:text-t1'
+          }`}
+        >
+          {option.label}
+          {option.count !== undefined && (
+            <span className="ml-[6px] font-mono text-[11px] font-medium text-t3">{option.count}</span>
+          )}
+        </button>
+      ))}
+    </span>
+  )
+}
+```
+
+And `apps/web/test/segmented.test.tsx`:
+
+```tsx
+// @vitest-environment jsdom
+import { render, screen, act } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { Segmented } from '../src/components/ui/Segmented.js'
+
+const OPTIONS = [
+  { id: 'board' as const, label: 'Board' },
+  { id: 'list' as const, label: 'List', count: 12 },
+]
+
+describe('Segmented', () => {
+  it('names every segment by the caller s prefix and marks the chosen one', () => {
+    render(<Segmented options={OPTIONS} value="board" onChange={vi.fn()} ariaLabel="View" testIdPrefix="task-view" />)
+    expect(screen.getByTestId('task-view').getAttribute('data-value')).toBe('board')
+    expect(screen.getByTestId('task-view-board').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('task-view-list').getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('reports the segment that was pressed, and never sets state of its own', () => {
+    const onChange = vi.fn()
+    render(<Segmented options={OPTIONS} value="board" onChange={onChange} ariaLabel="View" testIdPrefix="task-view" />)
+    act((): void => { screen.getByTestId('task-view-list').click() })
+    expect(onChange).toHaveBeenCalledWith('list')
+    // Still `board`: the caller owns the value.
+    expect(screen.getByTestId('task-view').getAttribute('data-value')).toBe('board')
+  })
+
+  it('shows a count beside a segment that has one, and nothing where there is none', () => {
+    render(<Segmented options={OPTIONS} value="board" onChange={vi.fn()} ariaLabel="View" testIdPrefix="task-view" />)
+    expect(screen.getByTestId('task-view-list').textContent).toContain('12')
+    expect(screen.getByTestId('task-view-board').textContent).toBe('Board')
+  })
+
+  it('is a named group, so a screen reader says what the choice is about', () => {
+    render(<Segmented options={OPTIONS} value="list" onChange={vi.fn()} ariaLabel="View" testIdPrefix="task-view" />)
+    expect(screen.getByRole('group', { name: 'View' })).toBeTruthy()
+  })
+})
+```
+
 - [ ] **Step 5: Write the filter row and the list view**
 
 Create `apps/web/src/components/TaskFilters.tsx`:
@@ -6133,6 +6916,7 @@ Create `apps/web/src/components/TaskFilters.tsx`:
 'use client'
 
 import type { TaskBoardItem } from '../server/tasks'
+import { Segmented } from './ui/Segmented'
 
 /** The README's filter row: a search box, a `Needs you · n` toggle, one chip per assignee and the
  *  Board/List segmented control. Everything here filters the snapshot the page is ALREADY holding
@@ -6160,6 +6944,8 @@ export function TaskFilters({
   readonly view: 'board' | 'list'
   readonly onView: (next: 'board' | 'list') => void
 }): React.JSX.Element {
+  // The two filter CHIPS keep their own recipe (they toggle independently and one of them is
+  // amber); the Board/List control is `ui/Segmented` (M57 R21) -- no copied class strings.
   const chip = (on: boolean, tone?: 'waiting'): string =>
     `rounded-card border px-3 py-[5px] text-[13px] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
       on
@@ -6168,8 +6954,6 @@ export function TaskFilters({
           : 'border-line2 bg-sel font-semibold text-t1'
         : 'border-line2 bg-transparent text-t2 hover:text-t1'
     }`
-  const segment = (on: boolean): string =>
-    `rounded-nav border-0 px-[10px] py-1 text-[13px] ${on ? 'bg-sel font-semibold text-t1' : 'bg-transparent text-t2'}`
   return (
     <div className="flex flex-wrap items-center gap-2 px-[24px] pt-[18px] text-[13px]">
       <input
@@ -6196,13 +6980,20 @@ export function TaskFilters({
           {name}
         </button>
       ))}
-      <span data-testid="task-view-toggle" data-view={view} className="ml-auto inline-flex gap-[2px] rounded-card border border-line2 p-[2px]">
-        <button type="button" data-testid="task-view-board" onClick={() => onView('board')} className={segment(view === 'board')}>
-          Board
-        </button>
-        <button type="button" data-testid="task-view-list" onClick={() => onView('list')} className={segment(view === 'list')}>
-          List
-        </button>
+      {/* `testIdPrefix="task-view"` gives `task-view-board` / `task-view-list` -- the two names
+        * spec §3 lists and `gate-m57` stage 6 clicks. `task-view-toggle` stays on the wrapper, so
+        * all three exist. */}
+      <span className="ml-auto" data-testid="task-view-toggle" data-view={view}>
+        <Segmented
+          options={[
+            { id: 'board', label: 'Board' },
+            { id: 'list', label: 'List' },
+          ]}
+          value={view}
+          onChange={onView}
+          ariaLabel="Task view"
+          testIdPrefix="task-view"
+        />
       </span>
     </div>
   )
@@ -6290,8 +7081,9 @@ export function TaskList({
 In `apps/web/src/components/TasksClient.tsx`:
 - add `const [query, setQuery] = useState('')`, `const [needsOnly, setNeedsOnly] = useState(false)`,
   `const [assignee, setAssignee] = useState<string | null>(null)`, `const [view, setView] = useState<'board' | 'list'>('board')`;
-- derive `const needsYouIds = useMemo(() => new Set(view_.tasks.filter((task) => userTaskStatus({ status: task.status }).needsYou).map((task) => task.id)), [view_.tasks])`
-  (rename the existing `view` local to `snapshotView` first, so the new `view` state does not shadow it — `tsc` will find every use);
+- **rename the existing `view` local to `snapshotView` FIRST**, so the new `view` state does not
+  shadow it, and use that one name everywhere below — `tsc` finds every remaining use;
+- derive `const needsYouIds = useMemo(() => new Set(snapshotView.tasks.filter((task) => userTaskStatus({ status: task.status }).needsYou).map((task) => task.id)), [snapshotView.tasks])`;
 - derive `const visible = filterTasks(snapshotView.tasks, { query, needsOnly, assignee }, needsYouIds)`;
 - derive `const assignees = [...new Set(snapshotView.tasks.map((t) => t.assigneeName).filter((n): n is string => n !== null))].sort()`;
 - render `<TaskFilters …/>` above the board;
@@ -6301,7 +7093,11 @@ In `apps/web/src/components/TasksClient.tsx`:
 - render `<TaskList tasks={visible} onSelect={setSelectedId} />` instead of the board when `view === 'list'`.
 
 In `apps/web/src/components/TaskColumn.tsx`, keep every testid (`column`, `column-dot-<column>`,
-`column-count-<column>`) and change only the head's type: the `<h2>` becomes
+`column-count-<column>`) and change only the head's type. **Those last two are built by
+interpolation, so the rename changes their VALUES**: `column-dot-In Progress` becomes
+`column-dot-In progress` and likewise for the count (scan finding 45). `tasks-components.test.tsx:874`
+pins the old spelling and is in this task's Files list; `graph-exec.test.ts:126` pins the same
+lower-case change on a different node (Step 4b). No gate reads either. the `<h2>` becomes
 `className="text-[13px] font-semibold text-t1"` with the dot at `h-[7px] w-[7px]` and the count
 `font-mono text-[11.5px] font-medium text-t3` — the README's numbers. Add the empty state:
 
@@ -6325,7 +7121,8 @@ that file is kept verbatim.
 These two pages keep every component, every read model and every testid; only class strings change,
 plus the Team page's H1.
 
-**`apps/web/src/components/OrganizationClient.tsx`** — find its title (`grep -n "SectionLabel\|<h1" apps/web/src/components/OrganizationClient.tsx`) and change the visible word to `Team`, with the
+**`apps/web/src/components/organization/OrganizationClient.tsx`** (nested, not top-level — scan
+finding 15) — find its title (`grep -n "SectionLabel\|<h1" apps/web/src/components/organization/OrganizationClient.tsx`) and change the visible word to `Team`, with the
 sub-line `{n} workers on {project} · why they are here and what they are doing`. **The route, the
 testids (`organization-rows`, `organization-row-*`, `organization-kind-*`, `organization-why-*`,
 `organization-doing-*`, `capability-chip`, `organization-needs`, `organization-need-*`,
@@ -6335,9 +7132,11 @@ read them. Then apply the README's card recipe to whatever element carries `orga
 `font-semibold text-t1`, role · provider at `text-[12px] text-t3`, capability chips at
 `rounded-pill border border-line2 px-2 py-[2px] text-[12px] text-t2`.
 
-**`apps/web/src/components/KnowledgeClient.tsx`** — the segmented All / Verified · n /
-Candidates · n control takes `TaskFilters`' `segment()` recipe (copy the three lines; it is six
-tokens and importing a private helper across two unrelated pages is worse), and the row grid becomes
+**`apps/web/src/components/knowledge/KnowledgeClient.tsx`** (nested, not top-level — scan finding
+15) — the All / Verified · n / Candidates · n control becomes `<Segmented …/>` (M57 R21; the draft
+told an implementer to copy `TaskFilters`' recipe, which is the duplication the primitive exists to
+prevent). **Grep the file for its existing filter testids first and pass whichever prefix reproduces
+them**, so nothing a test or a gate names moves. The row grid becomes
 `grid-cols-[110px_minmax(0,1fr)_190px] gap-[14px] px-4 py-3 border-b border-line`. Keep
 `knowledge-counts`, `knowledge-rows` and every other testid in the file verbatim.
 
@@ -6380,9 +7179,10 @@ MSG
 - Modify: `apps/web/src/components/activity/ActivityClient.tsx` and its `FilterBar.tsx` (class strings + the `200px 1fr` split)
 - Modify: `apps/web/src/components/project/ProjectSettingsClient.tsx` (the `180px minmax(0,760px)` grid + the sticky in-page nav)
 - Modify: `apps/web/src/components/workforce/WorkforceClient.tsx` (six tabs → four visible, six `?tab=` values)
-- Modify: `apps/web/src/components/SimulationsClient.tsx` (dashed cards; `§` is already the rule)
-- Modify: `apps/web/src/components/SettingsClient.tsx` + `ProviderAdapterCards.tsx` (the Appearance section)
-- Modify: `apps/web/test/workforce-page.test.tsx`, `apps/web/test/settings-page.test.tsx`, `apps/web/test/activity-page.test.tsx`, `apps/web/test/simulation-page.test.tsx`
+- Modify: `apps/web/src/components/sim/SimulationsClient.tsx` (nested, not top-level — dashed cards; `§` is already the rule)
+- Modify: `apps/web/src/components/SettingsClient.tsx` (the Appearance section)
+- Modify: `apps/web/test/workforce-page.test.tsx`, `apps/web/test/settings-page.test.tsx`, `apps/web/test/activity-page.test.tsx`, **`apps/web/test/simulations-page.test.tsx`** (plural — the singular `simulation-page.test.tsx` tests `SimulationClient`, the DETAIL page, which this task does not touch; scan finding 16)
+- **Re-point every hit** of `workforce-tab-departments` / `workforce-tab-runbooks` found by Step 3's grep — at `c828f8c8` those are `scripts/gate-m11-shell.mjs`, `scripts/gate-m14-fidelity.mjs`, `scripts/gate-m48-runbooks.mjs` and `apps/web/test/workforce-page.test.tsx`
 
 **Interfaces:**
 - Consumes from Task 1: `useTheme`, `THEME_LABEL`, `ThemeChoice`. From Task 3: `useHeaderAction`.
@@ -6410,17 +7210,20 @@ Add to `apps/web/test/workforce-page.test.tsx`:
     expect(tabs.map((tab) => tab.textContent)).toEqual(['People', 'Catalog', 'Skills & runbooks', 'Evidence'])
   })
 
-  it('folds Departments into People as a segment, KEEPING its testid (R12)', () => {
+  it('folds Departments into People as a segment with its own testid (spec erratum E15)', () => {
     // …render with tab="slaves"…
-    const sub = screen.getByTestId('workforce-tab-departments')
+    const sub = screen.getByTestId('workforce-segment-departments')
     expect(sub.getAttribute('href')).toContain('tab=departments')
     // The Slaves table is what People opens on.
     expect(screen.getByTestId('data-table')).toBeTruthy()
+    // And `workforce-tab-slaves` appears exactly ONCE -- the visible tab, not the segment too.
+    expect(screen.getAllByTestId('workforce-tab-slaves')).toHaveLength(1)
   })
 
-  it('folds Runbooks into Skills & runbooks as a segment, KEEPING its testid', () => {
+  it('folds Runbooks into Skills & runbooks as a segment with its own testid', () => {
     // …render with tab="skills"…
-    expect(screen.getByTestId('workforce-tab-runbooks').getAttribute('href')).toContain('tab=runbooks')
+    expect(screen.getByTestId('workforce-segment-runbooks').getAttribute('href')).toContain('tab=runbooks')
+    expect(screen.getAllByTestId('workforce-tab-skills')).toHaveLength(1)
   })
 ```
 
@@ -6451,9 +7254,20 @@ export const WORKFORCE_TABS: readonly { readonly id: WorkforceTab; readonly labe
   { id: 'evidence', label: 'Evidence' },
 ]
 
-/** The two tabs that folded, as SEGMENTS inside their new parent. Each keeps the testid it had as
- *  a tab (`workforce-tab-departments`, `workforce-tab-runbooks`) and each still drives its own
- *  `?tab=` value, so every bookmark and every gate click lands exactly where it did. */
+/**
+ * The two tabs that folded, as SEGMENTS inside their new parent — with their OWN testid namespace
+ * (spec erratum E15).
+ *
+ * The draft of this plan kept `workforce-tab-<id>` on these, on the theory that a gate clicking
+ * `workforce-tab-departments` would then keep working. It does not: `SUB_TABS.slaves` contains
+ * `{id:'slaves'}` and `SUB_TABS.skills` contains `{id:'skills'}`, so on `?tab=slaves` the page
+ * would render `workforce-tab-slaves` TWICE — once as the visible People tab and once as the
+ * segment — which breaks this task's own four-tab assertion and puts `gate-m11-shell`'s
+ * unqualified `getByTestId('workforce-tab-slaves')` into Playwright strict-mode failure.
+ *
+ * `workforce-segment-<id>` for all four. Every `?tab=` value still works, every bookmark still
+ * lands, and the four gate/test hits on the two old names are re-pointed in this task.
+ */
 const SUB_TABS: Record<string, readonly { readonly id: WorkforceTab; readonly label: string }[]> = {
   slaves: [
     { id: 'slaves', label: 'Slaves' },
@@ -6468,8 +7282,22 @@ const SUB_TABS: Record<string, readonly { readonly id: WorkforceTab; readonly la
 
 …then: the visible tab for the current `tab` is `tab === 'departments' ? 'slaves' : tab === 'runbooks' ? 'skills' : tab`;
 the sub-segment row renders under the tab strip whenever `SUB_TABS[visibleTab]` exists, as `<Link>`s
-carrying `data-testid={`workforce-tab-${sub.id}`}` and `href={`/workforce?tab=${sub.id}`}`; and the
-six `{tab === '…' && <Panel/>}` lines below are unchanged.
+carrying `data-testid={`workforce-segment-${sub.id}`}` and `href={`/workforce?tab=${sub.id}`}`; and
+the six `{tab === '…' && <Panel/>}` lines below are unchanged.
+
+**Then re-point the four places that name the old testids** (spec erratum E15). Find them first:
+
+```bash
+grep -rn "workforce-tab-departments\|workforce-tab-runbooks" scripts apps/web/test apps/web/src
+```
+
+At `c828f8c8` that is `scripts/gate-m11-shell.mjs` and `scripts/gate-m14-fidelity.mjs` (both click
+`workforce-tab-departments` to reach the Departments table), `scripts/gate-m48-runbooks.mjs` (clicks
+`workforce-tab-runbooks`) and `apps/web/test/workforce-page.test.tsx`. Change each to
+`workforce-segment-departments` / `workforce-segment-runbooks`; the hrefs and the `?tab=` values
+they navigate to do not change, so nothing else in any of those three gates moves. **This is the one
+claim R12 made that the pre-flight scan withdrew** — "no gate script changes for this page" is now
+"three gate scripts change one string each", and that is still the smallest edit available.
 
 - [ ] **Step 4: Run it and watch it pass, then run the four gates that navigate this page**
 
@@ -6481,8 +7309,10 @@ for g in m11-shell m44-ux-foundation m48-runbooks m55-catalog; do
 done
 ```
 
-Expected: PASS and `exit=0` four times, with **no edit to any gate script** — that is R12's claim
-about this page, and this is where it is proved.
+Expected: PASS and `exit=0` four times, **after the three one-string gate edits Step 3 names**. R12's
+original claim — "no gate script changes for this page" — was withdrawn by the pre-flight scan
+(spec erratum E15); what survives of it is that no gate's LOGIC changes, no route changes and no
+`?tab=` value changes.
 
 - [ ] **Step 5: Add Appearance to the global Settings page**
 
@@ -6497,26 +7327,34 @@ and Security:
             <div className="font-medium text-t1">Theme</div>
             <div className="text-[12.5px] text-t3">&quot;System&quot; follows your computer.</div>
           </div>
-          <div data-testid="appearance-theme" data-theme-mode={theme} className="inline-flex gap-[2px] rounded-panel border border-line2 p-[2px]">
-            {(['system', 'light', 'dark'] as const).map((choice) => (
-              <button
-                key={choice}
-                type="button"
-                data-testid={`appearance-theme-${choice}`}
-                aria-pressed={theme === choice}
-                onClick={() => setTheme(choice)}
-                className={`rounded-nav border-0 px-[10px] py-1 text-[13px] ${theme === choice ? 'bg-sel font-semibold text-t1' : 'bg-transparent text-t2'}`}
-              >
-                {THEME_LABEL[choice]}
-              </button>
-            ))}
-          </div>
+          {/* `ui/Segmented` (M57 R21), not a fourth copy of the same nine class strings. Its own
+            * markup emits `appearance-theme` on the group and `appearance-theme-<id>` on each
+            * button, which is exactly what spec §3 lists. `data-theme-mode` rides alongside
+            * `Segmented`'s `data-value` because the gate reads it by that name. */}
+          <span data-theme-mode={theme}>
+            <Segmented
+              options={[
+                { id: 'system', label: THEME_LABEL.system },
+                { id: 'light', label: THEME_LABEL.light },
+                { id: 'dark', label: THEME_LABEL.dark },
+              ]}
+              value={theme}
+              onChange={setTheme}
+              ariaLabel="Theme"
+              testIdPrefix="appearance-theme"
+            />
+          </span>
         </div>
       </section>
 ```
 
-…with `const { theme, setTheme } = useTheme()` and the two imports. The component must be a client
-component already (it holds the reseed controls); check its `'use client'` line first.
+…with `const { theme, setTheme } = useTheme()` and three imports (`useTheme`, `THEME_LABEL`,
+`Segmented`). The component must be a client component already (it holds the reseed controls); check
+its `'use client'` line first. `data-theme-mode` is on a wrapper because `Segmented` owns the group
+element and its own `data-value`; the gate's stage 1 reads `appearance-theme`'s `data-theme-mode`,
+so put the wrapper's testid nowhere and let `Segmented`'s own `appearance-theme` sit inside it —
+**or** give the wrapper the attribute and have the gate read
+`[data-testid="appearance-theme"]`'s `data-value` instead. Pick one and make the gate agree.
 
 Add to `apps/web/test/settings-page.test.tsx`:
 
@@ -6562,7 +7400,7 @@ and each given the matching `id`. The danger section's border becomes
 verbatim** — `gate:m11-shell` and `gate:m14-fidelity` read four of them, and `gate:m52-broker` reads
 the permission matrix.
 
-**`apps/web/src/components/SimulationsClient.tsx`** — the banner and the cards take the README's
+**`apps/web/src/components/sim/SimulationsClient.tsx`** (nested, not top-level — scan finding 15) — the banner and the cards take the README's
 dashed border (`border border-dashed border-line2 rounded-page-card`), which IS the "not real" cue,
 and the three stat tiles become a `grid-cols-3 gap-px bg-line` strip inside a `rounded-panel
 border border-line` wrapper. **`data-simulation="true"` stays on every block that renders money and
@@ -6574,6 +7412,10 @@ the currency stays `§`** (`docs/ia.md` rule 4; `gate:m44` stage 8 scans for a `
 ```bash
 npx vitest run 2>&1 | tail -20
 pgrep -af vitest || echo "no vitest running"
+# m52 is here because Task 4 edited a COMMENT in it (the one that explained a scoped locator by
+# naming the Overview's `Advanced` disclosure) and because its scoped locator has to keep resolving
+# now that the disclosure is gone -- a comment edit is not a behaviour change, and this is where
+# that is proved rather than assumed.
 for g in m11-shell m18-skill-and-teeth m29-simulation m30-simulation-compare m44-ux-foundation m48-runbooks m52-broker m53-evidence m55-catalog; do
   echo "=== $g ==="; npm run "gate:$g" 2>&1 | tail -10; echo "exit=${PIPESTATUS[0]}"
 done
@@ -6719,9 +7561,14 @@ Also add one line to the `/w/:id/graph` and `/w/:id/office` rows' "Later" column
 from the `Advanced ▾` menu to the sidebar's `VIEWS` chips; the route and all five modes are
 unchanged"*; and one to `/workforce`'s: *"M57 shows four tabs — People, Catalog, Skills & runbooks,
 Evidence — and keeps all six `?tab=` values, the two folded ones as segments inside their new
-parent."* Finally, replace M44's responsive line wherever it appears with: *"M57 replaces the 899 px
-sidebar collapse with a 1280 px minimum frame width: this is a desktop operator console and the
-handoff states a floor rather than a breakpoint."*
+parent."* Finally, **ADD** a responsive line — there is none to replace (scan finding 32:
+`grep -n "responsive\|899\|collapse\|icon rail" docs/ia.md` returns nothing, because M44 recorded
+its 899 px collapse in its own spec and never in the IA contract, and spec R4's claim that the line
+"is rewritten" was wrong). Put it at the end of the new **The header** section: *"**One width.** The
+frame has a 1280 px minimum and no breakpoints. M44's sidebar collapsed to a 52 px icon rail below
+899 px; M57 removed that with `Sidebar.tsx`, because this is a desktop operator console and the
+handoff states a floor rather than a breakpoint. Below 1280 px the page scrolls horizontally rather
+than rearranging."*
 
 Then:
 
@@ -6743,6 +7590,31 @@ pending `SupervisorDecision`, a blocked `Task`, one task in each of the five col
 two `workspace.goal_set` events with a `request`, one of them backdated a day.
 
 ```js
+  // ============================================================================================
+  // The status -> column table, RE-DECLARED (scan finding 7).
+  //
+  // This gate cannot import `lib/taskColumns.ts`: `apps/web` compiles with `noEmit: true` under a
+  // bundler resolver, so there is no built output for a plain `node` script to load. That is the
+  // constraint `apps/web/test/integration/gate-surface-parity.test.ts:18-21` was written to
+  // document, and this is the same answer M41 gave -- the gate states the fact it asserts, in its
+  // own words, and a vitest case PINS the two together so the copy cannot drift (Step 2b).
+  // ============================================================================================
+  const GATE_COLUMN_FOR_STATUS = {
+    backlog: 'Queued',
+    ready: 'Queued',
+    rework: 'Queued',
+    assigned: 'Queued',
+    running: 'In progress',
+    verifying: 'In progress',
+    waiting: 'In progress',
+    reviewing: 'Review',
+    merging: 'Review',
+    blocked: 'Blocked',
+    done: 'Done',
+    failed: 'Done',
+    cancelled: 'Done',
+  }
+
   // ============================================================================================
   // Stage 1: the theme, which is the one thing a person notices on every single page load.
   // ============================================================================================
@@ -6894,8 +7766,8 @@ two `workspace.goal_set` events with a `request`, one of them backdated a day.
   }
   for (const column of columns) {
     for (const status of column.statuses) {
-      if (COLUMN_FOR_STATUS[status] !== column.name) {
-        await fail(`stage 6: a ${status} task is in ${column.name}, and COLUMN_FOR_STATUS says ${COLUMN_FOR_STATUS[status]}`)
+      if (GATE_COLUMN_FOR_STATUS[status] !== column.name) {
+        await fail(`stage 6: a ${status} task is in ${column.name}, and the table says ${GATE_COLUMN_FOR_STATUS[status]}`)
       }
     }
   }
@@ -6985,6 +7857,49 @@ or `.`), point it at the twelve routes stage 3 already lists, and add:
   console.log(`stage 10 PASSED: ${EVERY_ROUTE.length} destinations, all of them still there`)
 ```
 
+- [ ] **Step 2b: Pin the gate's copy of the column table to `lib/taskColumns` (scan finding 7)**
+
+The gate re-declares `GATE_COLUMN_FOR_STATUS` because it cannot import the real one. A copy nobody
+checks is a copy that drifts, so a vitest case checks it — in the idiom
+`apps/web/test/integration/gate-surface-parity.test.ts` already establishes for exactly this problem.
+**Read that file first** (its docstring is the argument this case inherits), then APPEND to it —
+same file, because it is the same claim about the same kind of gate:
+
+```ts
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { COLUMN_FOR_STATUS } from '../../src/lib/taskColumns.js'
+
+/**
+ * M57 R10 / spec §5 stage 6: `scripts/gate-m57-ui-redesign.mjs` asserts that every card on the
+ * board sits in the column `COLUMN_FOR_STATUS` says it should — and it cannot import that table,
+ * for the reason this file's own header gives. So it re-declares it, and this case is the pin: the
+ * gate's literal and the module must be the same thirteen pairs, or the gate is measuring a
+ * vocabulary the board does not use.
+ *
+ * Parsed out of the gate's SOURCE rather than imported from it: the gate is a `.mjs` whose module
+ * body drives a browser, and importing it would run it. The literal is a flat block of
+ * `key: 'Value',` lines, which is all this needs to read.
+ */
+describe('the m57 gate reads the same task columns the board draws', () => {
+  it('re-declares COLUMN_FOR_STATUS exactly', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('../../../../scripts/gate-m57-ui-redesign.mjs', import.meta.url)),
+      'utf8',
+    )
+    const block = /const GATE_COLUMN_FOR_STATUS = \{([^}]*)\}/.exec(source)?.[1]
+    expect(block, 'GATE_COLUMN_FOR_STATUS is not in the gate').toBeDefined()
+    const parsed = Object.fromEntries(
+      [...(block ?? '').matchAll(/^\s*(\w+):\s*'([^']+)',/gm)].map((match) => [match[1], match[2]]),
+    )
+    expect(parsed).toEqual(COLUMN_FOR_STATUS)
+  })
+})
+```
+
+*(Check the relative depth of that `new URL(...)` against the file's own location — it is four
+directories below the repository root — and correct it if the first run cannot find the gate.)*
+
 - [ ] **Step 3: Run the gate until it is green**
 
 ```bash
@@ -7040,9 +7955,11 @@ Replace the `NUMBERS` table (around line 936) with:
     // row still carries `slave-card` with `avatar-tile` and `status-pill` inside it, which is why
     // R18 made keeping those three testids a requirement rather than a convenience.
     ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"]', 'padding', '10px 14px'],
-    // 30x30 now, not 28x28 (README "Overview" → Team rows: "30px avatar tile (18% tint)"). Still
-    // scoped to the row: after M57 the brief renders no `AvatarTile` at all, but the scoping stays
-    // -- it costs nothing and it is what stopped this assertion measuring the wrong node once.
+    // 30x30 on THIS row, and 28x28 everywhere else: Task 6 Step 5c gives `ui/AvatarTile` a `size`
+    // prop whose default is the 28px every other caller already gets, and the Team row is the ONE
+    // caller that passes `md`. The SCOPING is therefore load-bearing rather than defensive -- an
+    // unscoped selector would hit whichever 28px tile rendered first (`TaskCard`,
+    // `AllSlavesTable`, `ProjectsClient`, `GraphDrawer`) and fail against 30.
     ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="avatar-tile"]', 'width', '30px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="avatar-tile"]', 'height', '30px'],
     // M57 erratum E9: the handoff's pill radius is 999, not the 20 M44's token carried.
@@ -7219,8 +8136,28 @@ not otherwise touch. Each names the exact file and line range to read.
   as a type by `RightColumn.tsx`.
 - `SidebarProject` — seven fields in Task 2's interface, the same seven in Task 3's test fixture and
   the same seven read by `SidebarTree`.
-- `ShellFacts.counts.runsPaused` — added in Task 2 Step 10, read in Task 4's `Header`, present in
-  Task 4's test fixture, and Task 2 Step 11 is the sweep that finds every other literal.
+- `ShellFacts.counts.slavesPaused` — added in Task 2 Step 10 (as a `deriveSlaveStatus` count over
+  the runs already fetched, because there is no `Slave.status` column), read in Task 4's `Header`,
+  present in Task 4's test fixture, and Task 2 Step 11 is the sweep that finds every other literal.
+  The name is `slavesPaused` on BOTH sides — server and the `OverviewClient` literal — which is the
+  whole of spec erratum E13.
+- `ShellFactsSeed({ facts })` — created in Task 4 Step 11b, mounted by the project layout in Step 11,
+  and its only import is `publishShellFacts`, which already exists.
+- `Header({ projects })` — one prop, passed by the root layout in Task 4 Step 11, threaded through
+  `ShellFrame` as its own second prop in Task 5 Step 14, and passed by the header test's
+  `renderHeader`. Three call sites, one shape.
+- `AvatarTile({ name, tone, size? })` — `size` added in Task 6 Step 5c, defaulted to `'sm'`, passed
+  as `'md'` by exactly one caller (the Team row) and by nobody else. Task 9's two 30 px rows are
+  scoped to that row.
+- `Segmented({ options, value, onChange, ariaLabel, testIdPrefix })` — created in Task 7 Step 4c,
+  consumed by Task 7's `TaskFilters` (`testIdPrefix="task-view"`) and Knowledge, and by Task 8's
+  Appearance (`testIdPrefix="appearance-theme"`). The testids it emits are
+  `<prefix>` on the group and `<prefix>-<id>` on each button, which is what spec §3 lists for both.
+- `supervisor-request-result` (SUCCESS) and `supervisor-request-error` (refusal) — two elements, both
+  emitted by `SupervisorThreadPanel` from Task 5 onwards, and Task 6 renames neither. `postJson`
+  (not `postControl`) is what gives the success line its version number.
+- `PendingDecision` — declared and exported by `SupervisorThreadPanel`, imported as a type by
+  `RightPanelHost`, which does the one fetch and passes the list down.
 - `SupervisorThread` / `SupervisorMessage` — six and five fields in Task 5's definitions, matched by
   its own test fixture and by `SupervisorThreadPanel`'s reads (`id`, `title`, `when`, `messages`;
   `who`, `text`, `at`, `refs`, `decisionId`).
@@ -7234,7 +8171,8 @@ not otherwise touch. Each names the exact file and line range to read.
   `Done` value is `'completed'`, which is `UserCardState`'s spelling (erratum E6) and not `'done'`.
 - `filterTasks(tasks, options, needsYouIds)` — three arguments where it is defined and where it is
   called.
-- `NeedsYouCard({ workspaceId, items, onRefresh })` — matched at its one call site.
+- `NeedsYouCard({ workspaceId, items })` — two props, matched at its one call site; there is no
+  `onRefresh`, because `useOverview` exposes no refetch and the SSE wake-up already refetches.
 - `ProjectBrief({ workspaceId, brief, runbookLine })` — `onOpenSlave` is gone with the `team` tile
   that was its only reader, `runbookLine` is optional and defaults to `null`, and the one call site
   in `OverviewClient` passes all three. `SlaveCard` loses `liveActionLine` in the same way: the
@@ -7254,7 +8192,29 @@ assertion measures the same clock it always did. And the spec's introduced-testi
 nineteen entries the plan's code blocks produce; it now lists every one, and the stray `views-chip`
 row (an alias that was never written) is gone.
 
-**What the controller ruling changed after the first self-review** (recorded here because the plan
+**What the pre-flight scan changed, and what it could not.** The scan
+(`.superpowers/sdd/2026-09-14-m57-ui-redesign/preflight-scan.md`, 73 findings: 11 blockers, 32
+must-rule, 30 notes) was run against both documents after they were complete, and twenty-eight
+controller rulings came back. The eleven blockers are all closed in the task that owns them:
+the breadcrumb's missing name (`ShellFactsSeed` + the tree, Task 4), `gate-m44`'s two Supervisor
+assertions (`ProposalRow` extracted, the two testids re-emitted, Task 5), `useRightPanel` throwing in
+two bare test files (the provider added, Task 5), Workforce's duplicated testids
+(`workforce-segment-*`, Task 8), the gate's un-importable column table (re-declared and pinned by a
+parity case, Task 9), the Graph's six stages (follows by construction; two tests moved, Task 7),
+`slave.status === 'blocked'` (it is `taskStatus`, Task 6), the 30 px avatar with no producer (a
+`size` prop, Task 6), `project-brief.test.tsx`'s 28 unlisted cases (a per-case verdict, Task 6),
+`needs-you-row`'s shape against `gate-m45` stage 3 (a `Chip` and an anchor on every row, Task 6), and
+`supervisor-request-result` on an error span (it is the success line, Task 5).
+
+**One ruling could not be applied as stated and was implemented to its intent instead.** P13 asked
+for `prisma.slave.count({ where: { status: 'paused', … } })`; **there is no `Slave.status` column** —
+a slave's status is derived from its live runs by `deriveSlaveStatus`, which is exactly how
+`buildShellFacts` already computes `slavesWorking` from the `SlaveRun` rows it has in hand. The count
+is that same derivation asked for `'paused'` and deduped by `slaveId`: it costs no query, it carries
+the ruling's intent (both sides count SLAVES, under the name `slavesPaused`), and it is identical to
+the client literal by construction rather than by agreement. Spec erratum E13 records it.
+
+**What the earlier controller ruling changed after the first self-review** (recorded here because the plan
 was already complete when it arrived): Task 6 grew Steps 5b, 8 and 8b and lost its `FactTiles.tsx`;
 `ProjectBrief.tsx`, `SlaveCard.tsx`, `SupervisorTimeline.tsx` and `scripts/gate-m45-project-experience.mjs`
 joined its Files list and `TopStrip.tsx` its deletions; spec §6 lost two of its four deviations and

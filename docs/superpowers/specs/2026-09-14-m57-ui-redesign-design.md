@@ -397,8 +397,11 @@ which has moved on every milestone and is therefore found by
 | `needs-you-card` / `needs-you-row` | Overview | `data-kind` from `NeedsYouItem.kind` |
 | `needs-you-approve` / `-decline` / `-open` | on a row | buttons for a decision, a link for the rest |
 | `needs-you-empty` | Overview | the dashed "nothing needs you" box |
-| `card-unblock` | a Team row | the primary button's fourth state (R18) |
+| `project-title` / `project-goal-line` | Overview band 1 | the H1 + pill row, and the goal sentence the `objective` tile's fact moved to |
+| `card-unblock` | a Team row | the primary button's fourth state (R18). It keys off the TASK — `slave.taskStatus === 'blocked'` — never `slave.status`, which is a `SlaveStatus` with no `blocked` member (erratum E14) |
 | `card-more` | a Team row | the `⋯` that opens `SlavePanel` |
+| `supervisor-request-error` | the Supervisor composer | the refusal line. The SUCCESS line beside it keeps the old `supervisor-request-result` testid, because that is the one `gate-m45` stage 5 waits for after a send (erratum E17) |
+| `workforce-segment-<id>` | Workforce | the two folded tabs, as segments. `workforce-tab-*` stays on the FOUR top tabs only (erratum E15) |
 | `recent-changes` | Overview | the section wrapping `supervisor-timeline` |
 | `task-search` / `task-filter-needs-you` / `task-filter-assignee` | Tasks | the filter row |
 | `task-view-toggle` / `task-view-board` / `task-view-list` | Tasks | `data-view` = `board`/`list` |
@@ -422,8 +425,9 @@ which has moved on every milestone and is therefore found by
 | `strip` (on `TopStrip`) | the SAME testid, **moved** onto the fact-tiles container (R17) | no gate edit — `gate-m14` 773/1132, `gate-m44` 769 and `gate-m49` 1529 only wait on it |
 | `strip-tile`, `strip-value-*`, `strip-unmeasured`, `strip-supervisor-spend` | the Work and Cost tiles' own `brief-work-*` and `brief-cost-*` spans | `overview-components.test.tsx` only — no gate reads them |
 | `brief-tile[data-brief=objective\|needs-you\|team\|recent-changes]` | the title row, the Needs-you card, the Team rows and `supervisor-timeline` (R17) | `gate-m45` 95-104 (`EXPECTED_BRIEF_FACTS`), 770-780 (two `wants` pairs each), 794-805 |
-| `card-message`, `card-stop` | the `⋯` → `SlavePanel`, where both already exist | `slave-card.test.tsx` / `overview-components.test.tsx` only — no gate reads either |
-| `card-task-ref`, `card-step`, `card-percent`, `card-skill-chip`, `card-queue-chip` | `SlavePanel`, unchanged, where all five already are | tests only — no gate reads any |
+| `card-message`, `card-stop` | the `⋯` → `SlavePanel`, where the FACT is reachable under `message-box`/`message-input` and `stop-button` — **not** under these testids | `overview-components.test.tsx` only — no gate reads either |
+| `card-task-ref`, `card-step`, `card-skill-chip`, `card-waiting-for`, `card-resume-requested` | `SlavePanel`: the id is in its header, the step at `run-paused-step`, the skill at `panel-skill`, and the last two at `waiting-for` and `resume-requested`. **The fact is reachable; the testid is not the same one** | `overview-components.test.tsx` only — no gate reads any |
+| `card-percent`, `card-queue-chip` | **Nothing carries these facts as a testid after M57.** `SlavePanel` renders no progress bar and no queued-message chip. The row keeps the PROGRESS itself (the 4 px bar the README draws) and the queued message is still visible in the panel's message box as its initial value — but neither has a handle a test can name, and this table says so rather than claiming a move that did not happen | `overview-components.test.tsx` only — no gate reads either |
 | `project-header` | `app-header` | `gate-m11` 445; `gate-m14` 941; `project-layout.test.tsx` |
 | `project-header-hairline` | nothing — the new header has a plain hairline | `project-header.test.tsx` |
 | `project-switcher*` | `sidebar-project` | `project-header.test.tsx` |
@@ -528,6 +532,14 @@ oversight, and each is a candidate for the milestone after this one.
 2. **The sidebar shows a count on `Projects` only**, not on `Workforce` and `Simulations` as the
    prototype draws. Those two numbers would need two more reads in the ROOT layout — on every page
    in the product — for two figures nobody acts on from the sidebar.
+3. **The Work tile's segmented bar has the READ MODEL's five keys**, not the README's. The README
+   draws `working / planning / review / blocked / done`; `ProjectBriefFacts['work']` carries
+   `working / verifying / review / waiting / done`, which is what `server/brief.ts` counts and what
+   `gate:m45` asserts two of by name. The bar keeps the five it can actually compute, and each gets
+   its OWN fill (`working → --s-working`, `verifying → --s-planning`, `review → --s-review`,
+   `waiting → --s-waiting`, `done → --s-done`) so that five segments read as five and not as four.
+   Changing the read model's buckets to the README's is a `server/brief.ts` change and a
+   `gate:m45` change, which is a different milestone's work.
 
 **Two further deviations were drafted here and WITHDRAWN under a controller ruling** (2026-09-14),
 recorded because the reasoning that produced them is a trap the next milestone will fall into too.
@@ -562,4 +574,83 @@ cannot drift by accident; it does not pin it against a deliberate, specified, re
 
 ## 7. Errata — where execution corrects this spec
 
-(appended during execution, in the form `**En (amends Rx)** — <claim>.`)
+E1–E9 are the plan's own, written before execution and listed in full at the head of
+`docs/superpowers/plans/2026-09-14-m57-ui-redesign.md`. E10–E19 below were raised by the
+**pre-flight conflict scan** (`.superpowers/sdd/2026-09-14-m57-ui-redesign/preflight-scan.md`, 73
+findings) and ruled by the controller before Task 2 began; each names the finding it closes.
+
+- **E10 (amends R7 and R8; scan F31) — the spec's two signatures are the PLAN's.** R7 writes
+  `useHeaderAction(node)`; it is `useHeaderAction(node: React.ReactNode, deps: readonly unknown[])`,
+  because a page rebuilds its action node every render and the effect needs the caller's own
+  declaration of what actually changed inside it. R8 writes `open(mode, payload)` over a state of
+  `{mode, collapsed, payload}`; it is `open(mode, content: React.ReactNode, onClose: () => void)`
+  over `{mode, collapsed, content}` — the third argument is the owning page's URL clearer, which is
+  what makes the slot's `»`, the slot's `✕` and the page's own close do one thing (plan erratum E5).
+- **E11 (amends R5; scan F23, F55) — the root layout's tree read is gated on a principal and the
+  client refetch is throttled.** `buildSidebarTree()` in an `async` + `force-dynamic` root layout
+  runs on every request in the product, `/login` included, before anybody has authenticated. It runs
+  only when the existing principal helper reports one (no redirect — the layout is not an
+  authorisation boundary; `GET /api/sidebar` already has `requirePrincipal`), and answers `[]`
+  otherwise. `SidebarTree`'s own refetch fires on a pathname change and on a `ShellFacts` change
+  **throttled to at most once per 10 s** by a ref-held timestamp: `sameFacts` compares twelve live
+  figures, several of which move every few seconds while a run is live.
+- **E12 (amends R7; scan F1) — every `/w/:id/*` route publishes `ShellFacts`, and the breadcrumb
+  takes the project's NAME from the tree.** Only five of the eight project page clients publish to
+  `useShellFacts`; `/organization`, `/knowledge` and `/office` publish nothing, so a header that
+  read the name from that store alone would say the workspace ID on three routes and hide the budget
+  and the whole split button on them. Two halves: `w/[workspaceId]/layout.tsx` (which already calls
+  `buildShellFacts`) renders a client `<ShellFactsSeed facts={initial}/>` that publishes on mount,
+  so the store is never empty inside a project; and `Header` takes the NAME from the sidebar tree by
+  `workspaceId` — which the root layout has read server-side — and only the budget, the halt state
+  and the paused count from `ShellFacts`. The gate polls until the breadcrumb's TEXT equals the
+  expectation rather than waiting for the element, which resolves on the server frame.
+- **E13 (amends R7; scan F20) — `runsPaused` is `slavesPaused`, and both sides count SLAVES.**
+  `buildShellFacts` counted paused RUNS while the hand-built literal in `OverviewClient` counted
+  paused SLAVES, and `sameFacts` compared the two across a route change. Both count slaves, under
+  one name. *(verified: there is no `Slave.status` column — a slave's status is DERIVED from its
+  live runs by `deriveSlaveStatus`, which is exactly how `buildShellFacts` already computes
+  `slavesWorking` from the `SlaveRun` rows it has already fetched. `slavesPaused` is that same
+  derivation asked for `'paused'`, deduped by `slaveId`: no new query, and identical by construction
+  to the client's `view.slaves.filter((s) => s.status === 'paused').length`.)*
+- **E14 (amends R18; scan F56) — the row's `Unblock` keys off the TASK.**
+  `SlaveCardData.status` is a `SlaveStatus` (`idle | starting | working | pausing | paused |
+  resuming | stopping`) with no `blocked` member, so `slave.status === 'blocked'` does not compile.
+  The README's Unblock is about a blocked TASK: the branch reads `slave.taskStatus === 'blocked'`,
+  the field `cardStateFor` already reads.
+- **E15 (amends R12 and R13; scan F6) — the two folded Workforce tabs get their own testid
+  namespace.** Keeping `workforce-tab-slaves` on both the visible People tab and the Slaves segment
+  renders that testid twice, which breaks the plan's own four-tab assertion and puts
+  `gate-m11-shell`'s unqualified `getByTestId('workforce-tab-slaves')` into Playwright strict-mode
+  failure. `workforce-tab-*` stays on the FOUR top tabs; the segments are `workforce-segment-<id>`
+  for all four segment ids, and every gate and test hit on `workforce-tab-departments` /
+  `workforce-tab-runbooks` is re-pointed in the task that makes the change.
+- **E16 (amends R10; scan F8, F30) — `assigned` moves column, and that moves a card's TONE.** The
+  README maps `assigned → Queued`; today it is `In Progress`. `lib/tones.ts`'s `cardStateForTask`
+  reads `COLUMN_STATE[COLUMN_FOR_STATUS[status]]`, so an assigned task's card goes from the
+  `working` tone to `planning`. **This is a deliberate, user-visible behaviour change** and is named
+  here rather than discovered in a diff: a task nobody has started should not be painted the colour
+  of work in flight. The Graph page's Execution mode follows the five columns **by construction** —
+  it imports `BOARD_COLUMNS`, `COLUMN_FOR_STATUS` and `COLUMN_STATE` rather than restating them
+  (`components/graph/ExecutionNodes.tsx:5`) — so its pipeline becomes five stages with no edit to
+  its logic, and spec §6's "the Graph canvas is out of scope" means its rendering, not its
+  vocabulary.
+- **E17 (amends R9; scan F4, F27, F62) — the composer's two outcome lines are two elements.**
+  `gate-m45` stage 5 clicks Send *until `supervisor-request-result` is visible* and then asserts its
+  text names `v3`, so that testid must be on the SUCCESS line ("goal v{n} saved …", which
+  `SupervisorRequest.tsx:75-85` rendered). The refusal line beside it is
+  `supervisor-request-error`. `supervisor-composer` is on the composer WRAPPER and
+  `supervisor-request-input` / `supervisor-request-send` on the textarea and the button, from the
+  moment the panel is written — no mid-milestone rename.
+- **E18 (amends R8; scan F2) — `SupervisorPanel.tsx` is deleted, but `ProposalRow` is extracted
+  first.** `SupervisorTimeline` imports `ProposalRow` from `SupervisorPanel`
+  (`project/SupervisorTimeline.tsx:11`), and four gates read testids that only `ProposalRow` emits.
+  It moves to `components/supervisor/ProposalRow.tsx` unchanged; `SupervisorTimeline` imports it
+  from there; then `SupervisorPanel.tsx` and `supervisor-panel.test.tsx` go. The two testids that
+  die with the panel's own body — `supervisor-decision-meta` and the panel-scoped
+  `supervisor-proposal-kind`, both read by `gate-m44` — are emitted by
+  `SupervisorThreadPanel`'s decision card with the same semantics: the WORD from `SITUATION_LABEL`
+  with the raw record in `title`.
+- **E19 (amends R4; scan F32) — `docs/ia.md` has no responsive line to rewrite.**
+  `grep -n "responsive\|899\|collapse\|icon rail" docs/ia.md` returns nothing: M44 recorded the
+  899 px collapse in its own spec and never in the IA contract. Task 9 ADDS the 1280 px floor as a
+  new line rather than replacing one.
