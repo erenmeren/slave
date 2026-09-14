@@ -2,6 +2,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ProjectsClient } from '../src/components/ProjectsClient.js'
+import { HeaderActionProvider, useHeaderActionNode } from '../src/components/shell/HeaderActionProvider.js'
 import type { Kpi } from '../src/server/analytics.js'
 import type { ProjectRow } from '../src/server/org.js'
 
@@ -58,10 +59,23 @@ const KPIS: readonly Kpi[] = [
   { label: 'slaves', value: '7', note: null },
 ]
 type ProjectsClientProps = React.ComponentProps<typeof ProjectsClient>
+
+/** What the shell's `Header` renders in its action slot (M57 R7). The page declares its primary
+ *  action with `useHeaderAction` now, so a test that renders the page alone would render no
+ *  `+ New project` button at all -- the provider IS the button's mount point. */
+function HeaderActionSlot(): React.JSX.Element {
+  return <>{useHeaderActionNode()}</>
+}
+
 function TestProjectsClient(
   props: Omit<ProjectsClientProps, 'kpis'> & Partial<Pick<ProjectsClientProps, 'kpis'>>,
 ): React.JSX.Element {
-  return <ProjectsClient kpis={[]} {...props} />
+  return (
+    <HeaderActionProvider>
+      <HeaderActionSlot />
+      <ProjectsClient kpis={[]} {...props} />
+    </HeaderActionProvider>
+  )
 }
 
 describe('ProjectsClient', () => {
@@ -75,7 +89,7 @@ describe('ProjectsClient', () => {
     routerReplace.mockClear()
   })
 
-  it('renders one card per project with its name, company badge, and a 4-up stat strip', () => {
+  it('renders one card per project with its name, company line, and a 4-up stat strip', () => {
     render(
       <TestProjectsClient
         projects={[project({ id: 'w1', name: 'Checkout Platform', companyName: 'Acme Robotics' })]}
@@ -109,7 +123,7 @@ describe('ProjectsClient', () => {
     expect(screen.queryByTestId('project-unmeasured')).toBeNull()
   })
 
-  it('shows a dim "no company" badge and an assign button when unassigned', () => {
+  it('shows a dim "no company" line and an assign button when unassigned', () => {
     render(<TestProjectsClient projects={[project({ id: 'w1', companyName: null })]} companies={companies} />)
     expect(screen.getByText('no company')).toBeTruthy()
     expect(screen.getByTestId('assign-company-button')).toBeTruthy()
@@ -143,7 +157,9 @@ describe('ProjectsClient', () => {
 
   it('navigates to the workspace when the card is clicked', () => {
     render(<TestProjectsClient projects={[project({ id: 'w7', companyName: 'Acme Robotics' })]} companies={companies} />)
-    fireEvent.click(screen.getByTestId('card'))
+    // M57 ruling P17: the README's card recipe is ON the surface, so `ui/Card` carries the
+    // `project-card` testid rather than a wrapper drawing a second bordered box around it.
+    fireEvent.click(screen.getByTestId('project-card'))
     expect(routerPush).toHaveBeenCalledWith('/w/w7')
   })
 
@@ -541,6 +557,61 @@ describe('the handoff project card', () => {
     ]
     render(<TestProjectsClient projects={[project({ team })]} companies={companies} />)
     expect(screen.queryByTestId('team-overflow')).toBeNull()
+  })
+})
+
+// M57 t6: the README's Projects page -- the primary action in the header, the recipe on the card
+// surface itself, and the two rows the card gained.
+describe('the Projects page after M57 R7/R17', () => {
+  it('declares its primary action in the HEADER rather than drawing one in the title row', () => {
+    render(<TestProjectsClient projects={[project({ id: 'w1' })]} companies={companies} />)
+    // The testid does not move with the button -- `gate-m44-ux-foundation` clicks it by name.
+    const button = screen.getByTestId('new-project')
+    expect(button.textContent).toBe('+ New project')
+    // It is in the header's slot, NOT inside the page frame.
+    expect(screen.getByTestId('page-shell').contains(button)).toBe(false)
+  })
+
+  it('says how many projects there are, and how many things need a person across all of them', () => {
+    const { rerender } = render(
+      <TestProjectsClient projects={[project({ id: 'w1', needsYou: 0 }), project({ id: 'w2', needsYou: 0 })]} companies={companies} />,
+    )
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Projects')
+    expect(screen.getByText('2 projects')).toBeTruthy()
+
+    rerender(
+      <TestProjectsClient projects={[project({ id: 'w1', needsYou: 2 }), project({ id: 'w2', needsYou: 1 })]} companies={companies} />,
+    )
+    expect(screen.getByText('3 things need you')).toBeTruthy()
+  })
+
+  // Ruling P17: the recipe lands ON the surface. The old wrapper drew nothing and held the testid,
+  // so the README's radius would have measured a transparent box around the real card.
+  it('puts the card recipe on the card surface, and tints its border when something waits', () => {
+    const { rerender } = render(<TestProjectsClient projects={[project({ id: 'w1', needsYou: 0 })]} companies={companies} />)
+    const card = screen.getByTestId('project-card')
+    expect(card.className).toContain('rounded-page-card')
+    expect(card.className).toContain('shadow-card')
+    expect(card.className).not.toContain('--s-waiting')
+    expect(screen.queryByTestId('project-needs-you')).toBeNull()
+
+    rerender(<TestProjectsClient projects={[project({ id: 'w1', needsYou: 2 })]} companies={companies} />)
+    expect(screen.getByTestId('project-card').className).toContain('var(--s-waiting)_45%')
+    expect(screen.getByTestId('project-needs-you').textContent).toBe('2 things need you')
+    expect(screen.getByText('Review →')).toBeTruthy()
+  })
+
+  // M27 §3.4: an archived project accrues no spend, so the footer's figure is its own absence --
+  // the same rule the `spend` tile follows by dropping out of the strip.
+  it('ends the card with the spend and a way in, and prints no spend on an archived one', () => {
+    const { rerender } = render(<TestProjectsClient projects={[project({ id: 'w1', spend: 12.5 })]} companies={companies} />)
+    expect(screen.getByText('Open project →')).toBeTruthy()
+    expect(screen.getAllByText('$12.50').length).toBeGreaterThan(0)
+
+    search = 'archived=1'
+    rerender(<TestProjectsClient projects={[project({ id: 'w1', spend: 12.5, archived: true })]} companies={companies} />)
+    expect(screen.getByText('Open project →')).toBeTruthy()
+    expect(screen.queryByText('$12.50')).toBeNull()
   })
 })
 

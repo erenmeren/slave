@@ -193,6 +193,64 @@ describe('the Supervisor panel', () => {
     expect(screen.queryByTestId('supervisor-request-result')).toBeNull()
   })
 
+  // M57 t6: three cases that lived on `project/SupervisorRequest`'s own describe until that
+  // component was deleted. The composer is the one box posting to `/goal/request` now, and these
+  // are behaviours it still has -- so they moved here rather than dying with the widget.
+  it('will not send an empty request, and names its box for a screen reader', async (): Promise<void> => {
+    render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
+    await waitFor(() => expect(screen.getByTestId('supervisor-composer')).toBeTruthy())
+    const box = screen.getByTestId('supervisor-request-input')
+    // M45 final wave, M2: a placeholder is not a name, and it disappears the moment somebody types.
+    expect(box.getAttribute('aria-label')).toBe('Message the Supervisor')
+    expect(screen.getByLabelText('Message the Supervisor')).toBeTruthy()
+
+    expect((screen.getByTestId('supervisor-request-send') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(box, { target: { value: '   ' } })
+    expect((screen.getByTestId('supervisor-request-send') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('will not send the same request twice while the first is still in flight', async (): Promise<void> => {
+    // `duplicate_request` is the route's backstop, not the UX: the button goes down the moment a
+    // POST leaves, so a double click is one write.
+    let release: (() => void) | null = null
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
+      return new Promise<Response>((resolve) => {
+        release = () => resolve(new Response(JSON.stringify({ ok: true, version: 3 }), { status: 200 }))
+      })
+    })
+    render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
+    await waitFor(() => expect(screen.getByTestId('supervisor-composer')).toBeTruthy())
+    fireEvent.change(screen.getByTestId('supervisor-request-input'), { target: { value: 'add 3-D Secure' } })
+    fireEvent.click(screen.getByTestId('supervisor-request-send'))
+
+    expect((screen.getByTestId('supervisor-request-send') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByTestId('supervisor-request-send'))
+    await act(async (): Promise<void> => {
+      release?.()
+    })
+    expect(fetchMock.mock.calls.filter((call) => String(call[0]).includes('/goal/request'))).toHaveLength(1)
+  })
+
+  it('shows a refusal without clearing what was typed', async (): Promise<void> => {
+    fetchMock.mockImplementation(async (url: string) =>
+      url.includes('/supervisor/threads')
+        ? new Response(JSON.stringify(THREADS), { status: 200 })
+        : new Response(
+            JSON.stringify({ error: 'project w1 already recorded exactly this change request at version 3: nothing was recorded' }),
+            { status: 409 },
+          ),
+    )
+    render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
+    await waitFor(() => expect(screen.getByTestId('supervisor-composer')).toBeTruthy())
+    fireEvent.change(screen.getByTestId('supervisor-request-input'), { target: { value: 'add 3-D Secure' } })
+    fireEvent.click(screen.getByTestId('supervisor-request-send'))
+
+    await waitFor(() => expect(screen.getByTestId('supervisor-request-error').textContent).toContain('nothing was recorded'))
+    // A refusal that emptied the box would delete the words a person has to read to understand it.
+    expect((screen.getByTestId('supervisor-request-input') as HTMLTextAreaElement).value).toBe('add 3-D Secure')
+  })
+
   it('says so, once, when there is no conversation yet', async (): Promise<void> => {
     fetchMock.mockImplementation(async (url: string) =>
       url.includes('/supervisor/threads') ? new Response('[]', { status: 200 }) : new Response('{}', { status: 200 }),

@@ -10,11 +10,10 @@ import type { TimelineEntry } from '../../server/timeline'
 import { postControl } from '../../lib/postControl'
 import { ProposalRow } from '../supervisor/ProposalRow'
 import { Button } from '../ui/Button'
-import { Chip } from '../ui/Chip'
 import { EmptyState } from '../ui/EmptyState'
 import { Panel } from '../ui/Panel'
 import { SectionLabel } from '../ui/SectionLabel'
-import type { StatusTone } from '../ui/StatusPill'
+import { TONE_DOT, type StatusTone } from '../ui/StatusPill'
 
 /** The colour each lane is read in. A literal table, never an interpolated class (`StatusPill`'s
  *  own rule): Tailwind only generates a utility it can find as literal text. */
@@ -157,7 +156,9 @@ export function SupervisorTimeline({
   }
 
   return (
-    <div data-testid="supervisor-timeline" className="flex flex-col gap-[11px] px-[20px] pt-[16px]">
+    // No gutter of its own any more: `OverviewClient`'s Recent changes section owns the page's
+    // 24px padding, and a second copy here indented the timeline out of line with every band.
+    <div data-testid="supervisor-timeline" className="flex flex-col gap-3">
       {waiting > 0 && (
         <section data-testid="timeline-decisions">
           <Panel>
@@ -321,7 +322,7 @@ export function SupervisorTimeline({
             )
           })}
         </div>
-        <ol data-testid="timeline" className="flex flex-col gap-1">
+        <ol data-testid="timeline" className="flex flex-col">
           {river.length === 0 ? (
             <li>
               <EmptyState testId="timeline-empty" message="nothing in these lanes yet" />
@@ -334,29 +335,37 @@ export function SupervisorTimeline({
                 data-lane={entry.lane}
                 data-resolved={entry.resolved ? 'true' : 'false'}
                 {...(entry.eventType === null ? {} : { 'data-event-type': entry.eventType, title: entry.eventType })}
-                // A decision a person already took is history, not a demand: muted, in place
-                // (spec erratum E27).
-                className={`flex flex-col gap-0.5 border-l-2 border-line pl-2 ${entry.resolved ? 'opacity-60' : ''}`}
+                // README "Overview" → Recent changes: a mono time in a fixed 64px column, an 8px
+                // tone dot, the lane and the sentence, and the task it is about as a ref chip. A
+                // decision a person already took is history, not a demand: muted, in place (spec
+                // erratum E27).
+                className={`grid grid-cols-[64px_14px_minmax(0,1fr)_auto] items-baseline gap-3 border-b border-line px-4 py-[11px] last:border-b-0 ${
+                  entry.resolved ? 'opacity-60' : ''
+                }`}
               >
-                <div className="flex flex-wrap items-baseline gap-2">
-                  <span className="shrink-0 font-mono text-[10px] text-text-3">{clock(entry.at)}</span>
-                  <Chip tone={LANE_TONE[entry.lane]}>{entry.laneLabel}</Chip>
+                <span className="font-mono text-[12px] text-t3">{clock(entry.at)}</span>
+                <span aria-hidden className={`block h-2 w-2 rounded-full ${TONE_DOT[LANE_TONE[entry.lane]]}`} />
+                <span className="min-w-0">
                   {/* A model's or a person's sentence, as JSX children (spec §1). */}
-                  <span className="min-w-0 text-xs text-text-1">{entry.title}</span>
-                  {entry.collapsedCount > 0 && (
-                    <span className="shrink-0 text-[10px] text-text-3">+{entry.collapsedCount} earlier</span>
-                  )}
-                </div>
-                {/* TWO LINES, whatever the payload carries (final wave I3): a goal document, a
-                  * long rationale or a worker's paragraph is a second line here, not a page. The
-                  * whole of it stays one hover away, the way the brief's objective tile does it. */}
-                {entry.detail !== null && (
-                  <span title={entry.detail} className="line-clamp-2 text-[11px] text-text-2">
-                    {entry.detail}
+                  <span className="text-[13.5px] text-t1">
+                    <b className="font-semibold">{entry.laneLabel}</b> — {entry.title}
                   </span>
-                )}
+                  {entry.collapsedCount > 0 && (
+                    <span className="ml-2 text-[12px] text-t3">+{entry.collapsedCount} earlier</span>
+                  )}
+                  {/* TWO LINES, whatever the payload carries (final wave I3): a goal document, a
+                    * long rationale or a worker's paragraph is a second line here, not a page. The
+                    * whole of it stays one hover away. */}
+                  {entry.detail !== null && (
+                    <span title={entry.detail} className="mt-[2px] line-clamp-2 block text-[12.5px] text-t2">
+                      {entry.detail}
+                    </span>
+                  )}
+                </span>
                 {entry.taskTitle !== null && (
-                  <span className="font-mono text-[10px] text-text-3">{entry.taskTitle}</span>
+                  <span className="rounded-chip border border-line2 px-[7px] py-[2px] font-mono text-[11.5px] font-medium text-t2">
+                    {entry.taskTitle}
+                  </span>
                 )}
               </li>
             ))

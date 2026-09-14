@@ -3,15 +3,11 @@
 import { useEffect, useRef, useState } from 'react'
 import { SLAVE_LIFECYCLE_LABEL } from '@slave-of-ai/domain'
 import { postControl } from '../lib/postControl'
-import { providerLabel } from '../lib/providerLabel'
 import { CARD_STATE_TONE, cardStateFor } from '../lib/tones'
 import type { SlaveCardData } from '../server/overview'
-import { RuntimeRoleChips } from './RuntimeRoleChips'
-import { ShellOnlyMark } from './ShellOnlyMark'
 import { AvatarTile } from './ui/AvatarTile'
-import { Chip } from './ui/Chip'
 import { ProgressBar } from './ui/ProgressBar'
-import { StatusPill, TONE_BORDER } from './ui/StatusPill'
+import { StatusPill } from './ui/StatusPill'
 
 export const DOT: Record<SlaveCardData['status'], string> = {
   working: 'bg-tone-working',
@@ -50,37 +46,35 @@ function taskRef(taskId: string): string {
 type CardAction = 'pause' | 'resume' | 'stop'
 
 /**
- * The design handoff's slave card (README "1a — Control Room"), rebuilt: 1px border in the status
- * colour at `3d` alpha, radius 8, bg `#0f1217`, padding 12px 13px. Header = `AvatarTile` + name +
- * role + `StatusPill`; task line = mono ref + ellipsised title; a `ProgressBar` with the tone's
- * `0 0 8px` glow; a step/percent row; three chips (skill · queue · provider); a footer of three
- * ghost buttons.
+ * One worker, as a ROW (M57 R18, README "Overview" → Team rows).
  *
- * The footer POSTs to the SAME routes `SlavePanel` uses (`/api/w/:id/runs/:runId/{pause,resume,
- * stop}`) — no new endpoint, spec §3. `Message` opens the panel instead of POSTing, because the
- * message textarea and its `paused`-only writability rule already live there and a second copy of
- * that rule on the card is where the two would drift apart.
+ * It was a card in a three-up grid until this milestone, carrying every fact a worker has. The
+ * README's Overview gives the team a list instead -- `34px 120px 120px 1fr 96px 32px`, one hairline
+ * between rows -- because a person scanning eight workers is asking "who is stuck", not "what is
+ * each one's tool call". Six facts stay on the row: the avatar's tone, the name and role, the
+ * status WORD, what the worker is on, one primary action and a `⋯`.
  *
- * This stays its own `<article>` rather than `<Card>`: `Card` renders a fixed
- * `data-testid="card"` with no `className`, `style` or `data-status` passthrough, and this card
- * needs all three (the border flash's `--flash-color`, the per-state border colour, and the
- * `data-status` the gate and `overview-components.test.tsx` both read).
+ * Everything else is in `SlavePanel`, which the name and the `⋯` both open (`docs/ia.md` rule 2 --
+ * moved, not removed): the step counter, the skill, the queued message, the provider word and its
+ * gate mark, the live action line, the waiting-for question, the resume-requested note, Message and
+ * Stop. The progress BAR stays here (ruling P26): the panel carries no progress of any kind, and a
+ * fact with nowhere else to go does not leave.
+ *
+ * The footer's control POSTs are unchanged -- the SAME routes `SlavePanel` uses
+ * (`/api/w/:id/runs/:runId/{pause,resume,stop}`), no new endpoint, spec §3.
  */
 export function SlaveCard({
   slave,
-  liveActionLine,
   workspaceId,
   onOpen,
 }: {
   readonly slave: SlaveCardData
-  readonly liveActionLine: string | null
-  /** Needed for the footer's control POSTs (`/api/w/:id/runs/:runId/{pause,resume,stop}`) --
-   *  the SAME routes `SlavePanel` uses. No new endpoint. */
+  /** Needed for the row's control POSTs (`/api/w/:id/runs/:runId/{pause,resume}`) -- the SAME
+   *  routes `SlavePanel` uses. No new endpoint. */
   readonly workspaceId: string
   /** Opens the detail panel (spec §6) — where the message textarea and the full run record live. */
   readonly onOpen: (id: string) => void
 }): React.JSX.Element {
-  const line = liveActionLine ?? slave.actionLine
   // M51 R7: the breaker's rung is the third fact the word is built from -- a working run the
   // breaker has spoken to reads STEERED/CONSTRAINED rather than WORKING, and nothing else moves.
   const state = cardStateFor(slave.status, slave.taskStatus, { breakerLevel: slave.breakerLevel })
@@ -107,16 +101,15 @@ export function SlaveCard({
   // `SlavePanel.tsx`'s guard, mirrored rather than restated loosely: the resume intent is a single
   // `resumeRequestedAt` column, so a second click cannot say anything the first did not. Disabled
   // here keeps that double-click a no-op instead of a second POST the server has to refuse. (The
-  // panel also disables on a halted workspace; the card has no halt reason to read, and that one
+  // panel also disables on a halted workspace; the row has no halt reason to read, and that one
   // stays server-refused into `card-error`.)
   const resumeRequestedWhilePaused = slave.status === 'paused' && slave.resumeRequestedAt !== null
   // M36 t2: a slave waiting for another slave's answer is `paused` like any other, and a bare
-  // "Resume" on this footer would read as continuing a pause an operator asked for. The footer
-  // offers "Answer" instead, which opens the panel -- the one place an answer can actually be
-  // typed and delivered (the panel's message box, consumed by the resume).
+  // "Resume" on this row would read as continuing a pause an operator asked for. The row offers
+  // "Answer" instead, which opens the panel -- the one place an answer can actually be typed and
+  // delivered (the panel's message box, consumed by the resume).
   const waitingFor = slave.waitingFor
   const canResume = runId !== null && slave.status === 'paused' && waitingFor === null && !resumeRequestedWhilePaused
-  const canStop = runId !== null && slave.status !== 'idle'
   const showResume = (slave.status === 'paused' || slave.status === 'pausing') && waitingFor === null
 
   const run = async (action: CardAction): Promise<void> => {
@@ -137,163 +130,137 @@ export function SlaveCard({
       data-testid="slave-card"
       data-status={slave.status}
       data-card-state={state}
-      // M50 R3/D7: a released worker's card is still a card and still opens its panel -- it just
+      // M50 R3/D7: a released worker's row is still a row and still opens its panel -- it just
       // reads as finished. Greyed rather than removed (`docs/ia.md` rule 2).
       data-released={slave.released === null ? undefined : 'true'}
-      // `TONE_BORDER` is `StatusPill`'s own `3d`-alpha border map, imported rather than restated:
-      // the card's border and the pill's border are the SAME recipe in the handoff, and a second
-      // literal copy of eight class strings is the duplication Decision 2 forbids.
-      className={`relative flex flex-col gap-[9px] overflow-hidden rounded-card border bg-bg-2 px-[13px] py-[12px] transition-colors hover:border-line-hover ${
-        TONE_BORDER[tone]
-      } ${flashing ? 'motion-safe:animate-[border-flash_800ms_ease-out]' : ''}${slave.released === null ? '' : ' opacity-50'}`}
+      // README "Overview" → Team rows: `34px 120px 120px 1fr 96px 32px`, padding `10px 14px`, with
+      // the row's own hairline underneath. `TONE_BORDER` is gone from the recipe -- a ROW is not a
+      // bordered card, and the tone now reads from the avatar tile and the status word instead.
+      className={`relative grid grid-cols-[34px_120px_120px_minmax(0,1fr)_96px_32px] items-center gap-3 border-b border-line px-[14px] py-[10px] transition-colors hover:bg-hover ${
+        flashing ? 'motion-safe:animate-[border-flash_800ms_ease-out]' : ''
+      }${slave.released === null ? '' : ' opacity-60'}`}
       style={flashing ? ({ '--flash-color': FLASH_COLOR[slave.status] } as React.CSSProperties) : undefined}
     >
-      {/* The activity sweep (design README "Motion"): a 2.2s cubic-bezier(.4,0,.2,1) gradient
-        * travelling the top hairline while the card is `working`. Rendered as its own absolutely
-        * positioned 1px strip so the keyframe moves a transform (compositor-only) rather than a
-        * background-position. Present ONLY in the `working` state — the handoff's own rule. */}
+      {/* The activity sweep, unchanged (design README "Motion"): a 2.2s cubic-bezier(.4,0,.2,1)
+        * gradient travelling the row's top hairline while it is `working`. The motion did not
+        * change, so neither do `gate:m14-fidelity`'s three assertions on it. */}
       {state === 'working' && (
         <span aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-px overflow-hidden">
           <span
             data-testid="card-sweep"
-            className="block h-full w-full bg-gradient-to-r from-transparent via-tone-working to-transparent motion-safe:animate-[card-sweep_2.2s_cubic-bezier(.4,0,.2,1)_infinite]"
+            className="block h-full w-full bg-gradient-to-r from-transparent via-s-working to-transparent motion-safe:animate-[card-sweep_2.2s_cubic-bezier(.4,0,.2,1)_infinite]"
           />
         </span>
       )}
 
-      <div className="flex items-start gap-[9px]">
-        <AvatarTile name={slave.name} tone={tone} />
-        <button
-          type="button"
-          onClick={() => onOpen(slave.id)}
-          aria-label={`Open ${slave.name}'s detail panel`}
-          className="min-w-0 flex-1 text-left"
-        >
-          <span className="block truncate text-[13px] font-semibold text-text-1">{slave.name}</span>
-          <span className="block truncate text-[10.5px] text-text-dim">{slave.role}</span>
-        </button>
-        <StatusPill tone={tone} label={label} pulse={pulse} />
-      </div>
+      {/* 1. The 30px avatar tile (README "Overview" → Team rows). `size="md"` is `AvatarTile`'s
+        * opt-in: that primitive renders on five other surfaces this milestone does not touch, so
+        * its 28px default stays the default and this row asks for the bigger one. */}
+      <AvatarTile name={slave.name} tone={tone} size="md" />
 
-      {/* M37 §5: the dispatch set, beside the title rather than instead of it. `slave.role` above
-        * is the profile's heading and is matched by nothing since M37; these are what the
-        * scheduler, review staffing and role-addressed messaging actually read. */}
-      <div className="flex flex-wrap items-center gap-[5px]">
-        <RuntimeRoleChips roles={slave.runtimeRoles} />
-      </div>
-
-      <div className="flex items-baseline gap-[7px]">
-        <span data-testid="card-task-ref" className="shrink-0 font-mono text-[10px] text-text-3">
-          {slave.taskId === null ? '—' : taskRef(slave.taskId)}
+      {/* 2. Name and role. */}
+      <button
+        type="button"
+        onClick={() => onOpen(slave.id)}
+        aria-label={`Open ${slave.name}'s detail panel`}
+        className="min-w-0 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+      >
+        <span className="flex items-center gap-[5px]">
+          <span className="block truncate text-[13px] font-semibold text-t1">{slave.name}</span>
+          {/* M50's lifecycle marker stays: `docs/ia.md` records it as a promise, and `project` --
+            * the ordinary case -- still prints nothing, because a marker every row carries marks
+            * nothing. The WORD, raw value in `title` (rule 3). */}
+          {slave.lifecycle !== 'project' && (
+            <span
+              data-testid="card-lifecycle-chip"
+              title={slave.lifecycle}
+              className="shrink-0 rounded-chip border border-line2 px-[5px] text-[10.5px] text-t3"
+            >
+              {SLAVE_LIFECYCLE_LABEL[slave.lifecycle]}
+            </span>
+          )}
         </span>
-        <span data-testid="card-task-title" className="min-w-0 truncate text-[11.5px] text-text-body">
-          {slave.taskTitle ?? 'no task'}
+        <span className="block truncate text-[12px] text-t3">{slave.role}</span>
+      </button>
+
+      {/* 3. The mini status: the dot and the WORD, in the tone. `StatusPill` keeps this row's
+        * `status-pill` testid and its pulsing inner span, which `gate:m14-fidelity` reads as
+        * `[data-testid="slave-card"] [data-testid="status-pill"] span`. */}
+      <StatusPill tone={tone} label={label} pulse={pulse} />
+
+      {/* 4. What this worker is doing, ellipsised, over the 3px progress bar. The
+        * `card-task-title` testid is kept; the separate `card-task-ref` is folded into it, because
+        * a row has one line here and the id is in `SlavePanel`, which the `⋯` opens. The BAR stays
+        * (ruling P26): `SlavePanel` carries no progress at all, so this is the only surface that
+        * answers "how far in is it". */}
+      <span className="flex min-w-0 flex-col gap-[5px]">
+        <span data-testid="card-task-title" className="min-w-0 truncate text-[13px] text-t2">
+          {slave.taskTitle ?? 'idle'}
+          {slave.taskId !== null && <span className="ml-2 font-mono text-[11px] text-t3">{taskRef(slave.taskId)}</span>}
         </span>
-      </div>
+        <ProgressBar pct={slave.progressPct} tone={tone} size="card" />
+      </span>
 
-      {/* 3px, the card's own thickness (design README "1a") — every table row keeps the 6px default. */}
-      <ProgressBar pct={slave.progressPct} tone={tone} size="card" />
-
-      <div className="flex items-baseline justify-between font-mono text-[9.5px] text-text-3">
-        <span data-testid="card-step">{slave.stepLabel ?? '—'}</span>
-        <span data-testid="card-percent">{slave.progressPct}%</span>
-      </div>
-
-      <div data-testid="action-line" className="h-5 truncate font-mono text-xs text-text-2">
-        {/* Cross-fade (M5 spec §8): a key tied to the text remounts the span on every change, which
-         *  is what makes the `action-line-in` keyframe replay each time. */}
-        <span key={line ?? 'idle'} className="motion-safe:animate-[action-line-in_120ms_ease-out]">
-          {line}
-        </span>
-      </div>
-
-      <div className="flex flex-wrap items-center gap-[5px]">
-        <Chip>
-          <span data-testid="card-skill-chip">{slave.skill ?? '—'}</span>
-        </Chip>
-        <Chip>
-          {/* "queue" is this product's real queue: the instruction waiting for the next resume
-            * (`SlaveRun.queuedMessage`). The mockup's own chip meant a merge position, which this
-            * card has no honest source for. */}
-          <span data-testid="card-queue-chip">{slave.queuedMessage === null ? '—' : 'queued'}</span>
-        </Chip>
-        <Chip>
-          {/* The runtime's WORD (M44 R4, final review item I3) and `—` when no run has resolved
-            * one (M12 Task 9, ruling R10). The raw `ProviderKind` stays in `title`, the same rule
-            * the status pill beside it follows. The shell-only gate mark is spec §8's. */}
-          <span data-testid="provider-chip" title={slave.provider ?? undefined}>
-            {providerLabel(slave.provider)}
-          </span>
-        </Chip>
-        <ShellOnlyMark gate={slave.gate} />
-        {slave.lifecycle !== 'project' && (
-          // The WORD, raw value in `title` (`docs/ia.md` rule 3). `project` is the ordinary hire
-          // and prints nothing -- a chip every card carries marks nothing. `ephemeral` takes the
-          // `waiting` tone, the one tone that already means "temporary, and somebody will have to
-          // act", so a specialist stands out in a grid of cards.
-          <Chip {...(slave.lifecycle === 'ephemeral' ? { tone: 'waiting' as const } : {})} title={slave.lifecycle}>
-            <span data-testid="card-lifecycle-chip">{SLAVE_LIFECYCLE_LABEL[slave.lifecycle]}</span>
-          </Chip>
-        )}
-      </div>
-
-      {waitingFor !== null && (
-        <span data-testid="card-waiting-for" className="truncate text-[10.5px] text-tone-waiting">
-          waiting for {waitingFor.recipient}
-        </span>
+      {/* 5. ONE primary button (README "One action cluster"). Its testid follows its ACTION, so
+        * `gate:m14-fidelity` still finds `card-pause` on a working row. `Unblock` is
+        * accent-filled -- the README's one emphasised row action.
+        *
+        * `slave.taskStatus`, NEVER `slave.status` (ruling P7). `SlaveCardData.status` is a
+        * `SlaveStatus` -- `idle | starting | working | pausing | paused | resuming | stopping` --
+        * with no `blocked` member at all, so comparing it against `'blocked'` does not even
+        * compile. The README's Unblock is about a blocked TASK, which is the field `cardStateFor`
+        * already reads above. */}
+      {waitingFor !== null ? (
+        <RowButton testId="card-answer" accent onClick={() => onOpen(slave.id)}>
+          Answer
+        </RowButton>
+      ) : slave.taskStatus === 'blocked' ? (
+        <RowButton testId="card-unblock" accent onClick={() => onOpen(slave.id)}>
+          Unblock
+        </RowButton>
+      ) : showResume ? (
+        <RowButton testId="card-resume" disabled={!canResume || pending.has('resume')} onClick={() => void run('resume')}>
+          Resume
+        </RowButton>
+      ) : (
+        <RowButton testId="card-pause" disabled={!canPause || pending.has('pause')} onClick={() => void run('pause')}>
+          Pause
+        </RowButton>
       )}
 
-      {resumeRequestedWhilePaused && (
-        <span data-testid="card-resume-requested" className="text-[10.5px] text-text-3">
-          {/* The panel's own wording, verbatim: the same fact told twice in two places should not
-            * be told in two voices. */}
-          resume requested — waiting for the daemon
-        </span>
-      )}
+      {/* 6. `⋯` -- Message and Stop live in `SlavePanel`, which is what this opens, and both are
+        * already there (`docs/ia.md` rule 2: moved, not removed). */}
+      <button
+        type="button"
+        data-testid="card-more"
+        aria-label={`More actions for ${slave.name}`}
+        onClick={() => onOpen(slave.id)}
+        className="rounded-card border-0 bg-transparent text-center text-[14px] text-t3 transition-colors hover:text-t1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+      >
+        ⋯
+      </button>
 
       {errorText !== null && (
-        <span role="alert" data-testid="card-error" className="text-[10.5px] text-tone-blocked">
+        <span role="alert" data-testid="card-error" className="col-span-6 text-[11px] text-s-blocked">
           {errorText}
         </span>
       )}
-
-      <footer className="flex gap-[5px] border-t border-white/[0.06] pt-[3px]">
-        {waitingFor !== null ? (
-          <FooterButton testId="card-answer" disabled={false} onClick={() => onOpen(slave.id)}>
-            Answer
-          </FooterButton>
-        ) : showResume ? (
-          <FooterButton testId="card-resume" disabled={!canResume || pending.has('resume')} onClick={() => void run('resume')}>
-            Resume
-          </FooterButton>
-        ) : (
-          <FooterButton testId="card-pause" disabled={!canPause || pending.has('pause')} onClick={() => void run('pause')}>
-            Pause
-          </FooterButton>
-        )}
-        <FooterButton testId="card-message" disabled={false} onClick={() => onOpen(slave.id)}>
-          Message
-        </FooterButton>
-        <FooterButton testId="card-stop" disabled={!canStop || pending.has('stop')} onClick={() => void run('stop')}>
-          Stop
-        </FooterButton>
-      </footer>
     </article>
   )
 }
 
-/** The card footer's ghost button. Not `ui/Button`: that component fixes
- *  `data-testid="button"` for every instance and this footer needs three distinguishable ones,
- *  and its `px-3 py-1.5` is wider than the handoff's three-up equal-thirds footer. Same ghost
- *  recipe (`border-line`, `hover:border-line-hover`, `hover:text-text-1`), one size down. */
-function FooterButton({
+/** The row's one action. Not `ui/Button`: that component fixes `data-testid="button"` for every
+ *  instance, and this row's button needs the testid to say which action it is. */
+function RowButton({
   testId,
-  disabled,
+  accent = false,
+  disabled = false,
   onClick,
   children,
 }: {
   readonly testId: string
-  readonly disabled: boolean
+  readonly accent?: boolean
+  readonly disabled?: boolean
   readonly onClick: () => void
   readonly children: React.ReactNode
 }): React.JSX.Element {
@@ -303,7 +270,9 @@ function FooterButton({
       data-testid={testId}
       disabled={disabled}
       onClick={onClick}
-      className="flex-1 rounded-chip border border-line py-[5px] text-center text-[10.5px] font-medium text-text-2 transition-colors hover:border-line-hover hover:text-text-1 disabled:cursor-not-allowed disabled:opacity-50"
+      className={`rounded-tile px-[10px] py-[5px] text-center text-[12.5px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+        accent ? 'border-0 bg-accent font-semibold text-accent-ink' : 'border border-line2 bg-transparent text-t1 hover:bg-hover'
+      }`}
     >
       {children}
     </button>

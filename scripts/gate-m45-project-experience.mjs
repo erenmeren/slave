@@ -23,7 +23,9 @@
 // be empty.
 //
 // The eight stages of R7:
-//   1. The eight facts render inside the first viewport at 1440x900, with the expected words.
+//   1. The four fact tiles render inside the first viewport at 1440x900, with the expected words --
+//      and the four facts that left the grid in M57 R17/R18 (the objective, the needs-you queue,
+//      the team and the recent changes) are asserted on the surfaces they moved to.
 //   2. The timeline shows the six lanes with the seeded entries in the RIGHT lanes, and no run.*
 //      chatter anywhere on the page.
 //   3. The needs-you list has exactly four entries, and every link resolves.
@@ -65,7 +67,7 @@ const MANIFEST_RACE_SIGNATURE = 'Unexpected end of JSON input'
 
 const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 const ORCHESTRATOR_CLI = join(repoRoot, 'apps/orchestrator/dist/cli.js')
-const PASS_LINE = 'eight facts in one screen, six lanes, four things needing a person, and one Supervisor to tell'
+const PASS_LINE = 'four fact tiles in one screen, six lanes, four things needing a person, and one Supervisor to tell'
 
 // Suffixed per run (`gate-m44-ux-foundation.mjs`'s idiom): `Workspace.name` IS unique, and a
 // distinct name per run keeps two overlapping executions from colliding on it. `preflightCleanup`
@@ -91,17 +93,12 @@ const CHATTER = 'GATE-CHATTER-MUST-NOT-APPEAR'
  *  but a person (`holdersOf` in `packages/control/src/supervisorWorld.ts`). */
 const NOBODY_ROLE = 'nobody-holds-this'
 
-/** The eight facts of R1, in the order `ProjectBrief` renders them. */
-const EXPECTED_BRIEF_FACTS = [
-  'objective',
-  'supervisor',
-  'work',
-  'cost',
-  'needs-you',
-  'latest-verified',
-  'team',
-  'recent-changes',
-]
+// M57 R17: the brief IS the README's four fact tiles now. The four that left are not gone -- the
+// objective is the page's own title row, `needs-you` is the Needs-you card above these tiles (which
+// shows all four kinds rather than a five-row slice and answers a decision in place), `team` is the
+// Team rows below them, and `recent-changes` is the `recent-changes` section. Each is asserted
+// below, on its new surface.
+const EXPECTED_BRIEF_FACTS = ['work', 'cost', 'supervisor', 'latest-verified']
 
 /** The first viewport. "Ten seconds" is a claim about ONE SCREEN, and stage 1 measures it. */
 const VIEWPORT = { width: 1440, height: 900 }
@@ -726,7 +723,8 @@ try {
   }
 
   // ============================================================================================
-  // Stage 1: the eight facts, inside the first viewport.
+  // Stage 1: the four fact tiles, inside the first viewport -- and the four facts that left the
+  // grid in M57, on the surfaces they moved to.
   // ============================================================================================
   await gotoReliably(projectUrl)
   await waitVisible(page.getByTestId('brief'), "the project brief on /w/<id>")
@@ -740,7 +738,7 @@ try {
   console.log(`stage 1: brief tiles in DOM order = ${JSON.stringify(tiles.map((tile) => tile.fact))}`)
   if (JSON.stringify(tiles.map((tile) => tile.fact)) !== JSON.stringify(EXPECTED_BRIEF_FACTS)) {
     await fail(
-      `stage 1: the brief renders ${JSON.stringify(tiles.map((tile) => tile.fact))}, expected the eight facts ` +
+      `stage 1: the brief renders ${JSON.stringify(tiles.map((tile) => tile.fact))}, expected the four facts ` +
         `${JSON.stringify(EXPECTED_BRIEF_FACTS)}`,
     )
   }
@@ -759,16 +757,12 @@ try {
 
   const tileText = (fact) => tiles.find((tile) => tile.fact === fact)?.text ?? ''
   const wants = [
-    ['objective', GOAL_V1],
-    ['objective', 'v2'],
     ['work', 'WORKING'],
     ['work', 'IN REVIEW'],
     ['cost', '$25'],
     ['cost', 'unmeasured calls charged at $1.00 each'],
     ['latest-verified', integratedTask.title],
     ['latest-verified', 'integrated'],
-    ['team', DEVELOPER_NAME],
-    ['team', REVIEWER_NAME],
   ]
   for (const [fact, needle] of wants) {
     const text = tileText(fact)
@@ -776,6 +770,44 @@ try {
     if (!text.includes(needle)) {
       await fail(`stage 1: the ${fact} tile does not say ${JSON.stringify(needle)} -- it reads ${JSON.stringify(text)}`)
     }
+  }
+
+  // M57 R17: the objective left the tile grid for the page's own title row, where a goal belongs --
+  // it is what the project IS, not one fact among four. The same two things are asserted: the goal
+  // text and its version.
+  const goalLine = await page.evaluate(
+    () => document.querySelector('[data-testid="project-goal-line"]')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+  )
+  console.log(`stage 1: goal line = ${JSON.stringify(goalLine)}`)
+  for (const needle of [GOAL_V1, 'v2']) {
+    if (!goalLine.includes(needle)) {
+      await fail(`stage 1: the goal line does not say ${JSON.stringify(needle)} -- it reads ${JSON.stringify(goalLine)}`)
+    }
+  }
+
+  // M57 R18: the team left the tile grid for the Team ROWS, which list EVERY worker rather than the
+  // five the tile sliced to. Same two names, more of them.
+  const teamNames = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="team"] [data-testid="slave-card"]')].map((row) =>
+      (row.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    ),
+  )
+  console.log(`stage 1: team rows = ${JSON.stringify(teamNames)}`)
+  for (const needle of [DEVELOPER_NAME, REVIEWER_NAME]) {
+    if (!teamNames.some((row) => row.includes(needle))) {
+      await fail(`stage 1: no Team row names ${JSON.stringify(needle)} -- rows read ${JSON.stringify(teamNames)}`)
+    }
+  }
+
+  // M57: the needs-you tile became the Needs-you CARD, above the tiles. It was asserted nowhere in
+  // this gate before (the tile was only in EXPECTED_BRIEF_FACTS); it is asserted now, because a
+  // surface that answers a decision in place is a stronger claim than a surface that lists one.
+  const needsYouRows = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="needs-you-row"]')].map((row) => row.getAttribute('data-kind') ?? ''),
+  )
+  console.log(`stage 1: needs-you rows = ${JSON.stringify(needsYouRows)}`)
+  if (!needsYouRows.includes('decision')) {
+    await fail(`stage 1: the Needs you card does not carry the seeded pending decision -- it reads ${JSON.stringify(needsYouRows)}`)
   }
 
   const supervisorState = await page.evaluate(() => {
@@ -790,13 +822,20 @@ try {
     )
   }
 
+  // M57 R17: "recent changes" is the `recent-changes` section now, not a five-line tile. The two
+  // things this block has always asserted are asserted still: there ARE rows, and none of them
+  // prints a raw dotted event type (`docs/ia.md` rule 3).
   const changes = await page.evaluate(() => {
-    const tile = document.querySelector('[data-testid="brief-tile"][data-brief="recent-changes"]')
-    return tile === null ? [] : [...tile.querySelectorAll('li')].map((row) => (row.textContent ?? '').replace(/\s+/g, ' ').trim())
+    const section = document.querySelector('[data-testid="recent-changes"]')
+    return section === null
+      ? []
+      : [...section.querySelectorAll('[data-testid="timeline-entry"]')].map((row) =>
+          (row.textContent ?? '').replace(/\s+/g, ' ').trim(),
+        )
   })
   console.log(`stage 1: recent changes = ${JSON.stringify(changes)}`)
   if (changes.length === 0) {
-    await fail('stage 1: the recent-changes tile has no rows -- the two goal_set events this gate wrote should be in it')
+    await fail('stage 1: the recent-changes section has no entries -- the two goal_set events this gate wrote should be in it')
   }
   for (const line of changes) {
     for (const word of line.split(/\s+/)) {
@@ -805,7 +844,10 @@ try {
       }
     }
   }
-  console.log('stage 1 PASSED: eight facts, every one of them above the fold at 1440x900, saying what R1 promises')
+  console.log(
+    'stage 1 PASSED: four facts, the objective on its own title row, the team in rows and the changes in the timeline -- ' +
+      'every tile above the fold at 1440x900, saying what R1 promises',
+  )
 
   // ============================================================================================
   // Stage 2: six lanes, the right entries, and no model chatter.

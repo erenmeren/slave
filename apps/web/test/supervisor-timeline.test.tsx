@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SupervisorRequest } from '../src/components/project/SupervisorRequest'
 import { SupervisorTimeline } from '../src/components/project/SupervisorTimeline'
 import type { NeedsYouItem } from '../src/server/needsYou'
 import type { TimelineEntry } from '../src/server/timeline'
@@ -317,64 +316,5 @@ describe('SupervisorTimeline', () => {
   it('marks its own root, so the page can pin where the timeline sits', () => {
     render(<SupervisorTimeline workspaceId="w1" entries={ENTRIES} needsYou={[]} />)
     expect(screen.getByTestId('supervisor-timeline')).toBeTruthy()
-  })
-})
-
-describe('SupervisorRequest', () => {
-  it('sends the words and reports the version it made', async () => {
-    stubFetch({ ok: true, version: 3, sha256: 'abc', goal: '…' })
-    render(<SupervisorRequest workspaceId="w1" />)
-    type(screen.getByTestId('supervisor-request-input'), 'Add Apple Pay')
-    await click(screen.getByTestId('supervisor-request-send'))
-    expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/goal/request', expect.objectContaining({ method: 'POST' }))
-    expect(screen.getByTestId('supervisor-request-result').textContent).toContain('goal v3')
-    // A sent request leaves the box empty, ready for the next one.
-    expect((screen.getByTestId('supervisor-request-input') as HTMLTextAreaElement).value).toBe('')
-  })
-
-  /** M45 final wave, M2: the same naming the timeline's answer box got. */
-  it('names the request box for a screen reader', () => {
-    render(<SupervisorRequest workspaceId="w1" />)
-    expect(screen.getByTestId('supervisor-request-input').getAttribute('aria-label')).toBe('Tell the Supervisor')
-    expect(screen.getByLabelText('Tell the Supervisor')).toBeTruthy()
-  })
-
-  it('will not send an empty request', () => {
-    render(<SupervisorRequest workspaceId="w1" />)
-    expect((screen.getByTestId('supervisor-request-send') as HTMLButtonElement).disabled).toBe(true)
-    type(screen.getByTestId('supervisor-request-input'), '   ')
-    expect((screen.getByTestId('supervisor-request-send') as HTMLButtonElement).disabled).toBe(true)
-  })
-
-  it('will not send the same request twice while the first is still in flight', async () => {
-    // `duplicate_request` is the backstop, not the UX (Task 2's handoff): the button goes down the
-    // moment a POST leaves, so a double click is one write.
-    let release: (() => void) | null = null
-    fetchMock.mockImplementation(
-      async () =>
-        new Promise<Response>((resolve) => {
-          release = () => resolve(new Response(JSON.stringify({ ok: true, version: 3, sha256: 'a', goal: 'g' }), { status: 200 }))
-        }),
-    )
-    render(<SupervisorRequest workspaceId="w1" />)
-    type(screen.getByTestId('supervisor-request-input'), 'Add Apple Pay')
-    await click(screen.getByTestId('supervisor-request-send'))
-    expect((screen.getByTestId('supervisor-request-send') as HTMLButtonElement).disabled).toBe(true)
-    await act(async () => {
-      release?.()
-    })
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('shows a refusal without clearing what was typed', async () => {
-    stubFetch(
-      { error: 'project w1 already recorded exactly this change request at version 3: nothing was recorded', kind: 'duplicate_request' },
-      409,
-    )
-    render(<SupervisorRequest workspaceId="w1" />)
-    type(screen.getByTestId('supervisor-request-input'), 'Add Apple Pay')
-    await click(screen.getByTestId('supervisor-request-send'))
-    expect(screen.getByTestId('supervisor-request-result').textContent).toContain('nothing was recorded')
-    expect((screen.getByTestId('supervisor-request-input') as HTMLTextAreaElement).value).toBe('Add Apple Pay')
   })
 })

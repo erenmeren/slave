@@ -6,7 +6,6 @@ import { SlaveCard } from '../src/components/SlaveCard.js'
 import { HaltBanner } from '../src/components/HaltBanner.js'
 import { BlockedPanel, LiveEventsPanel, MergeQueuePanel, OverviewClient } from '../src/components/OverviewClient.js'
 import { TasksClient } from '../src/components/TasksClient.js'
-import { TopStrip } from '../src/components/TopStrip.js'
 import { publishStreamState } from '../src/hooks/useStreamState.js'
 import { RightPanel } from '../src/components/shell/RightPanel.js'
 import { RightPanelProvider } from '../src/components/shell/RightPanelProvider.js'
@@ -128,138 +127,18 @@ const snapshot = (slaves: readonly SlaveCardData[]): OverviewSnapshot => ({
   runbook: null,
 })
 
-describe('SlaveCard provider chip', () => {
-  it("renders the run's own provider kind, and the unknown mark when no run has resolved one", () => {
-    // M12 Task 9 / ruling R10. The bare kind: the human-readable label and the shell-only gate
-    // mark belong to Task 13 (spec §8), and inventing either here would be that task's decision
-    // taken by the wrong task.
-    const { rerender } = render(<SlaveCard slave={slave({ provider: 'cursor', gate: 'all-tools' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
-    expect(screen.getByTestId('provider-chip').textContent).toBe('Cursor')
-    expect(screen.getByTestId('provider-chip').getAttribute('title')).toBe('cursor')
-
-    rerender(<SlaveCard slave={slave({ provider: null, gate: null })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
-    expect(screen.getByTestId('provider-chip').textContent).toBe('—')
-  })
-
-  // M44 final review, item I3: `claude_code` is a COLUMN VALUE, and it was visible text on this
-  // card, on the panel, in the workforce table and in every provider `<select>`. The word a person
-  // reads is `PROVIDER_LABEL`'s; the raw kind stays in `title`, the same rule every other
-  // projection in this milestone follows.
-  it('reads the provider label, with the raw kind kept in title', () => {
-    render(<SlaveCard slave={slave({ provider: 'claude_code', gate: 'all-tools' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
-    expect(screen.getByTestId('provider-chip').textContent).toBe('Claude Code')
-    expect(screen.getByTestId('provider-chip').getAttribute('title')).toBe('claude_code')
-  })
-
-  // M12 Task 13 fix round 1, spec §8 / finding 4a: "wherever a worker's runtime is shown, a
-  // provider whose gate is shell-only is marked as such". `gate` is server-derived
-  // (`overview.ts`, via `capabilitiesOf`), never recomputed here.
-  it('marks a shell-only gate, and shows no mark for a runtime that gates every tool', () => {
-    // `gate` is server-derived (`overview.ts`, via `capabilitiesOf`). As of M13 Task 10 no shipped
-    // provider reports `shell-only` -- Cursor's gate was proven to cover writes too -- so this
-    // fixture is hand-written: the MARK is still part of the contract, and a third runtime that
-    // gates only shells must light it up on day one.
-    const { rerender } = render(<SlaveCard slave={slave({ provider: 'cursor', gate: 'shell-only' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
-    expect(screen.getByText(/shell only/i)).toBeTruthy()
-
-    rerender(<SlaveCard slave={slave({ provider: 'cursor', gate: 'all-tools' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
-    expect(screen.queryByText(/shell only/i)).toBeNull()
-  })
-})
-
-// The M11 strip's three slave buckets (`count-working` / `count-paused` / `count-idle`) are GONE
-// as of M14 Task 8: the handoff's 1a strip is a fixed 6-up — slaves working · tasks active ·
-// tasks ready · tasks done · blocked · spend — and `paused`/`idle` are not among its six. A
-// paused slave still says so on its own card's pill (the ten states above), which is where the
-// handoff puts that fact; the strip answers "how much work is moving", not "what is each slave
-// doing". So this replaces the old bucket assertions rather than sitting beside them.
-describe('TopStrip \u2014 the handoff 6-up', () => {
-  it('renders six tiles in the README order with 1px gutters', () => {
-    render(<TopStrip snapshot={snapshot([slave({ status: 'working' })])} />)
-    const tiles = screen.getAllByTestId('strip-tile')
-    expect(tiles.map((t) => t.getAttribute('data-strip'))).toEqual([
-      'slaves-working', 'tasks-active', 'tasks-ready', 'tasks-done', 'blocked', 'spend',
-    ])
-    // jsdom loads no CSS: the class is the assertion. `gap-px` over a `bg-line` section is what
-    // makes the hairline show THROUGH the grid rather than being drawn per tile.
-    expect(screen.getByTestId('strip').className).toContain('gap-px')
-    expect(screen.getByTestId('strip').className).toContain('grid-cols-6')
-    expect(screen.getByTestId('strip').className).toContain('bg-line')
-  })
-
-  it('counts slaves, tasks and spend into their own tiles', () => {
-    render(
-      <TopStrip
-        snapshot={snapshot([
-          slave({ id: 'a1', status: 'working' }),
-          slave({ id: 'a2', status: 'working' }),
-          slave({ id: 'a3', status: 'paused' }),
-        ])}
-      />,
-    )
-    expect(screen.getByTestId('strip-value-slaves-working').textContent).toBe('2')
-    expect(screen.getByTestId('strip-value-tasks-active').textContent).toBe('2')
-    expect(screen.getByTestId('strip-value-tasks-ready').textContent).toBe('3')
-    expect(screen.getByTestId('strip-value-tasks-done').textContent).toBe('4')
-    expect(screen.getByTestId('strip-value-blocked').textContent).toBe('1')
-  })
-
-  it('renders spend as known spend, with the unmeasured count as its own line', () => {
-    render(<TopStrip snapshot={snapshot([])} />)
-    expect(screen.getByTestId('strip-value-spend').textContent).toBe('$3.00')
-    // Nothing unmeasured in this fixture, so nothing is claimed about a hole in the total.
-    expect(screen.queryByTestId('strip-unmeasured')).toBeNull()
-  })
-
-  // M38 t5: the total is the guardrail's own figure now, so the part of it no run explains has to
-  // be nameable -- and an unmeasured supervisor call is charged at the cap, not measured.
-  it("names the Supervisor's share of spend, and what its unmeasured calls were charged", () => {
-    const view = snapshot([])
-    render(
-      <TopStrip
-        snapshot={{ ...view, workspace: { ...view.workspace, supervisorSpend: { measuredUsd: 0.25, unmeasuredCalls: 2 } } }}
-      />,
-    )
-    expect(screen.getByTestId('strip-supervisor-spend').textContent).toBe('supervisor $0.25 \u00b7 2 at $1.00')
-  })
-
-  it('claims nothing about the Supervisor when it has never called anybody', () => {
-    render(<TopStrip snapshot={snapshot([])} />)
-    expect(screen.queryByTestId('strip-supervisor-spend')).toBeNull()
-  })
-
-  it('says how many runs went unmeasured, rather than letting known spend read as total spend', () => {
-    const view = snapshot([])
-    render(<TopStrip snapshot={{ ...view, workspace: { ...view.workspace, unmeasuredRuns: 2 } }} />)
-    expect(screen.getByTestId('strip-unmeasured').textContent).toBe('2 unmeasured')
-  })
-
-  it('tones a non-zero count and leaves a zero neutral', () => {
-    const view = snapshot([slave({ status: 'working' })])
-    render(<TopStrip snapshot={view} />)
-    expect(screen.getByTestId('strip-value-slaves-working').className).toContain('text-tone-working')
-    expect(screen.getByTestId('strip-value-blocked').className).toContain('text-tone-blocked')
-
-    const quiet = { ...view, slaves: [], tasks: { active: 0, ready: 0, blocked: 0, done: 0, failed: 0 } }
-    render(<TopStrip snapshot={quiet} />)
-    // Two strips are mounted now; the second one's tiles are the later half of the query.
-    const blocked = screen.getAllByTestId('strip-value-blocked').at(-1)
-    expect(blocked?.className).toContain('text-text-1')
-    expect(blocked?.className).not.toContain('text-tone-blocked')
-  })
-})
-
 describe('SlaveCard', () => {
-  it('shows a working slave with its task and live action line', () => {
+  it('shows a working slave with the task it is on', () => {
     render(
       <SlaveCard
         slave={slave({ status: 'working', taskTitle: 'Add the thing', actionLine: 'Read a.ts' })}
-        liveActionLine="Write note3.txt"
+       
         workspaceId="w1" onOpen={() => {}}
       />,
     )
-    // The live line wins over the snapshot's (spec §6) — the stream is fresher by construction.
-    expect(screen.getByTestId('action-line').textContent).toBe('Write note3.txt')
+    // M57 R18: the live action line is the PANEL's now -- a row says which TASK a worker is on,
+    // not which file it is reading.
+    expect(screen.queryByTestId('action-line')).toBeNull()
     expect(screen.getByText('Add the thing')).toBeTruthy()
     // M14 Task 2: the card says its state in the handoff's `StatusPill` vocabulary now, not the
     // raw `SlaveStatus` word the M5 card printed into `status-label`.
@@ -272,7 +151,6 @@ describe('SlaveCard', () => {
     const { rerender } = render(
       <SlaveCard
         slave={slave({ status: 'working', taskStatus: 'running', breakerLevel: 'steered' })}
-        liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
       />,
@@ -281,7 +159,6 @@ describe('SlaveCard', () => {
     rerender(
       <SlaveCard
         slave={slave({ status: 'working', taskStatus: 'running', breakerLevel: 'constrained' })}
-        liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
       />,
@@ -294,7 +171,6 @@ describe('SlaveCard', () => {
     render(
       <SlaveCard
         slave={slave({ status: 'paused', taskStatus: 'running', breakerLevel: 'constrained' })}
-        liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
       />,
@@ -302,50 +178,15 @@ describe('SlaveCard', () => {
     expect(screen.getByTestId('status-pill').textContent).toBe('PAUSED')
   })
 
-  it('falls back to the snapshot action line when no live one has arrived', () => {
-    render(<SlaveCard slave={slave({ status: 'working', actionLine: 'Read a.ts' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
-    expect(screen.getByTestId('action-line').textContent).toBe('Read a.ts')
-  })
-
   it('pulses only while working', () => {
     // M14 Task 2: the dot moved inside `StatusPill` (its first child) and the keyframe is the
     // shared `status-pulse` one, not Tailwind's `animate-pulse`. The rule is unchanged.
     const dot = (): Element => screen.getByTestId('status-pill').firstElementChild as Element
-    const { rerender } = render(<SlaveCard slave={slave({ status: 'working' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    const { rerender } = render(<SlaveCard slave={slave({ status: 'working' })} workspaceId="w1" onOpen={() => {}} />)
     expect(dot().className).toContain('motion-safe:animate-[status-pulse_1.5s_ease-in-out_infinite]')
-    rerender(<SlaveCard slave={slave({ status: 'paused' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    rerender(<SlaveCard slave={slave({ status: 'paused' })} workspaceId="w1" onOpen={() => {}} />)
     // Motion carries information (spec §7): a pulsing paused slave is a lie on screen.
     expect(dot().className).not.toContain('status-pulse')
-  })
-
-  // M37 t4 (spec §5): `role` is the profile's TITLE and is matched by nothing; `runtimeRoles` is
-  // what the scheduler, the review pass and the planning pass dispatch on. The title stays where it
-  // was, and the dispatch set gets chips of its own beside it.
-  describe('runtime-role chips (M37 §5)', () => {
-    it('keeps the title under the name and adds one chip per dispatchable role', () => {
-      render(
-        <SlaveCard
-          slave={slave({ role: 'Senior Engineer', runtimeRoles: ['backend', 'reviewer'] })}
-          liveActionLine={null}
-          workspaceId="w1"
-          onOpen={() => {}}
-        />,
-      )
-
-      expect(screen.getByText('Senior Engineer')).toBeTruthy()
-      expect(screen.getAllByTestId('runtime-role-chip').map((chip) => chip.textContent)).toEqual([
-        'backend',
-        'reviewer',
-      ])
-      expect(screen.queryByTestId('not-dispatchable')).toBeNull()
-    })
-
-    it('marks an empty set as parked rather than showing an empty chip row (spec §7)', () => {
-      render(<SlaveCard slave={slave({ runtimeRoles: [] })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
-
-      expect(screen.queryByTestId('runtime-role-chip')).toBeNull()
-      expect(screen.getByTestId('not-dispatchable').textContent).toMatch(/cannot be dispatched/i)
-    })
   })
 
   // M36 t2 fix round 1, finding 1: a waiting run is `paused`, and a footer offering a bare
@@ -358,28 +199,22 @@ describe('SlaveCard', () => {
 
     it('offers Answer instead of Resume, and Answer opens the panel where an answer can be typed', () => {
       const onOpen = vi.fn()
-      render(<SlaveCard slave={waiting} liveActionLine={null} workspaceId="w1" onOpen={onOpen} />)
+      render(<SlaveCard slave={waiting} workspaceId="w1" onOpen={onOpen} />)
       expect(screen.queryByTestId('card-resume')).toBeNull()
       fireEvent.click(screen.getByTestId('card-answer'))
       expect(onOpen).toHaveBeenCalledWith('a1')
     })
 
-    it('names who it is waiting on', () => {
-      render(<SlaveCard slave={waiting} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
-      expect(screen.getByTestId('card-waiting-for').textContent).toContain('Maya')
-    })
-
     it('still offers Resume for an ordinary operator pause', () => {
-      render(<SlaveCard slave={slave({ status: 'paused' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+      render(<SlaveCard slave={slave({ status: 'paused' })} workspaceId="w1" onOpen={() => {}} />)
       expect(screen.getByTestId('card-resume')).toBeTruthy()
-      expect(screen.queryByTestId('card-answer')).toBeNull()
-      expect(screen.queryByTestId('card-waiting-for')).toBeNull()
+
     })
   })
 
   it('opens the detail panel via onOpen when the header is clicked — no more disabled M4 buttons', () => {
     const onOpen = vi.fn()
-    render(<SlaveCard slave={slave({ id: 'a9', status: 'working' })} liveActionLine={null} workspaceId="w1" onOpen={onOpen} />)
+    render(<SlaveCard slave={slave({ id: 'a9', status: 'working' })} workspaceId="w1" onOpen={onOpen} />)
     fireEvent.click(screen.getByRole('button', { name: /open alex's detail panel/i }))
     expect(onOpen).toHaveBeenCalledWith('a9')
     // The M5 controls live in the panel now (spec §6) — the card carries no pause/stop of its own.
@@ -398,24 +233,8 @@ describe('SlaveCard', () => {
   // cross-fade keyframe replays), a status-flash trigger with its motion-safe class and timed
   // decay, and the `motion-safe:` variant gating every animation class for reduced-motion.
   describe('motion (spec §8)', () => {
-    it("cross-fades the action line via a key that remounts when the line's text changes", () => {
-      const { container, rerender } = render(
-        <SlaveCard slave={slave({ status: 'working', actionLine: 'Read a.ts' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />,
-      )
-      const first = container.querySelector('[data-testid="action-line"] > span')
-      expect(first).toBeTruthy()
-      expect(first?.className).toContain('motion-safe:animate-[action-line-in_120ms_ease-out]')
-
-      rerender(<SlaveCard slave={slave({ status: 'working', actionLine: 'Write b.ts' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
-      const second = container.querySelector('[data-testid="action-line"] > span')
-      // A different key means React unmounts the old span and mounts a new DOM node — that
-      // remount is what makes the cross-fade keyframe run again on every text change.
-      expect(second).not.toBe(first)
-      expect(second?.textContent).toBe('Write b.ts')
-    })
-
     it('carries data-status and a transition-colors border, ready for the flash to animate against', () => {
-      const { container } = render(<SlaveCard slave={slave({ status: 'working' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+      const { container } = render(<SlaveCard slave={slave({ status: 'working' })} workspaceId="w1" onOpen={() => {}} />)
       const card = container.querySelector('article')
       expect(card?.getAttribute('data-status')).toBe('working')
       expect(card?.className).toContain('transition-colors')
@@ -424,12 +243,12 @@ describe('SlaveCard', () => {
     it('flashes the border motion-safe class on a status change and clears it after 800ms', () => {
       vi.useFakeTimers()
       try {
-        const { container, rerender } = render(<SlaveCard slave={slave({ status: 'working' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+        const { container, rerender } = render(<SlaveCard slave={slave({ status: 'working' })} workspaceId="w1" onOpen={() => {}} />)
         const card = () => container.querySelector('article')!
         // No status change yet (this is the initial mount) — no flash.
         expect(card().className).not.toContain('motion-safe:animate-[border-flash_800ms_ease-out]')
 
-        rerender(<SlaveCard slave={slave({ status: 'paused' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+        rerender(<SlaveCard slave={slave({ status: 'paused' })} workspaceId="w1" onOpen={() => {}} />)
         expect(card().className).toContain('motion-safe:animate-[border-flash_800ms_ease-out]')
         expect(card().getAttribute('style') ?? '').toContain('--flash-color')
 
@@ -464,11 +283,10 @@ describe('SlaveCard — the handoff anatomy', () => {
     vi.unstubAllGlobals()
   })
 
-  it('renders the header: avatar tile, name, role, status pill', () => {
+  it('renders the row head: a 30px avatar tile, name, role, status pill', () => {
     render(
       <SlaveCard
         slave={slave({ name: 'Alex Turner', role: 'backend', status: 'working', taskStatus: 'running' })}
-        liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
       />,
@@ -476,6 +294,11 @@ describe('SlaveCard — the handoff anatomy', () => {
     expect(screen.getByTestId('avatar-tile').textContent).toBe('AT')
     expect(screen.getByTestId('status-pill').textContent).toBe('WORKING')
     expect(screen.getByTestId('status-pill').getAttribute('data-tone')).toBe('working')
+    // Ruling P8: the Team row is the one caller that asks `AvatarTile` for the README's 30px. The
+    // prop DEFAULTS to the 28px the five other surfaces render, so none of them moved.
+    const tile = screen.getByTestId('avatar-tile')
+    expect(tile.getAttribute('data-size')).toBe('md')
+    expect(tile.className).toContain('h-[30px]')
   })
 
   // The ten states, exhaustively — spec §3's "SlaveCard renders all ten states in one it.each".
@@ -496,7 +319,6 @@ describe('SlaveCard — the handoff anatomy', () => {
     render(
       <SlaveCard
         slave={slave({ status, taskStatus, taskTitle: 'Add the thing' })}
-        liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
       />,
@@ -506,105 +328,106 @@ describe('SlaveCard — the handoff anatomy', () => {
     expect(pill.getAttribute('data-tone')).toBe(tone)
   })
 
-  it('carries the handoff surface recipe: radius 8, padding 12/13, hover border', () => {
-    render(<SlaveCard slave={slave({})} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
-    const card = screen.getByTestId('slave-card')
-    // Class strings, not computed style: jsdom loads no CSS in this suite. The gate reads
-    // `border-radius: 8px` and `padding: 12px 13px` back off the real page.
-    expect(card.className).toContain('rounded-card')
-    expect(card.className).toContain('px-[13px]')
-    expect(card.className).toContain('py-[12px]')
-    // The `.20` hover hairline, as its token (M44 final review, item I2): `border-line-hover`
-    // computes to the same `rgba(255,255,255,.20)` the literal did.
-    expect(card.className).toContain('hover:border-line-hover')
-    // The README's 3px bar, the one number the first round left at `ProgressBar`'s 6px default.
+  it('is a row on the README grid, with one primary button and a ⋯ (M57 R18)', () => {
+    render(<SlaveCard slave={slave({})} workspaceId="w1" onOpen={vi.fn()} />)
+    const row = screen.getByTestId('slave-card')
+    // Class strings, not computed style: jsdom loads no CSS in this suite. The gate reads the
+    // six track widths and the `10px 14px` padding back off the real page.
+    expect(row.className).toContain('grid-cols-[34px_120px_120px_minmax(0,1fr)_96px_32px]')
+    expect(row.className).toContain('px-[14px]')
+    expect(row.className).toContain('py-[10px]')
+    // A ROW is not a bordered card: one hairline underneath, and the tone reads off the avatar
+    // tile and the status word instead of a per-state border.
+    expect(row.className).toContain('border-b')
+    expect(row.className).not.toContain('rounded-card')
+
+    expect(screen.getByTestId('card-pause')).toBeTruthy()
+    expect(screen.getByTestId('card-more').textContent).toBe('⋯')
+    // Message and Stop are `SlavePanel`'s, which is what the `⋯` opens.
+    expect(screen.queryByTestId('card-stop')).toBeNull()
+    expect(screen.queryByTestId('card-message')).toBeNull()
+    // The README's 3px bar stays on the row (ruling P26): the panel draws no progress at all.
     expect(screen.getByTestId('progress-bar').className).toContain('h-[3px]')
+  })
+
+  // M57 R18 / ruling P7: the README's Unblock is about a blocked TASK. `SlaveCardData.status` has
+  // no `blocked` member at all -- an IDLE worker whose task is blocked is the state that needs a
+  // person, and `Unblock` opens the panel where the task can be read and unblocked.
+  it('offers Unblock on a blocked TASK, never on a worker status', () => {
+    const onOpen = vi.fn()
+    render(<SlaveCard slave={slave({ status: 'idle', taskStatus: 'blocked' })} workspaceId="w1" onOpen={onOpen} />)
+    expect(screen.queryByTestId('card-pause')).toBeNull()
+    fireEvent.click(screen.getByTestId('card-unblock'))
+    expect(onOpen).toHaveBeenCalledWith('a1')
   })
 
   it('sweeps the top hairline only while working', () => {
     const { rerender } = render(
-      <SlaveCard slave={slave({ status: 'working', taskStatus: 'running' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />,
+      <SlaveCard slave={slave({ status: 'working', taskStatus: 'running' })} workspaceId="w1" onOpen={() => {}} />,
     )
     expect(screen.getByTestId('card-sweep').className).toContain('motion-safe:animate-[card-sweep_2.2s_cubic-bezier(.4,0,.2,1)_infinite]')
 
-    rerender(<SlaveCard slave={slave({ status: 'paused', taskStatus: 'running' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    rerender(<SlaveCard slave={slave({ status: 'paused', taskStatus: 'running' })} workspaceId="w1" onOpen={() => {}} />)
     expect(screen.queryByTestId('card-sweep')).toBeNull()
   })
 
-  it('renders the task line as a mono reference plus an ellipsised title', () => {
+  // M57 R18: ONE line for the task, with the mono reference folded into it -- `card-task-ref` was
+  // its own node while this was a card, and the id is `SlavePanel`'s now.
+  it('renders the task title and its mono reference on one ellipsised line', () => {
     render(
       <SlaveCard
         slave={slave({ taskId: '3f9a21c8-0000-4000-8000-000000000000', taskTitle: 'Implement Checkout API', taskStatus: 'running', status: 'working' })}
-        liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
       />,
     )
-    expect(screen.getByTestId('card-task-ref').textContent).toBe('TASK-3f9a21c8')
-    expect(screen.getByTestId('card-task-title').className).toContain('truncate')
+    const line = screen.getByTestId('card-task-title')
+    expect(line.textContent).toBe('Implement Checkout APITASK-3f9a21c8')
+    expect(line.className).toContain('truncate')
+    expect(screen.queryByTestId('card-task-ref')).toBeNull()
   })
 
-  it('shows the step counter and percent from the run, and — with no run', () => {
-    const { rerender } = render(
-      <SlaveCard slave={slave({ status: 'working', taskStatus: 'running', progressPct: 64, stepLabel: '7/11' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />,
+  // The step counter and the percent READING left with the card; the bar itself stays (ruling
+  // P26), because `SlavePanel` draws no progress of any kind and a fact with nowhere to go stays.
+  it('draws the run s progress as the bar, and leaves the counter to the panel', () => {
+    render(
+      <SlaveCard slave={slave({ status: 'working', taskStatus: 'running', progressPct: 64, stepLabel: '7/11' })} workspaceId="w1" onOpen={() => {}} />,
     )
-    expect(screen.getByTestId('card-step').textContent).toBe('7/11')
-    expect(screen.getByTestId('card-percent').textContent).toBe('64%')
     expect(screen.getByTestId('progress-bar-fill').style.width).toBe('64%')
-
-    rerender(<SlaveCard slave={slave({ status: 'idle' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
-    expect(screen.getByTestId('card-step').textContent).toBe('—')
-  })
-
-  it('renders the three chips: skill, queue, provider — each with its own unknown mark', () => {
-    const { rerender } = render(
-      <SlaveCard
-        slave={slave({ skill: 'superpowers:test-driven-development', queuedMessage: 'rebase first', provider: 'cursor' })}
-        liveActionLine={null}
-        workspaceId="w1"
-        onOpen={() => {}}
-      />,
-    )
-    expect(screen.getByTestId('card-skill-chip').textContent).toBe('superpowers:test-driven-development')
-    expect(screen.getByTestId('card-queue-chip').textContent).toBe('queued')
-    expect(screen.getByTestId('provider-chip').textContent).toBe('Cursor')
-
-    rerender(<SlaveCard slave={slave({ skill: null, queuedMessage: null, provider: null })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
-    expect(screen.getByTestId('card-skill-chip').textContent).toBe('—')
-    expect(screen.getByTestId('card-queue-chip').textContent).toBe('—')
-    expect(screen.getByTestId('provider-chip').textContent).toBe('—')
+    expect(screen.queryByTestId('card-step')).toBeNull()
+    expect(screen.queryByTestId('card-percent')).toBeNull()
   })
 
   // M50 R6, `docs/ia.md` rule 3: the word, with the raw value one hover away. `project` is the
   // ordinary case and prints nothing -- a chip every card carries marks nothing.
-  it('marks a temporary specialist, and greys the card of one whose engagement is over', () => {
-    const { rerender } = render(<SlaveCard slave={slave({})} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+  it('marks a temporary specialist, and greys the row of one whose engagement is over', () => {
+    const { rerender } = render(<SlaveCard slave={slave({})} workspaceId="w1" onOpen={() => {}} />)
     expect(screen.queryByTestId('card-lifecycle-chip')).toBeNull()
     expect(screen.getByTestId('slave-card').getAttribute('data-released')).toBeNull()
 
-    rerender(<SlaveCard slave={slave({ lifecycle: 'ephemeral' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+    rerender(<SlaveCard slave={slave({ lifecycle: 'ephemeral' })} workspaceId="w1" onOpen={() => {}} />)
     const chip = screen.getByTestId('card-lifecycle-chip')
     expect(chip.textContent).toBe('Ephemeral')
-    expect(chip.closest('[data-testid="chip"]')?.getAttribute('title')).toBe('ephemeral')
+    // The WORD, with the raw value one hover away -- on the marker itself, now that the row draws
+    // its own instead of wrapping `ui/Chip`.
+    expect(chip.getAttribute('title')).toBe('ephemeral')
 
     rerender(
       <SlaveCard
         slave={slave({ lifecycle: 'ephemeral', released: { at: '2026-09-12T10:00:00.000Z', reason: 'over' } })}
-        liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
       />,
     )
     const card = screen.getByTestId('slave-card')
     expect(card.getAttribute('data-released')).toBe('true')
-    expect(card.className).toContain('opacity-50')
+    expect(card.className).toContain('opacity-60')
   })
 
   it('POSTs pause to the run route the panel already uses', async (): Promise<void> => {
     render(
       <SlaveCard
         slave={slave({ status: 'working', taskStatus: 'running', runId: 'r1' })}
-        liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
       />,
@@ -617,7 +440,7 @@ describe('SlaveCard — the handoff anatomy', () => {
 
   it('swaps pause for resume once the run is paused', async (): Promise<void> => {
     render(
-      <SlaveCard slave={slave({ status: 'paused', taskStatus: 'running', runId: 'r1' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />,
+      <SlaveCard slave={slave({ status: 'paused', taskStatus: 'running', runId: 'r1' })} workspaceId="w1" onOpen={() => {}} />,
     )
     expect(screen.queryByTestId('card-pause')).toBeNull()
     await act(async () => {
@@ -626,50 +449,46 @@ describe('SlaveCard — the handoff anatomy', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/runs/r1/resume', { method: 'POST' })
   })
 
-  it('cannot ask for the same resume twice: a pending request disables Resume and says so', () => {
+  it('cannot ask for the same resume twice: a pending request disables Resume', () => {
     // `SlavePanel.tsx`'s guard, mirrored: the intent is a single `resumeRequestedAt` column, so a
     // second click cannot mean anything the first did not already say. Same wording as the panel.
     const { rerender } = render(
       <SlaveCard
         slave={slave({ status: 'paused', taskStatus: 'running', runId: 'r1', resumeRequestedAt: '2026-08-29T09:00:00.000Z' })}
-        liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
       />,
     )
     expect((screen.getByTestId('card-resume') as HTMLButtonElement).disabled).toBe(true)
-    expect(screen.getByTestId('card-resume-requested').textContent).toBe('resume requested — waiting for the daemon')
+    // The SENTENCE that explains the disabled button is `SlavePanel`'s `resume-requested`, which
+    // this row's name and its `⋯` both open (M57 R18).
+    expect(screen.queryByTestId('card-resume-requested')).toBeNull()
 
     rerender(
       <SlaveCard
         slave={slave({ status: 'paused', taskStatus: 'running', runId: 'r1', resumeRequestedAt: null })}
-        liveActionLine={null}
         workspaceId="w1"
         onOpen={() => {}}
       />,
     )
     expect((screen.getByTestId('card-resume') as HTMLButtonElement).disabled).toBe(false)
-    expect(screen.queryByTestId('card-resume-requested')).toBeNull()
   })
 
-  it('POSTs stop, and opens the panel for Message rather than inventing a second textarea', async (): Promise<void> => {
+  // M57 R18: Stop and Message left the row for `SlavePanel`, which is what the `⋯` opens. The row
+  // POSTs nothing they used to POST, and it invents no second textarea either.
+  it('opens the panel from ⋯ instead of carrying Stop and Message', () => {
     const onOpen = vi.fn()
     render(
-      <SlaveCard slave={slave({ status: 'working', taskStatus: 'running', runId: 'r1' })} liveActionLine={null} workspaceId="w1" onOpen={onOpen} />,
+      <SlaveCard slave={slave({ status: 'working', taskStatus: 'running', runId: 'r1' })} workspaceId="w1" onOpen={onOpen} />,
     )
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('card-stop'))
-    })
-    expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/runs/r1/stop', { method: 'POST' })
-
-    fireEvent.click(screen.getByTestId('card-message'))
+    fireEvent.click(screen.getByTestId('card-more'))
     expect(onOpen).toHaveBeenCalledWith('a1')
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('disables every footer control when there is no run to control', () => {
-    render(<SlaveCard slave={slave({ status: 'idle', runId: null })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />)
+  it('disables its one control when there is no run to control', () => {
+    render(<SlaveCard slave={slave({ status: 'idle', runId: null })} workspaceId="w1" onOpen={() => {}} />)
     expect((screen.getByTestId('card-pause') as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByTestId('card-stop') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('shows a refusal verbatim without touching the snapshot', async (): Promise<void> => {
@@ -677,7 +496,7 @@ describe('SlaveCard — the handoff anatomy', () => {
       async () => new Response(JSON.stringify({ error: 'the run is still stopping; retry in a moment' }), { status: 409 }),
     )
     render(
-      <SlaveCard slave={slave({ status: 'paused', taskStatus: 'running', runId: 'r1' })} liveActionLine={null} workspaceId="w1" onOpen={() => {}} />,
+      <SlaveCard slave={slave({ status: 'paused', taskStatus: 'running', runId: 'r1' })} workspaceId="w1" onOpen={() => {}} />,
     )
     await act(async () => {
       fireEvent.click(screen.getByTestId('card-resume'))
@@ -848,47 +667,102 @@ describe('shell facts and stream state reach the project header, never the sideb
     expect(publishStreamState).toHaveBeenCalledWith('w1', { connection: 'connected', latencyMs: null })
   })
 
-  // M24 §3 kept, re-aimed by M45 R1: the goal card and the runtime card left this page for the
-  // project Settings tab and are still not here -- what changed is what is FIRST. The brief
-  // answers the ten-second questions, and the strip the design handoff documents sits directly
-  // under it (erratum E17: the overlap between the two is deliberate).
-  it('M45 R1: the brief is the first thing on the page, and the strip is directly under it', () => {
-    renderInShell(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+  // M24 §3 kept, re-aimed by M57 R17: the goal card and the runtime card left this page for the
+  // project Settings tab and are still not here. What changed is the ORDER -- the README's five
+  // bands, top to bottom, and the goal is the title row's own line now.
+  it('lays the page out in the README s five bands (M57 R17)', () => {
+    renderInShell(<OverviewClient workspaceId="w1" initial={WAITING} />)
     expect(screen.queryByTestId('goal-input')).toBeNull()
     expect(screen.queryByTestId('runtime-provider')).toBeNull()
     expect(screen.queryByTestId('goal-suggestion')).toBeNull()
-    const shell = screen.getByTestId('page-shell')
-    const order = [...shell.children].map((child) => child.getAttribute('data-testid'))
-    expect(order.filter((id) => id !== null).slice(0, 2)).toEqual(['brief', 'strip'])
+    expect(screen.getByTestId('project-goal-line').textContent).toContain('Ship the checkout flow')
+    expect(BANDS.every((band) => band !== null)).toBe(true)
+    expect(bandOrder()).toEqual(BANDS)
   })
 
-  // M45 erratum E16: the Team strip IS the same `SlaveCard` grid it has always been, under a
-  // label -- the cards did not move to a new component and none of their six fidelity assertions
-  // changed.
-  it('M45 E16: the team strip is the same slave-card grid, under a Team label', () => {
+  // M57 R17: FOUR tiles, and the container answers to `strip` as well as `brief` -- `TopStrip` is
+  // gone and three gates waited on that marker for "the Overview has rendered".
+  it('draws FOUR fact tiles, and the container carries both the brief and the strip testid', () => {
+    renderInShell(<OverviewClient workspaceId="w1" initial={WAITING} />)
+    expect(screen.getAllByTestId('brief-tile').map((tile) => tile.getAttribute('data-brief'))).toEqual([
+      'work', 'cost', 'supervisor', 'latest-verified',
+    ])
+    expect(screen.getByTestId('strip').contains(screen.getByTestId('brief'))).toBe(true)
+    expect(screen.queryByTestId('strip-tile')).toBeNull()
+  })
+
+  // M57 band 2: the queue that needs a person, above everything the project did on its own.
+  it('puts what needs a person on the Needs-you card, above the tiles', () => {
+    renderInShell(<OverviewClient workspaceId="w1" initial={WAITING} />)
+    const rows = screen.getAllByTestId('needs-you-row')
+    expect(rows.map((row) => row.getAttribute('data-kind'))).toEqual(['decision'])
+    expect(screen.getByTestId('needs-you-card').textContent).toContain('Staffing: nobody can review')
+    // `BlockedPanel` is off the page: its three task kinds are this card's, and its paused RUNS
+    // are the Team row's own Resume button.
+    expect(screen.queryByTestId('blocked-empty')).toBeNull()
+  })
+
+  /**
+   * M45 R2, on the surface (controller ruling T6-0).
+   *
+   * `run.output` and `run.tool_call` are model chatter the domain gives no lane, and R2's promise
+   * is that their text never reaches the project page -- which held only because the river used to
+   * sit inside a closed `Advanced` disclosure until Task 4 deleted it. The page now shows the live
+   * rows the timeline beside them classifies, and nothing else.
+   */
+  it('keeps model chatter out of the live river, however loud the log is (M45 R2)', () => {
+    renderInShell(
+      <OverviewClient
+        workspaceId="w1"
+        initial={{
+          ...WAITING,
+          liveEvents: [
+            { seq: 9, ts: '2026-09-14T10:00:00.000Z', summary: 'MODEL-CHATTER-MUST-NOT-APPEAR' },
+            { seq: 8, ts: '2026-09-14T09:59:00.000Z', summary: 'Project · goal set' },
+          ],
+          timeline: [
+            {
+              key: 'event-8', lane: 'user_request', laneLabel: 'USER REQUEST', at: '2026-09-14T09:59:00.000Z',
+              title: 'Ship the checkout flow', detail: null, taskId: null, taskTitle: null,
+              eventType: 'workspace.goal_set', decision: null, messageId: null, resolved: false, collapsedCount: 0,
+            },
+          ],
+        }}
+      />,
+    )
+    const rows = screen.getAllByTestId('live-event-row')
+    expect(rows.map((row) => row.textContent)).toEqual(['09:59:00Project · goal set'])
+    expect(screen.getByTestId('recent-changes').textContent).not.toContain('MODEL-CHATTER-MUST-NOT-APPEAR')
+  })
+
+  // M45 erratum E16 kept, re-aimed by M57 R18: the Team band is the same `SlaveCard`s it has
+  // always been -- ROWS now, in one surface, listing every worker with a link to the Team page.
+  it('M45 E16 / M57 R18: the Team band is the slave rows, counted and linked', () => {
     renderInShell(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
     const team = screen.getByTestId('team')
-    expect(screen.getByTestId('team').id).toBe('team') // the brief's '+N more' team link targets #team
-    expect(team.textContent).toContain('team')
+    expect(team.id).toBe('team') // other surfaces link to #team
+    expect(team.textContent).toContain('Team')
+    expect(within(team).getByRole('link').getAttribute('href')).toBe('/w/w1/organization')
     expect(team.querySelectorAll('[data-testid="slave-card"]').length).toBe(PUBLISHED.slaves.length)
     expect(screen.getAllByTestId('slave-card').length).toBe(PUBLISHED.slaves.length)
   })
 
-  // M45 R3/R2: the two new surfaces are on the page, in the order the spec reads them -- one
-  // input to the Supervisor, then the six-lane timeline.
-  it('M45 R2/R3: the request box and the timeline sit between the strip and the team', () => {
+  // M57 R17 band 5 / erratum E17: the Supervisor request BOX is gone -- the right panel's composer
+  // is the one box posting to `/goal/request` -- and the six-lane timeline is what Recent changes
+  // is made of.
+  it('M57: Recent changes IS the timeline, and there is no second Supervisor box', () => {
     renderInShell(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
-    const shell = screen.getByTestId('page-shell')
-    // Fix round 1, Important 2: the timeline's own root is marked, so the accepted page order is
-    // pinned in full rather than "the timeline is somewhere on the page".
-    const order = [...shell.children].map((child) => child.getAttribute('data-testid')).filter((id) => id !== null)
-    expect(order).toEqual(['brief', 'strip', 'supervisor-request', 'supervisor-timeline', 'team'])
+    expect(screen.queryByTestId('supervisor-request')).toBeNull()
+    const changes = screen.getByTestId('recent-changes')
+    expect(changes.contains(screen.getByTestId('supervisor-timeline'))).toBe(true)
     expect(screen.getByTestId('supervisor-timeline').contains(screen.getByTestId('timeline'))).toBe(true)
+    expect(within(changes).getAllByRole('link').some((one) => one.getAttribute('href') === '/w/w1/activity')).toBe(true)
   })
 
-  // M48 R7: how this project works goes BETWEEN what you asked for and what happened -- and a
-  // project nobody has an opinion about (the fixture above) gets no panel at all.
-  it('puts the runbook panel between the request box and the timeline, and nothing when there is none', () => {
+  // M48 R7: how this project works goes BETWEEN who is doing it and what happened -- and a
+  // project nobody has an opinion about (the fixture above) gets no panel at all. Its one-line
+  // SUMMARY rides on the Supervisor tile above (M57 R17).
+  it('puts the runbook panel between the Team rows and Recent changes, and nothing when there is none', () => {
     renderInShell(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
     expect(screen.queryByTestId('runbook-panel')).toBeNull()
 
@@ -908,26 +782,25 @@ describe('shell facts and stream state reach the project header, never the sideb
         }}
       />,
     )
-    const order = [...screen.getAllByTestId('page-shell')[1]!.children]
-      .map((child) => child.getAttribute('data-testid'))
-      .filter((id) => id !== null)
-    expect(order).toEqual(['brief', 'strip', 'supervisor-request', 'runbook-panel', 'supervisor-timeline', 'team'])
+    expect(bandOrder(screen.getAllByTestId('page-shell')[1] as HTMLElement, ['runbook-panel'])).toEqual([
+      'project-title', 'strip', 'team', 'runbook-panel', 'recent-changes',
+    ])
+    expect(screen.getByTestId('brief-runbook-line').textContent).toBe('Runbook Feature delivery · stage 1/1 Design')
   })
 
-  // M57 R11: the `Advanced ▾` disclosure is gone, and the three panels it held that stay on this
-  // page render directly, in the order it held them. The `Advanced` link row goes with it -- Graph,
-  // Office and Analytics are the sidebar tree's `VIEWS` chips now -- and so does the Supervisor
-  // panel, which is the right panel's from Task 5 on.
-  it('M57 R11: the blocked panel, the river and the merge queue render with no disclosure to open', () => {
+  // M57 R11: the `Advanced ▾` disclosure is gone, and the two panels that stay on this page render
+  // directly, inside Recent changes. The `Advanced` link row went with it -- Graph, Office and
+  // Analytics are the sidebar tree's `VIEWS` chips now -- and so did the Supervisor panel, which is
+  // the right panel's from Task 5 on.
+  it('M57 R11: the river and the merge queue render inside Recent changes, with no disclosure to open', () => {
     renderInShell(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
     expect(screen.queryByTestId('overview-advanced')).toBeNull()
     expect(screen.queryByTestId('overview-advanced-toggle')).toBeNull()
 
-    expect(screen.getByTestId('live-events')).toBeTruthy()
+    const changes = screen.getByTestId('recent-changes')
+    expect(changes.contains(screen.getByTestId('live-events'))).toBe(true)
     expect(screen.getByTestId('live-events').className).toContain('w-[340px]')
     expect(screen.getByText('merge queue · serial')).toBeTruthy()
-    expect(screen.getByText('blocked · needs you')).toBeTruthy()
-    expect(screen.getByTestId('blocked-empty')).toBeTruthy()
     expect(screen.getByTestId('merge-empty')).toBeTruthy()
   })
 
@@ -992,6 +865,35 @@ const PUBLISHED: OverviewSnapshot = snapshot([
   slave({ id: 'a1', status: 'working' }),
   slave({ id: 'a2', name: 'Sam Yates', status: 'working' }),
 ])
+
+/** The README's five bands, in the order the Overview reads top to bottom (M57 R17). */
+const BANDS = ['project-title', 'needs-you-card', 'strip', 'team', 'recent-changes']
+
+/**
+ * The bands actually on the page, in DOM order.
+ *
+ * Over the whole document rather than `page-shell`'s direct children: `needs-you-card` is inside
+ * the card's own section, and a band's testid says where the band IS, not how deeply it is nested.
+ */
+function bandOrder(root: HTMLElement | Document = document, extra: readonly string[] = []): readonly string[] {
+  const wanted = [...BANDS, ...extra]
+  return [...root.querySelectorAll('[data-testid]')]
+    .map((node) => node.getAttribute('data-testid') ?? '')
+    .filter((id) => wanted.includes(id))
+}
+
+/** A project with something waiting on a person -- the state bands 1 and 2 are about. */
+const WAITING: OverviewSnapshot = {
+  ...PUBLISHED,
+  workspace: { ...PUBLISHED.workspace, name: 'Checkout Platform' },
+  needsYou: [
+    {
+      kind: 'decision', id: 'd-1', title: 'Staffing: nobody can review', href: '/w/w1#decision-d-1',
+      since: '2026-09-14T09:00:00.000Z', taskId: null, decisionId: 'd-1', messageId: null,
+    },
+  ],
+  brief: { ...PUBLISHED.brief, objective: { text: 'Ship the checkout flow', version: 2 } },
+}
 
 /**
  * M57 R8: the page no longer DRAWS the worker panel -- it mirrors `?slave=` into the shell's slot,

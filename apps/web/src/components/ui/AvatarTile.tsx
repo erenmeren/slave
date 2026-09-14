@@ -17,20 +17,35 @@ export function initialsOf(name: string): string {
 }
 
 /**
- * 28×28, radius 7, status colour at `1a` alpha for the fill and `3d` for the border, 11px mono
- * initials (design README "1a"). `h-7`/`w-7` are Tailwind's 28px steps -- not arbitrary values --
- * and `rounded-tile` is `globals.css`'s `--radius-tile: 7px`.
+ * 28×28 (`sm`) or 30×30 (`md`), radius 7, status colour at `1a` alpha for the fill and `3d` for the
+ * border, 11px mono initials (design README "1a"). `h-7`/`w-7` are Tailwind's 28px steps -- not
+ * arbitrary values -- and `rounded-tile` is `globals.css`'s `--radius-tile: 7px`.
  *
  * `title` carries the full name: two letters are not an accessible label, and this tile sits
  * beside the name in some layouts and replaces it in others (the Projects team row).
  */
-export function AvatarTile({ name, tone }: { readonly name: string; readonly tone: StatusTone }): React.JSX.Element {
+export function AvatarTile({
+  name,
+  tone,
+  size = 'sm',
+}: {
+  readonly name: string
+  readonly tone: StatusTone
+  /**
+   * `sm` (28 px, `h-7 w-7`) is the handoff's original and stays the DEFAULT, so not one of the five
+   * existing call sites moves a pixel. `md` (30 px) is the M57 Overview Team row's
+   * (README "Overview" → Team rows: "30px avatar tile (18% tint)"), and it is the only caller that
+   * passes it. `gate:m14-fidelity` measures both, each scoped to the surface it belongs to.
+   */
+  readonly size?: 'sm' | 'md'
+}): React.JSX.Element {
   return (
     <span
       data-testid="avatar-tile"
       data-tone={tone}
+      data-size={size}
       title={name}
-      className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-tile border font-mono text-[11px] font-semibold ${TONE_FILL[tone]} ${TONE_BORDER[tone]} ${TONE_TEXT[tone]}`}
+      className={`inline-flex ${size === 'md' ? 'h-[30px] w-[30px]' : 'h-7 w-7'} shrink-0 items-center justify-center rounded-tile border font-mono text-[11px] font-semibold ${TONE_FILL[tone]} ${TONE_BORDER[tone]} ${TONE_TEXT[tone]}`}
     >
       {initialsOf(name)}
     </span>

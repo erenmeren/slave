@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, within } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { ProjectBrief } from '../src/components/project/ProjectBrief'
 
@@ -55,36 +55,45 @@ const tileFor = (fact: string): HTMLElement => {
 }
 
 describe('ProjectBrief', () => {
-  it('renders exactly the eight facts, each on its own tile', () => {
+  // M57 R17: FOUR tiles, in the README's order. The four that left are asserted on the surfaces
+  // they moved to -- the goal on the page's title row, the queue on the Needs-you card, the team on
+  // the Team rows, the changes on the timeline (`overview-components.test.tsx`,
+  // `needs-you-card.test.tsx`).
+  it('renders exactly the four facts, each on its own tile', () => {
     render(<ProjectBrief workspaceId="w1" brief={BRIEF} />)
     const tiles = screen.getAllByTestId('brief-tile')
     expect(tiles.map((tile) => tile.getAttribute('data-brief'))).toEqual([
-      'objective', 'supervisor', 'work', 'cost', 'needs-you', 'latest-verified', 'team', 'recent-changes',
+      'work', 'cost', 'supervisor', 'latest-verified',
     ])
+  })
+
+  // The container answers to BOTH names: `brief` is the tile grid every M45 assertion reads, and
+  // `strip` is the "the Overview has rendered" marker three gates waited on `TopStrip` for.
+  it('carries the brief testid on the tile grid and the strip testid on the section around it', () => {
+    render(<ProjectBrief workspaceId="w1" brief={BRIEF} />)
+    expect(screen.getByTestId('strip').contains(screen.getByTestId('brief'))).toBe(true)
+    expect(screen.getByTestId('brief').contains(screen.getAllByTestId('brief-tile')[0] as HTMLElement)).toBe(true)
+  })
+
+  // README "Overview" → Supervisor tile: the runbook's one line, composed by the page from the
+  // snapshot `RunbookPanel` already reads. A project that has adopted none has no line.
+  it('prints the runbook line inside the Supervisor tile, and nothing without one', () => {
+    const { rerender } = render(<ProjectBrief workspaceId="w1" brief={BRIEF} />)
+    expect(screen.queryByTestId('brief-runbook-line')).toBeNull()
+
+    rerender(<ProjectBrief workspaceId="w1" brief={BRIEF} runbookLine="Runbook Feature delivery · stage 3/5 Verify" />)
+    const line = screen.getByTestId('brief-runbook-line')
+    expect(line.textContent).toBe('Runbook Feature delivery · stage 3/5 Verify')
+    expect(tileFor('supervisor').contains(line)).toBe(true)
   })
 
   it('M49 R6: the knowledge line is a link inside the latest-verified tile, not a ninth tile', () => {
     render(<ProjectBrief workspaceId="w1" brief={BRIEF} />)
-    expect(screen.getAllByTestId('brief-tile')).toHaveLength(8)
+    expect(screen.getAllByTestId('brief-tile')).toHaveLength(4)
     const line = screen.getByTestId('brief-knowledge')
     expect(line.getAttribute('href')).toBe('/w/w1/knowledge')
     expect(line.textContent).toBe('Knowledge: 3 verified · 1 candidates')
     expect(tileFor('latest-verified').contains(line)).toBe(true)
-  })
-
-  it('says the objective and its version, and links to where it is edited', () => {
-    render(<ProjectBrief workspaceId="w1" brief={BRIEF} />)
-    const tile = tileFor('objective')
-    expect(tile.textContent).toContain('Ship the checkout flow')
-    expect(tile.textContent).toContain('v3')
-    expect(within(tile).getAllByRole('link')[0]?.getAttribute('href')).toBe('/w/w1/settings')
-  })
-
-  it('invites a person to set an objective when the project has none', () => {
-    render(<ProjectBrief workspaceId="w1" brief={{ ...BRIEF, objective: { text: null, version: 0 } }} />)
-    const link = within(tileFor('objective')).getByRole('link')
-    expect(link.textContent).toBe('no objective yet · set one')
-    expect(link.getAttribute('href')).toBe('/w/w1/settings')
   })
 
   it('says what the Supervisor is doing in one word, with the raw state in title', () => {
@@ -96,14 +105,17 @@ describe('ProjectBrief', () => {
 
   it('counts the work in the domain’s own words, and dims a zero rather than hiding it', () => {
     render(<ProjectBrief workspaceId="w1" brief={BRIEF} />)
-    expect(screen.getByTestId('brief-work-working').textContent).toBe('WORKING 2')
-    expect(screen.getByTestId('brief-work-verifying').textContent).toBe('VERIFYING 1')
-    expect(screen.getByTestId('brief-work-review').textContent).toBe('IN REVIEW 0')
-    expect(screen.getByTestId('brief-work-waiting').textContent).toBe('WAITING 1')
-    expect(screen.getByTestId('brief-work-done').textContent).toBe('DONE 4')
+    // M57 R17: the figure leads and the word follows it, which is the README's bar legend.
+    expect(screen.getByTestId('brief-work-working').textContent).toBe('2 WORKING')
+    expect(screen.getByTestId('brief-work-verifying').textContent).toBe('1 VERIFYING')
+    expect(screen.getByTestId('brief-work-review').textContent).toBe('0 IN REVIEW')
+    expect(screen.getByTestId('brief-work-waiting').textContent).toBe('1 WAITING')
+    expect(screen.getByTestId('brief-work-done').textContent).toBe('4 DONE')
     // A zero is dimmed, never dropped: "is anything being reviewed" is answered by the 0.
-    expect(screen.getByTestId('brief-work-review').className).toContain('text-text-3')
-    expect(screen.getByTestId('brief-work-working').className).not.toContain('text-text-3')
+    expect(screen.getByTestId('brief-work-review').className).toContain('text-t3')
+    expect(screen.getByTestId('brief-work-working').className).not.toContain('text-t3')
+    // The bar's five segments, one per word and each in its own tone (ruling P23).
+    expect(tileFor('work').textContent).toContain('Work · 8 tasks')
   })
 
   it('names the two halves of the money and never prints a bare unmeasured figure', () => {
@@ -127,90 +139,9 @@ describe('ProjectBrief', () => {
     expect(tile.textContent).not.toContain('charged at')
   })
 
-  it('lists what needs a person, with a working link each', () => {
-    render(<ProjectBrief workspaceId="w1" brief={BRIEF} />)
-    const rows = screen.getAllByTestId('needs-you-row')
-    expect(rows).toHaveLength(2)
-    expect(rows[0]?.querySelector('a')?.getAttribute('href')).toBe('/w/w1/tasks?task=t1')
-    expect(rows[0]?.textContent).toContain('BLOCKED')
-    expect(rows[0]?.textContent).toContain('Wire the webhook')
-    expect(rows[1]?.querySelector('a')?.getAttribute('href')).toBe('/w/w1#decision-d1')
-    expect(rows[1]?.textContent).toContain('DECISION')
-    // The raw kind is reachable, never readable (`docs/ia.md` rule 3).
-    expect(rows[0]?.textContent).not.toContain('blocked_task')
-    expect(within(rows[0] as HTMLElement).getByTestId('chip').getAttribute('title')).toBe('blocked_task')
-  })
-
-  /**
-   * M45 final wave, I4: R1's promise is EIGHT FACTS ON ONE SCREEN, and a queue that grows with the
-   * project keeps that promise only while the project is small. Five rows and a way to the rest.
-   */
-  it('caps the needs-you list at five rows and links to the rest', () => {
-    const many = Array.from({ length: 7 }, (_, index) => ({
-      kind: 'blocked_task' as const,
-      id: `t${String(index)}`,
-      title: `Blocked task ${String(index)}`,
-      href: `/w/w1/tasks?task=t${String(index)}`,
-      since: '2026-09-09T08:00:00.000Z',
-      taskId: `t${String(index)}`,
-      decisionId: null,
-      messageId: null,
-    }))
-    render(<ProjectBrief workspaceId="w1" brief={{ ...BRIEF, needsYou: many }} />)
-    expect(screen.getAllByTestId('needs-you-row')).toHaveLength(5)
-    const more = screen.getByTestId('needs-you-more')
-    expect(more.textContent).toContain('+2 more')
-    expect(more.querySelector('a')?.getAttribute('href')).toBe('/w/w1/tasks')
-  })
-
-  it('shows no overflow row when the needs-you queue is exactly five', () => {
-    const five = Array.from({ length: 5 }, (_, index) => ({
-      kind: 'question' as const,
-      id: `m${String(index)}`,
-      title: `Question ${String(index)}`,
-      href: `/w/w1#question-m${String(index)}`,
-      since: '2026-09-09T08:00:00.000Z',
-      taskId: null,
-      decisionId: null,
-      messageId: `m${String(index)}`,
-    }))
-    render(<ProjectBrief workspaceId="w1" brief={{ ...BRIEF, needsYou: five }} />)
-    expect(screen.getAllByTestId('needs-you-row')).toHaveLength(5)
-    expect(screen.queryByTestId('needs-you-more')).toBeNull()
-  })
-
-  it('caps the team list at five rows and sends the rest to the Team strip', () => {
-    const many = Array.from({ length: 8 }, (_, index) => ({
-      slaveId: `s${String(index)}`,
-      name: `Worker ${String(index)}`,
-      roleLabel: 'developer',
-      status: 'WORKING',
-      taskTitle: null,
-      lifecycle: 'project' as const,
-      released: null,
-    }))
-    render(<ProjectBrief workspaceId="w1" brief={{ ...BRIEF, team: many }} />)
-    expect(screen.getAllByTestId('team-row')).toHaveLength(5)
-    const more = screen.getByTestId('team-more')
-    expect(more.textContent).toContain('+3 more')
-    expect(more.querySelector('a')?.getAttribute('href')).toBe('#team')
-  })
-
-  /** M45 final wave, M6: version 0 is "no version has ever been saved", and a `v0` chip beside a
-   *  goal somebody clearly wrote reads as a version somebody made. */
-  it('shows no version chip on an objective that has no saved version', () => {
-    render(<ProjectBrief workspaceId="w1" brief={{ ...BRIEF, objective: { text: 'Ship the checkout flow', version: 0 } }} />)
-    const tile = tileFor('objective')
-    expect(tile.textContent).toContain('Ship the checkout flow')
-    expect(tile.textContent).not.toContain('v0')
-    // The way to the editor stays, chip or no chip.
-    expect(within(tile).getAllByRole('link')[0]?.getAttribute('href')).toBe('/w/w1/settings')
-  })
-
   it('says nothing is verified yet rather than leaving the tile blank', () => {
     render(<ProjectBrief workspaceId="w1" brief={{ ...BRIEF, latestVerified: null, needsYou: [] }} />)
     expect(tileFor('latest-verified').textContent).toContain('nothing verified yet')
-    expect(tileFor('needs-you').textContent).toContain('nothing needs you')
   })
 
   it('says which kind of finished the newest verified work reached', () => {
@@ -220,46 +151,16 @@ describe('ProjectBrief', () => {
     expect(tile.textContent).toContain('integrated into the base branch')
   })
 
-  it('shows what each worker is on', () => {
-    render(<ProjectBrief workspaceId="w1" brief={BRIEF} />)
-    const tile = tileFor('team')
-    expect(tile.textContent).toContain('Ada')
-    expect(tile.textContent).toContain('Add Apple Pay')
-    // A worker on nothing says so, rather than leaving the column blank.
-    expect(screen.getAllByTestId('team-row')[1]?.textContent).toContain('—')
-  })
-
-  // M50 R6, `docs/ia.md` rule 3: the word, with the raw value one hover away. `project` is the
-  // ordinary case and prints nothing -- a marker every row carries marks nothing.
-  it('marks a temporary specialist and greys one whose engagement is over', () => {
-    render(<ProjectBrief workspaceId="w1" brief={BRIEF} />)
-    const chips = screen.getAllByTestId('team-lifecycle')
-    expect(chips.map((chip) => chip.textContent)).toEqual(['Permanent', 'Ephemeral', 'Ephemeral'])
-    expect(chips[1]?.getAttribute('title')).toBe('ephemeral')
-    const rows = screen.getAllByTestId('team-row')
-    expect(rows.filter((row) => row.getAttribute('data-released') === 'true')).toHaveLength(1)
-  })
-
-  // The component test passes no handler, and that is the case being pinned: a brief with nowhere
-  // to send a click is still a correct brief, and it must not offer a dead button.
-  it('is a plain row with no handler and a button with one', () => {
-    const { unmount } = render(<ProjectBrief workspaceId="w1" brief={BRIEF} />)
-    expect(screen.getAllByTestId('team-row')[0]?.tagName).toBe('DIV')
-    unmount()
-    render(<ProjectBrief workspaceId="w1" brief={BRIEF} onOpenSlave={() => undefined} />)
-    expect(screen.getAllByTestId('team-row')[0]?.tagName).toBe('BUTTON')
-  })
-
   it('shows no budget figure at all on an unbudgeted project', () => {
     render(<ProjectBrief workspaceId="w1" brief={{ ...BRIEF, cost: { ...BRIEF.cost, budgetUsd: null } }} />)
     expect(tileFor('cost').textContent).not.toContain('/ $')
   })
 
+  // Re-pointed by M57 R17: the `recent-changes` tile is the Recent changes SECTION now, and the
+  // one stamp this component still reads off an ISO string is the latest verified work's.
   it('reads the clock off the stamp rather than computing an age', () => {
     render(<ProjectBrief workspaceId="w1" brief={BRIEF} />)
-    const tile = tileFor('recent-changes')
-    expect(tile.textContent).toContain('10:30:00')
-    expect(tile.textContent).toContain('Project · goal set')
+    expect(tileFor('latest-verified').textContent).toContain('10:00:00')
   })
 })
 
@@ -281,9 +182,9 @@ describe('the cost tile after M51 R7', () => {
   }
   const briefWith = (over: Partial<typeof cost>): typeof BRIEF => ({ ...BRIEF, cost: { ...cost, ...over } })
 
-  it('is still ONE tile among the eight, and the big figure is still the guardrail’s number', () => {
+  it('is still ONE tile among the four, and the big figure is still the guardrail’s number', () => {
     render(<ProjectBrief workspaceId="w1" brief={briefWith({})} />)
-    expect(screen.getAllByTestId('brief-tile')).toHaveLength(8)
+    expect(screen.getAllByTestId('brief-tile')).toHaveLength(4)
     expect(tileFor('cost').textContent).toContain('$4.50 / $25')
   })
 

@@ -6,7 +6,7 @@ import {
   type UserCardFacts,
   type UserCardState,
 } from '@slave-of-ai/domain'
-import type { SlaveStatus, RunStatus, TaskStatus } from '@slave-of-ai/domain'
+import type { SlaveStatus, RunStatus, TaskStatus, UserWorkspaceState } from '@slave-of-ai/domain'
 import type { StatusTone } from '../components/ui/StatusPill'
 import { COLUMN_FOR_STATUS, COLUMN_STATE } from './taskColumns'
 
@@ -51,6 +51,23 @@ const TONE_AND_PULSE: Record<CardState, { readonly tone: StatusTone; readonly pu
   // `pause_requested` and `waiting` already do: the WORD is the difference, not the colour.
   steered: { tone: 'waiting', pulse: true },
   constrained: { tone: 'waiting', pulse: true },
+}
+
+/**
+ * A PROJECT's one word is `userWorkspaceStatus`'s (M44 R4) -- the domain decides it, and this table
+ * keeps only the half the domain may not have: the tone the pill is painted in (erratum E2,
+ * `StatusTone` is an `apps/web` type).
+ *
+ * M57 t6: moved here from `ProjectsClient.tsx`, because the Overview's own title row says the same
+ * word about the same project and one table with two readers cannot drift the way two tables with
+ * one reader each can.
+ */
+export const WORKSPACE_TONE: Record<UserWorkspaceState, StatusTone> = {
+  archived: 'idle',
+  halted: 'blocked',
+  needs_you: 'waiting',
+  working: 'working',
+  idle: 'idle',
 }
 
 export const CARD_STATE_TONE: Record<CardState, ToneSpec> = Object.fromEntries(

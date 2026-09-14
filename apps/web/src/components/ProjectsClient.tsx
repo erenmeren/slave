@@ -1,11 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
-import type { SlaveStatus, UserWorkspaceState } from '@slave-of-ai/domain'
+import type { SlaveStatus } from '@slave-of-ai/domain'
 import { userWorkspaceStatus } from '@slave-of-ai/domain'
-import { CARD_STATE_TONE, cardStateForSlave } from '../lib/tones'
+import { CARD_STATE_TONE, WORKSPACE_TONE, cardStateForSlave } from '../lib/tones'
 import { formatUsd } from '../lib/realMoney'
 import { sendControl } from '../lib/postControl'
 import type { Kpi } from '../server/analytics'
@@ -14,30 +14,15 @@ import { AssignCompanyDialog } from './AssignCompanyDialog'
 import { KpiStrip } from './analytics/KpiStrip'
 import type { CompanyRow } from './CompanyManager'
 import { NewProjectDrawer } from './projects/NewProjectDrawer'
+import { useHeaderAction } from './shell/HeaderActionProvider'
 import { AvatarTile } from './ui/AvatarTile'
 import { Button } from './ui/Button'
 import { Card } from './ui/Card'
-import { Chip } from './ui/Chip'
 import { Panel } from './ui/Panel'
 import { ProgressBar } from './ui/ProgressBar'
 import { PageShell } from './ui/PageShell'
-import { SectionLabel } from './ui/SectionLabel'
 import { StatStrip } from './ui/StatStrip'
-import { StatusPill, type StatusTone } from './ui/StatusPill'
-
-/**
- * A project's one word is `userWorkspaceStatus`'s now (M44 R4) -- the domain decides it, and this
- * file keeps only the half the domain may not have: the tone the pill is painted in (erratum E2,
- * `StatusTone` is an `apps/web` type). The old three-member table said "Halted / Running / Idle"
- * and could not say ARCHIVED or WAITING FOR YOU at all.
- */
-const WORKSPACE_TONE: Record<UserWorkspaceState, StatusTone> = {
-  archived: 'idle',
-  halted: 'blocked',
-  needs_you: 'waiting',
-  working: 'working',
-  idle: 'idle',
-}
+import { StatusPill } from './ui/StatusPill'
 
 function ProjectCard({
   project,
@@ -73,35 +58,53 @@ function ProjectCard({
   }
 
   return (
-    <div data-testid="project-card" className="flex flex-col gap-2">
-      <Card onClick={() => router.push(`/w/${project.id}`)}>
+    // The wrapper is LAYOUT ONLY and carries no testid any more (ruling P17): the README's card
+    // recipe -- the 14px radius, the border, the padding -- belongs on the surface a person sees,
+    // and `gate-m57` and the rewritten `gate-m14` both measure `[data-testid="project-card"]`'s
+    // own `border-radius`. It stays because `restore`/`Assign company` cannot live INSIDE a `Card`
+    // that renders as a `<button>`: a button inside a button is invalid HTML.
+    <div className="flex flex-col gap-2">
+      <Card
+        testId="project-card"
+        onClick={() => router.push(`/w/${project.id}`)}
+        className={`gap-3 rounded-page-card p-4 px-[18px] shadow-card ${
+          project.needsYou > 0 ? 'border-[color-mix(in_oklab,var(--s-waiting)_45%,var(--line))]' : ''
+        }`}
+      >
         <div className="flex items-start gap-[9px]">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-[6px]">
-              <span className="truncate text-[14px] font-semibold tracking-[-.2px]">{project.name}</span>
-              <Chip>{project.companyName ?? 'no company'}</Chip>
+              <span className="truncate text-[16px] font-semibold tracking-[-.2px] text-t1">{project.name}</span>
               {project.archived && (
-                <span data-testid="project-archived" className="rounded-pill border border-line px-[9px] py-[3px] text-[10px] text-text-faint">
+                <span data-testid="project-archived" className="rounded-pill border border-line px-[9px] py-[3px] text-[10px] text-t3">
                   archived
                 </span>
               )}
             </div>
-            <div data-testid="project-description" className="mt-[2px] truncate text-[11px] text-text-dim">
-              {project.goal ?? 'no goal set'}
-            </div>
-            {/* The count behind the WAITING FOR YOU pill, said in words (M44 R1). A floor, never a
-              * total -- `listProjects`' own doc comment and `docs/ia.md` both say what it counts
-              * and what it does not. */}
-            {project.needsYou > 0 && (
-              <span data-testid="project-needs-you" className="mt-[2px] block text-[11px] text-tone-waiting">
-                {project.needsYou} {project.needsYou === 1 ? 'thing needs' : 'things need'} you
-              </span>
-            )}
+            {/* README "Projects": the company line under the name. `ProjectRow` carries no runbook,
+              * so the line is the company alone until a read model has one to add. */}
+            <div className="mt-[2px] truncate text-[12.5px] text-t3">{project.companyName ?? 'no company'}</div>
           </div>
           <StatusPill tone={tone} label={status.label} pulse={status.state === 'working'} />
         </div>
 
-        <div aria-label="team" className="mt-[13px] flex flex-wrap items-center gap-1">
+        <div data-testid="project-description" className="min-h-[40px] text-[13.5px] leading-[1.45] text-t2">
+          {project.goal ?? 'no goal set'}
+        </div>
+
+        {/* The count behind the WAITING FOR YOU pill, said in words (M44 R1), in the README's own
+          * amber strip. A floor, never a total -- `listProjects`' own doc comment and `docs/ia.md`
+          * both say what it counts and what it does not. */}
+        {project.needsYou > 0 && (
+          <div className="flex items-center justify-between rounded-panel bg-[color-mix(in_oklab,var(--s-waiting)_10%,transparent)] px-3 py-[9px] text-[13px] text-t1">
+            <span data-testid="project-needs-you">
+              {project.needsYou} {project.needsYou === 1 ? 'thing needs' : 'things need'} you
+            </span>
+            <span className="font-semibold">Review →</span>
+          </div>
+        )}
+
+        <div aria-label="team" className="flex flex-wrap items-center gap-1">
           {project.team.slice(0, 6).map((member) => (
             <AvatarTile
               key={member.slaveId}
@@ -120,17 +123,17 @@ function ProjectCard({
           )}
         </div>
 
-        <div className="mt-[14px]">
+        <div>
           <ProgressBar pct={pct} tone={tone} />
         </div>
-        <div className="mt-[5px] flex justify-between font-mono text-[10px] text-text-3">
+        <div className="flex justify-between font-mono text-[11px] text-t3">
           <span>progress</span>
           <span>{pct}%</span>
         </div>
 
-        <div className="mt-[14px]">
+        <div>
           {/* The caveat rides INSIDE the spend tile, as `StatStripItem.note` (M14 fix wave, queue
-            * item (f)) -- exactly where `TopStrip` nests its own `strip-unmeasured`. It is never
+            * item (f)) -- the idiom `ui/StatStrip.tsx`'s own `note` doc records. It is never
             * folded into the figure (Decision 4), and the strip stays exactly 4-up, which is the
             * handoff's own geometry -- except an archived project (M27 §3.4's "no spend bar"),
             * which drops to 3-up: spend is a live-budget figure, and an archived project spends
@@ -160,6 +163,14 @@ function ProjectCard({
                   ]),
             ]}
           />
+        </div>
+
+        {/* README "Projects": the card's own call to action. M27 §3.4 keeps an archived project's
+          * half of it empty -- spend is a live-budget figure and an archived project accrues none,
+          * which is the same rule the `spend` tile above follows. */}
+        <div className="flex items-center justify-between border-t border-line pt-3 text-[12.5px] text-t2">
+          <span className="font-mono">{project.archived ? '' : formatUsd(project.spend)}</span>
+          <span className="text-[13px] font-semibold text-accent">Open project →</span>
         </div>
       </Card>
       {project.archived ? (
@@ -245,6 +256,22 @@ export function ProjectsClient({
   const [assigningWorkspaceId, setAssigningWorkspaceId] = useState<string | null>(null)
   const [newOpen, setNewOpen] = useState(searchParams.get('new') === '1')
   const showArchived = searchParams.get('archived') === '1'
+  const needsYouTotal = projects.reduce((n, project) => n + project.needsYou, 0)
+
+  // M57 R7: a page's primary action is the HEADER's now, not the page's own title row. The testid
+  // does not move with it -- `gate-m44-ux-foundation` clicks `new-project`.
+  const openNew = useCallback((): void => setNewOpen(true), [])
+  useHeaderAction(
+    <button
+      type="button"
+      data-testid="new-project"
+      onClick={openNew}
+      className="rounded-card border-0 bg-accent px-[14px] py-[7px] text-[13px] font-semibold text-accent-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+    >
+      + New project
+    </button>,
+    [openNew],
+  )
 
   return (
     // M44 erratum E25 / M45 R5: the shell WRAPS this page's own frame rather than replacing it --
@@ -253,10 +280,21 @@ export function ProjectsClient({
     // `page-shell` marker.
     <PageShell flush>
       <div className="flex flex-col">
-        <div className="flex items-center justify-between px-[20px] pt-[18px]">
-          <SectionLabel>Projects</SectionLabel>
+        <div className="flex items-center justify-between px-[24px] pt-[22px]">
+          <div>
+            <h1 className="m-0 text-[22px] font-semibold tracking-[-.3px] text-t1">Projects</h1>
+            <p className="mt-1 text-[13.5px] text-t2">
+              {projects.length} projects
+              {needsYouTotal > 0 && (
+                <>
+                  {' · '}
+                  <span className="font-medium text-s-waiting">{needsYouTotal} things need you</span>
+                </>
+              )}
+            </p>
+          </div>
           <span className="flex items-center gap-3">
-            <label className="flex items-center gap-[6px] text-xs text-text-2">
+            <label className="flex items-center gap-[6px] text-[13px] text-t2">
               <input
                 type="checkbox"
                 data-testid="show-archived"
@@ -271,12 +309,9 @@ export function ProjectsClient({
               />
               show archived
             </label>
-            <Button variant="primary" size="sm" data-testid="new-project" onClick={() => setNewOpen(true)}>
-              + New project
-            </Button>
           </span>
         </div>
-        <div className="grid grid-cols-1 gap-[14px] p-[18px_20px] md:grid-cols-3">
+        <div className="grid gap-[14px] p-[18px_24px] [grid-template-columns:repeat(auto-fit,minmax(300px,1fr))]">
           {projects.map((project) => (
             <ProjectCard
               key={project.id}
@@ -293,7 +328,7 @@ export function ProjectsClient({
           * and its all-workspaces view arrived here instead, because a spend figure is a fact about
           * the projects above it and belongs where somebody can act on it. `/analytics` keeps its
           * route, its `?workspace=` scope and this link (`docs/ia.md`). */}
-        <section data-testid="all-projects-analytics" className="flex flex-col gap-4 px-[20px] pb-[20px]">
+        <section data-testid="all-projects-analytics" className="flex flex-col gap-4 px-[24px] pb-[24px]">
           <Panel
             title="across every project"
             action={

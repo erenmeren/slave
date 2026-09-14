@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
+import { userWorkspaceStatus } from '@slave-of-ai/domain'
 import { publishShellFacts } from '../hooks/useShellFacts'
 import { publishStreamState } from '../hooks/useStreamState'
 import { useSelectedId } from '../hooks/useSelectedId'
@@ -12,22 +13,27 @@ import { SlaveCard } from './SlaveCard'
 import { SlavePanel } from './SlavePanel'
 import { HaltBanner } from './HaltBanner'
 import { postControl } from '../lib/postControl'
-import { TopStrip } from './TopStrip'
+import { WORKSPACE_TONE } from '../lib/tones'
+import { NeedsYouCard } from './project/NeedsYouCard'
 import { ProjectBrief } from './project/ProjectBrief'
 import { RunbookPanel } from './project/RunbookPanel'
-import { SupervisorRequest } from './project/SupervisorRequest'
 import { SupervisorTimeline } from './project/SupervisorTimeline'
 import { Alert } from './ui/Alert'
 import { Button } from './ui/Button'
 import { EmptyState } from './ui/EmptyState'
 import { PageShell } from './ui/PageShell'
 import { Panel } from './ui/Panel'
-import { SectionLabel } from './ui/SectionLabel'
+import { StatusPill } from './ui/StatusPill'
 
 /**
- * The "blocked · needs you" panel (design README §3a.1). `flex-1` beside the fixed 340px events
- * panel. Resume POSTs to the run route the card and the detail panel already use — no new
- * endpoint, and no second idea of what resume means.
+ * The "blocked · needs you" panel (design README §3a.1). Resume POSTs to the run route the row and
+ * the detail panel already use — no new endpoint, and no second idea of what resume means.
+ *
+ * M57 t6: NOT on the Overview any more. `NeedsYouCard` is the band that answers "what needs me",
+ * and it is this panel's superset for three of the four kinds; the fourth -- a paused run waiting
+ * to be resumed -- is the Team row's own Resume button, one section below. Exported still, because
+ * its own cases pin behaviour no other surface has yet, and Tasks 7-8 decide where (if anywhere) a
+ * panel of paused RUNS belongs.
  */
 export function BlockedPanel({
   workspaceId,
@@ -172,7 +178,7 @@ export function OverviewClient({
   readonly workspaceId: string
   readonly initial: OverviewSnapshot
 }): React.JSX.Element {
-  const { snapshot, actionLines, liveEvents, connection, error, latencyMs } = useOverview(workspaceId, initial)
+  const { snapshot, liveEvents, connection, error, latencyMs } = useOverview(workspaceId, initial)
   const view = snapshot ?? initial
   const [selectedSlaveId, selectSlave] = useSelectedId('slave')
   const selectedSlave = view.slaves.find((slave) => slave.id === selectedSlaveId) ?? null
@@ -223,6 +229,56 @@ export function OverviewClient({
     publishStreamState(workspaceId, { connection, latencyMs })
   }, [workspaceId, connection, latencyMs])
   useEffect((): (() => void) => () => publishStreamState(workspaceId, null), [workspaceId])
+
+  // Band 1's pill: the same word `ProjectsClient`'s card says about this same project, from the
+  // same `userWorkspaceStatus`. `archived: false` because `OverviewSnapshot.workspace` carries no
+  // archived flag -- an archived project's Overview is reachable and its chip lives on the
+  // Projects card, which is the surface that can restore it.
+  const workspaceStatus = userWorkspaceStatus({
+    archived: false,
+    halted: view.workspace.haltedReason !== null,
+    needsYouCount: view.needsYou.length,
+    tasksActive: view.tasks.active,
+  })
+
+  // README "Overview" → Supervisor tile: `Runbook <name> · stage 3/5 Verify`. Composed here rather
+  // than in `server/brief.ts` because `ProjectBrief` the DTO has no runbook field and this
+  // milestone adds no read-model field -- `view.runbook` is already on the snapshot for the panel
+  // below. `RunbookPanelView.currentStage` is a stage KEY and `RunbookStageView` has `key`/`title`
+  // (no `name`), so the index comes off the key and the WORD printed is the title, exactly as
+  // `RunbookPanel` itself reads them. A project with no adopted runbook has no line.
+  const runbookLine = ((): string | null => {
+    const runbook = view.runbook
+    if (runbook?.adopted == null) return null
+    const stageIndex = runbook.stages.findIndex((stage) => stage.key === runbook.currentStage)
+    const stage = runbook.stages[stageIndex]
+    const position =
+      stage === undefined
+        ? ''
+        : ` · stage ${String(stageIndex + 1)}/${String(runbook.stages.length)} ${stage.title}`
+    return `Runbook ${runbook.adopted.name}${position}`
+  })()
+
+  /**
+   * The live river, minus what the domain classifies as nothing (controller ruling T6-0, M45 R2).
+   *
+   * `run.output` and `run.tool_call` are MODEL CHATTER: `LANE_BY_TYPE` gives them no lane, and R2's
+   * promise -- measured by `gate:m45-project-experience` stage 2 -- is that their text never
+   * appears on the project page. The river used to be hidden inside a closed `Advanced` disclosure,
+   * which is the only reason the promise held; Task 4 deleted that disclosure, so the rule has to
+   * be a rule now rather than a piece of furniture.
+   *
+   * `OverviewSnapshot.liveEvents` is a THREE-FIELD projection (`seq`, `ts`, `summary`) and carries
+   * no type, and this milestone adds no read-model field -- so the classification is joined from
+   * the timeline sitting beside it in this same band, whose rows `server/timeline.ts` selects with
+   * `LANE_BY_TYPE[type] !== null` and nothing else. One rule, one place, no second table: an event
+   * the Supervisor timeline will not carry is not a change this project made, and the Activity page
+   * (the band's own `All activity →`) is where every raw row keeps its `data-event-type`.
+   */
+  const classifiedEvents = useMemo(() => {
+    const laned = new Set(view.timeline.map((entry) => entry.key))
+    return view.liveEvents.filter((event) => laned.has(`event-${String(event.seq)}`))
+  }, [view.timeline, view.liveEvents])
 
   const { open: openPanel, close: closePanel, mode: panelMode } = useRightPanel()
 
@@ -346,52 +402,75 @@ export function OverviewClient({
               </Link>
             </Alert>
           )}
-          {/* M45 R1: the eight facts, first, because "what is happening and what needs me" is the
-            * question this page exists to answer. */}
-          <ProjectBrief workspaceId={workspaceId} brief={view.brief} onOpenSlave={selectSlave} />
-          {/* M45 erratum E17: the raw board counts the design handoff documents and
-            * `gate:m14-fidelity` measures, kept under the brief that speaks the domain's words. */}
-          <TopStrip snapshot={view} />
-          {/* M45 R3 */}
-          <SupervisorRequest workspaceId={workspaceId} />
-          {/* M48 R7: how this project works, between what you asked for and what happened. */}
-          <RunbookPanel workspaceId={workspaceId} view={view.runbook} />
-          {/* M45 R2 */}
-          <SupervisorTimeline workspaceId={workspaceId} entries={view.timeline} needsYou={view.needsYou} />
-          <section id="team" data-testid="team" className="px-[20px] pt-[16px]">
-            <SectionLabel>team</SectionLabel>
-            {/* M45 erratum E16: the Team strip IS this grid. `SlaveCard` renders nowhere else in
-              * the app, and six `gate:m14-fidelity` assertions live on it. R4's worker disclosure
-              * is the EXPANDED view -- `SlavePanel`'s Details groups, Task 4.
-              *
-              * The handoff's 3-column card grid at an 11px gap (design README §3a.1), narrowing to
-              * two and then one rather than shrinking the cards past the anatomy they hold. */}
-            <div className="grid grid-cols-1 gap-[11px] pt-[8px] md:grid-cols-2 xl:grid-cols-3">
+          {/* README "Overview", band 1: the project's name, its one word, and the goal under it.
+            * This is where the brief's deleted `objective` tile went -- a goal is what the project
+            * IS, not one fact among four. */}
+          <section data-testid="project-title" className="px-[24px] pt-[22px]">
+            <div className="flex items-center gap-3">
+              <h1 className="m-0 text-[22px] font-semibold tracking-[-.3px] text-t1">{view.workspace.name}</h1>
+              <StatusPill tone={WORKSPACE_TONE[workspaceStatus.state]} label={workspaceStatus.label} title={workspaceStatus.state} />
+            </div>
+            <p data-testid="project-goal-line" className="mt-[6px] text-[13.5px] text-t2">
+              {view.brief.objective.version > 0 && `Goal v${String(view.brief.objective.version)} · `}
+              {view.brief.objective.text ?? 'no goal yet'}{' '}
+              <Link href={`/w/${workspaceId}/settings`} className="font-medium text-accent">
+                Edit goal
+              </Link>
+            </p>
+          </section>
+
+          {/* Band 2: what is waiting on a person, above everything the project did on its own.
+            * No `onRefresh` (ruling P18): approve and reject append events, this page's own stream
+            * wakes on them, and the snapshot is refetched 250 ms later by the loop every other
+            * control here already rides. */}
+          <NeedsYouCard workspaceId={workspaceId} items={view.needsYou} />
+
+          {/* Band 3: the four fact tiles (M57 R17). The container carries `strip` as well as
+            * `brief` -- `TopStrip` is gone and three gates wait on that marker for "the Overview
+            * has rendered". */}
+          <ProjectBrief workspaceId={workspaceId} brief={view.brief} runbookLine={runbookLine} />
+
+          {/* Band 4: the Team ROWS (M57 R18). `SlaveCard` is a row now, so this section owns only
+            * the surface around them; the six-track grid is the row's own. `#team` stays -- it is
+            * an anchor other surfaces link to -- and so does the `team` testid. */}
+          <section id="team" data-testid="team" className="px-[24px] pt-[18px]">
+            <div className="mb-[10px] flex items-center justify-between">
+              <span className="font-semibold text-t1">
+                Team <span className="font-mono text-[12px] font-medium text-t3">{view.slaves.length}</span>
+              </span>
+              <Link href={`/w/${workspaceId}/organization`} className="text-[13px] font-medium text-accent">
+                Open Team →
+              </Link>
+            </div>
+            <div className="overflow-hidden rounded-panel-card border border-line bg-card">
               {view.slaves.map((slave) => (
-                <SlaveCard
-                  key={slave.id}
-                  slave={slave}
-                  liveActionLine={actionLines[slave.id] ?? null}
-                  workspaceId={workspaceId}
-                  onOpen={selectSlave}
-                />
+                // THREE props. `liveActionLine` is gone with the `action-line` the row no longer
+                // draws (M57 R18) -- the panel the `⋯` opens renders the live line already.
+                <SlaveCard key={slave.id} slave={slave} workspaceId={workspaceId} onOpen={selectSlave} />
               ))}
             </div>
           </section>
-          {/* M57 R11: the `Advanced ▾` disclosure is gone and these three are on the page, in the
-            * order it held them. Their final homes are later tasks' (`BlockedPanel` becomes the
-            * Needs you card, `LiveEventsPanel` the Recent changes section, `MergeQueuePanel` the
-            * Review column), and a page that lost them here and got them back three tasks later
-            * would be a page nobody could review in between. The Supervisor panel does NOT come
-            * with them: it is the right panel's from the next task on. No wrapper testid, so the
-            * page's own child order still reads as the sections it is made of. */}
-          <div className="flex flex-col gap-[11px] px-[20px] pb-[20px] pt-[16px]">
-            <div className="flex gap-[11px]">
-              <BlockedPanel workspaceId={workspaceId} items={view.blocked} />
-              <LiveEventsPanel workspaceId={workspaceId} events={view.liveEvents} />
+
+          {/* M48 R7: how this project works, between who is doing it and what happened. Unchanged
+            * -- `gate:m48-runbooks` reads eleven of its testids, and band 3's Supervisor tile
+            * carries the one-line SUMMARY of it. */}
+          <RunbookPanel workspaceId={workspaceId} view={view.runbook} />
+
+          {/* Band 5: Recent changes. M45 R2's six-lane timeline with its own testids untouched,
+            * plus the two panels Task 4 parked on the page. */}
+          <section data-testid="recent-changes" className="flex flex-col gap-3 px-[24px] py-[18px]">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-t1">Recent changes</span>
+              <Link href={`/w/${workspaceId}/activity`} className="text-[13px] font-medium text-accent">
+                All activity →
+              </Link>
             </div>
-            <MergeQueuePanel queue={view.mergeQueue} />
-          </div>
+            <SupervisorTimeline workspaceId={workspaceId} entries={view.timeline} needsYou={view.needsYou} />
+            <div className="flex gap-3">
+              <LiveEventsPanel workspaceId={workspaceId} events={classifiedEvents} />
+              <MergeQueuePanel queue={view.mergeQueue} />
+            </div>
+          </section>
         </PageShell>
       </div>
     </>
