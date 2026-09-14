@@ -60,17 +60,15 @@
 // catalog is a fact about the daemon host's disk, not about this gate's workspace, and Decision 6
 // says the catalog never deletes.
 
-// ---- ONE ROW OF STAGE 2 NOW PREPARES THE PAGE (M45 erratum E15) ----------------------------
+// ---- NO ROW OF STAGE 2 PREPARES THE PAGE ANY MORE (M45 erratum E15, closed by M57 R11) -----
 //
-// `NUMBERS`' rows take an optional sixth element -- a function run after navigation and before the
-// measurement -- and exactly one row uses it: the 340px `live-events` river. M45 R1 moved that
-// panel under the Overview's own `Advanced` disclosure, because it is not one of the eight facts a
-// person needs in ten seconds. The panel itself did not change -- same component, same
-// `w-[340px]`, same testid -- so the README's 340px number is still real and is still measured
-// here; what changed is that it has to be OPENED first. `getComputedStyle` on a subtree that is
-// not rendered returns `auto`, so a gate that did not click would read nothing, and a gate that
-// dropped the row would leave a documented number with nothing measuring it. NO EXPECTED VALUE IN
-// THIS FILE CHANGED.
+// `NUMBERS`' rows used to take an optional sixth element -- a function run after navigation and
+// before the measurement -- and exactly one row used it: the 340px `live-events` river, which M45
+// R1 had moved under the Overview's own `Advanced` disclosure, where `getComputedStyle` on an
+// unrendered subtree answers `auto`. M57 R11 deleted that disclosure and re-homed the river onto
+// `recent-changes`, so it is measurable where it stands and the hook has no callers. It is gone
+// with them: a mechanism nothing uses, described by a comment nothing can check, is worse than
+// either.
 
 import { execFileSync, spawn } from 'node:child_process'
 import {
@@ -917,32 +915,47 @@ try {
     console.log(`stage 2 (${pageName}): ${selector} ${property} = ${actual}`)
   }
 
-  // page, path, selector, property, expected, prepare? -- every row is one README number. The cable's own
-  // dasharray is NOT here: `CableEdge` draws that path only on an ACTIVE edge, which needs a live
-  // run, so it is asserted as stage 2b after stage 4b dispatches one.
+  // page, path, selector, property, expected -- every row is one number out of the M57
+  // handoff README (`design_handoff_ui_redesign`). The M14-era numbers this table held (212px
+  // sidebar, 52px header, 20px pill) are the OLD handoff's and are gone with the components that
+  // drew them (M57 erratum E9). The cable's own dasharray is NOT here: `CableEdge` draws that path
+  // only on an ACTIVE edge, which needs a live run, so it is asserted as stage 2b after stage 4b
+  // dispatches one.
   const NUMBERS = [
-    ['overview', `/w/${workspaceId}`, 'nav[aria-label="Primary"]', 'width', '212px'],
+    ['overview', `/w/${workspaceId}`, 'nav[aria-label="Primary"]', 'width', '236px'],
     // M57 R7: the project header is the ROOT layout's `app-header` now, on every page in the
     // product rather than only `/w/<id>/*`, and the handoff's number for it is 54px.
     ['overview', `/w/${workspaceId}`, '[data-testid="app-header"]', 'height', '54px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"]', 'border-radius', '8px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"]', 'padding', '12px 13px'],
-    // SCOPED to the card (M45 t5): the brief's `team` tile renders `AvatarTile` too, and it is
-    // above the SlaveCard grid on the page -- an unscoped `querySelector` would be measuring the
-    // brief's tile while claiming to measure the card's. Both are 28x28 today, which is exactly
-    // why the drift would have gone unnoticed.
-    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="avatar-tile"]', 'width', '28px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="avatar-tile"]', 'height', '28px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="status-pill"]', 'border-radius', '20px'],
-    // M45 R1 moved the live-events river under the Overview's own `Advanced` disclosure: it is not
-    // one of the eight facts a person needs in ten seconds. The panel itself did not change -- same
-    // component, same `w-[340px]`, same testid -- so the README's 340px number is still real and is
-    // still measured here. What changed is that it has to be OPENED first: `getComputedStyle` on a
-    // subtree that is not rendered returns `auto`, so a gate that did not click would read nothing
-    // and a gate that dropped the row would leave a documented number with nothing measuring it.
-    // No `prepare` any more (M57 R11): the disclosure that used to hold this panel is gone and the
-    // river renders directly on the Overview, so the 340px is measurable where it stands.
+    // M57 R8: the third column. 372px open, and the 52px dock it collapses to is
+    // `gate:m57-ui-redesign` stage 8's, because it takes a click to exist.
+    ['overview', `/w/${workspaceId}`, '[data-testid="right-panel"]', 'width', '372px'],
+    // `needs-you-empty`, NOT `needs-you-card`: this gate's fixture has nothing waiting on a person
+    // -- one `ready` task, no blocked task, no pending decision, no unintegrated `done` -- so the
+    // Overview draws the queue's EMPTY state, which is the same `rounded-panel-card` at the same
+    // README radius. The POPULATED card is measured by `gate:m57-ui-redesign` stage 8, whose
+    // fixture seeds both a decision and a blocked task on purpose.
+    ['overview', `/w/${workspaceId}`, '[data-testid="needs-you-empty"]', 'border-radius', '12px'],
+    ['overview', `/w/${workspaceId}`, '[data-testid="brief-tile"]', 'border-radius', '12px'],
+    // M57 R18: `slave-card` is a ROW on the README's `34px 120px 120px 1fr 96px 32px` grid, not a
+    // bordered card. The radius row and the `12px 13px` padding row are GONE -- a row has neither
+    // -- and the padding it does have is the README's. The SCOPED selectors survive because the
+    // row still carries `slave-card` with `avatar-tile` and `status-pill` inside it, which is why
+    // R18 made keeping those three testids a requirement rather than a convenience.
+    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"]', 'padding', '10px 14px'],
+    // 30x30 on THIS row, and 28x28 everywhere else: `ui/AvatarTile` has a `size` prop whose default
+    // is the 28px every other caller already gets, and the Team row is the ONE caller that passes
+    // `md`. The SCOPING is therefore load-bearing rather than defensive -- an unscoped selector
+    // would hit whichever 28px tile rendered first (`TaskCard`, `AllSlavesTable`, `ProjectsClient`,
+    // `GraphDrawer`) and fail against 30.
+    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="avatar-tile"]', 'width', '30px'],
+    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="avatar-tile"]', 'height', '30px'],
+    // M57 erratum E9: the handoff's pill radius is 999, not the 20 M44's token carried.
+    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="status-pill"]', 'border-radius', '999px'],
+    // M57 R11 re-homed the live-events river out of a disclosure and onto `recent-changes`; it is
+    // the same component at the same 340px, and it needs no click to be measurable any more.
     ['overview', `/w/${workspaceId}`, '[data-testid="live-events"]', 'width', '340px'],
+    ['tasks', `/w/${workspaceId}/tasks`, '[data-testid="task-card"]', 'border-radius', '10px'],
+    ['projects', '/', '[data-testid="project-card"]', 'border-radius', '14px'],
     // M57 t8 fix round 1, ruling T8-3: the row's geometry moved (`ActivityCard.tsx`'s
     // `px-4` + `64px` time + `gap-3` + `14px` dot column), so the rule's x moved with it to the
     // dot's own centre -- `16 + 64 + 12 + 7 = 99`.
@@ -951,7 +964,7 @@ try {
   ]
 
   let currentPath = null
-  for (const [pageName, path, selector, property, expected, prepare] of NUMBERS) {
+  for (const [pageName, path, selector, property, expected] of NUMBERS) {
     if (path !== currentPath) {
       await gotoReliably(`${baseUrl}${path}`)
       currentPath = path
@@ -969,10 +982,6 @@ try {
         )
       }
     }
-    // OUTSIDE the `path !== currentPath` block above, deliberately: the rows are grouped by path
-    // and the one row that prepares (`live-events`) is the eighth of eight on `/w/<id>`, so a hook
-    // run only on a page CHANGE would never run at all.
-    if (typeof prepare === 'function') await prepare()
     await assertComputed(pageName, selector, property, expected)
   }
 
@@ -1048,14 +1057,27 @@ try {
   // ============================================================================================
   // Stage 4a: the two-step STOP, the halt banner, and clear-halt.
   // ============================================================================================
+  //
+  // M57 R7 re-homed the control, not the recipe. `EmergencyStopButton`'s two elements
+  // (`emergency-stop` -> `emergency-stop-confirm`) were the project header's until this milestone;
+  // the header is the ROOT layout's now and draws ONE split button that CHANGES -- `Stop ▾` arms on
+  // the first click (`data-armed="true"`, with a Cancel beside it) and fires on the second. The
+  // rule this stage exists to prove is untouched: the first click never fires. The component itself
+  // still lives on the project Settings tab's danger zone, where M24 put its second copy.
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
+  await waitVisible(page.getByTestId('stop-split'), "the header's Stop split button")
   await clickUntil(
-    page.getByTestId('emergency-stop'),
-    async () => page.getByTestId('emergency-stop-confirm').first().isVisible(),
-    'the STOP button',
+    page.getByTestId('stop-split'),
+    async () => (await page.getByTestId('stop-split').getAttribute('data-armed')) === 'true',
+    'the STOP button (first click, which arms and must not fire)',
   )
+  const haltedAfterArming = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
+  if (haltedAfterArming.haltedReason !== null) {
+    await fail(`stage 4a: the FIRST click halted the workspace (${JSON.stringify(haltedAfterArming.haltedReason)}) -- a destructive control must ask twice`)
+  }
+  await waitVisible(page.getByTestId('stop-cancel'), "the armed STOP's Cancel")
   await clickUntil(
-    page.getByTestId('emergency-stop-confirm'),
+    page.getByTestId('stop-split'),
     async () => {
       const row = await prisma.workspace.findUnique({ where: { id: workspaceId } })
       return row !== null && row.haltedReason !== null

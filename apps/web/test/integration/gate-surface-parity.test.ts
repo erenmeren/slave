@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { prisma } from '@slave-of-ai/db/client'
 import {
   listDecisions,
@@ -12,6 +14,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildGoalHistory } from '../../src/server/goal.js'
 import { buildOverviewSnapshot } from '../../src/server/overview.js'
 import { RECENT_DECISION_LIMIT, buildSupervisorView } from '../../src/server/supervisor.js'
+import { COLUMN_FOR_STATUS } from '../../src/lib/taskColumns.js'
 import { buildTasksSnapshot } from '../../src/server/tasks.js'
 
 /**
@@ -217,5 +220,31 @@ describe('the gate reads the same facts the web builders publish', () => {
     expect(snapshot?.tasks.blocked).toBe(countOf(['blocked']))
     expect(spend.spentUsd).toBeGreaterThan(0)
     expect(snapshot?.workspace.spentUsd).toBe(spend.spentUsd)
+  })
+})
+
+/**
+ * M57 R10 / spec §5 stage 6: `scripts/gate-m57-ui-redesign.mjs` asserts that every card on the
+ * board sits in the column `COLUMN_FOR_STATUS` says it should — and it cannot import that table,
+ * for the reason this file's own header gives. So it re-declares it, and this case is the pin: the
+ * gate's literal and the module must be the same thirteen pairs, or the gate is measuring a
+ * vocabulary the board does not use.
+ *
+ * Parsed out of the gate's SOURCE rather than imported from it: the gate is a `.mjs` whose module
+ * body drives a browser, and importing it would run it. The literal is a flat block of
+ * `key: 'Value',` lines, which is all this needs to read.
+ */
+describe('the m57 gate reads the same task columns the board draws', () => {
+  it('re-declares COLUMN_FOR_STATUS exactly', () => {
+    const source = readFileSync(
+      fileURLToPath(new URL('../../../../scripts/gate-m57-ui-redesign.mjs', import.meta.url)),
+      'utf8',
+    )
+    const block = /const GATE_COLUMN_FOR_STATUS = \{([^}]*)\}/.exec(source)?.[1]
+    expect(block, 'GATE_COLUMN_FOR_STATUS is not in the gate').toBeDefined()
+    const parsed = Object.fromEntries(
+      [...(block ?? '').matchAll(/^\s*(\w+):\s*'([^']+)',/gm)].map((match) => [match[1], match[2]]),
+    )
+    expect(parsed).toEqual(COLUMN_FOR_STATUS)
   })
 })

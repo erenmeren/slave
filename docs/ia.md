@@ -23,19 +23,78 @@ before adding a surface.
 
 ## Top-level navigation
 
+The sidebar is one tree (M57 R5). Its root is Projects; under it is one row per project; under the
+OPEN project are its six sections and a `VIEWS` group. Below the tree are the three destinations
+that are not a project.
+
 | Entry | Route | The question it answers |
 |---|---|---|
 | Projects | `/` | What am I building, and what needs me? |
+| … a project | `/w/:id` | (its six sections, below) |
 | Workforce | `/workforce` | Who works here, and what can they do? |
 | Simulations | `/sim` | What would a company like this do? |
 | Settings | `/settings` | How is this installation set up? |
+
+| A project's row | Route | Label |
+|---|---|---|
+| Overview | `/w/:id` | Overview |
+| Tasks | `/w/:id/tasks` | Tasks |
+| Organization | `/w/:id/organization` | **Team** |
+| Knowledge | `/w/:id/knowledge` | Knowledge |
+| Activity | `/w/:id/activity` | Activity |
+| Settings | `/w/:id/settings` | Settings |
+| `VIEWS` chips | `/w/:id/graph`, `/w/:id/office`, `/analytics?workspace=:id` | Graph · Office · Analytics |
+
+`ProjectTabs`' six-tab strip and its `Advanced ▾` menu are gone as WIDGETS in M57. Rule 2 is about
+destinations and every one of them is above, at the URL it always had — the six tabs are the six
+section rows and `Advanced ▾`'s three items are the `VIEWS` chips, visible instead of behind a
+menu. `Team` is a LABEL change only: the route, the component and every `organization-*` testid are
+untouched, because "Organization" was the graph mode's word for a diagram and this page is about
+people.
+
+## The header
+
+54 px, on every page, mounted by the ROOT layout (M57 R7): a breadcrumb `Projects / <project> /
+<section>`, a HALTED pill while the project is halted, the budget `$x / $y` beside a 100 × 5 px bar,
+and one split button — `Pause all | Stop ▾`, where `Stop ▾` arms on the first click and fires on the
+second, and reads `Clear halt` while the project is halted. A page contributes its own primary
+action (`+ New project`, `+ New slave`, `+ New simulation`) into the header's slot.
+
+`Pause all` and `Resume all` are the web's own fan-outs over verbs that already existed — the first
+is `pauseActiveRuns`, which an emergency stop has always used; the second is a loop over the same
+per-run `requestResume` a single worker's Resume button calls. `Clear halt` is `clearHalt`, which
+until M57 was two columns written inline in the CLI's own `clear-halt` case and had no web route at
+all. None of the three adds an event type.
+
+The live/latency chip that used to sit here is the sidebar's footer now, beside the theme pill.
+
+**One width.** The frame has a 1280 px minimum and no breakpoints. M44's sidebar collapsed to a
+52 px icon rail below 899 px; M57 removed that with `Sidebar.tsx`, because this is a desktop
+operator console and the handoff states a floor rather than a breakpoint. Below 1280 px the page
+scrolls horizontally rather than rearranging.
+
+## The right panel
+
+372 px on every `/w/:id/*` route, collapsing to a 52 px dock; absent on every global route (M57 R8).
+Its default content is the **Supervisor**, which is a conversation over events that already exist: a
+thread is one local calendar day of this project's `workspace.goal_set` (the operator's own typed
+words, which M45 put on the payload) and `supervisor.*` rows, its decision cards are the same
+pending list the Overview's Needs-you card reads, and its composer is the same
+`POST /api/w/:id/goal/request` the M45 request box posted to. There is no conversation table and no
+new event type.
+
+`SlavePanel` and `TaskDetailPanel` render in the SAME slot while one is selected, replacing the
+Supervisor and handing it back on close. `?slave=` and `?task=` are still the source of truth and
+still what a refresh restores. The dock's `S` button carries the pending-decision count, which is
+why the dock exists at all: a person who collapsed the panel still has to be told when something is
+waiting on them.
 
 ## Global surfaces
 
 | Route | User goal | Decision | M44 | Later |
 |---|---|---|---|---|
 | `/` | See every project and what needs me | keep | Project cards read one word from `userWorkspaceStatus` and carry a "needs you" count; the all-workspaces KPI strip moved in from `/analytics`; the team catalog moved out to Workforce → Catalog | M45 rewrites the project card around the Supervisor |
-| `/workforce` | Everyone who works here | **new** | Five tabs: Slaves, Departments, Catalog, Skills, Runbooks — the panels are the existing ones, moved | M46 rebuilt Catalog as the Workforce Catalog — search, filters, one row per specialist and a profile drawer; the hand-made template form, the company manager and the import log are still there, the last under the tab's own Advanced. M47 adds capabilities. M48 adds Runbooks: the stage plans a project can adopt, seeded, translated from a persona's own workflow, or written by hand. M53 adds Evidence, the sixth tab: two tables — per profile and per model, because they are two different questions — with counts, rates, and `Insufficient evidence` wherever the sample is too thin to claim one. No chart. M55 turns the Catalog into a surface that works at three hundred rows: the filtering and the paging happen in the database, there are two more filters (whether a row is hirable, and whether anything in the catalog looks like it), a `Show more` under the list, and a two-state toggle on every row — because nothing an import creates is hirable until somebody says so. Each row that looks like another carries one chip saying which and how, with the raw class one attribute away, and the profile drawer gains a fourteenth group listing every pair with a Dismiss beside it. Nothing is ever deleted by any of it |
+| `/workforce` | Everyone who works here | **new** | Five tabs: Slaves, Departments, Catalog, Skills, Runbooks — the panels are the existing ones, moved | M46 rebuilt Catalog as the Workforce Catalog — search, filters, one row per specialist and a profile drawer; the hand-made template form, the company manager and the import log are still there, the last under the tab's own Advanced. M47 adds capabilities. M48 adds Runbooks: the stage plans a project can adopt, seeded, translated from a persona's own workflow, or written by hand. M53 adds Evidence, the sixth tab: two tables — per profile and per model, because they are two different questions — with counts, rates, and `Insufficient evidence` wherever the sample is too thin to claim one. No chart. M55 turns the Catalog into a surface that works at three hundred rows: the filtering and the paging happen in the database, there are two more filters (whether a row is hirable, and whether anything in the catalog looks like it), a `Show more` under the list, and a two-state toggle on every row — because nothing an import creates is hirable until somebody says so. Each row that looks like another carries one chip saying which and how, with the raw class one attribute away, and the profile drawer gains a fourteenth group listing every pair with a Dismiss beside it. Nothing is ever deleted by any of it. M57 shows four tabs — People, Catalog, Skills & runbooks, Evidence — and keeps all six `?tab=` values, the two folded ones as segments inside their new parent |
 | `/slaves` | — | **merged into** `/workforce` (Slaves tab) | 307 redirect | — |
 | `/skills` | — | **merged into** `/workforce?tab=skills` | 307 redirect | — |
 | `/analytics` | Spend and throughput | **demoted** from the sidebar, route kept | All-workspaces view is a section on `/`; per-workspace view is reached from a project; the URL and its `?workspace=` scope are unchanged and bookmarkable | M53 did it: the per-slave table and the Spend tile are gone — the first because it counted one project's materialised workers, the second because its figure was a raw `SUM(costUsd)` with no provenance — and the route, its five remaining tiles and its `?workspace=` scope are unchanged, with a line pointing at Workforce → Evidence |
@@ -53,25 +112,32 @@ before adding a surface.
 | `/w/:id/knowledge` Knowledge | What this project has learnt, and who says it is true | **new** (tab 4) | — | M49: one row per memory — what kind of knowledge, its scope, the provenance sentence that says where it came from and who verified it — with filters by scope, type and status, a search on the title, and Verify / Correct / Remove in place; the expanded row shows the chain (what it replaced, what replaced it, what it summarises) |
 | `/w/:id/activity` Activity | What happened, in order | keep (tab 5) | The event-type rail reads words; the raw prefix is on `data-prefix` and in `title` | M52 adds the two brokered-operation cards and the permission change, and the tool-denial card finally prints the operation's name instead of its key. M53 adds the staffing-preference card. M54 adds the two external-delivery cards, and the rail gains an `External` family: what arrived, what it was about, and which goal version it produced |
 | `/w/:id/settings` Settings | Goal, runtime, permissions, danger | keep (tab 6) | Emergency stop uses the one destructive recipe | M52 turns the permission matrix into six OPERATIONS with words for column headers, a third click that takes a decision back, and copy that says what is enforced where instead of saying it is not enforced at all. M54 adds one line to the goal history: the version a connected repository asked for says which repository, and which issue or commit. Connecting a repository is a CLI act (`triggers map`) and deliberately not a form — it has to be paired with exporting a variable into the web process's environment and pasting a url into a provider's settings, and a form that could do only the first would imply the other two happened |
-| `/w/:id/graph` Graph | Five structural views of the project | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Graph` and by URL; all five modes intact; the mode nav is a real tablist now | M47 lifted the org mode's content into an Organization tab; Graph stays |
-| `/w/:id/office` Office | The team as a pixel office | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Office` and by URL; the canvas gains a label and a text line saying what it shows | — |
+| `/w/:id/graph` Graph | Five structural views of the project | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Graph` and by URL; all five modes intact; the mode nav is a real tablist now | M47 lifted the org mode's content into an Organization tab; Graph stays. M57 re-homed it from the `Advanced ▾` menu to the sidebar's `VIEWS` chips; the route and all five modes are unchanged |
+| `/w/:id/office` Office | The team as a pixel office | **demoted to Advanced ▾** | Reachable from `Advanced ▾ → Office` and by URL; the canvas gains a label and a text line saying what it shows | M57 re-homed it from the `Advanced ▾` menu to the sidebar's `VIEWS` chips; the route and all five modes are unchanged |
 | `/analytics?workspace=:id` Analytics | Spend and throughput for THIS project | **reached from the project** | The third item in `Advanced ▾`, carrying the project's `?workspace=` scope; the route and the scope are the global page's, unchanged and bookmarkable | M53 did it: the per-slave table and the Spend tile are gone — the first because it counted one project's materialised workers, the second because its figure was a raw `SUM(costUsd)` with no provenance — and the route, its five remaining tiles and its `?workspace=` scope are unchanged, with a line pointing at Workforce → Evidence |
 
 ## Panels that stay where they are, deliberately
 
 - `SlavePanel`, `GraphDrawer` and `TaskDetailPanel` are persistent side panels, not modals: they do
   not close on Escape and do not trap focus, because a person reads them while working in the page
-  behind them. `Dialog`/`Drawer` are for the six things that ARE modal. M52 gives `SlavePanel` a
-  `Permissions` group between Skills and Messages — one line per operation, in the operation's
-  words, with the three marks the Settings matrix draws; who decided each one and when is a raw
-  value and lives under a nested `Advanced`, beside the sentence that says a run kind granted it.
+  behind them. Since M57 `SlavePanel` and `TaskDetailPanel` render inside the shell's right-panel
+  slot rather than as their own fixed asides — the placement moved, the non-modality did not;
+  `GraphDrawer` is still the Graph page's own 352 px aside. `Dialog`/`Drawer` are for the six
+  things that ARE modal. M52 gives `SlavePanel` a `Permissions` group between Skills and Messages —
+  one line per operation, in the operation's words, with the three marks the Settings matrix draws;
+  who decided each one and when is a raw value and lives under a nested `Advanced`, beside the
+  sentence that says a run kind granted it.
 - `HaltBanner` keeps its own component rather than becoming an `Alert`: four gates key off it.
-- The Tasks board's pill keeps its board vocabulary in M44. `userTaskStatus` is the domain's task
-  word and is wired to one thing here — the "needs you" count on a project card.
-- The Overview's own `Advanced ▾` holds the four panels that left its first viewport — the
-  Supervisor panel, `blocked · needs you`, the live-events river and the merge queue. All four
-  keep their components, their tests and their behaviour; the river keeps its 340 px, which
-  `gate:m14-fidelity` still measures (it opens the disclosure first).
+- M57 closed this: the board is five columns (Queued / In progress / Review / Blocked / Done), the
+  columns are phases and the card's pill is `USER_TASK_LABEL` — the domain's own word — so there is
+  one task vocabulary and not two. `COLUMN_FOR_STATUS` stays a total `Record<TaskStatus,
+  BoardColumn>`, which is what makes a fourteenth status a build failure rather than an invisible
+  task.
+- The Overview's own `Advanced ▾` is gone in M57 and each of its four panels has a home: the
+  Supervisor panel is the RIGHT PANEL on every project page, `blocked · needs you` is the
+  Overview's own **Needs you** card (which shows all four kinds `buildNeedsYou` finds, not one),
+  and the live-events river and the merge queue are under **Recent changes** on the same page, with
+  `/w/:id/activity` still the whole river.
 
 ## What "needs you" counts, exactly
 

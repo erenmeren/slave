@@ -7,7 +7,8 @@ import { ShellFrame } from '../components/shell/ShellFrame'
 import { SidebarTree } from '../components/shell/SidebarTree'
 import { HeaderActionProvider } from '../components/shell/HeaderActionProvider'
 import { RightPanelProvider } from '../components/shell/RightPanelProvider'
-import { ThemeProvider, THEME_STORAGE_KEY } from '../components/theme/ThemeProvider'
+import { ThemeProvider } from '../components/theme/ThemeProvider'
+import { THEME_STORAGE_KEY } from '../lib/themeStorage'
 
 /**
  * M57 R3 — the handoff's two families, self-hosted, one `localFont()` call PER FAMILY PER SUBSET.
@@ -79,6 +80,13 @@ const FONT_VARIABLES = `${sansLatin.variable} ${sansExt.variable} ${monoLatin.va
  * That is why `THEME_STORAGE_KEY` is interpolated into it rather than spelled twice, and why
  * `apps/web/test/theme.test.tsx` pins the constant's value -- those are the two halves of keeping
  * one string in one place across a boundary a module graph cannot cross.
+ *
+ * IT COMES FROM `lib/themeStorage.ts`, NOT FROM `ThemeProvider` (M57 erratum E20). This file is a
+ * server component, and importing the constant out of a `'use client'` module gave a CLIENT
+ * REFERENCE rather than the string: the script shipped as `localStorage.getItem(undefined)` and
+ * stamped nothing, so a pinned operator got the flash this script exists to kill on every load.
+ * `gate:m57-ui-redesign` stage 1 caught it -- no jsdom test can, because in a test both sides
+ * import the same real module.
  *
  * It stamps NOTHING for `system`: absent is system, and the stylesheet's media query answers it.
  */

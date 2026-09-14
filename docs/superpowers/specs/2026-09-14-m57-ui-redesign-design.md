@@ -574,11 +574,36 @@ cannot drift by accident; it does not pin it against a deliberate, specified, re
 
 ## 7. Errata — where execution corrects this spec
 
-E1–E9 are the plan's own, written before execution and listed in full at the head of
-`docs/superpowers/plans/2026-09-14-m57-ui-redesign.md`. E10–E19 below were raised by the
-**pre-flight conflict scan** (`.superpowers/sdd/2026-09-14-m57-ui-redesign/preflight-scan.md`, 73
-findings) and ruled by the controller before Task 2 began; each names the finding it closes.
+E1–E9 are the plan's own, written before execution and argued in full at the head of
+`docs/superpowers/plans/2026-09-14-m57-ui-redesign.md`; they are indexed here in one line each so
+this section is the whole ledger. E10–E19 were raised by the **pre-flight conflict scan**
+(`.superpowers/sdd/2026-09-14-m57-ui-redesign/preflight-scan.md`, 73 findings) and ruled by the
+controller before Task 2 began; each names the finding it closes. E20–E39 are EXECUTION's own —
+one per controller ruling made while the nine tasks ran that corrects something this spec states
+(`.superpowers/sdd/2026-09-14-m57-ui-redesign/task-9-rulings.md` is the ledger they come from).
 
+- **E1 (amends R14c) — there is no `clear-halt` route and no `clearHalt` CONTROL VERB either**; the
+  CLI performed the two-column update inline, so Task 4 extracts `clearHalt(workspaceId)` into
+  `packages/control/src/emergency.ts`, rewrites the CLI case to call it, and appends no event
+  because the CLI appended none.
+- **E2 (amends R7) — `Pause all ⇄ Resume all` needs one more number**: `ShellFacts.counts` gains
+  `slavesPaused`, derived from the `SlaveRun` rows `buildShellFacts` has already fetched.
+- **E3 (amends R5) — `buildSidebarTree` must not call `listProjects()`**, which is the Projects
+  page's seven-query read model and would run on every page in the product; it is its own four
+  grouped reads, deriving `needsYouCount` through the domain's `needsYou(...)`.
+- **E4 (amends R8) — the `?slave=`/`?task=` mirror belongs in the PAGE, not in the provider**: the
+  provider lives in the root layout and must not know those parameter names.
+- **E5 (amends R8) — a panel's `onClose` closes the PROVIDER as well as the URL, and the provider's
+  `close()` clears the URL**, so the slot's `»`, the slot's `✕` and the panel's own close do one
+  thing.
+- **E6 (amends R10) — `COLUMN_STATE`'s value for the `Done` column is `'completed'`**, which is
+  `UserCardState`'s spelling, not `'done'`.
+- **E7 (amends R12) — `gate-m49-memory.mjs` reads the six sections as a SET**, so its replacement
+  scrapes `[data-testid="sidebar-section"]`'s `data-section` — the same six route segments.
+- **E8 (amends R2) — the pre-hydration script must be inside an authored `<head>`**: a `<script>`
+  rendered in `<body>` runs after the first paint, which is the flash it exists to prevent.
+- **E9 (amends R1) — `--radius-pill` takes the README's `999px`**, and the one gate row that
+  measured the old `20px` is rewritten in Task 9 with the rest of `gate-m14-fidelity`'s table.
 - **E10 (amends R7 and R8; scan F31) — the spec's two signatures are the PLAN's.** R7 writes
   `useHeaderAction(node)`; it is `useHeaderAction(node: React.ReactNode, deps: readonly unknown[])`,
   because a page rebuilds its action node every render and the effect needs the caller's own
@@ -654,3 +679,102 @@ findings) and ruled by the controller before Task 2 began; each names the findin
   `grep -n "responsive\|899\|collapse\|icon rail" docs/ia.md` returns nothing: M44 recorded the
   899 px collapse in its own spec and never in the IA contract. Task 9 ADDS the 1280 px floor as a
   new line rather than replacing one.
+- **E20 (amends R2 and E8; found by the gate) — the pre-hydration script's key crossed an RSC
+  boundary and shipped as `undefined`.** `THEME_STORAGE_KEY` was exported from `ThemeProvider.tsx`,
+  a `'use client'` module, and `app/layout.tsx` is a SERVER component: Next replaces that module's
+  exports with client references, so the interpolated script rendered as
+  `localStorage.getItem(undefined)`, stamped nothing, and left a pinned operator the flash E8 exists
+  to kill. The key moves to `lib/themeStorage.ts`, a plain module both sides import, and
+  `ThemeProvider` re-exports it so every importer is unchanged. No jsdom test can see this — both
+  sides import the same real module there — and `gate:m57-ui-redesign` stage 1 is what caught it.
+- **E21 (amends R5) — the Analytics `VIEWS` chip reads its own currentness from `?workspace=`.**
+  `/analytics` carries no `/w/:id` for `viewOf` to read, so `lib/routes.ts` leaves that one chip to
+  its caller and `SidebarTree` decides it from `useSearchParams()`; Graph and Office stay a path
+  segment (ruling T3-2).
+- **E22 (amends R5 and E11) — the shell RENDERS on `/login`; the tree does not.** E11 gated only the
+  layout's database read. `SidebarTree` additionally neither requests `/api/sidebar` nor draws a
+  tree body there (a signed-out fetch could only 401), and its throttle clock starts at mount, so
+  the tree the server already rendered is not refetched by the first `ShellFacts` frame (rulings
+  T3-3, T3-5).
+- **E23 (amends R8 and E10) — `open()` takes a FOURTH argument, the content KEY.** The outgoing
+  owner's `onClose` runs only when a DIFFERENT subject takes the slot; re-asserting the same one
+  does not, or a page moving its own selection from one task to the next would cancel the selection
+  a person had just made (ruling T3-4).
+- **E24 (amends R8) — the owning page hands the slot back on unmount, and never acts from an
+  unmounted frame.** Two refs: `mounted`, so a clearer created for a page that has gone cannot
+  `router.replace` its old pathname back over a person's navigation, and `owned`, so a page closes
+  the slot only while the slot is still its own (ruling T5-1).
+- **E25 (amends R8) — the dock's `S` calls `close()` before `expand()`.** A bare `expand()` re-opens
+  whatever mode the slot was collapsed with, so a button labelled `Supervisor` would produce a task
+  panel; closing first also runs the owning page's clearer, so the `?task=`/`?slave=` goes with it
+  (ruling T5-2).
+- **E26 (amends R9) — a proposal whose action is `answer_question` gets no Approve/Decline.** Its
+  drafted words go out in the operator's name and this card shows the situation summary, not the
+  draft, so it renders `supervisor-decision-review` — a link to the timeline lane where
+  `ProposalRow` shows the question, the draft, its confidence and its sources. Every other kind
+  keeps the two buttons (ruling T5-3).
+- **E27 (amends R7) — the split button cannot lie about a halt, and does not lie about a fan-out.**
+  `Pause all`/`Resume all` is DISABLED while the project is halted, with a `title` saying the halt
+  must be cleared first (nothing resumes into a halt: `requestResume` refuses every run), and the
+  header reads the fan-out envelope — an empty `requested` beside a non-empty `refused` prints
+  `header-error` rather than a green 200 with nothing happening (ruling T4-2).
+- **E28 (amends R7) — the armed Stop disarms on every PATHNAME change.** The header is the root
+  layout's and does not unmount between two sections of one project, so keying the disarm on the
+  workspace alone would carry a cocked destructive control across a navigation; the same effect
+  clears the last refusal, which is otherwise a complaint about a page no longer on screen (ruling
+  T4-3).
+- **E29 (amends R11 and R17; a scoped exception to "`buildOverviewSnapshot` untouched") — the
+  re-homed river excludes the two chatter types AT THE QUERY.** M45 R2 forbids `run.output` /
+  `run.tool_call` text on the project page, and the closed disclosure that used to hold the river
+  was compliance by accident. Filtering after `take: 8` would starve the panel during a run, so
+  `recentForPanel` gains `type: { notIn: … }` and the `liveEvents` projection gains `type`; nothing
+  else about that read moves (ruling T6-1).
+- **E30 (amends §2's Team row) — `/w/:id/organization` drops `DataTable` for self-contained worker
+  cards.** §2's binding text is "worker cards with lifecycle, `Now:`, `Why here:`, capability
+  chips", and the handoff's card recipe cannot align to a shared header without changing a
+  component other pages use; per-card labels stand in for the column headers. Every
+  `organization-*` testid is verbatim (ruling T7-2).
+- **E31 (amends R13) — `ui/Segmented`'s option gains an optional `href`.** An option carrying one
+  renders a `next/link` `<Link>` instead of a `<button>`; both call `onChange` on click, and the
+  link takes `aria-current="page"` when selected — never `aria-selected`/`aria-pressed`, which a
+  link's implicit role does not have. That is how Workforce's two folded segments are bookmarkable
+  AND one primitive (ruling T8-2).
+- **E32 (amends §2's Activity row) — the timeline rule is at 99 px, not 88.** `ActivityCard`'s row
+  geometry moved (`px-4` + a 64 px time column + `gap-3` + a 14 px dot column), so the rule moved
+  with it to the dot's own centre; `Timeline.tsx`, `activity-page.test.tsx` and
+  `gate-m14-fidelity.mjs` all say 99 (ruling T8-3).
+- **E33 (amends §2's project-Settings row) — one card per section, and Goal and Runtime are bare
+  wrappers.** Their inner `Panel` IS the card, so giving them the section recipe as well would draw
+  a card inside a card; Permissions and Danger zone take the recipe with an `<h2>` where the inner
+  `Panel title` was (ruling T8-5).
+- **E34 (amends R12) — two CI gates are re-pointed at the FACT, not the widget.**
+  `gate-m11-shell.mjs` read a project card's company through a `chip` testid the README's card
+  recipe no longer draws (and scoped its action buttons to a `Card` they are now siblings of), and
+  reads the badge TEXT inside the card's wrapper instead; `gate-m18-skill-and-teeth.mjs` matched
+  two nested `complementary` landmarks named "Task detail" once `TaskDetailPanel` moved into the
+  slot, and keys off `right-panel`'s `data-mode` with one scoped visibility check. Neither surface
+  changed (ruling T8-1).
+- **E35 (amends §6) — `workspaceArchived` and its doc comment are deleted from `server/org.ts`.**
+  Three dead lines nothing imports, whose comment named a surface that no longer exists; a false
+  comment over a dead symbol is worse than one scoped extra hunk, and `buildOrganization`'s body is
+  untouched (ruling T4-1).
+- **E36 (amends E9) — `gate:m14-fidelity` measures the Needs-you radius on the EMPTY card.** That
+  gate's fixture has one `ready` task, no blocked task, no pending decision and no unintegrated
+  `done`, so the Overview draws `needs-you-empty` — the same `rounded-panel-card` at the same 12 px.
+  The POPULATED `needs-you-card` is measured by `gate:m57-ui-redesign` stage 8, whose fixture seeds
+  a decision and a blocked task for exactly that reason.
+- **E37 (amends R7 and E9) — `gate:m14-fidelity`'s two-step STOP is the header's split button.**
+  `EmergencyStopButton`'s `emergency-stop` → `emergency-stop-confirm` pair left the project header
+  with `ProjectHeader.tsx`, so stage 4a arms `stop-split` (asserting the FIRST click did not halt
+  anything, which is the rule that stage exists for), waits for `stop-cancel` to appear beside it,
+  and fires. The component itself still lives on the project Settings tab's danger zone.
+- **E38 (amends E9) — `NUMBERS`' optional sixth element is gone.** M45's erratum E15 added a
+  `prepare` hook for the one row that had to open a disclosure before it could be measured; R11
+  deleted the disclosure, so the hook has no callers and goes with them rather than staying as a
+  mechanism described by a comment nothing can check.
+- **E39 (amends §4) — `docs/ia.md` has FIVE rules, not four.** §4 says the file keeps "its four
+  rules verbatim"; rule 5 ("Advanced is a promise, not a graveyard") is the fifth, and all five are
+  kept verbatim. It is still true after this milestone: the `Advanced ▾` disclosures the Workforce
+  Catalog, its profile drawer and `SlavePanel` own are untouched, and what M57 removed —
+  `ProjectTabs`' menu and the Overview's own — were menus over DESTINATIONS, every one of which is
+  still at the URL it had (R11, and the gate's stage 10).

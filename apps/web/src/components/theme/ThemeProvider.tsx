@@ -1,16 +1,19 @@
 'use client'
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { THEME_STORAGE_KEY } from '../../lib/themeStorage'
 
 /** The three values the operator can choose between (M57 R2). `system` is the default and is
  *  represented by the ABSENCE of `data-theme` on `<html>` -- which is what lets the stylesheet
  *  answer it with one `prefers-color-scheme` media query instead of a JavaScript read. */
 export type ThemeChoice = 'system' | 'light' | 'dark'
 
-/** The `localStorage` key. Exported because the pre-hydration script in `app/layout.tsx` spells
- *  the same string as a literal -- that script cannot import anything, it runs before the bundle
- *  exists -- and a test that pins the two together is the only thing keeping them in step. */
-export const THEME_STORAGE_KEY = 'theme'
+/** RE-EXPORTED, not declared here (M57 erratum E20). The key itself lives in
+ *  `lib/themeStorage.ts`, a module with no `'use client'` on it, because `app/layout.tsx`
+ *  interpolates it into the pre-hydration script and a SERVER component importing it from this
+ *  file gets a client reference rather than the string. Every existing importer of
+ *  `THEME_STORAGE_KEY` from this module keeps working. */
+export { THEME_STORAGE_KEY }
 
 const CHOICES: readonly ThemeChoice[] = ['system', 'light', 'dark']
 

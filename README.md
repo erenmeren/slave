@@ -161,28 +161,31 @@ nothing about them resumes automatically.
 
 ## The web UI
 
-Four ways in: **Projects**, **Workforce**, **Simulations**, **Settings**. Everything else is inside
-one of them — `docs/ia.md` is the map, and says where anything that left a main path went.
+The sidebar is one tree: **Projects** at its root, one row per project under it, and the open
+project's six sections and its `VIEWS` chips under that — with **Workforce**, **Simulations** and
+**Settings** below. Everything else is inside one of them — `docs/ia.md` is the map, and says where
+anything that left a main path went.
 
 | Page | What it shows |
 |---|---|
 | **Projects** `/` | Every active project (workspace) with its status in one word, how many things need you, its spend and its team; click one to open it. **New project** attaches a repo; **show archived** also lists archived projects (an "archived" chip, no spend bar, a **restore** button); below the cards, the same all-project figures the Analytics page shows. |
-| **Overview** `/w/<id>` | The project in one screen: what it is for and at which version, what the Supervisor is doing, what is being worked on, what it has cost, what needs you, the latest verified result, who is on the team and what changed lately — above a timeline of the project's own history in six lanes, where the things waiting on you can be answered in place. One box tells the Supervisor what changed. `Advanced ▾` on the page holds the live event river, the blocked list, the merge queue and the Supervisor's own panel. |
+| **Overview** `/w/<id>` | The project in one screen: what it is for and at which version, what the Supervisor is doing, what is being worked on, what it has cost, what needs you, the latest verified result, who is on the team and what changed lately — above a timeline of the project's own history in six lanes, where the things waiting on you can be answered in place. The Supervisor is the right panel, on this and every other page of the project, and one box in it tells the Supervisor what changed; the live event river and the merge queue are under **Recent changes** on the page itself. |
 | **Tasks** `/w/<id>/tasks` | The board by status. Each card says its state in one word, who has it, and one line about why it is not moving. Click one for the rest, grouped under `Details ▾`: the run, its messages, what it saw, its verification attempts, its cost, its worktree and its events. |
-| **Graph** (Advanced ▾) `/w/<id>/graph` | Five views: the org tree, live execution, the task dependency DAG (draw or delete an edge to change it), the skill chain, and who handed work to whom. Reached from the project's `Advanced ▾` menu, or by its URL. |
-| **Office** (Advanced ▾) `/w/<id>/office` | The project's departments and slaves as a pixel office: who is working, blocked or paused, on what and how far; pause, resume or stop the focused slave's run; scroll to zoom, drag to pan, click a slave to focus. Reached from the project's `Advanced ▾` menu, or by its URL. |
+| **Graph** (VIEWS) `/w/<id>/graph` | Five views: the org tree, live execution, the task dependency DAG (draw or delete an edge to change it), the skill chain, and who handed work to whom. Reached from the project's `VIEWS` chips in the sidebar, or by its URL. |
+| **Office** (VIEWS) `/w/<id>/office` | The project's departments and slaves as a pixel office: who is working, blocked or paused, on what and how far; pause, resume or stop the focused slave's run; scroll to zoom, drag to pan, click a slave to focus. Reached from the project's `VIEWS` chips in the sidebar, or by its URL. |
 | **Activity** `/w/<id>/activity` | Every event, live, filterable by kind, slave and task; the filters live in the URL. Events made from the UI name the user who made them. |
 | **Organization** `/w/<id>/organization` | Who is on this project, what each of them can DO, and the sentence that says why they are here — beside what the project still needs, who could cover it and the offers waiting for your answer, and the advice each worker's own profile gives about who to consult. |
 | **Knowledge** `/w/<id>/knowledge` | What this project has learnt, one row per piece, with the sentence that says where each came from — filters for kind, scope, status and title that live in the URL, and the chain (what this replaced, what replaced it, what it summarises) folded inside each row. Verify a claim a worker made, correct a memory (the old wording is kept and marked replaced), or withdraw one with a reason — nothing is ever deleted. |
 | **Settings** `/w/<id>/settings` | This project's goal, its runtime (provider, budget, and the read-only concurrency/timeout/attempts limits), its own slave permissions, its emergency stop, and its danger zone to archive/restore the project. |
-| **Workforce** `/workforce` | Everyone who works here, in four tabs. **Slaves**: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete with its history and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project. **Departments**: add, rename or delete a project's department and see who is on it. **Catalog**: every slave template as one searchable catalog — filter by division, capability, skill or where it came from, and click a row for its specialist profile: who it is, what it is for, what it must never do and where all of that came from, with any field customisable in place and the raw Markdown a run is given under `Advanced ▾` — beside the companies and their department templates, with the log of catalog imports under the tab's own `Advanced ▾`. **Skills**: the skill catalog and its assignments. `/slaves` and `/skills` still work — they redirect here. |
+| **Workforce** `/workforce` | Everyone who works here, in four tabs — **People**, **Catalog**, **Skills & runbooks** and **Evidence**; Departments and Runbooks are segments inside the first and third, and all six `?tab=` values still work. **People**: every slave, project-materialized or still catalog-only, with its department as a select, rename/re-role/delete with its history and a model chosen from the provider's own list inline; **+ New slave** adds one to the catalog and, optionally, to a project. **Departments**: add, rename or delete a project's department and see who is on it. **Catalog**: every slave template as one searchable catalog — filter by division, capability, skill or where it came from, and click a row for its specialist profile: who it is, what it is for, what it must never do and where all of that came from, with any field customisable in place and the raw Markdown a run is given under `Advanced ▾` — beside the companies and their department templates, with the log of catalog imports under the tab's own `Advanced ▾`. **Skills**: the skill catalog and its assignments. `/slaves` and `/skills` still work — they redirect here. |
 | **Simulations** `/sim` | Company simulation runs (M29): create one from a catalog company — a trade company on synthetic data, decided by the rules provider, no repository and no model call; step it by day, run it to a horizon, pause, halt, add customer demand or a supplier delay; the simulated company's cash and the real model cost are two separate panels; metrics are computed from the run's own journal; clone a run under another policy, let the daemon auto-run it, compare two runs side by side (no verdict); adopt a software run's organisation into a company-less project (M33). |
 | **Analytics** `/analytics` | Spend and throughput, for every project or for one (`?workspace=`). The all-project view is also a section on the Projects page; a project's own view is one click from it. |
 | **Settings** `/settings` | Provider adapters, security, and reset demo data (development only). |
 
 Every page updates itself over a live event stream. Interventions — **Pause**, **Resume** (with a
-message), **Stop** — live in the task panel. **Emergency stop** lives in the project header (on
-every project tab) and on the project Settings tab's danger zone. A pause takes effect at the
+message), **Stop** — live in the task panel. **Emergency stop** is the header's split button
+(`Stop ▾`, which arms on the first click and fires on the second, and reads `Clear halt` while the
+project is halted) and is also on the project Settings tab's danger zone. A pause takes effect at the
 slave's next tool call; a resume continues from the checkpoint in the same worktree.
 
 ## CLI cheat sheet
@@ -862,8 +865,8 @@ Under it is the project's own history, in six lanes:
 | **DECISION REQUIRED** | What is waiting on you — pinned above everything else, and answerable here |
 | **VERIFIED RESULT** | What passed, was approved, or landed in the base branch |
 
-What a model said while it worked is not on this timeline. That is the event river, one click away
-under `Advanced ▾`, and the Activity tab keeps all of it.
+What a model said while it worked is not on this timeline. That is the event river, under
+**Recent changes** on the same page, and the Activity tab keeps all of it.
 
 **Telling it what changed.** One box, one sentence: *"Also support Google Pay."* That writes a new
 version of the project's requirement — the goal document keeps its body and gains a dated line
@@ -987,7 +990,7 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m42-catalog-import`, `gate:m44-ux-foundation`, `gate:m45-project-experience`,
 `gate:m46-workforce-catalog`, `gate:m47-team-formation`, `gate:m48-runbooks`, `gate:m49-memory`,
 `gate:m50-ephemeral`, `gate:m51-breaker`, `gate:m52-broker`, `gate:m53-evidence`,
-`gate:m54-triggers`, `gate:m55-catalog` and `gate:m56a-provider-contract` on every push — `m36` stops the orchestrator and starts it again
+`gate:m54-triggers`, `gate:m55-catalog`, `gate:m56a-provider-contract` and `gate:m57-ui-redesign` on every push — `m36` stops the orchestrator and starts it again
 mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was
 given the persona and the skills it was assigned, `m38` drives a real daemon until the Supervisor
 proposes the staffing a reviewer-less project needs, waits for a human to approve it, unblocks a
@@ -1085,7 +1088,7 @@ and `m56a` proves a refactor changed nothing: twelve permission verdicts byte fo
 builders' argv element for element, both capability rows two different ways, one paused run per
 provider whose two checkpoint columns hold the two files its adapter actually wrote, and a grep that
 fails the build the moment a second copy of the provider list appears anywhere in the tree. That is
-31 gates. Tests and gates share one Postgres --
+32 gates. Tests and gates share one Postgres --
 run one at a time.
 
 ## Learn more
