@@ -907,11 +907,23 @@ try {
 
   await gotoReliably(`${baseUrl}/w/${workspaceId}/tasks`)
   await waitVisible(page.getByTestId('column'), 'the Tasks board')
+  // The slot (`RightPanel.tsx`) IS the named landmark now (M57 Task 5, R8): its own `<aside
+  // data-testid="right-panel">` carries `aria-label="Task detail"` once `mode` is `'task'`, and
+  // `TaskDetailPanel`'s own `<aside aria-label="Task detail">` -- unchanged since before the
+  // slot existed, and still needed for `tasks-components.test.tsx`'s `container.querySelector
+  // ('aside')` -- renders right inside it as `content`. Two nested landmarks sharing one
+  // accessible name is what `getByRole('complementary', { name: 'Task detail' })` used to be
+  // the sole answer to; now it matches both and `.isVisible()` is a strict-mode violation the
+  // `.catch(() => false)` above swallows into an endless "not yet" that never becomes true.
+  // `right-panel`'s own `data-mode` attribute names the same fact without the ambiguity: it
+  // flips to `'task'` the instant `useRightPanel().open('task', ...)` runs, one render before
+  // `TaskDetailPanel` itself paints, so it is also the earliest true signal available here.
   await clickUntil(
     page.getByTestId('task-card').filter({ hasText: 'Gate stage 3 -- paused with denials' }),
-    async () => page.getByRole('complementary', { name: 'Task detail' }).isVisible(),
+    async () => (await page.getByTestId('right-panel').getAttribute('data-mode')) === 'task',
     "the seeded task's card",
   )
+  await waitVisible(page.getByTestId('right-panel').getByRole('complementary', { name: 'Task detail' }), 'the opened Task detail panel')
   const deniedLine = page.getByText('2 tool calls denied during pause · toolu_AA…, toolu_BB…')
   await waitVisible(deniedLine, "the panel's deniedToolUseIds reader line")
   console.log('stage 3 PASSED: the Activity chip measured a real frame, and the paused checkpoint\'s reader line rendered')
