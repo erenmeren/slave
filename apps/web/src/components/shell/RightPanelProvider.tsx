@@ -40,6 +40,15 @@ export function RightPanelProvider({ children }: { readonly children: React.Reac
 
   const open = useCallback(
     (next: RightPanelMode, node: React.ReactNode, onClose: () => void, key?: string): void => {
+      const nextKey = `${next}:${key ?? ''}`
+      // Is this a genuinely NEW subject, or the same one re-asserted? One answer, two consequences.
+      const changed = openKeyRef.current !== nextKey
+      // THE SLOT ONLY HOLDS ONE THING (ruling T3-4). Opening a task while a slave is open evicts
+      // the slave, and the page that owned it has to be told, or its `?slave=` stays in the URL and
+      // its mirror effect re-opens the panel on the next frame -- two owners fighting over one
+      // slot. The OLD clearer runs before it is replaced, and only when something else is taking
+      // the slot: re-asserting the same subject must not clear the URL that describes it.
+      if (changed) onCloseRef.current?.()
       onCloseRef.current = onClose
       setMode(next)
       setContent(node)
@@ -49,8 +58,7 @@ export function RightPanelProvider({ children }: { readonly children: React.Reac
       // unconditional `setCollapsed(false)` turns that into an un-collapse loop. A click that
       // produces no visible change is a click a person repeats — so a genuinely new subject still
       // un-collapses, and only a re-assertion of the same one does not.
-      const nextKey = `${next}:${key ?? ''}`
-      if (openKeyRef.current !== nextKey) setCollapsed(false)
+      if (changed) setCollapsed(false)
       openKeyRef.current = nextKey
     },
     [],

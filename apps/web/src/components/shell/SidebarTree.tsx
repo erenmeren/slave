@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
 import { SECTIONS, VIEWS, sectionOf, viewOf, workspaceIdOf } from '../../lib/routes'
 import type { SidebarProject } from '../../server/sidebar'
@@ -41,6 +41,11 @@ const PROJECT_DOT: Record<SidebarProject['status'], string> = {
  *  effect below reads it. */
 const SIDEBAR_REFETCH_MS = 10_000
 
+/** The one route a signed-out person can reach (`lib/boundary.ts`'s public paths). The frame still
+ *  renders there -- the header's breadcrumb says `Sign in` -- but the tree has nothing to show and
+ *  nothing to ask for. */
+const LOGIN_PATH = '/login'
+
 /**
  * The sidebar, as a TREE (M57 R5).
  *
@@ -55,13 +60,25 @@ const SIDEBAR_REFETCH_MS = 10_000
  */
 export function SidebarTree({ initial }: { readonly initial: readonly SidebarProject[] }): React.JSX.Element {
   const pathname = usePathname()
+  const searchParams = useSearchParams()
   const [projects, setProjects] = useState<readonly SidebarProject[]>(initial)
   const lastPathname = useRef(pathname)
-  const openId = workspaceIdOf(pathname)
+  // WHICH PROJECT IS OPEN, and the query string is the second way of saying it (ruling T3-2).
+  // `/analytics?workspace=<id>` is a project's page that does not live under `/w/<id>` -- it is the
+  // one VIEWS destination with a global route (`lib/routes.ts:52-54`) -- so a pathname-only answer
+  // would close the whole subtree the moment somebody followed the Analytics chip out of it.
+  const workspaceParam = searchParams.get('workspace')
+  const openId = workspaceIdOf(pathname) ?? workspaceParam
   const facts = useShellFacts(openId)
   const section = sectionOf(pathname)
   const view = viewOf(pathname)
   const { theme, cycle } = useTheme()
+  // `/login` keeps the frame and loses the tree (ruling T3-3): a person who is not signed in has no
+  // projects to be shown and no business asking for the list. The rows are dropped HERE rather than
+  // by handing the layout an empty array, because in loopback mode the layout's read is not gated at
+  // all and `initial` arrives full even on this route.
+  const signedOut = pathname === LOGIN_PATH
+  const rows = signedOut ? [] : projects
   // The footer chip is the project header's old `connection` badge, moved (README "Shell" →
   // Sidebar footer). Its source is the SAME module store the header read -- `useStreamState`,
   // published by whichever workspace page is streaming -- so the number is the same number, on a
@@ -75,13 +92,19 @@ export function SidebarTree({ initial }: { readonly initial: readonly SidebarPro
   // minute while a run is live, so an unthrottled effect fires `GET /api/sidebar` -- four queries
   // -- at roughly the stream's own cadence, for a tree whose rows change when somebody creates or
   // archives a project. A ref, not state: bumping it must not re-render.
-  const lastFetchedAt = useRef(0)
+  //
+  // It starts at MOUNT TIME, not at 0 (ruling T3-5): `initial` is the root layout's own read from
+  // this very request, so a zero here would make every page load fetch the tree a second time, one
+  // frame after the server sent it. The window opens ten seconds later, and a route change still
+  // jumps the queue.
+  const lastFetchedAt = useRef(Date.now())
 
   useEffect((): (() => void) | undefined => {
-    const now = Date.now()
     // A pathname change always refetches; a facts change waits its turn.
     const forced = lastPathname.current !== pathname
     lastPathname.current = pathname
+    if (pathname === LOGIN_PATH) return undefined
+    const now = Date.now()
     if (!forced && now - lastFetchedAt.current < SIDEBAR_REFETCH_MS) return undefined
     lastFetchedAt.current = now
     let cancelled = false
@@ -144,12 +167,12 @@ export function SidebarTree({ initial }: { readonly initial: readonly SidebarPro
         <div className="flex flex-col gap-px">
           <Link href="/" className={rowClass(pathname === '/')} aria-current={pathname === '/' ? 'page' : undefined}>
             <span className="flex-1 text-left">Projects</span>
-            <span className="font-mono text-[11.5px] font-medium text-t3">{projects.length}</span>
+            <span className="font-mono text-[11.5px] font-medium text-t3">{rows.length}</span>
           </Link>
 
           {/* The project list, indented behind a hairline rule -- the README's own geometry. */}
           <div className="ml-[10px] flex flex-col gap-px border-l border-line pl-[6px]">
-            {projects.map((project) => {
+            {rows.map((project) => {
               const open = project.id === openId
               return (
                 <div key={project.id} className="flex flex-col gap-px">
@@ -195,7 +218,13 @@ export function SidebarTree({ initial }: { readonly initial: readonly SidebarPro
                       </div>
                       <div className="flex flex-wrap gap-1 px-[6px] pb-[6px]">
                         {VIEWS.map((spec) => {
-                          const current = spec.id === view
+                          // Analytics answers from the SEARCH STRING, because its route carries no
+                          // `/w/<id>` for `viewOf` to read (`lib/routes.ts:97-98` says the caller
+                          // decides, and this is the caller). The other two are a path segment.
+                          const current =
+                            spec.id === 'analytics'
+                              ? pathname === '/analytics' && workspaceParam === project.id
+                              : spec.id === view
                           return (
                             <Link
                               key={spec.id}
