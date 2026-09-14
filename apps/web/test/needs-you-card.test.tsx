@@ -56,6 +56,34 @@ describe('the Needs you card', () => {
     }
   })
 
+  // Review finding 2: the refusal belongs to the attempt that earned it. A red line left standing
+  // over a row somebody has since answered is a lie about the current state -- `SlaveCard.run()`
+  // clears its own on entry for exactly this reason.
+  it('clears a refusal when the next answer is sent', async (): Promise<void> => {
+    const both: readonly NeedsYouItem[] = [
+      ITEMS[0] as NeedsYouItem,
+      { ...(ITEMS[0] as NeedsYouItem), id: 'd-2', decisionId: 'd-2', title: 'Staffing: nobody can deploy' },
+    ]
+    fetchMock.mockImplementationOnce(
+      async () => new Response(JSON.stringify({ error: 'that decision is no longer pending' }), { status: 409 }),
+    )
+    render(<NeedsYouCard workspaceId="w1" items={both} />)
+
+    await act(async (): Promise<void> => {
+      screen.getAllByTestId('needs-you-decline')[0]?.click()
+    })
+    expect(screen.getByTestId('needs-you-error').textContent).toBe('that decision is no longer pending')
+
+    await act(async (): Promise<void> => {
+      screen.getAllByTestId('needs-you-approve')[1]?.click()
+    })
+    expect(screen.queryByTestId('needs-you-error')).toBeNull()
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/w/w1/supervisor/decisions/d-2/approve',
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
   it('says nothing needs you, rather than drawing an empty card', () => {
     render(<NeedsYouCard workspaceId="w1" items={[]} />)
     expect(screen.queryByTestId('needs-you-row')).toBeNull()

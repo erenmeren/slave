@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, toRunState } from '@slave-of-ai/db'
+import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, EVENT_TYPE_BY_DOMAIN_TYPE, toRunState } from '@slave-of-ai/db'
 import { capabilitiesOf, listDecisions, workspaceDefaultProvider, workspaceSpend, type ProviderCapabilities, type ProviderKind } from '@slave-of-ai/control'
 import {
   deriveSlaveStatus,
@@ -34,6 +34,20 @@ const RECENT_EVENTS_LIMIT = 20
 
 /** The 340px live-events panel shows the workspace's last 8 (design README §3a.1). */
 const LIVE_EVENTS_LIMIT = 8
+
+/**
+ * MODEL CHATTER, kept off the project page at the SOURCE (M45 R2, controller ruling T6-1).
+ *
+ * R2's promise is that what a model said while working never appears on the project page, and
+ * these are the spec's own two types -- the same pair `gate:m45-project-experience` seeds and
+ * forbids, and the pair `LANE_BY_TYPE` gives no lane. Not "everything beginning `run.`":
+ * `run.started`, `run.paused` and `run.failed` are the run LIFECYCLE the river exists to show.
+ *
+ * Excluded in the QUERY rather than after it, because the panel takes the last eight events of any
+ * type: while a run streams, all eight are chatter, and a filter applied to the result would leave
+ * the river empty on exactly the projects that have work in them.
+ */
+const CHATTER_TYPES = ['run.output', 'run.tool_call'] as const
 
 /**
  * One operation's answer for one worker, with the granter's NAME resolved (M52 t5 fix round 1,
@@ -331,8 +345,16 @@ export interface OverviewSnapshot {
     /** Set only when `action` is non-null. */
     readonly runId: string | null
   }[]
-  /** The last 8 events in this workspace, newest first -- the 340px live-events panel. */
-  readonly liveEvents: readonly { readonly seq: number; readonly ts: string; readonly summary: string }[]
+  /**
+   * The last 8 events in this workspace, newest first -- the 340px live-events panel. MODEL
+   * CHATTER is not among them: {@link CHATTER_TYPES} is excluded by the query (M45 R2, ruling
+   * T6-1), so the promise holds however the page chooses to draw the rows.
+   *
+   * `type` is the DOMAIN spelling, carried so a surface can say WHICH event a row is without
+   * re-reading the log -- the same contract every other projected row keeps (`docs/ia.md` rule 3:
+   * the raw value rides on an attribute, never in the words).
+   */
+  readonly liveEvents: readonly { readonly seq: number; readonly ts: string; readonly type: string; readonly summary: string }[]
   /**
    * Tasks in `merging`, in the order `apps/orchestrator/src/merge.ts` will actually process them.
    * At most one is really merging (the queue is serialized); the rest are waiting.
@@ -598,7 +620,11 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       orderBy: { startedAt: 'asc' },
       include: { slave: true },
     }),
-    prisma.executionEvent.findMany({ where: { workspaceId }, orderBy: { seq: 'desc' }, take: LIVE_EVENTS_LIMIT }),
+    prisma.executionEvent.findMany({
+      where: { workspaceId, type: { notIn: CHATTER_TYPES.map((type) => EVENT_TYPE_BY_DOMAIN_TYPE[type]) } },
+      orderBy: { seq: 'desc' },
+      take: LIVE_EVENTS_LIMIT,
+    }),
     prisma.task.findMany({ where: { workspaceId, status: 'merging' } }),
     // The M45 queue, built ONCE here and handed to both builders below (M45 R1): it walks the
     // Supervisor's world, so a second copy would be a second `RepeatableRead` transaction per
@@ -808,14 +834,15 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       failed: countOf(['failed']),
     },
     blocked,
-    liveEvents: recentForPanel.map((event) => ({
-      seq: Number(event.seq),
-      ts: event.ts.toISOString(),
-      summary: feedSummary(
-        DOMAIN_EVENT_TYPE_BY_DB_VALUE[event.type] ?? event.type,
-        event.payload as Record<string, unknown>,
-      ),
-    })),
+    liveEvents: recentForPanel.map((event) => {
+      const type = DOMAIN_EVENT_TYPE_BY_DB_VALUE[event.type] ?? event.type
+      return {
+        seq: Number(event.seq),
+        ts: event.ts.toISOString(),
+        type,
+        summary: feedSummary(type, event.payload as Record<string, unknown>),
+      }
+    }),
     mergeQueue: [...approvedQueue, ...unapprovedQueue],
     brief,
     needsYou: brief.needsYou,

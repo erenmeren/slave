@@ -52,6 +52,9 @@ export function NeedsYouCard({
 
   const answer = async (decisionId: string, verdict: 'approve' | 'reject'): Promise<void> => {
     setBusy(decisionId)
+    // The refusal belongs to the attempt that earned it, the way `SlaveCard.run()` clears its own:
+    // a stale red line over a row that has since been answered is a lie about the current state.
+    setErrorText(null)
     const result = await postControl(`/api/w/${workspaceId}/supervisor/decisions/${decisionId}/${verdict}`)
     setBusy(null)
     // No local refetch and no optimistic removal: the POST appended an event, the page's stream
@@ -84,7 +87,7 @@ export function NeedsYouCard({
           <span className="text-[13px] text-t3">Answer here, or open the item</span>
         </div>
         {errorText !== null && (
-          <p role="alert" className="border-b border-line px-4 py-2 text-[12.5px] text-s-blocked">
+          <p role="alert" data-testid="needs-you-error" className="border-b border-line px-4 py-2 text-[12.5px] text-s-blocked">
             {errorText}
           </p>
         )}

@@ -736,19 +736,58 @@ describe('buildOverviewSnapshot', () => {
   it('carries the last eight events newest first', async (): Promise<void> => {
     for (let i = 0; i < 12; i += 1) {
       await appendEvent({
-        type: 'run.tool_call',
+        type: 'task.created',
         workspaceId: fixture.workspaceId,
-        slaveId: fixture.slaveId,
-        actor: 'slave',
-        payload: { name: 'Write', summary: `Write ${i}.txt` },
+        taskId: fixture.taskId,
+        actor: 'human',
+        payload: { title: `Task ${String(i)}` },
       })
     }
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
     expect(snapshot?.liveEvents).toHaveLength(8)
     expect(snapshot?.liveEvents[0]?.seq).toBeGreaterThan(snapshot?.liveEvents[7]?.seq ?? 0)
-    // The panel prints these verbatim, so the summary has to be the rendered line, not a raw type.
-    expect(snapshot?.liveEvents[0]?.summary).toBe('Write 11.txt')
+    // The panel prints these verbatim, so the summary has to be a rendered LINE, never the raw
+    // dotted type (M44 R5, `feedSummary`'s own reason for existing).
+    expect(snapshot?.liveEvents[0]?.summary).toBe('Tasks · created')
     expect(snapshot?.liveEvents.every((e) => e.summary.length > 0)).toBe(true)
+    expect(snapshot?.liveEvents.every((e) => !/^[a-z]+\.[a-z_]+$/u.test(e.summary))).toBe(true)
+    // The raw type rides along, so a surface can say WHICH event a row is without re-reading the
+    // log -- and it is the DOMAIN spelling, never the database's.
+    expect(snapshot?.liveEvents[0]?.type).toBe('task.created')
+  })
+
+  /**
+   * M45 R2 at the source (controller ruling T6-1).
+   *
+   * The live panel takes the last eight events of ANY type, so while a run streams all eight are
+   * `run.tool_call`/`run.output` -- a filter applied after the read would leave the river empty on
+   * exactly the projects that have work in them. Excluded in the QUERY, the eight are the eight
+   * newest events a person is allowed to see, and the run LIFECYCLE is not among the excluded: the
+   * two chatter types are the spec's own pair, not "everything beginning `run.`".
+   */
+  it('keeps model chatter out of the live river and the run lifecycle in it (M45 R2)', async (): Promise<void> => {
+    await appendEvent({
+      type: 'run.started',
+      workspaceId: fixture.workspaceId,
+      taskId: fixture.taskId,
+      slaveId: fixture.slaveId,
+      actor: 'slave',
+      payload: { sessionId: 'sess-1' },
+    })
+    for (let i = 0; i < 10; i += 1) {
+      await appendEvent({
+        type: 'run.tool_call',
+        workspaceId: fixture.workspaceId,
+        slaveId: fixture.slaveId,
+        actor: 'slave',
+        payload: { name: 'Write', summary: `CHATTER-MUST-NOT-APPEAR ${String(i)}` },
+      })
+    }
+    const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
+    const types = snapshot?.liveEvents.map((event) => event.type) ?? []
+    expect(types).not.toContain('run.tool_call')
+    expect(types).toContain('run.started')
+    expect(snapshot?.liveEvents.some((event) => event.summary.includes('CHATTER-MUST-NOT-APPEAR'))).toBe(false)
   })
 
   it('lists merging tasks FIFO by review-approval seq and counts ready tasks in the strip', async (): Promise<void> => {

@@ -259,27 +259,6 @@ export function OverviewClient({
     return `Runbook ${runbook.adopted.name}${position}`
   })()
 
-  /**
-   * The live river, minus what the domain classifies as nothing (controller ruling T6-0, M45 R2).
-   *
-   * `run.output` and `run.tool_call` are MODEL CHATTER: `LANE_BY_TYPE` gives them no lane, and R2's
-   * promise -- measured by `gate:m45-project-experience` stage 2 -- is that their text never
-   * appears on the project page. The river used to be hidden inside a closed `Advanced` disclosure,
-   * which is the only reason the promise held; Task 4 deleted that disclosure, so the rule has to
-   * be a rule now rather than a piece of furniture.
-   *
-   * `OverviewSnapshot.liveEvents` is a THREE-FIELD projection (`seq`, `ts`, `summary`) and carries
-   * no type, and this milestone adds no read-model field -- so the classification is joined from
-   * the timeline sitting beside it in this same band, whose rows `server/timeline.ts` selects with
-   * `LANE_BY_TYPE[type] !== null` and nothing else. One rule, one place, no second table: an event
-   * the Supervisor timeline will not carry is not a change this project made, and the Activity page
-   * (the band's own `All activity →`) is where every raw row keeps its `data-event-type`.
-   */
-  const classifiedEvents = useMemo(() => {
-    const laned = new Set(view.timeline.map((entry) => entry.key))
-    return view.liveEvents.filter((event) => laned.has(`event-${String(event.seq)}`))
-  }, [view.timeline, view.liveEvents])
-
   const { open: openPanel, close: closePanel, mode: panelMode } = useRightPanel()
 
   // What the URL names RIGHT NOW, readable from a closure created for an earlier subject. The
@@ -410,7 +389,15 @@ export function OverviewClient({
               <h1 className="m-0 text-[22px] font-semibold tracking-[-.3px] text-t1">{view.workspace.name}</h1>
               <StatusPill tone={WORKSPACE_TONE[workspaceStatus.state]} label={workspaceStatus.label} title={workspaceStatus.state} />
             </div>
-            <p data-testid="project-goal-line" className="mt-[6px] text-[13.5px] text-t2">
+            {/* TWO LINES, with the whole of it one hover away (ruling T6-3) -- the deleted
+              * `objective` tile's own idiom. A goal DOCUMENT is paragraphs long and grows with
+              * every `requestChange` (which appends a dated line to it), so an unclamped line here
+              * pushes the fact tiles below the fold `gate:m45` stage 1 measures. */}
+            <p
+              data-testid="project-goal-line"
+              {...(view.brief.objective.text === null ? {} : { title: view.brief.objective.text })}
+              className="mt-[6px] line-clamp-2 text-[13.5px] text-t2"
+            >
               {view.brief.objective.version > 0 && `Goal v${String(view.brief.objective.version)} · `}
               {view.brief.objective.text ?? 'no goal yet'}{' '}
               <Link href={`/w/${workspaceId}/settings`} className="font-medium text-accent">
@@ -443,11 +430,17 @@ export function OverviewClient({
               </Link>
             </div>
             <div className="overflow-hidden rounded-panel-card border border-line bg-card">
-              {view.slaves.map((slave) => (
-                // THREE props. `liveActionLine` is gone with the `action-line` the row no longer
-                // draws (M57 R18) -- the panel the `⋯` opens renders the live line already.
-                <SlaveCard key={slave.id} slave={slave} workspaceId={workspaceId} onOpen={selectSlave} />
-              ))}
+              {view.slaves.length === 0 ? (
+                // The deleted `team` tile said this, and an empty bordered box says nothing
+                // (`docs/ia.md` rule 2: the fact moved here with the rows).
+                <EmptyState testId="team-empty" message="nobody works here yet" />
+              ) : (
+                view.slaves.map((slave) => (
+                  // THREE props. `liveActionLine` is gone with the `action-line` the row no longer
+                  // draws (M57 R18) -- the panel the `⋯` opens renders the live line already.
+                  <SlaveCard key={slave.id} slave={slave} workspaceId={workspaceId} onOpen={selectSlave} />
+                ))
+              )}
             </div>
           </section>
 
@@ -467,7 +460,7 @@ export function OverviewClient({
             </div>
             <SupervisorTimeline workspaceId={workspaceId} entries={view.timeline} needsYou={view.needsYou} />
             <div className="flex gap-3">
-              <LiveEventsPanel workspaceId={workspaceId} events={classifiedEvents} />
+              <LiveEventsPanel workspaceId={workspaceId} events={view.liveEvents} />
               <MergeQueuePanel queue={view.mergeQueue} />
             </div>
           </section>

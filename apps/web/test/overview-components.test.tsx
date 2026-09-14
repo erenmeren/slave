@@ -132,8 +132,8 @@ describe('SlaveCard', () => {
     render(
       <SlaveCard
         slave={slave({ status: 'working', taskTitle: 'Add the thing', actionLine: 'Read a.ts' })}
-       
-        workspaceId="w1" onOpen={() => {}}
+        workspaceId="w1"
+        onOpen={() => {}}
       />,
     )
     // M57 R18: the live action line is the PANEL's now -- a row says which TASK a worker is on,
@@ -208,7 +208,7 @@ describe('SlaveCard', () => {
     it('still offers Resume for an ordinary operator pause', () => {
       render(<SlaveCard slave={slave({ status: 'paused' })} workspaceId="w1" onOpen={() => {}} />)
       expect(screen.getByTestId('card-resume')).toBeTruthy()
-
+      expect(screen.queryByTestId('card-answer')).toBeNull()
     })
   })
 
@@ -574,7 +574,7 @@ describe('Overview bottom row', () => {
   })
 
   it('renders the 340px live-events panel with an all → action', () => {
-    render(<LiveEventsPanel workspaceId="w1" events={[{ seq: 9, ts: '2026-08-29T10:00:00.000Z', summary: 'Alex wrote a.txt' }]} />)
+    render(<LiveEventsPanel workspaceId="w1" events={[{ seq: 9, ts: '2026-08-29T10:00:00.000Z', type: 'run.tool_result', summary: 'Alex wrote a.txt' }]} />)
     expect(screen.getByTestId('live-events').className).toContain('w-[340px]')
     expect(screen.getByTestId('panel-header-action').textContent).toBe('all →')
     expect(screen.getAllByTestId('live-event-row')).toHaveLength(1)
@@ -589,13 +589,13 @@ describe('Overview bottom row', () => {
   })
 
   it('gives a new live-events row the rise class and an existing one none', () => {
-    const { rerender } = render(<LiveEventsPanel workspaceId="w1" events={[{ seq: 1, ts: '2026-08-29T10:00:00.000Z', summary: 'a' }]} />)
+    const { rerender } = render(<LiveEventsPanel workspaceId="w1" events={[{ seq: 1, ts: '2026-08-29T10:00:00.000Z', type: 'run.started', summary: 'a' }]} />)
     rerender(
       <LiveEventsPanel
         workspaceId="w1"
         events={[
-          { seq: 2, ts: '2026-08-29T10:00:01.000Z', summary: 'b' },
-          { seq: 1, ts: '2026-08-29T10:00:00.000Z', summary: 'a' },
+          { seq: 2, ts: '2026-08-29T10:00:01.000Z', type: 'run.started', summary: 'b' },
+          { seq: 1, ts: '2026-08-29T10:00:00.000Z', type: 'run.started', summary: 'a' },
         ]}
       />,
     )
@@ -676,7 +676,6 @@ describe('shell facts and stream state reach the project header, never the sideb
     expect(screen.queryByTestId('runtime-provider')).toBeNull()
     expect(screen.queryByTestId('goal-suggestion')).toBeNull()
     expect(screen.getByTestId('project-goal-line').textContent).toContain('Ship the checkout flow')
-    expect(BANDS.every((band) => band !== null)).toBe(true)
     expect(bandOrder()).toEqual(BANDS)
   })
 
@@ -703,36 +702,34 @@ describe('shell facts and stream state reach the project header, never the sideb
   })
 
   /**
-   * M45 R2, on the surface (controller ruling T6-0).
+   * M45 R2, at the source (controller ruling T6-1).
    *
-   * `run.output` and `run.tool_call` are model chatter the domain gives no lane, and R2's promise
-   * is that their text never reaches the project page -- which held only because the river used to
-   * sit inside a closed `Advanced` disclosure until Task 4 deleted it. The page now shows the live
-   * rows the timeline beside them classifies, and nothing else.
+   * `run.output` and `run.tool_call` are model chatter, and R2's promise is that their words never
+   * reach the project page -- which held only because the river used to sit inside a closed
+   * `Advanced` disclosure Task 4 deleted. `buildOverviewSnapshot` excludes the two types in the
+   * QUERY now, so `liveEvents` cannot carry one; this case pins the PAGE's half of that contract:
+   * it draws what the snapshot gives it, run lifecycle included, without a filter of its own.
    */
-  it('keeps model chatter out of the live river, however loud the log is (M45 R2)', () => {
+  it('draws the live river the snapshot gives it, run lifecycle and all (M45 R2)', () => {
     renderInShell(
       <OverviewClient
         workspaceId="w1"
         initial={{
           ...WAITING,
           liveEvents: [
-            { seq: 9, ts: '2026-09-14T10:00:00.000Z', summary: 'MODEL-CHATTER-MUST-NOT-APPEAR' },
-            { seq: 8, ts: '2026-09-14T09:59:00.000Z', summary: 'Project · goal set' },
+            { seq: 9, ts: '2026-09-14T10:00:00.000Z', type: 'run.started', summary: 'Runs · started' },
+            { seq: 8, ts: '2026-09-14T09:59:00.000Z', type: 'workspace.goal_set', summary: 'Project · goal set' },
           ],
-          timeline: [
-            {
-              key: 'event-8', lane: 'user_request', laneLabel: 'USER REQUEST', at: '2026-09-14T09:59:00.000Z',
-              title: 'Ship the checkout flow', detail: null, taskId: null, taskTitle: null,
-              eventType: 'workspace.goal_set', decision: null, messageId: null, resolved: false, collapsedCount: 0,
-            },
-          ],
+          // The timeline gives `run.started` no lane, so a page that filtered its river against the
+          // timeline beside it would drop the run the person is watching. It does not.
+          timeline: [],
         }}
       />,
     )
-    const rows = screen.getAllByTestId('live-event-row')
-    expect(rows.map((row) => row.textContent)).toEqual(['09:59:00Project · goal set'])
-    expect(screen.getByTestId('recent-changes').textContent).not.toContain('MODEL-CHATTER-MUST-NOT-APPEAR')
+    expect(screen.getAllByTestId('live-event-row').map((row) => row.textContent)).toEqual([
+      '10:00:00Runs · started',
+      '09:59:00Project · goal set',
+    ])
   })
 
   // M45 erratum E16 kept, re-aimed by M57 R18: the Team band is the same `SlaveCard`s it has
@@ -745,6 +742,31 @@ describe('shell facts and stream state reach the project header, never the sideb
     expect(within(team).getByRole('link').getAttribute('href')).toBe('/w/w1/organization')
     expect(team.querySelectorAll('[data-testid="slave-card"]').length).toBe(PUBLISHED.slaves.length)
     expect(screen.getAllByTestId('slave-card').length).toBe(PUBLISHED.slaves.length)
+  })
+
+  // Folded review finding: the deleted `team` tile said "nobody works here yet", and a bordered
+  // box with nothing in it says nothing at all (`docs/ia.md` rule 2).
+  it('says nobody works here yet rather than drawing an empty Team box', () => {
+    renderInShell(<OverviewClient workspaceId="w1" initial={{ ...PUBLISHED, slaves: [] }} />)
+    expect(screen.queryByTestId('slave-card')).toBeNull()
+    expect(screen.getByTestId('team-empty').textContent).toContain('nobody works here yet')
+    expect(screen.getByTestId('team').textContent).toContain('Team')
+  })
+
+  // Ruling T6-3: `requestChange` APPENDS a dated line to the goal on every request, so an unclamped
+  // goal line grows without limit and pushes the fact tiles below the 900px fold stage 1 measures.
+  it('clamps the goal line to two lines, with the whole of it one hover away', () => {
+    const goal = 'Ship the checkout flow.\n\n## Requested changes\n- 2026-09-14: Add Apple Pay'
+    renderInShell(
+      <OverviewClient
+        workspaceId="w1"
+        initial={{ ...WAITING, brief: { ...WAITING.brief, objective: { text: goal, version: 2 } } }}
+      />,
+    )
+    const line = screen.getByTestId('project-goal-line')
+    expect(line.className).toContain('line-clamp-2')
+    expect(line.getAttribute('title')).toBe(goal)
+    expect(line.textContent).toContain('Goal v2 ·')
   })
 
   // M57 R17 band 5 / erratum E17: the Supervisor request BOX is gone -- the right panel's composer
