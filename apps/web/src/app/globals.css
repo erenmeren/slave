@@ -1,84 +1,192 @@
 @import 'tailwindcss';
 
+/* ============================================================================================
+ * M57 R1 — ONE sheet, TWO themes, and every name that ever meant something still meaning it.
+ *
+ * The first block below is the handoff README's own vocabulary (`design_handoff_ui_redesign`,
+ * "Design Tokens"), in its LIGHT values. The second block is the same names in dark, applied when
+ * the operating system asks for dark AND the operator has not pinned light. The third is the same
+ * names again under an explicit `data-theme="dark"`, so the toggle wins in both directions -- a
+ * person on a light OS who chooses Dark gets dark, and a person on a dark OS who chooses Light
+ * gets light. The ABSENCE of `data-theme` is "follow the system": that is why the media query is
+ * guarded by `:not([data-theme='light'])` and not by the attribute's presence.
+ *
+ * The third block after that is the ALIAS LAYER, and it is the reason this milestone can land one
+ * page at a time. Ninety-odd files in `src/` spell utilities like `bg-bg-1`, `text-text-2`,
+ * `border-line`, `text-tone-blocked`. Deleting those tokens would break the build in one file and
+ * the render in eighty-nine. Every one of them is still declared here, with its value rewritten to
+ * `var(<the new token that means what it meant>)` -- so a component nobody has restyled yet keeps
+ * rendering, and keeps rendering CORRECTLY IN BOTH THEMES, from the moment the switch exists. The
+ * old six-rung text ramp collapses onto the new three deliberately: `--text-1`/`--text-body` are
+ * primary, `--text-2`/`--text-dim` are muted, `--text-faint`/`--text-3` are labels. As each page is
+ * restyled its file stops spelling the old name; when no file spells one, it can go. Not before.
+ * ========================================================================================== */
+
 :root {
-  /* Layered neutral backgrounds — dark only (handoff spec §3 / design_handoff README "Design
-   * Tokens": page/panel/card surfaces). Existing variable NAMES kept; values shift to the
-   * handoff palette. */
-  --bg-0: #0a0c0f; /* page */
-  --bg-1: #0c0f13; /* panel */
-  --bg-2: #0f1217; /* card */
-  --line: rgba(255, 255, 255, 0.07); /* structural hairline */
-  --text-1: #e7eaf0; /* primary */
-  --text-2: #8a929e; /* muted */
-  /* The rung between "muted" and "label" on the handoff's text ramp (README "Design Tokens":
-   * ... muted #8a929e, dim #7c8697, faint #69727f, label #5b6472 ...). The mock uses it for
-   * numbers that sit BESIDE a label rather than being one -- the sidebar's nav counts and its
-   * bottom-block row labels (`Slave of AI Mockups.dc.html:57,63,70`). */
-  --text-faint: #69727f; /* faint */
-  --text-3: #5b6472; /* label */
+  /* ---- The handoff palette, LIGHT ---------------------------------------------------------- */
+  --bg: #f5f3ef;
+  --panel: #faf9f6;
+  --card: #ffffff;
+  --line: rgba(30, 27, 22, 0.09);
+  --line2: rgba(30, 27, 22, 0.16);
+  --t1: #1b1a17;
+  --t2: #5d5a53;
+  --t3: #75716a;
+  --hover: rgba(30, 27, 22, 0.045);
+  --sel: rgba(30, 27, 22, 0.07);
+  --accent: #1f8a7a;
+  --accent-ink: #ffffff;
+  --s-working: #0b7466;
+  --s-planning: #4453d6;
+  --s-review: #7d3fc9;
+  --s-waiting: #9a6200;
+  --s-blocked: #c43a31;
+  --s-done: #1f7d45;
+  --s-paused: #6b7080;
+  --s-idle: #8a8b85;
 
-  /* The rest of the handoff's text ramp that this app ACTUALLY paints with (design_handoff README
-   * "Design Tokens"), previously scattered through SlaveCard/TaskCard/ProjectsClient/OfficeHud/
-   * FocusCard/ActivityCard/AllSlavesTable/AnalyticsClient as hex literals -- a shadow palette
-   * beside the declared one (M44 R3).
-   *
-   * The ramp's other three rungs (`--text-strong #f2f5f9`, `--text-secondary #a8b0bd`,
-   * `--text-ghost #3f4650`) and the `.05` inner hairline were minted by erratum E15 and are NOT
-   * here: applying the census found no literal anywhere in `src/` computing to any of them, so
-   * they were four tokens naming nothing this product draws (M44 final review, item I2). A token
-   * with no call site is a colour a future edit reaches for because it exists, not because the
-   * design asks for it. They are in the handoff README, which is where an unused rung belongs;
-   * the day a surface needs one it comes back with its call site. */
-  --text-body: #c8cfda;
-  --text-dim: #7c8697;
-
-  /* The surfaces the handoff names beside the three declared ones. */
-  --bg-selected: #151a21; /* a selected row/card */
-  --bg-card-alt: #0f1116; /* the board's task card */
-  --bg-canvas: #08090c;   /* the graph canvas */
-  --bg-floor: #07080b;    /* the office floor */
-
-  /* The hairline a hover raises the structural `.07` to. (The handoff's `.05` inner-row rule is
-   * not here -- nothing in `src/` draws one; see the note on the text ramp above.) */
-  --line-hover: rgba(255, 255, 255, 0.2);
-
-  /* Handoff status tones (spec §3): the eight `StatusTone` values the `ui/` component library
-   * renders — the one tone vocabulary the app now uses end to end (the earlier M4 status
-   * variables have folded into this). */
-  --tone-working: #2ee6cf;
-  --tone-planning: #7b8cff;
-  --tone-review: #c084fc;
-  --tone-waiting: #f5b34a;
-  --tone-blocked: #f87171;
-  --tone-done: #4ade80;
-  --tone-paused: #8a929e;
-  --tone-idle: #5b6472;
-
-  /* Radii (spec §3): 5 chip/button · 6 nav/small · 7 input/tile · 8 card · 9–10 panel · 20 pill. */
+  /* ---- Radii (README "Radius"): 5 ref chip · 6 kind chip/segment · 7 small button ·
+   *      8 button/input/nav · 9-10 tile/card · 12 panel card · 14 page card · 999 pill.
+   *      The first five keep the names M44 minted for them; the three the README adds are new;
+   *      `--radius-pill` takes the README's 999 (M57 erratum E9 -- one gate row measured the old
+   *      20, and Task 9 rewrites that row). `--radius-hair` (2px bar cap) and `--radius-bubble`
+   *      (14px message bubble) are M44 erratum E14's and stay. */
   --radius-chip: 5px;
   --radius-nav: 6px;
   --radius-tile: 7px;
   --radius-card: 8px;
   --radius-panel: 9px;
-  --radius-pill: 20px;
-
-  /* Two radii that were literals with no token at all (M44 erratum E14): the 2px bar cap and the
-   * 14px message bubble. */
+  --radius-tile-lg: 10px;
+  --radius-panel-card: 12px;
+  --radius-page-card: 14px;
+  --radius-pill: 999px;
   --radius-hair: 2px;
   --radius-bubble: 14px;
 
-  /* Shadows (spec §3 / design_handoff README "Design Tokens"). */
-  --shadow-resting: 0 4px 16px rgba(0, 0, 0, 0.35);
+  /* ---- Shadows. The README allows cards exactly one (`0 1px 2px rgba(0,0,0,.04)`); that is
+   *      `--shadow-card`. `--shadow-resting` is NOT that and is not being replaced by it: it names
+   *      a FLOATING surface (a popover, a detail panel) and four components already ask for it. */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-resting: 0 4px 16px rgba(0, 0, 0, 0.12);
 
-  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  /* ---- Type (M57 R3). Four `next/font/local` calls hand us four variables, one per family per
+   *      subset, each carrying its own `unicode-range`; a codepoint outside the latin face's range
+   *      falls through to the latin-ext face exactly as it would between two faces of one family.
+   *      The literal fallbacks at the end are what a context rendering OUTSIDE this layout gets
+   *      (a component test mounting a `ui/` component with no `<html>` wrapper). */
+  --font-sans: var(--font-sans-latin), var(--font-sans-ext), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-mono-latin), var(--font-mono-ext), ui-monospace, monospace;
+
+  /* ---- The alias layer (see the header comment). NOTHING here is a colour; every one is a
+   *      pointer at one of the twenty names above, so all of them theme for free. */
+  --bg-0: var(--bg);
+  --bg-1: var(--panel);
+  --bg-2: var(--card);
+  --bg-selected: var(--sel);
+  --bg-card-alt: var(--card);
+  --bg-canvas: var(--bg);
+  --bg-floor: var(--bg);
+  --line-hover: var(--line2);
+  --text-1: var(--t1);
+  --text-body: var(--t1);
+  --text-2: var(--t2);
+  --text-dim: var(--t2);
+  --text-faint: var(--t3);
+  --text-3: var(--t3);
+  --tone-working: var(--s-working);
+  --tone-planning: var(--s-planning);
+  --tone-review: var(--s-review);
+  --tone-waiting: var(--s-waiting);
+  --tone-blocked: var(--s-blocked);
+  --tone-done: var(--s-done);
+  --tone-paused: var(--s-paused);
+  --tone-idle: var(--s-idle);
+}
+
+/* Dark, when the OS asks for it and nobody has pinned light. Only the twenty palette tokens are
+ * restated -- the aliases, the radii and the type above point at these names, so they follow. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --bg: #141518;
+    --panel: #191a1e;
+    --card: #1e2025;
+    --line: rgba(255, 255, 255, 0.08);
+    --line2: rgba(255, 255, 255, 0.15);
+    --t1: #eeede8;
+    --t2: #a6a59d;
+    --t3: #8f8f87;
+    --hover: rgba(255, 255, 255, 0.05);
+    --sel: rgba(255, 255, 255, 0.08);
+    --accent: #3ccbb5;
+    --accent-ink: #0f2521;
+    --s-working: #2ee6cf;
+    --s-planning: #7b8cff;
+    --s-review: #c084fc;
+    --s-waiting: #f5b34a;
+    --s-blocked: #f87171;
+    --s-done: #4ade80;
+    --s-paused: #8a929e;
+    --s-idle: #6b7280;
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-resting: 0 4px 16px rgba(0, 0, 0, 0.35);
+  }
+}
+
+/* Dark, pinned. The same twenty values, outside the media query, so a person on a light OS who
+ * chose Dark actually gets it. */
+:root[data-theme='dark'] {
+  --bg: #141518;
+  --panel: #191a1e;
+  --card: #1e2025;
+  --line: rgba(255, 255, 255, 0.08);
+  --line2: rgba(255, 255, 255, 0.15);
+  --t1: #eeede8;
+  --t2: #a6a59d;
+  --t3: #8f8f87;
+  --hover: rgba(255, 255, 255, 0.05);
+  --sel: rgba(255, 255, 255, 0.08);
+  --accent: #3ccbb5;
+  --accent-ink: #0f2521;
+  --s-working: #2ee6cf;
+  --s-planning: #7b8cff;
+  --s-review: #c084fc;
+  --s-waiting: #f5b34a;
+  --s-blocked: #f87171;
+  --s-done: #4ade80;
+  --s-paused: #8a929e;
+  --s-idle: #6b7280;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-resting: 0 4px 16px rgba(0, 0, 0, 0.35);
 }
 
 @theme inline {
+  /* The handoff's own names. */
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-card: var(--card);
+  --color-line: var(--line);
+  --color-line2: var(--line2);
+  --color-t1: var(--t1);
+  --color-t2: var(--t2);
+  --color-t3: var(--t3);
+  --color-hover: var(--hover);
+  --color-sel: var(--sel);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-s-working: var(--s-working);
+  --color-s-planning: var(--s-planning);
+  --color-s-review: var(--s-review);
+  --color-s-waiting: var(--s-waiting);
+  --color-s-blocked: var(--s-blocked);
+  --color-s-done: var(--s-done);
+  --color-s-paused: var(--s-paused);
+  --color-s-idle: var(--s-idle);
+
+  /* Every mapping that existed before M57, kept so that not one utility class in `src/` stops
+   * resolving. These point at the aliases, which point at the names above. */
   --color-bg-0: var(--bg-0);
   --color-bg-1: var(--bg-1);
   --color-bg-2: var(--bg-2);
-  --color-line: var(--line);
   --color-text-1: var(--text-1);
   --color-text-2: var(--text-2);
   --color-text-faint: var(--text-faint);
@@ -98,23 +206,73 @@
   --color-tone-done: var(--tone-done);
   --color-tone-paused: var(--tone-paused);
   --color-tone-idle: var(--tone-idle);
+
   --radius-chip: var(--radius-chip);
   --radius-nav: var(--radius-nav);
   --radius-tile: var(--radius-tile);
   --radius-card: var(--radius-card);
   --radius-panel: var(--radius-panel);
+  --radius-tile-lg: var(--radius-tile-lg);
+  --radius-panel-card: var(--radius-panel-card);
+  --radius-page-card: var(--radius-page-card);
   --radius-pill: var(--radius-pill);
   --radius-hair: var(--radius-hair);
   --radius-bubble: var(--radius-bubble);
+  --shadow-card: var(--shadow-card);
   --shadow-resting: var(--shadow-resting);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
 }
 
+/* `color-scheme` tells the browser which way to paint the things CSS does not own -- form
+ * controls, the scrollbar's own gutter, the canvas behind an over-scroll. Without it a light page
+ * gets dark native widgets and vice versa. It follows the same three-way rule the palette does. */
+:root {
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+  }
+}
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}
+
 body {
-  background: var(--bg-0);
-  color: var(--text-1);
+  background: var(--bg);
+  color: var(--t1);
   font-family: var(--font-sans);
+  /* README "Type": body is 14px. Every page's own sizes are relative to this one. */
+  font-size: 14px;
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+
+/* README "Scrollbars": 8px, transparent track, `--line2` thumb at radius 8, `--t3` on hover.
+ * The prototype draws these on every descendant (`App.dc.html:19-24`); so do we. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line2) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--line2);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--t3);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* Motion pass (spec §8 / M4 deferral). Every consumer gates these behind Tailwind's

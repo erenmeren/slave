@@ -1,47 +1,107 @@
 import type React from 'react'
-import { IBM_Plex_Mono, IBM_Plex_Sans } from 'next/font/google'
+import localFont from 'next/font/local'
 import './globals.css'
 import { Sidebar } from '../components/Sidebar'
+import { ThemeProvider, THEME_STORAGE_KEY } from '../components/theme/ThemeProvider'
 
-// The handoff typography (spec §3): IBM Plex Sans for UI, IBM Plex Mono for data/labels/section
-// labels. `variable` wires each loaded font's stack into the `--font-sans`/`--font-mono` custom
-// properties `globals.css` already consumes through its `@theme inline` mapping — `globals.css`
-// keeps its own literal-string fallback for contexts that render outside this layout (e.g. a
-// component test that mounts a `ui/` component directly, with no `<html>` wrapper).
-const plexSans = IBM_Plex_Sans({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
-  variable: '--font-sans',
+/**
+ * M57 R3 — the handoff's two families, self-hosted, one `localFont()` call PER FAMILY PER SUBSET.
+ *
+ * Per-file `unicode-range` is the whole point (a page of English must not download the latin-ext
+ * face), and `next/font/local`'s `src` array entries carry only `path`/`weight`/`style` -- there is
+ * no `unicodeRange` field. `declarations` IS accepted, and is applied to every `@font-face` a call
+ * generates, so ONE CALL PER SUBSET is the shape that keeps the split. Two families in one
+ * `font-family` stack fall back on a codepoint outside the first's range exactly the way two faces
+ * of one family would.
+ *
+ * `adjustFontFallback: false` on all four is load-bearing, not tidying: with it on, `next/font`
+ * synthesises a metric-matched local fallback and puts it INSIDE each variable's value -- and that
+ * fallback family carries no `unicode-range`, so it would sit between the latin face and the
+ * latin-ext face in the composed stack and swallow every latin-ext glyph. The literal fallbacks
+ * live at the end of `globals.css`'s `--font-sans`/`--font-mono` instead, where they belong.
+ *
+ * The `unicode-range` strings are Google Fonts' own for these two subsets, taken verbatim from the
+ * manifest that came with the downloaded files. They are spelled out in full at each call site
+ * rather than hoisted into a `const`, because `next/font`'s SWC loader reads these options at
+ * compile time and refuses anything that is not a written literal ("Font loader values must be
+ * explicitly written literals") -- a shared constant fails the BUILD, which is the one check
+ * neither `tsc` nor `vitest` performs.
+ */
+const sansLatin = localFont({
+  src: [
+    { path: './fonts/InstrumentSans-normal-latin.woff2', weight: '400 700', style: 'normal' },
+    { path: './fonts/InstrumentSans-italic-latin.woff2', weight: '400 700', style: 'italic' },
+  ],
+  declarations: [{ prop: 'unicode-range', value: 'U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD' }],
+  adjustFontFallback: false,
+  variable: '--font-sans-latin',
   display: 'swap',
 })
 
-const plexMono = IBM_Plex_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500', '600'],
-  variable: '--font-mono',
+const sansExt = localFont({
+  src: [
+    { path: './fonts/InstrumentSans-normal-latin-ext.woff2', weight: '400 700', style: 'normal' },
+    { path: './fonts/InstrumentSans-italic-latin-ext.woff2', weight: '400 700', style: 'italic' },
+  ],
+  declarations: [{ prop: 'unicode-range', value: 'U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF' }],
+  adjustFontFallback: false,
+  variable: '--font-sans-ext',
   display: 'swap',
 })
+
+const monoLatin = localFont({
+  src: [{ path: './fonts/JetBrainsMono-normal-latin.woff2', weight: '400 600', style: 'normal' }],
+  declarations: [{ prop: 'unicode-range', value: 'U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD' }],
+  adjustFontFallback: false,
+  variable: '--font-mono-latin',
+  display: 'swap',
+})
+
+const monoExt = localFont({
+  src: [{ path: './fonts/JetBrainsMono-normal-latin-ext.woff2', weight: '400 600', style: 'normal' }],
+  declarations: [{ prop: 'unicode-range', value: 'U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF' }],
+  adjustFontFallback: false,
+  variable: '--font-mono-ext',
+  display: 'swap',
+})
+
+const FONT_VARIABLES = `${sansLatin.variable} ${sansExt.variable} ${monoLatin.variable} ${monoExt.variable}`
+
+/**
+ * M57 R2 / erratum E8 — the flash killer.
+ *
+ * It is inline, it is in `<head>`, and it cannot import anything: it runs before the bundle exists.
+ * That is why `THEME_STORAGE_KEY` is interpolated into it rather than spelled twice, and why
+ * `apps/web/test/theme.test.tsx` pins the constant's value -- those are the two halves of keeping
+ * one string in one place across a boundary a module graph cannot cross.
+ *
+ * It stamps NOTHING for `system`: absent is system, and the stylesheet's media query answers it.
+ */
+const THEME_SCRIPT = `(function(){try{var t=localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)});if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t)}}catch(e){}})()`
 
 export const metadata = { title: 'Slave of AI' }
 
-// The global shell (M11 spec §4, reduced by M24 §2.1 and again by M44 R1): every page renders
-// inside sidebar + content area. The sidebar is one unconditional list of FOUR global rows --
-// Projects, Workforce, Simulations, Settings -- and reads no per-route data to decide what to show
-// (that was ProjectNav's job, removed in M24); a project's own navigation lives in
-// `app/w/[workspaceId]/layout.tsx`'s header and tab strip instead.
 export default function RootLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
   return (
-    <html lang="en" className={`${plexSans.variable} ${plexMono.variable}`}>
+    <html lang="en" className={FONT_VARIABLES} suppressHydrationWarning>
+      {/* An explicit `<head>` so the script above is genuinely in it (erratum E8): a `<script>`
+        * rendered in `<body>` runs after the body has painted, which is the flash. `next/font`'s
+        * own preload `<link>`s are injected by the framework and are unaffected by an authored
+        * head. `suppressHydrationWarning` on `<html>` because the script mutates the element's
+        * attributes before React sees it -- which is exactly its job. */}
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
       <body className="flex min-h-screen">
-        <Sidebar />
-        {/* The one `main` landmark, and the skip link's target (M44 R6). `tabIndex={-1}` so the
-          * anchor can actually move focus here -- a `<main>` is not focusable by default, and a
-          * skip link that only scrolls has moved the viewport and not the keyboard. The nine
-          * page-level `<main>`s that used to sit inside this one are `<div>`s now (erratum E16):
-          * a document with ten main landmarks has none. */}
-        <main id="main" tabIndex={-1} className="flex min-w-0 flex-1 flex-col focus:outline-none">
-          {children}
-        </main>
+        <ThemeProvider>
+          <Sidebar />
+          {/* The one `main` landmark, and the skip link's target (M44 R6). `tabIndex={-1}` so the
+            * anchor can actually move focus here -- a `<main>` is not focusable by default, and a
+            * skip link that only scrolls has moved the viewport and not the keyboard. */}
+          <main id="main" tabIndex={-1} className="flex min-w-0 flex-1 flex-col focus:outline-none">
+            {children}
+          </main>
+        </ThemeProvider>
       </body>
     </html>
   )
