@@ -1,34 +1,28 @@
 import { describe, expect, it } from 'vitest'
-import type { TaskStatus } from '@slave-of-ai/domain'
+// `@slave-of-ai/db`, NOT the domain (scan finding 19): `TASK_STATUSES` is at
+// `packages/db/src/enums.ts:81` and no such export exists under `packages/domain/src`. The file
+// this extends already imports it — as `ALL_STATUSES` — so REUSE THE EXISTING BINDING rather than
+// adding a second import of the same array under a second name.
+import { TASK_STATUSES as ALL_STATUSES } from '@slave-of-ai/db'
 import { CARD_STATE_TONE } from '../src/lib/tones.js'
 import { BOARD_COLUMNS, COLUMN_FOR_STATUS, COLUMN_STATE, priorityChip } from '../src/lib/taskColumns.js'
 
-const ALL_STATUSES: readonly TaskStatus[] = [
-  'backlog', 'ready', 'blocked', 'assigned', 'running',
-  'verifying', 'reviewing', 'merging', 'rework', 'waiting', 'done', 'failed', 'cancelled',
-]
-
 describe('the board columns', () => {
-  it('are the README six, in its order', () => {
-    expect(BOARD_COLUMNS).toEqual(['Backlog', 'Todo', 'In Progress', 'Review', 'Blocked', 'Done'])
+  it('is the README s five, in its order (M57 R10)', () => {
+    expect(BOARD_COLUMNS).toEqual(['Queued', 'In progress', 'Review', 'Blocked', 'Done'])
   })
 
-  it('maps every status exactly as the spec §5.3 table says', () => {
+  it('maps every TaskStatus onto exactly one of them, by the README s table', () => {
     expect(COLUMN_FOR_STATUS).toEqual({
-      backlog: 'Backlog',
-      ready: 'Todo',
-      // `rework` is a verify failure with attempts remaining — work that is queued again, so it
-      // reads as Todo. The card still shows its own `rework` pill.
-      rework: 'Todo',
-      assigned: 'In Progress',
-      running: 'In Progress',
-      verifying: 'In Progress',
+      backlog: 'Queued',
+      ready: 'Queued',
+      rework: 'Queued',
+      assigned: 'Queued',
+      running: 'In progress',
+      verifying: 'In progress',
+      waiting: 'In progress',
       reviewing: 'Review',
       merging: 'Review',
-      // M36: a task waiting for another slave's answer is mid-flight -- its session is alive and
-      // its worktree is held -- so it stays on In Progress and keeps its own amber WAITING pill.
-      // NOT Blocked, which is the column addressed to the human.
-      waiting: 'In Progress',
       blocked: 'Blocked',
       done: 'Done',
       failed: 'Done',
@@ -36,20 +30,29 @@ describe('the board columns', () => {
     })
   })
 
-  it('covers every TaskStatus and lands only on the six columns', () => {
+  it('leaves no status without a column -- the Record s totality is the build-time guard', () => {
     for (const status of ALL_STATUSES) {
-      expect(BOARD_COLUMNS).toContain(COLUMN_FOR_STATUS[status])
+      expect(BOARD_COLUMNS, status).toContain(COLUMN_FOR_STATUS[status])
     }
-    expect(Object.keys(COLUMN_FOR_STATUS).sort()).toEqual([...ALL_STATUSES].sort())
+  })
+
+  it('gives each column one CardState, spelled the way lib/tones.ts spells it (erratum E6)', () => {
+    expect(COLUMN_STATE).toEqual({
+      Queued: 'planning',
+      'In progress': 'working',
+      Review: 'review',
+      Blocked: 'blocked',
+      Done: 'completed',
+    })
   })
 
   it('resolves every column tone through the one tone table, never its own', () => {
     for (const column of BOARD_COLUMNS) {
-      // The assertion that matters is that the state is a KEY of `CARD_STATE_TONE` — i.e. that
+      // The assertion that matters is that the state is a KEY of `CARD_STATE_TONE` -- i.e. that
       // `lib/tones.ts` is still the only place a colour is chosen.
       expect(Object.keys(CARD_STATE_TONE)).toContain(COLUMN_STATE[column])
     }
-    expect(CARD_STATE_TONE[COLUMN_STATE['In Progress']].tone).toBe('working')
+    expect(CARD_STATE_TONE[COLUMN_STATE['In progress']].tone).toBe('working')
     expect(CARD_STATE_TONE[COLUMN_STATE.Done].tone).toBe('done')
   })
 })

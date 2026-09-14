@@ -197,10 +197,14 @@ describe('cardStateFor', () => {
 // and five statuses fell through that to the slave's own idleness.
 describe('cardStateForTask', () => {
   const cases: ReadonlyArray<readonly [TaskStatus, CardState]> = [
-    ['backlog', 'idle'],
+    // M57 R10: `Backlog` folded into `Queued` (idle's own column is gone), so a backlog task now
+    // reads the same `planning` state as `ready`/`rework` -- the three of them are one phase now.
+    ['backlog', 'planning'],
     ['ready', 'planning'],
     ['rework', 'planning'],
-    ['assigned', 'working'],
+    // M57 R10, spec erratum E16: `assigned` moved off the In Progress column onto Queued, and its
+    // state moved with it -- a task nobody has started should not look like one in flight.
+    ['assigned', 'planning'],
     ['running', 'working'],
     ['verifying', 'working'],
     ['reviewing', 'review'],
@@ -231,9 +235,9 @@ describe('cardStateForTask', () => {
         expect(cardStateForTask(status)).toBe(status === 'failed' ? 'blocked' : 'cancelled')
         expect(CARD_STATE_TONE[cardStateForTask(status)].tone).toBe(status === 'failed' ? 'blocked' : 'idle')
       } else if (status === 'waiting') {
-        // M36 t2: the work is in flight (the In Progress column) but nothing is being worked on
+        // M36 t2: the work is in flight (the In progress column) but nothing is being worked on
         // while the slave waits for another slave's answer, so the card says WAITING, not WORKING.
-        expect(COLUMN_FOR_STATUS[status]).toBe('In Progress')
+        expect(COLUMN_FOR_STATUS[status]).toBe('In progress')
         expect(cardStateForTask(status)).toBe('waiting')
       } else {
         expect(cardStateForTask(status)).toBe(columnState)
@@ -244,6 +248,13 @@ describe('cardStateForTask', () => {
   it('reads a running task as working, never as idle -- the pill agrees with the column head', () => {
     expect(CARD_STATE_TONE[cardStateForTask('running')].label).toBe('WORKING')
     expect(CARD_STATE_TONE[cardStateFor('idle', 'running')].label).toBe('IDLE')
+  })
+
+  it('paints an assigned task as queued, not as working (M57 R10, spec erratum E16)', () => {
+    // Until M57 `assigned` sat on the In Progress column and inherited its `working` tone. The
+    // README puts it in Queued, and a task nobody has started should not look like one in flight.
+    expect(COLUMN_FOR_STATUS.assigned).toBe('Queued')
+    expect(cardStateForTask('assigned')).toBe('planning')
   })
 })
 

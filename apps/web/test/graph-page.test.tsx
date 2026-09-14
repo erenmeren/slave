@@ -486,15 +486,17 @@ describe('GraphClient', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/graph/communication'))
   })
 
-  it('switches to Execution mode and draws the six pipeline stages', async () => {
+  it('switches to Execution mode and draws the five pipeline stages', async () => {
     render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
     await waitFor(() => expect(elkLayoutSpy).toHaveBeenCalled())
 
     fireEvent.click(screen.getByText('Execution'))
 
     expect(routerReplace).toHaveBeenCalledWith('/w/w1/graph?mode=exec', { scroll: false })
-    await waitFor(() => expect(screen.getAllByTestId('stage-node')).toHaveLength(6))
-    // The one running task rides its own compact node under In Progress.
+    // M57 R10: six columns folded to five (`Backlog`/`Todo` became `Queued`) -- the pipeline
+    // follows `BOARD_COLUMNS` by construction (`ExecutionNodes.tsx`), so this count moved with it.
+    await waitFor(() => expect(screen.getAllByTestId('stage-node')).toHaveLength(5))
+    // The one running task rides its own compact node under In progress.
     expect(screen.getAllByTestId('stage-task-node')).toHaveLength(1)
   })
 

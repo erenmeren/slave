@@ -5,6 +5,8 @@ import { BOARD_COLUMNS } from '../src/lib/taskColumns.js'
 import { TaskCard } from '../src/components/TaskCard.js'
 import { TaskColumn } from '../src/components/TaskColumn.js'
 import { TaskDetailPanel } from '../src/components/TaskDetailPanel.js'
+import { TaskFilters, filterTasks } from '../src/components/TaskFilters.js'
+import { TaskList } from '../src/components/TaskList.js'
 import { TasksClient } from '../src/components/TasksClient.js'
 import { publishStreamState } from '../src/hooks/useStreamState.js'
 import { RightPanel } from '../src/components/shell/RightPanel.js'
@@ -97,7 +99,7 @@ afterEach(() => {
 })
 
 describe('TaskColumn', () => {
-  it('renders the six columns in the README order, empty ones included', () => {
+  it('renders the five columns in the README order, empty ones included', () => {
     render(
       <div>
         {BOARD_COLUMNS.map((column) => (
@@ -107,6 +109,161 @@ describe('TaskColumn', () => {
     )
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
     expect(headings).toEqual(BOARD_COLUMNS)
+  })
+
+  it('says so when a column holds no tasks, and says nothing when it holds some', () => {
+    render(
+      <div>
+        <TaskColumn workspaceGoalVersion={0} column="Queued" tasks={[]} onSelect={() => {}} />
+        <TaskColumn workspaceGoalVersion={0} column="Done" tasks={[task({ id: 't1' })]} onSelect={() => {}} />
+      </div>,
+    )
+    const [empty, populated] = screen.getAllByTestId('column')
+    expect(within(empty!).getByTestId('column-empty').textContent).toBe('Nothing here')
+    expect(within(populated!).queryByTestId('column-empty')).toBeNull()
+  })
+})
+
+// M57 R21: the row-filter pure function `TasksClient` and `TaskFilters` share, so the two never
+// disagree about which tasks a search, a needs-you toggle or an assignee chip leaves on screen.
+describe('filterTasks', () => {
+  const checkout = task({ id: 't1', title: 'Add the checkout API', assigneeName: 'Alex' })
+  const header = task({ id: 't2', title: 'Fix the header bug', assigneeName: 'Sam' })
+  const docs = task({ id: 't3', title: 'Write the docs', assigneeName: null })
+  const all = [checkout, header, docs]
+
+  it('is the identity filter when nothing is set', () => {
+    expect(filterTasks(all, { query: '', needsOnly: false, assignee: null }, new Set())).toEqual(all)
+  })
+
+  it('matches the query against the title or the id, case-insensitively', () => {
+    expect(filterTasks(all, { query: 'checkout', needsOnly: false, assignee: null }, new Set())).toEqual([checkout])
+    expect(filterTasks(all, { query: 'T2', needsOnly: false, assignee: null }, new Set())).toEqual([header])
+  })
+
+  it('keeps only the ids the caller says need a person, when the toggle is on', () => {
+    expect(filterTasks(all, { query: '', needsOnly: true, assignee: null }, new Set(['t2']))).toEqual([header])
+  })
+
+  it('keeps only the named assignee', () => {
+    expect(filterTasks(all, { query: '', needsOnly: false, assignee: 'Sam' }, new Set())).toEqual([header])
+  })
+
+  it('applies the query, the toggle and the assignee together', () => {
+    expect(filterTasks(all, { query: 'fix', needsOnly: true, assignee: 'Sam' }, new Set(['t2']))).toEqual([header])
+    expect(filterTasks(all, { query: 'fix', needsOnly: true, assignee: 'Alex' }, new Set(['t2']))).toEqual([])
+  })
+})
+
+describe('TaskFilters', () => {
+  const noop = (): void => {}
+
+  it('renders the search box, the needs-you count, one chip per assignee and the view toggle', () => {
+    render(
+      <TaskFilters
+        query=""
+        onQuery={noop}
+        needsOnly={false}
+        onNeedsOnly={noop}
+        needsCount={2}
+        assignees={['Alex', 'Sam']}
+        assignee={null}
+        onAssignee={noop}
+        view="board"
+        onView={noop}
+      />,
+    )
+    expect(screen.getByTestId('task-search')).toBeTruthy()
+    expect(screen.getByTestId('task-filter-needs-you').textContent).toBe('Needs you · 2')
+    expect(screen.getAllByTestId('task-filter-assignee').map((el) => el.getAttribute('data-assignee'))).toEqual([
+      'Alex',
+      'Sam',
+    ])
+    expect(screen.getByTestId('task-view-toggle').getAttribute('data-view')).toBe('board')
+    expect(screen.getByTestId('task-view-board').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('reports what was typed, toggled or clicked -- it owns no state of its own', () => {
+    const onQuery = vi.fn()
+    const onNeedsOnly = vi.fn()
+    const onAssignee = vi.fn()
+    const onView = vi.fn()
+    render(
+      <TaskFilters
+        query=""
+        onQuery={onQuery}
+        needsOnly={false}
+        onNeedsOnly={onNeedsOnly}
+        needsCount={0}
+        assignees={['Alex']}
+        assignee={null}
+        onAssignee={onAssignee}
+        view="board"
+        onView={onView}
+      />,
+    )
+    fireEvent.change(screen.getByTestId('task-search'), { target: { value: 'checkout' } })
+    expect(onQuery).toHaveBeenCalledWith('checkout')
+
+    fireEvent.click(screen.getByTestId('task-filter-needs-you'))
+    expect(onNeedsOnly).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByTestId('task-filter-assignee'))
+    expect(onAssignee).toHaveBeenCalledWith('Alex')
+
+    fireEvent.click(screen.getByTestId('task-view-list'))
+    expect(onView).toHaveBeenCalledWith('list')
+  })
+
+  it('un-picks an assignee chip that is already the chosen one', () => {
+    const onAssignee = vi.fn()
+    render(
+      <TaskFilters
+        query=""
+        onQuery={noop}
+        needsOnly={false}
+        onNeedsOnly={noop}
+        needsCount={0}
+        assignees={['Alex']}
+        assignee="Alex"
+        onAssignee={onAssignee}
+        view="board"
+        onView={noop}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('task-filter-assignee'))
+    expect(onAssignee).toHaveBeenCalledWith(null)
+  })
+})
+
+describe('TaskList', () => {
+  it('renders one row per task, with the domain word, the title, the assignee and the priority', () => {
+    render(
+      <TaskList
+        tasks={[
+          task({ id: 't1', title: 'Add the thing', assigneeName: 'Alex', priority: 4, status: 'running' }),
+          task({ id: 't2', title: 'Fix the bug', assigneeName: null, priority: 1, status: 'blocked' }),
+        ]}
+        onSelect={() => {}}
+      />,
+    )
+    const rows = screen.getAllByTestId('task-list-row')
+    expect(rows).toHaveLength(2)
+    expect(rows[0]?.textContent).toContain('Add the thing')
+    expect(rows[0]?.textContent).toContain('WORKING')
+    expect(rows[0]?.textContent).toContain('Alex')
+    expect(rows[0]?.textContent).toContain('URGENT')
+    expect(rows[1]?.textContent).toContain('BLOCKED')
+    expect(rows[1]?.textContent).toContain('—')
+    expect(rows[0]?.getAttribute('data-status')).toBe('running')
+  })
+
+  it('reports the clicked task and nothing else', () => {
+    const onSelect = vi.fn()
+    render(<TaskList tasks={[task({ id: 't1' }), task({ id: 't2' })]} onSelect={onSelect} />)
+    fireEvent.click(screen.getAllByTestId('task-list-row')[1]!)
+    expect(onSelect).toHaveBeenCalledWith('t2')
+    expect(onSelect).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -821,7 +978,7 @@ describe('TasksClient', () => {
     expect(publishStreamState).toHaveBeenCalledWith('w1', { connection: 'connected', latencyMs: null })
   })
 
-  it('renders all six columns in order, empty ones included', () => {
+  it('renders all five columns in order, empty ones included', () => {
     renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({})])} />)
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
     expect(headings).toEqual(BOARD_COLUMNS)
@@ -881,34 +1038,110 @@ describe('TasksClient', () => {
     expect(screen.queryByTestId('task-stale')).toBeNull()
   })
 
-  it('buckets an off-column status (rework) into the Todo column while the card still carries the true status', () => {
+  it('buckets an off-column status (rework) into the Queued column while the card still carries the true status', () => {
     renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', status: 'rework' })])} />)
-    const todoColumn = screen.getAllByTestId('column').find((c) => c.getAttribute('data-column') === 'Todo')
-    expect(todoColumn).toBeDefined()
-    const card = within(todoColumn!).getByTestId('task-card')
+    const queuedColumn = screen.getAllByTestId('column').find((c) => c.getAttribute('data-column') === 'Queued')
+    expect(queuedColumn).toBeDefined()
+    const card = within(queuedColumn!).getByTestId('task-card')
     expect(card.getAttribute('data-status')).toBe('rework')
+  })
+
+  // M57 R10/R21: the filter row filters the snapshot the page already holds -- no query, no route.
+  it('filters the board by the search box, matching the title or the id', () => {
+    renderInShell(
+      <TasksClient
+        workspaceId="w1"
+        initial={snapshot([
+          task({ id: 't1', title: 'Add the checkout API' }),
+          task({ id: 't2', title: 'Fix the header bug' }),
+        ])}
+      />,
+    )
+    fireEvent.change(screen.getByTestId('task-search'), { target: { value: 'checkout' } })
+    expect(screen.getByText('Add the checkout API')).toBeTruthy()
+    expect(screen.queryByText('Fix the header bug')).toBeNull()
+  })
+
+  it('filters the board to the tasks that need a person, with the toggle\'s own count', () => {
+    renderInShell(
+      <TasksClient
+        workspaceId="w1"
+        initial={snapshot([
+          task({ id: 't1', title: 'Needs a look', status: 'blocked' }),
+          task({ id: 't2', title: 'Just running', status: 'running' }),
+        ])}
+      />,
+    )
+    expect(screen.getByTestId('task-filter-needs-you').textContent).toBe('Needs you · 1')
+    fireEvent.click(screen.getByTestId('task-filter-needs-you'))
+    expect(screen.getByText('Needs a look')).toBeTruthy()
+    expect(screen.queryByText('Just running')).toBeNull()
+  })
+
+  it('filters the board to one assignee\'s tasks on a chip click, and clears on a second click', () => {
+    renderInShell(
+      <TasksClient
+        workspaceId="w1"
+        initial={snapshot([
+          task({ id: 't1', title: 'Alex has this one', assigneeName: 'Alex' }),
+          task({ id: 't2', title: 'Sam has this one', assigneeName: 'Sam' }),
+        ])}
+      />,
+    )
+    const alexChip = screen.getAllByTestId('task-filter-assignee').find((el) => el.getAttribute('data-assignee') === 'Alex')!
+    fireEvent.click(alexChip)
+    expect(screen.getByText('Alex has this one')).toBeTruthy()
+    expect(screen.queryByText('Sam has this one')).toBeNull()
+
+    fireEvent.click(alexChip)
+    expect(screen.getByText('Sam has this one')).toBeTruthy()
+  })
+
+  it('switches from the board to the list view and back on the segmented control', () => {
+    renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', title: 'Add the thing' })])} />)
+    expect(screen.queryByTestId('task-list')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('task-view-list'))
+    expect(screen.getByTestId('task-list')).toBeTruthy()
+    expect(screen.getAllByTestId('task-list-row')).toHaveLength(1)
+    expect(screen.queryByTestId('column')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('task-view-board'))
+    expect(screen.queryByTestId('task-list')).toBeNull()
+    expect(screen.getAllByTestId('column')).toHaveLength(5)
+  })
+
+  it('opens the detail panel from a list row, the same as from a card', () => {
+    renderInShell(
+      <TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', description: 'The full description' })])} />,
+    )
+    fireEvent.click(screen.getByTestId('task-view-list'))
+    fireEvent.click(screen.getByTestId('task-list-row'))
+    expect(screen.getByText('The full description')).toBeTruthy()
   })
 })
 
 // M44 erratum E25 / M45 R5: the one page frame reaches the Tasks board too. `flush`, so it brings
-// its landmark and its `page-shell` marker and none of its padding -- the board's own
-// `grid-cols-6 gap-[10px] p-[16px]` is what `gate:m14-fidelity` measures, and it is unchanged.
+// its landmark and its `page-shell` marker and none of its padding -- the board's own five-column
+// grid (M57 R10) is what a future `gate:m14-fidelity` pass measures.
 describe('TasksClient (M44 E25 / M45 R5)', () => {
-  it('renders inside the one page shell, with the board grid untouched', () => {
+  it('renders inside the one page shell, with the board grid its own five-column recipe', () => {
     renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({})])} />)
     const shell = screen.getByTestId('page-shell')
     expect(shell.className).not.toContain('p-3')
-    expect(shell.querySelector(':scope > div')?.className).toBe('grid grid-cols-6 gap-[10px] p-[16px]')
+    expect(shell.querySelector('.grid')?.className).toBe(
+      'grid gap-3 overflow-x-auto p-[16px_24px_24px] [grid-template-columns:repeat(5,minmax(172px,1fr))] items-start',
+    )
   })
 })
 
-describe('the six-column board', () => {
-  it('renders six columns in the README order with a dot and a count each', () => {
+describe('the five-column board', () => {
+  it('renders five columns in the README order with a dot and a count each', () => {
     renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({ status: 'running' }), task({ id: 't2', status: 'blocked' })])} />)
     expect(screen.getAllByTestId('column').map((c) => c.getAttribute('data-column'))).toEqual([
-      'Backlog', 'Todo', 'In Progress', 'Review', 'Blocked', 'Done',
+      'Queued', 'In progress', 'Review', 'Blocked', 'Done',
     ])
-    expect(screen.getByTestId('column-count-In Progress').textContent).toBe('1')
+    expect(screen.getByTestId('column-count-In progress').textContent).toBe('1')
     expect(screen.getByTestId('column-count-Blocked').textContent).toBe('1')
     expect(screen.getByTestId('column-dot-Blocked').getAttribute('data-tone')).toBe('blocked')
   })

@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { userTaskStatus } from '@slave-of-ai/domain'
 import { publishShellFacts } from '../hooks/useShellFacts'
 import { publishStreamState } from '../hooks/useStreamState'
 import { useSelectedId } from '../hooks/useSelectedId'
@@ -13,6 +14,8 @@ import { PageShell } from './ui/PageShell'
 import { HaltBanner } from './HaltBanner'
 import { TaskColumn } from './TaskColumn'
 import { TaskDetailPanel } from './TaskDetailPanel'
+import { TaskFilters, filterTasks } from './TaskFilters'
+import { TaskList } from './TaskList'
 
 export function TasksClient({
   workspaceId,
@@ -22,9 +25,24 @@ export function TasksClient({
   readonly initial: TasksSnapshot
 }): React.JSX.Element {
   const { snapshot, connection, error, latencyMs } = useTasks(workspaceId, initial)
-  const view = snapshot ?? initial
+  // Renamed from `view` (Step 6): the new `view` state below is the board/list toggle, and the two
+  // must not shadow each other.
+  const snapshotView = snapshot ?? initial
   const [selectedId, setSelectedId] = useSelectedId('task')
-  const selectedTask = view.tasks.find((task) => task.id === selectedId) ?? null
+  const selectedTask = snapshotView.tasks.find((task) => task.id === selectedId) ?? null
+
+  const [query, setQuery] = useState('')
+  const [needsOnly, setNeedsOnly] = useState(false)
+  const [assignee, setAssignee] = useState<string | null>(null)
+  const [view, setView] = useState<'board' | 'list'>('board')
+
+  // The README's filter row filters the snapshot the page already holds -- no query, no route.
+  const needsYouIds = useMemo(
+    () => new Set(snapshotView.tasks.filter((task) => userTaskStatus({ status: task.status }).needsYou).map((task) => task.id)),
+    [snapshotView.tasks],
+  )
+  const visible = filterTasks(snapshotView.tasks, { query, needsOnly, assignee }, needsYouIds)
+  const assignees = [...new Set(snapshotView.tasks.map((t) => t.assigneeName).filter((n): n is string => n !== null))].sort()
 
   // Controller ruling carried from Task 3/8, and re-aimed by M24 §2.2: this page already streams
   // the workspace this snapshot's `shellFacts` describes, so it publishes them to
@@ -32,8 +50,8 @@ export function TasksClient({
   // no second `EventSource` against `/api/w/:id/shell` (see `OverviewClient.tsx` for the exact
   // idiom this mirrors).
   useEffect((): void => {
-    publishShellFacts(workspaceId, view.shellFacts)
-  }, [workspaceId, view.shellFacts])
+    publishShellFacts(workspaceId, snapshotView.shellFacts)
+  }, [workspaceId, snapshotView.shellFacts])
   // Retraction is its OWN effect, keyed only on the workspace: folding it into the cleanup of the
   // publish above would retract and re-publish on every snapshot, and the header would flip to
   // its fallback facts (this page's own SSR snapshot) between the two.
@@ -90,8 +108,8 @@ export function TasksClient({
   // drawn now. The clearer handed to `open` is the same one the panel's own close used, so the
   // slot's `»`, the slot's `✕` and the panel's own control all clear the URL together.
   //
-  // THE DEPENDENCY LIST IS `selectedTask?.id` AND NOTHING ELSE (scan finding 21): `view` changes
-  // identity on every SSE frame, and an effect that re-`open()`s several times a second is an
+  // THE DEPENDENCY LIST IS `selectedTask?.id` AND NOTHING ELSE (scan finding 21): `snapshotView`
+  // changes identity on every SSE frame, and an effect that re-`open()`s several times a second is an
   // effect that fights the person who just collapsed the panel. The fourth argument to `open` is
   // the content KEY, which is what lets the provider tell a re-assertion of the same task from a
   // new one. And it handles the CLEAR, because `?task=` can go away by navigation -- a link, a
@@ -113,7 +131,7 @@ export function TasksClient({
         key={selectedTask.id}
         task={selectedTask}
         workspaceId={workspaceId}
-        workspaceGoalVersion={view.workspace.goalVersion}
+        workspaceGoalVersion={snapshotView.workspace.goalVersion}
         onClose={() => {
           setSelectedId(null)
           closePanel()
@@ -143,22 +161,38 @@ export function TasksClient({
         * handoff's own gutters and `gate:m14-fidelity` measures them. The shell is here for its
         * landmark and its `page-shell` marker, not for its padding -- not a pixel moves. */}
         <PageShell flush>
-          {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
+          {snapshotView.workspace.haltedReason !== null && <HaltBanner reason={snapshotView.workspace.haltedReason} />}
           {/* M44 R3: the band three surfaces hand-rolled, each with its own class string, is
             * `ui/Alert` now. The one-line `role="alert"` refusal sentences under forms are NOT
             * alerts in this sense and stay exactly as they are (erratum E21). */}
           {error !== null && <Alert variant="notice">showing stale data: {error}</Alert>}
-          <div className="grid grid-cols-6 gap-[10px] p-[16px]">
-            {BOARD_COLUMNS.map((column) => (
-              <TaskColumn
-                key={column}
-                column={column}
-                tasks={view.tasks.filter((task) => COLUMN_FOR_STATUS[task.status] === column)}
-                workspaceGoalVersion={view.workspace.goalVersion}
-                onSelect={setSelectedId}
-              />
-            ))}
-          </div>
+          <TaskFilters
+            query={query}
+            onQuery={setQuery}
+            needsOnly={needsOnly}
+            onNeedsOnly={() => setNeedsOnly((was) => !was)}
+            needsCount={needsYouIds.size}
+            assignees={assignees}
+            assignee={assignee}
+            onAssignee={setAssignee}
+            view={view}
+            onView={setView}
+          />
+          {view === 'list' ? (
+            <TaskList tasks={visible} onSelect={setSelectedId} />
+          ) : (
+            <div className="grid gap-3 overflow-x-auto p-[16px_24px_24px] [grid-template-columns:repeat(5,minmax(172px,1fr))] items-start">
+              {BOARD_COLUMNS.map((column) => (
+                <TaskColumn
+                  key={column}
+                  column={column}
+                  tasks={visible.filter((task) => COLUMN_FOR_STATUS[task.status] === column)}
+                  workspaceGoalVersion={snapshotView.workspace.goalVersion}
+                  onSelect={setSelectedId}
+                />
+              ))}
+            </div>
+          )}
         </PageShell>
       </div>
     </>

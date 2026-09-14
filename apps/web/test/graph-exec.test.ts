@@ -44,13 +44,12 @@ function task(over: Partial<GraphSnapshot['tasks'][number]>): GraphSnapshot['tas
 }
 
 describe('buildExecutionGraph', () => {
-  it('emits the six stages in BOARD_COLUMNS order, always, even with no tasks at all', () => {
+  it('emits the five stages in BOARD_COLUMNS order, always, even with no tasks at all', () => {
     const { nodes } = buildExecutionGraph(snapshot([]))
     const stages = nodes.filter((node) => node.type === 'stage')
     expect(stages.map((node) => node.id)).toEqual([
-      'stage:Backlog',
-      'stage:Todo',
-      'stage:In Progress',
+      'stage:Queued',
+      'stage:In progress',
       'stage:Review',
       'stage:Blocked',
       'stage:Done',
@@ -63,9 +62,8 @@ describe('buildExecutionGraph', () => {
   it('chains the stages left to right, one inactive cable per adjacent pair', () => {
     const { edges } = buildExecutionGraph(snapshot([]))
     expect(edges.map((edge) => edge.id)).toEqual([
-      'stage:Backlog->stage:Todo',
-      'stage:Todo->stage:In Progress',
-      'stage:In Progress->stage:Review',
+      'stage:Queued->stage:In progress',
+      'stage:In progress->stage:Review',
       'stage:Review->stage:Blocked',
       'stage:Blocked->stage:Done',
     ])
@@ -84,24 +82,24 @@ describe('buildExecutionGraph', () => {
     )
     const parentOf = (taskId: string): string | undefined => edges.find((edge) => edge.target === `execTask:${taskId}`)?.source
 
-    expect(parentOf('t1')).toBe('stage:In Progress')
-    expect(parentOf('t2')).toBe('stage:In Progress')
+    expect(parentOf('t1')).toBe('stage:In progress')
+    expect(parentOf('t2')).toBe('stage:In progress')
     // `merging` is Review, `cancelled` is Done — the SAME mapping the board uses, imported from
     // `lib/taskColumns.ts`, never re-derived here.
     expect(parentOf('t3')).toBe('stage:Review')
     expect(parentOf('t4')).toBe('stage:Done')
 
-    const inProgress = nodes.find((node) => node.id === 'stage:In Progress')
+    const inProgress = nodes.find((node) => node.id === 'stage:In progress')
     expect((inProgress?.data as { count: number }).count).toBe(2)
     expect(nodes.filter((node) => node.type === 'stageTask')).toHaveLength(4)
   })
 
   it('lights the cable INTO a stage that currently holds live work', () => {
     const { edges } = buildExecutionGraph(snapshot([task({ id: 't1', status: 'running' })]))
-    const intoInProgress = edges.find((edge) => edge.id === 'stage:Todo->stage:In Progress')
+    const intoInProgress = edges.find((edge) => edge.id === 'stage:Queued->stage:In progress')
     expect((intoInProgress?.data as { active: boolean }).active).toBe(true)
     // Nothing is in Review, so its inbound cable stays inactive.
-    const intoReview = edges.find((edge) => edge.id === 'stage:In Progress->stage:Review')
+    const intoReview = edges.find((edge) => edge.id === 'stage:In progress->stage:Review')
     expect((intoReview?.data as { active: boolean }).active).toBe(false)
   })
 
@@ -123,7 +121,7 @@ describe('buildExecutionGraph', () => {
     const { nodes } = buildExecutionGraph(snapshot([task({ id: 't1', status: 'running' })]))
     const node = nodes.find((n) => n.type === 'stageTask')
     expect((node?.data as { tone: string }).tone).toBe('working')
-    expect((node?.data as StageTaskNodeData).column).toBe('In Progress')
+    expect((node?.data as StageTaskNodeData).column).toBe('In progress')
   })
 
   // M16 Task 8: the Tasks board reads a `reviewing` task's pill as the review tone (purple), via

@@ -30,6 +30,7 @@ import { FieldLabel, INPUT_SHELL, SelectField } from '../ui/FormControls'
 import { PageShell } from '../ui/PageShell'
 import { Panel } from '../ui/Panel'
 import { SectionLabel } from '../ui/SectionLabel'
+import { Segmented } from '../ui/Segmented'
 import { StatusPill, type StatusTone } from '../ui/StatusPill'
 
 /**
@@ -64,6 +65,24 @@ function statusValue(statuses: readonly MemoryStatus[] | undefined): string {
   // `statuses[0]` under `noUncheckedIndexedAccess` is `string | undefined` even here, so the
   // fallback is the one the length test already proved cannot be reached.
   return statuses.length === 1 ? (statuses[0] ?? '') : SEVERAL
+}
+
+type QuickView = 'all' | 'verified' | 'candidate'
+
+/**
+ * The README's segmented All / Verified / Candidates (M57 R21), reading the SAME `filters.statuses`
+ * the granular status select already owns -- a second, independent filter dimension here would be
+ * a second place `?status=` could disagree with itself. `All` is exactly the select's own blank
+ * option: no `status` on the wire, which the route already answers with the live ones (verified
+ * plus the candidates waiting on a person) -- not literally "every status", but the ALL a person
+ * reaches for from this control. A link carrying anything else (`superseded`, `removed`, several at
+ * once) has no segment of its own; the granular select underneath still shows and answers it.
+ */
+function quickViewOf(statuses: readonly MemoryStatus[] | undefined): QuickView {
+  if (statuses === undefined || statuses.length === 0) return 'all'
+  if (statuses.length === 1 && statuses[0] === 'verified') return 'verified'
+  if (statuses.length === 1 && statuses[0] === 'candidate') return 'candidate'
+  return 'all'
 }
 
 /**
@@ -219,6 +238,23 @@ export function KnowledgeClient({
         )}
 
         <Panel title="what this project knows">
+          {/* The README's segmented All / Verified / Candidates (M57 R21), `ui/Segmented` so the
+            * primitive is written once. The granular `status` select below still reaches
+            * `superseded`/`removed`/several at once -- this is the common-case shortcut over it,
+            * not a second filter dimension. */}
+          <div className="pb-2">
+            <Segmented
+              options={[
+                { id: 'all', label: 'All' },
+                { id: 'verified', label: 'Verified', count: view.counts.verified },
+                { id: 'candidate', label: 'Candidates', count: view.counts.candidates },
+              ]}
+              value={quickViewOf(filters.statuses)}
+              onChange={(next) => pick('statuses', next === 'all' ? undefined : [next])}
+              ariaLabel="Knowledge status"
+              testIdPrefix="knowledge-filter-view"
+            />
+          </div>
           <div className="flex flex-wrap items-end gap-2">
             {/* The kit's own field shell (M16 §2), not three hand-rolled `<select>`s: the testid,
               * the value and the handler ride through `selectProps` untouched, and the radius and
@@ -321,81 +357,86 @@ export function KnowledgeClient({
                   data-memory-type={memory.type}
                   data-memory-status={memory.status}
                   data-memory-scope={memory.scope}
-                  className="flex flex-col gap-2 rounded-panel border border-line bg-bg-1 p-4 shadow-resting"
+                  className="flex flex-col overflow-hidden rounded-panel border border-line bg-bg-1 shadow-resting"
                 >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Chip testId="knowledge-type" title={memory.type}>
-                      {row.typeLabel}
-                    </Chip>
-                    <span className="min-w-0 flex-1 text-sm text-text-1">{memory.title}</span>
-                    <Chip testId="knowledge-scope" title={memory.scope}>
-                      {row.scopeLabel}
-                    </Chip>
-                    <StatusPill tone={STATUS_TONE[memory.status]} label={row.statusLabel} title={memory.status} />
-                  </div>
-
-                  <p className="text-xs text-text-2">{memory.body}</p>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span data-testid="knowledge-provenance" className="text-[11px] text-text-3">
-                      {row.provenance}
-                    </span>
-                    <Chip testId="knowledge-confidence" title={memory.confidence}>
-                      {row.confidenceLabel}
-                    </Chip>
-                  </div>
-
-                  {memory.removedReason !== null && (
-                    <span data-testid="knowledge-removed-reason" className="text-[11px] text-tone-blocked">
-                      withdrawn: {memory.removedReason}
-                    </span>
-                  )}
-
-                  {live && (
-                    <div className="flex flex-wrap items-center gap-2">
-                      {memory.status === 'candidate' && (
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          data-testid="knowledge-verify"
-                          disabled={busyId === memory.id}
-                          onClick={() => void verify(row)}
-                        >
-                          Verify
-                        </Button>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        data-testid="knowledge-correct"
-                        onClick={() => {
-                          setCorrecting(row)
-                          setDraft({ title: memory.title, body: memory.body })
-                          setCorrectError(null)
-                        }}
-                      >
-                        Correct
-                      </Button>
-                      <input
-                        data-testid="knowledge-remove-reason"
-                        value={reasons[memory.id] ?? ''}
-                        onChange={(event) => setReasons((was) => ({ ...was, [memory.id]: event.target.value }))}
-                        placeholder="why withdraw this?"
-                        aria-label="why withdraw this"
-                        className={`${INPUT_SHELL} w-[190px] text-xs`}
-                      />
-                      <DangerConfirm
-                        label="Remove"
-                        testId="knowledge-remove"
-                        confirmText="remove"
-                        confirmName="confirm removing this memory"
-                        onConfirm={async () => remove(row)}
-                      />
+                  {/* The README's three-column row (M57 R10): a fixed classification rail, the
+                    * substance in the middle, and the live actions on the right -- `190px` is the
+                    * remove-reason input's own width below, not a coincidence. */}
+                  <div className="grid grid-cols-[110px_minmax(0,1fr)_190px] gap-[14px] border-b border-line px-4 py-3">
+                    <div className="flex flex-col items-start gap-1.5">
+                      <Chip testId="knowledge-type" title={memory.type}>
+                        {row.typeLabel}
+                      </Chip>
+                      <Chip testId="knowledge-scope" title={memory.scope}>
+                        {row.scopeLabel}
+                      </Chip>
+                      <StatusPill tone={STATUS_TONE[memory.status]} label={row.statusLabel} title={memory.status} />
                     </div>
-                  )}
+
+                    <div className="flex min-w-0 flex-col gap-1.5">
+                      <span className="min-w-0 text-sm text-text-1">{memory.title}</span>
+                      <p className="text-xs text-text-2">{memory.body}</p>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span data-testid="knowledge-provenance" className="text-[11px] text-text-3">
+                          {row.provenance}
+                        </span>
+                        <Chip testId="knowledge-confidence" title={memory.confidence}>
+                          {row.confidenceLabel}
+                        </Chip>
+                      </div>
+                      {memory.removedReason !== null && (
+                        <span data-testid="knowledge-removed-reason" className="text-[11px] text-tone-blocked">
+                          withdrawn: {memory.removedReason}
+                        </span>
+                      )}
+                    </div>
+
+                    {live && (
+                      <div className="flex flex-col items-start gap-2">
+                        {memory.status === 'candidate' && (
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            data-testid="knowledge-verify"
+                            disabled={busyId === memory.id}
+                            onClick={() => void verify(row)}
+                          >
+                            Verify
+                          </Button>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          data-testid="knowledge-correct"
+                          onClick={() => {
+                            setCorrecting(row)
+                            setDraft({ title: memory.title, body: memory.body })
+                            setCorrectError(null)
+                          }}
+                        >
+                          Correct
+                        </Button>
+                        <input
+                          data-testid="knowledge-remove-reason"
+                          value={reasons[memory.id] ?? ''}
+                          onChange={(event) => setReasons((was) => ({ ...was, [memory.id]: event.target.value }))}
+                          placeholder="why withdraw this?"
+                          aria-label="why withdraw this"
+                          className={`${INPUT_SHELL} w-[190px] text-xs`}
+                        />
+                        <DangerConfirm
+                          label="Remove"
+                          testId="knowledge-remove"
+                          confirmText="remove"
+                          confirmName="confirm removing this memory"
+                          onConfirm={async () => remove(row)}
+                        />
+                      </div>
+                    )}
+                  </div>
 
                   {errors[memory.id] !== undefined && (
-                    <span role="alert" data-testid="knowledge-error" className="text-[11px] text-tone-blocked">
+                    <span role="alert" data-testid="knowledge-error" className="px-4 pt-3 text-[11px] text-tone-blocked">
                       {errors[memory.id]}
                     </span>
                   )}
@@ -403,31 +444,33 @@ export function KnowledgeClient({
                   {/* Folded, never hidden: the ids, the raw source kind and the capability keys live
                     * INSIDE the group, so the row above stays a sentence a person reads
                     * (`DetailsGroup`'s own rule). */}
-                  <DetailsGroup group="provenance" title="Where this came from">
-                    <dl data-testid="knowledge-chain" className="flex flex-col gap-1 font-mono text-[10px] text-text-3">
-                      <ChainRow label="replaced" ids={row.supersedesIds} titles={view.memoryTitles} />
-                      <ChainRow
-                        label="replaced by"
-                        ids={memory.supersededById === null ? [] : [memory.supersededById]}
-                        titles={view.memoryTitles}
-                      />
-                      <ChainRow label="summarises" ids={memory.sourceIds} titles={view.memoryTitles} />
-                      <Fact label="this memory">{memory.id}</Fact>
-                      <Fact label="source">{memory.provenance.sourceKind}</Fact>
-                      {memory.provenance.sourceRef !== null && <Fact label="reference">{memory.provenance.sourceRef}</Fact>}
-                      {memory.provenance.runId !== null && <Fact label="run">{memory.provenance.runId}</Fact>}
-                      {memory.provenance.goalVersion !== null && (
-                        <Fact label="goal version">{String(memory.provenance.goalVersion)}</Fact>
+                  <div className="px-4 pb-3 pt-3">
+                    <DetailsGroup group="provenance" title="Where this came from">
+                      <dl data-testid="knowledge-chain" className="flex flex-col gap-1 font-mono text-[10px] text-text-3">
+                        <ChainRow label="replaced" ids={row.supersedesIds} titles={view.memoryTitles} />
+                        <ChainRow
+                          label="replaced by"
+                          ids={memory.supersededById === null ? [] : [memory.supersededById]}
+                          titles={view.memoryTitles}
+                        />
+                        <ChainRow label="summarises" ids={memory.sourceIds} titles={view.memoryTitles} />
+                        <Fact label="this memory">{memory.id}</Fact>
+                        <Fact label="source">{memory.provenance.sourceKind}</Fact>
+                        {memory.provenance.sourceRef !== null && <Fact label="reference">{memory.provenance.sourceRef}</Fact>}
+                        {memory.provenance.runId !== null && <Fact label="run">{memory.provenance.runId}</Fact>}
+                        {memory.provenance.goalVersion !== null && (
+                          <Fact label="goal version">{String(memory.provenance.goalVersion)}</Fact>
+                        )}
+                        {row.taskTitle !== null && <Fact label="task">{row.taskTitle}</Fact>}
+                      </dl>
+                      {row.capabilities.length > 0 && (
+                        <div className="flex flex-col gap-1">
+                          <SectionLabel>asked for by</SectionLabel>
+                          <CapabilityChips capabilities={row.capabilities} max={row.capabilities.length} />
+                        </div>
                       )}
-                      {row.taskTitle !== null && <Fact label="task">{row.taskTitle}</Fact>}
-                    </dl>
-                    {row.capabilities.length > 0 && (
-                      <div className="flex flex-col gap-1">
-                        <SectionLabel>asked for by</SectionLabel>
-                        <CapabilityChips capabilities={row.capabilities} max={row.capabilities.length} />
-                      </div>
-                    )}
-                  </DetailsGroup>
+                    </DetailsGroup>
+                  </div>
                 </article>
               )
             })}

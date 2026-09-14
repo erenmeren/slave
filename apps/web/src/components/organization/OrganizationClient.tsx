@@ -6,6 +6,7 @@ import { SLAVE_LIFECYCLE_LABEL } from '@slave-of-ai/domain'
 // Prisma client -- reaches the client bundle. The rule `supervisor/ProposalRow.tsx` states for
 // `SupervisorView`.
 import type { OrganizationPreference, OrganizationView } from '../../server/organization'
+import { useShellFacts } from '../../hooks/useShellFacts'
 import { plural } from '../../lib/plural'
 import { postControl, sendControl } from '../../lib/postControl'
 import { ProposalRow } from '../supervisor/ProposalRow'
@@ -52,6 +53,11 @@ export function OrganizationClient({
   readonly initial: OrganizationView
 }): React.JSX.Element {
   const [view, setView] = useState<OrganizationView>(initial)
+  // `/organization` publishes no `shellFacts` of its own (`ShellFactsSeed`'s own note names exactly
+  // this route), so the project's NAME for the sub-line comes from the layout's seed rather than a
+  // second read here -- null for the one paint before that effect lands, same as the header's own
+  // budget figure on this route.
+  const projectName = useShellFacts(workspaceId)?.workspace.name ?? null
   /** The one proposal currently writing. Per-row rather than per-page: two needs are two
    *  independent decisions, and answering one must not grey out the other. */
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -95,6 +101,13 @@ export function OrganizationClient({
   return (
     <PageShell flush>
       <div className="flex flex-col gap-[11px] px-[20px] pt-[16px]">
+        <div>
+          <h1 className="m-0 text-[22px] font-semibold tracking-[-.3px] text-t1">Team</h1>
+          <p className="mt-[6px] text-[13.5px] text-t2">
+            {plural(view.workers.length, 'worker')} on {projectName ?? 'this project'} · why they are here and what
+            they are doing
+          </p>
+        </div>
         {stale && (
           <Alert variant="error" testId="organization-stale">
             could not refresh this page — showing the last answer.
@@ -119,19 +132,18 @@ export function OrganizationClient({
                     key={worker.slaveId}
                     data-testid={`organization-row-${worker.slaveId}`}
                     data-released={worker.released === null ? undefined : 'true'}
-                    className={worker.released === null ? undefined : 'opacity-60'}
+                    className={`rounded-panel-card border border-line bg-card p-[14px_16px] gap-[10px] shadow-card ${
+                      worker.released === null ? '' : 'opacity-60'
+                    }`}
                   >
                     {/* `last` because this `Row` is the only child of its wrapper, so its own
                       * `:last-child` selector would match every row and draw no separator. */}
                     <Row columns={COLUMNS} last={index === view.workers.length - 1}>
                       <span className="flex min-w-0 flex-col">
-                        <span className="truncate text-sm text-text-1">{worker.name}</span>
+                        <span className="truncate font-semibold text-t1">{worker.name}</span>
                         {/* The role a person reads, with the runtime roles that actually decide
                           * dispatch one hover away (M44 R5). */}
-                        <span
-                          title={worker.runtimeRoles.join(', ')}
-                          className="truncate font-mono text-[10px] text-text-3"
-                        >
+                        <span title={worker.runtimeRoles.join(', ')} className="truncate text-[12px] text-t3">
                           {worker.roleLabel}
                         </span>
                       </span>

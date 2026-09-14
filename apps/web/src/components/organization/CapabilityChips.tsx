@@ -26,7 +26,7 @@ export function CapabilityChips({
           key={capability.key}
           data-testid="capability-chip"
           title={capability.key}
-          className="rounded-chip border border-line px-2 py-[2px] text-[11px] text-text-2"
+          className="rounded-pill border border-line2 px-2 py-[2px] text-[12px] text-t2"
         >
           {capability.label}
         </span>

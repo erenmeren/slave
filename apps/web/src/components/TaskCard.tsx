@@ -106,10 +106,11 @@ export function TaskCard({
       onClick={() => onSelect(task.id)}
       // Greyed, not reddened (M40 §6): a cancelled card is still readable and still selectable --
       // an operator has to be able to open it and read why -- but it recedes, because the work it
-      // stands for is not coming back.
-      className={`flex w-full flex-col gap-1 rounded-tile border bg-bg-card-alt p-[10px] text-left transition-colors hover:border-white/[0.22] ${
-        task.status === 'blocked' ? 'border-tone-blocked/30' : 'border-line'
-      } ${task.status === 'cancelled' ? 'opacity-60' : ''}`}
+      // stands for is not coming back. Integrated work recedes a LITTLE, not as much -- it is not
+      // pending anything, but it is still findable history rather than something to look past.
+      className={`flex w-full flex-col rounded-tile-lg border bg-card p-[11px_12px] gap-[7px] text-left transition-colors hover:border-white/[0.22] ${
+        task.status === 'blocked' ? 'border-[color-mix(in_oklab,var(--s-blocked)_45%,var(--line))]' : 'border-line'
+      } ${task.integratedAt !== null ? 'opacity-[.85]' : ''} ${task.status === 'cancelled' ? 'opacity-60' : ''}`}
     >
       <span className="flex items-baseline justify-between gap-2">
         <span data-testid="task-goal-version" className="truncate font-mono text-[9.5px] text-text-3">

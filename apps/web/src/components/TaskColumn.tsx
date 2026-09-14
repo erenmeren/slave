@@ -23,11 +23,11 @@ export function TaskColumn({
   return (
     <div data-testid="column" data-column={column} className="flex min-w-0 flex-col gap-2">
       <header className="flex items-center gap-[7px] border-b border-line pb-[7px]">
-        <span data-testid={`column-dot-${column}`} data-tone={tone} className={`h-[5px] w-[5px] rounded-full ${TONE_DOT[tone]}`} />
+        <span data-testid={`column-dot-${column}`} data-tone={tone} className={`h-[7px] w-[7px] rounded-full ${TONE_DOT[tone]}`} />
         {/* An `<h2>`, not `SectionLabel`'s `<div>`: `tasks-components.test.tsx` reaches these by
-          * `getAllByRole('heading', { level: 2 })`, and the recipe is the same 9.5px mono. */}
-        <h2 className="font-mono text-[9.5px] font-medium uppercase tracking-[.06em] text-text-2">{column}</h2>
-        <span data-testid={`column-count-${column}`} className="font-mono text-[9.5px] text-text-3">
+          * `getAllByRole('heading', { level: 2 })`. */}
+        <h2 className="text-[13px] font-semibold text-t1">{column}</h2>
+        <span data-testid={`column-count-${column}`} className="font-mono text-[11.5px] font-medium text-t3">
           {tasks.length}
         </span>
       </header>
@@ -35,6 +35,11 @@ export function TaskColumn({
         {tasks.map((task) => (
           <TaskCard key={task.id} task={task} workspaceGoalVersion={workspaceGoalVersion} onSelect={onSelect} />
         ))}
+        {tasks.length === 0 && (
+          <p data-testid="column-empty" className="rounded-tile-lg border border-dashed border-line2 p-[14px] text-center text-[12.5px] text-t3">
+            Nothing here
+          </p>
+        )}
       </div>
     </div>
   )
