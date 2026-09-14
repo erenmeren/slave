@@ -39,10 +39,24 @@ afterEach((): void => {
 
 const PROJECTS = [
   { id: 'w1', name: 'Checkout rewrite', archived: false, status: 'working' as const, statusLabel: 'WORKING', needsYouCount: 0, tasksActive: 5 },
+  { id: 'w2', name: 'Billing', archived: false, status: 'idle' as const, statusLabel: 'IDLE', needsYouCount: 0, tasksActive: 0 },
 ]
 
-function renderHeader(): void {
-  render(<HeaderActionProvider><Header projects={PROJECTS} /></HeaderActionProvider>)
+/** A FRESH element every call, deliberately: `rerender` with the same element object is a React
+ *  bailout -- the subtree is skipped entirely and `usePathname()` is never read again, so a
+ *  navigation case would silently assert nothing. */
+function tree(): React.JSX.Element {
+  return (
+    <HeaderActionProvider>
+      <Header projects={PROJECTS} />
+    </HeaderActionProvider>
+  )
+}
+
+/** Returns the render result so a case can `rerender` -- which is what a NAVIGATION is for this
+ *  component: the root layout keeps it mounted, only the pathname moves. */
+function renderHeader(): ReturnType<typeof render> {
+  return render(tree())
 }
 
 describe('the header', () => {
@@ -122,7 +136,102 @@ describe('the header', () => {
   it('posts pause-all and resume-all to their own routes', () => {
     renderHeader()
     act((): void => { screen.getByTestId('pause-all').click() })
-    expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/runs/pause-all', expect.objectContaining({ method: 'POST' }))
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/w/w1/runs/pause-all', expect.objectContaining({ method: 'POST' }))
+
+    // The OTHER half of this case's name (fix round 1): the same button on an all-paused project
+    // posts somewhere else, and a test that only ever saw `pause-all` could not have noticed.
+    facts = shellFacts({}, { slavesWorking: 0, slavesPaused: 2 })
+    renderHeader()
+    act((): void => { screen.getAllByTestId('pause-all').at(-1)?.click() })
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/w/w1/runs/resume-all', expect.objectContaining({ method: 'POST' }))
+  })
+
+  // Fix round 1, finding 2a. After an emergency stop every run settles to `paused`, so the split
+  // button reads `Resume all` -- and `requestResume` refuses every one of them with
+  // `workspace_halted`, which came back as a 200 carrying an empty report. The button is shut.
+  it('will not offer to resume into a halt: the pause/resume half is disabled while halted', () => {
+    facts = shellFacts({ haltedReason: 'emergency stop by eren' }, { slavesWorking: 0, slavesPaused: 3 })
+    renderHeader()
+    const button = screen.getByTestId('pause-all') as HTMLButtonElement
+    expect(button.textContent).toBe('Resume all')
+    expect(button.disabled).toBe(true)
+    expect(button.getAttribute('title')).toContain('Clear the safety halt first')
+
+    act((): void => { button.click() })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  // Fix round 1, finding 2b. A fan-out that asked for nothing and was refused something is the one
+  // shape a 200 can hide, and `postControl` threw the body away.
+  it('says so when a fan-out comes back having requested nothing and refused something', async (): Promise<void> => {
+    fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, requested: [], refused: ['r1'] }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    renderHeader()
+    await act(async (): Promise<void> => { screen.getByTestId('pause-all').click() })
+    expect(screen.getByTestId('header-error').textContent).toContain('Nothing could be paused')
+  })
+
+  it('prefers the refusal a fan-out entry explains itself with, when one does', async (): Promise<void> => {
+    fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ ok: true, requested: [], refused: [{ error: 'this project is halted' }] }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    renderHeader()
+    await act(async (): Promise<void> => { screen.getByTestId('pause-all').click() })
+    expect(screen.getByTestId('header-error').textContent).toContain('this project is halted')
+  })
+
+  it('shows the server\'s own words for a refused control POST', async (): Promise<void> => {
+    fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: 'this project is archived' }), { status: 409 }))
+    vi.stubGlobal('fetch', fetchMock)
+    renderHeader()
+    await act(async (): Promise<void> => { screen.getByTestId('pause-all').click() })
+    const band = screen.getByTestId('header-error')
+    expect(band.getAttribute('role')).toBe('alert')
+    expect(band.textContent).toBe('this project is archived')
+  })
+
+  // Fix round 1, finding 3. The header is the ROOT layout's now, so a hop between two pages of one
+  // project unmounts nothing and `workspaceId` never moves -- only the pathname does.
+  it('disarms the stop on any navigation, not only on a change of project', () => {
+    const view = renderHeader()
+    act((): void => { screen.getByTestId('stop-split').click() })
+    expect(screen.getByTestId('stop-cancel')).toBeTruthy()
+
+    pathname = '/w/w1/settings'
+    view.rerender(tree())
+
+    expect(screen.queryByTestId('stop-cancel')).toBeNull()
+    expect(screen.getByTestId('stop-split').getAttribute('data-armed')).toBe('false')
+    expect(screen.getByTestId('pause-all').textContent).toBe('Pause all')
+  })
+
+  it('forgets a refusal on the way to another project', async (): Promise<void> => {
+    fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: 'this project is archived' }), { status: 409 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const view = renderHeader()
+    await act(async (): Promise<void> => { screen.getByTestId('pause-all').click() })
+    expect(screen.getByTestId('header-error')).toBeTruthy()
+
+    pathname = '/w/w2/tasks'
+    view.rerender(tree())
+
+    expect(screen.queryByTestId('header-error')).toBeNull()
+  })
+
+  // Fix round 1, finding 5: the thresholds had no test anywhere once `project-header.test.tsx` was
+  // deleted. `data-tone` is the name; the fill's Tailwind class is a colour decision that may move.
+  it('tones the budget bar at the 80% and 100% lines', () => {
+    renderHeader()
+    expect(screen.getByTestId('budget-bar').getAttribute('data-tone')).toBe('ok')
+
+    facts = shellFacts({ spentUsd: 36 })
+    renderHeader()
+    expect(screen.getAllByTestId('budget-bar').at(-1)?.getAttribute('data-tone')).toBe('near')
+
+    facts = shellFacts({ spentUsd: 44 })
+    renderHeader()
+    expect(screen.getAllByTestId('budget-bar').at(-1)?.getAttribute('data-tone')).toBe('over')
   })
 
   it('renders no project cluster at all on a global route', () => {

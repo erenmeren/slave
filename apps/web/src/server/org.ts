@@ -75,13 +75,6 @@ const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'mer
  *  asks for. */
 const notArchived = (includeArchived?: boolean): { archivedAt?: null } => (includeArchived === true ? {} : { archivedAt: null })
 
-/** Whether a project is archived -- the Projects card's chip and `ProjectSettingsClient`'s danger
- *  zone both need this one flag with no other row data. */
-export async function workspaceArchived(workspaceId: string): Promise<boolean> {
-  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { archivedAt: true } })
-  return workspace !== null && workspace.archivedAt !== null
-}
-
 /** `sumSpendFromGroups`'s pair under this DTO's own field names (`listProjects` and `listWorkers`
  *  below both group in SQL and share this one wrapper -- `spendOf`, the equivalent wrapper over a
  *  whole-history row array, was deleted in the M19 Task 12 rewrite once `listWorkers` stopped being
