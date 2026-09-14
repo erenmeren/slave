@@ -45,7 +45,10 @@ const THREAD_TYPES: readonly DomainEventType[] = [
 ]
 
 /** `YYYY-MM-DD` in the SERVER's own zone — the same zone the timestamps beside each message are
- *  formatted in, so a message can never fall in a thread dated differently from its own clock. */
+ *  formatted in, so a message can never fall in a thread dated differently from its own clock.
+ *  NOTE: the bubble's own clock time is formatted client-side, in the BROWSER's zone
+ *  (`SupervisorThreadPanel.tsx`'s `toLocaleTimeString()`), so the day this function buckets a
+ *  message into and the time printed beside it are not guaranteed to agree across a timezone. */
 function localDay(at: Date): string {
   const year = at.getFullYear()
   const month = String(at.getMonth() + 1).padStart(2, '0')
@@ -78,8 +81,10 @@ function stringAt(payload: Record<string, unknown>, key: string): string | null 
  * nothing — there is no row to create; it is a scroll position and an empty composer.
  *
  * `feedSummary` is the same projection the Activity river and the Overview's live-events panel
- * read, so a supervisor message says here exactly what it says there (`docs/ia.md` rule 3: the raw
- * dotted type stays available, and the panel puts it on each bubble's `data-event-type`).
+ * read, so a supervisor message says here exactly what it says there. The raw dotted type itself
+ * is used only to pick `who`/`text` below and is not carried onto `SupervisorMessage` -- a bubble
+ * has no `data-event-type` of its own, and `docs/ia.md` rule 3 is satisfied here by never printing
+ * the bare type as a WORD, the same guarantee `feedSummary` gives every other reader of it.
  *
  * Newest thread first, oldest message first inside a thread — the order a person reads a list of
  * conversations in, and the order they read one.

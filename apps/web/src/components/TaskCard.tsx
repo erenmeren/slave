@@ -108,7 +108,7 @@ export function TaskCard({
       // an operator has to be able to open it and read why -- but it recedes, because the work it
       // stands for is not coming back. Integrated work recedes a LITTLE, not as much -- it is not
       // pending anything, but it is still findable history rather than something to look past.
-      className={`flex w-full flex-col rounded-tile-lg border bg-card p-[11px_12px] gap-[7px] text-left transition-colors hover:border-white/[0.22] ${
+      className={`flex w-full flex-col rounded-tile-lg border bg-card p-[11px_12px] gap-[7px] text-left transition-colors hover:border-line2 ${
         task.status === 'blocked' ? 'border-[color-mix(in_oklab,var(--s-blocked)_45%,var(--line))]' : 'border-line'
       } ${task.integratedAt !== null ? 'opacity-[.85]' : ''} ${task.status === 'cancelled' ? 'opacity-60' : ''}`}
     >
@@ -152,7 +152,7 @@ export function TaskCard({
           </span>
         </span>
       </span>
-      <span data-testid="task-title" className="text-[11.5px] leading-[1.35] text-[#dbe1ea]">
+      <span data-testid="task-title" className="text-[11.5px] leading-[1.35] text-t1">
         {task.title}
       </span>
       {why !== null && (

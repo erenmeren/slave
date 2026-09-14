@@ -117,11 +117,11 @@ export async function buildShellFacts(workspaceId: string): Promise<ShellFacts |
     runs.filter((run) => deriveSlaveStatus(toRunState(run)) === 'working').map((run) => run.slaveId),
   ).size
 
-  // The same derivation, the same dedupe, one word apart (spec erratum E13). `deriveSlaveStatus`
-  // is the domain's, so this number and the `paused` pill on the same slave's card cannot come to
-  // disagree -- and `SlaveCardData.status` on the client is that identical projection, which is
-  // what makes `OverviewClient`'s own literal below equal to this one BY CONSTRUCTION rather than
-  // by coincidence. Zero extra queries: `runs` is already in hand.
+  // The same derivation over the same rows as `slavesWorking`, asked for `'paused'` instead (spec
+  // erratum E13). `deriveSlaveStatus` is the domain's, so this number and the `paused` pill on the
+  // same slave's card read off the same mapping -- and `SlaveCardData.status` on the client is
+  // that same projection, which is what `OverviewClient`'s own literal below also counts. Zero
+  // extra queries: `runs` is already in hand.
   const slavesPaused = new Set(
     runs.filter((run) => deriveSlaveStatus(toRunState(run)) === 'paused').map((run) => run.slaveId),
   ).size

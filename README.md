@@ -1087,7 +1087,16 @@ score to three decimals, and nothing deleted by any of it,
 and `m56a` proves a refactor changed nothing: twelve permission verdicts byte for byte, both flag
 builders' argv element for element, both capability rows two different ways, one paused run per
 provider whose two checkpoint columns hold the two files its adapter actually wrote, and a grep that
-fails the build the moment a second copy of the provider list appears anywhere in the tree. That is
+fails the build the moment a second copy of the provider list appears anywhere in the tree,
+and `m57` drives the redesigned shell through a real browser and proves the frame is a tree, a
+header and a slot: a first visit stamps no theme and remembers whichever one a person then picks,
+the tree and the breadcrumb read back against a real Prisma query on every route they can reach,
+the right panel switches between the Supervisor, a task and nothing at all with a dock badge equal
+to the pending decisions actually in the database, five columns tally against a grouped read of the
+same tasks and the List view's own row count, two goal requests on two different days become two
+Supervisor conversations word for word, eleven numbers come off a real browser's
+`getComputedStyle`, no raw enum token is ever visible text, and all twenty-five routes `docs/ia.md`
+names still answer 200. That is
 32 gates. Tests and gates share one Postgres --
 run one at a time.
 

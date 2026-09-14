@@ -143,9 +143,10 @@ function DecisionCard({
  * composer is `POST /api/w/:id/goal/request`, which is what `project/SupervisorRequest.tsx` has
  * posted to since M45. No table, no event type, no migration.
  *
- * `+` starts a conversation for TODAY. It writes nothing — there is no row to create — it clears
- * the composer and scrolls to the end of today's thread, which is what "new conversation" means
- * when a conversation is a day.
+ * `+` writes nothing — there is no row to create. It selects `threads[0]`, the NEWEST thread
+ * (threads sort newest-first, so that is today's once anything addressed to a person has happened
+ * today), closes the history dropdown, and clears the composer. It does not scroll anywhere: the
+ * newly-selected thread simply replaces whatever was showing.
  */
 export function SupervisorThreadPanel({
   workspaceId,

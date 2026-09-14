@@ -65,8 +65,8 @@ export function eventPrefixLabel(prefix: string): string {
  * de-underscores whatever follows the dot, so a fifty-eighth event type needs no entry anywhere
  * and can never render as `undefined`. On the Activity page the raw type stays reachable the same
  * way every other R5 fix keeps it -- `data-event-type` on the row, `title` on the chip. The
- * Overview panel deliberately carries no such attribute: `liveEvents` is a three-field snapshot on
- * the RSC wire, and that panel's own `all →` action opens the Activity page, where it is.
+ * Overview panel carries the same attribute on its own row (`liveEvents` has held `type` on the
+ * RSC wire since ruling T6-1): this function only ever supplies the WORDS, never the raw value.
  */
 export function readableEventType(type: string): string {
   const dot = type.indexOf('.')

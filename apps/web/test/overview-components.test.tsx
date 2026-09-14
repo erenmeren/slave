@@ -4,7 +4,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { SlaveCard } from '../src/components/SlaveCard.js'
 import { HaltBanner } from '../src/components/HaltBanner.js'
-import { BlockedPanel, LiveEventsPanel, MergeQueuePanel, OverviewClient } from '../src/components/OverviewClient.js'
+import { LiveEventsPanel, MergeQueuePanel, OverviewClient } from '../src/components/OverviewClient.js'
 import { TasksClient } from '../src/components/TasksClient.js'
 import { publishStreamState } from '../src/hooks/useStreamState.js'
 import { RightPanel } from '../src/components/shell/RightPanel.js'
@@ -506,73 +506,6 @@ describe('SlaveCard — the handoff anatomy', () => {
 })
 
 describe('Overview bottom row', () => {
-  let fetchMock: ReturnType<typeof vi.fn>
-
-  beforeEach(() => {
-    fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
-  })
-
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
-
-  it('lists a blocked task and offers resume on a paused run', () => {
-    const view = {
-      ...snapshot([]),
-      blocked: [
-        { kind: 'task' as const, id: 't1', title: 'Payment provider keys', detail: 'blocked', action: null, runId: null },
-        { kind: 'run' as const, id: 'r1', title: 'Alex', detail: 'paused at step 7', action: 'resume' as const, runId: 'r1' },
-      ],
-    }
-    render(<BlockedPanel workspaceId="w1" items={view.blocked} />)
-    expect(screen.getAllByTestId('blocked-row')).toHaveLength(2)
-    expect(screen.getAllByTestId('blocked-row')[1]?.textContent).toContain('paused at step 7')
-    expect(screen.getByTestId('blocked-resume')).toBeTruthy()
-  })
-
-  it('offers no resume on a task, and none on a run that has only been ASKED to pause', () => {
-    // `requestResume` refuses a `pause_requested` run — there is no checkpoint to resume from
-    // yet. A button that always refuses is worse than no button, so the panel reports and waits.
-    render(
-      <BlockedPanel
-        workspaceId="w1"
-        items={[
-          { kind: 'task', id: 't1', title: 'Payment provider keys', detail: 'blocked', action: null, runId: null },
-          { kind: 'run', id: 'r2', title: 'Sam', detail: 'pause requested', action: null, runId: null },
-        ]}
-      />,
-    )
-    expect(screen.queryByTestId('blocked-resume')).toBeNull()
-  })
-
-  it('POSTs resume to the run route the card and panel already use, and shows a refusal verbatim', async (): Promise<void> => {
-    render(
-      <BlockedPanel
-        workspaceId="w1"
-        items={[{ kind: 'run', id: 'r1', title: 'Alex', detail: 'paused at step 7', action: 'resume', runId: 'r1' }]}
-      />,
-    )
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('blocked-resume'))
-    })
-    expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/runs/r1/resume', { method: 'POST' })
-
-    fetchMock.mockImplementationOnce(
-      async () => new Response(JSON.stringify({ error: 'the run is still stopping; retry in a moment' }), { status: 409 }),
-    )
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('blocked-resume'))
-    })
-    expect(screen.getByTestId('blocked-error').textContent).toBe('the run is still stopping; retry in a moment')
-  })
-
-  it('says nothing needs you rather than drawing an empty list', () => {
-    render(<BlockedPanel workspaceId="w1" items={[]} />)
-    expect(screen.getByTestId('blocked-empty').textContent).toBe('nothing needs you')
-    expect(screen.queryByTestId('blocked-row')).toBeNull()
-  })
-
   it('renders the 340px live-events panel with an all → action', () => {
     render(<LiveEventsPanel workspaceId="w1" events={[{ seq: 9, ts: '2026-08-29T10:00:00.000Z', type: 'run.tool_result', summary: 'Alex wrote a.txt' }]} />)
     expect(screen.getByTestId('live-events').className).toContain('w-[340px]')
@@ -696,8 +629,8 @@ describe('shell facts and stream state reach the project header, never the sideb
     const rows = screen.getAllByTestId('needs-you-row')
     expect(rows.map((row) => row.getAttribute('data-kind'))).toEqual(['decision'])
     expect(screen.getByTestId('needs-you-card').textContent).toContain('Staffing: nobody can review')
-    // `BlockedPanel` is off the page: its three task kinds are this card's, and its paused RUNS
-    // are the Team row's own Resume button.
+    // `BlockedPanel` is deleted (M57 final review I4, dead since Task 6): its three task kinds
+    // are this card's, and its paused RUNS are the Team row's own Resume button.
     expect(screen.queryByTestId('blocked-empty')).toBeNull()
   })
 

@@ -20,7 +20,7 @@ export function FieldLabel({ children }: { readonly children: React.ReactNode })
 // site, e.g. ProviderSelect in RuntimePanel.tsx) can still use the exact same radius/border/text
 // shell rather than hand-copying this string.
 export const INPUT_SHELL =
-  'rounded-tile border border-line bg-bg-0 px-2.5 py-1.5 text-sm text-text-1 placeholder:text-text-3 focus:border-white/25 focus:outline-none'
+  'rounded-tile border border-line bg-bg-0 px-2.5 py-1.5 text-sm text-text-1 placeholder:text-text-3 focus:border-line2 focus:outline-none'
 
 export function TextField({
   label,

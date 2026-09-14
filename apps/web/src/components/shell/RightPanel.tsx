@@ -14,26 +14,39 @@ import { useRightPanel } from './RightPanelProvider'
  * replaces it while a task or a worker is selected, and comes back to it when that closes.
  */
 export function RightPanel({
-  title,
   children,
 }: {
-  readonly title: string
+  /** Unused: the visible title and the landmark name are both DERIVED from `mode` below, never
+   *  passed in -- a caller-supplied string could drift from the mode it is drawn beside. Kept
+   *  optional so an existing call site may still pass one without a type error. */
+  readonly title?: string
   readonly children: React.ReactNode
 }): React.JSX.Element {
   const { mode, content, close, collapse } = useRightPanel()
   const showing = mode ?? 'supervisor'
+  // One label, three uses: the visible header text, the Supervisor mode's own landmark name, and
+  // (by NOT being applied) the reason task/slave mode has none of its own -- see the aside below.
+  const label = showing === 'supervisor' ? 'Supervisor' : showing === 'task' ? 'Task detail' : 'Slave detail'
   return (
     <aside
       data-testid="right-panel"
       data-mode={showing}
-      aria-label={showing === 'supervisor' ? 'Supervisor' : showing === 'task' ? 'Task detail' : 'Worker detail'}
+      // Supervisor mode is the only content this slot draws itself, so it is the only mode where
+      // THIS element is the landmark. In task/slave mode the content mounted below already renders
+      // its own labelled `<aside>` (`TaskDetailPanel`/`SlavePanel`, which also render standalone on
+      // routes with no slot) -- carrying an `aria-label` here too would put two `complementary`
+      // landmarks named "Task detail" (or "Slave detail") on the page for the one panel a person
+      // sees. `role="presentation"` strips this element from the landmark tree entirely, leaving
+      // the inner one as the sole named `complementary` region.
+      aria-label={showing === 'supervisor' ? label : undefined}
+      role={showing === 'supervisor' ? undefined : 'presentation'}
       className="flex min-h-0 w-[372px] flex-none flex-col border-l border-line bg-panel"
     >
       {/* One header bar, at the header's own height, so the three columns line up across the top.
         * The panels that move in here bring their own title row BELOW this one -- theirs carries a
         * task id and a status pill, which this one cannot know about. */}
       <div className="flex h-[54px] flex-none items-center gap-2 border-b border-line px-[14px] pl-[16px]">
-        <span className="flex-1 truncate text-[13.5px] font-semibold text-t1">{title}</span>
+        <span className="flex-1 truncate text-[13.5px] font-semibold text-t1">{label}</span>
         {mode !== null && (
           <button
             type="button"

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, act } from '@testing-library/react'
+import { render, screen, within, act } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { RightPanelProvider, useRightPanel } from '../src/components/shell/RightPanelProvider.js'
 import { RightPanel } from '../src/components/shell/RightPanel.js'
@@ -15,12 +15,24 @@ vi.mock('next/navigation', () => ({
 
 const closed = vi.fn()
 
-/** A stand-in owner: the page client that will call `open` from its `useSelectedId` effect. */
+/** A stand-in owner: the page client that will call `open` from its `useSelectedId` effect. Task
+ *  and slave content are each wrapped in their OWN labelled `<aside>`, the way the real
+ *  `TaskDetailPanel`/`SlavePanel` are (I2/I3) -- a plain unlabelled `<div>` here would prove
+ *  nothing about the outer slot no longer duplicating that landmark. */
 function Opener(): React.JSX.Element {
   const { open, close, collapse } = useRightPanel()
   return (
     <>
-      <button data-testid="open-task" type="button" onClick={() => open('task', <div data-testid="task-body" />, closed)} />
+      <button
+        data-testid="open-task"
+        type="button"
+        onClick={() => open('task', <aside aria-label="Task detail" data-testid="task-body" />, closed)}
+      />
+      <button
+        data-testid="open-slave"
+        type="button"
+        onClick={() => open('slave', <aside aria-label="Slave detail" data-testid="slave-body" />, closed)}
+      />
       <button data-testid="close" type="button" onClick={close} />
       <button data-testid="collapse" type="button" onClick={collapse} />
     </>
@@ -40,12 +52,23 @@ describe('the right panel', () => {
   it('says which mode it is in, and shows the Supervisor by default inside a project', () => {
     render(
       <RightPanelProvider>
-        <RightPanel title="Supervisor"><div data-testid="sup" /></RightPanel>
+        <RightPanel><div data-testid="sup" /></RightPanel>
       </RightPanelProvider>,
     )
     const panel = screen.getByTestId('right-panel')
     expect(panel.getAttribute('data-mode')).toBe('supervisor')
     expect(panel.className).toContain('w-[372px]')
+    // I2/I3: the visible title and the landmark name are both DERIVED from the mode, not from a
+    // caller-supplied `title` prop (none is even passed above) -- Supervisor mode is the only one
+    // where this outer `<aside>` carries its own `aria-label` and is itself the named landmark.
+    expect(panel.getAttribute('aria-label')).toBe('Supervisor')
+    expect(panel.hasAttribute('role')).toBe(false)
+    expect(within(panel).getByText('Supervisor')).toBeTruthy()
+    // `panel` itself is the named landmark here (Supervisor mode only) -- `within(panel)` searches
+    // its DESCENDANTS, not the node itself, so this reads off `screen` and asserts it is `panel`.
+    const landmarks = screen.getAllByRole('complementary', { name: 'Supervisor' })
+    expect(landmarks).toHaveLength(1)
+    expect(landmarks[0]).toBe(panel)
     expect(screen.getByTestId('sup')).toBeTruthy()
   })
 
@@ -53,20 +76,45 @@ describe('the right panel', () => {
     render(
       <RightPanelProvider>
         <Opener />
-        <RightPanel title="Supervisor"><div data-testid="sup" /></RightPanel>
+        <RightPanel><div data-testid="sup" /></RightPanel>
       </RightPanelProvider>,
     )
     act((): void => { screen.getByTestId('open-task').click() })
-    expect(screen.getByTestId('right-panel').getAttribute('data-mode')).toBe('task')
+    const panel = screen.getByTestId('right-panel')
+    expect(panel.getAttribute('data-mode')).toBe('task')
     expect(screen.getByTestId('task-body')).toBeTruthy()
     expect(screen.queryByTestId('sup')).toBeNull()
+    // I2/I3: the header still reads "Task detail" (derived from mode, not the old fixed
+    // "Supervisor" title), and the outer slot gives up its OWN landmark -- `role="presentation"`,
+    // no `aria-label` -- so `TaskDetailPanel`'s own labelled `<aside>` (stood in for here) is the
+    // SOLE "Task detail" landmark inside `right-panel`, not a second one alongside it.
+    expect(within(panel).getByText('Task detail')).toBeTruthy()
+    expect(panel.getAttribute('role')).toBe('presentation')
+    expect(panel.hasAttribute('aria-label')).toBe(false)
+    expect(within(panel).getAllByRole('complementary', { name: 'Task detail' })).toHaveLength(1)
+  })
+
+  it('names the slave landmark once too, when a slave is open instead of a task', () => {
+    render(
+      <RightPanelProvider>
+        <Opener />
+        <RightPanel><div data-testid="sup" /></RightPanel>
+      </RightPanelProvider>,
+    )
+    act((): void => { screen.getByTestId('open-slave').click() })
+    const panel = screen.getByTestId('right-panel')
+    expect(panel.getAttribute('data-mode')).toBe('slave')
+    expect(within(panel).getByText('Slave detail')).toBeTruthy()
+    expect(panel.getAttribute('role')).toBe('presentation')
+    expect(panel.hasAttribute('aria-label')).toBe(false)
+    expect(within(panel).getAllByRole('complementary', { name: 'Slave detail' })).toHaveLength(1)
   })
 
   it('hands the slot back on close, and calls the OWNER s clearer so the URL goes too (E5)', () => {
     render(
       <RightPanelProvider>
         <Opener />
-        <RightPanel title="Supervisor"><div data-testid="sup" /></RightPanel>
+        <RightPanel><div data-testid="sup" /></RightPanel>
       </RightPanelProvider>,
     )
     act((): void => { screen.getByTestId('open-task').click() })
@@ -79,7 +127,7 @@ describe('the right panel', () => {
   it('collapses from its own » -- the same call the page s close makes', () => {
     render(
       <RightPanelProvider>
-        <RightPanel title="Supervisor"><div data-testid="sup" /></RightPanel>
+        <RightPanel><div data-testid="sup" /></RightPanel>
       </RightPanelProvider>,
     )
     expect(screen.getByTestId('panel-collapse')).toBeTruthy()
@@ -93,7 +141,7 @@ function Slot(): React.JSX.Element {
   return collapsed ? (
     <RightPanelDock workspaceId="w1" pendingDecisions={0} />
   ) : (
-    <RightPanel title="Supervisor"><div data-testid="sup" /></RightPanel>
+    <RightPanel><div data-testid="sup" /></RightPanel>
   )
 }
 

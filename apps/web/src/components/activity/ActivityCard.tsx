@@ -76,10 +76,10 @@ const TONE_DOT_GLOW: Record<StatusTone, string> = {
 
 /** `2026-08-22T10:00:00.000Z` → `10:00:00` — a fixed slice of the ISO string rather than
  *  `toLocaleTimeString`, so the rendered text is timezone- and locale-independent (both in tests
- *  and across viewers). The 74px right-aligned mono column of the README's row anatomy; with the
- *  28px dot gutter beside it, the 7px dot's centre lands at exactly x=88 — the rule
- *  (`Timeline.tsx`) is drawn at that same number, and the two only agree because these two widths
- *  are fixed. */
+ *  and across viewers). M57 t8 fix round 1 (ruling T8-3) replaced the pre-E32 `74px time + 28px
+ *  gutter` row with this one's own `grid-cols-[64px_14px_minmax(0,1fr)_auto]` (below): `px-4`
+ *  (16px) before this 64px column, `gap-3` (12px) after it, then the 14px dot column centres its
+ *  7px dot -- `16 + 64 + 12 + 7 = 99`, the exact number `Timeline.tsx`'s rule is drawn at. */
 function EventTime({ ts }: { readonly ts: string }): ReactElement {
   return (
     <time dateTime={ts} data-testid="event-time" className="font-mono text-[12px] text-t3">
@@ -88,7 +88,7 @@ function EventTime({ ts }: { readonly ts: string }): ReactElement {
   )
 }
 
-/** The dot gutter, and its 7px tone dot — the row's half of the x=88 rule. */
+/** The dot gutter, and its 7px tone dot — the row's half of the x=99 rule (`Timeline.tsx`). */
 function EventDot({ type }: { readonly type: string }): ReactElement {
   const tone = toneForEventType(type)
   return (

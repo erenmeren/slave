@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import Link from 'next/link'
 import { userWorkspaceStatus } from '@slave-of-ai/domain'
 import { publishShellFacts } from '../hooks/useShellFacts'
@@ -12,74 +12,16 @@ import type { OverviewSnapshot } from '../server/overview'
 import { SlaveCard } from './SlaveCard'
 import { SlavePanel } from './SlavePanel'
 import { HaltBanner } from './HaltBanner'
-import { postControl } from '../lib/postControl'
 import { WORKSPACE_TONE } from '../lib/tones'
 import { NeedsYouCard } from './project/NeedsYouCard'
 import { ProjectBrief } from './project/ProjectBrief'
 import { RunbookPanel } from './project/RunbookPanel'
 import { SupervisorTimeline } from './project/SupervisorTimeline'
 import { Alert } from './ui/Alert'
-import { Button } from './ui/Button'
 import { EmptyState } from './ui/EmptyState'
 import { PageShell } from './ui/PageShell'
 import { Panel } from './ui/Panel'
 import { StatusPill } from './ui/StatusPill'
-
-/**
- * The "blocked · needs you" panel (design README §3a.1). Resume POSTs to the run route the row and
- * the detail panel already use — no new endpoint, and no second idea of what resume means.
- *
- * M57 t6: NOT on the Overview any more. `NeedsYouCard` is the band that answers "what needs me",
- * and it is this panel's superset for three of the four kinds; the fourth -- a paused run waiting
- * to be resumed -- is the Team row's own Resume button, one section below. Exported still, because
- * its own cases pin behaviour no other surface has yet, and Tasks 7-8 decide where (if anywhere) a
- * panel of paused RUNS belongs.
- */
-export function BlockedPanel({
-  workspaceId,
-  items,
-}: {
-  readonly workspaceId: string
-  readonly items: OverviewSnapshot['blocked']
-}): React.JSX.Element {
-  const [errorText, setErrorText] = useState<string | null>(null)
-  return (
-    <div className="min-w-0 flex-1">
-      <Panel title="blocked · needs you">
-        {items.length === 0 ? (
-          <EmptyState testId="blocked-empty" message="nothing needs you" />
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {items.map((item) => (
-              <li key={`${item.kind}-${item.id}`} data-testid="blocked-row" className="flex items-center gap-2 text-xs">
-                <span className="min-w-0 flex-1 truncate text-text-1">{item.title}</span>
-                <span className="shrink-0 font-mono text-[10px] text-text-3">{item.detail}</span>
-                {item.action === 'resume' && item.runId !== null && (
-                  <Button
-                    variant="ghost"
-                    data-testid="blocked-resume"
-                    onClick={() => {
-                      void postControl(`/api/w/${workspaceId}/runs/${item.runId}/resume`).then((result) => {
-                        setErrorText(result.ok ? null : result.error)
-                      })
-                    }}
-                  >
-                    resume
-                  </Button>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-        {errorText !== null && (
-          <span role="alert" data-testid="blocked-error" className="text-xs text-tone-blocked">
-            {errorText}
-          </span>
-        )}
-      </Panel>
-    </div>
-  )
-}
 
 /**
  * The 340px live-events panel with the handoff's `all →` action (design README §3a.1).
@@ -113,6 +55,7 @@ export function LiveEventsPanel({
               <li
                 key={event.seq}
                 data-testid="live-event-row"
+                data-event-type={event.type}
                 className={`flex items-baseline gap-2 font-mono text-[10.5px] text-text-2 ${
                   event.seq > boundary ? 'motion-safe:animate-[rise_0.3s_ease-out]' : ''
                 }`}
@@ -122,10 +65,12 @@ export function LiveEventsPanel({
                 <span className="shrink-0 text-text-3">{event.ts.slice(11, 19)}</span>
                 {/* `feedSummary`'s fallback used to print the dotted event type here, so this
                   * glance panel read `run.started` (M44 R5/R8, found by
-                  * `gate:m44-ux-foundation`'s stage 4). It names the family now. The raw type is
-                  * deliberately NOT carried onto this row: `liveEvents` is a three-field snapshot
-                  * on the RSC wire, and the panel's own `all →` action opens the Activity page,
-                  * where every row keeps its `data-event-type` and its kind chip's `title`. */}
+                  * `gate:m44-ux-foundation`'s stage 4). It names the family now, and the raw type
+                  * -- carried on `liveEvents` since ruling T6-1 -- stays reachable the same way
+                  * every other R5 fix keeps it: `data-event-type` on the row, above (docs/ia.md
+                  * rule 3). The panel's own `all →` action still opens the Activity page for the
+                  * full history; this row no longer has to hide its own type to send someone
+                  * there. */}
                 <span className="min-w-0 truncate">{event.summary}</span>
               </li>
             ))}

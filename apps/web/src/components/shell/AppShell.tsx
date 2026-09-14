@@ -50,7 +50,7 @@ export function AppShell({
       data-testid="app-shell"
       data-right={rightWidth}
       style={{ gridTemplateColumns: TRACK[rightWidth] }}
-      className="grid min-h-screen min-w-[1280px] flex-1 bg-bg text-t1"
+      className="grid min-h-screen min-w-[1280px] bg-bg text-t1"
     >
       {sidebar}
       {/* The middle column owns the header and the scroll. `min-w-0` so a wide table inside a page

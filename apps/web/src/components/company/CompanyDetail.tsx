@@ -39,7 +39,7 @@ export function CompanyDetail({
   }
 
   return (
-    <div data-testid="company-detail" className="flex flex-col gap-3 border-t border-white/[0.05] pt-3">
+    <div data-testid="company-detail" className="flex flex-col gap-3 border-t border-line pt-3">
       {teams.length === 0 ? (
         <p className="text-xs text-text-3">no departments yet.</p>
       ) : (

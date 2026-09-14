@@ -61,7 +61,7 @@ export function RightPanelHost(): React.JSX.Element | null {
   const decisions = pending?.workspaceId === workspaceId ? pending.list : NONE_PENDING
   if (collapsed) return <RightPanelDock workspaceId={workspaceId} pendingDecisions={decisions.length} />
   return (
-    <RightPanel title="Supervisor">
+    <RightPanel>
       <SupervisorThreadPanel workspaceId={workspaceId} pending={decisions} />
     </RightPanel>
   )

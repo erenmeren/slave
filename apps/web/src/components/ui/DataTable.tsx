@@ -63,7 +63,7 @@ export function Row({
   readonly children: React.ReactNode
 }): React.JSX.Element {
   const border =
-    last === undefined ? 'border-b border-white/[0.05] last:border-b-0' : last ? '' : 'border-b border-white/[0.05]'
+    last === undefined ? 'border-b border-line last:border-b-0' : last ? '' : 'border-b border-line'
   return (
     <div
       data-testid="data-table-row"

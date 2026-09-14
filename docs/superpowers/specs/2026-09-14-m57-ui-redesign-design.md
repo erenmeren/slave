@@ -632,11 +632,10 @@ one per controller ruling made while the nine tasks ran that corrects something 
 - **E13 (amends R7; scan F20) — `runsPaused` is `slavesPaused`, and both sides count SLAVES.**
   `buildShellFacts` counted paused RUNS while the hand-built literal in `OverviewClient` counted
   paused SLAVES, and `sameFacts` compared the two across a route change. Both count slaves, under
-  one name. *(verified: there is no `Slave.status` column — a slave's status is DERIVED from its
-  live runs by `deriveSlaveStatus`, which is exactly how `buildShellFacts` already computes
-  `slavesWorking` from the `SlaveRun` rows it has already fetched. `slavesPaused` is that same
-  derivation asked for `'paused'`, deduped by `slaveId`: no new query, and identical by construction
-  to the client's `view.slaves.filter((s) => s.status === 'paused').length`.)*
+  one name. There is no `Slave.status` column — a slave's status is DERIVED from its live runs by
+  `deriveSlaveStatus`, which is exactly how `buildShellFacts` already computes `slavesWorking` from
+  the `SlaveRun` rows it has already fetched. `slavesPaused` is the same derivation over the same
+  rows as `slavesWorking`, asked for `'paused'` and deduped by `slaveId`: no new query.
 - **E14 (amends R18; scan F56) — the row's `Unblock` keys off the TASK.**
   `SlaveCardData.status` is a `SlaveStatus` (`idle | starting | working | pausing | paused |
   resuming | stopping`) with no `blocked` member, so `slave.status === 'blocked'` does not compile.
