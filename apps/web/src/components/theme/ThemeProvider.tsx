@@ -59,18 +59,26 @@ export function ThemeProvider({ children }: { readonly children: React.ReactNode
   // `localStorage` to read; an initialiser that read it would make a pinned operator's first
   // client render disagree with the HTML that arrived. What the page LOOKS like is not at stake
   // either way: `layout.tsx`'s pre-hydration script stamps `data-theme` on `<html>` before the
-  // first paint, so the colours are right from the first frame and the only thing the effect
-  // below catches up is the word this state spells in the sidebar pill.
+  // first paint, so the colours are right from the first frame and the only thing the effects
+  // below catch up is the word this state spells in the sidebar pill.
   const [theme, setThemeState] = useState<ThemeChoice>('system')
-  const [systemDark, setSystemDark] = useState<boolean>(() =>
-    typeof window === 'undefined' ? false : (window.matchMedia?.(DARK_QUERY).matches ?? false),
-  )
+  // Flips true once the effect below has read the stored choice. The attribute effect stays
+  // inert until then -- otherwise `theme` reading `'system'` on that first render (a pinned
+  // operator included) would REMOVE the `data-theme` the pre-hydration script already stamped in
+  // one commit, and only put it back in a LATER commit once `setThemeState` below lands, leaving
+  // a window for a paint to land in between: the exact flash the script exists to prevent.
+  const [hydrated, setHydrated] = useState<boolean>(false)
+  // Flat `false`, same reasoning as `theme` above: the server has no `matchMedia` to read, so an
+  // initialiser that read it would make a dark-OS client's first render disagree with the
+  // server's. The `matchMedia` effect below re-reads `query.matches` on mount, so this only holds
+  // for that first render.
+  const [systemDark, setSystemDark] = useState<boolean>(false)
 
-  // The stored choice, read once the component is on the client for certain. Declared before the
-  // attribute effect below so that both run in one commit: a pinned operator's mount removes the
-  // attribute and puts it straight back, with no paint in between.
+  // The stored choice, read once the component is on the client for certain. Also what lets the
+  // attribute effect below start doing its job.
   useEffect((): void => {
     setThemeState(readStored())
+    setHydrated(true)
   }, [])
 
   // `system` must FOLLOW the operating system while the page is open, not only on load -- a person
@@ -87,11 +95,14 @@ export function ThemeProvider({ children }: { readonly children: React.ReactNode
 
   // The attribute is the ONE thing the stylesheet reads. `system` REMOVES it rather than setting
   // it to some third value, because "absent" is what the media query's `:not([data-theme='light'])`
-  // guard is written against.
+  // guard is written against. Inert until `hydrated`: before the stored choice has been read,
+  // `theme` reads `'system'` even for a pinned operator, and this effect touching the attribute on
+  // that render would remove what the pre-hydration script already stamped.
   useEffect((): void => {
+    if (!hydrated) return
     if (theme === 'system') document.documentElement.removeAttribute('data-theme')
     else document.documentElement.setAttribute('data-theme', theme)
-  }, [theme])
+  }, [theme, hydrated])
 
   const setTheme = useCallback((next: ThemeChoice): void => {
     setThemeState(next)

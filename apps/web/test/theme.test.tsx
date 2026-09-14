@@ -64,6 +64,7 @@ beforeEach((): void => {
 
 afterEach((): void => {
   vi.unstubAllGlobals()
+  vi.restoreAllMocks()
 })
 
 describe('the theme provider', () => {
@@ -115,6 +116,20 @@ describe('the theme provider', () => {
     await waitFor((): void => {
       expect(screen.getByTestId('mode').textContent).toBe('dark')
     })
+  })
+
+  it('never removes a data-theme the pre-hydration script already stamped (fix round 1, finding 1)', async () => {
+    document.documentElement.setAttribute('data-theme', 'dark')
+    window.localStorage.setItem(THEME_STORAGE_KEY, 'dark')
+    const removeAttribute = vi.spyOn(document.documentElement, 'removeAttribute')
+    render(<ThemeProvider><Probe /></ThemeProvider>)
+    await waitFor((): void => {
+      expect(screen.getByTestId('mode').textContent).toBe('dark')
+    })
+    // Across the mount AND the post-mount effect that catches the state up to "dark" -- never a
+    // removal in between, which is what would open a window for the flash to land in.
+    expect(removeAttribute).not.toHaveBeenCalled()
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
   })
 
   it('restores a stored choice after mount', async () => {
