@@ -1369,10 +1369,17 @@ try {
   }
 
   // ---- the Workforce page's Runbooks tab -------------------------------------------------------
+  // M57 R13 / erratum E15: Runbooks folded into the "Skills & runbooks" tab as a segment, so the
+  // segment itself is not in the DOM until that PARENT tab is the one selected -- `/workforce`
+  // opens on People (Slaves) by default. `workforce-tab-skills` first, then the segment.
   await gotoReliably(`${baseUrl}/workforce`)
-  await waitVisible(page.getByTestId('workforce-tab-runbooks'), 'the Workforce Runbooks tab')
   await clickUntil(
-    page.getByTestId('workforce-tab-runbooks').first(),
+    page.getByTestId('workforce-tab-skills'),
+    async () => page.getByTestId('workforce-segment-runbooks').first().isVisible(),
+    'the Workforce Skills & runbooks tab',
+  )
+  await clickUntil(
+    page.getByTestId('workforce-segment-runbooks').first(),
     async () => page.getByTestId('workforce-runbooks').first().isVisible(),
     'the Workforce Runbooks tab',
   )

@@ -193,34 +193,60 @@ afterEach(() => {
 describe('WorkforceClient tabs (M44 R1)', () => {
   // The four surfaces the M44 audit found for "a slave" -- a sidebar row, another sidebar row, a
   // section on the Projects home and a panel inside a project -- are four tabs on one page now.
-  it('renders the slaves table by default, with the other five tabs beside it', () => {
+  it('renders the slaves table by default, with the other three tabs beside it', () => {
     render(<TestWorkforceClient />)
     expect(screen.getByTestId('data-table')).toBeTruthy()
     expect(screen.getByTestId('worker-row-button').textContent).toContain('Alex')
     expect(screen.getByTestId('workforce-tab-slaves').getAttribute('aria-selected')).toBe('true')
-    // SIX since M53 R12 added Evidence, last -- a record is what you look at after you know who is
-    // here, what they are made of and how they are asked to work.
+    // FOUR since M57 R13 folded Departments into People and Runbooks into Skills & runbooks
+    // (spec erratum E15) -- the two folded tabs are segments under their new parent now, not
+    // entries in this tablist.
     expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
-      'Slaves',
-      'Departments',
+      'People',
       'Catalog',
-      'Skills',
-      'Runbooks',
+      'Skills & runbooks',
       'Evidence',
     ])
   })
 
-  it('switches to the Departments tab and renders a DepartmentsTable row', () => {
+  it('shows FOUR tabs and keeps all six ?tab= values (M57 R13)', () => {
+    render(<TestWorkforceClient initialTab="slaves" />)
+    const tabs = screen.getAllByTestId(/^workforce-tab-/)
+    expect(tabs.map((tab) => tab.getAttribute('data-testid'))).toEqual([
+      'workforce-tab-slaves', 'workforce-tab-catalog', 'workforce-tab-skills', 'workforce-tab-evidence',
+    ])
+    expect(tabs.map((tab) => tab.textContent)).toEqual(['People', 'Catalog', 'Skills & runbooks', 'Evidence'])
+  })
+
+  it('folds Departments into People as a segment with its own testid (spec erratum E15)', () => {
+    render(<TestWorkforceClient initialTab="slaves" />)
+    const sub = screen.getByTestId('workforce-segment-departments')
+    expect(sub.getAttribute('href')).toContain('tab=departments')
+    // The Slaves table is what People opens on.
+    expect(screen.getByTestId('data-table')).toBeTruthy()
+    // And `workforce-tab-slaves` appears exactly ONCE -- the visible tab, not the segment too.
+    expect(screen.getAllByTestId('workforce-tab-slaves')).toHaveLength(1)
+  })
+
+  it('folds Runbooks into Skills & runbooks as a segment with its own testid', () => {
+    render(<TestWorkforceClient initialTab="skills" />)
+    expect(screen.getByTestId('workforce-segment-runbooks').getAttribute('href')).toContain('tab=runbooks')
+    expect(screen.getAllByTestId('workforce-tab-skills')).toHaveLength(1)
+  })
+
+  // M57 R13 / erratum E15: Departments is a `?tab=departments` VALUE still, and a segment link
+  // under People now, not a tab of its own -- so this case opens straight onto it the way a
+  // bookmark or the segment's own `href` would, rather than clicking a `workforce-tab-*` button
+  // that no longer exists.
+  it('opens straight onto ?tab=departments and renders a DepartmentsTable row, with People shown selected', () => {
     render(
       <TestWorkforceClient
+        initialTab="departments"
         teams={[{ teamId: 't1', name: 'Platform', workspaceId: 'w1', projectName: 'Checkout', slaveCount: 2, runCount: 0 }]}
       />,
     )
-    expect(screen.queryByTestId('department-rename')).toBeNull()
-
-    fireEvent.click(screen.getByTestId('workforce-tab-departments'))
-
-    expect(screen.getByTestId('workforce-tab-departments').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('workforce-tab-slaves').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('workforce-segment-departments').getAttribute('aria-selected')).toBe('true')
     expect(screen.getByTestId('department-rename').textContent).toBe('Platform')
   })
 
@@ -286,7 +312,10 @@ describe('WorkforceClient tabs (M44 R1)', () => {
         ]}
       />,
     )
-    expect(screen.getByTestId('workforce-tab-runbooks').getAttribute('aria-selected')).toBe('true')
+    // M57 R13 / erratum E15: Runbooks folded into Skills & runbooks -- the visible tab is Skills,
+    // and the segment underneath is what actually names Runbooks now.
+    expect(screen.getByTestId('workforce-tab-skills').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('workforce-segment-runbooks').getAttribute('aria-selected')).toBe('true')
     expect(screen.getByTestId('runbook-row').getAttribute('data-key')).toBe('feature-delivery')
   })
 

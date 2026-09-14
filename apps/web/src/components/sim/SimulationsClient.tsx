@@ -41,7 +41,9 @@ export function SimulationsClient({
               {cards.map((card) => (
                 <div key={card.id} data-testid="sim-card">
                   <div data-testid={`sim-card-${card.id}`}>
-                    <Card onClick={() => router.push(`/sim/${card.id}`)}>
+                    {/* The README's dashed border (M57 R15) -- the "not real" cue every
+                      * simulation card carries. */}
+                    <Card className="rounded-page-card border-dashed border-line2" onClick={() => router.push(`/sim/${card.id}`)}>
                       <div className="flex items-center gap-2">
                         <span data-testid="sim-chip"><Chip tone="waiting">SIMULATION</Chip></span>
                         <span className="text-sm text-text-1">{card.name}</span>

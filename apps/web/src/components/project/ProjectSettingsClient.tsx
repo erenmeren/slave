@@ -58,73 +58,97 @@ export function ProjectSettingsClient({
     // exactly, and not a pixel moves. The shell is here for its landmark and its `page-shell`
     // marker.
     <PageShell flush>
-      <div className="flex flex-col gap-4 p-4">
-        {workspace.haltedReason !== null && <HaltBanner reason={workspace.haltedReason} />}
-        <GoalPanel
-          workspaceId={workspace.id}
-          goal={workspace.goal}
-          goalVersion={workspace.goalVersion}
-          // The re-plan trigger's own question (`dispatchPlanning` check 2): every task the project
-          // has, terminal ones included, which is exactly what `projectFootprint` counts.
-          boardTaskCount={footprint.tasks}
-          // `tick` returns before `dispatchPlanning` while a halt stands, so the re-plan sentence
-          // must not be said on a halted project. Off the same field the halt banner above reads.
-          halted={workspace.haltedReason !== null}
-        />
-        <RuntimePanel
-          key={`${workspace.provider ?? ''}|${workspace.budgetUsd ?? ''}`}
-          workspaceId={workspace.id}
-          provider={workspace.provider}
-          budgetUsd={workspace.budgetUsd}
-          costBlindBudgeted={workspace.costBlindBudgeted}
-          limits={{ maxConcurrentRuns: workspace.maxConcurrentRuns, runTimeoutMs: workspace.runTimeoutMs, maxAttempts: workspace.maxAttempts }}
-        />
-        <Panel title="slave permissions">
-          <PermissionMatrix sections={permissions === null ? [] : [permissions]} />
-        </Panel>
-        <Panel title="danger zone">
-          <div className="flex flex-col gap-3">
-            {!workspace.archived && (
-              <div className="flex items-center gap-3 rounded-card border border-tone-blocked/22 p-3">
-                <span className="text-xs text-text-2">stop every run in this project</span>
-                <span className="ml-auto">
-                  <EmergencyStopButton workspaceId={workspace.id} halted={workspace.haltedReason !== null} />
-                </span>
-              </div>
-            )}
-            <div className="flex items-center gap-3 rounded-card border border-tone-blocked/22 p-3">
-              <span className="text-xs text-text-2">
-                {workspace.archived ? 'restore this project to active use' : 'archive this project'}
-              </span>
-              <span className="ml-auto flex flex-col items-end gap-1">
-                {workspace.archived ? (
-                  <Button variant="primary" size="sm" data-testid="restore-project" onClick={() => void restore()}>
-                    restore project
-                  </Button>
-                ) : (
-                  <DangerConfirm
-                    label="archive project"
-                    testId="archive-project"
-                    confirmText={
-                      `archives ${workspace.name}: ${plural(footprint.departments, 'department')}, ${plural(footprint.slaves, 'slave')}, ` +
-                      `${plural(footprint.tasks, 'task')}, ${plural(footprint.runs, 'run')} stay on record; nothing runs until you restore it`
-                    }
-                    onConfirm={async () => {
-                      const error = await sendControl(`/api/w/${workspace.id}/archive`, { method: 'POST' })
-                      if (error === null) router.push('/')
-                      return error
-                    }}
-                  />
+      {workspace.haltedReason !== null && <HaltBanner reason={workspace.haltedReason} />}
+      {/* The README's `180px minmax(0,760px)` split (M57 R15): a sticky in-page nav in the first
+        * column, and the four sections that used to just stack -- each its own `rounded-page-card`
+        * now, in the second. */}
+      <div className="grid grid-cols-[180px_minmax(0,760px)] items-start gap-7 px-[24px] py-[22px]">
+        <nav className="sticky top-0 flex flex-col gap-2 text-[13px] text-t2">
+          <a href="#goal" className="hover:text-t1">Goal</a>
+          <a href="#runtime" className="hover:text-t1">Runtime</a>
+          <a href="#permissions" className="hover:text-t1">Permissions</a>
+          <a href="#danger" className="text-s-blocked hover:opacity-80">Danger zone</a>
+        </nav>
+        <div className="flex flex-col gap-5">
+          <section id="goal" className="rounded-page-card border border-line bg-card p-[18px_20px]">
+            <GoalPanel
+              workspaceId={workspace.id}
+              goal={workspace.goal}
+              goalVersion={workspace.goalVersion}
+              // The re-plan trigger's own question (`dispatchPlanning` check 2): every task the
+              // project has, terminal ones included, which is exactly what `projectFootprint`
+              // counts.
+              boardTaskCount={footprint.tasks}
+              // `tick` returns before `dispatchPlanning` while a halt stands, so the re-plan
+              // sentence must not be said on a halted project. Off the same field the halt banner
+              // above reads.
+              halted={workspace.haltedReason !== null}
+            />
+          </section>
+          <section id="runtime" className="rounded-page-card border border-line bg-card p-[18px_20px]">
+            <RuntimePanel
+              key={`${workspace.provider ?? ''}|${workspace.budgetUsd ?? ''}`}
+              workspaceId={workspace.id}
+              provider={workspace.provider}
+              budgetUsd={workspace.budgetUsd}
+              costBlindBudgeted={workspace.costBlindBudgeted}
+              limits={{ maxConcurrentRuns: workspace.maxConcurrentRuns, runTimeoutMs: workspace.runTimeoutMs, maxAttempts: workspace.maxAttempts }}
+            />
+          </section>
+          <section id="permissions" className="rounded-page-card border border-line bg-card p-[18px_20px]">
+            <Panel title="slave permissions">
+              <PermissionMatrix sections={permissions === null ? [] : [permissions]} />
+            </Panel>
+          </section>
+          <section
+            id="danger"
+            className="rounded-page-card border border-[color-mix(in_oklab,var(--s-blocked)_40%,var(--line))] bg-card p-[18px_20px]"
+          >
+            <Panel title="danger zone">
+              <div className="flex flex-col gap-3">
+                {!workspace.archived && (
+                  <div className="flex items-center gap-3 rounded-card border border-tone-blocked/22 p-3">
+                    <span className="text-xs text-text-2">stop every run in this project</span>
+                    <span className="ml-auto">
+                      <EmergencyStopButton workspaceId={workspace.id} halted={workspace.haltedReason !== null} />
+                    </span>
+                  </div>
                 )}
-                {restoreError !== null && (
-                  <span role="alert" data-testid="restore-project-error" className="text-xs text-tone-blocked">
-                    {restoreError}
+                <div className="flex items-center gap-3 rounded-card border border-tone-blocked/22 p-3">
+                  <span className="text-xs text-text-2">
+                    {workspace.archived ? 'restore this project to active use' : 'archive this project'}
                   </span>
-                )}
-              </span>
-            </div>
-          </div>
-        </Panel>
+                  <span className="ml-auto flex flex-col items-end gap-1">
+                    {workspace.archived ? (
+                      <Button variant="primary" size="sm" data-testid="restore-project" onClick={() => void restore()}>
+                        restore project
+                      </Button>
+                    ) : (
+                      <DangerConfirm
+                        label="archive project"
+                        testId="archive-project"
+                        confirmText={
+                          `archives ${workspace.name}: ${plural(footprint.departments, 'department')}, ${plural(footprint.slaves, 'slave')}, ` +
+                          `${plural(footprint.tasks, 'task')}, ${plural(footprint.runs, 'run')} stay on record; nothing runs until you restore it`
+                        }
+                        onConfirm={async () => {
+                          const error = await sendControl(`/api/w/${workspace.id}/archive`, { method: 'POST' })
+                          if (error === null) router.push('/')
+                          return error
+                        }}
+                      />
+                    )}
+                    {restoreError !== null && (
+                      <span role="alert" data-testid="restore-project-error" className="text-xs text-tone-blocked">
+                        {restoreError}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              </div>
+            </Panel>
+          </section>
+        </div>
       </div>
     </PageShell>
   )

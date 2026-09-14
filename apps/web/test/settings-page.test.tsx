@@ -7,7 +7,30 @@ import { DangerZone } from '../src/components/DangerZone.js'
 import { clearModelSelectCache } from '../src/components/ModelSelect.js'
 import { ProviderAdapterCards } from '../src/components/ProviderAdapterCards.js'
 import { SettingsClient } from '../src/components/SettingsClient.js'
+import { ThemeProvider } from '../src/components/theme/ThemeProvider.js'
 import type { RosterCompany, RosterMemberRow } from '../src/server/org.js'
+
+// jsdom has no `matchMedia`, and `SettingsClient` now mounts `ThemeProvider` (M57 t8: the
+// Appearance section) -- copied verbatim from `theme.test.tsx`, the one place this stub already
+// exists.
+function installMatchMedia(): void {
+  vi.stubGlobal('matchMedia', (query: string) => ({
+    matches: false,
+    media: query,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }))
+}
+
+/** Every `<SettingsClient>` render in this file now needs `ThemeProvider` above it -- the
+ *  Appearance section calls `useTheme()`, which throws outside one. */
+function renderSettings(props: React.ComponentProps<typeof SettingsClient>): ReturnType<typeof render> {
+  return render(
+    <ThemeProvider>
+      <SettingsClient {...props} />
+    </ThemeProvider>,
+  )
+}
 
 // M25 Task 5: a fetch mock shared by the two describes below that render a `ModelSelect` --
 // branches on the URL so the same stub answers both `GET /api/providers/<kind>/models` and the
@@ -90,20 +113,22 @@ function company(over: Partial<RosterCompany> = {}): RosterCompany {
   }
 }
 
+beforeEach(() => {
+  installMatchMedia()
+})
+
 afterEach(() => {
   routerRefresh.mockClear()
 })
 
 describe('SettingsClient', () => {
   it('renders the three panels in order, with the moved-out surfaces gone', () => {
-    render(
-      <SettingsClient
-        adapters={[]}
-        showReseed={false}
-        mode="loopback-only"
-        posture="loopback-only · no accounts · cross-site requests refused"
-      />,
-    )
+    renderSettings({
+      adapters: [],
+      showReseed: false,
+      mode: 'loopback-only',
+      posture: 'loopback-only · no accounts · cross-site requests refused',
+    })
     // `Panel` renders `PanelHeader` → `SectionLabel` as its first child when it has a title —
     // the same idiom `ProjectSettingsClient`'s "renders the four panels in order" test uses.
     const titles = screen.getAllByTestId('panel').map((p) => p.firstElementChild?.textContent?.trim().toLowerCase())
@@ -120,27 +145,23 @@ describe('SettingsClient', () => {
   })
 
   it('states the security posture, honestly and without controls', () => {
-    render(
-      <SettingsClient
-        adapters={[]}
-        showReseed={false}
-        mode="loopback-only"
-        posture="loopback-only · no accounts · cross-site requests refused"
-      />,
-    )
+    renderSettings({
+      adapters: [],
+      showReseed: false,
+      mode: 'loopback-only',
+      posture: 'loopback-only · no accounts · cross-site requests refused',
+    })
     const posture = screen.getByTestId('security-posture')
     expect(posture.textContent).toBe('loopback-only · no accounts · cross-site requests refused')
   })
 
   it('renders whatever posture the server computed (accounts mode names the user)', () => {
-    render(<SettingsClient adapters={[]} showReseed={false}
-      mode="accounts" posture="accounts · signed in as ada · cross-site requests refused" />)
+    renderSettings({ adapters: [], showReseed: false, mode: 'accounts', posture: 'accounts · signed in as ada · cross-site requests refused' })
     expect(screen.getByTestId('security-posture').textContent).toBe('accounts · signed in as ada · cross-site requests refused')
   })
 
   it('offers Logout only in accounts mode', () => {
-    render(<SettingsClient adapters={[]} showReseed={false}
-      mode="loopback-only" posture="loopback-only · no accounts · cross-site requests refused" />)
+    renderSettings({ adapters: [], showReseed: false, mode: 'loopback-only', posture: 'loopback-only · no accounts · cross-site requests refused' })
     expect(screen.queryByTestId('logout')).toBeNull()
   })
 
@@ -148,14 +169,28 @@ describe('SettingsClient', () => {
     const assign = vi.fn()
     Object.defineProperty(window, 'location', { configurable: true, value: { assign, pathname: '/settings', search: '' } })
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
-    render(<SettingsClient adapters={[]} showReseed={false}
-      mode="accounts" posture="accounts · signed in as ada · cross-site requests refused" />)
+    renderSettings({ adapters: [], showReseed: false, mode: 'accounts', posture: 'accounts · signed in as ada · cross-site requests refused' })
     await act(async () => {
       fireEvent.click(screen.getByTestId('logout'))
     })
     expect(fetchMock).toHaveBeenCalledWith('/api/auth/logout', expect.objectContaining({ method: 'POST' }))
     expect(assign).toHaveBeenCalledWith('/login')
     vi.restoreAllMocks()
+  })
+
+  // M57 t8: the Appearance section, folded in beside the provider-adapter cards. `Segmented`
+  // (M57 R21) owns the group's own `appearance-theme`/`appearance-theme-<id>` testids; the
+  // CHOSEN mode's `data-theme-mode` rides on that SAME group element (`Segmented`'s `data`
+  // passthrough), which is what lets a gate read it straight off `appearance-theme` with no
+  // wrapper of this page's own to reach through.
+  it('offers the three theme choices and stamps the one that is chosen', () => {
+    renderSettings({ adapters: [], showReseed: false, mode: 'loopback-only', posture: 'loopback-only · no accounts · cross-site requests refused' })
+    expect(screen.getByTestId('appearance-theme').getAttribute('data-theme-mode')).toBe('system')
+    act((): void => {
+      screen.getByTestId('appearance-theme-dark').click()
+    })
+    expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
+    expect(screen.getByTestId('appearance-theme').getAttribute('data-theme-mode')).toBe('dark')
   })
 })
 
@@ -751,8 +786,7 @@ describe('the danger zone', () => {
 // unchanged, which is what keeps `gate:m14-fidelity`'s numbers where they are.
 describe('SettingsClient (M44 E25 / M45 R5)', () => {
   it('renders inside the one page shell, with its own frame classes untouched', () => {
-    render(<SettingsClient adapters={[]} showReseed={false}
-      mode="loopback-only" posture="loopback-only · no accounts · cross-site requests refused" />)
+    renderSettings({ adapters: [], showReseed: false, mode: 'loopback-only', posture: 'loopback-only · no accounts · cross-site requests refused' })
     const shell = screen.getByTestId('page-shell')
     expect(shell.className).not.toContain('p-3')
     expect(shell.querySelector(':scope > div')?.className).toBe('flex flex-col gap-4 p-4')

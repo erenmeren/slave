@@ -82,21 +82,17 @@ const TONE_DOT_GLOW: Record<StatusTone, string> = {
  *  are fixed. */
 function EventTime({ ts }: { readonly ts: string }): ReactElement {
   return (
-    <time
-      dateTime={ts}
-      data-testid="event-time"
-      className="w-[74px] flex-none pt-[1px] text-right font-mono text-[10.5px] text-text-3"
-    >
+    <time dateTime={ts} data-testid="event-time" className="font-mono text-[12px] text-t3">
       {ts.slice(11, 19)}
     </time>
   )
 }
 
-/** The 28px gutter and its 7px tone dot — the row's half of the x=88 rule. */
+/** The dot gutter, and its 7px tone dot — the row's half of the x=88 rule. */
 function EventDot({ type }: { readonly type: string }): ReactElement {
   const tone = toneForEventType(type)
   return (
-    <span data-testid="event-gutter" className="flex w-[28px] flex-none justify-center pt-[4px]">
+    <span data-testid="event-gutter" className="flex justify-center pt-[4px]">
       <span
         data-testid="event-dot"
         data-tone={tone}
@@ -179,14 +175,14 @@ function PayloadDetails({ payload }: { readonly payload: Record<string, unknown>
         * removes the browser's own disclosure triangle so the handoff's glyph is the only one. */}
       <summary
         data-testid="payload-toggle"
-        className="mt-[2px] cursor-pointer list-none text-[10px] uppercase tracking-wide text-text-3 group-open:text-text-2"
+        className="mt-[2px] cursor-pointer list-none text-[10px] uppercase tracking-wide text-t3 group-open:text-t2"
       >
         <span aria-hidden className="group-open:hidden">▸</span>
         <span aria-hidden className="hidden group-open:inline">▾</span> payload
       </summary>
       <pre
         data-testid="payload-json"
-        className="mt-1 overflow-x-auto rounded border border-line bg-bg-0 p-2 font-mono text-[10px] text-text-2"
+        className="mt-1 overflow-x-auto rounded bg-bg border border-line p-2 font-mono text-[11.5px]/1.5 text-t2"
       >
         {JSON.stringify(payload, null, 2)}
       </pre>
@@ -220,11 +216,11 @@ export function ActivityCard({
       data-event-type={event.type}
       // Dimmed, never hidden (design README "Filtering"): the river keeps its shape and its
       // timestamps stay comparable, which a filtered-out row would destroy.
-      className={`flex items-start py-[6px] pr-[18px] transition-opacity ${dimmed ? 'opacity-[.35]' : ''}`}
+      className={`grid grid-cols-[64px_14px_minmax(0,1fr)_auto] items-start gap-3 border-b border-line px-4 py-[11px] transition-opacity ${dimmed ? 'opacity-[.35]' : ''}`}
     >
       <EventTime ts={event.ts} />
       <EventDot type={event.type} />
-      <div className="min-w-0 flex-1">
+      <div className="min-w-0">
         <div className="flex flex-wrap items-baseline gap-2">
           {/* "who": the slave when the event names one (still a link to its Overview panel), the
             * envelope's bare actor otherwise. Tone-coloured at 12px/600, as the mock's own
@@ -256,10 +252,10 @@ export function ActivityCard({
         <div className="mt-[1px] text-[12px] text-text-body">{children}</div>
         <PayloadDetails payload={event.payload} />
       </div>
-      {/* "ref": the task this row belongs to, or the unknown mark when it belongs to none. */}
-      {/* A flex item, so `truncate` blockifies and actually clips: a long task title must not
-        * push the row's own right edge out and destroy the river's alignment. */}
-      <span data-testid="event-ref" className="max-w-[140px] flex-none truncate pt-[3px] font-mono text-[9.5px] text-text-3">
+      {/* "ref": the task this row belongs to, or the unknown mark when it belongs to none -- a
+        * chip now (M57 R13), the `auto` grid column's own width. `max-w`/`truncate` still clip a
+        * long task title rather than letting it push the chip past the river's own right edge. */}
+      <span data-testid="event-ref" className="max-w-[140px] truncate rounded-chip border border-line2 px-[7px] py-[2px] font-mono text-[11.5px] font-medium text-t2">
         {event.taskId === null ? (
           '—'
         ) : (

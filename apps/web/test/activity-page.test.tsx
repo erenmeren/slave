@@ -542,6 +542,17 @@ describe('ActivityClient', () => {
     expect(screen.getAllByTestId('volume-bar')[0]?.textContent).toContain('future.*')
   })
 
+  // M57 R13: the README's `200px 1fr` split -- the family rail (this page's own event-type
+  // volumes) at 200px, beside the river.
+  it('lays the family rail and the river out in the 200px/1fr split, with a 56x4px volume track', () => {
+    render(<ActivityClient workspaceId="w1" initial={page({ typeVolumes: [{ prefix: 'task.*', count: 9 }] })} />)
+    const rail = screen.getByTestId('activity-rail')
+    expect(rail.parentElement?.className).toContain('grid-cols-[200px_minmax(0,1fr)]')
+    const track = screen.getByTestId('volume-bar').querySelector('[data-testid="volume-fill"]')?.parentElement
+    expect(track?.className).toContain('w-[56px]')
+    expect(track?.className).toContain('h-[4px]')
+  })
+
   it('filtering to a roster row dims every card that is not that slave', () => {
     render(
       <ActivityClient

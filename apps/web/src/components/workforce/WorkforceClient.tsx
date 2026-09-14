@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { CapabilityRecord } from '@slave-of-ai/domain'
 import type { AllSlavesPage, CatalogRowView, ProjectTeamRow, RosterCompany, RunbookRowView, WorkforceCatalogView } from '../../server/org'
@@ -26,19 +27,48 @@ import { Tabs } from '../ui/Tabs'
 
 export type WorkforceTab = 'slaves' | 'departments' | 'catalog' | 'skills' | 'runbooks' | 'evidence'
 
+/** The FOUR visible tabs (M57 R13). `id` is still a `WorkforceTab`, so `Tabs`' own
+ *  `workforce-tab-<id>` testids are byte-identical to the six-tab strip's first, third, fourth and
+ *  sixth -- which is what lets `gate:m11-shell`, `gate:m14-fidelity` and `gate:m44-ux-foundation`
+ *  carry over with no edit at all. Only the LABELS move. */
 export const WORKFORCE_TABS: readonly { readonly id: WorkforceTab; readonly label: string }[] = [
-  { id: 'slaves', label: 'Slaves' },
-  { id: 'departments', label: 'Departments' },
+  { id: 'slaves', label: 'People' },
   { id: 'catalog', label: 'Catalog' },
-  { id: 'skills', label: 'Skills' },
-  // M48 R7: a runbook is a way of WORKING, which is what you look for after you know who is
-  // here and what they are made of.
-  { id: 'runbooks', label: 'Runbooks' },
-  // M53 R12, LAST: a record is what you look at after you know who is here, what they are made of
-  // and how they are asked to work. `docs/ia.md:41` and `:58` promised this since M44 -- the
-  // per-profile evidence that replaces the Analytics tiles.
+  { id: 'skills', label: 'Skills & runbooks' },
   { id: 'evidence', label: 'Evidence' },
 ]
+
+/**
+ * The two tabs that folded, as SEGMENTS inside their new parent -- with their OWN testid namespace
+ * (spec erratum E15).
+ *
+ * The draft of this plan kept `workforce-tab-<id>` on these, on the theory that a gate clicking
+ * `workforce-tab-departments` would then keep working. It does not: `SUB_TABS.slaves` contains
+ * `{id:'slaves'}` and `SUB_TABS.skills` contains `{id:'skills'}`, so on `?tab=slaves` the page
+ * would render `workforce-tab-slaves` TWICE -- once as the visible People tab and once as the
+ * segment -- which breaks this task's own four-tab assertion and puts `gate-m11-shell`'s
+ * unqualified `getByTestId('workforce-tab-slaves')` into Playwright strict-mode failure.
+ *
+ * `workforce-segment-<id>` for all four. Every `?tab=` value still works, every bookmark still
+ * lands, and the four gate/test hits on the two old names are re-pointed in this task.
+ */
+const SUB_TABS: Record<string, readonly { readonly id: WorkforceTab; readonly label: string }[]> = {
+  slaves: [
+    { id: 'slaves', label: 'Slaves' },
+    { id: 'departments', label: 'Departments' },
+  ],
+  skills: [
+    { id: 'skills', label: 'Skills' },
+    { id: 'runbooks', label: 'Runbooks' },
+  ],
+}
+
+/** `departments`/`runbooks` are `?tab=` values, never visible tabs -- the strip shows the PARENT
+ *  they folded into, and the sub-segment row underneath (see `SUB_TABS`) is what actually names
+ *  the folded surface. */
+function visibleTabFor(tab: WorkforceTab): WorkforceTab {
+  return tab === 'departments' ? 'slaves' : tab === 'runbooks' ? 'skills' : tab
+}
 
 /**
  * The Workforce page (M44 R1). Six tabs since M53 R12, and every panel on them is the one that was
@@ -100,6 +130,16 @@ export function WorkforceClient({
   const searchParams = useSearchParams()
   const router = useRouter()
   const [tab, setTab] = useState<WorkforceTab>(initialTab)
+  // Re-syncs local state whenever the SERVER hands this component a different `initialTab` --
+  // which only happens after a real navigation, never after `select()`'s own `replaceState` (that
+  // never changes what the server rendered). The sub-segment row below is a plain `<Link>` (M57
+  // erratum E15), so choosing "Departments"/"Runbooks" from it is exactly such a navigation: the
+  // Server Component re-runs with the new `?tab=`, but THIS client component is not remounted --
+  // same fiber, same position -- so without this effect its own `tab` state would keep whatever a
+  // previous local click last set, and the segment's target panel would never actually show.
+  useEffect((): void => {
+    setTab(initialTab)
+  }, [initialTab])
   const [newOpen, setNewOpen] = useState(false)
   /**
    * MOVED verbatim from `SlavesClient` (deleted this task), including its fix-round-1 rule: the
@@ -173,13 +213,33 @@ export function WorkforceClient({
         ) : undefined
       }
       tabs={
-        <Tabs
-          tabs={WORKFORCE_TABS}
-          current={tab}
-          ariaLabel="Workforce"
-          testIdPrefix="workforce-tab"
-          onSelect={(id) => select(id as WorkforceTab)}
-        />
+        <div className="flex flex-col gap-2">
+          <Tabs
+            tabs={WORKFORCE_TABS}
+            current={visibleTabFor(tab)}
+            ariaLabel="Workforce"
+            testIdPrefix="workforce-tab"
+            onSelect={(id) => select(id as WorkforceTab)}
+          />
+          {SUB_TABS[visibleTabFor(tab)] !== undefined && (
+            <span role="group" aria-label="Workforce sub-section" className="inline-flex w-fit gap-[2px] rounded-card border border-line2 p-[2px]">
+              {SUB_TABS[visibleTabFor(tab)]?.map((sub) => (
+                <Link
+                  key={sub.id}
+                  href={`/workforce?tab=${sub.id}`}
+                  data-testid={`workforce-segment-${sub.id}`}
+                  aria-selected={tab === sub.id}
+                  aria-current={tab === sub.id ? 'page' : undefined}
+                  className={`rounded-nav border-0 px-[10px] py-1 text-[13px] transition-colors ${
+                    tab === sub.id ? 'bg-sel font-semibold text-t1' : 'bg-transparent text-t2 hover:text-t1'
+                  }`}
+                >
+                  {sub.label}
+                </Link>
+              ))}
+            </span>
+          )}
+        </div>
       }
     >
       {tab === 'slaves' && <AllSlavesTable initial={slaves} onOpen={(row) => setSelected(row)} />}

@@ -48,6 +48,14 @@ describe('SimulationsClient', () => {
     expect(routerPush).toHaveBeenCalledWith('/sim/s1')
     expect(screen.getAllByTestId('sim-card')).toHaveLength(2)
   })
+
+  // M57 R15: the README's dashed border is the "not real" cue every simulation card carries.
+  it('marks every card with the dashed "not real" border', () => {
+    render(<SimulationsClient cards={[card()]} companiesBySector={companiesBySector} />)
+    const inner = within(screen.getByTestId('sim-card-s1')).getByTestId('card')
+    expect(inner.className).toContain('border-dashed')
+  })
+
   it('the drawer has sector, company, name, policy and seed — no repository, branch or verify field — and posts to /api/sim with the sector', async () => {
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, id: 's9' }), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)

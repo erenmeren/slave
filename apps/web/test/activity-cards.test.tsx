@@ -951,11 +951,13 @@ describe('the river row', () => {
     expect(screen.queryByTestId('event-user')).toBeNull()
   })
 
-  it('lays out 74px timestamp, 28px dot gutter, then who + kind + text', () => {
+  // M57 R13: the row is a `grid-cols-[64px_14px_minmax(0,1fr)_auto]` now -- the 64px/14px widths
+  // live on the ROW itself (`activity-card`'s own className), not on the time/gutter elements,
+  // which just take whatever column the grid hands them.
+  it('lays out a 64px timestamp column, a 14px dot gutter column, then who + kind + text', () => {
     render(<ActivityCard {...base}>body</ActivityCard>)
-    expect(screen.getByTestId('event-time').className).toContain('w-[74px]')
-    expect(screen.getByTestId('event-time').className).toContain('text-right')
-    expect(screen.getByTestId('event-gutter').className).toContain('w-[28px]')
+    expect(screen.getByTestId('activity-card').className).toContain('grid-cols-[64px_14px_minmax(0,1fr)_auto]')
+    expect(screen.getByTestId('event-time').className).toContain('text-t3')
     expect(screen.getByTestId('event-dot').className).toContain('h-[7px]')
   })
 

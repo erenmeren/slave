@@ -624,7 +624,7 @@ try {
   // ---- Scenario stage 6b: delete the second department through the Departments tab's
   // `department-delete` -> `department-delete-confirm` (M27 §4.2). Its one slave is already gone
   // (deleted above), so this is a plain cascade with no live-run refusal to work around.
-  const departmentsTab = page.getByTestId('workforce-tab-departments')
+  const departmentsTab = page.getByTestId('workforce-segment-departments')
   const otherDeptRow = page.getByTestId('data-table-row').filter({ hasText: 'M11 Gate Other Dept' })
   await clickUntil(
     departmentsTab,

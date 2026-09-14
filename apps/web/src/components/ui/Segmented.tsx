@@ -18,15 +18,23 @@ export function Segmented<T extends string>({
   onChange,
   ariaLabel,
   testIdPrefix,
+  data,
 }: {
   readonly options: readonly { readonly id: T; readonly label: string; readonly count?: number }[]
   readonly value: T
   readonly onChange: (next: T) => void
   readonly ariaLabel: string
   readonly testIdPrefix: string
+  /** Extra `data-*` attributes for the group element -- spread BEFORE `data-testid`/`data-value`,
+   *  so a caller cannot accidentally shadow either (`ui/Card`'s own `data` prop documents the same
+   *  reasoning). Settings' Appearance section (M57 t8) is the one caller: the gate reads the
+   *  CHOSEN mode's `data-theme-mode` off this same group element, not off a wrapper this component
+   *  does not itself render. */
+  readonly data?: Readonly<Record<`data-${string}`, string>>
 }): React.JSX.Element {
   return (
     <span
+      {...data}
       role="group"
       aria-label={ariaLabel}
       data-testid={testIdPrefix}

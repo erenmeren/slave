@@ -993,7 +993,8 @@ try {
   await gotoReliably(`${baseUrl}/workforce`)
   // The Slaves page opens on the one table now (M24 Task 7): Roster and Workers were two names for
   // the same list of slaves and are gone, folded into `workforce-tab-slaves` (default) beside
-  // `workforce-tab-departments`. That table is the WORKFORCE page's Slaves tab since M44 R1, and
+  // `workforce-segment-departments` (M57 R13 folded the Departments TAB into a segment under
+  // People, erratum E15). That table is the WORKFORCE page's Slaves tab since M44 R1, and
   // `/slaves` is a 307 into it -- the route above is the one a person lands on. The `clickUntil`
   // below is kept anyway -- it is idempotent on an already-selected tab, and it is what makes this
   // stage assert the template rather than assume which tab happened to be default.

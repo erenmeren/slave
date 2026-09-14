@@ -194,8 +194,77 @@ export function ActivityClient({
       <div data-testid="sparkline-slot" className="border-b border-line px-3 py-2 text-text-3">
         <Sparkline buckets={sparkline} width={160} height={24} label="tool calls, last 10 minutes" />
       </div>
-      <div className="flex min-h-0 flex-1">
-        <div className="relative flex min-w-0 flex-1 flex-col overflow-hidden">
+      {/* M57 R13: the README's `200px 1fr` split -- the family rail (event-type volumes, then the
+        * roster) on the left, the river on the right. `flex-1 min-h-0` keeps this row filling
+        * whatever height `FilterBar`/the sparkline slot leave it, exactly as the old `flex flex-1`
+        * wrapper did; `items-start` (the handoff's own alignment) is what lets the rail sit at its
+        * own content height instead of stretching to match the river, so the river's own
+        * `self-stretch` is what still gives its `Timeline` a bounded height to scroll inside. */}
+      <div className="grid min-h-0 flex-1 grid-cols-[200px_minmax(0,1fr)] items-start gap-5 px-[24px] py-5">
+        {/* The family rail (design README §3a.5: event-type volumes, then the roster beneath). */}
+        <aside data-testid="activity-rail" className="flex flex-col gap-6 overflow-y-auto">
+          <div>
+            <PanelHeader title="event types · 24h" />
+            <div className="mt-[11px] flex flex-col gap-[9px]">
+              {initial.typeVolumes.map((volume) => (
+                <div key={volume.prefix} data-testid="volume-bar" data-prefix={volume.prefix}>
+                  <div className="flex justify-between font-mono text-[10.5px] text-text-2">
+                    {/* R5 leak 3: this printed the SQL prefix. `eventPrefixLabel` names the family;
+                      * `data-prefix` on the bar and this `title` keep the raw key. */}
+                    <span data-testid="volume-label" title={volume.prefix}>
+                      {eventPrefixLabel(volume.prefix)}
+                    </span>
+                    <span className="text-text-3">{volume.count}</span>
+                  </div>
+                  {/* The handoff's 56 x 4px volume bar (M57 R13). `bg-sel` is the same faint track
+                    * `shell/Header.tsx`'s own budget bar uses -- the old `bg-white/[0.06]` painted
+                    * an invisible track in the light theme. */}
+                  <div className="mt-[4px] h-[4px] w-[56px] overflow-hidden rounded-hair bg-sel">
+                    {/* Normalized to the BUSIEST kind, not to a fixed ceiling: the rail compares
+                      * kinds against each other, and a fixed scale would flatten a quiet day into
+                      * six invisible bars. `width .5s ease` is the handoff's own bar transition. */}
+                    <div
+                      data-testid="volume-fill"
+                      className="h-full bg-tone-working motion-safe:[transition:width_.5s_ease]"
+                      style={{ width: `${Math.round((volume.count / volumeMax) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+              {initial.typeVolumes.length === 0 && (
+                // A kind with no events in the window is OMITTED, never drawn as a zero bar
+                // (`ActivityPage.typeVolumes`) — so a silent 24 hours has nothing to draw at all,
+                // and says so rather than showing an empty box.
+                <EmptyState testId="volume-empty" message="no events in the last 24h" />
+              )}
+            </div>
+          </div>
+          <div>
+            <PanelHeader title="roster" />
+            <ul className="mt-[11px] flex flex-col gap-1">
+              {initial.slaves.map((slave) => (
+                <li key={slave.id}>
+                  <button
+                    type="button"
+                    data-testid={`roster-row-${slave.id}`}
+                    // A toggle, not a radio: clicking the selected row again clears the filter,
+                    // which is the only way back to the undimmed river without a reload.
+                    aria-pressed={rosterSlaveId === slave.id}
+                    onClick={() => setRosterSlaveId((current) => (current === slave.id ? null : slave.id))}
+                    // The mockup's roster row is 7px (rounded-tile per the radius scale).
+                    className={`w-full truncate rounded-tile px-2 py-1 text-left text-[12.5px] transition-colors ${
+                      rosterSlaveId === slave.id ? 'bg-sel text-t1' : 'text-t2 hover:text-t1'
+                    }`}
+                  >
+                    {slave.name}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </aside>
+        {/* The river (design README §3a.5): a `rounded-panel-card` surface now, not a bare column. */}
+        <div className="relative flex min-h-0 min-w-0 flex-col self-stretch overflow-hidden rounded-panel-card border border-line bg-card">
           <Timeline
             ref={timelineRef}
             events={events}
@@ -225,64 +294,6 @@ export function ActivityClient({
             </button>
           )}
         </div>
-        {/* The right rail (design README §3a.5: "the 1c timeline + a right rail of event-type
-          * volumes"), with 1c's roster below it. */}
-        <aside data-testid="activity-rail" className="w-[280px] flex-none overflow-y-auto border-l border-line p-4">
-          <PanelHeader title="event types · 24h" />
-          <div className="mt-[11px] flex flex-col gap-[9px]">
-            {initial.typeVolumes.map((volume) => (
-              <div key={volume.prefix} data-testid="volume-bar" data-prefix={volume.prefix}>
-                <div className="flex justify-between font-mono text-[10.5px] text-text-2">
-                  {/* R5 leak 3: this printed the SQL prefix. `eventPrefixLabel` names the family;
-                    * `data-prefix` on the bar and this `title` keep the raw key. */}
-                  <span data-testid="volume-label" title={volume.prefix}>
-                    {eventPrefixLabel(volume.prefix)}
-                  </span>
-                  <span className="text-text-3">{volume.count}</span>
-                </div>
-                <div className="mt-[4px] h-[4px] overflow-hidden rounded-hair bg-white/[0.06]">
-                  {/* Normalized to the BUSIEST kind, not to a fixed ceiling: the rail compares
-                    * kinds against each other, and a fixed scale would flatten a quiet day into
-                    * six invisible bars. `width .5s ease` is the handoff's own bar transition. */}
-                  <div
-                    data-testid="volume-fill"
-                    className="h-full bg-tone-working motion-safe:[transition:width_.5s_ease]"
-                    style={{ width: `${Math.round((volume.count / volumeMax) * 100)}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-            {initial.typeVolumes.length === 0 && (
-              // A kind with no events in the window is OMITTED, never drawn as a zero bar
-              // (`ActivityPage.typeVolumes`) — so a silent 24 hours has nothing to draw at all,
-              // and says so rather than showing an empty box.
-              <EmptyState testId="volume-empty" message="no events in the last 24h" />
-            )}
-          </div>
-          <div className="mt-6">
-            <PanelHeader title="roster" />
-            <ul className="mt-[11px] flex flex-col gap-1">
-              {initial.slaves.map((slave) => (
-                <li key={slave.id}>
-                  <button
-                    type="button"
-                    data-testid={`roster-row-${slave.id}`}
-                    // A toggle, not a radio: clicking the selected row again clears the filter,
-                    // which is the only way back to the undimmed river without a reload.
-                    aria-pressed={rosterSlaveId === slave.id}
-                    onClick={() => setRosterSlaveId((current) => (current === slave.id ? null : slave.id))}
-                    // The mockup's roster row is 7px (rounded-tile per the radius scale).
-                    className={`w-full truncate rounded-tile px-2 py-1 text-left text-[12.5px] transition-colors ${
-                      rosterSlaveId === slave.id ? 'bg-bg-selected text-text-1' : 'text-text-2 hover:text-text-1'
-                    }`}
-                  >
-                    {slave.name}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </aside>
       </div>
     </PageShell>
   )

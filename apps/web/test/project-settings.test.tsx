@@ -194,6 +194,18 @@ describe('ProjectSettingsClient', () => {
     expect(screen.getAllByTestId(/^permission-matrix-/).length).toBe(1)
   })
 
+  // M57 R15: the sticky in-page nav, one anchor per section, the danger link in the blocked tone.
+  it('offers a sticky in-page nav to the four sections, with Danger zone in the blocked tone', () => {
+    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
+    const links = screen.getAllByRole('link').filter((link) => link.getAttribute('href')?.startsWith('#') === true)
+    expect(links.map((link) => link.getAttribute('href'))).toEqual(['#goal', '#runtime', '#permissions', '#danger'])
+    expect(links[3]?.className).toContain('text-s-blocked')
+    expect(document.getElementById('goal')).toBeTruthy()
+    expect(document.getElementById('runtime')).toBeTruthy()
+    expect(document.getElementById('permissions')).toBeTruthy()
+    expect(document.getElementById('danger')).toBeTruthy()
+  })
+
   it('sets the goal then refreshes the route instead of waiting for a stream', async () => {
     // The panel dials `fetch` itself since M40 t4 (both outcomes of a save carry a number it has to
     // render), so this stubs the response the tab's own wiring is being checked against; what the
@@ -295,13 +307,17 @@ describe('ProjectSettingsClient', () => {
 })
 
 // M44 erratum E25 / M45 R5: the one page frame reaches this page too. `flush`, so it brings its
-// landmark and its `page-shell` marker and none of its padding -- the frame's own classes are
-// unchanged, which is what keeps `gate:m14-fidelity`'s numbers where they are.
+// landmark and its `page-shell` marker and none of its padding -- the shell itself is still
+// untouched by this page's OWN layout, which M57 t8 changed from a single stacked column to the
+// README's `180px minmax(0,760px)` split with its own gutters (`gate:m14-fidelity`'s numbers for
+// THIS page are Task 9's to regenerate, not this test's to keep frozen).
 describe('ProjectSettingsClient (M44 E25 / M45 R5)', () => {
-  it('renders inside the one page shell, with its own frame classes untouched', () => {
+  it('renders inside the one page shell, with its own two-column layout', () => {
     render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
     const shell = screen.getByTestId('page-shell')
     expect(shell.className).not.toContain('p-3')
-    expect(shell.querySelector(':scope > div')?.className).toBe('flex flex-col gap-4 p-4')
+    expect(shell.querySelector(':scope > div')?.className).toBe(
+      'grid grid-cols-[180px_minmax(0,760px)] items-start gap-7 px-[24px] py-[22px]',
+    )
   })
 })

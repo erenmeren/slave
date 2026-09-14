@@ -48,7 +48,7 @@ function KindChip({
       aria-pressed={active}
       onClick={onToggle}
       className={`rounded-bubble border px-[9px] py-[3px] font-mono text-[10px] font-medium transition-colors ${
-        active ? 'border-text-1 bg-bg-2 text-text-1' : 'border-line bg-bg-1 text-text-3 hover:text-text-2'
+        active ? 'border-t1 bg-card text-t1' : 'border-line bg-panel text-t3 hover:text-t2'
       }`}
     >
       {KIND_LABEL[kind]}
@@ -67,20 +67,20 @@ function AdvancedTypesPopover({
 }): ReactElement {
   return (
     <details className="group relative" data-testid="advanced-popover">
-      <summary className="cursor-pointer list-none rounded border border-line bg-bg-1 px-2.5 py-1 text-xs text-text-2 group-open:text-text-1">
+      <summary className="cursor-pointer list-none rounded border border-line bg-panel px-2.5 py-1 text-xs text-t2 group-open:text-t1">
         Advanced{rawTypes.length > 0 ? ` (${rawTypes.length})` : ''}
       </summary>
-      <div className="absolute z-10 mt-1 grid max-h-64 w-72 grid-cols-1 gap-0.5 overflow-y-auto rounded border border-line bg-bg-1 p-2 shadow-lg">
+      <div className="absolute z-10 mt-1 grid max-h-64 w-72 grid-cols-1 gap-0.5 overflow-y-auto rounded border border-line bg-panel p-2 shadow-lg">
         {ALL_TYPES.map((type) => {
           const checked = rawTypes.includes(type)
           return (
-            <label key={type} className="flex items-center gap-2 rounded px-1.5 py-1 text-xs text-text-2 hover:bg-bg-2">
+            <label key={type} className="flex items-center gap-2 rounded px-1.5 py-1 text-xs text-t2 hover:bg-card">
               <input
                 type="checkbox"
                 data-testid={`type-checkbox-${type}`}
                 checked={checked}
                 onChange={() => setRawTypes(toggleItem(rawTypes, type))}
-                className="accent-text-1"
+                className="accent-t1"
               />
               <span className="font-mono">{type}</span>
             </label>
@@ -106,14 +106,14 @@ function RosterSelect({
   readonly onChange: (ids: readonly string[]) => void
 }): ReactElement {
   return (
-    <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-text-3">
+    <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wide text-t3">
       {label}
       <select
         multiple
         data-testid={`select-${label.toLowerCase()}`}
         value={[...selected]}
         onChange={(event) => onChange(Array.from(event.currentTarget.selectedOptions).map((option) => option.value))}
-        className="min-w-32 rounded border border-line bg-bg-1 px-2 py-1 text-xs normal-case tracking-normal text-text-1"
+        className="min-w-32 rounded border border-line bg-panel px-2 py-1 text-xs normal-case tracking-normal text-t1"
       >
         {options.map((option) => (
           <option key={option.id} value={option.id}>
@@ -133,7 +133,7 @@ function RosterSelect({
 export function FilterBar(props: FilterBarProps): ReactElement {
   const { slaves, tasks, filters, kinds, rawTypes, setKinds, setRawTypes, setSlaves, setTasks } = props
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-line bg-bg-1 p-3" data-testid="filter-bar">
+    <div className="flex flex-wrap items-center gap-2 border-b border-line bg-panel p-3" data-testid="filter-bar">
       <div className="flex flex-wrap gap-1.5">
         {ACTIVITY_KINDS.map((kind) => (
           <KindChip key={kind} kind={kind} active={kinds.includes(kind)} onToggle={() => setKinds(toggleItem(kinds, kind))} />
