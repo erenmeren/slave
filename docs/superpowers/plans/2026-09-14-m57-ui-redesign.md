@@ -4870,16 +4870,28 @@ MSG
 
 **Files:**
 - Create: `apps/web/src/components/project/NeedsYouCard.tsx`
-- Create: `apps/web/src/components/project/FactTiles.tsx`
 - Create: `apps/web/test/needs-you-card.test.tsx`
 - Modify: `apps/web/src/components/ProjectsClient.tsx`
 - Modify: `apps/web/src/components/OverviewClient.tsx`
-- Modify: `apps/web/src/app/page.tsx` (the header action moves into the client)
-- Modify: `apps/web/test/projects-page.test.tsx`, `apps/web/test/overview-components.test.tsx`
+- Modify: `apps/web/src/components/project/ProjectBrief.tsx` (**eight tiles → four**, R17)
+- Modify: `apps/web/src/components/SlaveCard.tsx` (**card → row**, R18)
+- Modify: `apps/web/src/components/project/SupervisorTimeline.tsx` (the Recent-changes row look)
+- Modify: `scripts/gate-m45-project-experience.mjs` (lines 95–104, 770–780, 794–805 — see Step 9)
+- Modify: `apps/web/test/projects-page.test.tsx`, `apps/web/test/overview-components.test.tsx`, `apps/web/test/slave-card.test.tsx`, `apps/web/test/brief.test.tsx` (whichever of the last two exist — `ls apps/web/test | grep -iE "slave-card|brief"`)
+- Delete: `apps/web/src/components/TopStrip.tsx`
 
 **Interfaces:**
-- Consumes from Task 3: `useHeaderAction`. From Task 2: nothing new. From earlier milestones, unchanged: `ProjectRow` (`server/org.ts:94`), `OverviewSnapshot` (`server/overview.ts:230-377`), `NeedsYouItem` (`server/needsYou.ts:26`), `ProjectBrief`, `TopStrip`, `SlaveCard`, `SupervisorTimeline`, `RunbookPanel`, `BlockedPanel`, `LiveEventsPanel`, `MergeQueuePanel`, `KpiStrip`.
-- Produces, for Tasks 7–9: testids `needs-you-card`, `needs-you-row`, `needs-you-empty`, `fact-tile`; the header-action idiom every later page copies.
+- Consumes from Task 3: `useHeaderAction`. From Task 2: nothing new. From earlier milestones, unchanged: `ProjectRow` (`server/org.ts:94`), `OverviewSnapshot` (`server/overview.ts:230-377`), `NeedsYouItem` (`server/needsYou.ts:26`), `ProjectBrief` the DTO (`server/brief.ts`), `SupervisorTimeline`, `RunbookPanel`, `LiveEventsPanel`, `MergeQueuePanel`, `KpiStrip`, `AvatarTile`, `StatusPill`, `ProgressBar`.
+- Produces, for Tasks 7–9: `ProjectBrief({ workspaceId, brief, runbookLine })` rendering FOUR `brief-tile`s (`data-brief` = `work` | `cost` | `supervisor` | `latest-verified`) inside a container carrying BOTH `data-testid="brief"` and `data-testid="strip"`; `SlaveCard` as a row; testids `needs-you-card`, `needs-you-row`, `needs-you-empty`, `card-unblock`, `card-more`, `recent-changes`; the header-action idiom every later page copies.
+
+**The controller ruling this task implements (spec R17/R18, §6).** The first draft of this plan kept
+`ProjectBrief`'s eight tiles and `SlaveCard`'s card grid, and added a second four-tile set beside
+them, because both carry computed-style assertions in `gate:m14-fidelity` and
+`gate:m45-project-experience`. That was withdrawn: **a gate pins a number so it cannot drift by
+accident, not against a deliberate, specified, reviewed change** — and Task 9 rewrites m14's whole
+`NUMBERS` table and regenerates all thirteen screenshots anyway. The Overview follows the README's
+five bands exactly, and the gates that measured the old layout are edited here, by name, with every
+assertion either carried over onto the new selector or re-pointed at the surface the fact moved to.
 
 - [ ] **Step 1: Write the failing test for the Needs-you card**
 
@@ -5120,107 +5132,379 @@ npx vitest run apps/web/test/needs-you-card.test.tsx
 
 Expected: PASS, 4 tests.
 
-- [ ] **Step 5: Write `FactTiles`**
+- [ ] **Step 5: Turn `ProjectBrief`'s eight tiles into the README's four (R17)**
 
-Create `apps/web/src/components/project/FactTiles.tsx`. It draws the README's four tiles from the
-snapshot the page already holds — the Work bar, the Cost, the Supervisor and the Latest verified —
-and it REPLACES nothing: `ProjectBrief` (371 lines, eight facts, six `gate:m14-fidelity`
-assertions) stays exactly where it is, below these, under its own `brief` testid. These four are
-the README's first band and the brief is the fuller answer underneath.
+Rewrite `apps/web/src/components/project/ProjectBrief.tsx`. The `Tile` helper, the imports, the
+`WORK_WORDS`/`VERIFIED_WORD`/`toneForCardLabel`/`clock` helpers and the `ProjectBriefFacts` type all
+stay; four tiles go, four are restyled, and the container gains one attribute.
+
+**(a) The container** carries BOTH testids. `brief` is what `gate:m45` waits on; `strip` is what
+`gate-m14-fidelity` (773, 1132), `gate-m44-ux-foundation` (769) and `gate-m49-memory` (1529) wait on
+as the Overview's structural marker, and it is free the moment `TopStrip` goes. A DOM node may carry
+one `data-testid`, so the outer element takes `strip` and an inner wrapper takes `brief` — the gates
+that ask for `brief` want the tile grid, and the gates that ask for `strip` want "the Overview has
+rendered", which both answer.
 
 ```tsx
-'use client'
+    <section data-testid="strip" className="px-[24px] pt-[18px]">
+      <div
+        data-testid="brief"
+        className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4"
+      >
+        …the four tiles…
+      </div>
+    </section>
+```
 
-import Link from 'next/link'
-import { USER_TASK_LABEL, userSupervisorStatus } from '@slave-of-ai/domain'
-import { formatUsd } from '../../lib/realMoney'
-import type { OverviewSnapshot } from '../../server/overview'
+**(b) `Tile`** takes the README's card recipe instead of `Panel`'s:
 
-/** The five segments of the Work bar, in the README's order, each with its own literal tone class
- *  (Tailwind's static scan again — no interpolation). */
-const WORK_SEGMENTS = [
-  { key: 'active', word: 'working', fill: 'bg-s-working' },
-  { key: 'ready', word: 'queued', fill: 'bg-s-planning' },
-  { key: 'blocked', word: 'blocked', fill: 'bg-s-blocked' },
-  { key: 'done', word: 'done', fill: 'bg-s-done' },
-  { key: 'failed', word: 'failed', fill: 'bg-s-paused' },
-] as const
-
-function Tile({ fact, caption, children }: { readonly fact: string; readonly caption: string; readonly children: React.ReactNode }): React.JSX.Element {
+```tsx
+function Tile({
+  fact,
+  caption,
+  children,
+}: {
+  readonly fact: string
+  readonly caption: string
+  readonly children: React.ReactNode
+}): React.JSX.Element {
   return (
-    <div data-testid="fact-tile" data-fact={fact} className="rounded-panel-card border border-line bg-card px-4 py-[14px] shadow-card">
+    <div
+      data-testid="brief-tile"
+      data-brief={fact}
+      className="flex min-w-0 flex-col rounded-panel-card border border-line bg-card px-4 py-[14px] shadow-card"
+    >
+      {/* README "Overview": caption 12px `--t3`, then the fact. Not `SectionLabel` — that is a
+        * 9px mono uppercase rail label, and these are sentence-case captions. */}
       <div className="mb-[6px] text-[12px] text-t3">{caption}</div>
       {children}
     </div>
   )
 }
+```
 
-/** The README's four facts, above the brief. Every number here is already in `OverviewSnapshot`;
- *  nothing new is read and nothing is computed a second way. */
-export function FactTiles({ view }: { readonly view: OverviewSnapshot }): React.JSX.Element {
-  const counts = view.tasks
-  const total = WORK_SEGMENTS.reduce((n, segment) => n + (counts[segment.key] ?? 0), 0)
-  const supervisor = userSupervisorStatus({
-    halted: view.workspace.haltedReason !== null,
-    enabled: view.workspace.supervisorEnabled ?? true,
-    pendingDecisions: view.needsYou.filter((item) => item.kind === 'decision').length,
-    openQuestions: view.needsYou.filter((item) => item.kind === 'question').length,
-    workingSlaves: view.slaves.filter((slave) => slave.status === 'working').length,
-  })
-  return (
-    <section className="grid grid-cols-1 gap-3 px-[24px] pt-[18px] md:grid-cols-2 xl:grid-cols-4">
-      <Tile fact="work" caption={`Work · ${String(total)} tasks`}>
+**(c) The four tiles, in the README's order.** `work` first, because the Work bar is the fact the
+README leads with.
+
+```tsx
+      <Tile fact="work" caption={`Work · ${String(workTotal)} tasks`}>
+        {/* README: an 8px segmented bar, 2px gaps, one segment per word, in the word's own tone.
+          * Every class here is a LITERAL (`WORK_WORDS` carries it) because Tailwind's static scan
+          * cannot see an interpolated tone — the rule `ui/StatusPill.tsx`'s TONE_* maps document. */}
         <div className="flex h-2 gap-[2px] overflow-hidden rounded-hair">
-          {WORK_SEGMENTS.map((segment) => (
+          {WORK_WORDS.map(({ key, fill }) => (
             <span
-              key={segment.key}
-              className={`block h-full ${segment.fill}`}
-              style={{ width: `${String(total === 0 ? 0 : ((counts[segment.key] ?? 0) / total) * 100)}%` }}
+              key={key}
+              className={`block h-full ${fill}`}
+              style={{ width: `${String(workTotal === 0 ? 0 : (work[key] / workTotal) * 100)}%` }}
             />
           ))}
         </div>
         <div className="mt-[10px] flex flex-wrap gap-x-[10px] gap-y-1 text-[12.5px] text-t2">
-          {WORK_SEGMENTS.map((segment) => (
-            <span key={segment.key}>
-              <b className="font-medium text-t1">{counts[segment.key] ?? 0}</b> {segment.word}
+          {WORK_WORDS.map(({ key, word }) => (
+            // A zero is DIMMED, never hidden: a person asking "is anything being reviewed" needs to
+            // read the 0. The testid and the word are unchanged from the eight-tile brief, so
+            // `gate:m45`'s `['work','WORKING']` and `['work','IN REVIEW']` pairs still match.
+            <span key={key} data-testid={`brief-work-${key}`} className={work[key] === 0 ? 'text-t3' : 'text-t2'}>
+              <b className={work[key] === 0 ? 'font-medium text-t3' : 'font-medium text-t1'}>{work[key]}</b> {word}
             </span>
           ))}
         </div>
       </Tile>
+
       <Tile fact="cost" caption="Cost">
-        <div className="font-mono text-[22px] font-semibold tracking-[-.5px] text-t1">
-          {formatUsd(view.brief.spentUsd)}
-          {view.workspace.budgetUsd !== null && (
-            <span className="text-[13px] font-medium text-t3"> / {formatUsd(view.workspace.budgetUsd)}</span>
-          )}
-        </div>
-      </Tile>
-      <Tile fact="supervisor" caption="Supervisor">
-        <span
-          data-supervisor-state={supervisor.state}
-          title={supervisor.state}
-          className="inline-flex items-center gap-[5px] rounded-pill bg-sel px-[9px] py-[3px] font-mono text-[11px] font-medium tracking-[.04em] text-t1"
-        >
-          {supervisor.label}
+        {/* README: 22px mono, -.5px. The five lines below are M32/M51's and are NOT touched --
+          * `gate:m51-breaker` (:1413-1436) reads four of them out of this exact tile, by
+          * `[data-testid="brief-tile"][data-brief="cost"]`, and needs no edit at all. */}
+        <span className="font-mono text-[22px] font-semibold tracking-[-.5px] text-t1">
+          {cost.budgetUsd === null ? formatUsd(cost.spentUsd) : `${formatUsd(cost.spentUsd)} / $${String(cost.budgetUsd)}`}
         </span>
+        <span data-testid="brief-cost-actual" className="mt-1 text-[12.5px] text-t2">
+          actual {formatUsd(cost.actualUsd)}
+        </span>
+        {formatUsd(cost.estimatedUsd) !== formatUsd(cost.actualUsd) && (
+          <span data-testid="brief-cost-estimated" className="text-[12.5px] text-t2">
+            estimated {formatUsd(cost.estimatedUsd)}
+          </span>
+        )}
+        {formatUsd(cost.upperBoundUsd) !== formatUsd(cost.spentUsd) && (
+          <span data-testid="brief-cost-upper-bound" className="text-[12.5px] text-s-waiting">
+            upper bound {formatUsd(cost.upperBoundUsd)}
+          </span>
+        )}
+        {cost.unmeasuredCalls > 0 && (
+          <span data-testid="brief-cost-unmeasured-calls" className="text-[12.5px] text-s-waiting">
+            {cost.unmeasuredCalls} unmeasured calls charged at {formatUsd(SUPERVISOR_PER_CALL_CAP_USD)} each
+          </span>
+        )}
+        {cost.unmeasuredRuns > 0 && (
+          <span data-testid="brief-cost-unmeasured-runs" className="text-[12.5px] text-s-waiting">
+            {cost.unmeasuredRuns} unmeasured runs (not in the total)
+          </span>
+        )}
       </Tile>
-      <Tile fact="verified" caption="Latest verified">
-        <div className="font-medium text-t1">{view.brief.latestVerified ?? '—'}</div>
-        <Link href={`/w/${view.workspace.id}/knowledge`} className="mt-[6px] block text-[12.5px] font-medium text-accent">
-          Knowledge →
+
+      <Tile fact="supervisor" caption="Supervisor">
+        {/* Unchanged from the eight-tile brief, deliberately: `gate:m45` (:782-791) reads this
+          * node's text AND its `title`, and asserts the word is "1 DECISION WAITING" with the raw
+          * state "decisions" behind it (`docs/ia.md` rule 3). Not one character moves. */}
+        <span data-testid="brief-supervisor-state" title={supervisor.state} className="w-fit">
+          <StatusPill tone={supervisorTone} label={supervisor.label} />
+        </span>
+        {/* README: "Runbook <b>Web feature</b> · stage 3/5 Verify". ONE line, from the snapshot the
+          * page already holds; `RunbookPanel` keeps its own section below, with its own eleven
+          * testids that `gate:m48-runbooks` reads (Step 7d). */}
+        {runbookLine !== null && (
+          <span data-testid="brief-runbook-line" className="mt-2 text-[12.5px] text-t2">
+            {runbookLine}
+          </span>
+        )}
+      </Tile>
+
+      <Tile fact="latest-verified" caption="Latest verified">
+        {latestVerified === null ? (
+          <EmptyState testId="latest-verified-empty" message="nothing verified yet" />
+        ) : (
+          <>
+            {/* `gate:m45` asserts this tile says the task's title and the word "integrated". */}
+            <span className="font-medium text-t1">
+              {latestVerified.taskTitle} — {VERIFIED_WORD[latestVerified.kind]}
+            </span>
+            <span className="font-mono text-[12px] text-t3">{clock(latestVerified.at)}</span>
+          </>
+        )}
+        <Link
+          href={`/w/${workspaceId}/knowledge`}
+          data-testid="brief-knowledge"
+          className="mt-[6px] text-[12.5px] font-medium text-accent"
+        >
+          Knowledge: {knowledge.verified} verified · {knowledge.candidates} candidates →
         </Link>
       </Tile>
-    </section>
+```
+
+**(d) The four tiles that GO, and where each fact went** (`docs/ia.md` rule 2 — moved, not removed):
+
+| Tile | Where the fact is now |
+|---|---|
+| `objective` | the page's title row, above the Needs-you card: the goal line + `Edit goal` link (Step 7a) |
+| `needs-you` | the **Needs-you card**, which shows all four kinds rather than a five-row slice, and answers a decision in place |
+| `team` | the **Team rows** below the tiles, which show every worker rather than a five-row slice (R18) |
+| `recent-changes` | the **Recent changes** section, which is `SupervisorTimeline` — a fuller answer than five mono lines |
+
+Delete those four `<Tile>` blocks, the `BRIEF_LIST_MAX` slicing, `needsYouShown`, `teamShown`,
+`NEEDS_YOU_TONE`, `NEEDS_YOU_WORD`, `SLAVE_LIFECYCLE_LABEL`'s use here and the now-unused imports
+(`Chip`, `AvatarTile`, `TONE_TEXT`, `Panel`, `SectionLabel` — let `tsc` and `npm run --silent typecheck`
+name them). **Note the testid collision this resolves:** the old `needs-you` tile rendered
+`data-testid="needs-you-row"`, and so does `NeedsYouCard`. After this step there is exactly one
+element with that testid on the page, which is what `apps/web/test/overview-components.test.tsx`'s
+`getAllByTestId('needs-you-row')` cases will now count.
+
+**(e) The signature** gains one optional prop and loses one:
+
+```tsx
+export function ProjectBrief({
+  workspaceId,
+  brief,
+  runbookLine = null,
+}: {
+  readonly workspaceId: string
+  readonly brief: ProjectBriefFacts
+  /** README "Overview" → Supervisor tile: `Runbook <name> · stage n/N <stage>`, or null when this
+   *  project has adopted none. It is NOT on `ProjectBrief` the DTO (`server/brief.ts` has no
+   *  runbook field) — `OverviewClient` composes it from `view.runbook`, which `RunbookPanel` below
+   *  already reads, so no read model changes. */
+  readonly runbookLine?: string | null
+}): React.JSX.Element {
+```
+
+`onOpenSlave` goes: the only thing that used it was the `team` tile's rows, and the Team rows below
+own that now. `const { objective, … }` destructuring drops `objective`, `needsYou`, `team` and
+`recentChanges`; add `const workTotal = WORK_WORDS.reduce((n, { key }) => n + work[key], 0)`.
+
+**(f) `WORK_WORDS`** gains a `fill` per entry, spelled literally:
+
+```tsx
+const WORK_WORDS: readonly { readonly key: keyof ProjectBriefFacts['work']; readonly word: string; readonly fill: string }[] = [
+  { key: 'working', word: 'WORKING', fill: 'bg-s-working' },
+  { key: 'verifying', word: 'VERIFYING', fill: 'bg-s-working' },
+  { key: 'review', word: 'IN REVIEW', fill: 'bg-s-review' },
+  { key: 'waiting', word: 'WAITING', fill: 'bg-s-waiting' },
+  { key: 'done', word: 'DONE', fill: 'bg-s-done' },
+]
+```
+
+**(g) Delete `TopStrip`:**
+
+```bash
+git rm apps/web/src/components/TopStrip.tsx
+grep -rn "TopStrip\|strip-value-\|strip-tile\|strip-unmeasured\|strip-supervisor-spend" apps/web/src apps/web/test scripts
+```
+
+Every remaining hit is in `apps/web/src/components/OverviewClient.tsx` (the element and its import —
+delete both) and in `apps/web/test/overview-components.test.tsx` (Step 9). **No gate script reads
+any `strip-*` testid** — the census is in spec §3's removed table — and the bare `strip` is kept by
+(a).
+
+- [ ] **Step 5b: Turn `SlaveCard` into the README's Team row (R18)**
+
+`SlaveCard.tsx` renders on the Overview and nowhere else (`grep -rln "<SlaveCard" apps/web/src`
+returns `OverviewClient.tsx` alone), so this is a one-page change with no other caller to consider.
+Keep the whole top of the file — the imports, `taskRef`, the `pending`/`run` control machinery, the
+`canPause`/`canResume`/`canStop`/`showResume`/`waitingFor` derivations, `FLASH_COLOR`, `flashing`,
+and every POST — and replace only the returned JSX and the footer button.
+
+```tsx
+  return (
+    <article
+      data-testid="slave-card"
+      data-status={slave.status}
+      data-card-state={state}
+      data-released={slave.released === null ? undefined : 'true'}
+      // README "Overview" → Team rows: `34px 120px 120px 1fr 96px 32px`, padding `10px 14px`, with
+      // the row's own hairline underneath. `TONE_BORDER` is gone from the recipe -- a ROW is not a
+      // bordered card, and the tone now reads from the avatar tile and the status word instead.
+      className={`relative grid grid-cols-[34px_120px_120px_minmax(0,1fr)_96px_32px] items-center gap-3 border-b border-line px-[14px] py-[10px] transition-colors hover:bg-hover ${
+        flashing ? 'motion-safe:animate-[border-flash_800ms_ease-out]' : ''
+      }${slave.released === null ? '' : ' opacity-60'}`}
+      style={flashing ? ({ '--flash-color': FLASH_COLOR[slave.status] } as React.CSSProperties) : undefined}
+    >
+      {/* The activity sweep, unchanged (design README "Motion"; `gate:m14-fidelity:1238-1240`
+        * reads its three animation properties): a 2.2s cubic-bezier(.4,0,.2,1) gradient travelling
+        * the row's top hairline while it is `working`. The motion did not change, so neither do
+        * those three assertions. */}
+      {state === 'working' && (
+        <span aria-hidden className="pointer-events-none absolute inset-x-0 top-0 h-px overflow-hidden">
+          <span
+            data-testid="card-sweep"
+            className="block h-full w-full bg-gradient-to-r from-transparent via-s-working to-transparent motion-safe:animate-[card-sweep_2.2s_cubic-bezier(.4,0,.2,1)_infinite]"
+          />
+        </span>
+      )}
+
+      {/* 1. The 30px avatar tile at an 18% tint. `AvatarTile` owns the recipe and `gate:m14` reads
+        * its width and height scoped to this row, so its size moves in ONE place (Task 9). */}
+      <AvatarTile name={slave.name} tone={tone} />
+
+      {/* 2. Name and role. */}
+      <button
+        type="button"
+        onClick={() => onOpen(slave.id)}
+        aria-label={`Open ${slave.name}'s detail panel`}
+        className="min-w-0 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+      >
+        <span className="flex items-center gap-[5px]">
+          <span className="block truncate text-[13px] font-semibold text-t1">{slave.name}</span>
+          {/* M50's lifecycle marker stays: `docs/ia.md` records it as a promise, and `project` --
+            * the ordinary case -- still prints nothing, because a marker every row carries marks
+            * nothing. */}
+          {slave.lifecycle !== 'project' && (
+            <span
+              data-testid="card-lifecycle-chip"
+              title={slave.lifecycle}
+              className="shrink-0 rounded-chip border border-line2 px-[5px] text-[10.5px] text-t3"
+            >
+              {SLAVE_LIFECYCLE_LABEL[slave.lifecycle]}
+            </span>
+          )}
+        </span>
+        <span className="block truncate text-[12px] text-t3">{slave.role}</span>
+      </button>
+
+      {/* 3. The mini status: the dot and the WORD, in the tone. `StatusPill` keeps this row's
+        * `status-pill` testid and its pulsing inner span, which `gate:m14-fidelity:1241-1242`
+        * reads as `[data-testid="slave-card"] [data-testid="status-pill"] span`. */}
+      <StatusPill tone={tone} label={label} pulse={pulse} />
+
+      {/* 4. What this worker is doing, ellipsised. The `card-task-title` testid is kept; the
+        * separate `card-task-ref` is folded into it, because a row has one line here and the id is
+        * in `SlavePanel`, which the `⋯` opens. */}
+      <span data-testid="card-task-title" className="min-w-0 truncate text-[13px] text-t2">
+        {slave.taskTitle ?? 'idle'}
+        {slave.taskId !== null && <span className="ml-2 font-mono text-[11px] text-t3">{taskRef(slave.taskId)}</span>}
+      </span>
+
+      {/* 5. ONE primary button (README "One action cluster"). Its testid follows its ACTION, so
+        * `gate:m14-fidelity:1295` still finds `card-pause` on a working row. `Unblock` is
+        * accent-filled -- the README's one emphasised row action. */}
+      {waitingFor !== null ? (
+        <RowButton testId="card-answer" accent onClick={() => onOpen(slave.id)}>
+          Answer
+        </RowButton>
+      ) : slave.status === 'blocked' ? (
+        <RowButton testId="card-unblock" accent onClick={() => onOpen(slave.id)}>
+          Unblock
+        </RowButton>
+      ) : showResume ? (
+        <RowButton testId="card-resume" disabled={!canResume || pending.has('resume')} onClick={() => void run('resume')}>
+          Resume
+        </RowButton>
+      ) : (
+        <RowButton testId="card-pause" disabled={!canPause || pending.has('pause')} onClick={() => void run('pause')}>
+          Pause
+        </RowButton>
+      )}
+
+      {/* 6. `⋯` -- Message and Stop live in `SlavePanel`, which is what this opens, and both are
+        * already there (`docs/ia.md` rule 2: moved, not removed). */}
+      <button
+        type="button"
+        data-testid="card-more"
+        aria-label={`More actions for ${slave.name}`}
+        onClick={() => onOpen(slave.id)}
+        className="rounded-card border-0 bg-transparent text-center text-[14px] text-t3 transition-colors hover:text-t1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+      >
+        ⋯
+      </button>
+
+      {errorText !== null && (
+        <span role="alert" data-testid="card-error" className="col-span-6 text-[11px] text-s-blocked">
+          {errorText}
+        </span>
+      )}
+    </article>
+  )
+}
+
+/** The row's one action. Not `ui/Button`: that component fixes `data-testid="button"` for every
+ *  instance, and this row's button needs the testid to say which action it is. */
+function RowButton({
+  testId,
+  accent = false,
+  disabled = false,
+  onClick,
+  children,
+}: {
+  readonly testId: string
+  readonly accent?: boolean
+  readonly disabled?: boolean
+  readonly onClick: () => void
+  readonly children: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      disabled={disabled}
+      onClick={onClick}
+      className={`rounded-tile px-[10px] py-[5px] text-center text-[12.5px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+        accent ? 'border-0 bg-accent font-semibold text-accent-ink' : 'border border-line2 bg-transparent text-t1 hover:bg-hover'
+      }`}
+    >
+      {children}
+    </button>
   )
 }
 ```
 
-**Before writing this file, read `apps/web/src/server/overview.ts:230-377` and
-`packages/domain/src/status/user.ts:359-411`** and correct every field name above against what
-`OverviewSnapshot` and `UserSupervisorFacts` actually carry — `view.tasks`' members, `view.brief`'s
-members (`spentUsd`, `latestVerified`) and `userSupervisorStatus`'s argument shape. The structure is
-the design; the field names are whatever the snapshot says they are, and `tsc` will name every one
-you get wrong.
+**What leaves the row, and where it already is.** `card-task-ref` (folded into `card-task-title`
+above), `card-step`, `card-percent`, `card-skill-chip`, `card-queue-chip`, `card-waiting-for`,
+`card-resume-requested`, the `ProgressBar`, `RuntimeRoleChips`, `provider-chip`, `action-line`,
+`card-message` and `card-stop` — **every one of them is already in `SlavePanel`**, which the row's
+`⋯` and its name both open. Delete the `FooterButton` helper and the now-unused imports (`Chip`,
+`ProgressBar`, `RuntimeRoleChips`, `ShellOnlyMark`, `TONE_BORDER`) — `tsc` names them. **No gate
+script reads any of those testids**; the census is in spec §3's removed table, and the one gate hit
+on this file (`gate-m14-fidelity:1295`, `card-pause`) is preserved above.
 
 - [ ] **Step 6: Restyle the Projects page**
 
@@ -5316,40 +5600,120 @@ data-testid="project-needs-you" …>` at line 96 so there is exactly one.)*
 its wrapper's classes change, to the README's five-tile card:
 `className="flex flex-col gap-4 px-[24px] pb-[24px]"`.
 
-- [ ] **Step 7: Restyle the Overview**
+- [ ] **Step 7: Lay the Overview out in the README's five bands**
 
-In `apps/web/src/components/OverviewClient.tsx`, inside the `<PageShell flush>`:
+Rewrite the body of `<PageShell flush>` in `apps/web/src/components/OverviewClient.tsx` so the page
+reads, top to bottom, exactly as the README's "Overview" section does. The halt banner, the stale-data
+`Alert` and the `ws-adopted-from` `Alert` stay above all five, where they are.
 
-**(a)** Above `<ProjectBrief …/>`, insert the README's title row, then the Needs-you card, then the
-fact tiles:
+**(a) Band 1 — the title row** (README: "H1 22/600 + workspace status pill. Goal line 13.5 `--t2` +
+`Edit goal` accent link"). This is where the deleted `objective` tile's fact went:
 
 ```tsx
-          <section className="px-[24px] pt-[22px]">
+          <section data-testid="project-title" className="px-[24px] pt-[22px]">
             <div className="flex items-center gap-3">
               <h1 className="m-0 text-[22px] font-semibold tracking-[-.3px] text-t1">{view.workspace.name}</h1>
               <StatusPill tone={WORKSPACE_TONE[workspaceStatus.state]} label={workspaceStatus.label} title={workspaceStatus.state} />
             </div>
-            <p className="mt-[6px] text-[13.5px] text-t2">
-              Goal v{view.workspace.goalVersion} · {view.workspace.goal ?? 'no goal yet'}{' '}
+            <p data-testid="project-goal-line" className="mt-[6px] text-[13.5px] text-t2">
+              {view.brief.objective.version > 0 && `Goal v${String(view.brief.objective.version)} · `}
+              {view.brief.objective.text ?? 'no goal yet'}{' '}
               <Link href={`/w/${workspaceId}/settings`} className="font-medium text-accent">
                 Edit goal
               </Link>
             </p>
           </section>
-          <NeedsYouCard workspaceId={workspaceId} items={view.needsYou} onRefresh={refresh} />
-          <FactTiles view={view} />
 ```
 
-…with `workspaceStatus = userWorkspaceStatus({ archived: …, halted: view.workspace.haltedReason !== null, needsYouCount: view.needsYou.length, tasksActive: view.tasks.active })` computed above the
-return, `WORKSPACE_TONE` copied from `ProjectsClient.tsx:35-41` into `lib/tones.ts` as an export
-(one table, two readers), and `refresh` being whatever `useOverview` exposes for a manual refetch
-— **read `apps/web/src/hooks/useOverview.ts` first**; if it exposes none, pass
-`() => router.refresh()`.
+…with, above the return:
 
-**(b)** `BlockedPanel` is now redundant — the Needs-you card is its four-kind superset. **Delete the
-`<BlockedPanel …/>` element** Task 4 Step 12 left on the page, and delete its import if it has no
-other reader (`grep -rn BlockedPanel apps/web/src`). `LiveEventsPanel` and `MergeQueuePanel` stay,
-now under a **Recent changes** heading below the team grid:
+```tsx
+  const workspaceStatus = userWorkspaceStatus({
+    archived: false,
+    halted: view.workspace.haltedReason !== null,
+    needsYouCount: view.needsYou.length,
+    tasksActive: view.tasks.active,
+  })
+```
+
+`WORKSPACE_TONE` is `ProjectsClient.tsx:35-41`'s table: **move it into
+`apps/web/src/lib/tones.ts` as an export** and import it in both files, so one table has two readers
+instead of two tables having one each. `userWorkspaceStatus` comes from `@slave-of-ai/domain`.
+`archived: false` because an archived project's Overview is reachable but its chip lives on the
+Projects card; read `server/overview.ts`'s `workspace` shape first and pass the real flag if
+`OverviewSnapshot` carries one.
+
+**(b) Band 2 — the Needs-you card**, and the `BlockedPanel` it replaces:
+
+```tsx
+          <NeedsYouCard workspaceId={workspaceId} items={view.needsYou} onRefresh={refresh} />
+```
+
+Delete the `<BlockedPanel …/>` element Task 4 Step 12 left on the page and its import — the
+Needs-you card is its four-kind superset (`grep -rn BlockedPanel apps/web/src` afterwards; if
+`OverviewClient.tsx` still EXPORTS it for another reader, keep the export and delete only the
+element). `refresh` is whatever `useOverview` exposes for a manual refetch: **read
+`apps/web/src/hooks/useOverview.ts` first**, and if it exposes none, pass `() => router.refresh()`
+with `useRouter` from `next/navigation`.
+
+**(c) Band 3 — the four fact tiles**, which is `ProjectBrief` after Step 5:
+
+```tsx
+          <ProjectBrief workspaceId={workspaceId} brief={view.brief} runbookLine={runbookLine} />
+```
+
+…with `runbookLine` composed above the return from the snapshot `RunbookPanel` already reads:
+
+```tsx
+  // README "Overview" → Supervisor tile: `Runbook <name> · stage 3/5 Verify`. Composed here rather
+  // than in `server/brief.ts` because `ProjectBrief` the DTO has no runbook field and this
+  // milestone adds no read-model field -- `view.runbook` is already on the snapshot for the panel
+  // below. Read `server/runbook.ts`'s own shape and correct these three member names against it.
+  const runbookLine =
+    view.runbook === null
+      ? null
+      : `Runbook ${view.runbook.name} · stage ${String(view.runbook.currentStageIndex + 1)}/${String(view.runbook.stages.length)} ${view.runbook.currentStageName}`
+```
+
+Delete `<TopStrip snapshot={view} />` and its import (Step 5g).
+
+**(d) Band 4 — the Team rows.** The section keeps `id="team"` and `data-testid="team"` (the brief's
+old `team-more` anchor pointed at `#team`, and `overview-components.test.tsx` reads the testid); the
+GRID becomes a rows container, because `SlaveCard` is a row now:
+
+```tsx
+          <section id="team" data-testid="team" className="px-[24px] pt-[18px]">
+            <div className="mb-[10px] flex items-center justify-between">
+              <span className="font-semibold text-t1">
+                Team <span className="font-mono text-[12px] font-medium text-t3">{view.slaves.length}</span>
+              </span>
+              <Link href={`/w/${workspaceId}/organization`} className="text-[13px] font-medium text-accent">
+                Open Team →
+              </Link>
+            </div>
+            {/* README "Overview" → Team rows: one card, hairline-separated rows inside it. The
+              * grid itself is `SlaveCard`'s own (R18); this owns only the surface around them. */}
+            <div className="overflow-hidden rounded-panel-card border border-line bg-card">
+              {view.slaves.map((slave) => (
+                <SlaveCard
+                  key={slave.id}
+                  slave={slave}
+                  liveActionLine={actionLines[slave.id] ?? null}
+                  workspaceId={workspaceId}
+                  onOpen={selectSlave}
+                />
+              ))}
+            </div>
+          </section>
+```
+
+`SlaveCard` keeps its four props: `liveActionLine` is still passed and still accepted, even though
+the row no longer draws an `action-line` — **delete the prop from the component's signature and from
+this call site together**, or `tsc` will name it. (It is one of the five facts that moved into
+`SlavePanel`; the panel renders the live line already.)
+
+**(e) Band 5 — Recent changes**, which is `SupervisorTimeline` restyled, plus the two panels Task 4
+parked on the page:
 
 ```tsx
           <section data-testid="recent-changes" className="flex flex-col gap-3 px-[24px] py-[18px]">
@@ -5359,6 +5723,11 @@ now under a **Recent changes** heading below the team grid:
                 All activity →
               </Link>
             </div>
+            {/* M45 R2's six-lane timeline, with the README's row look. Its testid, its lane
+              * filters, its `timeline-entry` nodes and their `title` attributes are UNCHANGED --
+              * `gate:m45-project-experience`'s whole stage 2 reads them, and stage 1's
+              * recent-changes assertions are re-pointed here (Step 9). */}
+            <SupervisorTimeline workspaceId={workspaceId} entries={view.timeline} needsYou={view.needsYou} />
             <div className="flex gap-3">
               <LiveEventsPanel workspaceId={workspaceId} events={view.liveEvents} />
               <MergeQueuePanel queue={view.mergeQueue} />
@@ -5366,50 +5735,203 @@ now under a **Recent changes** heading below the team grid:
           </section>
 ```
 
-**(c)** `SupervisorRequest` is now the right panel's composer. **Delete the `<SupervisorRequest …/>`
-element and its import from this page** — the panel is on screen beside it, and two boxes that post
-to the same route is one box too many. `apps/web/src/components/project/SupervisorRequest.tsx`
-itself is NOT deleted: `gate:m45-project-experience` asserts `supervisor-request-input` and
-`supervisor-request-send`, and Task 9's own gate work is where that is dealt with. **In this task,
-move the component into the right panel's composer instead of deleting the element**: give
-`SupervisorThreadPanel`'s textarea and Send button the two extra testids
-`data-testid="supervisor-request-input"` / `data-testid="supervisor-request-send"` alongside their
-own — a `<textarea>` may carry one testid only, so rename the panel's to those two and keep
-`supervisor-composer` on the wrapping `<div>`. Then update
-`apps/web/test/supervisor-thread-panel.test.tsx`'s composer case to query
-`supervisor-request-input`, and delete `apps/web/src/components/project/SupervisorRequest.tsx` and
-`apps/web/test/supervisor-request.test.tsx` (if it exists — `ls apps/web/test | grep supervisor`).
+In `apps/web/src/components/project/SupervisorTimeline.tsx`, change **class strings only** so each
+entry reads the README's way: a mono time in a fixed **64 px** column, an 8 px tone dot, then
+`<b>Family · verb</b> — sentence`. Concretely, whatever element wraps one entry becomes
+`grid grid-cols-[64px_14px_minmax(0,1fr)_auto] items-baseline gap-3 border-b border-line px-4 py-[11px]`,
+its time span `font-mono text-[12px] text-t3`, and its ref chip
+`rounded-chip border border-line2 px-[7px] py-[2px] font-mono text-[11.5px] font-medium text-t2`.
+**Do not touch `timeline-lanes`, `timeline-entry`, `timeline-decisions`, `timeline-lane-filter-*`,
+`timeline-rule` or any `title` attribute** — `gate:m45` stages 2 and 3 and `gate:m14-fidelity`'s
+`timeline-rule` `left: 88px` row all read them.
 
-**(d)** `ProjectBrief`, `TopStrip`, `RunbookPanel`, `SupervisorTimeline` and the team grid keep
-their positions, their components and every testid. Their own class strings are NOT rewritten in
-this milestone beyond what Task 1's alias layer already gives them: they are five surfaces with
-twenty-plus `gate:m14-fidelity` and `gate:m45` assertions between them, and restyling them is a
-milestone of its own. Add a one-line comment above each saying so.
+**(f) What stays exactly as it is.** `RunbookPanel` keeps its own section between the Team rows and
+Recent changes, unchanged: it is 318 lines with an adopt drawer and a stage list, `gate:m48-runbooks`
+reads eleven of its testids, and the README's "one line" is the SUMMARY of it, which band 3's
+Supervisor tile now carries. A `DetailsGroup` was the alternative and is worse for a concrete
+reason: `DetailsGroup`'s `group` prop is a closed union of ~28 names in the domain, so hiding this
+panel behind one would mean editing the domain in a milestone that promised not to.
+`SupervisorRequest` is deleted per Step 7g below.
 
-- [ ] **Step 8: Update the two page tests**
+**(g) The Supervisor request box.** It is the right panel's composer now, and two boxes posting to
+one route is one box too many. `gate:m45-project-experience` asserts `supervisor-request-input`,
+`supervisor-request-send` and `supervisor-request-result`, so the testids MOVE rather than die: in
+`apps/web/src/components/supervisor/SupervisorThreadPanel.tsx` (Task 5), rename the textarea's
+testid to `supervisor-request-input`, the Send button's to `supervisor-request-send`, and give the
+`role="alert"` error span `data-testid="supervisor-request-result"`; keep `supervisor-composer` on
+the wrapping `<div>`. Then update `apps/web/test/supervisor-thread-panel.test.tsx`'s composer case to
+query `supervisor-request-input`, and:
 
 ```bash
-npx vitest run apps/web/test/projects-page.test.tsx apps/web/test/overview-components.test.tsx
+git rm apps/web/src/components/project/SupervisorRequest.tsx
+ls apps/web/test | grep -i supervisor-request && git rm apps/web/test/supervisor-request.test.tsx
+grep -rn "SupervisorRequest" apps/web/src apps/web/test
 ```
 
-Read each failure and fix it in the TEST where the test pinned a layout this task deliberately
-moved (the `new-project` button's parent, the `order` array's members, the `SectionLabel` text), and
-in the COMPONENT where it pinned a contract (`project-card`, `project-needs-you`, `brief`, `strip`,
-`team`, `supervisor-timeline`). Add the two cases the new structure earns:
+Delete the element and the import from `OverviewClient.tsx`; the grep must come back empty.
+
+- [ ] **Step 8: Edit `gate-m45-project-experience.mjs` — three places, every assertion carried over**
+
+This is the gate that measured the eight-tile brief. Each of its three stage-1 blocks is edited so
+the SUBSTANCE of the assertion survives on the surface the fact moved to.
+
+**(a) `EXPECTED_BRIEF_FACTS`, lines 95–104** — eight facts become four, in the README's order:
+
+```js
+// M57 R17: the brief IS the README's four fact tiles now. The four that left are not gone -- the
+// objective is the page's own title row, `needs-you` is the Needs-you card above these tiles (which
+// shows all four kinds rather than a five-row slice and answers a decision in place), `team` is the
+// Team rows below them, and `recent-changes` is the `supervisor-timeline` section. Each is asserted
+// below, on its new surface.
+const EXPECTED_BRIEF_FACTS = ['work', 'cost', 'supervisor', 'latest-verified']
+```
+
+The `belowFold` measurement at 748–759 is UNCHANGED and is now trivially satisfied — which is the
+point: the milestone's claim was that the facts are in the first viewport, and four tiles in one row
+are more obviously so than eight in two.
+
+**(b) The `wants` table, lines 769–780** — the `objective` and `team` pairs move onto their new
+nodes. Replace the table and the loop that follows it with:
+
+```js
+  const tileText = (fact) => tiles.find((tile) => tile.fact === fact)?.text ?? ''
+  const wants = [
+    ['work', 'WORKING'],
+    ['work', 'IN REVIEW'],
+    ['cost', '$25'],
+    ['cost', 'unmeasured calls charged at $1.00 each'],
+    ['latest-verified', integratedTask.title],
+    ['latest-verified', 'integrated'],
+  ]
+  for (const [fact, needle] of wants) {
+    const text = tileText(fact)
+    console.log(`stage 1: ${fact} tile ${JSON.stringify(text.slice(0, 160))}`)
+    if (!text.includes(needle)) {
+      await fail(`stage 1: the ${fact} tile does not say ${JSON.stringify(needle)} -- it reads ${JSON.stringify(text)}`)
+    }
+  }
+
+  // M57 R17: the objective left the tile grid for the page's own title row, where a goal belongs --
+  // it is what the project IS, not one fact among four. The same two things are asserted: the goal
+  // text and its version.
+  const goalLine = await page.evaluate(
+    () => document.querySelector('[data-testid="project-goal-line"]')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+  )
+  console.log(`stage 1: goal line = ${JSON.stringify(goalLine)}`)
+  for (const needle of [GOAL_V1, 'v2']) {
+    if (!goalLine.includes(needle)) {
+      await fail(`stage 1: the goal line does not say ${JSON.stringify(needle)} -- it reads ${JSON.stringify(goalLine)}`)
+    }
+  }
+
+  // M57 R18: the team left the tile grid for the Team ROWS, which list EVERY worker rather than the
+  // five the tile sliced to. Same two names, more of them.
+  const teamNames = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="team"] [data-testid="slave-card"]')].map((row) =>
+      (row.textContent ?? '').replace(/\s+/g, ' ').trim(),
+    ),
+  )
+  console.log(`stage 1: team rows = ${JSON.stringify(teamNames)}`)
+  for (const needle of [DEVELOPER_NAME, REVIEWER_NAME]) {
+    if (!teamNames.some((row) => row.includes(needle))) {
+      await fail(`stage 1: no Team row names ${JSON.stringify(needle)} -- rows read ${JSON.stringify(teamNames)}`)
+    }
+  }
+
+  // M57: the needs-you tile became the Needs-you CARD, above the tiles. It was asserted nowhere in
+  // this gate before (the tile was only in EXPECTED_BRIEF_FACTS); it is asserted now, because a
+  // surface that answers a decision in place is a stronger claim than a surface that lists one.
+  const needsYouRows = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="needs-you-row"]')].map((row) => row.getAttribute('data-kind') ?? ''),
+  )
+  console.log(`stage 1: needs-you rows = ${JSON.stringify(needsYouRows)}`)
+  if (!needsYouRows.includes('decision')) {
+    await fail(`stage 1: the Needs you card does not carry the seeded pending decision -- it reads ${JSON.stringify(needsYouRows)}`)
+  }
+```
+
+**(c) The `recent-changes` block, lines 793–806** — the same two assertions, re-pointed at the
+section that holds the fact now:
+
+```js
+  // M57 R17: "recent changes" is the `supervisor-timeline` section now, not a five-line tile. The
+  // two things this block has always asserted are asserted still: there ARE rows, and none of them
+  // prints a raw dotted event type (`docs/ia.md` rule 3).
+  const changes = await page.evaluate(() => {
+    const section = document.querySelector('[data-testid="recent-changes"]')
+    return section === null
+      ? []
+      : [...section.querySelectorAll('[data-testid="timeline-entry"]')].map((row) =>
+          (row.textContent ?? '').replace(/\s+/g, ' ').trim(),
+        )
+  })
+  console.log(`stage 1: recent changes = ${JSON.stringify(changes)}`)
+  if (changes.length === 0) {
+    await fail('stage 1: the recent-changes section has no entries -- the two goal_set events this gate wrote should be in it')
+  }
+  for (const line of changes) {
+    for (const word of line.split(/\s+/)) {
+      if (DOTTED_TYPE.test(word)) {
+        await fail(`stage 1: a recent-changes row prints the raw event type ${JSON.stringify(word)}: ${JSON.stringify(line)}`)
+      }
+    }
+  }
+```
+
+Read lines 806–812 before pasting and keep whatever closes the block and prints its PASS line; change
+that line's wording from "eight facts" to "four facts, the objective on its own title row, the team
+in rows and the changes in the timeline".
+
+**Left alone entirely, and asserted so:** `gate-m51-breaker.mjs:1413-1436` reads
+`[data-testid="brief-tile"][data-brief="cost"]` and the four `brief-cost-*` spans inside it — Step 5c
+keeps that tile, that key and all five spans, so **that gate is not edited**. `gate-m45`'s stage 2
+(the timeline's lanes, entries and `title` attributes) and stage 3 are not edited either.
+
+- [ ] **Step 8b: Update the component tests**
+
+```bash
+npx vitest run apps/web/test/projects-page.test.tsx apps/web/test/overview-components.test.tsx \
+  apps/web/test/slave-card.test.tsx apps/web/test/brief.test.tsx 2>&1 | tail -40
+```
+
+Read each failure and fix it in the TEST where the test pinned a layout this task deliberately moved,
+and in the COMPONENT where it pinned a contract. Specifically:
+- `overview-components.test.tsx`'s `strip-value-*` cases (lines ~178–224) assert the six raw board
+  counts. Those counts fold into the Work tile, so **re-point each to its `brief-work-<key>` span**
+  and drop the two that had no word (`strip-value-spend` is the Cost tile's big figure;
+  `strip-value-blocked` is the Needs-you card's row count).
+- Its `order` arrays become `['project-title', 'needs-you-card', 'strip', 'team', 'recent-changes']`.
+- `slave-card.test.tsx`'s `card-message`, `card-stop`, `card-step`, `card-percent`,
+  `card-skill-chip`, `card-queue-chip` and `action-line` cases move to `slave-panel.test.tsx` if an
+  equivalent case is not already there, and are deleted here otherwise. Add one case for the row:
 
 ```tsx
-  it('puts the Needs you card above the brief -- what needs a person comes first (M57)', () => {
+  it('is a row on the README grid, with one primary button and a ⋯ (M57 R18)', () => {
+    render(<SlaveCard slave={workingSlave} workspaceId="w1" onOpen={vi.fn()} />)
+    const row = screen.getByTestId('slave-card')
+    expect(row.className).toContain('grid-cols-[34px_120px_120px_minmax(0,1fr)_96px_32px]')
+    expect(screen.getByTestId('card-pause')).toBeTruthy()
+    expect(screen.getByTestId('card-more').textContent).toBe('⋯')
+    expect(screen.queryByTestId('card-stop')).toBeNull()
+  })
+```
+
+Add the two Overview cases the new structure earns:
+
+```tsx
+  it('lays the page out in the README s five bands (M57 R17)', () => {
     // …render the Overview with a needsYou item…
     const order = [...document.querySelectorAll('[data-testid]')]
       .map((node) => node.getAttribute('data-testid'))
-      .filter((id) => id === 'needs-you-card' || id === 'brief' || id === 'team')
-    expect(order).toEqual(['needs-you-card', 'brief', 'team'])
+      .filter((id) => ['project-title', 'needs-you-card', 'strip', 'team', 'recent-changes'].includes(id ?? ''))
+    expect(order).toEqual(['project-title', 'needs-you-card', 'strip', 'team', 'recent-changes'])
   })
 
-  it('draws four fact tiles, each saying which fact it is', () => {
+  it('draws FOUR fact tiles, and the container carries both the brief and the strip testid', () => {
     // …render…
-    expect(screen.getAllByTestId('fact-tile').map((tile) => tile.getAttribute('data-fact')))
-      .toEqual(['work', 'cost', 'supervisor', 'verified'])
+    expect(screen.getAllByTestId('brief-tile').map((tile) => tile.getAttribute('data-brief')))
+      .toEqual(['work', 'cost', 'supervisor', 'latest-verified'])
+    expect(screen.getByTestId('strip').contains(screen.getByTestId('brief'))).toBe(true)
   })
 ```
 
@@ -5418,7 +5940,10 @@ in the COMPONENT where it pinned a contract (`project-card`, `project-needs-you`
 ```bash
 npx vitest run 2>&1 | tail -20
 pgrep -af vitest || echo "no vitest running"
-for g in m44-ux-foundation m45-project-experience m47-team-formation; do
+# m45 is the gate Step 8 edited; m51 reads the cost tile and must pass WITHOUT an edit; m14 is
+# not in CI but is run here because this task moved every selector it measures on the Overview --
+# it will FAIL on the numbers until Task 9 rewrites them, and that failure must be ONLY numbers.
+for g in m44-ux-foundation m45-project-experience m47-team-formation m49-memory m51-breaker; do
   echo "=== $g ==="; npm run "gate:$g" 2>&1 | tail -12; echo "exit=${PIPESTATUS[0]}"
 done
 pgrep -af "next dev" || echo "no dev server"
@@ -5426,14 +5951,20 @@ npm run web:build 2>&1 | tail -20; echo "exit=${PIPESTATUS[0]}"
 npm run gate:m26-vocabulary && npx tsc --build && npm run --silent typecheck
 git add -A
 git commit -m "$(cat <<'MSG'
-feat(m57): t6 — what needs you, first
+feat(m57): t6 — the Overview in the README's five bands
 
-The Overview opens with the four kinds of thing waiting on a person -- one card, the
-existing `buildNeedsYou` queue, and Approve answered in place through the route that
-already existed -- then four fact tiles, then the brief that was there before. The
-Projects page gets the handoff's cards: auto-fit at 300px, an amber border and a needs
-strip where somebody is waited on, and an accent line that says what clicking does.
-Every testid a gate holds is where it was.
+Title row, Needs you, four fact tiles, Team rows, Recent changes -- in that order,
+because that is the order the design asks for. `ProjectBrief` BECOMES the four tiles
+rather than gaining a second set beside its eight: the objective moves to the title
+row where a goal belongs, needs-you to the card that answers a decision in place, team
+to rows that list everybody instead of five, and recent changes to the timeline. The
+first draft kept all eight because a gate measured them; the controller's ruling is
+that a gate pins a number against accident, not against a change the user asked for.
+`SlaveCard` becomes a row on the README's six-track grid, keeping `slave-card`,
+`avatar-tile` and `status-pill` so every scoped selector still resolves. `TopStrip` goes
+and hands `strip` to the tile grid, which is what three gates were really waiting for.
+`gate:m45` is edited in three places and every assertion it made is made still, on the
+surface its fact moved to; `gate:m51` reads the cost tile and is not edited at all.
 
 Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01Tb1HCWnBqh63E9diBxdxR6
@@ -5857,11 +6388,13 @@ MSG
 - Consumes from Task 1: `useTheme`, `THEME_LABEL`, `ThemeChoice`. From Task 3: `useHeaderAction`.
 - Produces, for Task 9: testids `appearance-theme` and `appearance-theme-<mode>` (one per option). **Every existing `workforce-tab-*` is preserved verbatim** — the two folded tabs keep their testids on the segments that replace them, which is why no gate script changes for this page.
 
-**What this task must NOT restyle** (spec §6's deviations 2 and 4, both here so an implementer does
-not reach for them): `AllSlavesTable`'s `grid-template-columns` string — `gate:m14-fidelity` asserts
-it twice, by two different methods, and the README's seven-column sketch drops two columns M50 and
-M53 added; and the four Overview panels (`ProjectBrief`, `TopStrip`, `RunbookPanel`,
-`SupervisorTimeline`), which Task 6 already left alone for the same reason.
+**What this task must NOT restyle** (spec §6's surviving deviation 1, here so an implementer does
+not reach for it): `AllSlavesTable`'s `grid-template-columns` string — `gate:m14-fidelity` asserts it
+twice, by two different methods, and the README's seven-column sketch drops the lifecycle column M50
+added and the cost column M53 reads, so reconciling the two is a data question and not a styling one.
+**`RunbookPanel` is also left alone**, for a different and narrower reason: Task 6 Step 7f keeps it
+as its own section with its eleven `gate:m48-runbooks` testids, and the README's "one line" about a
+runbook is the SUMMARY that Task 6 put in the Overview's Supervisor tile.
 
 - [ ] **Step 1: Write the failing test for Workforce's four tabs**
 
@@ -6401,7 +6934,7 @@ two `workspace.goal_set` events with a `request`, one of them backdated a day.
     [`/w/${workspaceId}`, '[data-testid="app-shell"]', 'min-width', '1280px'],
     [`/w/${workspaceId}`, 'body', 'font-size', '14px'],
     [`/w/${workspaceId}`, '[data-testid="needs-you-card"]', 'border-radius', '12px'],
-    [`/w/${workspaceId}`, '[data-testid="fact-tile"]', 'border-radius', '12px'],
+    [`/w/${workspaceId}`, '[data-testid="brief-tile"]', 'border-radius', '12px'],
     ['/', '[data-testid="project-card"]', 'border-radius', '14px'],
     [`/w/${workspaceId}/tasks`, '[data-testid="task-card"]', 'border-radius', '10px'],
     [`/w/${workspaceId}/tasks`, '[data-testid="status-pill"]', 'border-radius', '999px'],
@@ -6500,12 +7033,18 @@ Replace the `NUMBERS` table (around line 936) with:
     ['overview', `/w/${workspaceId}`, '[data-testid="app-header"]', 'height', '54px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="right-panel"]', 'width', '372px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="needs-you-card"]', 'border-radius', '12px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="fact-tile"]', 'border-radius', '12px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"]', 'border-radius', '8px'],
-    // SCOPED to the card (M45 t5): the brief's `team` tile renders `AvatarTile` too, and an
-    // unscoped selector would measure the brief's while claiming to measure the card's.
-    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="avatar-tile"]', 'width', '28px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="avatar-tile"]', 'height', '28px'],
+    ['overview', `/w/${workspaceId}`, '[data-testid="brief-tile"]', 'border-radius', '12px'],
+    // M57 R18: `slave-card` is a ROW on the README's `34px 120px 120px 1fr 96px 32px` grid, not a
+    // bordered card. The radius row and the `12px 13px` padding row are GONE -- a row has neither
+    // -- and the padding it does have is the README's. The SCOPED selectors survive because the
+    // row still carries `slave-card` with `avatar-tile` and `status-pill` inside it, which is why
+    // R18 made keeping those three testids a requirement rather than a convenience.
+    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"]', 'padding', '10px 14px'],
+    // 30x30 now, not 28x28 (README "Overview" → Team rows: "30px avatar tile (18% tint)"). Still
+    // scoped to the row: after M57 the brief renders no `AvatarTile` at all, but the scoping stays
+    // -- it costs nothing and it is what stopped this assertion measuring the wrong node once.
+    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="avatar-tile"]', 'width', '30px'],
+    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="avatar-tile"]', 'height', '30px'],
     // M57 erratum E9: the handoff's pill radius is 999, not the 20 M44's token carried.
     ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="status-pill"]', 'border-radius', '999px'],
     // M57 R11 re-homed the live-events river out of a disclosure and onto `recent-changes`; it is
@@ -6518,10 +7057,17 @@ Replace the `NUMBERS` table (around line 936) with:
   ]
 ```
 
-Also delete the `openOverviewAdvanced` helper if Task 4 Step 13 has not already, delete the
-`slave-card` `padding` row if the new card recipe changed it (run once and read the failure before
-deciding), and change stage 2a's `project-settings` assertion only if the restyle moved
-`runtime-timeout`'s font size (again: run, read, then edit).
+Also delete the `openOverviewAdvanced` helper if Task 4 Step 13 has not already, and change stage
+2a's `project-settings` assertion only if Task 8's restyle moved `runtime-timeout`'s font size (run,
+read the failure, then edit — never the other way round).
+
+**Two more places in this file read the Overview and must be checked, not assumed.** Stage 3b
+(`:1238-1242`) asserts `card-sweep`'s three animation properties and
+`[data-testid="slave-card"] [data-testid="status-pill"] span`'s pulse: **both are unchanged**, because
+R18 moved the layout and not the motion, and the row still renders `card-sweep` and a pulsing pill.
+Stage 4a (`:1295-1298`) waits for and clicks `card-pause`: **also unchanged**, because the row's one
+primary button keeps that testid in its pause state. Run the gate and confirm both rather than
+trusting this paragraph.
 
 - [ ] **Step 6: Regenerate the thirteen pictures — the ONLY time this milestone does**
 
@@ -6629,7 +7175,7 @@ turned up.
 | Shell → Header | 4 | breadcrumb, HALTED, budget, split button, action slot |
 | Shell → Right panel | 5 | 372 px, 54 px header, `»` → 52 px dock with `S` (badged) and `A` |
 | Projects (`/`) | 6 | auto-fit cards, needs strip, the five-tile KPI panel (existing `KpiStrip`) |
-| Overview (`/w/:id`) | 6 | title + pill + goal line, Needs you, four fact tiles, team, Recent changes |
+| Overview (`/w/:id`) | 6 | the README's five bands, in order: title + pill + goal line · Needs you · four fact tiles (`ProjectBrief`, rebuilt) · Team ROWS (`SlaveCard`, rebuilt) · Recent changes (`SupervisorTimeline`) |
 | Tasks | 7 | filter row, 5 columns, Board ⇄ List |
 | Team | 7 | the existing `/organization` route, relabelled and restyled |
 | Knowledge | 7 | segmented filter, three-column rows |
@@ -6644,12 +7190,13 @@ turned up.
 | Interactions & Behavior | 1, 4, 5, 6 | theme cycle + live system tracking (1); Pause all ⇄ Resume all, the two-step stop, Clear halt (4); decision approve/decline, task click → panel (5); needs-you approve (6). Per-worker pause/resume, Knowledge verify, permission changes, goal save, activity filters and the simulation timer are **existing behaviour this milestone does not touch**, and each is restyled by the task that owns its page |
 | State Management | 2, 5 | `theme` (1), right-panel mode (5), thread id (5), task filters/view (7), activity family + settings section (8, existing) |
 
-**Four README details are deliberately not built**, and each is named in spec §6 with its reason:
-the Overview's team rows stay a `SlaveCard` grid rather than the README's six-track table; Workforce's
-People table keeps its ten columns; the sidebar counts only `Projects`; and the four Overview panels
-below the first viewport keep their own layouts. Each was checked against the gate that measures it
-before being deferred, and each is a candidate for the milestone after this one. No other README
-requirement is without a task.
+**Two README details are deliberately not built**, each named in spec §6 with its reason: Workforce's
+People table keeps its ten columns, and the sidebar counts only `Projects`. Two further deviations
+were drafted and **withdrawn under a controller ruling** — the Overview's eight-tile brief and its
+`SlaveCard` grid — on the grounds that "a gate already measures that number" is not a reason to keep a
+layout the user asked to change, least of all in the milestone whose Task 9 rewrites that gate's whole
+`NUMBERS` table anyway. Task 6 now implements spec R17 and R18 in full, and Task 9's m14 list carries
+the row numbers they move. No other README requirement is without a task.
 
 **2. Placeholder scan.** `grep -nEi "TBD|TODO|FIXME|implement later|fill in|similar to task|add tests|appropriate error handling|handle edge cases"` over both documents returns two hits, both the
 literal column name `Todo` in a sentence explaining that it folded into `Queued`. Every code step
@@ -6687,8 +7234,15 @@ not otherwise touch. Each names the exact file and line range to read.
   `Done` value is `'completed'`, which is `UserCardState`'s spelling (erratum E6) and not `'done'`.
 - `filterTasks(tasks, options, needsYouIds)` — three arguments where it is defined and where it is
   called.
-- `NeedsYouCard({ workspaceId, items, onRefresh })` and `FactTiles({ view })` — matched at their one
-  call site each.
+- `NeedsYouCard({ workspaceId, items, onRefresh })` — matched at its one call site.
+- `ProjectBrief({ workspaceId, brief, runbookLine })` — `onOpenSlave` is gone with the `team` tile
+  that was its only reader, `runbookLine` is optional and defaults to `null`, and the one call site
+  in `OverviewClient` passes all three. `SlaveCard` loses `liveActionLine` in the same way: the
+  component's signature and the call site move together, and `tsc` names it if only one does.
+- The four `data-brief` keys (`work`, `cost`, `supervisor`, `latest-verified`) are spelled
+  identically in `ProjectBrief`'s four `<Tile fact=…>` props, in `gate-m45`'s `EXPECTED_BRIEF_FACTS`,
+  in its `wants` table, in `gate-m51`'s `[data-brief="cost"]` selector (unedited) and in the two new
+  component-test cases.
 - `THEME_STORAGE_KEY`, `THEME_GLYPH`, `THEME_LABEL`, `ThemeChoice` — exported from `ThemeProvider`,
   consumed by the root layout's inline script (via interpolation, pinned by a test), `SidebarTree`
   and Task 8's Appearance section.
@@ -6699,6 +7253,17 @@ the number the old `connection` badge showed — so `gate:m18-skill-and-teeth`'s
 assertion measures the same clock it always did. And the spec's introduced-testid table was missing
 nineteen entries the plan's code blocks produce; it now lists every one, and the stray `views-chip`
 row (an alias that was never written) is gone.
+
+**What the controller ruling changed after the first self-review** (recorded here because the plan
+was already complete when it arrived): Task 6 grew Steps 5b, 8 and 8b and lost its `FactTiles.tsx`;
+`ProjectBrief.tsx`, `SlaveCard.tsx`, `SupervisorTimeline.tsx` and `scripts/gate-m45-project-experience.mjs`
+joined its Files list and `TopStrip.tsx` its deletions; spec §6 lost two of its four deviations and
+gained R17/R18 plus the reasoning that withdrew them; spec §3's removed table gained six rows naming
+every testid that moves and, for each, whether a GATE or only a test reads it; and Task 9's m14
+`NUMBERS` list swapped the card radius and `12px 13px` padding rows for the README's `10px 14px` row
+padding and a 30 × 30 avatar. The census behind those six rows was taken by grepping each testid
+across `scripts/*.mjs` and `apps/web/test/` separately, because "a gate reads it" and "a test reads
+it" have different costs and the plan has to say which.
 
 **One thing the review could not settle, and it is recorded rather than guessed:** `docs/ia.md`'s
 own line saying the card's `needsYou` count and the Overview queue's can disagree, with reconciliation

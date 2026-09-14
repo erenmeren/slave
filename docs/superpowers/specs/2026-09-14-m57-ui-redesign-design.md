@@ -283,6 +283,15 @@ which has moved on every milestone and is therefore found by
   rendering of them. Nothing inside any of the six panels is rewritten — this is the same MOVE
   operation M44 R1 performed on the same page.
 
+- **R17 — the Overview follows the README's order exactly, and `ProjectBrief` BECOMES the four fact
+  tiles.** Five bands: title row (H1 + `userWorkspaceStatus` pill + goal line + `Edit goal`), the
+  Needs-you card, four fact tiles, Team rows, Recent changes. `TopStrip` is removed as a widget and
+  its `strip` testid moves onto the fact-tiles container. Stated in full in §6, with the controller
+  ruling that produced it.
+
+- **R18 — the Overview's Team is ROWS on the README's `34px 120px 120px 1fr 96px 32px` grid**, by
+  restyling `SlaveCard.tsx`, which renders on this page and nowhere else. Stated in full in §6.
+
 ### The plumbing this milestone must add
 
 - **R14 — Three additive web routes, no new control verb but one, and no new event type.**
@@ -332,8 +341,10 @@ which has moved on every milestone and is therefore found by
   selected; `»` → a 52 px dock with `S` (badged) and `A`.
 - **`/`** Projects: cards (`auto-fit minmax(300px,1fr)`), a needs strip per card, the five-tile
   "Across every project · last 7 days" panel.
-- **`/w/:id`** Overview: title + status pill + goal line → **Needs you** → four fact tiles (Work bar,
-  Cost, Supervisor, Latest verified) → Team rows → Recent changes.
+- **`/w/:id`** Overview, in five bands (R17/R18): title + status pill + goal line → **Needs you** →
+  four fact tiles (`ProjectBrief`, rebuilt from eight: Work bar, Cost, Supervisor + runbook line,
+  Latest verified + Knowledge) → **Team rows** (`SlaveCard`, rebuilt from a card) → Recent changes
+  (`SupervisorTimeline`). `TopStrip` is gone; its `strip` testid marks the tile grid.
 - **`/w/:id/tasks`** Tasks: filter row, Board (5 columns) ⇄ List.
 - **`/w/:id/organization`** Team: worker cards with lifecycle, "Now:", "Why here:", capability chips.
 - **`/w/:id/knowledge`** Knowledge: segmented All / Verified / Candidates, rows with Verify/Remove.
@@ -386,8 +397,9 @@ which has moved on every milestone and is therefore found by
 | `needs-you-card` / `needs-you-row` | Overview | `data-kind` from `NeedsYouItem.kind` |
 | `needs-you-approve` / `-decline` / `-open` | on a row | buttons for a decision, a link for the rest |
 | `needs-you-empty` | Overview | the dashed "nothing needs you" box |
-| `fact-tile` | Overview | `data-fact` = `work`/`cost`/`supervisor`/`verified` |
-| `recent-changes` | Overview | the section holding `live-events` and the merge queue |
+| `card-unblock` | a Team row | the primary button's fourth state (R18) |
+| `card-more` | a Team row | the `⋯` that opens `SlavePanel` |
+| `recent-changes` | Overview | the section wrapping `supervisor-timeline` |
 | `task-search` / `task-filter-needs-you` / `task-filter-assignee` | Tasks | the filter row |
 | `task-view-toggle` / `task-view-board` / `task-view-list` | Tasks | `data-view` = `board`/`list` |
 | `task-list` / `task-list-row` | Tasks, list mode | the table and one row per task |
@@ -407,6 +419,11 @@ which has moved on every milestone and is therefore found by
 | `overview-advanced` / `overview-advanced-toggle` | nothing — the four panels are re-homed (R11) | `gate-m44` 842; `gate-m14` 928; `overview-components.test.tsx` |
 | `advanced-panel-supervisor` | `right-panel[data-mode=supervisor]` | `gate-m44` 930 |
 | `advanced-link-graph|office|analytics` | `sidebar-view` | `overview-components.test.tsx` |
+| `strip` (on `TopStrip`) | the SAME testid, **moved** onto the fact-tiles container (R17) | no gate edit — `gate-m14` 773/1132, `gate-m44` 769 and `gate-m49` 1529 only wait on it |
+| `strip-tile`, `strip-value-*`, `strip-unmeasured`, `strip-supervisor-spend` | the Work and Cost tiles' own `brief-work-*` and `brief-cost-*` spans | `overview-components.test.tsx` only — no gate reads them |
+| `brief-tile[data-brief=objective\|needs-you\|team\|recent-changes]` | the title row, the Needs-you card, the Team rows and `supervisor-timeline` (R17) | `gate-m45` 95-104 (`EXPECTED_BRIEF_FACTS`), 770-780 (two `wants` pairs each), 794-805 |
+| `card-message`, `card-stop` | the `⋯` → `SlavePanel`, where both already exist | `slave-card.test.tsx` / `overview-components.test.tsx` only — no gate reads either |
+| `card-task-ref`, `card-step`, `card-percent`, `card-skill-chip`, `card-queue-chip` | `SlavePanel`, unchanged, where all five already are | tests only — no gate reads any |
 | `project-header` | `app-header` | `gate-m11` 445; `gate-m14` 941; `project-layout.test.tsx` |
 | `project-header-hairline` | nothing — the new header has a plain hairline | `project-header.test.tsx` |
 | `project-switcher*` | `sidebar-project` | `project-header.test.tsx` |
@@ -472,7 +489,7 @@ file written. It joins CI immediately after `gate:m56a-provider-contract`.
    `supervisor-message[data-who="operator"]` with the typed words.
 8. **Computed style.** Ten README numbers read back with `getComputedStyle`: sidebar width `236px`,
    header height `54px`, right panel width `372px`, dock width `52px`, the frame's `min-width`
-   `1280px`, an Overview page card's `border-radius` `14px`, a fact tile's `border-radius` `12px`,
+   `1280px`, an Overview page card's `border-radius` `14px`, a fact tile's (`brief-tile`) `border-radius` `12px`,
    a task card's `border-radius` `10px`, a status pill's `border-radius` `999px`, and the body's
    `font-size` `14px`.
 9. **Vocabulary and the IA floor.** No raw enum token is visible text on the twelve pages the gate
@@ -490,7 +507,7 @@ the new README values (`nav[aria-label="Primary"]` 212 → 236; `[data-testid="p
 deleted with the disclosure they measured; the `slave-card` radius/padding rows are re-read from the
 new card recipe), `PAGES`' `overview` marker stays `strip`, and its 13 PNGs are regenerated ONCE.
 
-## 6. Out of scope, and the four places this milestone deliberately does not match the README
+## 6. Out of scope, and the two places this milestone deliberately does not match the README
 
 The domain, `packages/control` (but for R14c's `clearHalt`), `packages/db`, `packages/events`, the
 orchestrator, every existing API route's behaviour, every read model's SHAPE (the three new ones are
@@ -500,30 +517,48 @@ named here so nobody reads its inertness as a bug), a real conversation table fo
 per-viewer accent colours (the prototype's `data-accent`), and any responsive behaviour below
 1280 px (R4).
 
-Four README details are deliberately not built, each because building it would move a number a gate
-already measures for no user-visible gain. Each is named here so that nobody reads it as an
+Two README details are deliberately not built. Each is named here so that nobody reads it as an
 oversight, and each is a candidate for the milestone after this one.
 
-1. **The Overview's Team rows stay a CARD GRID, not the README's `34px 120px 120px 1fr 96px 32px`
-   table.** That grid is `SlaveCard`, which renders nowhere else in the app and carries six
-   `gate:m14-fidelity` assertions (radius 8, padding `12px 13px`, a 28 × 28 avatar tile, a
-   radius-999 pill). Rewriting it into a row is a card recipe change, and M44's own erratum E1 already
-   ruled that one card recipe waits for a milestone that may move README pixels. This one moves
-   plenty, but not that one: the Overview is already the page with the most gate surface in the
-   product.
-2. **Workforce's People table keeps its ten columns**, not the README's seven.
+1. **Workforce's People table keeps its ten columns**, not the README's seven.
    `gate:m14-fidelity` asserts the authored `grid-template-columns` string
    (`200px 110px 150px 120px 100px 110px 1fr 90px 90px 160px`) twice, by two different methods and
    for a stated reason; the README's seven-column sketch drops the lifecycle column M50 added and
    the cost column M53 reads. Reconciling the two is a data question, not a styling one.
-3. **The sidebar shows a count on `Projects` only**, not on `Workforce` and `Simulations` as the
+2. **The sidebar shows a count on `Projects` only**, not on `Workforce` and `Simulations` as the
    prototype draws. Those two numbers would need two more reads in the ROOT layout — on every page
    in the product — for two figures nobody acts on from the sidebar.
-4. **`ProjectBrief`, `TopStrip`, `RunbookPanel` and `SupervisorTimeline` keep their own surfaces.**
-   Between them they carry over twenty `gate:m14-fidelity` and `gate:m45-project-experience`
-   assertions, they all sit below the first viewport the README specifies, and the tokens they paint
-   with are themed correctly by R1's alias layer from Task 1 onwards. They look like the new palette;
-   they are not laid out like the new sketch.
+
+**Two further deviations were drafted here and WITHDRAWN under a controller ruling** (2026-09-14),
+recorded because the reasoning that produced them is a trap the next milestone will fall into too.
+The draft kept the Overview's `SlaveCard` grid and its eight-tile `ProjectBrief` on the grounds that
+each carries computed-style assertions in `gate:m14-fidelity` and `gate:m45-project-experience`. The
+ruling: **"a gate already measures that number" is not a reason to keep a layout the user asked to
+change** — and it is a particularly bad reason in THIS milestone, whose Task 9 rewrites m14's whole
+`NUMBERS` table and regenerates all thirteen screenshots regardless. A gate pins a number so that it
+cannot drift by accident; it does not pin it against a deliberate, specified, reviewed change. So:
+
+- **R17 — the Overview follows the README's order exactly**, and `ProjectBrief` becomes the four
+  fact tiles rather than gaining a second tile set beside its eight. The page is: (1) title row —
+  H1 + `userWorkspaceStatus` pill, goal line, `Edit goal`; (2) the Needs-you card; (3) FOUR fact
+  tiles — Work (8 px segmented bar + `<b>n</b> word` list), Cost (22 px mono), Supervisor (pill +
+  runbook line), Latest verified (+ Knowledge link); (4) Team ROWS; (5) Recent changes. The
+  container keeps `data-testid="brief"`, each tile keeps `brief-tile` + `data-brief`, and
+  `brief-supervisor-state` and the five `brief-cost-*` spans are kept verbatim —
+  `gate:m51-breaker` reads four of the latter and needs no edit at all. `TopStrip` is removed as a
+  widget (its raw counts fold into the Work tile, which is what the README asks for) and its
+  `strip` testid **moves onto the fact-tiles container**, because three gates wait on it as the
+  Overview's structural marker and none of them cares what it wraps.
+- **R18 — the Overview's Team is ROWS**, on the README's `34px 120px 120px 1fr 96px 32px` grid, by
+  restyling `SlaveCard.tsx` — which renders on this one page and nowhere else. Each row keeps
+  `data-testid="slave-card"` with `avatar-tile` and `status-pill` inside it, so every scoped
+  `gate:m14-fidelity` selector still resolves; the six numbers those selectors read are rewritten in
+  Task 9 to the README's row numbers (avatar 30 × 30, row padding `10px 14px`, pill radius 999 px),
+  and the `card-sweep` and `status-pulse` motion assertions are unchanged because the motion is.
+  The row's one primary button keeps whichever of `card-pause` / `card-resume` / `card-answer` /
+  `card-unblock` its state calls for — `gate:m14-fidelity:1295` clicks `card-pause` — and `Message`
+  and `Stop` fold into the `⋯`, which opens `SlavePanel`, where both already live (`docs/ia.md`
+  rule 2: moved, not removed).
 
 ## 7. Errata — where execution corrects this spec
 
