@@ -7,9 +7,24 @@ import { TaskColumn } from '../src/components/TaskColumn.js'
 import { TaskDetailPanel } from '../src/components/TaskDetailPanel.js'
 import { TasksClient } from '../src/components/TasksClient.js'
 import { publishStreamState } from '../src/hooks/useStreamState.js'
+import { RightPanel } from '../src/components/shell/RightPanel.js'
+import { RightPanelProvider } from '../src/components/shell/RightPanelProvider.js'
 import type { TaskBoardItem, TasksSnapshot } from '../src/server/tasks.js'
 
 vi.mock('../src/hooks/useStreamState', () => ({ publishStreamState: vi.fn() }))
+
+/** Every page client in the shell runs inside the root layout's providers, and beside the SLOT
+ *  those providers feed. A test that renders one bare is rendering a tree that does not exist --
+ *  `useRightPanel` says so by throwing, and a selected task or worker would have nowhere to be
+ *  drawn (M57 R8: the page mirrors its selection into the slot, it no longer draws the panel). */
+function renderInShell(ui: React.ReactElement): ReturnType<typeof render> {
+  return render(
+    <RightPanelProvider>
+      {ui}
+      <RightPanel title="Supervisor">{null}</RightPanel>
+    </RightPanelProvider>,
+  )
+}
 
 // Module-level so the M23 B4 collect test below can assert `router.refresh()` fired -- a fresh
 // `vi.fn()` returned from inside `useRouter` would give the assertion no stable reference to check.
@@ -802,32 +817,54 @@ describe('TaskDetailPanel artifacts (M23 C1-C3)', () => {
 
 describe('TasksClient', () => {
   it('publishes its stream state on mount, for the project header’s connection chip to read', () => {
-    render(<TasksClient workspaceId="w1" initial={snapshot([])} />)
+    renderInShell(<TasksClient workspaceId="w1" initial={snapshot([])} />)
     expect(publishStreamState).toHaveBeenCalledWith('w1', { connection: 'connected', latencyMs: null })
   })
 
   it('renders all six columns in order, empty ones included', () => {
-    render(<TasksClient workspaceId="w1" initial={snapshot([task({})])} />)
+    renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({})])} />)
     const headings = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)
     expect(headings).toEqual(BOARD_COLUMNS)
   })
 
   it('opens the detail panel on card click and closes back to the board', () => {
-    render(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', description: 'The full description' })])} />)
+    renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', description: 'The full description' })])} />)
 
     expect(screen.queryByText('The full description')).toBeNull()
     fireEvent.click(screen.getByText('Add the thing'))
     expect(screen.getByText('The full description')).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('button', { name: /close/i }))
+    // The PANEL's own control, by its exact name: the slot it is drawn in has a close button of
+    // its own now, and both of them clear the selection.
+    fireEvent.click(screen.getByRole('button', { name: 'Close task detail' }))
     expect(screen.queryByText('The full description')).toBeNull()
+  })
+
+  // M57 R8: the board no longer DRAWS the panel -- it mirrors `?task=` into the shell's slot, and
+  // the provider tells the previous owner when a different subject takes that slot (ruling T3-4).
+  // The previous owner here is this same page, whose selection has already moved; a clearer that
+  // fired anyway would cancel the click that made the new selection, one frame after it.
+  it('swaps the slot for the next task instead of closing on itself', () => {
+    renderInShell(
+      <TasksClient
+        workspaceId="w1"
+        initial={snapshot([task({ id: 't1' }), task({ id: 't2', title: 'The second thing' })])}
+      />,
+    )
+
+    fireEvent.click(screen.getByText('Add the thing'))
+    expect(screen.getByTestId('task-panel-ref').textContent).toBe('TASK-t1')
+
+    fireEvent.click(screen.getByText('The second thing'))
+    expect(screen.getByTestId('task-panel-ref').textContent).toBe('TASK-t2')
+    expect(screen.getByTestId('right-panel').getAttribute('data-mode')).toBe('task')
   })
 
   it('threads the snapshot\'s own goal version to the card and the panel, badging a stale task (fix round 1)', () => {
     // Every other stale case renders `TaskCard`/`TaskDetailPanel` with a literal prop; this one
     // proves the wiring that actually carries it -- `TasksSnapshot.workspace.goalVersion` through
     // `TasksClient` and `TaskColumn` to both surfaces.
-    render(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', goalVersion: 1 })], 2)} />)
+    renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', goalVersion: 1 })], 2)} />)
 
     expect(screen.getByTestId('task-goal-version').textContent).toBe('goal v1')
     expect(screen.getByTestId('task-stale').textContent).toBe('stale')
@@ -838,14 +875,14 @@ describe('TasksClient', () => {
   })
 
   it('leaves a task on the project\'s current goal version unbadged all the way through', () => {
-    render(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', goalVersion: 2 })], 2)} />)
+    renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', goalVersion: 2 })], 2)} />)
 
     expect(screen.getByTestId('task-goal-version').textContent).toBe('goal v2')
     expect(screen.queryByTestId('task-stale')).toBeNull()
   })
 
   it('buckets an off-column status (rework) into the Todo column while the card still carries the true status', () => {
-    render(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', status: 'rework' })])} />)
+    renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', status: 'rework' })])} />)
     const todoColumn = screen.getAllByTestId('column').find((c) => c.getAttribute('data-column') === 'Todo')
     expect(todoColumn).toBeDefined()
     const card = within(todoColumn!).getByTestId('task-card')
@@ -858,7 +895,7 @@ describe('TasksClient', () => {
 // `grid-cols-6 gap-[10px] p-[16px]` is what `gate:m14-fidelity` measures, and it is unchanged.
 describe('TasksClient (M44 E25 / M45 R5)', () => {
   it('renders inside the one page shell, with the board grid untouched', () => {
-    render(<TasksClient workspaceId="w1" initial={snapshot([task({})])} />)
+    renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({})])} />)
     const shell = screen.getByTestId('page-shell')
     expect(shell.className).not.toContain('p-3')
     expect(shell.querySelector(':scope > div')?.className).toBe('grid grid-cols-6 gap-[10px] p-[16px]')
@@ -867,7 +904,7 @@ describe('TasksClient (M44 E25 / M45 R5)', () => {
 
 describe('the six-column board', () => {
   it('renders six columns in the README order with a dot and a count each', () => {
-    render(<TasksClient workspaceId="w1" initial={snapshot([task({ status: 'running' }), task({ id: 't2', status: 'blocked' })])} />)
+    renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({ status: 'running' }), task({ id: 't2', status: 'blocked' })])} />)
     expect(screen.getAllByTestId('column').map((c) => c.getAttribute('data-column'))).toEqual([
       'Backlog', 'Todo', 'In Progress', 'Review', 'Blocked', 'Done',
     ])
@@ -906,7 +943,7 @@ describe('the six-column board', () => {
   })
 
   it('keeps a failed task on Done while its own pill still says failed', () => {
-    render(<TasksClient workspaceId="w1" initial={snapshot([task({ status: 'failed' })])} />)
+    renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({ status: 'failed' })])} />)
     expect(screen.getByTestId('column-count-Done').textContent).toBe('1')
     // M45 R4: the WORD is the domain's (`userTaskStatus`), so a failed task finally reads FAILED --
     // the TONE is still the board column's `blocked` red, which is what put it here.

@@ -232,14 +232,20 @@ export function WorkforceClient({
         </Alert>
       )}
       {panel.kind === 'ready' && selected !== null && (
-        <SlavePanel
-          key={panel.slave.id}
-          slave={panel.slave}
-          liveEvents={[]}
-          workspaceId={selected.workspaceId}
-          haltedReason={null}
-          onClose={() => setSelected(null)}
-        />
+        // M57 R8 / erratum E4: `/workforce` is a GLOBAL route -- no project, no third column -- so
+        // this panel stays in the page frame. `SlavePanel` gave up its own `fixed` geometry when it
+        // moved into the shell's slot on project routes, and this wrapper is where that geometry
+        // now lives, for the one call site that still needs it.
+        <div className="fixed inset-y-0 right-0 z-10 w-96 border-l border-line bg-panel shadow-resting motion-safe:animate-[panel-in_160ms_ease-out]">
+          <SlavePanel
+            key={panel.slave.id}
+            slave={panel.slave}
+            liveEvents={[]}
+            workspaceId={selected.workspaceId}
+            haltedReason={null}
+            onClose={() => setSelected(null)}
+          />
+        </div>
       )}
     </PageShell>
   )

@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ActivityClient } from '../src/components/activity/ActivityClient.js'
 import { TasksClient } from '../src/components/TasksClient.js'
+import { RightPanelProvider } from '../src/components/shell/RightPanelProvider.js'
 import type { ActivityPage } from '../src/server/activity.js'
 import type { TasksSnapshot } from '../src/server/tasks.js'
 
@@ -91,7 +92,14 @@ describe('the halt banner shows on every page', () => {
     }
     fetchMock.mockImplementation(async () => new Response(JSON.stringify(snapshot), { status: 200 }))
 
-    render(<TasksClient workspaceId="w1" initial={snapshot} />)
+    // Inside the root layout's provider, which is where every page client runs (M57 R8): the
+    // board mirrors its `?task=` selection into the shell's right panel, and `useRightPanel`
+    // throws outside it. No slot here -- this case selects nothing and only reads the banner.
+    render(
+      <RightPanelProvider>
+        <TasksClient workspaceId="w1" initial={snapshot} />
+      </RightPanelProvider>,
+    )
 
     expect(screen.getByRole('alert').textContent).toContain(HALT_REASON)
   })

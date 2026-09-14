@@ -3,6 +3,8 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { TaskDetailPanel } from '../src/components/TaskDetailPanel'
 import { TasksClient } from '../src/components/TasksClient'
+import { RightPanel } from '../src/components/shell/RightPanel'
+import { RightPanelProvider } from '../src/components/shell/RightPanelProvider'
 import type { KnowledgeRow, TaskMemoriesView } from '../src/server/memory'
 import { taskItem } from './fixtures/taskItem'
 
@@ -180,7 +182,14 @@ describe('the drawer is a new drawer for a new task (M49 R6)', () => {
         : { ok: true, status: 200, json: async () => snapshot },
     )
     vi.stubGlobal('fetch', fetchMock)
-    render(<TasksClient workspaceId="w1" initial={snapshot} />)
+    // The page mirrors `?task=` into the shell's right panel now (M57 R8), so the slot has to be
+    // in the tree or the detail panel this case reads has nowhere to be drawn.
+    render(
+      <RightPanelProvider>
+        <TasksClient workspaceId="w1" initial={snapshot} />
+        <RightPanel title="Supervisor">{null}</RightPanel>
+      </RightPanelProvider>,
+    )
 
     fireEvent.click(screen.getByText('Add the thing'))
     fireEvent.click(within(group()).getByRole('button', { name: /Knowledge/ }))

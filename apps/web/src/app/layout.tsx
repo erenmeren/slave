@@ -3,9 +3,8 @@ import localFont from 'next/font/local'
 import './globals.css'
 import { buildSidebarTree } from '../server/sidebar'
 import { requirePrincipal } from '../server/principal'
-import { AppShell } from '../components/shell/AppShell'
+import { ShellFrame } from '../components/shell/ShellFrame'
 import { SidebarTree } from '../components/shell/SidebarTree'
-import { Header } from '../components/shell/Header'
 import { HeaderActionProvider } from '../components/shell/HeaderActionProvider'
 import { RightPanelProvider } from '../components/shell/RightPanelProvider'
 import { ThemeProvider, THEME_STORAGE_KEY } from '../components/theme/ThemeProvider'
@@ -123,10 +122,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
               {/* The header takes the TREE as a prop rather than reading the facts store alone
                 * (spec erratum E12): the store is published by five of a project's eight page
                 * clients, and the breadcrumb has to be able to name the project on all eight.
-                * `right` is still Task 5's empty socket. */}
-              <AppShell sidebar={<SidebarTree initial={projects} />} header={<Header projects={projects} />} right={null} rightWidth="none">
+                * `ShellFrame` owns the third column, because how wide it is depends on the ROUTE
+                * and on whether somebody collapsed it -- two client facts a server layout has
+                * no way to read (M57 R8). */}
+              <ShellFrame sidebar={<SidebarTree initial={projects} />} projects={projects}>
                 {children}
-              </AppShell>
+              </ShellFrame>
             </HeaderActionProvider>
           </RightPanelProvider>
         </ThemeProvider>

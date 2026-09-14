@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import type { TaskStatus } from '@slave-of-ai/domain'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { SlaveCard } from '../src/components/SlaveCard.js'
 import { HaltBanner } from '../src/components/HaltBanner.js'
 import { BlockedPanel, LiveEventsPanel, MergeQueuePanel, OverviewClient } from '../src/components/OverviewClient.js'
 import { TopStrip } from '../src/components/TopStrip.js'
 import { publishStreamState } from '../src/hooks/useStreamState.js'
+import { RightPanel } from '../src/components/shell/RightPanel.js'
+import { RightPanelProvider } from '../src/components/shell/RightPanelProvider.js'
 import type { SlaveCardData, OverviewSnapshot } from '../src/server/overview.js'
 
 // `OverviewClient`'s `useSelectedId` reads the router.
@@ -17,6 +19,19 @@ vi.mock('next/navigation', () => ({
 }))
 
 vi.mock('../src/hooks/useStreamState', () => ({ publishStreamState: vi.fn() }))
+
+/** Every page client in the shell runs inside the root layout's providers, and beside the SLOT
+ *  those providers feed. A test that renders one bare is rendering a tree that does not exist --
+ *  `useRightPanel` says so by throwing, and a selected task or worker would have nowhere to be
+ *  drawn (M57 R8: the page mirrors its selection into the slot, it no longer draws the panel). */
+function renderInShell(ui: React.ReactElement): ReturnType<typeof render> {
+  return render(
+    <RightPanelProvider>
+      {ui}
+      <RightPanel title="Supervisor">{null}</RightPanel>
+    </RightPanelProvider>,
+  )
+}
 
 const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
   id: 'a1',
@@ -822,7 +837,7 @@ describe('shell facts and stream state reach the project header, never the sideb
   })
 
   it('publishes its stream state on mount, for the project header’s connection chip to read', () => {
-    render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+    renderInShell(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
     expect(publishStreamState).toHaveBeenCalledWith('w1', { connection: 'connected', latencyMs: null })
   })
 
@@ -831,7 +846,7 @@ describe('shell facts and stream state reach the project header, never the sideb
   // answers the ten-second questions, and the strip the design handoff documents sits directly
   // under it (erratum E17: the overlap between the two is deliberate).
   it('M45 R1: the brief is the first thing on the page, and the strip is directly under it', () => {
-    render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+    renderInShell(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
     expect(screen.queryByTestId('goal-input')).toBeNull()
     expect(screen.queryByTestId('runtime-provider')).toBeNull()
     expect(screen.queryByTestId('goal-suggestion')).toBeNull()
@@ -844,7 +859,7 @@ describe('shell facts and stream state reach the project header, never the sideb
   // label -- the cards did not move to a new component and none of their six fidelity assertions
   // changed.
   it('M45 E16: the team strip is the same slave-card grid, under a Team label', () => {
-    render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+    renderInShell(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
     const team = screen.getByTestId('team')
     expect(screen.getByTestId('team').id).toBe('team') // the brief's '+N more' team link targets #team
     expect(team.textContent).toContain('team')
@@ -855,7 +870,7 @@ describe('shell facts and stream state reach the project header, never the sideb
   // M45 R3/R2: the two new surfaces are on the page, in the order the spec reads them -- one
   // input to the Supervisor, then the six-lane timeline.
   it('M45 R2/R3: the request box and the timeline sit between the strip and the team', () => {
-    render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+    renderInShell(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
     const shell = screen.getByTestId('page-shell')
     // Fix round 1, Important 2: the timeline's own root is marked, so the accepted page order is
     // pinned in full rather than "the timeline is somewhere on the page".
@@ -867,10 +882,10 @@ describe('shell facts and stream state reach the project header, never the sideb
   // M48 R7: how this project works goes BETWEEN what you asked for and what happened -- and a
   // project nobody has an opinion about (the fixture above) gets no panel at all.
   it('puts the runbook panel between the request box and the timeline, and nothing when there is none', () => {
-    render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+    renderInShell(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
     expect(screen.queryByTestId('runbook-panel')).toBeNull()
 
-    render(
+    renderInShell(
       <OverviewClient
         workspaceId="w1"
         initial={{
@@ -897,7 +912,7 @@ describe('shell facts and stream state reach the project header, never the sideb
   // Office and Analytics are the sidebar tree's `VIEWS` chips now -- and so does the Supervisor
   // panel, which is the right panel's from Task 5 on.
   it('M57 R11: the blocked panel, the river and the merge queue render with no disclosure to open', () => {
-    render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+    renderInShell(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
     expect(screen.queryByTestId('overview-advanced')).toBeNull()
     expect(screen.queryByTestId('overview-advanced-toggle')).toBeNull()
 
@@ -910,12 +925,12 @@ describe('shell facts and stream state reach the project header, never the sideb
   })
 
   it('a workspace adopted from a simulation shows the note linking back to it; a hand-assigned one shows nothing (M33 §4)', () => {
-    const { unmount } = render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+    const { unmount } = renderInShell(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
     expect(screen.queryByTestId('ws-adopted-from')).toBeNull()
     unmount()
 
     const adopted = { ...PUBLISHED, workspace: { ...PUBLISHED.workspace, adoptedFrom: { simulationId: 's1', name: 'Sprint plan' } } }
-    render(<OverviewClient workspaceId="w2" initial={adopted} />)
+    renderInShell(<OverviewClient workspaceId="w2" initial={adopted} />)
     const note = screen.getByTestId('ws-adopted-from')
     expect(note.textContent).toBe('organisation adopted from simulation Sprint plan')
     expect(note.querySelector('a')?.getAttribute('href')).toBe('/sim/s1')
@@ -937,7 +952,7 @@ describe('shell facts and stream state reach the project header, never the sideb
     vi.stubGlobal('fetch', fetchMock)
     try {
       const adopted = { ...PUBLISHED, workspace: { ...PUBLISHED.workspace, adoptedFrom: { simulationId: 's1', name: 'Sprint plan' } } }
-      render(<OverviewClient workspaceId="w3" initial={adopted} />)
+      renderInShell(<OverviewClient workspaceId="w3" initial={adopted} />)
 
       const note = screen.getByTestId('ws-adopted-from')
       expect(note.getAttribute('role')).toBe('status')
@@ -970,3 +985,40 @@ const PUBLISHED: OverviewSnapshot = snapshot([
   slave({ id: 'a1', status: 'working' }),
   slave({ id: 'a2', name: 'Sam Yates', status: 'working' }),
 ])
+
+/**
+ * M57 R8: the page no longer DRAWS the worker panel -- it mirrors `?slave=` into the shell's slot,
+ * and the provider tells the previous owner when a different subject takes that slot (ruling
+ * T3-4). The previous owner here is this same page, whose selection has already moved on; a
+ * clearer that fired anyway would cancel the click that made the new selection.
+ */
+describe('the worker panel is mirrored into the slot, not drawn by the page', () => {
+  class SilentEventSource {
+    onmessage: ((event: { data: string }) => void) | null = null
+    onerror: (() => void) | null = null
+    onopen: (() => void) | null = null
+    close(): void {}
+  }
+
+  beforeEach((): void => {
+    vi.stubGlobal('EventSource', SilentEventSource as unknown as typeof EventSource)
+  })
+
+  afterEach((): void => {
+    vi.unstubAllGlobals()
+  })
+
+  it('swaps the slot for the next worker instead of closing on itself', () => {
+    renderInShell(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+    expect(screen.getByTestId('right-panel').getAttribute('data-mode')).toBe('supervisor')
+
+    fireEvent.click(screen.getByRole('button', { name: "Open Alex's detail panel" }))
+    const panel = screen.getByTestId('right-panel')
+    expect(panel.getAttribute('data-mode')).toBe('slave')
+    expect(within(panel).getByRole('heading', { level: 2 }).textContent).toBe('Alex')
+
+    fireEvent.click(screen.getByRole('button', { name: "Open Sam Yates's detail panel" }))
+    expect(screen.getByTestId('right-panel').getAttribute('data-mode')).toBe('slave')
+    expect(within(screen.getByTestId('right-panel')).getByRole('heading', { level: 2 }).textContent).toBe('Sam Yates')
+  })
+})

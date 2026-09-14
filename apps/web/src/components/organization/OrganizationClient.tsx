@@ -3,12 +3,12 @@
 import { useState } from 'react'
 import { SLAVE_LIFECYCLE_LABEL } from '@slave-of-ai/domain'
 // Type-only, so nothing from `server/organization.ts` -- and nothing under it, control and the
-// Prisma client -- reaches the client bundle. The rule `SupervisorPanel.tsx` states for
+// Prisma client -- reaches the client bundle. The rule `supervisor/ProposalRow.tsx` states for
 // `SupervisorView`.
 import type { OrganizationPreference, OrganizationView } from '../../server/organization'
 import { plural } from '../../lib/plural'
 import { postControl, sendControl } from '../../lib/postControl'
-import { ProposalRow } from '../SupervisorPanel'
+import { ProposalRow } from '../supervisor/ProposalRow'
 import { Alert } from '../ui/Alert'
 import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'

@@ -4,11 +4,11 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { LANE_LABEL, TIMELINE_LANES, type TimelineLane } from '@slave-of-ai/domain'
 // Type-only, so nothing from `server/*` (and nothing under it -- control, and the Prisma client)
-// reaches the client bundle. The same rule `SupervisorPanel.tsx` states for `SupervisorView`.
+// reaches the client bundle. The same rule `supervisor/ProposalRow.tsx` states for `SupervisorView`.
 import type { NeedsYouItem } from '../../server/needsYou'
 import type { TimelineEntry } from '../../server/timeline'
 import { postControl } from '../../lib/postControl'
-import { ProposalRow } from '../SupervisorPanel'
+import { ProposalRow } from '../supervisor/ProposalRow'
 import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
 import { EmptyState } from '../ui/EmptyState'

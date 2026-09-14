@@ -915,12 +915,12 @@ try {
       const meta = page.getByTestId('supervisor-decision-meta').first()
       const sentence = (await meta.textContent())?.trim() ?? ''
       const rawRecord = await meta.getAttribute('title')
-      // SCOPED to the Supervisor panel under `Advanced` (M45 t5): M45 R2 renders the SAME
-      // `ProposalRow` on the Overview's own timeline, ABOVE the disclosure, so an unscoped
-      // `.first()` here resolves to the timeline's copy while the message says "the Supervisor
-      // panel". Both are read, and both have to agree -- one proposal shown in two places that
-      // disagreed about what it is would be the bug this stage exists to catch.
-      const kindChip = page.locator('[data-testid="advanced-panel-supervisor"] [data-testid="supervisor-proposal-kind"]').first()
+      // SCOPED to the Supervisor panel, which is the shell's RIGHT PANEL from M57 t5 (it was the
+      // `Advanced ▾` disclosure before): M45 R2 renders the SAME proposal on the Overview's own
+      // timeline, so an unscoped `.first()` here resolves to the timeline's copy while the message
+      // says "the Supervisor panel". Both are read, and both have to agree -- one proposal shown in
+      // two places that disagreed about what it is would be the bug this stage exists to catch.
+      const kindChip = page.locator('[data-testid="right-panel"] [data-testid="supervisor-proposal-kind"]').first()
       const kindWord = (await kindChip.textContent())?.trim() ?? ''
       const kindRaw = await kindChip.getAttribute('title')
       const timelineChip = page.locator('[data-testid="timeline-decisions"] [data-testid="supervisor-proposal-kind"]').first()

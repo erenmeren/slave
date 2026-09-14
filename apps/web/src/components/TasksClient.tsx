@@ -1,9 +1,10 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { publishShellFacts } from '../hooks/useShellFacts'
 import { publishStreamState } from '../hooks/useStreamState'
 import { useSelectedId } from '../hooks/useSelectedId'
+import { useRightPanel } from './shell/RightPanelProvider'
 import { useTasks } from '../hooks/useTasks'
 import { BOARD_COLUMNS, COLUMN_FOR_STATUS } from '../lib/taskColumns'
 import type { TasksSnapshot } from '../server/tasks'
@@ -42,6 +43,60 @@ export function TasksClient({
   }, [workspaceId, connection, latencyMs])
   useEffect((): (() => void) => () => publishStreamState(workspaceId, null), [workspaceId])
 
+  // What the URL names RIGHT NOW, readable from a closure created for an earlier subject. The
+  // provider calls the PREVIOUS owner's clearer whenever a DIFFERENT subject takes the slot
+  // (ruling T3-4) -- and that includes this page moving its own selection from one task to the
+  // next, where the "previous owner" is this same page and its selection has already moved on.
+  // Clearing then would cancel a selection one frame after a person made it, so the clearer only
+  // fires while the URL still names the task it was created for.
+  const selectedIdRef = useRef<string | null>(null)
+  selectedIdRef.current = selectedTask?.id ?? null
+
+  // M57 R8 / plan errata E4-E5: `?task=` is still the source of truth and still what a refresh
+  // restores -- this only MIRRORS it into the shell's right panel, which is where the panel is
+  // drawn now. The clearer handed to `open` is the same one the panel's own close used, so the
+  // slot's `»`, the slot's `✕` and the panel's own control all clear the URL together.
+  //
+  // THE DEPENDENCY LIST IS `selectedTask?.id` AND NOTHING ELSE (scan finding 21): `view` changes
+  // identity on every SSE frame, and an effect that re-`open()`s several times a second is an
+  // effect that fights the person who just collapsed the panel. The fourth argument to `open` is
+  // the content KEY, which is what lets the provider tell a re-assertion of the same task from a
+  // new one. And it handles the CLEAR, because `?task=` can go away by navigation -- a link, a
+  // Back -- rather than by the close button.
+  const { open: openPanel, close: closePanel, mode: panelMode } = useRightPanel()
+  useEffect((): void => {
+    if (selectedTask === null) {
+      if (panelMode === 'task') closePanel()
+      return
+    }
+    const openedFor = selectedTask.id
+    openPanel(
+      'task',
+      <TaskDetailPanel
+        // KEYED on the task (final review, Minor 5): the panel keeps its three on-demand reads --
+        // the knowledge, the artifact preview, the recorded run context -- in its own state, and
+        // none of them is keyed to the task. Without this, React re-uses the one instance when
+        // the selection moves and one task's knowledge stays on the screen under another task's
+        // title. A new key is a new instance, so every such read starts closed and empty.
+        key={selectedTask.id}
+        task={selectedTask}
+        workspaceId={workspaceId}
+        workspaceGoalVersion={view.workspace.goalVersion}
+        onClose={() => {
+          setSelectedId(null)
+          closePanel()
+        }}
+      />,
+      () => {
+        if (selectedIdRef.current === openedFor) setSelectedId(null)
+      },
+      openedFor,
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately keyed on the SELECTION
+    // and not on the snapshot: see the note above. `panelMode` is read, not depended on, for the
+    // same reason (it changes when this effect's own `close()` lands).
+  }, [selectedTask?.id])
+
   return (
     <>
       {/* The stale-data dim stays OUTSIDE the shell (the M45 t3 idiom on the Overview):
@@ -69,20 +124,6 @@ export function TasksClient({
           </div>
         </PageShell>
       </div>
-      {/* KEYED on the task (final review, Minor 5): the panel keeps its three on-demand reads --
-        * the knowledge, the artifact preview, the recorded run context -- in its own state, and
-        * none of them is keyed to the task. Without this, React re-uses the one instance when the
-        * selection moves and one task's knowledge stays on the screen under another task's title.
-        * A new key is a new instance, so every such read starts closed and empty. */}
-      {selectedTask !== null && (
-        <TaskDetailPanel
-          key={selectedTask.id}
-          task={selectedTask}
-          workspaceId={workspaceId}
-          workspaceGoalVersion={view.workspace.goalVersion}
-          onClose={() => setSelectedId(null)}
-        />
-      )}
     </>
   )
 }

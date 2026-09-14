@@ -1056,13 +1056,17 @@ try {
   // ============================================================================================
   // Stage 5: telling the Supervisor makes a version and arms a re-plan.
   // ============================================================================================
-  await page.getByTestId('supervisor-request-input').fill(REQUEST_V3)
+  // SCOPED to the shell's right panel (M57 t5): the Supervisor's composer lives there now, and
+  // until Task 6 retires the Overview's own request box the two carry the same three testids. The
+  // panel is the one this milestone keeps, so the panel is the one this stage drives.
+  const supervisorPanel = page.locator('[data-testid="right-panel"]')
+  await supervisorPanel.getByTestId('supervisor-request-input').fill(REQUEST_V3)
   await clickUntil(
-    page.getByTestId('supervisor-request-send'),
-    async () => page.getByTestId('supervisor-request-result').first().isVisible(),
+    supervisorPanel.getByTestId('supervisor-request-send'),
+    async () => supervisorPanel.getByTestId('supervisor-request-result').isVisible(),
     'the "tell the Supervisor" send button',
   )
-  const requestResult = (await page.getByTestId('supervisor-request-result').first().textContent())?.trim() ?? ''
+  const requestResult = (await supervisorPanel.getByTestId('supervisor-request-result').textContent())?.trim() ?? ''
   console.log(`stage 5: the box answered ${JSON.stringify(requestResult)}`)
   if (!requestResult.includes('v3')) {
     await fail(`stage 5: the request result reads ${JSON.stringify(requestResult)}, expected it to name goal v3`)

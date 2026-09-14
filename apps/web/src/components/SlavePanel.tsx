@@ -285,7 +285,12 @@ export function SlavePanel({
       aria-label="Slave detail"
       // Slide-in (spec §8): this panel is mounted fresh per slave (`OverviewClient` keys it by
       // slave id), so the animation replays on every open/switch by construction.
-      className="fixed inset-y-0 right-0 z-10 flex w-96 flex-col gap-4 overflow-y-auto border-l border-line bg-bg-1 p-4 motion-safe:animate-[panel-in_160ms_ease-out]"
+      //
+      // M57 R8: it renders inside the shell's 372px slot now, which owns the width, the surface
+      // and the position -- so this element is a plain column that fills its parent. Not one line
+      // below this header moved, and the slide-in above still replays: the key is per slave, and
+      // `/workforce` (a global route, no slot) wraps it in the geometry this className gave up.
+      className="flex h-full w-full flex-col gap-4 overflow-y-auto p-4 motion-safe:animate-[panel-in_160ms_ease-out]"
     >
       <header className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">

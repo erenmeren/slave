@@ -255,12 +255,13 @@ export function TaskDetailPanel({
       // Slide-in (spec §8): `TasksClient` mounts this panel fresh on card select, so the
       // animation replays on every open by construction. Stays a hand-rolled `<aside>`, not
       // `ui/Panel` -- the motion test (`tasks-components.test.tsx`) asserts on
-      // `container.querySelector('aside')` directly, and `Panel` renders a `<section>` with no
-      // `className` passthrough for the fixed edge-anchored positioning this needs. Adopts
-      // `Panel`'s `shadow-resting` token (its own radius doesn't apply -- this panel is flush
-      // against the viewport's top/right/bottom edges, same precedent as
-      // `AssignCompanyDialog.tsx`'s floating surface).
-      className="fixed inset-y-0 right-0 z-10 flex w-96 flex-col gap-4 overflow-y-auto border-l border-line bg-bg-1 p-4 shadow-resting motion-safe:animate-[panel-in_160ms_ease-out]"
+      // `container.querySelector('aside')` directly, and it keeps `Panel`'s `shadow-resting`
+      // token (same precedent as `AssignCompanyDialog.tsx`'s floating surface). Both are what
+      // that test reads, so both stay.
+      //
+      // M57 R8: it renders inside the shell's 372px slot now, which owns the width, the surface
+      // and the position -- so this element is a plain column that fills its parent.
+      className="flex h-full w-full flex-col gap-4 overflow-y-auto p-4 shadow-resting motion-safe:animate-[panel-in_160ms_ease-out]"
     >
       <header className="flex items-start justify-between gap-2">
         <div>
