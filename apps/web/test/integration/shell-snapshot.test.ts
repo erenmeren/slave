@@ -59,6 +59,7 @@ describe('buildShellFacts', () => {
 
     await prisma.slaveRun.updateMany({ where: { slaveId: fixture.slaveId }, data: { status: 'paused' } })
     expect((await buildShellFacts(fixture.workspaceId))?.counts.slavesWorking).toBe(0)
+    expect((await buildShellFacts(fixture.workspaceId))?.counts.slavesPaused).toBe(1)
   })
 
   // M14 fix wave, review Minor 2: the badge says "slaves working", and it counted live RUNS. One
