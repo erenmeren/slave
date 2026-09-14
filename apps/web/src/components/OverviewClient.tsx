@@ -192,6 +192,7 @@ export function OverviewClient({
       counts: {
         slavesWorking: view.slaves.filter((a) => a.status === 'working').length,
         tasksActive: view.tasks.active,
+        slavesPaused: view.slaves.filter((a) => a.status === 'paused').length,
       },
       guardrails: {
         budgetUsd: view.workspace.budgetUsd,

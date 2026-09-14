@@ -117,7 +117,7 @@ describe('ProjectTabs', () => {
     act(() =>
       publishShellFacts('w1', {
         workspace: { id: 'w1', name: 'x' },
-        counts: { slavesWorking: 1, tasksActive: 7 },
+        counts: { slavesWorking: 1, tasksActive: 7, slavesPaused: 0 },
         guardrails: { budgetUsd: null, maxConcurrentRuns: 1, runTimeoutMs: 1000, maxAttempts: 1 },
         status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
       }),

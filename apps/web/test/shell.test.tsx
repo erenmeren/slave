@@ -198,7 +198,7 @@ describe('the halt banner shows on every page', () => {
       workspace: { id: 'w1', name: 'W', haltedReason: HALT_REASON, goalVersion: 0 },
       shellFacts: {
         workspace: { id: 'w1', name: 'W' },
-        counts: { slavesWorking: 0, tasksActive: 0 },
+        counts: { slavesWorking: 0, tasksActive: 0, slavesPaused: 0 },
         guardrails: { budgetUsd: 20, maxConcurrentRuns: 3, runTimeoutMs: 3_600_000, maxAttempts: 3 },
         status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: HALT_REASON },
       },
@@ -225,7 +225,7 @@ describe('the halt banner shows on every page', () => {
       typeVolumes: [],
       shellFacts: {
         workspace: { id: 'w1', name: 'W' },
-        counts: { slavesWorking: 0, tasksActive: 0 },
+        counts: { slavesWorking: 0, tasksActive: 0, slavesPaused: 0 },
         guardrails: { budgetUsd: 20, maxConcurrentRuns: 3, runTimeoutMs: 3_600_000, maxAttempts: 3 },
         status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: HALT_REASON },
       },

@@ -101,7 +101,7 @@ vi.mock('../src/server/graph.js', () => ({
 // EventSource on this route. Nothing above the drawer/mode-tab blocks asserts on them.
 const SHELL_FACTS: GraphSnapshot['shellFacts'] = {
   workspace: { id: 'w1', name: 'Checkout Platform' },
-  counts: { slavesWorking: 1, tasksActive: 1 },
+  counts: { slavesWorking: 1, tasksActive: 1, slavesPaused: 0 },
   guardrails: { budgetUsd: 100, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
   status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
 }

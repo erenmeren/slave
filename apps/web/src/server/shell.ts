@@ -25,6 +25,19 @@ export interface ShellFacts {
     readonly slavesWorking: number
     /** Tasks in the six statuses `overview.ts` counts as active work. */
     readonly tasksActive: number
+    /**
+     * SLAVES of this workspace whose derived status is `paused` (M57 R7, plan erratum E2, spec
+     * erratum E13). The header's split button reads `Resume all` instead of `Pause all` when this
+     * is positive and `slavesWorking` is zero — the two together are the only way to tell
+     * "everything is paused" from "nothing is running", and the second must not offer to pause an
+     * idle project.
+     *
+     * SLAVES and not RUNS, and deduped, for exactly the reason `slavesWorking` beside it is: one
+     * slave with two live rows is one slave. The draft of this plan counted paused RUNS here and
+     * paused SLAVES in `OverviewClient`'s hand-built literal, and `sameFacts` compared the two
+     * across a route change — so the button's label flipped depending on which page you were on.
+     */
+    readonly slavesPaused: number
   }
   readonly guardrails: {
     /** `null` for an unbudgeted workspace (M12 Task 9) — rendered `—`, never `$0.00`. */
@@ -104,6 +117,15 @@ export async function buildShellFacts(workspaceId: string): Promise<ShellFacts |
     runs.filter((run) => deriveSlaveStatus(toRunState(run)) === 'working').map((run) => run.slaveId),
   ).size
 
+  // The same derivation, the same dedupe, one word apart (spec erratum E13). `deriveSlaveStatus`
+  // is the domain's, so this number and the `paused` pill on the same slave's card cannot come to
+  // disagree -- and `SlaveCardData.status` on the client is that identical projection, which is
+  // what makes `OverviewClient`'s own literal below equal to this one BY CONSTRUCTION rather than
+  // by coincidence. Zero extra queries: `runs` is already in hand.
+  const slavesPaused = new Set(
+    runs.filter((run) => deriveSlaveStatus(toRunState(run)) === 'paused').map((run) => run.slaveId),
+  ).size
+
   // Same `SpendGroup` construction as `listProjects`/`listWorkers` (`org.ts`).
   const groups: SpendGroup[] = spendGroups.map((g) => ({
     provider: g.provider,
@@ -118,7 +140,7 @@ export async function buildShellFacts(workspaceId: string): Promise<ShellFacts |
 
   return {
     workspace: { id: workspace.id, name: workspace.name },
-    counts: { slavesWorking, tasksActive },
+    counts: { slavesWorking, tasksActive, slavesPaused },
     guardrails: {
       budgetUsd: workspace.budgetUsd,
       maxConcurrentRuns: workspace.maxConcurrentRuns,

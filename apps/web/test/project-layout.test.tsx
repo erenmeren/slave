@@ -8,7 +8,7 @@ vi.mock('../src/server/shell', () => ({
     id === 'w1' || id === 'archived-w'
       ? {
           workspace: { id, name: 'Checkout Platform' },
-          counts: { slavesWorking: 0, tasksActive: 3 },
+          counts: { slavesWorking: 0, tasksActive: 3, slavesPaused: 0 },
           guardrails: { budgetUsd: 2, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 5 },
           status: { goal: 'Ship it', spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
         }

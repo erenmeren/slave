@@ -123,7 +123,7 @@ const INITIAL: ActivityPage = {
   typeVolumes: [],
   shellFacts: {
     workspace: { id: 'w1', name: 'Checkout Platform' },
-    counts: { slavesWorking: 3, tasksActive: 12 },
+    counts: { slavesWorking: 3, tasksActive: 12, slavesPaused: 0 },
     guardrails: { budgetUsd: 20, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
     status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
   },

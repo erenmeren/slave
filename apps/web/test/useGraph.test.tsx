@@ -8,7 +8,7 @@ import type { GraphSnapshot } from '../src/server/graph.js'
 // the drawer's facts. This hook test asserts on neither -- it only round-trips whatever it is given.
 const SHELL_FACTS: GraphSnapshot['shellFacts'] = {
   workspace: { id: 'w1', name: 'W' },
-  counts: { slavesWorking: 0, tasksActive: 0 },
+  counts: { slavesWorking: 0, tasksActive: 0, slavesPaused: 0 },
   guardrails: { budgetUsd: null, maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 3 },
   status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
 }

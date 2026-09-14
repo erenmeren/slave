@@ -46,6 +46,7 @@ function sameFacts(a: ShellFacts, b: ShellFacts): boolean {
     a.workspace.name === b.workspace.name &&
     a.counts.slavesWorking === b.counts.slavesWorking &&
     a.counts.tasksActive === b.counts.tasksActive &&
+    a.counts.slavesPaused === b.counts.slavesPaused &&
     a.guardrails.budgetUsd === b.guardrails.budgetUsd &&
     a.guardrails.maxConcurrentRuns === b.guardrails.maxConcurrentRuns &&
     a.guardrails.runTimeoutMs === b.guardrails.runTimeoutMs &&
