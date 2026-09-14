@@ -943,7 +943,10 @@ try {
     // No `prepare` any more (M57 R11): the disclosure that used to hold this panel is gone and the
     // river renders directly on the Overview, so the 340px is measurable where it stands.
     ['overview', `/w/${workspaceId}`, '[data-testid="live-events"]', 'width', '340px'],
-    ['activity', `/w/${workspaceId}/activity`, '[data-testid="timeline-rule"]', 'left', '88px'],
+    // M57 t8 fix round 1, ruling T8-3: the row's geometry moved (`ActivityCard.tsx`'s
+    // `px-4` + `64px` time + `gap-3` + `14px` dot column), so the rule's x moved with it to the
+    // dot's own centre -- `16 + 64 + 12 + 7 = 99`.
+    ['activity', `/w/${workspaceId}/activity`, '[data-testid="timeline-rule"]', 'left', '99px'],
     ['graph', `/w/${workspaceId}/graph`, '[data-testid="graph-drawer"]', 'width', '352px'],
   ]
 
@@ -1213,7 +1216,7 @@ try {
       // Now that the run has appended events, the river has height -- so the design's own rule is
       // required to be VISIBLE here, which is the assertion an empty workspace could not carry.
       await waitVisible(page.getByTestId('activity-card'), 'at least one activity row once the run is live')
-      await waitVisible(page.getByTestId('timeline-rule'), "the timeline's rule at x=88 over a populated river")
+      await waitVisible(page.getByTestId('timeline-rule'), "the timeline's rule at x=99 over a populated river")
     }
     await capture(target)
     console.log(`stage 1 (live): ${target.name} re-captured with a run in flight`)

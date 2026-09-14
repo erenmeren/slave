@@ -1,7 +1,6 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { CapabilityRecord } from '@slave-of-ai/domain'
 import type { AllSlavesPage, CatalogRowView, ProjectTeamRow, RosterCompany, RunbookRowView, WorkforceCatalogView } from '../../server/org'
@@ -23,6 +22,7 @@ import { Button } from '../ui/Button'
 import { LoadingState } from '../ui/LoadingState'
 import { PageShell } from '../ui/PageShell'
 import { Panel } from '../ui/Panel'
+import { Segmented } from '../ui/Segmented'
 import { Tabs } from '../ui/Tabs'
 
 export type WorkforceTab = 'slaves' | 'departments' | 'catalog' | 'skills' | 'runbooks' | 'evidence'
@@ -130,13 +130,14 @@ export function WorkforceClient({
   const searchParams = useSearchParams()
   const router = useRouter()
   const [tab, setTab] = useState<WorkforceTab>(initialTab)
-  // Re-syncs local state whenever the SERVER hands this component a different `initialTab` --
-  // which only happens after a real navigation, never after `select()`'s own `replaceState` (that
-  // never changes what the server rendered). The sub-segment row below is a plain `<Link>` (M57
-  // erratum E15), so choosing "Departments"/"Runbooks" from it is exactly such a navigation: the
-  // Server Component re-runs with the new `?tab=`, but THIS client component is not remounted --
-  // same fiber, same position -- so without this effect its own `tab` state would keep whatever a
-  // previous local click last set, and the segment's target panel would never actually show.
+  // A defensive backstop, not the fix for the segment's own click (that is `select` itself, called
+  // directly from `Segmented`'s `onChange` -- ruling T8-2, fix round 1): re-syncs local state
+  // whenever the SERVER hands this component a different `initialTab`, which happens after any
+  // navigation this component did not itself drive -- the segment's `<Link>` pushing a history
+  // entry a Back press later lands on, or a bookmark/external link arriving straight at a
+  // `?tab=departments`/`?tab=runbooks` URL. `select()`'s own `replaceState` never changes what the
+  // server rendered, so this effect stays a no-op re-set for every click that already went through
+  // `select()`.
   useEffect((): void => {
     setTab(initialTab)
   }, [initialTab])
@@ -201,6 +202,14 @@ export function WorkforceClient({
     if (next === 'evidence' && evidence === null) router.refresh()
   }
 
+  // Same MERGE rule `select` above uses (ruling R13): a segment's `href` carries whatever other
+  // param the current URL already has, never a hard-coded `?tab=`.
+  const hrefForTab = (next: WorkforceTab): string => {
+    const query = new URLSearchParams(searchParams)
+    query.set('tab', next)
+    return `/workforce?${query.toString()}`
+  }
+
   return (
     <PageShell
       title="Workforce"
@@ -222,22 +231,17 @@ export function WorkforceClient({
             onSelect={(id) => select(id as WorkforceTab)}
           />
           {SUB_TABS[visibleTabFor(tab)] !== undefined && (
-            <span role="group" aria-label="Workforce sub-section" className="inline-flex w-fit gap-[2px] rounded-card border border-line2 p-[2px]">
-              {SUB_TABS[visibleTabFor(tab)]?.map((sub) => (
-                <Link
-                  key={sub.id}
-                  href={`/workforce?tab=${sub.id}`}
-                  data-testid={`workforce-segment-${sub.id}`}
-                  aria-selected={tab === sub.id}
-                  aria-current={tab === sub.id ? 'page' : undefined}
-                  className={`rounded-nav border-0 px-[10px] py-1 text-[13px] transition-colors ${
-                    tab === sub.id ? 'bg-sel font-semibold text-t1' : 'bg-transparent text-t2 hover:text-t1'
-                  }`}
-                >
-                  {sub.label}
-                </Link>
-              ))}
-            </span>
+            // `ui/Segmented` (ruling T8-2, fix round 1) -- not a hand-rolled twin of it. `onChange`
+            // is `select` itself: the SAME local-state update the main strip's `onSelect` makes,
+            // so the segment's own `href` navigation is not the only thing that can move `tab` --
+            // closing the dead-click race a navigation-only update left open.
+            <Segmented
+              options={(SUB_TABS[visibleTabFor(tab)] ?? []).map((sub) => ({ id: sub.id, label: sub.label, href: hrefForTab(sub.id) }))}
+              value={tab}
+              onChange={select}
+              ariaLabel="Workforce sub-section"
+              testIdPrefix="workforce-segment"
+            />
           )}
         </div>
       }

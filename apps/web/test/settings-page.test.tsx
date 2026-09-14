@@ -7,7 +7,7 @@ import { DangerZone } from '../src/components/DangerZone.js'
 import { clearModelSelectCache } from '../src/components/ModelSelect.js'
 import { ProviderAdapterCards } from '../src/components/ProviderAdapterCards.js'
 import { SettingsClient } from '../src/components/SettingsClient.js'
-import { ThemeProvider } from '../src/components/theme/ThemeProvider.js'
+import { THEME_STORAGE_KEY, ThemeProvider } from '../src/components/theme/ThemeProvider.js'
 import type { RosterCompany, RosterMemberRow } from '../src/server/org.js'
 
 // jsdom has no `matchMedia`, and `SettingsClient` now mounts `ThemeProvider` (M57 t8: the
@@ -119,6 +119,18 @@ beforeEach(() => {
 
 afterEach(() => {
   routerRefresh.mockClear()
+  // Fix round 1 minor: the Appearance case's `dark` click writes `document.documentElement`'s own
+  // `data-theme` attribute and `localStorage[THEME_STORAGE_KEY]` -- real global state `ThemeProvider`
+  // re-reads on mount, outside this file's render container and outside vitest's own reset. The
+  // `try` is `readStored`/`writeStored`'s own guard, mirrored: this runner's `localStorage` is
+  // Node's own inert stub (no `installStorage()` here, unlike `theme.test.tsx`), which throws on
+  // every access -- nothing was ever actually written, so nothing to remove either.
+  document.documentElement.removeAttribute('data-theme')
+  try {
+    window.localStorage.removeItem(THEME_STORAGE_KEY)
+  } catch {
+    /* nothing was stored -- see above */
+  }
 })
 
 describe('SettingsClient', () => {

@@ -234,6 +234,18 @@ describe('WorkforceClient tabs (M44 R1)', () => {
     expect(screen.getAllByTestId('workforce-tab-skills')).toHaveLength(1)
   })
 
+  // Fix round 1, finding 2: land on `?tab=runbooks`, switch to the PARENT tab (a local `select`,
+  // no navigation -- `initialTab` never changes), then click the segment back to Runbooks. Before
+  // ruling T8-2, `select()`'s replaceState-only URL change and a `<Link>`'s own navigation could
+  // disagree with which one actually moved `tab` state, leaving the click dead. `onChange` on the
+  // segment is now `select` itself, so this is not a race any more.
+  it('re-selecting a segment after switching parent tabs still opens it', () => {
+    render(<TestWorkforceClient initialTab="runbooks" />)
+    fireEvent.click(screen.getByTestId('workforce-tab-skills'))
+    fireEvent.click(screen.getByTestId('workforce-segment-runbooks'))
+    expect(screen.getByTestId('workforce-runbooks')).toBeTruthy()
+  })
+
   // M57 R13 / erratum E15: Departments is a `?tab=departments` VALUE still, and a segment link
   // under People now, not a tab of its own -- so this case opens straight onto it the way a
   // bookmark or the segment's own `href` would, rather than clicking a `workforce-tab-*` button
@@ -246,7 +258,8 @@ describe('WorkforceClient tabs (M44 R1)', () => {
       />,
     )
     expect(screen.getByTestId('workforce-tab-slaves').getAttribute('aria-selected')).toBe('true')
-    expect(screen.getByTestId('workforce-segment-departments').getAttribute('aria-selected')).toBe('true')
+    // A segment is `ui/Segmented`'s LINK form (ruling T8-2): `aria-current`, never `aria-selected`.
+    expect(screen.getByTestId('workforce-segment-departments').getAttribute('aria-current')).toBe('page')
     expect(screen.getByTestId('department-rename').textContent).toBe('Platform')
   })
 
@@ -315,7 +328,7 @@ describe('WorkforceClient tabs (M44 R1)', () => {
     // M57 R13 / erratum E15: Runbooks folded into Skills & runbooks -- the visible tab is Skills,
     // and the segment underneath is what actually names Runbooks now.
     expect(screen.getByTestId('workforce-tab-skills').getAttribute('aria-selected')).toBe('true')
-    expect(screen.getByTestId('workforce-segment-runbooks').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('workforce-segment-runbooks').getAttribute('aria-current')).toBe('page')
     expect(screen.getByTestId('runbook-row').getAttribute('data-key')).toBe('feature-delivery')
   })
 

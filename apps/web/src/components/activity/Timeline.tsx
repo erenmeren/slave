@@ -258,15 +258,20 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
       className="flex-1 overflow-y-auto pt-3"
     >
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
-        {/* The design README's vertical rule at x=88 (1c / §3a.5). Absolutely positioned inside
-          * THIS element rather than the scroll viewport: this one is already `position: relative`
-          * and is as tall as the whole river, so the rule spans every row instead of only the
-          * first viewport's worth and then scrolling away. `left` is INLINE so the gate can read
-          * the exact number back off `getComputedStyle`. */}
+        {/* The design README's vertical rule, run through the dot's own centre (1c / §3a.5).
+          * Absolutely positioned inside THIS element rather than the scroll viewport: this one is
+          * already `position: relative` and is as tall as the whole river, so the rule spans every
+          * row instead of only the first viewport's worth and then scrolling away. `left` is
+          * INLINE so the gate can read the exact number back off `getComputedStyle`.
+          *
+          * M57 t8 fix round 1, ruling T8-3: was a fixed `88px`, the old row's own
+          * `74px time + 28px gutter` math. The row is `px-4` + `64px` time + `gap-3` + `14px` dot
+          * column now (`ActivityCard.tsx`), and `EventDot`'s `flex justify-center` centres its
+          * 7px dot inside that 14px column -- `16 + 64 + 12 + 7 = 99`. */}
         <span
           data-testid="timeline-rule"
           aria-hidden
-          style={{ left: '88px' }}
+          style={{ left: '99px' }}
           className="pointer-events-none absolute inset-y-0 w-px bg-[linear-gradient(180deg,transparent,rgba(46,230,207,.28),rgba(123,140,255,.18),transparent)]"
         />
         {virtualItems.map((virtualItem) => {

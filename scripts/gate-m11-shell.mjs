@@ -637,11 +637,14 @@ try {
   // ---- Scenario stage 6b: delete the second department through the Departments tab's
   // `department-delete` -> `department-delete-confirm` (M27 §4.2). Its one slave is already gone
   // (deleted above), so this is a plain cascade with no live-run refusal to work around.
+  // M57 t8 fix round 1 (ruling T8-2): the segment is `ui/Segmented`'s own LINK form now, which
+  // carries `aria-current="page"` when selected -- never `aria-selected`, which is not a valid
+  // ARIA attribute on an element with an implicit `role="link"`.
   const departmentsTab = page.getByTestId('workforce-segment-departments')
   const otherDeptRow = page.getByTestId('data-table-row').filter({ hasText: 'M11 Gate Other Dept' })
   await clickUntil(
     departmentsTab,
-    async () => (await departmentsTab.getAttribute('aria-selected')) === 'true' && (await otherDeptRow.first().isVisible()),
+    async () => (await departmentsTab.getAttribute('aria-current')) === 'page' && (await otherDeptRow.first().isVisible()),
     'the Departments tab',
   )
   await waitVisible(otherDeptRow, 'the "M11 Gate Other Dept" department row')

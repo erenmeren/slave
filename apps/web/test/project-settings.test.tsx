@@ -174,11 +174,19 @@ function settings(over: Partial<ProjectSettings['workspace']> = {}): ProjectSett
 }
 
 describe('ProjectSettingsClient', () => {
-  it('renders the four panels in order', () => {
+  // M57 t8 fix round 1, ruling T8-5: Goal/Runtime keep drawing their OWN `ui/Panel` card (their
+  // components are untouched), so this section wraps them bare -- no second card recipe of its
+  // own. Permissions/Danger have no inner `Panel` to double up with, so THEY keep the section's
+  // card recipe and name themselves with an `<h2>` instead.
+  it('renders the four sections in order, one card each', () => {
     render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
+    const sectionIds = [...document.querySelectorAll('section[id]')].map((section) => section.id)
+    expect(sectionIds).toEqual(['goal', 'runtime', 'permissions', 'danger'])
     // `Panel` renders `PanelHeader` → `SectionLabel` as its first child when it has a title.
-    const titles = screen.getAllByTestId('panel').map((p) => p.firstElementChild?.textContent?.trim().toLowerCase())
-    expect(titles).toEqual(['goal', 'runtime', 'slave permissions', 'danger zone'])
+    const panelTitles = screen.getAllByTestId('panel').map((p) => p.firstElementChild?.textContent?.trim().toLowerCase())
+    expect(panelTitles).toEqual(['goal', 'runtime'])
+    expect(document.getElementById('permissions')?.querySelector('h2')?.textContent).toBe('Permissions')
+    expect(document.getElementById('danger')?.querySelector('h2')?.textContent).toBe('Danger zone')
   })
 
   it("shows the three limits read-only in the sidebar's old format", () => {

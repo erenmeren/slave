@@ -202,7 +202,12 @@ export function ActivityClient({
         * `self-stretch` is what still gives its `Timeline` a bounded height to scroll inside. */}
       <div className="grid min-h-0 flex-1 grid-cols-[200px_minmax(0,1fr)] items-start gap-5 px-[24px] py-5">
         {/* The family rail (design README §3a.5: event-type volumes, then the roster beneath). */}
-        <aside data-testid="activity-rail" className="flex flex-col gap-6 overflow-y-auto">
+        {/* M57 t8 fix round 1, ruling T8-4: `self-stretch min-h-0`, the same override the river
+          * needed at `self-stretch` below -- the grid's own `items-start` sizes a track to its
+          * tallest item's CONTENT height by default, which never gives `overflow-y-auto` a bounded
+          * box to actually scroll inside; a long roster would overflow the grid container instead
+          * of scrolling in place. */}
+        <aside data-testid="activity-rail" className="flex min-h-0 flex-col gap-6 self-stretch overflow-y-auto">
           <div>
             <PanelHeader title="event types · 24h" />
             <div className="mt-[11px] flex flex-col gap-[9px]">

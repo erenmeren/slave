@@ -482,11 +482,14 @@ describe('ActivityClient', () => {
 
   // ---- M14 Task 12: the river, its rule, the right rail and the roster filter --------------
 
-  it('draws the vertical rule at exactly x=88 with the teal→indigo gradient', () => {
+  // M57 t8 fix round 1, ruling T8-3: the row's own geometry moved (`px-4` + `64px` time + `gap-3`
+  // + `14px` dot column), so the rule's x moved with it -- `16 + 64 + 12 + 7 = 99`, the dot's own
+  // centre inside its 14px gutter column.
+  it('draws the vertical rule at exactly x=99 with the teal→indigo gradient', () => {
     render(<ActivityClient workspaceId="w1" initial={page({})} />)
     const rule = screen.getByTestId('timeline-rule')
     // Inline style, which jsdom reports exactly. The gate re-reads `left` from computed style.
-    expect(rule.style.left).toBe('88px')
+    expect(rule.style.left).toBe('99px')
     expect(rule.className).toContain(
       'bg-[linear-gradient(180deg,transparent,rgba(46,230,207,.28),rgba(123,140,255,.18),transparent)]',
     )
@@ -551,6 +554,17 @@ describe('ActivityClient', () => {
     const track = screen.getByTestId('volume-bar').querySelector('[data-testid="volume-fill"]')?.parentElement
     expect(track?.className).toContain('w-[56px]')
     expect(track?.className).toContain('h-[4px]')
+  })
+
+  // M57 t8 fix round 1, ruling T8-4: `items-start` sizes the grid row to content height, so
+  // `overflow-y-auto` needs `self-stretch min-h-0` to actually have a bounded box to scroll in --
+  // the same override the river's own wrapper already carries.
+  it('gives the family rail a bounded, scrollable box under the grid\'s items-start', () => {
+    render(<ActivityClient workspaceId="w1" initial={page({})} />)
+    const rail = screen.getByTestId('activity-rail')
+    expect(rail.className).toContain('self-stretch')
+    expect(rail.className).toContain('min-h-0')
+    expect(rail.className).toContain('overflow-y-auto')
   })
 
   it('filtering to a roster row dims every card that is not that slave', () => {

@@ -12,7 +12,6 @@ import { HaltBanner } from '../HaltBanner'
 import { PermissionMatrix } from '../PermissionMatrix'
 import { DangerConfirm } from '../ui/DangerConfirm'
 import { PageShell } from '../ui/PageShell'
-import { Panel } from '../ui/Panel'
 import { GoalPanel } from './GoalPanel'
 import { RuntimePanel } from './RuntimePanel'
 import { Button } from '../ui/Button'
@@ -70,7 +69,10 @@ export function ProjectSettingsClient({
           <a href="#danger" className="text-s-blocked hover:opacity-80">Danger zone</a>
         </nav>
         <div className="flex flex-col gap-5">
-          <section id="goal" className="rounded-page-card border border-line bg-card p-[18px_20px]">
+          {/* M57 t8 fix round 1, ruling T8-5: GoalPanel/RuntimePanel already render their own
+            * `ui/Panel` card -- a bare wrapper here, no card recipe of its own, so the section is
+            * one card, not two nested ones. */}
+          <section id="goal">
             <GoalPanel
               workspaceId={workspace.id}
               goal={workspace.goal}
@@ -85,7 +87,7 @@ export function ProjectSettingsClient({
               halted={workspace.haltedReason !== null}
             />
           </section>
-          <section id="runtime" className="rounded-page-card border border-line bg-card p-[18px_20px]">
+          <section id="runtime">
             <RuntimePanel
               key={`${workspace.provider ?? ''}|${workspace.budgetUsd ?? ''}`}
               workspaceId={workspace.id}
@@ -95,58 +97,60 @@ export function ProjectSettingsClient({
               limits={{ maxConcurrentRuns: workspace.maxConcurrentRuns, runTimeoutMs: workspace.runTimeoutMs, maxAttempts: workspace.maxAttempts }}
             />
           </section>
-          <section id="permissions" className="rounded-page-card border border-line bg-card p-[18px_20px]">
-            <Panel title="slave permissions">
-              <PermissionMatrix sections={permissions === null ? [] : [permissions]} />
-            </Panel>
+          {/* Permissions and Danger have no inner `Panel` of their own to double up with, so THEY
+            * keep the section's own card recipe -- an `<h2>` (Settings' Appearance section's own
+            * heading recipe) replaces the `Panel title=…` that used to draw both the card AND the
+            * heading. Every `perm-*` testid `PermissionMatrix` renders is untouched. */}
+          <section id="permissions" className="flex flex-col gap-3 rounded-page-card border border-line bg-card p-[18px_20px]">
+            <h2 className="m-0 text-[15px] font-semibold text-t1">Permissions</h2>
+            <PermissionMatrix sections={permissions === null ? [] : [permissions]} />
           </section>
           <section
             id="danger"
-            className="rounded-page-card border border-[color-mix(in_oklab,var(--s-blocked)_40%,var(--line))] bg-card p-[18px_20px]"
+            className="flex flex-col gap-3 rounded-page-card border border-[color-mix(in_oklab,var(--s-blocked)_40%,var(--line))] bg-card p-[18px_20px]"
           >
-            <Panel title="danger zone">
-              <div className="flex flex-col gap-3">
-                {!workspace.archived && (
-                  <div className="flex items-center gap-3 rounded-card border border-tone-blocked/22 p-3">
-                    <span className="text-xs text-text-2">stop every run in this project</span>
-                    <span className="ml-auto">
-                      <EmergencyStopButton workspaceId={workspace.id} halted={workspace.haltedReason !== null} />
-                    </span>
-                  </div>
-                )}
+            <h2 className="m-0 text-[15px] font-semibold text-t1">Danger zone</h2>
+            <div className="flex flex-col gap-3">
+              {!workspace.archived && (
                 <div className="flex items-center gap-3 rounded-card border border-tone-blocked/22 p-3">
-                  <span className="text-xs text-text-2">
-                    {workspace.archived ? 'restore this project to active use' : 'archive this project'}
-                  </span>
-                  <span className="ml-auto flex flex-col items-end gap-1">
-                    {workspace.archived ? (
-                      <Button variant="primary" size="sm" data-testid="restore-project" onClick={() => void restore()}>
-                        restore project
-                      </Button>
-                    ) : (
-                      <DangerConfirm
-                        label="archive project"
-                        testId="archive-project"
-                        confirmText={
-                          `archives ${workspace.name}: ${plural(footprint.departments, 'department')}, ${plural(footprint.slaves, 'slave')}, ` +
-                          `${plural(footprint.tasks, 'task')}, ${plural(footprint.runs, 'run')} stay on record; nothing runs until you restore it`
-                        }
-                        onConfirm={async () => {
-                          const error = await sendControl(`/api/w/${workspace.id}/archive`, { method: 'POST' })
-                          if (error === null) router.push('/')
-                          return error
-                        }}
-                      />
-                    )}
-                    {restoreError !== null && (
-                      <span role="alert" data-testid="restore-project-error" className="text-xs text-tone-blocked">
-                        {restoreError}
-                      </span>
-                    )}
+                  <span className="text-xs text-text-2">stop every run in this project</span>
+                  <span className="ml-auto">
+                    <EmergencyStopButton workspaceId={workspace.id} halted={workspace.haltedReason !== null} />
                   </span>
                 </div>
+              )}
+              <div className="flex items-center gap-3 rounded-card border border-tone-blocked/22 p-3">
+                <span className="text-xs text-text-2">
+                  {workspace.archived ? 'restore this project to active use' : 'archive this project'}
+                </span>
+                <span className="ml-auto flex flex-col items-end gap-1">
+                  {workspace.archived ? (
+                    <Button variant="primary" size="sm" data-testid="restore-project" onClick={() => void restore()}>
+                      restore project
+                    </Button>
+                  ) : (
+                    <DangerConfirm
+                      label="archive project"
+                      testId="archive-project"
+                      confirmText={
+                        `archives ${workspace.name}: ${plural(footprint.departments, 'department')}, ${plural(footprint.slaves, 'slave')}, ` +
+                        `${plural(footprint.tasks, 'task')}, ${plural(footprint.runs, 'run')} stay on record; nothing runs until you restore it`
+                      }
+                      onConfirm={async () => {
+                        const error = await sendControl(`/api/w/${workspace.id}/archive`, { method: 'POST' })
+                        if (error === null) router.push('/')
+                        return error
+                      }}
+                    />
+                  )}
+                  {restoreError !== null && (
+                    <span role="alert" data-testid="restore-project-error" className="text-xs text-tone-blocked">
+                      {restoreError}
+                    </span>
+                  )}
+                </span>
               </div>
-            </Panel>
+            </div>
           </section>
         </div>
       </div>
