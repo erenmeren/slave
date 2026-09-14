@@ -6,10 +6,10 @@ import { useRightPanel } from './RightPanelProvider'
 /**
  * The 52px rail the panel collapses to (M57 R8, README "Shell" → Right panel).
  *
- * Two buttons: the accent `S` that brings the Supervisor back, carrying the pending-decision count
- * as a badge, and an `A` that goes to Activity. The badge is the whole reason the dock is not just
- * an empty gutter: a person who collapsed the panel still has to be told when something is waiting
- * on them.
+ * Two buttons: the accent `S` that brings the SUPERVISOR back -- the default content, not whatever
+ * was in the slot when somebody collapsed it -- carrying the pending-decision count as a badge, and
+ * an `A` that goes to Activity. The badge is the whole reason the dock is not just an empty gutter:
+ * a person who collapsed the panel still has to be told when something is waiting on them.
  */
 export function RightPanelDock({
   workspaceId,
@@ -18,7 +18,7 @@ export function RightPanelDock({
   readonly workspaceId: string
   readonly pendingDecisions: number
 }): React.JSX.Element {
-  const { expand } = useRightPanel()
+  const { close, expand } = useRightPanel()
   return (
     <div
       data-testid="right-dock"
@@ -29,7 +29,15 @@ export function RightPanelDock({
         data-testid="dock-supervisor"
         title="Supervisor"
         aria-label={pendingDecisions > 0 ? `Supervisor, ${String(pendingDecisions)} waiting on you` : 'Supervisor'}
-        onClick={expand}
+        // CLOSE, then expand (ruling T5-2). The button says "Supervisor", so it has to produce
+        // the Supervisor -- and a bare `expand()` re-opens whatever mode the slot was collapsed
+        // with, which is a task or a worker panel under a label that promised something else.
+        // `close()` hands the slot back to its default AND runs the owning page's clearer, so the
+        // `?task=`/`?slave=` this button walks away from goes with it.
+        onClick={() => {
+          close()
+          expand()
+        }}
         className="relative grid h-[34px] w-[34px] place-items-center rounded-panel border-0 bg-accent font-mono text-[13px] font-semibold text-accent-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         S

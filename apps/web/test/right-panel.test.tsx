@@ -86,6 +86,17 @@ describe('the right panel', () => {
   })
 })
 
+/** The slot as the shell actually assembles it (`RightPanelHost`): the 372px panel, or the 52px
+ *  dock once somebody has collapsed it. */
+function Slot(): React.JSX.Element {
+  const { collapsed } = useRightPanel()
+  return collapsed ? (
+    <RightPanelDock workspaceId="w1" pendingDecisions={0} />
+  ) : (
+    <RightPanel title="Supervisor"><div data-testid="sup" /></RightPanel>
+  )
+}
+
 describe('the dock', () => {
   it('is 52px, carries S and A, and badges the pending decisions', () => {
     render(
@@ -107,5 +118,29 @@ describe('the dock', () => {
       </RightPanelProvider>,
     )
     expect(screen.queryByTestId('dock-badge')).toBeNull()
+  })
+
+  // Ruling T5-2. The button says "Supervisor"; a bare `expand()` gave back whatever mode was in
+  // the slot when it was collapsed -- a task panel under a label that promised something else.
+  it('brings the SUPERVISOR back, not the task that was in the slot when it collapsed', () => {
+    render(
+      <RightPanelProvider>
+        <Opener />
+        <Slot />
+      </RightPanelProvider>,
+    )
+    act((): void => { screen.getByTestId('open-task').click() })
+    expect(screen.getByTestId('right-panel').getAttribute('data-mode')).toBe('task')
+
+    act((): void => { screen.getByTestId('collapse').click() })
+    expect(screen.getByTestId('right-dock')).toBeTruthy()
+
+    act((): void => { screen.getByTestId('dock-supervisor').click() })
+    expect(screen.queryByTestId('right-dock')).toBeNull()
+    expect(screen.getByTestId('right-panel').getAttribute('data-mode')).toBe('supervisor')
+    expect(screen.getByTestId('sup')).toBeTruthy()
+    expect(screen.queryByTestId('task-body')).toBeNull()
+    // And the owning page was told, so the `?task=` this button walked away from went with it.
+    expect(closed).toHaveBeenCalledTimes(1)
   })
 })

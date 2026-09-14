@@ -27,7 +27,15 @@ const THREADS: readonly SupervisorThread[] = [
 ]
 
 const DECISIONS: readonly PendingDecision[] = [
-  { id: 'd-1', situationKind: 'ready_unstaffed', situation: { summary: 'nobody can review' }, status: 'pending' },
+  {
+    id: 'd-1',
+    situationKind: 'ready_unstaffed',
+    situation: { summary: 'nobody can review' },
+    status: 'pending',
+    // A NON-answer kind, so every Approve/Decline case below is about a proposal this card is
+    // allowed to answer in one click (ruling T5-3).
+    action: { kind: 'set_runtime_roles' },
+  },
 ]
 
 let fetchMock: ReturnType<typeof vi.fn>
@@ -110,6 +118,32 @@ describe('the Supervisor panel', () => {
     expect(screen.getAllByTestId('supervisor-message').some((message) => message.contains(loose!))).toBe(false)
   })
 
+  // Ruling T5-3: an `answer_question` proposal sends a DRAFTED ANSWER to another worker in the
+  // operator's name, and this card shows the situation summary, not the draft. One-click Approve
+  // here would be approving words nobody has read.
+  it('sends an answer_question proposal to be READ instead of offering one-click Approve', async (): Promise<void> => {
+    const answering: readonly PendingDecision[] = [
+      {
+        id: 'd-1',
+        situationKind: 'waiting_stale',
+        situation: { summary: 'a worker has been waiting on an answer for two hours' },
+        status: 'pending',
+        action: { kind: 'answer_question' },
+      },
+    ]
+    render(<SupervisorThreadPanel workspaceId="w1" pending={answering} />)
+    await waitFor(() => expect(screen.getByTestId('supervisor-decision-card')).toBeTruthy())
+
+    // The timeline's DECISION REQUIRED lane renders `ProposalRow`, which shows the question, the
+    // draft in an editable box and every source behind it.
+    expect(screen.getByTestId('supervisor-decision-review').getAttribute('href')).toBe('/w/w1')
+    expect(screen.queryByTestId('supervisor-decision-approve')).toBeNull()
+    expect(screen.queryByTestId('supervisor-decision-decline')).toBeNull()
+    // The two chips gate-m44 reads are untouched by the branch.
+    expect(screen.getByTestId('supervisor-proposal-kind').getAttribute('title')).toBe('waiting_stale')
+    expect(screen.getByTestId('supervisor-decision-meta')).toBeTruthy()
+  })
+
   it('approves through the EXISTING route', async (): Promise<void> => {
     render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
     await waitFor(() => expect(screen.getByTestId('supervisor-decision-approve')).toBeTruthy())
@@ -139,6 +173,24 @@ describe('the Supervisor panel', () => {
     )
     // The SUCCESS line `gate-m45` stage 5 waits for, naming the version the route answered with.
     await waitFor(() => expect(screen.getByTestId('supervisor-request-result').textContent).toContain('goal v3'))
+  })
+
+  it('renders the route s refusal in its own line, with no success line beside it', async (): Promise<void> => {
+    fetchMock.mockImplementation(async (url: string) =>
+      url.includes('/supervisor/threads')
+        ? new Response(JSON.stringify(THREADS), { status: 200 })
+        : new Response(JSON.stringify({ error: 'this project is halted: the budget is exhausted' }), { status: 409 }),
+    )
+    render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
+    await waitFor(() => expect(screen.getByTestId('supervisor-composer')).toBeTruthy())
+
+    fireEvent.change(screen.getByTestId('supervisor-request-input'), { target: { value: 'add 3-D Secure' } })
+    fireEvent.click(screen.getByTestId('supervisor-request-send'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('supervisor-request-error').textContent).toBe('this project is halted: the budget is exhausted'),
+    )
+    expect(screen.queryByTestId('supervisor-request-result')).toBeNull()
   })
 
   it('says so, once, when there is no conversation yet', async (): Promise<void> => {

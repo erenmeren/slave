@@ -5,16 +5,23 @@ import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { SlaveCard } from '../src/components/SlaveCard.js'
 import { HaltBanner } from '../src/components/HaltBanner.js'
 import { BlockedPanel, LiveEventsPanel, MergeQueuePanel, OverviewClient } from '../src/components/OverviewClient.js'
+import { TasksClient } from '../src/components/TasksClient.js'
 import { TopStrip } from '../src/components/TopStrip.js'
 import { publishStreamState } from '../src/hooks/useStreamState.js'
 import { RightPanel } from '../src/components/shell/RightPanel.js'
 import { RightPanelProvider } from '../src/components/shell/RightPanelProvider.js'
+import { taskItem } from './fixtures/taskItem.js'
 import type { SlaveCardData, OverviewSnapshot } from '../src/server/overview.js'
+import type { TasksSnapshot } from '../src/server/tasks.js'
+
+// Module-level so the T5-1 case below can assert which URLs `useSelectedId` wrote -- a fresh
+// `vi.fn()` returned from inside `useRouter` gives an assertion no stable reference to check.
+const routerReplace = vi.fn()
 
 // `OverviewClient`'s `useSelectedId` reads the router.
 vi.mock('next/navigation', () => ({
   usePathname: () => '/w/w1',
-  useRouter: () => ({ replace: vi.fn() }),
+  useRouter: () => ({ replace: routerReplace }),
   useSearchParams: () => new URLSearchParams(),
 }))
 
@@ -1020,5 +1027,65 @@ describe('the worker panel is mirrored into the slot, not drawn by the page', ()
     fireEvent.click(screen.getByRole('button', { name: "Open Sam Yates's detail panel" }))
     expect(screen.getByTestId('right-panel').getAttribute('data-mode')).toBe('slave')
     expect(within(screen.getByTestId('right-panel')).getByRole('heading', { level: 2 }).textContent).toBe('Sam Yates')
+  })
+
+  // ---- Ruling T5-1: the provider outlives the page, so the page has to leave cleanly -----------
+  //
+  // One provider, one slot, and the page under them SWAPPED -- which is what a navigation from
+  // `/w/:id` to `/w/:id/tasks` does. Rendered as one tree rather than two `render()` calls,
+  // because the whole point is that the provider is the SAME one across the navigation.
+  const TASKS: TasksSnapshot = {
+    workspace: { id: 'w1', name: 'W', haltedReason: null, goalVersion: 0 },
+    shellFacts: {
+      workspace: { id: 'w1', name: 'W' },
+      counts: { slavesWorking: 0, tasksActive: 0, slavesPaused: 0 },
+      guardrails: { budgetUsd: 20, maxConcurrentRuns: 3, runTimeoutMs: 3_600_000, maxAttempts: 3 },
+      status: { goal: null, spentUsd: 0, unmeasuredRuns: 0, haltedReason: null },
+    },
+    tasks: [taskItem({ id: 't1' })],
+  }
+
+  function Sections({ page }: { readonly page: 'overview' | 'tasks' }): React.JSX.Element {
+    return (
+      <RightPanelProvider>
+        {page === 'overview' ? (
+          <OverviewClient workspaceId="w1" initial={PUBLISHED} />
+        ) : (
+          <TasksClient workspaceId="w1" initial={TASKS} />
+        )}
+        <RightPanel title="Supervisor">{null}</RightPanel>
+      </RightPanelProvider>
+    )
+  }
+
+  it('hands the slot back when it unmounts, instead of leaving its worker over the next page', () => {
+    const { rerender } = render(<Sections page="overview" />)
+    fireEvent.click(screen.getByRole('button', { name: "Open Alex's detail panel" }))
+    expect(screen.getByTestId('right-panel').getAttribute('data-mode')).toBe('slave')
+
+    rerender(<Sections page="tasks" />)
+
+    expect(screen.getByTestId('right-panel').getAttribute('data-mode')).toBe('supervisor')
+    // `panel-close` renders only while a mode is open, so its absence IS "the provider's mode is
+    // null" -- read off the slot rather than out of a probe.
+    expect(screen.queryByTestId('panel-close')).toBeNull()
+    // The worker panel's own `<h2>` is gone from the slot (the board has an `Alex` of its own, on
+    // the task card's assignee line, so this is asked of the slot rather than of the document).
+    expect(within(screen.getByTestId('right-panel')).queryByRole('heading', { level: 2 })).toBeNull()
+  })
+
+  it('does not navigate from the grave when the next page opens something', () => {
+    const { rerender } = render(<Sections page="overview" />)
+    fireEvent.click(screen.getByRole('button', { name: "Open Alex's detail panel" }))
+    rerender(<Sections page="tasks" />)
+    routerReplace.mockClear()
+
+    fireEvent.click(screen.getByText('Add the thing'))
+
+    // The task is in the slot, and the dead Overview's clearer did NOT write its own pathname --
+    // `select(null)` replaces with the bare path, which is the bounce this ruling is about.
+    expect(screen.getByTestId('right-panel').getAttribute('data-mode')).toBe('task')
+    expect(screen.getByTestId('task-panel-ref').textContent).toBe('TASK-t1')
+    expect(routerReplace.mock.calls.map((call) => call[0])).not.toContain('/w/w1')
   })
 })

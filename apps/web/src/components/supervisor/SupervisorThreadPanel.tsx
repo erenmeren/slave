@@ -1,6 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { SITUATION_LABEL } from '@slave-of-ai/domain'
 import { postControl, postJson } from '../../lib/postControl'
 import { useShellFacts } from '../../hooks/useShellFacts'
@@ -16,6 +17,12 @@ export interface PendingDecision {
   readonly id: string
   readonly situationKind: string
   readonly situation: { readonly summary?: string }
+  /** WHICH verb this proposal would run. Read for one reason (ruling T5-3): an `answer_question`
+   *  proposal carries a drafted answer a person has to READ before it is sent in their name, and
+   *  this card has no room to show one -- so it sends them to the surface that does instead of
+   *  offering a one-click Approve over words nobody has seen. Optional, and a proposal that
+   *  somehow arrives without it keeps the buttons, which is every other kind's behaviour. */
+  readonly action?: { readonly kind?: string }
   /** The whole record, for `supervisor-decision-meta`'s `title` (spec erratum E18) — the four
    *  fields `SupervisorPanel.tsx:557` put there before this panel replaced it. Optional because a
    *  row written by an older build carries none. */
@@ -40,13 +47,22 @@ function situationLabel(kind: string): string {
  */
 function DecisionCard({
   decision,
+  workspaceId,
   busy,
   onAnswer,
 }: {
   readonly decision: PendingDecision
+  /** For the one link this card can render -- see `needsReading` below. */
+  readonly workspaceId: string
   readonly busy: boolean
   readonly onAnswer: (decisionId: string, verdict: 'approve' | 'reject') => void
 }): React.JSX.Element {
+  // Ruling T5-3: a drafted answer goes out to another worker IN THE OPERATOR'S NAME, and this card
+  // shows the situation summary, not the draft. Approving from here would be approving words
+  // nobody has read. The six-lane timeline's DECISION REQUIRED lane renders `ProposalRow`, which
+  // shows the question, the draft in an editable box, its confidence and every source behind it --
+  // so this card sends a person there rather than growing a second, smaller copy of it.
+  const needsReading = decision.action?.kind === 'answer_question'
   return (
     <div
       data-testid="supervisor-decision-card"
@@ -82,24 +98,36 @@ function DecisionCard({
         {decision.situation.summary ?? 'The Supervisor has proposed something.'}
       </p>
       <div className="mt-[10px] flex gap-[6px]">
-        <button
-          type="button"
-          data-testid="supervisor-decision-approve"
-          disabled={busy}
-          onClick={() => onAnswer(decision.id, 'approve')}
-          className="rounded-card border-0 bg-accent px-3 py-[6px] text-[12.5px] font-semibold text-accent-ink disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-        >
-          Approve
-        </button>
-        <button
-          type="button"
-          data-testid="supervisor-decision-decline"
-          disabled={busy}
-          onClick={() => onAnswer(decision.id, 'reject')}
-          className="rounded-card border border-line2 bg-transparent px-3 py-[6px] text-[12.5px] font-medium text-t1 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
-        >
-          Decline
-        </button>
+        {needsReading ? (
+          <Link
+            data-testid="supervisor-decision-review"
+            href={`/w/${workspaceId}`}
+            className="rounded-card border border-line2 px-3 py-[6px] text-[12.5px] font-medium text-t1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          >
+            Review the draft →
+          </Link>
+        ) : (
+          <>
+            <button
+              type="button"
+              data-testid="supervisor-decision-approve"
+              disabled={busy}
+              onClick={() => onAnswer(decision.id, 'approve')}
+              className="rounded-card border-0 bg-accent px-3 py-[6px] text-[12.5px] font-semibold text-accent-ink disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              Approve
+            </button>
+            <button
+              type="button"
+              data-testid="supervisor-decision-decline"
+              disabled={busy}
+              onClick={() => onAnswer(decision.id, 'reject')}
+              className="rounded-card border border-line2 bg-transparent px-3 py-[6px] text-[12.5px] font-medium text-t1 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              Decline
+            </button>
+          </>
+        )}
       </div>
     </div>
   )
@@ -196,15 +224,24 @@ export function SupervisorThreadPanel({
     setBusy(false)
     if (answerBody.ok) {
       setDraft('')
+      // `errorText` is already null: it is cleared unconditionally above, before the request went
+      // out. What has to go HERE is nothing -- and in the failure arm below, the success line, so
+      // "goal v3 saved" never stands over the refusal of the message after it.
       // The SAME sentence `project/SupervisorRequest.tsx:47` produced, because it is the sentence
       // the gate was written against (spec erratum E17).
       setResultText(`goal v${String(answerBody.data.version)} saved — the next tick re-plans it as a delta`)
       await load()
-    } else setErrorText(answerBody.error)
+    } else {
+      setResultText(null)
+      setErrorText(answerBody.error)
+    }
   }
 
   const answer = async (decisionId: string, verdict: 'approve' | 'reject'): Promise<void> => {
     setBusy(true)
+    // The last refusal is about the last act, not this one: a band that outlives what it described
+    // is a band a person reads as being about the button they just pressed.
+    setErrorText(null)
     const result = await postControl(`/api/w/${workspaceId}/supervisor/decisions/${decisionId}/${verdict}`)
     setBusy(false)
     if (result.ok) await load()
@@ -298,7 +335,9 @@ export function SupervisorThreadPanel({
                 }
               >
                 <span className="block">{message.text}</span>
-                {decision !== undefined && <DecisionCard decision={decision} busy={busy} onAnswer={onAnswer} />}
+                {decision !== undefined && (
+                  <DecisionCard decision={decision} workspaceId={workspaceId} busy={busy} onAnswer={onAnswer} />
+                )}
                 {message.refs.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-[5px]">
                     {message.refs.map((ref) => (
@@ -317,7 +356,13 @@ export function SupervisorThreadPanel({
           <div className="flex flex-col gap-2">
             <div className="font-mono text-[10.5px] font-semibold uppercase tracking-[.08em] text-t3">Waiting on you</div>
             {loose.map((decision) => (
-              <DecisionCard key={decision.id} decision={decision} busy={busy} onAnswer={onAnswer} />
+              <DecisionCard
+                key={decision.id}
+                decision={decision}
+                workspaceId={workspaceId}
+                busy={busy}
+                onAnswer={onAnswer}
+              />
             ))}
           </div>
         )}

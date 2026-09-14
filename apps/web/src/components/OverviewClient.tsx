@@ -224,6 +224,8 @@ export function OverviewClient({
   }, [workspaceId, connection, latencyMs])
   useEffect((): (() => void) => () => publishStreamState(workspaceId, null), [workspaceId])
 
+  const { open: openPanel, close: closePanel, mode: panelMode } = useRightPanel()
+
   // What the URL names RIGHT NOW, readable from a closure created for an earlier subject. The
   // provider calls the PREVIOUS owner's clearer whenever a DIFFERENT subject takes the slot
   // (ruling T3-4) -- and that includes this page moving its own selection from one worker to the
@@ -232,6 +234,37 @@ export function OverviewClient({
   // fires while the URL still names the worker it was created for.
   const selectedIdRef = useRef<string | null>(null)
   selectedIdRef.current = selectedSlave?.id ?? null
+
+  /**
+   * Ruling T5-1 -- the two refs that keep an UNMOUNTED page out of the slot.
+   *
+   * The provider outlives this page: it is the root layout's, and navigating from one section to
+   * another unmounts the page under it. Without these, a worker opened here left a clearer
+   * behind that a LATER page's `open()` would run (ruling T3-4 fires the previous owner's clearer
+   * whenever a different subject takes the slot) -- and that clearer calls `router.replace` with
+   * the pathname this page was rendered on, bouncing a person off the page they just opened. The
+   * panel itself also stayed on screen over a section that has nothing to do with it.
+   *
+   * `mounted` is re-armed on every mount rather than only cleared on unmount, because React's
+   * StrictMode mounts, unmounts and remounts an effect in development.
+   */
+  const mounted = useRef(true)
+  /** True while the slot holds THIS page's content. Set where `open()` is called, cleared the
+   *  moment the clearer runs -- which is the provider telling us the slot has been taken or
+   *  closed, whether by another owner, the slot's own `✕`, or the dock. */
+  const owned = useRef(false)
+  useEffect((): (() => void) => {
+    mounted.current = true
+    return (): void => {
+      mounted.current = false
+      // Hand the slot back on the way out, but only if it is still ours: another page may already
+      // have taken it, and closing then would shut a panel this one does not own.
+      if (owned.current) closePanel()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount and unmount only. `closePanel`
+    // is the provider's stable `useCallback`; depending on it would re-run this cleanup mid-life
+    // and close a panel nobody asked to close.
+  }, [])
 
   // M57 R8 / plan errata E4-E5: `?slave=` is still the source of truth and still what a refresh
   // restores -- this only MIRRORS it into the shell's right panel, which is where the panel is
@@ -248,7 +281,6 @@ export function OverviewClient({
   // AND IT HANDLES THE CLEAR. `?slave=` can go away by navigation rather than by the close button
   // — a link, a Back — and an effect that only ever opens would leave the provider holding a stale
   // `slave` mode over a page that has no selection.
-  const { open: openPanel, close: closePanel, mode: panelMode } = useRightPanel()
   useEffect((): void => {
     if (selectedSlave === null) {
       if (panelMode === 'slave') closePanel()
@@ -272,10 +304,15 @@ export function OverviewClient({
         }}
       />,
       () => {
-        if (selectedIdRef.current === openedFor) selectSlave(null)
+        owned.current = false
+        if (mounted.current && selectedIdRef.current === openedFor) selectSlave(null)
       },
       openedFor,
     )
+    // AFTER the call, not before: `open()` runs the OUTGOING clearer first, and that clearer is
+    // this page's own when the selection simply moved -- setting the flag first would let it clear
+    // the very ownership it is announcing.
+    owned.current = true
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately keyed on the SELECTION
     // and not on the snapshot: see the note above. `panelMode` is read, not depended on, for the
     // same reason (it changes when this effect's own `close()` lands).
