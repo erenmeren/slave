@@ -167,7 +167,9 @@ beforeEach(() => {
 describe('OrganizationClient', () => {
   it('renders one row per worker with capabilities, why and what they are doing', () => {
     render(<OrganizationClient workspaceId="w1" initial={view} />)
-    expect(within(screen.getByTestId('organization-rows')).getAllByTestId('data-table-row').length).toBe(4)
+    // Fix round 1 (ruling T7-2): one self-contained card per worker, not a shared `DataTable` --
+    // `organization-row-*` is the row's own identity now, with no `data-table-row` underneath it.
+    expect(within(screen.getByTestId('organization-rows')).getAllByTestId(/^organization-row-/).length).toBe(4)
     expect(screen.getByTestId('organization-row-s3')).toBeTruthy()
     expect(screen.getByTestId('organization-why-s3').textContent).toBe(
       'Hired for security.application because the board needs it',

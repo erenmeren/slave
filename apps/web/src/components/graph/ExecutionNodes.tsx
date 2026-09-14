@@ -216,10 +216,10 @@ export function buildExecutionGraph(snapshot: GraphSnapshot): { readonly nodes: 
  *
  * Fix round 1, Important 3. The obvious wiring -- hand ELK the whole graph, containment edges
  * included -- is wrong in a way that is easy to miss and bad to ship: `elk.algorithm: layered` with
- * `elk.direction: RIGHT` assigns a node's layer by longest path from a source, so `stage:Backlog`
- * is layer 0 and BOTH `stage:Todo` and Backlog's own tasks land in layer 1. A Backlog task rendered
- * one column right of its own heading, directly under "Todo" -- a viewer reading a column would
- * count the wrong tasks under the wrong stage. Making ELK do it properly needs `elk.partitioning`
+ * `elk.direction: RIGHT` assigns a node's layer by longest path from a source, so `stage:Queued`
+ * is layer 0 and BOTH `stage:In progress` and Queued's own tasks land in layer 1. A Queued task
+ * rendered one column right of its own heading, directly under "In progress" -- a viewer reading a
+ * column would count the wrong tasks under the wrong stage. Making ELK do it properly needs `elk.partitioning`
  * plus a per-node partition option, which means `layoutGraph` reading something off `node.data`;
  * giving ELK only the stage chain and doing this one-dimensional stack here costs less and says
  * more.

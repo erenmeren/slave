@@ -8,6 +8,7 @@ import { TaskDetailPanel } from '../src/components/TaskDetailPanel.js'
 import { TaskFilters, filterTasks } from '../src/components/TaskFilters.js'
 import { TaskList } from '../src/components/TaskList.js'
 import { TasksClient } from '../src/components/TasksClient.js'
+import { REFETCH_DEBOUNCE_MS } from '../src/hooks/useWorkspaceStream.js'
 import { publishStreamState } from '../src/hooks/useStreamState.js'
 import { RightPanel } from '../src/components/shell/RightPanel.js'
 import { RightPanelProvider } from '../src/components/shell/RightPanelProvider.js'
@@ -79,13 +80,21 @@ const snapshot = (tasks: readonly TaskBoardItem[], goalVersion = 0): TasksSnapsh
 // open; neither exists/should run for real under jsdom, so both are stubbed file-wide — every
 // describe below that renders `<TasksClient>` shares this one stub rather than repeating it.
 class FakeEventSource {
+  // Fix round 1 (ruling T7-3): tracked so a test can reach the instance `TasksClient` opened and
+  // fire its `onopen` itself, the same idiom `overview-components.test.tsx`'s
+  // `FakeOverviewEventSource` already uses to drive a live snapshot update.
+  static instances: FakeEventSource[] = []
   onmessage: ((event: { data: string }) => void) | null = null
   onerror: (() => void) | null = null
   onopen: (() => void) | null = null
+  constructor() {
+    FakeEventSource.instances.push(this)
+  }
   close(): void {}
 }
 
 beforeEach(() => {
+  FakeEventSource.instances = []
   vi.stubGlobal('EventSource', FakeEventSource as unknown as typeof EventSource)
   vi.stubGlobal(
     'fetch',
@@ -1095,6 +1104,58 @@ describe('TasksClient', () => {
 
     fireEvent.click(alexChip)
     expect(screen.getByText('Sam has this one')).toBeTruthy()
+  })
+
+  // Ruling T7-3, fix round 1: `assignees` (and so the chip) is derived from the LIVE snapshot on
+  // every frame, but `assignee` is state that outlives any one frame. Without deriving the
+  // effective filter at the call site, the last task carrying the chosen name reassigning, being
+  // cancelled, or simply dropping off an SSE frame leaves `assignee` set to a name nothing wears
+  // any more -- the board goes empty and there is no chip left on screen to clear it.
+  it('recovers when the chosen assignee drops out of a live snapshot update, instead of hiding the whole board', async () => {
+    vi.useFakeTimers()
+    try {
+      const before = snapshot([
+        task({ id: 't1', title: 'Alex has this one', assigneeName: 'Alex' }),
+        task({ id: 't2', title: 'Sam has this one', assigneeName: 'Sam' }),
+      ])
+      // The live update: Alex's task is reassigned to Sam, so nothing in the new snapshot carries
+      // the name the filter is still set to -- the same shape of change a cancellation or the
+      // task dropping off the frame entirely would produce.
+      const after = snapshot([
+        task({ id: 't1', title: 'Alex has this one', assigneeName: 'Sam' }),
+        task({ id: 't2', title: 'Sam has this one', assigneeName: 'Sam' }),
+      ])
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response(JSON.stringify(after), { status: 200 })),
+      )
+
+      renderInShell(<TasksClient workspaceId="w1" initial={before} />)
+
+      const alexChip = screen.getAllByTestId('task-filter-assignee').find((el) => el.getAttribute('data-assignee') === 'Alex')!
+      fireEvent.click(alexChip)
+      expect(screen.getByText('Alex has this one')).toBeTruthy()
+      expect(screen.queryByText('Sam has this one')).toBeNull()
+
+      // A wake-up on the stream (`onopen` schedules a refetch on connect and on every reconnect),
+      // then the debounced refetch itself.
+      act(() => {
+        FakeEventSource.instances[0]?.onopen?.()
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(REFETCH_DEBOUNCE_MS)
+      })
+
+      // The board shows every task again -- the stale filter did not silently keep hiding
+      // everything -- and the chip for a name nobody carries any more is gone from the row.
+      expect(screen.getByText('Alex has this one')).toBeTruthy()
+      expect(screen.getByText('Sam has this one')).toBeTruthy()
+      expect(
+        screen.queryAllByTestId('task-filter-assignee').find((el) => el.getAttribute('data-assignee') === 'Alex'),
+      ).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('switches from the board to the list view and back on the segmented control', () => {

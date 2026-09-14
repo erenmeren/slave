@@ -41,8 +41,17 @@ export function TasksClient({
     () => new Set(snapshotView.tasks.filter((task) => userTaskStatus({ status: task.status }).needsYou).map((task) => task.id)),
     [snapshotView.tasks],
   )
-  const visible = filterTasks(snapshotView.tasks, { query, needsOnly, assignee }, needsYouIds)
   const assignees = [...new Set(snapshotView.tasks.map((t) => t.assigneeName).filter((n): n is string => n !== null))].sort()
+  // Fix round 1 (ruling T7-3): `assignee` is a name typed into state by a click, and the snapshot
+  // that name came from keeps changing underneath it -- a reassignment, a cancellation, or the
+  // task simply dropping off an SSE frame can all remove the last task that carried it. Without
+  // this, `assignee` stays set while its own chip (which only renders for names in `assignees`)
+  // disappears, `visible` goes empty, every column reads "Nothing here", and there is no control
+  // left on screen to clear a filter nobody can see is still active. Derived at the call site
+  // rather than an effect: the state itself is never wrong, only stale for one render, and this
+  // is the one read of it that has to agree with what `TaskFilters` is about to draw.
+  const effectiveAssignee = assignee !== null && assignees.includes(assignee) ? assignee : null
+  const visible = filterTasks(snapshotView.tasks, { query, needsOnly, assignee: effectiveAssignee }, needsYouIds)
 
   // Controller ruling carried from Task 3/8, and re-aimed by M24 §2.2: this page already streams
   // the workspace this snapshot's `shellFacts` describes, so it publishes them to
@@ -173,7 +182,7 @@ export function TasksClient({
             onNeedsOnly={() => setNeedsOnly((was) => !was)}
             needsCount={needsYouIds.size}
             assignees={assignees}
-            assignee={assignee}
+            assignee={effectiveAssignee}
             onAssignee={setAssignee}
             view={view}
             onView={setView}

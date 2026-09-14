@@ -13,7 +13,6 @@ import { ProposalRow } from '../supervisor/ProposalRow'
 import { Alert } from '../ui/Alert'
 import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
-import { DataTable, Row } from '../ui/DataTable'
 import { DetailsGroup } from '../ui/DetailsGroup'
 import { EmptyState } from '../ui/EmptyState'
 import { INPUT_SHELL } from '../ui/FormControls'
@@ -21,11 +20,6 @@ import { PageShell } from '../ui/PageShell'
 import { Panel } from '../ui/Panel'
 import { SectionLabel } from '../ui/SectionLabel'
 import { CapabilityChips } from './CapabilityChips'
-
-/** `gate:m11-shell` and four M46 tests read `data-table-row` on tables built this way; the columns
- *  are free to move, the primitive is not (`WorkforceCatalog`'s own note). */
-const COLUMNS = '1fr 90px 1.6fr 1.8fr 90px'
-const HEADER = ['Worker', 'Lifecycle', 'Provides', 'Why they are here', 'Doing'] as const
 
 /** How many advisory edges stand open. Five is what fits under the roster without turning the page
  *  into a list of suggestions; past it the group is folded and says how to open it. */
@@ -121,70 +115,70 @@ export function OrganizationClient({
               message="nobody is on this project yet. A plan that asks for a capability is what puts somebody here."
             />
           ) : (
-            <div data-testid="organization-rows">
-              <DataTable columns={COLUMNS} header={[...HEADER]}>
-                {view.workers.map((worker, index) => (
-                  // The wrapper carries the row's own identity, so the `data-table-row` handle
-                  // four gates read stays exactly where it is (`WorkforceCatalog`'s idiom).
-                  // A released worker's row is greyed and carries the state a stylesheet and a
-                  // gate can both read -- it is still here, and still findable (D7).
-                  <div
-                    key={worker.slaveId}
-                    data-testid={`organization-row-${worker.slaveId}`}
-                    data-released={worker.released === null ? undefined : 'true'}
-                    className={`rounded-panel-card border border-line bg-card p-[14px_16px] gap-[10px] shadow-card ${
-                      worker.released === null ? '' : 'opacity-60'
-                    }`}
-                  >
-                    {/* `last` because this `Row` is the only child of its wrapper, so its own
-                      * `:last-child` selector would match every row and draw no separator. */}
-                    <Row columns={COLUMNS} last={index === view.workers.length - 1}>
-                      <span className="flex min-w-0 flex-col">
-                        <span className="truncate font-semibold text-t1">{worker.name}</span>
-                        {/* The role a person reads, with the runtime roles that actually decide
-                          * dispatch one hover away (M44 R5). */}
-                        <span title={worker.runtimeRoles.join(', ')} className="truncate text-[12px] text-t3">
-                          {worker.roleLabel}
-                        </span>
+            <div data-testid="organization-rows" className="flex flex-col gap-[11px]">
+              {view.workers.map((worker) => (
+                // Fix round 1, Important 1 (ruling T7-2): a self-contained card, not a `DataTable`
+                // row -- the shared header/row grid template lined up only while the two shared one
+                // width, and the card recipe's own border+padding broke that the moment it landed
+                // on the row wrapper (`DataTable`/`Row` are UNCHANGED; other pages still use them).
+                // A released worker's card is greyed and carries the state a stylesheet and a gate
+                // can both read -- it is still here, and still findable (D7).
+                <div
+                  key={worker.slaveId}
+                  data-testid={`organization-row-${worker.slaveId}`}
+                  data-released={worker.released === null ? undefined : 'true'}
+                  className={`flex flex-col gap-[10px] rounded-panel-card border border-line bg-card p-[14px_16px] shadow-card ${
+                    worker.released === null ? '' : 'opacity-60'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="flex min-w-0 flex-col">
+                      <span className="truncate font-semibold text-t1">{worker.name}</span>
+                      {/* The role a person reads, with the runtime roles that actually decide
+                        * dispatch one hover away (M44 R5). */}
+                      <span title={worker.runtimeRoles.join(', ')} className="truncate text-[12px] text-t3">
+                        {worker.roleLabel}
                       </span>
-                      <span data-testid={`organization-lifecycle-${worker.slaveId}`}>
-                        {/* The WORD, with the raw value in `title` (`docs/ia.md` rule 3). An
-                          * ephemeral worker gets the `waiting` tone -- the one tone in the palette
-                          * that already means "this is temporary and somebody will have to act" --
-                          * so a temporary specialist is visible in a glance down the column. */}
-                        <Chip {...(worker.lifecycle === 'ephemeral' ? { tone: 'waiting' as const } : {})} title={worker.lifecycle}>
-                          {SLAVE_LIFECYCLE_LABEL[worker.lifecycle]}
-                        </Chip>
-                      </span>
-                      <CapabilityChips capabilities={worker.capabilities} />
-                      {/* Another party's sentence -- a MODEL may have written this one -- as JSX
-                        * children, so it is characters on the page and never elements (spec §1). */}
-                      <span data-testid={`organization-why-${worker.slaveId}`} className="text-xs text-text-2">
-                        {worker.why}
-                      </span>
-                      {worker.released === null ? (
-                        <span
-                          data-testid={`organization-doing-${worker.slaveId}`}
-                          className={`text-xs ${worker.doing === null ? 'text-text-3' : 'text-tone-working'}`}
-                        >
-                          {worker.doing ?? 'Idle'}
-                        </span>
-                      ) : (
-                        // The engagement ended, so "Idle" would be a lie about a worker that is not
-                        // waiting for anything. The DATE, with the sentence the release was recorded
-                        // with one hover away.
-                        <span
-                          data-testid={`organization-released-${worker.slaveId}`}
-                          title={worker.released.reason}
-                          className="text-xs text-text-3"
-                        >
-                          Released {worker.released.at.slice(0, 10)}
-                        </span>
-                      )}
-                    </Row>
+                    </span>
+                    <span data-testid={`organization-lifecycle-${worker.slaveId}`}>
+                      {/* The WORD, with the raw value in `title` (`docs/ia.md` rule 3). An
+                        * ephemeral worker gets the `waiting` tone -- the one tone in the palette
+                        * that already means "this is temporary and somebody will have to act" --
+                        * so a temporary specialist is visible in a glance down the card. */}
+                      <Chip {...(worker.lifecycle === 'ephemeral' ? { tone: 'waiting' as const } : {})} title={worker.lifecycle}>
+                        {SLAVE_LIFECYCLE_LABEL[worker.lifecycle]}
+                      </Chip>
+                    </span>
                   </div>
-                ))}
-              </DataTable>
+                  <CapabilityChips capabilities={worker.capabilities} />
+                  {/* The card's own label where the column header used to say it (spec :349 --
+                    * "worker cards with lifecycle, 'Now:', 'Why here:', capability chips"). The
+                    * label sits OUTSIDE the testid'd span so `organization-why-*`'s text stays
+                    * exactly the sentence itself -- another party's words, as JSX children, never
+                    * elements (spec §1) -- and nothing reading it has to strip a prefix. */}
+                  <span className="text-xs text-text-2">
+                    <span className="text-text-3">Why here: </span>
+                    <span data-testid={`organization-why-${worker.slaveId}`}>{worker.why}</span>
+                  </span>
+                  {worker.released === null ? (
+                    <span className={`text-xs ${worker.doing === null ? 'text-text-3' : 'text-tone-working'}`}>
+                      <span className="text-text-3">Now: </span>
+                      <span data-testid={`organization-doing-${worker.slaveId}`}>{worker.doing ?? 'Idle'}</span>
+                    </span>
+                  ) : (
+                    // The engagement ended, so "Idle" would be a lie about a worker that is not
+                    // waiting for anything. The DATE, with the sentence the release was recorded
+                    // with one hover away.
+                    <span
+                      data-testid={`organization-released-${worker.slaveId}`}
+                      title={worker.released.reason}
+                      className="text-xs text-text-3"
+                    >
+                      Released {worker.released.at.slice(0, 10)}
+                    </span>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </Panel>
