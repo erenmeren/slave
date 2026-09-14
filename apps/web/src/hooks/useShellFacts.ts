@@ -5,10 +5,10 @@ import type { ShellFacts } from '../server/shell'
 
 /**
  * The counts, guardrails and header figures a workspace page publishes, read by the project
- * header and tab strip that the project layout mounts (M24 §2.2: `ProjectHeader`/`ProjectTabs`)
+ * header that the ROOT layout mounts on every page (M57 R7: `components/shell/Header.tsx`)
  * -- the only consumers left after M24 Task 2's sidebar cleanup: `Sidebar` reads none of this.
  *
- * Deliberately NOT React context: `ProjectHeader`/`ProjectTabs` are mounted by the PROJECT LAYOUT
+ * Deliberately NOT React context: until M57 the header and tabs were mounted by the PROJECT LAYOUT
  * as siblings of the page (`{children}`), so nothing a page mounts is ever an ancestor of them --
  * exactly the relationship `Sidebar` already has with `app/layout.tsx`. A provider inside a page
  * component reaches it in a hand-built test tree and in no tree that actually exists. A

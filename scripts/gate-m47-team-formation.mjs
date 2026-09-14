@@ -961,11 +961,13 @@ try {
   await gotoReliably(`${baseUrl}/w/${workspaceId}/organization`)
   await waitVisible(page.getByTestId('organization-rows'), 'the Organization table')
 
-  // The fifth tab, on the page it names (E6): a tab strip that does not carry it is a page nobody
-  // can reach without typing the URL.
-  const tabHref = await page.getByTestId('project-tab-organization').getAttribute('href')
-  console.log(`stage 7 -- the project strip's Organization tab points at ${JSON.stringify(tabHref)}`)
-  if (tabHref !== `/w/${workspaceId}/organization`) await fail(`stage 7: the Organization tab points at ${String(tabHref)}`)
+  // The Team row, on the page it names (E6, M57 R5): a tree that does not carry it is a page
+  // nobody can reach without typing the URL.
+  const tabHref = await page.evaluate(
+    () => document.querySelector('[data-testid="sidebar-section"][data-section="organization"]')?.getAttribute('href') ?? null,
+  )
+  console.log(`stage 7 -- the tree's Team row points at ${JSON.stringify(tabHref)}`)
+  if (tabHref !== `/w/${workspaceId}/organization`) await fail(`stage 7: the tree's Team row points at ${String(tabHref)}`)
 
   await waitVisible(page.getByTestId(`organization-row-${hired.id}`), "the hired specialist's row")
   await waitVisible(page.getByTestId(`organization-row-${devId}`), "the worker who was already here")

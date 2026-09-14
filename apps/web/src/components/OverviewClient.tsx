@@ -12,7 +12,6 @@ import { SlavePanel } from './SlavePanel'
 import { HaltBanner } from './HaltBanner'
 import { postControl } from '../lib/postControl'
 import { TopStrip } from './TopStrip'
-import { OverviewAdvanced } from './project/OverviewAdvanced'
 import { ProjectBrief } from './project/ProjectBrief'
 import { RunbookPanel } from './project/RunbookPanel'
 import { SupervisorRequest } from './project/SupervisorRequest'
@@ -178,7 +177,7 @@ export function OverviewClient({
   const selectedSlave = view.slaves.find((slave) => slave.id === selectedSlaveId) ?? null
 
   // Controller ruling carried from Task 3 (and fix round 1), and re-aimed by M24 §2.2: the
-  // project layout's `<ProjectHeader>` and `<ProjectTabs>` render as SIBLINGS of `{children}`, so
+  // shell header and the sidebar tree are mounted by the ROOT layout, above every page, so
   // this component can never be their ancestor. This page already streams the workspace, and
   // every figure the header and the Tasks tab's badge show is in the snapshot it is already
   // holding — so it publishes them to `hooks/useShellFacts.ts` and the header opens nothing of
@@ -284,9 +283,20 @@ export function OverviewClient({
               ))}
             </div>
           </section>
-          {/* M45 plan erratum E22: the Supervisor panel, `blocked · needs you`, the live-events
-            * river and the merge queue, all four unchanged, one disclosure lower. */}
-          <OverviewAdvanced workspaceId={workspaceId} view={view} />
+          {/* M57 R11: the `Advanced ▾` disclosure is gone and these three are on the page, in the
+            * order it held them. Their final homes are later tasks' (`BlockedPanel` becomes the
+            * Needs you card, `LiveEventsPanel` the Recent changes section, `MergeQueuePanel` the
+            * Review column), and a page that lost them here and got them back three tasks later
+            * would be a page nobody could review in between. The Supervisor panel does NOT come
+            * with them: it is the right panel's from the next task on. No wrapper testid, so the
+            * page's own child order still reads as the sections it is made of. */}
+          <div className="flex flex-col gap-[11px] px-[20px] pb-[20px] pt-[16px]">
+            <div className="flex gap-[11px]">
+              <BlockedPanel workspaceId={workspaceId} items={view.blocked} />
+              <LiveEventsPanel workspaceId={workspaceId} events={view.liveEvents} />
+            </div>
+            <MergeQueuePanel queue={view.mergeQueue} />
+          </div>
         </PageShell>
       </div>
       {selectedSlave !== null && (

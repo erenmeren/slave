@@ -5,6 +5,7 @@ import { buildSidebarTree } from '../server/sidebar'
 import { requirePrincipal } from '../server/principal'
 import { AppShell } from '../components/shell/AppShell'
 import { SidebarTree } from '../components/shell/SidebarTree'
+import { Header } from '../components/shell/Header'
 import { HeaderActionProvider } from '../components/shell/HeaderActionProvider'
 import { RightPanelProvider } from '../components/shell/RightPanelProvider'
 import { ThemeProvider, THEME_STORAGE_KEY } from '../components/theme/ThemeProvider'
@@ -119,10 +120,11 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <ThemeProvider>
           <RightPanelProvider>
             <HeaderActionProvider>
-              {/* `header` and `right` are this task's two empty sockets: Task 4 hangs the header
-                * on the first and Task 5 the right panel on the second. What is proved here is the
-                * frame itself -- one grid, one `main`, one Primary nav on every page. */}
-              <AppShell sidebar={<SidebarTree initial={projects} />} header={null} right={null} rightWidth="none">
+              {/* The header takes the TREE as a prop rather than reading the facts store alone
+                * (spec erratum E12): the store is published by five of a project's eight page
+                * clients, and the breadcrumb has to be able to name the project on all eight.
+                * `right` is still Task 5's empty socket. */}
+              <AppShell sidebar={<SidebarTree initial={projects} />} header={<Header projects={projects} />} right={null} rightWidth="none">
                 {children}
               </AppShell>
             </HeaderActionProvider>

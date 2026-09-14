@@ -1380,10 +1380,10 @@ try {
 
   await gotoReliably(`${baseUrl}/w/${main.workspace.id}?slave=${main.worker.id}`)
   await waitVisible(page.getByTestId('status-label'), `${WORKER_NAME}'s panel`)
-  // SCOPED to the group, not `getByRole('button', { name })` on the page: the project Overview
-  // behind this panel has its own `Advanced` disclosure (`OverviewAdvanced`'s `<summary>`) and the
-  // tab strip has another, so a page-wide role query opens the wrong thing and reports a timeout on
-  // a sentence that was never going to render.
+  // SCOPED to the group, not `getByRole('button', { name })` on the page: this panel's OWN Details
+  // groups are several disclosures with the same shape, and the page behind it has more, so a
+  // page-wide role query opens the wrong thing and reports a timeout on a sentence that was never
+  // going to render.
   const permissionsGroup = page.locator('[data-testid="details-group"][data-group="permissions"]')
   await waitVisible(permissionsGroup, "the panel's Permissions group")
   await permissionsGroup.locator('button').first().click()

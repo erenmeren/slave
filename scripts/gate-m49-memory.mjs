@@ -1527,28 +1527,24 @@ try {
 
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
   await waitVisible(page.getByTestId('strip'), "the project's Overview")
-  // `Tabs` renders a `project-tab-badge-<id>` beside a tab that carries a count, and its text is
-  // part of the tab's own `textContent` ("Tasks2"). The badges are dropped by name here: they are
-  // the same prefix and a different thing.
+  // M57 R5: the project's sections are the sidebar tree's rows now, and each carries its ROUTE
+  // SEGMENT on `data-section` -- the same six ids the tab strip carried, with two labels changed.
   const tabs = await page
-    .locator('[data-testid^="project-tab-"]')
-    .evaluateAll((nodes) =>
-      nodes
-        .map((node) => (node.getAttribute('data-testid') ?? '').replace('project-tab-', ''))
-        .filter((id) => !id.startsWith('badge-')),
-    )
-  console.log(`stage 7 -- the project strip: ${JSON.stringify(tabs)}`)
+    .locator('[data-testid="sidebar-section"]')
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-section') ?? ''))
+  console.log(`stage 7 -- the project's section rows: ${JSON.stringify(tabs)}`)
   await assertEqual(
     tabs,
     ['overview', 'tasks', 'organization', 'knowledge', 'activity', 'settings'],
-    'stage 7: six tabs, with Knowledge the fourth of them',
+    'stage 7: six section rows, with Knowledge the fourth of them',
   )
-  const knowledgeTab = (await page.getByTestId('project-tab-knowledge').first().textContent())?.trim() ?? ''
-  const knowledgeHref = await page.getByTestId('project-tab-knowledge').first().getAttribute('href')
-  console.log(`stage 7 -- the fourth tab reads ${JSON.stringify(knowledgeTab)} and goes to ${JSON.stringify(knowledgeHref)}`)
-  if (knowledgeTab !== 'Knowledge') await fail(`stage 7: the fourth tab reads ${JSON.stringify(knowledgeTab)}, expected "Knowledge"`)
+  const knowledgeRow = page.locator('[data-testid="sidebar-section"][data-section="knowledge"]')
+  const knowledgeTab = (await knowledgeRow.first().textContent())?.trim() ?? ''
+  const knowledgeHref = await knowledgeRow.first().getAttribute('href')
+  console.log(`stage 7 -- the fourth row reads ${JSON.stringify(knowledgeTab)} and goes to ${JSON.stringify(knowledgeHref)}`)
+  if (knowledgeTab !== 'Knowledge') await fail(`stage 7: the fourth row reads ${JSON.stringify(knowledgeTab)}, expected "Knowledge"`)
   if (knowledgeHref !== `/w/${workspaceId}/knowledge`) {
-    await fail(`stage 7: the fourth tab goes to ${JSON.stringify(knowledgeHref)}`)
+    await fail(`stage 7: the fourth row goes to ${JSON.stringify(knowledgeHref)}`)
   }
 
   const briefLink = page.getByTestId('brief-knowledge')

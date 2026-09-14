@@ -236,7 +236,7 @@ export interface OverviewSnapshot {
     /**
      * The spend ceiling, or `null` for a workspace that is not budgeted at all (M12 Task 9) --
      * spec §6's only state in which a runtime that cannot report cost may run. Rendered by
-     * `ProjectHeader` as known spend with no ratio and no bar, never as a budget of zero.
+     * the shell header as known spend with no ratio and no bar, never as a budget of zero.
      */
     readonly budgetUsd: number | null
     /**

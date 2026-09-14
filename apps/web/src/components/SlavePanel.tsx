@@ -471,7 +471,7 @@ export function SlavePanel({
       </DetailsGroup>
 
       {/* M52 R7. The list is what a person needs at a glance; WHO decided and WHEN is a raw value,
-        * so it lives under Advanced -- `docs/ia.md` rule 5, and `OverviewAdvanced`'s own rule that
+        * so it lives under Advanced -- `docs/ia.md` rule 5, and this panel's own rule that
         * a closed disclosure must cost nothing. NESTED rather than a sibling group, because the
         * sentences are about these six lines and nothing else on this panel.
         *

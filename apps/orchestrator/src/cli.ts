@@ -17,6 +17,7 @@ import {
   archiveWorkspace,
   backfillSlaveCapabilities,
   cancelTask,
+  clearHalt,
   clearSlavePermission,
   clearStaffingPreference,
   assignCompany,
@@ -1717,10 +1718,8 @@ export async function main(argv: readonly string[]): Promise<number> {
 
     case 'clear-halt': {
       const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
-      await prisma.workspace.update({
-        where: { id: workspaceId },
-        data: { haltedReason: null, haltedAt: null },
-      })
+      const result = await clearHalt(workspaceId)
+      if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(
         `cleared the safety halt on ${workspaceId}. This starts nothing by itself: it removes the ` +
           `reason nothing was starting.\n`,

@@ -842,9 +842,9 @@ try {
   // Stage 3: Chrome truths -- the Activity sse·ms chip, and the deniedToolUseIds reader line.
   // ============================================================================================
   await gotoReliably(`${baseUrl}/w/${workspaceId}/activity`)
-  await waitVisible(page.getByTestId('connection'), 'the Activity connection chip')
-  const beforeTick = (await page.getByTestId('connection').first().textContent())?.trim()
-  console.log(`stage 3: connection chip before a fresh frame: ${JSON.stringify(beforeTick)}`)
+  await waitVisible(page.getByTestId('sidebar-live'), 'the sidebar live chip')
+  const beforeTick = (await page.getByTestId('sidebar-live').first().textContent())?.trim()
+  console.log(`stage 3: live chip before a fresh frame: ${JSON.stringify(beforeTick)}`)
 
   // One more real event, appended through the production write path (`pg_notify('events', ...)`
   // inside `appendEvent`) while the page's SSE connection is open -- the frame that gives the
@@ -859,11 +859,11 @@ try {
     actor: 'slave',
     payload: { name: 'Bash', summary: 'gate stage 3 -- sse tick' },
   })
-  await waitUntil('the connection chip to read sse · <n>ms once the stream ticks', ACTION_TIMEOUT_MS, async () => {
-    const text = await page.getByTestId('connection').first().textContent().catch(() => null)
-    return text !== null && /sse · \d+ms/.test(text) ? { done: true, value: text } : { done: false, detail: `chip reads ${JSON.stringify(text)}` }
+  await waitUntil('the live chip to read live · <n>ms once the stream ticks', ACTION_TIMEOUT_MS, async () => {
+    const text = await page.getByTestId('sidebar-live').first().textContent().catch(() => null)
+    return text !== null && /live · \d+ms/.test(text) ? { done: true, value: text } : { done: false, detail: `chip reads ${JSON.stringify(text)}` }
   })
-  console.log('stage 3: the Activity chip reads sse · <n>ms once the stream ticked')
+  console.log('stage 3: the sidebar chip reads live · <n>ms once the stream ticked')
 
   // The deniedToolUseIds reader: a paused task, a paused run, a Checkpoint carrying two denied ids.
   const readerTask = await prisma.task.create({

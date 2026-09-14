@@ -54,3 +54,32 @@ export async function emergencyStop(
 
   return ok({ engaged, requested, refused })
 }
+
+/**
+ * Retract a safety halt (M57 R14c, plan erratum E1).
+ *
+ * This is not new behaviour: `apps/orchestrator/src/cli.ts`'s `clear-halt` case has written these
+ * exact two columns inline since M5. It moves here so that the CLI and the web route share one
+ * copy rather than owning two, which is the whole of the change.
+ *
+ * IT APPENDS NO EVENT, because the CLI's version appends none, and a milestone whose claim is that
+ * nothing changed may not start writing history the CLI does not write. (`emergencyStop` above
+ * appends `guardrail.tripped` on the way IN; the way out has always been silent, and whether that
+ * asymmetry is right is a question for a milestone that is allowed to answer it.)
+ *
+ * It STARTS NOTHING: it removes the reason nothing was starting. A paused run resumes when the
+ * sweep next reaches it, or when somebody presses Resume.
+ */
+export async function clearHalt(workspaceId: string): Promise<Result<{ readonly cleared: boolean }, ControlRefusal>> {
+  const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { haltedReason: true } })
+  if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
+  // `updateMany` with the condition in the WHERE, not a read-then-write: two operators clearing at
+  // once must not both claim to have been the one who did it.
+  const cleared = await prisma.workspace.updateMany({
+    where: { id: workspaceId, haltedReason: { not: null } },
+    data: { haltedReason: null, haltedAt: null },
+  })
+  // A workspace that was not halted is NOT a refusal -- the button is idempotent by design, the
+  // same way `emergencyStop` treats a second press.
+  return ok({ cleared: cleared.count === 1 })
+}

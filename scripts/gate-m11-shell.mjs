@@ -439,12 +439,12 @@ try {
   console.log(`"${workspaceNameB}" assigned "${COMPANY_NAME}" and shows a worker avatar`)
   console.log('stage 2 (/) complete: both projects staffed by the same company, asserted through the browser')
 
-  // The project header's `budget` chip (M24 §2.2 -- the guardrail block's old budget figure moved
-  // here): reachable on any project page now, asserted on workspace A.
+  // The header's `budget` chip (M57 R7 -- the project header is the root layout's `app-header`
+  // now, on every page, and the budget figure came with it).
   await page.goto(`${baseUrl}/w/${workspaceIdA}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
-  await waitVisible(page.getByTestId('project-header'), `the "${workspaceNameA}" project header`)
+  await waitVisible(page.getByTestId('app-header'), `the "${workspaceNameA}" header`)
   await waitVisible(page.getByTestId('budget'), "the header's budget figure")
-  console.log(`the "${workspaceNameA}" project header shows a budget figure`)
+  console.log(`the "${workspaceNameA}" header shows a budget figure`)
 
   // ---- Scenario stage 3: /workforce -- the one table lists Gate Worker materialized in both
   // projects. (`/slaves` still answers: M44 R1 made it a 307 into this page.)

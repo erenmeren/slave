@@ -917,28 +917,14 @@ try {
     console.log(`stage 2 (${pageName}): ${selector} ${property} = ${actual}`)
   }
 
-  /** Opens the Overview's `Advanced` disclosure and waits for the river to be laid out (M45 E15).
-   *  Idempotent: `clickUntil` toggles a `<details>`, so a disclosure that is somehow already open
-   *  is left alone rather than clicked shut. */
-  const openOverviewAdvanced = async () => {
-    if (await page.getByTestId('live-events').first().isVisible().catch(() => false)) return
-    await clickUntil(
-      // The `<summary>`, not the `<details>`: `OverviewAdvanced` prevents the summary's own default
-      // and drives `open` from React state, so the summary is the element that toggles it.
-      page.getByTestId('overview-advanced-toggle'),
-      async () => page.getByTestId('live-events').first().isVisible(),
-      "the Overview's Advanced disclosure",
-    )
-  }
-
   // page, path, selector, property, expected, prepare? -- every row is one README number. The cable's own
   // dasharray is NOT here: `CableEdge` draws that path only on an ACTIVE edge, which needs a live
   // run, so it is asserted as stage 2b after stage 4b dispatches one.
   const NUMBERS = [
     ['overview', `/w/${workspaceId}`, 'nav[aria-label="Primary"]', 'width', '212px'],
-    // M24 §2.2: the workspace-scoped `TopBar` is gone -- `ProjectHeader` is the project layout's
-    // one header now, on every `/w/<id>/*` page, still 52px.
-    ['overview', `/w/${workspaceId}`, '[data-testid="project-header"]', 'height', '52px'],
+    // M57 R7: the project header is the ROOT layout's `app-header` now, on every page in the
+    // product rather than only `/w/<id>/*`, and the handoff's number for it is 54px.
+    ['overview', `/w/${workspaceId}`, '[data-testid="app-header"]', 'height', '54px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"]', 'border-radius', '8px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"]', 'padding', '12px 13px'],
     // SCOPED to the card (M45 t5): the brief's `team` tile renders `AvatarTile` too, and it is
@@ -954,7 +940,9 @@ try {
     // still measured here. What changed is that it has to be OPENED first: `getComputedStyle` on a
     // subtree that is not rendered returns `auto`, so a gate that did not click would read nothing
     // and a gate that dropped the row would leave a documented number with nothing measuring it.
-    ['overview', `/w/${workspaceId}`, '[data-testid="live-events"]', 'width', '340px', openOverviewAdvanced],
+    // No `prepare` any more (M57 R11): the disclosure that used to hold this panel is gone and the
+    // river renders directly on the Overview, so the 340px is measurable where it stands.
+    ['overview', `/w/${workspaceId}`, '[data-testid="live-events"]', 'width', '340px'],
     ['activity', `/w/${workspaceId}/activity`, '[data-testid="timeline-rule"]', 'left', '88px'],
     ['graph', `/w/${workspaceId}/graph`, '[data-testid="graph-drawer"]', 'width', '352px'],
   ]

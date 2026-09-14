@@ -84,8 +84,8 @@ export function useEscapeStack({
  *   - Whatever had focus when the modal opened gets it back when it closes -- read at open time,
  *     because by close time the trigger may have re-rendered.
  *
- * Returns the ref to put on the modal's container. Menus are NOT modals: `ProjectSwitcher` and
- * `graph/NodeMenu` keep their own Escape handling (plan erratum E22).
+ * Returns the ref to put on the modal's container. Menus are NOT modals: `graph/NodeMenu`, the one
+ * that is left now the project switcher is gone, keeps its own Escape handling (plan erratum E22).
  */
 export function useModalDismiss<T extends HTMLElement>({
   open,

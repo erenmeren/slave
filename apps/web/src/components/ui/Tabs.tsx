@@ -55,7 +55,7 @@ function moveWithinTablist(event: React.KeyboardEvent<HTMLButtonElement>, onSele
 }
 
 /**
- * The segmented tab strip (M44 R3), in the idiom `ProjectTabs` already used: `role="tablist"` with
+ * The segmented tab strip (M44 R3), in the idiom the project tab strip used: `role="tablist"` with
  * `role="tab"`, `aria-selected` and `aria-current="page"` on the live one. Four surfaces share it
  * now -- the project strip, Workforce, the Graph mode nav (which had plain buttons and an
  * `aria-current`, and a comment saying no shared component covered it) and the simulation tabs.

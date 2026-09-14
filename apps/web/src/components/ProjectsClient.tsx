@@ -214,7 +214,7 @@ function ProjectCard({
  * client-side -- an archived project's card needs the server's archived-row fields anyway, and
  * there is no reason to fetch a row this page would only throw away. The checkbox sits grouped
  * with the New project button at the row's right end (the header's own `ml-auto flex ... gap-3`
- * idiom, `project/ProjectHeader.tsx`) with the button LAST in that group, so the button keeps the
+ * idiom, `components/shell/Header.tsx`) with the button LAST in that group, so the button keeps the
  * exact position it already had -- the M14 fidelity gate screenshots this row, and a checkbox
  * placed after the button would shift it.
  *

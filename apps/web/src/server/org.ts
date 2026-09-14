@@ -75,7 +75,7 @@ const ACTIVE_TASK_STATUSES = ['ready', 'running', 'verifying', 'reviewing', 'mer
  *  asks for. */
 const notArchived = (includeArchived?: boolean): { archivedAt?: null } => (includeArchived === true ? {} : { archivedAt: null })
 
-/** Whether a project is archived -- `ProjectHeader`'s chip and `ProjectSettingsClient`'s danger
+/** Whether a project is archived -- the Projects card's chip and `ProjectSettingsClient`'s danger
  *  zone both need this one flag with no other row data. */
 export async function workspaceArchived(workspaceId: string): Promise<boolean> {
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { archivedAt: true } })

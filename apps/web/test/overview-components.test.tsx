@@ -797,7 +797,7 @@ describe('Overview bottom row', () => {
 
 describe('shell facts and stream state reach the project header, never the sidebar', () => {
   // Fix round 1, Critical (carried, re-aimed by M24 §2.2). `app/w/[workspaceId]/layout.tsx`
-  // renders `<ProjectHeader>`/`<ProjectTabs>` as SIBLINGS of `{children}`, so nothing a page
+  // seeds the same store the ROOT layout's header reads, above every page in the tree, so nothing a page
   // mounts can ever be an ancestor of them — the module-level stores (`hooks/useShellFacts.ts`,
   // `hooks/useStreamState.ts`) are how a page's snapshot reaches them anyway. `Sidebar` (rewritten
   // this task) reads none of this any more; its own coverage lives in `shell.test.tsx`.
@@ -860,7 +860,7 @@ describe('shell facts and stream state reach the project header, never the sideb
     // Fix round 1, Important 2: the timeline's own root is marked, so the accepted page order is
     // pinned in full rather than "the timeline is somewhere on the page".
     const order = [...shell.children].map((child) => child.getAttribute('data-testid')).filter((id) => id !== null)
-    expect(order).toEqual(['brief', 'strip', 'supervisor-request', 'supervisor-timeline', 'team', 'overview-advanced'])
+    expect(order).toEqual(['brief', 'strip', 'supervisor-request', 'supervisor-timeline', 'team'])
     expect(screen.getByTestId('supervisor-timeline').contains(screen.getByTestId('timeline'))).toBe(true)
   })
 
@@ -889,38 +889,24 @@ describe('shell facts and stream state reach the project header, never the sideb
     const order = [...screen.getAllByTestId('page-shell')[1]!.children]
       .map((child) => child.getAttribute('data-testid'))
       .filter((id) => id !== null)
-    expect(order).toEqual(['brief', 'strip', 'supervisor-request', 'runbook-panel', 'supervisor-timeline', 'team', 'overview-advanced'])
+    expect(order).toEqual(['brief', 'strip', 'supervisor-request', 'runbook-panel', 'supervisor-timeline', 'team'])
   })
 
-  // M45 plan erratum E22: NOTHING was removed. All four panels are one disclosure lower, and a
-  // CLOSED disclosure renders none of them -- which is what keeps `SupervisorPanel`'s
-  // `RepeatableRead` world load off a page that streams several times a second.
-  it('M45 R1: the river, the blocked panel, the merge queue and the Supervisor panel are under Advanced', async (): Promise<void> => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ error: 'not in this test' }), { status: 404 }))
-    vi.stubGlobal('fetch', fetchMock)
-    try {
-      render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
-      expect(screen.queryByTestId('live-events')).toBeNull()
-      expect(screen.queryByTestId('blocked-empty')).toBeNull()
-      expect(screen.queryByTestId('merge-empty')).toBeNull()
-      expect(screen.queryByTestId('advanced-panel-supervisor')).toBeNull()
+  // M57 R11: the `Advanced ▾` disclosure is gone, and the three panels it held that stay on this
+  // page render directly, in the order it held them. The `Advanced` link row goes with it -- Graph,
+  // Office and Analytics are the sidebar tree's `VIEWS` chips now -- and so does the Supervisor
+  // panel, which is the right panel's from Task 5 on.
+  it('M57 R11: the blocked panel, the river and the merge queue render with no disclosure to open', () => {
+    render(<OverviewClient workspaceId="w1" initial={PUBLISHED} />)
+    expect(screen.queryByTestId('overview-advanced')).toBeNull()
+    expect(screen.queryByTestId('overview-advanced-toggle')).toBeNull()
 
-      await act(async (): Promise<void> => {
-        fireEvent.click(screen.getByTestId('overview-advanced-toggle'))
-      })
-
-      expect(screen.getByTestId('live-events')).toBeTruthy()
-      expect(screen.getByTestId('live-events').className).toContain('w-[340px]')
-      expect(screen.getByText('merge queue · serial')).toBeTruthy()
-      expect(screen.getByText('blocked · needs you')).toBeTruthy()
-      expect(screen.getByTestId('advanced-panel-supervisor')).toBeTruthy()
-      // The three destinations `docs/ia.md` lists, reachable from the page as well as the header.
-      expect(screen.getByTestId('advanced-link-graph').getAttribute('href')).toBe('/w/w1/graph')
-      expect(screen.getByTestId('advanced-link-office').getAttribute('href')).toBe('/w/w1/office')
-      expect(screen.getByTestId('advanced-link-analytics').getAttribute('href')).toBe('/analytics?workspace=w1')
-    } finally {
-      vi.unstubAllGlobals()
-    }
+    expect(screen.getByTestId('live-events')).toBeTruthy()
+    expect(screen.getByTestId('live-events').className).toContain('w-[340px]')
+    expect(screen.getByText('merge queue · serial')).toBeTruthy()
+    expect(screen.getByText('blocked · needs you')).toBeTruthy()
+    expect(screen.getByTestId('blocked-empty')).toBeTruthy()
+    expect(screen.getByTestId('merge-empty')).toBeTruthy()
   })
 
   it('a workspace adopted from a simulation shows the note linking back to it; a hand-assigned one shows nothing (M33 §4)', () => {

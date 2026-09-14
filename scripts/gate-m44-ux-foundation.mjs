@@ -830,16 +830,12 @@ try {
     await waitVisible(page.getByTestId(target.testId), `${target.name}'s structural marker [data-testid=${target.testId}]`)
     await waitVisible(page.getByRole('navigation', { name: 'Primary' }), `${target.name}'s sidebar`)
 
-    // M45 t3: the Overview's own `Advanced ▾` holds the Supervisor panel, `blocked · needs you`,
-    // the live-events river and the merge queue, and renders them only when it is open. Opened
-    // HERE, BEFORE stage 3 and stage 4 read the page, so the raw-token scan still covers every
-    // string those four panels render -- opening it only for stage 4's positive counterpart below
-    // would have quietly narrowed this gate to the surfaces that stayed above the fold.
+    // M57 R11: the `Advanced ▾` disclosure that used to hold `blocked · needs you`, the river and
+    // the merge queue is gone and all three render directly, so there is nothing left to open --
+    // only something to wait for. Waited on HERE, BEFORE stage 3 and stage 4 read the page, so the
+    // raw-token scan still covers every string those panels render rather than racing the stream.
     if (target.name === 'overview') {
-      const toggle = page.getByTestId('overview-advanced-toggle')
-      await waitVisible(toggle, "the Overview's Advanced disclosure")
-      await toggle.click()
-      await waitVisible(page.getByTestId('live-events'), 'the live-events river under Advanced')
+      await waitVisible(page.getByTestId('live-events'), 'the live-events river on the Overview')
     }
 
     // ---- Stage 3: one shell, one landmark. -----------------------------------------------------
