@@ -25,17 +25,18 @@
 // has to be empty.
 //
 // The eight stages of R8:
-//   1. Four sidebar entries, in order, pointing where they say; /slaves and /skills land on
-//      /workforce with the right tab; /analytics still answers.
-//   2. The project strip is Overview/Tasks/Organization/Activity/Settings, and Advanced opens onto
-//      Graph and Office, whose routes still render.
+//   1. Three global sidebar entries, in order, pointing where they say, under a tree whose root is
+//      Projects; /slaves and /skills land on /workforce with the right tab; /analytics still answers.
+//   2. The open project's six section rows read Overview/Tasks/Team/Knowledge/Activity/Settings,
+//      and the three VIEWS chips point at Graph, Office and Analytics, whose routes still render.
 //   3. Every page renders inside PageShell or its page-level equivalent, with the one main
 //      landmark and the sidebar present.
 //   4. NO RAW ENUM TOKEN is visible text on the fidelity pages -- the blocklist is DERIVED from the
 //      domain's own unions, not typed here.
 //   5. A drawer traps Tab and gives focus back on Escape.
 //   6. The skip link is the first focusable element and reaches `main`.
-//   7. The sidebar is 212px at 1440 and collapsed at 800.
+//   7. The sidebar is 236px at 1440 AND at 800 -- M57 R4 states a 1280px floor for the whole frame
+//      instead of the old 899px icon rail.
 //   8. Simulated money and model cost never share a tile.
 //
 // THE GATE ASSERTS, IT NEVER FIXES. Every stage prints every measured value before asserting it.
@@ -602,12 +603,12 @@ try {
   }
 
   // ============================================================================================
-  // Stage 1: the four ways in.
+  // Stage 1: the ways in.
   // ============================================================================================
   await gotoReliably(`${baseUrl}/`)
   await waitVisible(page.getByRole('navigation', { name: 'Primary' }), "the Projects page's sidebar")
   const navRows = await page.evaluate(() =>
-    [...document.querySelectorAll('nav[aria-label="Primary"] [data-testid="nav-row"]')].map((row) => [
+    [...document.querySelectorAll('nav[aria-label="Primary"] [data-testid="sidebar-global"]')].map((row) => [
       row.getAttribute('data-nav') ?? '',
       // `getAttribute`, not `.href`: the DOM property resolves to an absolute URL.
       row.getAttribute('href') ?? '',
@@ -615,8 +616,9 @@ try {
     ]),
   )
   console.log(`stage 1: sidebar rows in DOM order = ${JSON.stringify(navRows.map(([nav, href]) => [nav, href]))}`)
+  // M57 R5: Projects is the TREE's root row now, above the per-project list, not a fourth sibling
+  // of these three. Its presence is asserted separately, immediately below.
   const EXPECTED_NAV = [
-    ['Projects', '/'],
     ['Workforce', '/workforce'],
     ['Simulations', '/sim'],
     ['Settings', '/settings'],
@@ -631,10 +633,19 @@ try {
   }
   for (const gone of ['Slaves', 'Skills', 'Analytics']) {
     if (navRows.some(([nav]) => nav === gone)) {
-      await fail(`stage 1: the sidebar still carries a "${gone}" row -- R1 leaves four entries, not five or six`)
+      await fail(`stage 1: the sidebar still carries a "${gone}" row -- R1 left four entries and M57 R5 leaves three global ones under a Projects root`)
     }
   }
   console.log('stage 1: no Slaves, Skills or Analytics row remains in the sidebar')
+
+  const treeRoot = await page.evaluate(() => {
+    const root = [...document.querySelectorAll('nav[aria-label="Primary"] a')].find(
+      (a) => (a.textContent ?? '').trim().startsWith('Projects'),
+    )
+    return root === undefined ? null : root.getAttribute('href')
+  })
+  if (treeRoot !== '/') await fail(`stage 1: the tree's Projects root points at ${JSON.stringify(treeRoot)}, expected "/"`)
+  console.log('stage 1: the tree root is Projects → /')
 
   await gotoReliably(`${baseUrl}/slaves`)
   await waitVisible(page.getByTestId('workforce-tab-slaves'), 'the Workforce Slaves tab after /slaves')
@@ -667,82 +678,68 @@ try {
   const kpiCount = await page.getByTestId('kpi-tile').count()
   console.log(`stage 1: /analytics?workspace=<fixture> answered with ${String(kpiCount)} kpi-tile(s)`)
   assert(kpiCount > 0, 'stage 1: /analytics rendered no KPI tile at all')
-  console.log('stage 1 PASSED: four entries, in order, pointing where they say; /slaves and /skills land on the right tab; /analytics still answers')
+  console.log('stage 1 PASSED: three global entries under a Projects root, in order, pointing where they say; /slaves and /skills land on the right tab; /analytics still answers')
 
   // ============================================================================================
-  // Stage 2: the project strip, and the Advanced menu's two routes.
+  // Stage 2: the tree's section rows, and the VIEWS chips' three routes.
   // ============================================================================================
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
-  await waitVisible(page.getByTestId('project-tab-overview'), "the project's tab strip")
-  // Scoped to the PROJECT tablist: the page carries other `role="tab"` strips of its own, and an
-  // unscoped query would be measuring whichever ones happened to render.
-  const stripLabels = await page.evaluate(() =>
-    [...document.querySelectorAll('[role="tablist"][aria-label="Project"] [role="tab"]')].map((tab) =>
-      // The badge digits ride inside the tab's own text (`project-tabs.test.tsx` strips them the
-      // same way) -- the label is what is left.
-      (tab.textContent ?? '').replace(/\d+$/, '').trim(),
+  await waitVisible(page.getByTestId('sidebar-section'), "the project's section rows in the tree")
+  const sectionIds = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="sidebar-section"]')].map((row) => row.getAttribute('data-section') ?? ''),
+  )
+  console.log(`stage 2: section rows = ${JSON.stringify(sectionIds)}`)
+  const EXPECTED_SECTIONS = ['overview', 'tasks', 'organization', 'knowledge', 'activity', 'settings']
+  if (JSON.stringify(sectionIds) !== JSON.stringify(EXPECTED_SECTIONS)) {
+    await fail(`stage 2: the tree's sections are ${JSON.stringify(sectionIds)}, expected ${JSON.stringify(EXPECTED_SECTIONS)}`)
+  }
+  // The LABEL assertion the tab strip used to carry, re-pointed at the rows that carry those words
+  // now. `Organization` became `Team` in M57 R6 -- a label change over an unchanged route -- and
+  // this line is where a reviewer sees that, in the same commit as the component.
+  const sectionLabels = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="sidebar-section"]')].map((row) =>
+      // The Tasks row carries a count in its own text, the way the tab's badge did; the label is
+      // what is left.
+      (row.textContent ?? '').replace(/\d+$/, '').trim(),
     ),
   )
-  console.log(`stage 2: project tabs = ${JSON.stringify(stripLabels)}`)
-  // SIX since M49 R6 added the Knowledge tab, fourth. This stage of M44's gate names a later
-  // milestone deliberately: the strip is M44's contract, and whoever widens it moves this line with
-  // the component, in the same commit, or learns here that they did not.
-  const EXPECTED_TABS = ['Overview', 'Tasks', 'Organization', 'Knowledge', 'Activity', 'Settings']
-  if (JSON.stringify(stripLabels) !== JSON.stringify(EXPECTED_TABS)) {
-    await fail(`stage 2: the project strip is ${JSON.stringify(stripLabels)}, expected ${JSON.stringify(EXPECTED_TABS)}`)
+  console.log(`stage 2: section labels = ${JSON.stringify(sectionLabels)}`)
+  const EXPECTED_LABELS = ['Overview', 'Tasks', 'Team', 'Knowledge', 'Activity', 'Settings']
+  if (JSON.stringify(sectionLabels) !== JSON.stringify(EXPECTED_LABELS)) {
+    await fail(`stage 2: the tree's section labels are ${JSON.stringify(sectionLabels)}, expected ${JSON.stringify(EXPECTED_LABELS)}`)
   }
-  const graphItemBefore = await page.getByTestId('advanced-item-graph').count()
-  console.log(`stage 2: advanced-item-graph before the menu is opened = ${String(graphItemBefore)} element(s)`)
-  if (graphItemBefore !== 0) {
-    await fail('stage 2: the Advanced menu is already open on arrival -- its items must be behind the trigger')
-  }
-  await clickUntil(
-    page.getByTestId('project-advanced'),
-    async () => page.getByTestId('advanced-item-graph').first().isVisible(),
-    'the Advanced trigger',
+  // M57 R11: what `Advanced ▾` held is three VISIBLE chips now. No menu to open, and therefore no
+  // Escape-refocus contract to hold -- the destinations are the promise `docs/ia.md` makes, and
+  // they are all three here, at the URLs they always had.
+  const viewHrefs = await page.evaluate(() =>
+    Object.fromEntries(
+      [...document.querySelectorAll('[data-testid="sidebar-view"]')].map((chip) => [
+        chip.getAttribute('data-view') ?? '',
+        chip.getAttribute('href') ?? '',
+      ]),
+    ),
   )
-  const advancedHrefs = await page.evaluate(() => ({
-    graph: document.querySelector('[data-testid="advanced-item-graph"]')?.getAttribute('href') ?? null,
-    office: document.querySelector('[data-testid="advanced-item-office"]')?.getAttribute('href') ?? null,
-  }))
-  console.log(`stage 2: Advanced menu hrefs = ${JSON.stringify(advancedHrefs)}`)
-  if (advancedHrefs.graph !== `/w/${workspaceId}/graph`) {
-    await fail(`stage 2: advanced-item-graph points at ${JSON.stringify(advancedHrefs.graph)}, expected /w/${workspaceId}/graph`)
+  console.log(`stage 2: VIEWS chips = ${JSON.stringify(viewHrefs)}`)
+  if (viewHrefs.graph !== `/w/${workspaceId}/graph`) {
+    await fail(`stage 2: the Graph chip points at ${JSON.stringify(viewHrefs.graph)}, expected /w/${workspaceId}/graph`)
   }
-  if (advancedHrefs.office !== `/w/${workspaceId}/office`) {
-    await fail(`stage 2: advanced-item-office points at ${JSON.stringify(advancedHrefs.office)}, expected /w/${workspaceId}/office`)
+  if (viewHrefs.office !== `/w/${workspaceId}/office`) {
+    await fail(`stage 2: the Office chip points at ${JSON.stringify(viewHrefs.office)}, expected /w/${workspaceId}/office`)
   }
-  // Not decoration: both routes still render.
+  if (viewHrefs.analytics !== `/analytics?workspace=${workspaceId}`) {
+    await fail(`stage 2: the Analytics chip points at ${JSON.stringify(viewHrefs.analytics)}, expected /analytics?workspace=${workspaceId}`)
+  }
+  // NOT DECORATION: both routes still render (M44's own two checks, kept verbatim -- a chip that
+  // points at a page nobody can draw is a chip that lies).
   await gotoReliably(`${baseUrl}/w/${workspaceId}/graph`)
-  await waitVisible(page.getByTestId('graph-canvas'), "the Graph route's canvas, reached from Advanced")
+  await waitVisible(page.getByTestId('graph-canvas'), "the Graph route's canvas, reached from VIEWS")
   console.log('stage 2: /w/<id>/graph rendered graph-canvas')
   await gotoReliably(`${baseUrl}/w/${workspaceId}/office`)
-  await waitVisible(page.getByTestId('office-canvas'), "the Office route's canvas, reached from Advanced")
+  await waitVisible(page.getByTestId('office-canvas'), "the Office route's canvas, reached from VIEWS")
   console.log('stage 2: /w/<id>/office rendered office-canvas')
-
-  // Escape closes the menu and hands the keyboard back to the trigger (E22: a menu, not a modal).
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
-  await waitVisible(page.getByTestId('project-advanced'), 'the Advanced trigger, for the Escape check')
-  await clickUntil(
-    page.getByTestId('project-advanced'),
-    async () => page.getByTestId('advanced-item-graph').first().isVisible(),
-    'the Advanced trigger (Escape check)',
-  )
-  await page.keyboard.press('Escape')
-  await delay(150)
-  const afterEscape = await page.evaluate(() => ({
-    items: document.querySelectorAll('[data-testid="advanced-item-graph"]').length,
-    active: document.activeElement?.getAttribute('data-testid') ?? null,
-    expanded: document.querySelector('[data-testid="project-advanced"]')?.getAttribute('aria-expanded') ?? null,
-  }))
-  console.log(`stage 2: after Escape = ${JSON.stringify(afterEscape)}`)
-  if (afterEscape.items !== 0 || afterEscape.expanded !== 'false') {
-    await fail(`stage 2: Escape did not close the Advanced menu (${JSON.stringify(afterEscape)})`)
-  }
-  if (afterEscape.active !== 'project-advanced') {
-    await fail(`stage 2: Escape left focus on ${JSON.stringify(afterEscape.active)}, expected the project-advanced trigger`)
-  }
-  console.log('stage 2 PASSED: five tabs, Advanced onto Graph and Office, both routes rendering, Escape giving the keyboard back')
+
+  console.log('stage 2 PASSED: six section rows with the right words, three VIEWS chips, and both canvases still drawing')
 
   // ============================================================================================
   // Stages 3 and 4, in ONE pass over the pages: the shell contract and the raw-token scan.
@@ -1086,31 +1083,40 @@ try {
   console.log('stage 6 PASSED: the skip link is the first thing the keyboard finds, and it actually moves focus to main')
 
   // ============================================================================================
-  // Stage 7: the collapse.
+  // Stage 7: the width, and the floor that replaced the collapse.
   // ============================================================================================
   const wideWidth = await page.evaluate(() => {
     const nav = document.querySelector('nav[aria-label="Primary"]')
     return nav === null ? null : window.getComputedStyle(nav).width
   })
   console.log(`stage 7: sidebar width at 1440x900 = ${JSON.stringify(wideWidth)}`)
-  if (wideWidth !== '212px') await fail(`stage 7: the sidebar is ${JSON.stringify(wideWidth)} at 1440x900, expected "212px" (the README number)`)
+  if (wideWidth !== '236px') await fail(`stage 7: the sidebar is ${JSON.stringify(wideWidth)} at 1440x900, expected "236px" (the M57 README number)`)
+  // M57 R4: the handoff states a MINIMUM WIDTH rather than a breakpoint, and the 899px icon rail
+  // went with `Sidebar.tsx`. What is asserted instead is that the frame refuses to compress: at
+  // 800px the shell is still at least 1280 wide and the page scrolls horizontally rather than the
+  // sidebar shrinking into something unusable.
   await page.setViewportSize({ width: 800, height: 900 })
   await gotoReliably(`${baseUrl}/`)
   await waitVisible(page.getByRole('navigation', { name: 'Primary' }), 'the sidebar at 800x900')
   const narrow = await page.evaluate(() => {
     const nav = document.querySelector('nav[aria-label="Primary"]')
+    const shell = document.querySelector('[data-testid="app-shell"]')
     return {
       width: nav === null ? null : window.getComputedStyle(nav).width,
-      labels: [...document.querySelectorAll('[data-testid="nav-row"]')].map((row) => row.getAttribute('aria-label') ?? ''),
+      shellWidth: shell === null ? null : shell.getBoundingClientRect().width,
+      labels: [...document.querySelectorAll('[data-testid="sidebar-global"]')].map((row) => row.getAttribute('aria-label') ?? ''),
     }
   })
   console.log(`stage 7: at 800x900 = ${JSON.stringify(narrow)}`)
-  if (narrow.width !== '52px') await fail(`stage 7: the sidebar is ${JSON.stringify(narrow.width)} at 800x900, expected "52px"`)
-  if (narrow.labels.length !== 4 || narrow.labels.some((label) => label === '')) {
-    await fail(`stage 7: a collapsed row lost its aria-label (${JSON.stringify(narrow.labels)}) -- the rail is icons to the eye, words to a reader`)
+  if (narrow.width !== '236px') await fail(`stage 7: the sidebar is ${JSON.stringify(narrow.width)} at 800x900, expected "236px" -- it does not collapse any more`)
+  if (narrow.shellWidth === null || narrow.shellWidth < 1280) {
+    await fail(`stage 7: the shell is ${JSON.stringify(narrow.shellWidth)} wide at 800px, expected at least 1280 (R4's floor)`)
+  }
+  if (narrow.labels.length !== 3 || narrow.labels.some((label) => label === '')) {
+    await fail(`stage 7: a global row lost its aria-label (${JSON.stringify(narrow.labels)})`)
   }
   await page.setViewportSize({ width: 1440, height: 900 })
-  console.log('stage 7 PASSED: 212px at 1440, 52px at 800, and every collapsed row still says its own name')
+  console.log('stage 7 PASSED: 236px at both widths, a 1280px floor, and every global row still says its own name')
 
   // ============================================================================================
   // Stage 8: two kinds of money.

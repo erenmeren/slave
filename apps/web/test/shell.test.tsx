@@ -1,18 +1,14 @@
 // @vitest-environment jsdom
 import { render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Sidebar } from '../src/components/Sidebar.js'
 import { ActivityClient } from '../src/components/activity/ActivityClient.js'
 import { TasksClient } from '../src/components/TasksClient.js'
 import type { ActivityPage } from '../src/server/activity.js'
 import type { TasksSnapshot } from '../src/server/tasks.js'
 
-let pathname = '/w/w1'
-const routerReplace = vi.fn()
-
 vi.mock('next/navigation', () => ({
-  usePathname: () => pathname,
-  useRouter: () => ({ replace: routerReplace }),
+  usePathname: () => '/w/w1',
+  useRouter: () => ({ replace: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
 }))
 
@@ -62,117 +58,6 @@ beforeEach((): void => {
 
 afterEach((): void => {
   vi.unstubAllGlobals()
-})
-
-/** A nav row by its label. */
-function navRow(label: string): HTMLElement {
-  const row = screen.getAllByTestId('nav-row').find((element) => element.getAttribute('data-nav') === label)
-  if (row === undefined) throw new Error(`no nav row labelled ${label}`)
-  return row
-}
-
-describe('the shell', () => {
-  afterEach(() => {
-    pathname = '/w/w1'
-  })
-
-  it('renders the four global rows in order: Projects, Workforce, Simulations, Settings (M44 R1)', () => {
-    render(<Sidebar />)
-    const labels = screen.getAllByTestId('nav-row').map((row) => row.getAttribute('data-nav'))
-    expect(labels).toEqual(['Projects', 'Workforce', 'Simulations', 'Settings'])
-    expect(navRow('Workforce').getAttribute('href')).toBe('/workforce')
-    expect(navRow('Simulations').getAttribute('href')).toBe('/sim')
-    expect(navRow('Settings').getAttribute('href')).toBe('/settings')
-  })
-
-  it('has no Slaves, Skills or Analytics row -- they are a Workforce tab, a Workforce tab and a Projects section now', () => {
-    render(<Sidebar />)
-    const labels = screen.getAllByTestId('nav-row').map((row) => row.getAttribute('data-nav'))
-    expect(labels).not.toContain('Slaves')
-    expect(labels).not.toContain('Skills')
-    expect(labels).not.toContain('Analytics')
-  })
-
-  it('marks Workforce current on /workforce and on the routes that redirect into it', () => {
-    pathname = '/workforce'
-    const { rerender } = render(<Sidebar />)
-    expect(navRow('Workforce')).toHaveProperty('ariaCurrent', 'page')
-    pathname = '/slaves'
-    rerender(<Sidebar />)
-    expect(navRow('Workforce')).toHaveProperty('ariaCurrent', 'page')
-    pathname = '/skills'
-    rerender(<Sidebar />)
-    expect(navRow('Workforce')).toHaveProperty('ariaCurrent', 'page')
-  })
-
-  it('marks Projects current on /, on /w/:id/... and on /analytics -- analytics is a Projects fact', () => {
-    pathname = '/'
-    const { rerender } = render(<Sidebar />)
-    expect(navRow('Projects')).toHaveProperty('ariaCurrent', 'page')
-    pathname = '/w/w1/tasks'
-    rerender(<Sidebar />)
-    expect(navRow('Projects')).toHaveProperty('ariaCurrent', 'page')
-    pathname = '/analytics'
-    rerender(<Sidebar />)
-    expect(navRow('Projects')).toHaveProperty('ariaCurrent', 'page')
-  })
-
-  it('marks Settings current on the settings route', () => {
-    pathname = '/settings'
-    render(<Sidebar />)
-    expect(navRow('Settings')).toHaveProperty('ariaCurrent', 'page')
-    expect(navRow('Projects')).not.toHaveProperty('ariaCurrent', 'page')
-  })
-
-  it('is 212px wide at full width and collapses to a 52px icon rail below 900px (M44 R3/R6)', () => {
-    render(<Sidebar />)
-    // Class strings, not computed style: jsdom loads no CSS. gate:m44-ux-foundation reads the real
-    // widths back at 1440px and at 800px.
-    const nav = screen.getByRole('navigation', { name: 'Primary' })
-    expect(nav.className).toContain('w-[212px]')
-    expect(nav.className).toContain('max-[899px]:w-[52px]')
-  })
-
-  it('gives every row an accessible name that survives the collapse', () => {
-    render(<Sidebar />)
-    expect(navRow('Workforce').getAttribute('aria-label')).toBe('Workforce')
-    expect(navRow('Workforce').getAttribute('title')).toBe('Workforce')
-    // The collapsed rail shows one letter; the full label is hidden below 900px, not deleted.
-    expect(navRow('Workforce').textContent).toContain('Workforce')
-  })
-
-  it('puts a skip link first, before the nav, pointing at the one main landmark', () => {
-    render(<Sidebar />)
-    const skip = screen.getByTestId('skip-link')
-    expect(skip.getAttribute('href')).toBe('#main')
-    expect(skip.textContent).toBe('Skip to content')
-    expect(skip.compareDocumentPosition(screen.getByRole('navigation', { name: 'Primary' })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-  })
-
-  it('marks the selected row with the handoff selected surface and its teal rail', () => {
-    // Class string, not computed style (jsdom loads no CSS): `bg-bg-selected` is spec §3's
-    // "selected" surface token and the `inset 2px 0 0` rail is the mockup's own. The gate reads
-    // both back.
-    pathname = '/w/w1'
-    render(<Sidebar />)
-    expect(navRow('Projects').className).toContain('bg-bg-selected')
-    expect(navRow('Projects').className).toContain('inset_2px_0_0')
-    expect(navRow('Workforce').className).not.toContain('bg-bg-selected')
-  })
-
-  it('renders no project section, no nav badges and no guardrail figures -- those live in the project header and tabs now (M24 §2.2)', () => {
-    pathname = '/w/w1/tasks'
-    render(<Sidebar />)
-    expect(screen.queryByTestId('project-section')).toBeNull()
-    expect(screen.queryAllByTestId(/^nav-badge-/)).toEqual([])
-    expect(screen.queryAllByTestId(/^guardrail-/)).toEqual([])
-  })
-
-  it('renders nothing on /login -- the shell is a logged-in surface', () => {
-    pathname = '/login'
-    const { container } = render(<Sidebar />)
-    expect(container.innerHTML).toBe('')
-  })
 })
 
 describe('the halt banner shows on every page', () => {

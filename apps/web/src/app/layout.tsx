@@ -1,7 +1,12 @@
 import type React from 'react'
 import localFont from 'next/font/local'
 import './globals.css'
-import { Sidebar } from '../components/Sidebar'
+import { buildSidebarTree } from '../server/sidebar'
+import { requirePrincipal } from '../server/principal'
+import { AppShell } from '../components/shell/AppShell'
+import { SidebarTree } from '../components/shell/SidebarTree'
+import { HeaderActionProvider } from '../components/shell/HeaderActionProvider'
+import { RightPanelProvider } from '../components/shell/RightPanelProvider'
 import { ThemeProvider, THEME_STORAGE_KEY } from '../components/theme/ThemeProvider'
 
 /**
@@ -81,7 +86,25 @@ const THEME_SCRIPT = `(function(){try{var t=localStorage.getItem(${JSON.stringif
 
 export const metadata = { title: 'Slave of AI' }
 
-export default function RootLayout({ children }: { children: React.ReactNode }): React.JSX.Element {
+/** The tree is read on the SERVER so the first paint carries the real project list — a sidebar
+ *  that arrives one frame late is the most visible kind of late. `force-dynamic` because it is a
+ *  database read on every request and there is nothing to cache across operators. */
+export const dynamic = 'force-dynamic'
+
+export default async function RootLayout({ children }: { children: React.ReactNode }): Promise<React.JSX.Element> {
+  // GATED ON A PRINCIPAL (spec erratum E11, scan finding 55). Without this, `/login` — the one page
+  // in the product a signed-out person can reach — opens a database connection and lists every
+  // project before anybody has authenticated. `GET /api/sidebar` has always been gated; the layout
+  // read was not.
+  //
+  // `requirePrincipal` is the SAME gate that route asks, which is the point: it answers "this
+  // installation has no accounts at all" (loopback: `{ principal: null }`, and the tree is read for
+  // everybody, as it always has been) and "signed in" identically, and only a signed-OUT accounts
+  // install comes back carrying a `response`. That `Response` is DISCARDED here on purpose -- a
+  // layout renders, it does not refuse; the empty tree is what `/login` gets, and every route
+  // behind it is already 401'd by its own handler.
+  const gate = await requirePrincipal()
+  const projects = 'response' in gate ? [] : await buildSidebarTree()
   return (
     <html lang="en" className={FONT_VARIABLES} suppressHydrationWarning>
       {/* An explicit `<head>` so the script above is genuinely in it (erratum E8): a `<script>`
@@ -92,15 +115,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }):
       <head>
         <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
       </head>
-      <body className="flex min-h-screen">
+      <body className="min-h-screen">
         <ThemeProvider>
-          <Sidebar />
-          {/* The one `main` landmark, and the skip link's target (M44 R6). `tabIndex={-1}` so the
-            * anchor can actually move focus here -- a `<main>` is not focusable by default, and a
-            * skip link that only scrolls has moved the viewport and not the keyboard. */}
-          <main id="main" tabIndex={-1} className="flex min-w-0 flex-1 flex-col focus:outline-none">
-            {children}
-          </main>
+          <RightPanelProvider>
+            <HeaderActionProvider>
+              {/* `header` and `right` are this task's two empty sockets: Task 4 hangs the header
+                * on the first and Task 5 the right panel on the second. What is proved here is the
+                * frame itself -- one grid, one `main`, one Primary nav on every page. */}
+              <AppShell sidebar={<SidebarTree initial={projects} />} header={null} right={null} rightWidth="none">
+                {children}
+              </AppShell>
+            </HeaderActionProvider>
+          </RightPanelProvider>
         </ThemeProvider>
       </body>
     </html>
