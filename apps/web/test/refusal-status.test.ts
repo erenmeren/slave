@@ -66,6 +66,9 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   invalid_tool: true,
   invalid_permission_mode: true,
   repo_path_not_absolute: true,
+  // M59 R3: `setInstallationSettings`'s own kind. 409 by the suffix rule -- the installation is
+  // there, the request just names a path that cannot be the repositories folder.
+  invalid_repos_root: true,
   repo_not_found: true,
   not_a_git_repository: true,
   base_branch_not_found: true,

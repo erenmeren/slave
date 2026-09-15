@@ -1,4 +1,5 @@
 export * from './paths.js'
+export * from './installation.js'
 export * from './kill.js'
 export * from './refusal.js'
 export * from './plural.js'

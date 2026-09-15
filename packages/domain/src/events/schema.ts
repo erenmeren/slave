@@ -410,6 +410,13 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       baseBranch: z.string().min(1),
       verifyCommands: z.array(z.string().min(1)).min(1),
       provider: z.string().nullable(),
+      // M59 R4: the conversation this project was created from, when it was created from one.
+      // OPTIONAL, like every other widening of an existing arm in this file (M19 B1, M23 F6,
+      // M27, M36 t1, M40 t1): `packages/events/src/read.ts` THROWS on a row this schema cannot
+      // parse, so a required field would make every `workspace.created` written before this
+      // milestone unreadable and take the activity stream down with it. There is no new event
+      // type and no `LANE_BY_TYPE` change -- this type already maps to `null`.
+      intakeId: z.string().min(1).optional(),
     }),
   }),
   // M27 §3: archived keeps every row; the payload is the footprint the confirm showed.

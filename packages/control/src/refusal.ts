@@ -265,6 +265,11 @@ export type ControlRefusal =
   | { readonly kind: 'invalid_permission_mode'; readonly mode: string }
   /** `createWorkspace`'s `repoPath` was not an absolute path (M23 A1, spec §2 A1). */
   | { readonly kind: 'repo_path_not_absolute'; readonly path: string }
+  /** M59 R3: `setInstallationSettings` was handed a relative repositories folder. Distinct from
+   *  `repo_path_not_absolute`, which is about ONE project's repository -- this is the folder every
+   *  future one is created under, and naming the wrong thing would send a person to the wrong
+   *  field. */
+  | { readonly kind: 'invalid_repos_root'; readonly path: string }
   /** No directory exists at `createWorkspace`'s `repoPath`. */
   | { readonly kind: 'repo_not_found'; readonly path: string }
   /** `repoPath` exists but is not a git work tree (`GitProbe.isRepository` said so). */
@@ -610,6 +615,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return 'a permission must be allow or deny'
     case 'repo_path_not_absolute':
       return `the repository path must be absolute: ${refusal.path}`
+    case 'invalid_repos_root':
+      return `the repositories folder must be an absolute path: ${refusal.path}`
     case 'repo_not_found':
       return `no directory at ${refusal.path}`
     case 'not_a_git_repository':
