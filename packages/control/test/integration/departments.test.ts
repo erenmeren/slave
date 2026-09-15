@@ -241,6 +241,13 @@ describe('moveSlave', () => {
     expect(await prisma.slaveRun.findUnique({ where: { id: historicRun.id } })).not.toBeNull()
     expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).closedAt).not.toBeNull()
     expect(await prisma.slave.count({ where: { personId: seat.personId, teamId: fixture.qaId } })).toBe(1)
+    // Fix round 1, Minor 6: the event names the seat the person is IN afterwards. It used to name
+    // the row the caller passed -- which on this path is the seat that just CLOSED, so the
+    // timeline pointed at a row the roster no longer shows.
+    const events = await orgChangedEvents(fixture.workspaceId)
+    expect(events).toHaveLength(1)
+    expect(events[0]?.slaveId).toBe(closed.id)
+    expect(events[0]?.payload).toMatchObject({ entity: 'slave', id: closed.id, field: 'team', to: 'QA' })
   })
 
   it('moving to the current department is a no-op with no event', async () => {

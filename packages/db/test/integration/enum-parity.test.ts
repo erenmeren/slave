@@ -16,6 +16,7 @@ import {
   PERMISSION_PROVIDERS,
   PERMISSION_RUN_KINDS,
   SITUATION_KINDS,
+  SKILL_GRANT_MODES,
   SLAVE_LIFECYCLES,
   TIERS,
   executionEventSchema,
@@ -99,6 +100,14 @@ describe('database enums match the domain unions', () => {
   // first INSERT rather than at build.
   it('SlaveLifecycle matches SLAVE_LIFECYCLES, member for member', async () => {
     expect(await enumValues('SlaveLifecycle')).toEqual([...SLAVE_LIFECYCLES].sort())
+  })
+
+  // M58 (fix round 1, Minor 10). `SkillGrantMode` is this milestone's one new Postgres enum and it
+  // arrived with no domain union to pin it to: `PersonSkill.mode` is what says whether a row grants
+  // a skill or takes a persona's away, and a third member added to one side and not the other is a
+  // runtime insert failure nothing else here would catch.
+  it('SkillGrantMode matches SKILL_GRANT_MODES, member for member', async () => {
+    expect(await enumValues('SkillGrantMode')).toEqual([...SKILL_GRANT_MODES].sort())
   })
 
   // M51 R2: the breaker's own enum. Same reason as the Supervisor's four and the memory four --

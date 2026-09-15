@@ -441,7 +441,10 @@ try {
     console.log(`workspace page shows ${cardCount} slave-card(s)`)
     if (cardCount !== ROSTER.length) await fail(`the workspace page shows ${cardCount} slave-card(s), expected ${ROSTER.length}`)
 
-    const slaves = await prisma.slave.findMany({ where: { team: { workspaceId } }, select: { name: true, role: true, runtimeRoles: true, team: { select: { name: true } } }, orderBy: { name: 'asc' } })
+    // M58 R2: a seat carries no name of its own -- the person in it does, so the roster this stage
+    // checks is read through `person` and flattened back to the shape the assertions below expect.
+    const seats = await prisma.slave.findMany({ where: { team: { workspaceId } }, select: { role: true, runtimeRoles: true, person: { select: { name: true } }, team: { select: { name: true } } }, orderBy: { person: { name: 'asc' } } })
+    const slaves = seats.map((seat) => ({ name: seat.person.name, role: seat.role, runtimeRoles: seat.runtimeRoles, team: seat.team }))
     console.log(`Slave rows for the workspace: ${JSON.stringify(slaves.map((s) => ({ name: s.name, team: s.team.name, role: s.role, runtimeRoles: s.runtimeRoles })))}`)
     if (slaves.length !== ROSTER.length) await fail(`the workspace has ${slaves.length} Slave row(s), expected ${ROSTER.length}`)
     for (const [slaveName, expectedRole] of Object.entries(EXPECTED_SLAVE_ROLES)) {

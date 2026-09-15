@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { CapabilityRecord } from '@slave-of-ai/domain'
 import type { AllSlavesPage, CatalogRowView, ProjectTeamRow, RosterCompany, RunbookRowView, WorkforceCatalogView } from '../../server/org'
@@ -142,6 +142,14 @@ export function WorkforceClient({
     setTab(initialTab)
   }, [initialTab])
   const [newOpen, setNewOpen] = useState(false)
+  // One entry per PERSON, not per seat: `slaves.rows` is a seat list, and somebody sitting on two
+  // projects is two rows there (fix round 1, Minor 3). First row wins -- every row for one person
+  // carries the same name.
+  const people = useMemo(() => {
+    const byPerson = new Map<string, { readonly personId: string; readonly name: string }>()
+    for (const row of slaves.rows) if (!byPerson.has(row.personId)) byPerson.set(row.personId, { personId: row.personId, name: row.name })
+    return [...byPerson.values()]
+  }, [slaves])
   /**
    * MOVED verbatim from `SlavesClient` (deleted this task), including its fix-round-1 rule: the
    * CLICKED slave's own `slaveId`/`workspaceId`, captured at click time from `AllSlavesTable`'s
@@ -255,12 +263,11 @@ export function WorkforceClient({
           </Panel>
           <Panel title="Companies">
             {/* M58 R5: a department holds PEOPLE, so the add-member form picks from everybody this
-                installation has -- which is exactly what the Slaves tab's own rows already are. */}
-            <CompanyManager
-              companies={companies}
-              roster={roster}
-              people={slaves.rows.map((row) => ({ personId: row.personId, name: row.name }))}
-            />
+                installation has -- which is exactly what the Slaves tab's own rows already are.
+                One row per SEAT, though (fix round 1, Minor 3), so a person sitting on two projects
+                appears twice; the list is deduplicated by person or the select renders one React
+                key twice and offers the same person as two choices. */}
+            <CompanyManager companies={companies} roster={roster} people={people} />
           </Panel>
           {/* M46 plan erratum E7: the import log is per-import-RUN, not per template, so it stays
               one panel on the tab instead of being repeated inside every profile drawer. It is

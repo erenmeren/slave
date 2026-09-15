@@ -2,17 +2,13 @@
 
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-import type { ProviderKind } from '@slave-of-ai/control'
 import type { RosterMemberRow } from '../../server/org'
 import { plural } from '../../lib/plural'
 import { sendControl } from '../../lib/postControl'
-import { ProviderSelect } from '../ProviderSelect'
-import { ModelSelect } from '../ModelSelect'
 import { SlaveRowActions } from '../SlaveRowActions'
-import type { TemplateRow } from '../workforce/TemplateForm'
 import { DangerConfirm } from '../ui/DangerConfirm'
 import { DataTable, Row } from '../ui/DataTable'
-import { FieldLabel, INPUT_SHELL, SelectField, TextField } from '../ui/FormControls'
+import { SelectField, TextField } from '../ui/FormControls'
 import { SectionLabel } from '../ui/SectionLabel'
 import { Button } from '../ui/Button'
 

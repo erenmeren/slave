@@ -815,6 +815,38 @@ describe('actionSchema reads a stored action back', () => {
     expect(parsed.success).toBe(true)
     if (parsed.success) expect(parsed.data.action).toEqual(stored.action)
   })
+
+  /**
+   * Spec erratum E9. M58 moved the `materialise_company_worker` subject from `companySlaveId` to
+   * `personId`, and the migration rewrites only PENDING rows -- deliberately, because rewriting an
+   * answered decision is rewriting history. So every applied and rejected row from before the
+   * upgrade, and every `candidates` entry on any row of any status, still names the old field, and
+   * `listDecisions` reads all of them through `parsedOrThrow`. A renamed field would have thrown
+   * the whole Supervisor view away over a row nobody can act on any more.
+   */
+  it('reads a pre-M58 seat action back by its old field, and refuses one that names nobody', () => {
+    const legacy = {
+      kind: 'materialise_company_worker',
+      companySlaveId: 'cs1',
+      capability: 'security.application',
+      capabilityLabel: 'Application security',
+      name: 'Sam',
+      rationale: 'the board needs application security',
+    }
+    const parsed = actionSchema.safeParse(legacy)
+    expect(parsed.success).toBe(true)
+    if (parsed.success && parsed.data.kind === 'materialise_company_worker') {
+      expect(parsed.data.companySlaveId).toBe('cs1')
+      expect(parsed.data.personId).toBeUndefined()
+    }
+    // What anything written since M58 says, and what the migration rewrote a pending row into.
+    const current = actionSchema.safeParse({ ...legacy, companySlaveId: undefined, personId: 'p1' })
+    expect(current.success).toBe(true)
+    // Neither field is not an action: it names nobody at all.
+    expect(actionSchema.safeParse({ ...legacy, companySlaveId: undefined }).success).toBe(false)
+    // And a row nested in `candidates` goes through the same validator.
+    expect(candidateSchema.safeParse({ action: legacy, tier: 'proposed', why: 'somebody already here' }).success).toBe(true)
+  })
 })
 
 describe('the run_looping offer (M51 R3)', () => {

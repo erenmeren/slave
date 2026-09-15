@@ -11,8 +11,8 @@
 --      that WAS materialised contributes its department membership to the persons its copies became,
 --      and does not become a third person (see the plan's pre-flight note 2);
 --   3. every remaining collision is resolved by the same " 2", " 3" suffix `uniquePersonName`
---      already uses, because "Person"."name" is UNIQUE and a migration may not fail on data that
---      was legal before it;
+--      already uses, against the set of names ALREADY TAKEN (spec erratum E8), because
+--      "Person"."name" is UNIQUE and a migration may not fail on data that was legal before it;
 --   4. "SlaveSkill" becomes "PersonSkill" with mode 'granted' -- the persona default set starts
 --      empty, so every skill somebody actually assigned survives as an explicit grant;
 --   5. "Memory"."slaveId" becomes "personId";
@@ -119,17 +119,40 @@ SELECT gen_random_uuid()::text, NULL, cs.id, cs."name"
   FROM "CompanySlave" cs
  WHERE NOT EXISTS (SELECT 1 FROM "Slave" s WHERE s."companySlaveId" = cs.id);
 
--- DATA 3 of 7 (rule 3). ONE de-duplication over the whole seed. `("slaveId" IS NULL)` sorts seats
--- FIRST, so a person who is actually working keeps the plain name and an unstaffed roster row is
--- the one that gains the suffix.
-UPDATE "_m58_person_seed" seed
-   SET "name" = CASE WHEN r.rn = 1 THEN seed."wanted" ELSE seed."wanted" || ' ' || r.rn::text END
-  FROM (
-    SELECT "personId",
-           ROW_NUMBER() OVER (PARTITION BY "wanted" ORDER BY ("slaveId" IS NULL), "personId") AS rn
+-- DATA 3 of 7 (rule 3). ONE de-duplication over the whole seed, against the names ALREADY TAKEN
+-- rather than per-`wanted` partition (spec erratum E8). A partition-local ROW_NUMBER is not enough:
+-- an installation holding the seats "Builder" and "Builder 2" -- what two `hireFromTemplate` calls
+-- produce -- plus an unstaffed roster row "Builder" has two partitions that never see each other,
+-- and both would land on "Builder 2", aborting the whole migration on "Person_name_key".
+--
+-- So this walks the seed one row at a time and gives each the first free name in the very sequence
+-- `uniquePersonName` walks -- "<wanted>", "<wanted> 2", "<wanted> 3" -- where free means no earlier
+-- row in this same pass took it. `("slaveId" IS NULL)` sorts seats FIRST, so a person who is
+-- actually working keeps the plain name and an unstaffed roster row is the one that gains a suffix.
+-- It terminates: each row's inner loop stops at the latest after as many tries as there are rows.
+CREATE INDEX "_m58_person_seed_name_idx" ON "_m58_person_seed"("name");
+
+DO $m58$
+DECLARE
+  seed_row  RECORD;
+  candidate TEXT;
+  suffix    INT;
+BEGIN
+  FOR seed_row IN
+    SELECT "personId", "wanted"
       FROM "_m58_person_seed"
-  ) r
- WHERE r."personId" = seed."personId";
+     ORDER BY ("slaveId" IS NULL), "wanted", "personId"
+  LOOP
+    suffix := 1;
+    candidate := seed_row."wanted";
+    WHILE EXISTS (SELECT 1 FROM "_m58_person_seed" WHERE "name" = candidate) LOOP
+      suffix := suffix + 1;
+      candidate := seed_row."wanted" || ' ' || suffix::text;
+    END LOOP;
+    UPDATE "_m58_person_seed" SET "name" = candidate WHERE "personId" = seed_row."personId";
+  END LOOP;
+END
+$m58$;
 
 -- The persons themselves. A seat-born person inherits the seat's facts and, where the seat had a
 -- roster row, that roster row's model/provider/profile -- which is exactly the middle rung of the

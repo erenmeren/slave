@@ -982,7 +982,11 @@ export async function moveSlave(
     } else {
       await tx.slave.update({ where: { id: slaveId }, data: { teamId } })
     }
-    return { ok: true as const, value: { workspaceId: target.workspaceId, from: from.name, to: target.name } }
+    // The seat the person is IN when this returns (fix round 1, Minor 6). On the reopen path that
+    // is not the row the caller named -- the row they named is the one that just closed -- and an
+    // `org.changed` pointing at a closed seat is a timeline entry nothing on the roster can be
+    // clicked to.
+    return { ok: true as const, value: { workspaceId: target.workspaceId, from: from.name, to: target.name, seatId: clash?.id ?? slaveId } }
   })
 
   if (!outcome.ok) return err(outcome.error)
@@ -991,9 +995,9 @@ export async function moveSlave(
     await appendEvent({
       type: 'org.changed',
       workspaceId: outcome.value.workspaceId,
-      slaveId,
+      slaveId: outcome.value.seatId,
       actor: 'human',
-      payload: { entity: 'slave', id: slaveId, field: 'team', from: outcome.value.from, to: outcome.value.to },
+      payload: { entity: 'slave', id: outcome.value.seatId, field: 'team', from: outcome.value.from, to: outcome.value.to },
       userId: principal?.userId ?? null,
     })
   }

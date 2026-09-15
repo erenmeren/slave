@@ -145,6 +145,27 @@ describe('recordMemory', () => {
       status: 'candidate',
       sourceKind: 'run_output',
     })
+    // A workspace-scoped memory is about nobody in particular, so no subject.
+    expect(event?.payload).not.toHaveProperty('personId')
+  })
+
+  // Fix round 1, Minor 8: the subject of a WORKER-scoped memory. It used to travel on the
+  // envelope's `slaveId` and named a seat; M58 moved the column to `Person`, a memory outlives any
+  // one seat, and the envelope has no slot for a person -- so it moved into the payload rather than
+  // being dropped, which is what the rebinding had left it as.
+  it('names the person a worker-scoped memory belongs to', async () => {
+    const result = await recordMemory(
+      draft({ type: 'lesson', scope: 'worker', workspaceId: null, personId, title: 'Prefer the repo runner' }),
+      undefined,
+      workspaceId,
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const event = await prisma.executionEvent.findFirst({
+      where: { workspaceId, type: 'memory_recorded' },
+      orderBy: { seq: 'desc' },
+    })
+    expect(event?.payload).toMatchObject({ memoryId: result.value.id, scope: 'worker', personId })
   })
 
   it('refuses a draft that names two targets, and writes nothing', async () => {

@@ -105,7 +105,6 @@ async function announceRecorded(row: MemoryRow, workspaceId: string | null, prin
     // Plan erratum E13: the task travels on the ENVELOPE, where it is indexed and where the
     // Activity filter and the task drawer both read it.
     ...(row.taskId === null ? {} : { taskId: row.taskId }),
-
     ...(row.runId === null ? {} : { runId: row.runId }),
     actor: row.createdBy,
     payload: {
@@ -114,6 +113,10 @@ async function announceRecorded(row: MemoryRow, workspaceId: string | null, prin
       scope: row.scope,
       status: row.status,
       sourceKind: row.sourceKind,
+      // M58 R3 (fix round 1, Minor 8): the subject a worker-scoped memory is ABOUT. The envelope's
+      // `slaveId` used to carry it and named a seat; the memory belongs to the person, who outlives
+      // any one seat, and the envelope has no slot for a person.
+      ...(row.personId === null ? {} : { personId: row.personId }),
     },
     userId: principal?.userId ?? row.createdByUserId ?? null,
   })

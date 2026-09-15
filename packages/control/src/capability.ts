@@ -311,7 +311,16 @@ export async function mergeRuntimeRoles(
  *  interleave and the worker keeps the role.
  *
  *  M58 R1: both of those are the PERSON's columns now, joined here so every caller keeps reading
- *  one flat row -- and `personId` comes back with them, because the writers write them there. */
+ *  one flat row -- and `personId` comes back with them, because the writers write them there.
+ *
+ *  Which is why the PERSON is locked too (fix round 1, Important 5). Locking the seat alone stopped
+ *  being enough the moment `capabilities` moved off it: `hireFromTemplate`'s reuse branch merges
+ *  and writes `Person.capabilities` under this lock, `setPersonCapabilities` writes the same column
+ *  under a lock on the PERSON, and two seat rows can hold the same person -- so a hire and a
+ *  set-capabilities on one person serialised against nothing and one of the two writes was lost.
+ *  Person -> Slave, the same order `setPersonCapabilities` takes, so the two can never deadlock.
+ *  The person is resolved and locked in ONE statement (`FOR UPDATE OF p`), because reading the id
+ *  first and locking it second is the very race this is closing. */
 async function lockedSlave(
   tx: Prisma.TransactionClient,
   slaveId: string,
@@ -322,6 +331,7 @@ async function lockedSlave(
   readonly releasedAt: Date | null
   readonly workspaceId: string
 } | null> {
+  await tx.$queryRaw`SELECT p.id FROM "Person" p JOIN "Slave" s ON s."personId" = p.id WHERE s.id = ${slaveId} FOR UPDATE OF p`
   const locked = await tx.$queryRaw<{ id: string }[]>`SELECT id FROM "Slave" WHERE id = ${slaveId} FOR UPDATE`
   if (locked.length === 0) return null
   const row = await tx.slave.findUnique({
@@ -391,7 +401,13 @@ function capabilityLabels(keys: readonly string[], taxonomy: readonly Capability
 export async function seatMember(
   workspaceId: string,
   personId: string,
-  opts: { readonly rationale?: string } = {},
+  opts: {
+    readonly rationale?: string
+    /** What the seat should DISPATCH as. Omitted -- which is every caller today -- a new seat takes
+     *  the person's own role plus the project roles their capabilities project to, and a REOPENED
+     *  seat keeps whatever it already had (fix round 1, Minors 4 and 5). */
+    readonly runtimeRoles?: readonly string[]
+  } = {},
 ): Promise<Result<{ readonly slaveId: string; readonly created: boolean }, ControlRefusal>> {
   const taxonomy = await listCapabilities()
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } })
@@ -407,7 +423,7 @@ export async function seatMember(
 
   const capabilities = person.capabilities
   const role = person.template?.role ?? 'worker'
-  const runtimeRoles = [...new Set([role, ...projectRoles(capabilities, taxonomy)])]
+  const runtimeRoles = [...new Set(opts.runtimeRoles ?? [role, ...projectRoles(capabilities, taxonomy)])]
 
   let seated: { readonly id: string; readonly created: boolean } | null
   try {
@@ -416,11 +432,23 @@ export async function seatMember(
       // two callers seating the same person must serialise rather than both read "not there".
       // `assignCompanyTx` locks the same row for the same reason.
       await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
-      const existing = await tx.slave.findFirst({ where: { personId, team: { workspaceId } }, orderBy: { id: 'asc' } })
-      if (existing !== null) {
-        if (existing.closedAt === null) return { id: existing.id, created: false }
-        await tx.slave.update({ where: { id: existing.id }, data: { closedAt: null, runtimeRoles } })
-        return { id: existing.id, created: true }
+      // An OPEN seat first (fix round 1, Minor 4). One person can hold several seats on one
+      // project over time -- one per department they have sat in -- and `orderBy: id` alone would
+      // find a CLOSED one and reopen it beside a seat they are already working from, which
+      // `listWorkers`' `closedAt: null` then shows twice.
+      const open = await tx.slave.findFirst({ where: { personId, team: { workspaceId }, closedAt: null }, orderBy: { id: 'asc' } })
+      if (open !== null) return { id: open.id, created: false }
+      const closed = await tx.slave.findFirst({ where: { personId, team: { workspaceId }, closedAt: { not: null } }, orderBy: { id: 'asc' } })
+      if (closed !== null) {
+        // `closedAt` and nothing else unless the caller said otherwise (fix round 1, Minor 5):
+        // `assignCompanyTx` reopens the same way, and a seat's runtime roles are a fact an operator
+        // set on THAT seat -- recomputing them from the person's capabilities on the way back in
+        // silently undoes every `set-runtime-roles` made before it was closed.
+        await tx.slave.update({
+          where: { id: closed.id },
+          data: { closedAt: null, ...(opts.runtimeRoles === undefined ? {} : { runtimeRoles }) },
+        })
+        return { id: closed.id, created: true }
       }
 
       const department = person.departments[0]
@@ -495,6 +523,10 @@ export async function hireFromTemplate(
   Result<
     {
       readonly slaveId: string
+      /** M58: the PERSON the seat belongs to. A caller that wants to give them a skill, a
+       *  department or a second seat needs the person, and only this verb knows which one it
+       *  created or reused. */
+      readonly personId: string
       readonly reused: boolean
       readonly capabilities: readonly string[]
       readonly runtimeRoles: readonly string[]
@@ -574,6 +606,7 @@ export async function hireFromTemplate(
       return {
         kind: 'reused' as const,
         slaveId: existing.id,
+        personId: locked.personId,
         capabilities: merged,
         runtimeRoles: roles,
         before: locked.capabilities,
@@ -617,7 +650,7 @@ export async function hireFromTemplate(
       actor: 'system',
       payload: { entity: 'slave', id: outcome.slaveId, personId: outcome.personId, field: 'created', from: null, to: outcome.name },
     })
-    return ok({ slaveId: outcome.slaveId, reused: false, capabilities, runtimeRoles })
+    return ok({ slaveId: outcome.slaveId, personId: outcome.personId, reused: false, capabilities, runtimeRoles })
   }
 
   // A reuse that CHANGED the worker is a write, and a write nobody can see in the log is how a
@@ -650,7 +683,13 @@ export async function hireFromTemplate(
       },
     })
   }
-  return ok({ slaveId: outcome.slaveId, reused: true, capabilities: outcome.capabilities, runtimeRoles: outcome.runtimeRoles })
+  return ok({
+    slaveId: outcome.slaveId,
+    personId: outcome.personId,
+    reused: true,
+    capabilities: outcome.capabilities,
+    runtimeRoles: outcome.runtimeRoles,
+  })
 }
 
 /**

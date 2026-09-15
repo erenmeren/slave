@@ -29,9 +29,25 @@ export type Action =
    *  what the Organization view shows a person months later, in words rather than in taxonomy keys
    *  (fix round 1, Minor 5).
    *
-   *  M58 R16: the field is a `Person.id` now -- the migration rewrote every pending row's payload.
-   *  The KIND keeps its name: a stored decision read a year later must still name what it named. */
-  | { readonly kind: 'materialise_company_worker'; readonly personId: string; readonly capability: string; readonly capabilityLabel: string; readonly name: string; readonly rationale: string }
+   *  M58 R16: the field is a `Person.id` now. The KIND keeps its name: a stored decision read a
+   *  year later must still name what it named.
+   *
+   *  Spec erratum E9: `companySlaveId` stays DECLARED and optional beside it, exactly as the
+   *  `workspace.company_assigned` payload keeps its own. The migration rewrites only PENDING rows,
+   *  and `listDecisions` parses every status -- an applied or rejected row from before this
+   *  milestone, and any `candidates` entry on any row, still carries the old field, and
+   *  `parsedOrThrow` would throw the whole Supervisor view away over it. Nothing WRITES it; one of
+   *  the two is always present (see the refinement on {@link actionSchema}), and `carryOut` refuses
+   *  a legacy one rather than guessing, because the roster row it names no longer exists. */
+  | {
+      readonly kind: 'materialise_company_worker'
+      readonly personId?: string | undefined
+      readonly companySlaveId?: string | undefined
+      readonly capability: string
+      readonly capabilityLabel: string
+      readonly name: string
+      readonly rationale: string
+    }
   /** `hireFromTemplate`: a new project worker from a catalog template. `rationale` is the sentence
    *  stored on the worker (`Slave.selectionRationale`) and shown on the Organization view --
    *  "why selected", months later. `temporary` is M50's lifecycle: true makes the hire `ephemeral`
@@ -137,7 +153,7 @@ export type ActionKind = (typeof ACTION_KINDS)[number]
  *  `.nullish().transform()`, so the schema's INPUT type (where the key may be absent) is no longer
  *  its output type -- which is the whole point of the transform, since a row stored before this
  *  milestone has no key there at all. */
-export const actionSchema: z.ZodType<Action, z.ZodTypeDef, unknown> = z.discriminatedUnion('kind', [
+const actionUnion = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('unblock_task'), taskId: z.string().min(1) }),
   z.object({ kind: z.literal('raise_max_attempts'), taskId: z.string().min(1) }),
   z.object({ kind: z.literal('set_runtime_roles'), slaveId: z.string().min(1), roles: z.array(z.string().min(1)) }),
@@ -150,7 +166,10 @@ export const actionSchema: z.ZodType<Action, z.ZodTypeDef, unknown> = z.discrimi
   }),
   z.object({
     kind: z.literal('materialise_company_worker'),
-    personId: z.string().min(1),
+    // E9: BOTH optional in the shape, exactly one required by the refinement below. A
+    // `discriminatedUnion` member may not be a `ZodEffects`, so the rule lives on the union.
+    personId: z.string().min(1).optional(),
+    companySlaveId: z.string().min(1).optional(),
     capability: z.string().min(1),
     capabilityLabel: z.string().min(1),
     name: z.string().min(1),
@@ -216,6 +235,22 @@ export const actionSchema: z.ZodType<Action, z.ZodTypeDef, unknown> = z.discrimi
   z.object({ kind: z.literal('escalate_to_human'), summary: z.string().min(1) }),
   z.object({ kind: z.literal('no_action') }),
 ])
+
+/**
+ * Spec erratum E9's one cross-field rule: a `materialise_company_worker` names its subject with
+ * EXACTLY one of the two fields -- `personId` on anything written since M58, `companySlaveId` on a
+ * row stored before it. A row carrying neither names nobody and is not an action.
+ */
+export const actionSchema: z.ZodType<Action, z.ZodTypeDef, unknown> = actionUnion.superRefine((value, ctx) => {
+  if (value.kind !== 'materialise_company_worker') return
+  if (value.personId === undefined && value.companySlaveId === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['personId'],
+      message: 'a materialise_company_worker names its subject with personId (or, before M58, companySlaveId)',
+    })
+  }
+})
 
 /**
  * What happens to a chosen action (spec §1, "tiers are fixed in code, not chosen by the model"):

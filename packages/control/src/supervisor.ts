@@ -409,6 +409,14 @@ async function carryOut(
       // lock the write takes or a concurrent `setSlaveCapabilities` loses a role to it.
       return reached(await mergeRuntimeRoles(action.slaveId, [action.role], SUPERVISOR_ACTOR, origin))
     case 'materialise_company_worker':
+      // Spec erratum E9: a row stored before M58 names a `CompanySlave` that this milestone's
+      // migration DROPPED, and there is nothing left to resolve it to -- the roster row is gone and
+      // its person, if it had one, is not named here. Refused rather than guessed at, with the
+      // refusal M27 already had for a roster id nothing carries. The row still PARSES, which is the
+      // point: the Supervisor view renders it and an operator can reject it by hand.
+      if (action.personId === undefined) {
+        return { ok: false as const, error: { kind: 'company_slave_not_found', companySlaveId: action.companySlaveId ?? '' } }
+      }
       // The rationale the rules wrote, verbatim -- `formTeam`'s sentence names the capability in
       // the taxonomy's WORDS ("Application security"), and that sentence is what the Organization
       // view shows beside the worker months later (fix round 1, Minor 5).

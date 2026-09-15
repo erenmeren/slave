@@ -12,12 +12,15 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
  * assertions. `pg`'s simple query protocol runs a whole migration file in one call, which is why
  * this uses a `Client` directly rather than Prisma's parameterised `$executeRaw`.
  *
- * The shadow schema is dropped in `afterAll` whatever happens; it is namespaced, so it survives
- * nothing and collides with nothing the other integration files truncate.
+ * Each case builds a shadow schema of its OWN, because M58 is irreversible and a second case
+ * cannot re-run it over the first's result. They are dropped in `afterAll` whatever happens; they
+ * are namespaced, so they survive nothing and collide with nothing the other integration files
+ * truncate.
  */
-const SHADOW = 'm58_shadow'
 const MIGRATIONS_DIR = join(process.cwd(), 'packages/db/prisma/migrations')
 const M58 = '20260915120000_m58_persons'
+/** One shadow schema per case: M58 is irreversible, so a case cannot reuse another's. */
+const SHADOWS = ['m58_shadow', 'm58_shadow_e8'] as const
 
 let client: Client
 
@@ -25,15 +28,11 @@ async function run(sql: string): Promise<void> {
   await client.query(sql)
 }
 
-beforeAll(async () => {
-  const url = process.env['TEST_DATABASE_URL']
-  if (url === undefined || url === '') throw new Error('TEST_DATABASE_URL is not set')
-  client = new Client({ connectionString: url })
-  await client.connect()
-  await run(`DROP SCHEMA IF EXISTS "${SHADOW}" CASCADE`)
-  await run(`CREATE SCHEMA "${SHADOW}"`)
-  await run(`SET search_path TO "${SHADOW}"`)
-
+/** Every migration in order EXCEPT M58's, into a schema of this case's own. */
+async function buildShadow(schema: string): Promise<void> {
+  await run(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
+  await run(`CREATE SCHEMA "${schema}"`)
+  await run(`SET search_path TO "${schema}"`)
   const dirs = readdirSync(MIGRATIONS_DIR, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
@@ -43,17 +42,31 @@ beforeAll(async () => {
   for (const name of before) {
     await run(readFileSync(join(MIGRATIONS_DIR, name, 'migration.sql'), 'utf8'))
   }
+}
+
+/** The migration under test, into whichever shadow the case built. */
+async function applyM58(): Promise<void> {
+  await run(readFileSync(join(MIGRATIONS_DIR, M58, 'migration.sql'), 'utf8'))
+}
+
+beforeAll(async () => {
+  const url = process.env['TEST_DATABASE_URL']
+  if (url === undefined || url === '') throw new Error('TEST_DATABASE_URL is not set')
+  client = new Client({ connectionString: url })
+  await client.connect()
 }, 120_000)
 
 afterAll(async () => {
   if (client !== undefined) {
-    await run(`DROP SCHEMA IF EXISTS "${SHADOW}" CASCADE`).catch(() => {})
+    for (const schema of SHADOWS) await run(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`).catch(() => {})
     await client.end()
   }
 })
 
 describe('the M58 migration, on a populated database', () => {
   it('moves every slave, roster row, memory and skill onto persons and leaves the rest alone', async () => {
+    await buildShadow(SHADOWS[0])
+
     // ---- the fixture: two projects, two slaves that share a name, a roster row nobody
     // materialised, a worker-scoped memory, a slave skill, and a run/permission/task to count.
     await run(`
@@ -101,7 +114,7 @@ describe('the M58 migration, on a populated database', () => {
     `)
 
     // ---- the migration under test
-    await run(readFileSync(join(MIGRATIONS_DIR, M58, 'migration.sql'), 'utf8'))
+    await applyM58()
 
     // 1. one person per old slave, plus one for the unmaterialised roster row
     const persons = await client.query<{ id: string; name: string; templateId: string | null }>(
@@ -177,8 +190,55 @@ describe('the M58 migration, on a populated database', () => {
     // 10. the old shapes are gone
     const gone = await client.query<{ table_name: string }>(`
       SELECT table_name FROM information_schema.tables
-       WHERE table_schema = '${SHADOW}' AND table_name IN ('CompanySlave','SlaveSkill','_m58_person_seed')
+       WHERE table_schema = '${SHADOWS[0]}' AND table_name IN ('CompanySlave','SlaveSkill','_m58_person_seed')
     `)
     expect(gone.rows).toEqual([])
+  }, 120_000)
+
+  // Spec erratum E8. The suffix is assigned against every name ALREADY TAKEN, not per-`wanted`
+  // partition: an installation holding the seats "Builder" and "Builder 2" -- exactly what two
+  // `hireFromTemplate` calls produce -- plus an unstaffed roster row "Builder" made the old
+  // per-partition ROW_NUMBER hand out a second "Builder 2" and abort the whole migration on
+  // "Person_name_key".
+  it('resolves a name collision against every name already taken, not one partition at a time', async () => {
+    await buildShadow(SHADOWS[1])
+
+    await run(`
+      INSERT INTO "Workspace" (id, name, "repoPath", "verifyCommands", "setupCommands")
+        VALUES ('w1','Alpha','/tmp/a', ARRAY['true'], ARRAY[]::TEXT[]);
+      INSERT INTO "Company" (id, name) VALUES ('c1','Acme');
+      INSERT INTO "CompanyTeam" (id, "companyId", name) VALUES ('ct1','c1','Engineering');
+      INSERT INTO "SlaveTemplate" (id, name, role) VALUES ('tpl1','Builder','dev');
+      -- the roster row nobody materialised, wanting the name a seat already has
+      INSERT INTO "CompanySlave" (id, "companyTeamId", "templateId", name)
+        VALUES ('cs1','ct1','tpl1','Builder');
+      INSERT INTO "Team" (id, "workspaceId", name, "companyTeamId") VALUES ('t1','w1','Engineering','ct1');
+      -- the two seats hireFromTemplate leaves behind when it is called twice for one persona
+      INSERT INTO "Slave" (id, "teamId", name, role, "runtimeRoles", capabilities, lifecycle)
+        VALUES ('s1','t1','Builder','dev',   ARRAY['dev'], ARRAY[]::TEXT[], 'project'),
+               ('s2','t1','Builder 2','dev', ARRAY['dev'], ARRAY[]::TEXT[], 'project');
+    `)
+
+    await applyM58()
+
+    // three persons, three distinct names: the pooled roster row walks PAST the taken "Builder 2"
+    const persons = await client.query<{ name: string; seats: string }>(`
+      SELECT p.name, (SELECT COUNT(*) FROM "Slave" s WHERE s."personId" = p.id)::text AS seats
+        FROM "Person" p ORDER BY p.name
+    `)
+    expect(persons.rows).toEqual([
+      { name: 'Builder', seats: '1' },
+      { name: 'Builder 2', seats: '1' },
+      { name: 'Builder 3', seats: '0' },
+    ])
+
+    // and the seats kept the names their own workers had, rather than trading them
+    const seats = await client.query<{ id: string; name: string }>(`
+      SELECT s.id, p.name FROM "Slave" s JOIN "Person" p ON p.id = s."personId" ORDER BY s.id
+    `)
+    expect(seats.rows).toEqual([
+      { id: 's1', name: 'Builder' },
+      { id: 's2', name: 'Builder 2' },
+    ])
   }, 120_000)
 })

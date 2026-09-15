@@ -655,7 +655,10 @@ try {
   const assignOutput = runCli(['assign-company', '--workspace', workspaceId, '--company', companyId])
   console.log(`assign-company printed: ${JSON.stringify(assignOutput.trim())}`)
 
-  const workers = await prisma.slave.findMany({ where: { team: { workspaceId } }, orderBy: { name: 'asc' } })
+  // M58 R2: the name belongs to the person, not the seat; flatten it back on so the stage below
+  // still reads `worker.name`.
+  const seats = await prisma.slave.findMany({ where: { team: { workspaceId } }, include: { person: { select: { name: true } } }, orderBy: { person: { name: 'asc' } } })
+  const workers = seats.map((seat) => ({ ...seat, name: seat.person.name }))
   for (const worker of workers) {
     console.log(`  worker ${worker.id} ${JSON.stringify(worker.name)}: role ${JSON.stringify(worker.role)}, runtimeRoles ${JSON.stringify(worker.runtimeRoles)}`)
   }

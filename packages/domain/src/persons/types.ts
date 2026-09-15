@@ -7,6 +7,13 @@
  * same argument out of whatever query they happened to run.
  */
 
+/** What a `PersonSkill` row SAYS: this person has this skill on top of their persona's set, or
+ *  this person does not have it even though their persona does (R11). The database enum
+ *  `SkillGrantMode` mirrors this union member for member -- `enum-parity.test.ts` is what holds the
+ *  two together, because nothing in TypeScript does. */
+export const SKILL_GRANT_MODES = ['granted', 'revoked'] as const
+export type SkillGrantMode = (typeof SKILL_GRANT_MODES)[number]
+
 /** Where an effective skill came from: the persona the person was hired from, or the person's own
  *  grant. A revoked skill is not in the effective set at all, so `revoked` is not an origin. */
 export type SkillOrigin = 'persona' | 'person'

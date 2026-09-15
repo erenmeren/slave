@@ -316,6 +316,9 @@ describe('hireFromTemplate', () => {
     expect(row.person.templateId).toBe(template.id)
     expect(row.person.selectionRationale).toBe('authentication work needs application security')
     expect(row.person.name).toBe('Security Reviewer')
+    // Fix round 1, Important 4: the PERSON comes back too. Tasks 3-8 give a hire a skill, a
+    // department or a second seat, and every one of those addresses the person, not the seat.
+    expect(out.value.personId).toBe(row.personId)
     // `org.changed { field: 'created' }` -- there is no `slave.created` event in this repository.
     const events = await prisma.executionEvent.findMany({ where: { workspaceId, type: 'org_changed' } })
     expect(events).toHaveLength(1)
@@ -332,6 +335,7 @@ describe('hireFromTemplate', () => {
     expect(first.ok && second.ok).toBe(true)
     if (!first.ok || !second.ok) return
     expect(second.value.slaveId).toBe(first.value.slaveId)
+    expect(second.value.personId).toBe(first.value.personId)
     expect(second.value.reused).toBe(true)
     expect(await prisma.slave.count({ where: { team: { workspaceId } } })).toBe(1)
     const row = await prisma.slave.findUniqueOrThrow({ where: { id: first.value.slaveId }, include: { person: true } })
@@ -464,6 +468,45 @@ describe('hireFromTemplate', () => {
     // `reviewer` is the one the stale read used to eat.
     expect(row.runtimeRoles).toEqual(['security', 'reviewer', 'qa'])
     expect(row.person.capabilities).toEqual(['qa.test-automation', 'security.application'])
+  })
+
+  /**
+   * Fix round 1, Important 5. The same lost update as the case above, reopened by M58's split:
+   * `capabilities` is the PERSON's column now, this branch merges and writes it under a lock the
+   * helper took on the SEAT, and `setPersonCapabilities` writes it under a lock on the PERSON. Two
+   * different rows, so the two serialised against nothing -- and one person can hold several seats,
+   * so there is not even a seat row in common to fall back on. `lockedSlave` locks Person -> Slave
+   * now, the order `setPersonCapabilities` takes.
+   *
+   * Concurrent rather than back to back, because the lock is the only thing being asserted: either
+   * serial order leaves a set this test can name, and the interleaving leaves a third one that is
+   * neither -- the merge computed from the row as it was BEFORE the operator's write, landing on
+   * top of it.
+   */
+  it('never loses a capability set while a second hire is merging into the same person', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const first = await hireFromTemplate(workspaceId, template.id, { rationale: 'first' })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+
+    const [set, second] = await Promise.all([
+      setPersonCapabilities(first.value.personId, ['backend.api-design'], 'operator'),
+      hireFromTemplate(workspaceId, template.id, { rationale: 'second', capabilities: ['qa.test-automation'] }),
+    ])
+    expect(set.ok && second.ok).toBe(true)
+
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id: first.value.slaveId }, include: { person: true } })
+    // Whichever won, the loser read the winner's write: the operator's set then the hire's merge on
+    // top of it, or the hire's merge then the operator's set replacing it. What may NOT happen is
+    // the hire's merge landing over a set it never saw, which is exactly
+    // `['qa.test-automation', 'security.application']`.
+    expect([
+      ['backend.api-design', 'qa.test-automation', 'security.application'],
+      ['backend.api-design'],
+    ]).toContainEqual(row.person.capabilities)
   })
 
   // Final review, Minor 5c: the event a person reads carries the WORDS. The keys are on the slave
@@ -737,6 +780,58 @@ describe('materialiseCompanySlave', () => {
     // M50 R1: a roster worker EXISTS in the organisation, which is what `permanent` means -- never
     // the column default, which would call every one of them a project hire.
     expect(worker.person.lifecycle).toBe('permanent')
+  })
+
+  // Fix round 1, Minor 4. One person can hold several seats on one project over time -- one per
+  // department they have sat in -- and `orderBy: id` alone found whichever was created first.
+  it('prefers a seat that is OPEN over a closed one the same person still holds here', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const person = await prisma.person.create({ data: { name: 'Two Seats', lifecycle: 'permanent' } })
+    const first = await prisma.team.create({ data: { workspaceId, name: 'Aaa' } })
+    const second = await prisma.team.create({ data: { workspaceId, name: 'Bbb' } })
+    // The closed one sorts FIRST by id, which is what made the old read pick it.
+    const closed = await prisma.slave.create({
+      data: { id: 'aaaa-closed', teamId: first.id, personId: person.id, role: 'worker', closedAt: new Date() },
+    })
+    const open = await prisma.slave.create({
+      data: { id: 'zzzz-open', teamId: second.id, personId: person.id, role: 'worker', runtimeRoles: ['reviewer'] },
+    })
+
+    const out = await seatMember(workspaceId, person.id, {})
+
+    expect(out.ok && out.value).toEqual({ slaveId: open.id, created: false })
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: closed.id } })).closedAt).not.toBeNull()
+  })
+
+  // Fix round 1, Minor 5. `assignCompanyTx` reopens by clearing `closedAt` and nothing else; this
+  // recomputed the roles from the person's capabilities, which silently undid every
+  // `set-runtime-roles` an operator had made on that seat before it was closed.
+  it('reopens a closed seat with the runtime roles it already had', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Reopen Security', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const person = await prisma.person.create({
+      data: { templateId: template.id, name: 'Reopened', capabilities: template.capabilityKeys, lifecycle: 'permanent' },
+    })
+    const team = await prisma.team.create({ data: { workspaceId, name: 'Security' } })
+    const seat = await prisma.slave.create({
+      data: { teamId: team.id, personId: person.id, role: 'security', runtimeRoles: ['reviewer'], closedAt: new Date() },
+    })
+
+    const out = await seatMember(workspaceId, person.id, {})
+
+    expect(out.ok && out.value).toEqual({ slaveId: seat.id, created: true })
+    const reopened = await prisma.slave.findUniqueOrThrow({ where: { id: seat.id } })
+    expect(reopened.closedAt).toBeNull()
+    expect(reopened.runtimeRoles).toEqual(['reviewer'])
+
+    // ...unless the caller says what the seat should dispatch as, which is the one rule both this
+    // verb and `moveSlave`'s reopen follow.
+    await prisma.slave.update({ where: { id: seat.id }, data: { closedAt: new Date() } })
+    const asked = await seatMember(workspaceId, person.id, { runtimeRoles: ['security'] })
+    expect(asked.ok).toBe(true)
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: seat.id } })).runtimeRoles).toEqual(['security'])
   })
 })
 

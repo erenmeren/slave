@@ -1923,6 +1923,38 @@ describe('listDecisions', () => {
     })
     expect(await listDecisions(other.id)).toHaveLength(0)
   })
+
+  /**
+   * Spec erratum E9. The M58 migration rewrites `companySlaveId` -> `personId` on PENDING rows only
+   * -- an answered decision is history and a migration does not rewrite history. This function
+   * reads EVERY status through `parsedOrThrow`, and it is called inside `buildSupervisorView`, so a
+   * renamed field would have thrown the whole Supervisor page away over one answered row from
+   * before the upgrade.
+   */
+  it('reads an answered pre-M58 seat decision back instead of throwing the page away', async () => {
+    const legacy = await record(
+      f,
+      {
+        kind: 'materialise_company_worker',
+        companySlaveId: 'cs1',
+        capability: 'security.application',
+        capabilityLabel: 'Application security',
+        name: 'Sam',
+        rationale: 'the board needs application security',
+      },
+      'proposed',
+      { subjectId: 'security.application' },
+    )
+    // Answered before the upgrade, which is exactly the row the migration leaves alone.
+    await prisma.supervisorDecision.update({ where: { id: legacy.id }, data: { status: 'applied', resolvedAt: new Date() } })
+
+    const views = await listDecisions(f.workspaceId)
+
+    expect(views.map((view) => view.id)).toEqual([legacy.id])
+    expect(views[0]?.action).toMatchObject({ kind: 'materialise_company_worker', companySlaveId: 'cs1' })
+    // The candidate list on the same row parses too -- it is stored JSON of the same shape.
+    expect(views[0]?.candidates[0]?.action).toMatchObject({ companySlaveId: 'cs1' })
+  })
 })
 
 describe('setSupervisorSettings', () => {
@@ -2111,6 +2143,38 @@ describe('applyDecision -- the M47 capability actions', () => {
     // Fix round 1, Minor 5: the sentence the rules wrote, in the taxonomy's WORDS -- what the
     // Organization view shows beside this worker months later -- not the raw key.
     expect(materialised.person.selectionRationale).toBe('Sam already works here and provides Application security.')
+  })
+
+  /**
+   * Spec erratum E9's other half. A PENDING row from before M58 was rewritten by the migration; a
+   * row that arrived by any other route -- a decision restored from a dump, a hand-edited payload --
+   * still names a `CompanySlave`, and this milestone DROPPED that table. There is nothing left to
+   * resolve it to, so the apply refuses with the refusal M27 already had for a roster id nothing
+   * carries, and the row is recorded `failed` rather than silently seating the wrong person.
+   */
+  it('refuses to carry out a pre-M58 seat action, because the roster row it names is gone', async () => {
+    const recorded = await record(
+      f,
+      {
+        kind: 'materialise_company_worker',
+        companySlaveId: 'cs-gone',
+        capability: CAPABILITY,
+        capabilityLabel: 'Application security',
+        name: 'Sam',
+        rationale: 'Sam already works here and provides Application security.',
+      },
+      'proposed',
+      { subjectId: CAPABILITY, situation: capabilitySituation() },
+    )
+    expect(recorded.status).toBe('pending')
+
+    const approved = await approveDecision(recorded.id, { userId: f.userId })
+
+    expect(approved.ok).toBe(false)
+    if (!approved.ok) expect(approved.error).toEqual({ kind: 'company_slave_not_found', companySlaveId: 'cs-gone' })
+    const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: recorded.id } })
+    expect(row.status).toBe('failed')
+    expect(await prisma.slave.count({ where: { team: { workspaceId: f.workspaceId }, person: { name: 'Sam' } } })).toBe(0)
   })
 
   it('records a failed decision rather than throwing when the template has since been deleted', async () => {

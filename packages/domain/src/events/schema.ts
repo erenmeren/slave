@@ -594,6 +594,12 @@ export const executionEventSchema = z.discriminatedUnion('type', [
         scope: z.enum(MEMORY_SCOPES),
         status: z.enum(MEMORY_STATUSES),
         sourceKind: z.enum(MEMORY_SOURCE_KINDS),
+        /** M58 R3 (fix round 1, Minor 8): WHO a worker-scoped memory belongs to. It used to travel
+         *  on the envelope's `slaveId`, which named the seat; a memory outlives the seat and
+         *  follows the person, so the subject moved into the payload rather than being dropped.
+         *  Optional: a workspace- or company-scoped memory belongs to nobody in particular, and a
+         *  row written before this milestone carries the seat on the envelope instead. */
+        personId: z.string().min(1).optional(),
       })
       .strict(),
   }),
