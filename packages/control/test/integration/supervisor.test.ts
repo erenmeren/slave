@@ -24,7 +24,7 @@ import { syncCapabilityTaxonomy } from '../../src/capability.js'
 import { STALE_CANDIDATE_REASON, recordMemory } from '../../src/memory.js'
 import { sendMessage } from '../../src/messaging.js'
 import { workspaceSpend } from '../../src/spend.js'
-import { releaseWorker } from '../../src/lifecycle.js'
+import { releasePerson } from '../../src/persons.js'
 import { refusalText } from '../../src/refusal.js'
 import { syncRunbooks } from '../../src/runbook.js'
 import {
@@ -83,13 +83,14 @@ const reset = async (): Promise<void> => {
 
 /** M50 R3: an ephemeral specialist hired for `f.taskId`, idle, its assignment finished -- the shape
  *  `engagement_over` raises and `release_worker` is carried out against. */
-async function seedReleasableWorker(fixture: Fixture): Promise<{ slaveId: string }> {
+async function seedReleasableWorker(fixture: Fixture): Promise<{ slaveId: string; personId: string }> {
   const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
   const template = await prisma.slaveTemplate.create({
     data: { name: `M50 Security ${String(Date.now())}`, role: 'security', capabilityKeys: [] },
   })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'Security Reviewer', runtimeRoles: ['security'], engagementTaskId: fixture.taskId, personId: (await prisma.person.create({ data: { name: 'Robin', templateId: template.id, lifecycle: 'ephemeral', selectionRationale: 'brought in for the authentication path' } })).id } })
-  return { slaveId: slave.id }
+  const person = await prisma.person.create({ data: { name: 'Robin', templateId: template.id, lifecycle: 'ephemeral', selectionRationale: 'brought in for the authentication path' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'Security Reviewer', runtimeRoles: ['security'], engagementTaskId: fixture.taskId, personId: person.id } })
+  return { slaveId: slave.id, personId: person.id }
 }
 
 const situationFor = (subjectId: string, kind: Situation['kind'] = 'review_cap_blocked'): Situation => ({
@@ -576,7 +577,7 @@ describe('applyDecision', () => {
   // M50 R3. The fifteenth arm, and the one the milestone is named for: `tierOf` makes it `applied`,
   // so this is what a TICK does with it -- no person, no approval.
   it('carries out release_worker: the worker is released and the decision is applied', async () => {
-    const { slaveId } = await seedReleasableWorker(f)
+    const { slaveId, personId } = await seedReleasableWorker(f)
     const decision = await record(f, { kind: 'release_worker', slaveId, name: 'Robin', reason: 'the engagement is over' }, 'applied', {
       subjectId: slaveId,
       situation: {
@@ -596,7 +597,7 @@ describe('applyDecision', () => {
     // A tick released this, so the timeline says `system` -- `carryOut` passes no principal.
     const [released] = await eventsOfType('slave_released')
     expect(released?.actor).toBe('system')
-    expect(released?.payload).toMatchObject({ slaveId, name: 'Robin', worktreesCollected: 0 })
+    expect(released?.payload).toMatchObject({ slaveId: personId, personId, name: 'Robin', worktreesCollected: 0 })
   })
 
   // M51 R3, the sixteenth arm. `tierOf` makes it `applied`, so this is what a TICK does with it:
@@ -738,7 +739,7 @@ describe('applyDecision', () => {
    * the `already_released` kind `releaseWorker` uses for the same fact.
    */
   it('refuses an assign_capability approved after the worker was released, and leaves the roles empty', async () => {
-    const { slaveId } = await seedReleasableWorker(f)
+    const { slaveId, personId } = await seedReleasableWorker(f)
     const decision = await record(
       f,
       {
@@ -760,7 +761,7 @@ describe('applyDecision', () => {
       },
     )
     // ...and the engagement ends while the decision waits.
-    expect((await releaseWorker(slaveId, 'the engagement is over')).ok).toBe(true)
+    expect((await releasePerson(personId, 'the engagement is over')).ok).toBe(true)
 
     const applied = await applyDecision(decision.id, 'system')
     expect(applied.ok).toBe(false)
@@ -775,11 +776,11 @@ describe('applyDecision', () => {
   // a released worker by hand is deliberate (`lifecycle.ts`) -- so the guard lives on the automatic
   // path rather than on the verb both of them call.
   it('refuses a set_runtime_roles approved after the worker was released', async () => {
-    const { slaveId } = await seedReleasableWorker(f)
+    const { slaveId, personId } = await seedReleasableWorker(f)
     const decision = await record(f, { kind: 'set_runtime_roles', slaveId, roles: ['security', 'reviewer'] }, 'proposed', {
       subjectId: slaveId,
     })
-    expect((await releaseWorker(slaveId, 'the engagement is over')).ok).toBe(true)
+    expect((await releasePerson(personId, 'the engagement is over')).ok).toBe(true)
 
     const approved = await approveDecision(decision.id, { userId: f.userId })
     expect(approved.ok).toBe(false)

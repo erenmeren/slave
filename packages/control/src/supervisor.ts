@@ -28,7 +28,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import { steerRun } from './breaker.js'
 import { hireFromTemplate, seatMember, mergeRuntimeRoles } from './capability.js'
-import { releaseWorker } from './lifecycle.js'
+import { releasePerson } from './persons.js'
 import { discardStaleCandidates, recordMemory } from './memory.js'
 import { answerQuestion, reassignQuestion } from './messaging.js'
 import { setRuntimeRoles } from './profile.js'
@@ -489,11 +489,15 @@ async function carryOut(
       // on: the verb withdraws whatever is stale at the moment it runs, which after a day's wait
       // is the honest set.
       return reached(ok(await discardStaleCandidates(action.workspaceId, new Date(), principal)))
-    case 'release_worker':
-      // M50 R3, the routine the milestone is named for. `tierOf` makes this `applied` on an
-      // unhalted project, so this arm runs inside a TICK -- which is exactly why `releaseWorker`
-      // skips and counts a worktree it could not remove instead of throwing.
-      return reached(await releaseWorker(action.slaveId, action.reason, principal, origin))
+    case 'release_worker': {
+      // M58 R10: a release is a fact about a PERSON and closes every seat they hold.
+      // Stored actions still name a seat (`slaveId`); resolve whoever sits there when the
+      // action has no personId of its own.
+      const seat = await prisma.slave.findUnique({ where: { id: action.slaveId }, select: { personId: true } })
+      if (seat === null) return err({ kind: 'slave_not_found', slaveId: action.slaveId })
+      const actionPersonId = 'personId' in action && typeof action.personId === 'string' ? action.personId : undefined
+      return reached(await releasePerson(actionPersonId ?? seat.personId, action.reason, principal, origin))
+    }
     case 'steer_run':
       // M51 R3. `tierOf` makes this `applied` on an unhalted project, so this arm runs inside a
       // TICK -- which is why `steerRun` returns a refusal for a run that moved under it rather than

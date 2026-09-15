@@ -11,7 +11,7 @@ import {
   setPersonCapabilities,
   syncCapabilityTaxonomy,
 } from '../../src/capability.js'
-import { releaseWorker } from '../../src/lifecycle.js'
+import { releasePerson } from '../../src/persons.js'
 import { setRuntimeRoles } from '../../src/profile.js'
 
 /**
@@ -537,7 +537,7 @@ describe('hireFromTemplate', () => {
       if (!first.ok) return
 
       const outcomes = await Promise.allSettled([
-        releaseWorker(first.value.slaveId, 'the engagement is over'),
+        releasePerson(first.value.personId, 'the engagement is over'),
         hireFromTemplate(workspaceId, template.id, { rationale: 'again', capabilities: ['qa.test-automation'] }),
       ])
 
@@ -693,7 +693,7 @@ describe('hireFromTemplate', () => {
     expect(first.ok).toBe(true)
     if (!first.ok) return
     const firstName = (await prisma.slave.findUniqueOrThrow({ where: { id: first.value.slaveId }, include: { person: true } })).person.name
-    expect((await releaseWorker(first.value.slaveId, 'over')).ok).toBe(true)
+    expect((await releasePerson(first.value.personId, 'over')).ok).toBe(true)
 
     const second = await hireFromTemplate(workspaceId, template.id, { rationale: 'again' })
     expect(second.ok).toBe(true)

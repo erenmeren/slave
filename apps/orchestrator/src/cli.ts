@@ -77,7 +77,7 @@ import {
   recomputeTemplateDuplicates,
   refusalText,
   rejectDecision,
-  releaseWorker,
+  releasePerson,
   removeMemory,
   renameSlave,
   renameCompanyTeam,
@@ -2772,16 +2772,20 @@ export async function main(argv: readonly string[]): Promise<number> {
     // ---- M50 R4: the two verbs a person moves a worker's lifecycle with ------------------------
     case 'release-worker': {
       const slaveId = requireFlag(flags, 'slave')
+      // M58 R10: a release is a fact about a PERSON. The seat named here is resolved to whoever
+      // sits in it -- Task 4's `person` family takes a `--person` directly.
+      const seat = await prisma.slave.findUnique({ where: { id: slaveId }, select: { personId: true } })
+      if (seat === null) throw new Error(refusalText({ kind: 'slave_not_found', slaveId }))
       // No `Principal`: the CLI has no session, the same as every verb above it. `origin` is left
       // at its default `'human'` on purpose -- a person typed this line, and the `slave.released`
       // event should not read as the machine's own housekeeping the way a tick's release does.
-      const result = await releaseWorker(slaveId, requireFlag(flags, 'reason'))
+      const result = await releasePerson(seat.personId, requireFlag(flags, 'reason'))
       if (!result.ok) throw new Error(refusalText(result.error))
       // The NAME, read back after the write: an operator who typed an id deserves to see who it
       // was, and the row is still there to ask -- which is the whole ruling of R5.
       const worker = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, select: { person: { select: { name: true } } } })
       process.stdout.write(
-        `released ${worker.person.name} (${slaveId}): runtime roles cleared, ` +
+        `released ${worker.person.name} (${slaveId}): ${plural(result.value.seatsClosed, 'seat')} closed, ` +
           `${plural(result.value.worktreesCollected, 'worktree')} collected; ` +
           'every run, message and memory it produced is untouched\n',
       )
