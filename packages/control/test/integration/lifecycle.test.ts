@@ -273,14 +273,15 @@ describe('setLifecycle', () => {
     expect(result.ok).toBe(true)
     const after = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })
     expect(after.person.lifecycle).toBe('project')
-    // The release CLOSED the seat. `setLifecycle` clears engagement only on OPEN seats -- a
-    // closed seat is history -- and writes no project event when nobody is sitting.
+    // The release CLOSED the seat. `setLifecycle` clears engagement on every seat (M50 R4) and
+    // still writes org.changed on the project they left -- a released person has no open seat,
+    // but the board they were on needs the log line.
     expect(after.closedAt).not.toBeNull()
     expect(after.person.releasedAt).toBeNull()
     expect(after.person.releaseReason).toBeNull()
     // R4: nothing is restored. The person sets the roles.
     expect(after.runtimeRoles).toEqual([])
-    expect(await prisma.executionEvent.count({ where: { workspaceId, type: 'org_changed' } })).toBe(0)
+    expect(await prisma.executionEvent.count({ where: { workspaceId, type: 'org_changed' } })).toBe(1)
   })
 
   it('refuses permanent for a person in no department', async () => {
