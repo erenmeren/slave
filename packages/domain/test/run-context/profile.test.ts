@@ -34,6 +34,6 @@ describe('effectiveProfile', () => {
   })
 
   it('is the one definition of the cap both enforcement points read', () => {
-    expect(PROFILE_MAX_CHARS).toBe(16_000)
+    expect(PROFILE_MAX_CHARS).toBe(48_000)
   })
 })

@@ -693,7 +693,7 @@ describe('SlavePanel', () => {
 
     it("renders a 409 refusal from the profile save in the panel's error band", async () => {
       fetchMock.mockImplementationOnce(
-        async () => new Response(JSON.stringify({ error: 'a profile may be at most 16000 characters; this one is 16001' }), { status: 409 }),
+        async () => new Response(JSON.stringify({ error: 'a profile may be at most 48000 characters; this one is 48001' }), { status: 409 }),
       )
       render_({ profile: null })
 
@@ -703,7 +703,7 @@ describe('SlavePanel', () => {
         fireEvent.click(screen.getByTestId('profile-save'))
       })
 
-      expect(screen.getByRole('alert').textContent).toContain('at most 16000 characters')
+      expect(screen.getByRole('alert').textContent).toContain('at most 48000 characters')
     })
 
     it('renders one chip per runtime role', () => {

@@ -478,8 +478,8 @@ try {
   console.log(`profile_too_long detail: ${JSON.stringify(tooLong.detail)}`)
   const declaredLength = Number.parseInt(tooLong.detail, 10)
   console.log(`the length it names: ${String(declaredLength)}`)
-  if (!Number.isInteger(declaredLength) || declaredLength <= 16_000) {
-    await fail(`the profile_too_long skip names ${JSON.stringify(tooLong.detail)}, which does not report a length over 16000`)
+  if (!Number.isInteger(declaredLength) || declaredLength <= 48_000) {
+    await fail(`the profile_too_long skip names ${JSON.stringify(tooLong.detail)}, which does not report a length over 48000`)
   }
   const nameTaken = firstImport.report.skipped.find((row) => row.reason === 'name_taken')
   console.log(`name_taken row: ${JSON.stringify(nameTaken)}`)

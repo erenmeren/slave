@@ -218,14 +218,14 @@ describe('importCatalog', () => {
 
   it('(f) skips profile_too_long with the COMPOSED length, and never truncates', async (): Promise<void> => {
     const filler = 'The core module holds the rest of the system up. '
-    const long = filler.repeat(400)
+    const long = filler.repeat(1000)
 
     const result = await importOne([entry('long-one', 'Long One', long)])
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value.skipped[0]?.reason).toBe('profile_too_long')
-    expect(result.value.skipped[0]?.detail).toMatch(/\d+ characters, over the 16000/)
+    expect(result.value.skipped[0]?.detail).toMatch(/\d+ characters, over the 48000/)
     expect(await prisma.slaveTemplate.count()).toBe(0)
   })
 

@@ -7,10 +7,14 @@
  * it at dispatch -- the case the spec §7 names, a text written while the cap was higher. Two
  * copies of the number would let a profile be writable and undispatchable at the same time.
  *
- * 16k characters is roughly four thousand tokens: a persona long enough to be a working brief and
- * short enough that it cannot crowd the task out of the prompt it is prepended to.
+ * 48k characters is roughly twelve thousand tokens. M37 set 16k ("a working brief that cannot
+ * crowd the task out"); raised in 2026-09 when the Agency persona catalogue was made the default
+ * roster and 87 of its 279 personas -- the longest 34,597 characters -- fell over the old cap.
+ * 48k takes every one of them with room to spare while keeping the ceiling well under what a
+ * single persona should ever cost per run; a persona near the cap is prepended to EVERY run of a
+ * worker hired from it, so the number is a ceiling, not a target.
  */
-export const PROFILE_MAX_CHARS = 16_000
+export const PROFILE_MAX_CHARS = 48_000
 
 /**
  * The profile that actually applies to a slave, and which level it came from (M37 §2).
