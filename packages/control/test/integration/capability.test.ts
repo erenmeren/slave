@@ -884,6 +884,23 @@ describe('materialiseCompanySlave', () => {
     expect(asked.ok).toBe(true)
     expect((await prisma.slave.findUniqueOrThrow({ where: { id: seat.id } })).runtimeRoles).toEqual(['security'])
   })
+
+  it('refuses to reopen a seat for a released person', async (): Promise<void> => {
+    const { workspaceId, teamId } = await workspace()
+    const person = await prisma.person.create({ data: { name: 'Released', lifecycle: 'ephemeral' } })
+    const seat = await prisma.slave.create({
+      data: { teamId, personId: person.id, role: 'worker', runtimeRoles: ['worker'] },
+    })
+    const released = await releasePerson(person.id, 'the engagement is over')
+    expect(released.ok).toBe(true)
+
+    const out = await seatMember(workspaceId, person.id, {})
+
+    expect(out.ok).toBe(false)
+    if (out.ok) return
+    expect(out.error.kind).toBe('person_released')
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: seat.id } })).closedAt).not.toBeNull()
+  })
 })
 
 // Fix round 1, minor 4: the department step is `assignCompanyTx`'s own, shared rather than

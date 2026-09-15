@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { addCompanyTeam, addDepartmentMember, assignCompany, assignCompanyTx, createCompany, createTemplate, setSlaveModel } from '../../src/org.js'
+import { releasePerson } from '../../src/persons.js'
 import { refusalText } from '../../src/refusal.js'
 
 // A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
@@ -456,6 +457,24 @@ describe('assignCompany', () => {
     expect(rows.map((row) => row.id)).toEqual([seat.id])
     expect(rows[0]?.closedAt).toBeNull()
     expect(await prisma.slaveRun.findUnique({ where: { id: run.id } })).not.toBeNull()
+  })
+
+  it('does not reopen a seat for a released person', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const { companyId } = await seedCompanyWithRoster(1)
+    expect((await assignCompany(workspace.id, companyId)).ok).toBe(true)
+    const seat = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: workspace.id } } })
+    const released = await releasePerson(seat.personId, 'the engagement is over')
+    expect(released.ok).toBe(true)
+
+    const again = await assignCompany(workspace.id, companyId)
+
+    if (!again.ok) {
+      expect(again.error.kind).toBe('person_released')
+    } else {
+      expect(again.value.createdWorkers).toEqual([])
+    }
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: seat.id } })).closedAt).not.toBeNull()
   })
 
   it('refuses when the workspace is already assigned to a different company, changing nothing', async (): Promise<void> => {

@@ -450,6 +450,11 @@ export async function assignCompanyTx(
 
     for (const member of companyTeam.members) {
       const person = member.person
+      // Person lock before reopen/create: `releasePerson` CLOSES seats, and reopening them here
+      // would undo R21. Skip a released member rather than refusing the whole roster.
+      await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${person.id} FOR UPDATE`
+      const locked = await tx.person.findUnique({ where: { id: person.id }, select: { releasedAt: true } })
+      if (locked === null || locked.releasedAt !== null) continue
       // M58 R5: the SAME person, on a second project. `@@unique([personId, teamId])` is what makes
       // this find-or-reopen rather than a copy -- a seat that was closed by `unassignPerson` is
       // REOPENED here, keeping its runs, messages and permissions as history (R2).

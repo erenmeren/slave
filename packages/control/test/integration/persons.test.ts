@@ -218,6 +218,27 @@ describe('movePerson', () => {
     const seat = await prisma.slave.findUniqueOrThrow({ where: { id: seated.value.slaveId } })
     expect(seat.closedAt).toBeNull()
   })
+
+  it('refuses a released person and leaves the original seat closed', async () => {
+    const workspace = await prisma.workspace.create({
+      data: { name: 'Alpha', repoPath: '/tmp/a', verifyCommands: ['true'], setupCommands: [] },
+    })
+    const from = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+    const to = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Design' } })
+    const person = await createPerson({ name: 'Atlas', lifecycle: 'ephemeral' })
+    if (!person.ok) throw new Error('setup')
+    const seated = await assignPerson(person.value.personId, from.id)
+    if (!seated.ok) throw new Error('setup')
+    await releasePerson(person.value.personId, 'the engagement is over')
+
+    const moved = await movePerson(person.value.personId, from.id, to.id)
+    expect(moved.ok).toBe(false)
+    if (moved.ok) return
+    expect(moved.error.kind).toBe('person_released')
+    const origin = await prisma.slave.findUniqueOrThrow({ where: { id: seated.value.slaveId } })
+    expect(origin.closedAt).not.toBeNull()
+    expect(await prisma.slave.count({ where: { personId: person.value.personId, teamId: to.id, closedAt: null } })).toBe(0)
+  })
 })
 
 describe('releasePerson', () => {

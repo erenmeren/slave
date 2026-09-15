@@ -428,13 +428,21 @@ export async function seatMember(
   const role = person.template?.role ?? 'worker'
   const runtimeRoles = [...new Set(opts.runtimeRoles ?? [role, ...projectRoles(capabilities, taxonomy)])]
 
-  let seated: { readonly id: string; readonly created: boolean } | null
+  let seated: { readonly id: string; readonly created: boolean } | { readonly refusal: ControlRefusal }
   try {
     seated = await prisma.$transaction(async (tx) => {
       // The workspace row under `FOR UPDATE` before the existence check (fix round 1, minor 2):
       // two callers seating the same person must serialise rather than both read "not there".
       // `assignCompanyTx` locks the same row for the same reason.
       await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
+      // Person lock before the first seat write: `releasePerson` stamps `releasedAt` and CLOSES
+      // every seat, so a reopen here would undo R21. Same check `assignPerson` already makes.
+      await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${personId} FOR UPDATE`
+      const locked = await tx.person.findUnique({ where: { id: personId }, select: { releasedAt: true } })
+      if (locked === null) return { refusal: { kind: 'person_not_found', personId } as ControlRefusal }
+      if (locked.releasedAt !== null) {
+        return { refusal: { kind: 'person_released', personId, at: locked.releasedAt.toISOString() } as ControlRefusal }
+      }
       // An OPEN seat first (fix round 1, Minor 4). One person can hold several seats on one
       // project over time -- one per department they have sat in -- and `orderBy: id` alone would
       // find a CLOSED one and reopen it beside a seat they are already working from, which
@@ -474,6 +482,7 @@ export async function seatMember(
     throw error
   }
 
+  if ('refusal' in seated) return err(seated.refusal)
   if (!seated.created) return ok({ slaveId: seated.id, created: false })
 
   await appendEvent({

@@ -260,6 +260,15 @@ export async function movePerson(
   principal?: Principal,
 ): Promise<Result<{ readonly slaveId: string }, ControlRefusal>> {
   const outcome = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${personId} FOR UPDATE`
+    const person = await tx.person.findUnique({
+      where: { id: personId },
+      select: { releasedAt: true },
+    })
+    if (person === null) return { refusal: { kind: 'person_not_found', personId } as ControlRefusal }
+    if (person.releasedAt !== null) {
+      return { refusal: { kind: 'person_released', personId, at: person.releasedAt.toISOString() } as ControlRefusal }
+    }
     const from = await tx.slave.findUnique({
       where: { personId_teamId: { personId, teamId: fromTeamId } },
       include: { team: { select: { workspaceId: true, name: true } } },
