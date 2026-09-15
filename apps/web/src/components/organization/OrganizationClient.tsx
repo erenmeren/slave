@@ -27,6 +27,7 @@ import { CapabilityChips } from './CapabilityChips'
 import { SlavePanel } from '../SlavePanel'
 import { NewSlaveDrawer } from '../slaves/NewSlaveDrawer'
 import { assignableProjectsOf } from '../persons/PersonProjectsGroup'
+import { cardsOf, haltedReasonOf, liveSeatOf, personOf } from '../persons/liveSeat'
 
 /** How many advisory edges stand open. Five is what fits under the roster without turning the page
  *  into a list of suggestions; past it the group is folded and says how to open it. */
@@ -81,7 +82,7 @@ export function OrganizationClient({
     | { readonly kind: 'idle' }
     | { readonly kind: 'loading' }
     | { readonly kind: 'error' }
-    | { readonly kind: 'ready'; readonly person: PersonDetail; readonly slave: SlaveCardData | null }
+    | { readonly kind: 'ready'; readonly person: PersonDetail; readonly slave: SlaveCardData | null; readonly haltedReason: string | null }
   >({ kind: 'idle' })
   const assignableProjects = useMemo(() => assignableProjectsOf(teams), [teams])
   const teamId = view.teamId
@@ -139,7 +140,12 @@ export function OrganizationClient({
           setPanel({ kind: 'error' })
           return
         }
-        setPanel({ kind: 'ready', person, slave: liveSeatOf(cardsOf(snapshot), slaveId, personId) })
+        setPanel({
+          kind: 'ready',
+          person,
+          slave: liveSeatOf(cardsOf(snapshot), slaveId, personId),
+          haltedReason: haltedReasonOf(snapshot),
+        })
       })
       .catch(() => setPanel({ kind: 'error' }))
   }, [selected, personTick, workspaceId])
@@ -457,7 +463,7 @@ export function OrganizationClient({
             skillCatalogue={skillCatalogue}
             liveEvents={[]}
             workspaceId={workspaceId}
-            haltedReason={null}
+            haltedReason={panel.haltedReason}
             onClose={() => setSelected(null)}
             onPersonChanged={() => setPersonTick((tick) => tick + 1)}
           />
@@ -607,21 +613,4 @@ function askedFor(preference: OrganizationPreference): string {
  *  is findable, rather than a name this component would have to invent. */
 function nameOf(slaveId: string, view: OrganizationView): string {
   return view.workers.find((worker) => worker.slaveId === slaveId)?.name ?? slaveId
-}
-
-function personOf(detail: unknown): PersonDetail | null {
-  return detail !== null && typeof detail === 'object' && 'personId' in detail && typeof (detail as { personId: unknown }).personId === 'string'
-    ? (detail as PersonDetail)
-    : null
-}
-
-/** The Team band's own cards, as `/overview` already publishes them. `id` is the seat. */
-function cardsOf(snapshot: unknown): readonly SlaveCardData[] {
-  if (snapshot === null || typeof snapshot !== 'object' || !('slaves' in snapshot)) return []
-  const slaves = (snapshot as { slaves: unknown }).slaves
-  return Array.isArray(slaves) ? (slaves as SlaveCardData[]) : []
-}
-
-function liveSeatOf(cards: readonly SlaveCardData[], slaveId: string, personId: string): SlaveCardData | null {
-  return cards.find((card) => card.id === slaveId) ?? cards.find((card) => card.personId === personId) ?? null
 }

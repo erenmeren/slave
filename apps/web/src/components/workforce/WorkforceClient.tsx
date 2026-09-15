@@ -15,6 +15,7 @@ import { SkillsClient } from '../SkillsClient'
 import { SlavePanel } from '../SlavePanel'
 import { PeopleTable } from '../persons/PeopleTable'
 import { assignableProjectsOf } from '../persons/PersonProjectsGroup'
+import { cardsOf, liveSeatOf, personOf } from '../persons/liveSeat'
 import { NewSlaveDrawer } from '../slaves/NewSlaveDrawer'
 import { EvidenceTab } from './EvidenceTab'
 import { RunbooksTab } from './RunbooksTab'
@@ -163,7 +164,10 @@ export function WorkforceClient({
   }, [namedPerson])
   const [personTick, setPersonTick] = useState(0)
   const [panel, setPanel] = useState<
-    { readonly kind: 'idle' } | { readonly kind: 'loading' } | { readonly kind: 'error' } | { readonly kind: 'ready'; readonly person: PersonDetail }
+    | { readonly kind: 'idle' }
+    | { readonly kind: 'loading' }
+    | { readonly kind: 'error' }
+    | { readonly kind: 'ready'; readonly person: PersonDetail; readonly slave: SlaveCardData | null }
   >({ kind: 'idle' })
 
   useEffect((): void => {
@@ -173,9 +177,22 @@ export function WorkforceClient({
     }
     setPanel({ kind: 'loading' })
     void fetch(`/api/persons/${selectedPerson}`)
-      .then(async (response) => (response.ok ? ((await response.json()) as PersonDetail) : null))
-      .then((detail) => {
-        setPanel(detail === null ? { kind: 'error' } : { kind: 'ready', person: detail })
+      .then(async (response) => (response.ok ? ((await response.json()) as unknown) : null))
+      .then(async (detail) => {
+        const person = personOf(detail)
+        if (person === null) {
+          setPanel({ kind: 'error' })
+          return
+        }
+        const seat = person.seats[0]
+        if (seat === undefined) {
+          setPanel({ kind: 'ready', person, slave: null })
+          return
+        }
+        const snapshot = await fetch(`/api/w/${seat.workspaceId}/overview`)
+          .then(async (response) => (response.ok ? ((await response.json()) as unknown) : null))
+          .catch(() => null)
+        setPanel({ kind: 'ready', person, slave: liveSeatOf(cardsOf(snapshot), seat.slaveId, person.personId) })
       })
       .catch(() => setPanel({ kind: 'error' }))
   }, [selectedPerson, personTick])
@@ -305,13 +322,17 @@ export function WorkforceClient({
       {panel.kind === 'ready' && (
         <div className="fixed inset-y-0 right-0 z-10 w-96 border-l border-line bg-panel shadow-resting motion-safe:animate-[panel-in_160ms_ease-out]">
           <SlavePanel
-            key={panel.person.personId}
-            slave={slaveCardForPerson(panel.person)}
+            key={panel.slave?.id ?? panel.person.personId}
+            slave={panel.slave}
             person={panel.person}
             projects={assignableProjects}
             skillCatalogue={skillCatalogue}
             liveEvents={[]}
-            workspaceId={panel.person.seats[0]?.workspaceId ?? ''}
+            workspaceId={
+              panel.person.seats.find((seat) => seat.slaveId === panel.slave?.id)?.workspaceId
+              ?? panel.person.seats[0]?.workspaceId
+              ?? ''
+            }
             haltedReason={null}
             onClose={() => setSelectedPerson(null)}
             onPersonChanged={() => setPersonTick((tick) => tick + 1)}
@@ -320,39 +341,4 @@ export function WorkforceClient({
       )}
     </PageShell>
   )
-}
-
-function slaveCardForPerson(person: PersonDetail): SlaveCardData {
-  const seat = person.seats[0]
-  return {
-    id: seat?.slaveId ?? person.personId,
-    personId: person.personId,
-    name: person.name,
-    role: seat?.role ?? person.personaName ?? '',
-    provider: person.provider?.value ?? null,
-    gate: null,
-    status: 'idle',
-    taskTitle: null,
-    taskId: null,
-    taskStatus: null,
-    progressPct: 0,
-    stepLabel: null,
-    skill: null,
-    actionLine: null,
-    runId: null,
-    queuedMessage: null,
-    resumeRequestedAt: null,
-    recentEvents: [],
-    costUsd: 0,
-    toolCalls: 0,
-    pausedAtStep: null,
-    waitingFor: null,
-    profile: person.profile,
-    runtimeRoles: seat === undefined ? [] : [...seat.runtimeRoles],
-    lifecycle: person.lifecycle,
-    released: person.releasedAt === null ? null : { at: person.releasedAt, reason: person.releaseReason ?? '' },
-    breakerLevel: 'none',
-    permissions: [],
-    permissionsRunKind: 'implementation',
-  }
 }

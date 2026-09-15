@@ -6,6 +6,7 @@ import WorkforcePage from '../src/app/workforce/page.js'
 import type { AllSlaveRow, AllSlavesPage, CatalogRowView, WorkforceCatalogView } from '../src/server/org.js'
 import type { EvidencePage } from '../src/server/evidence.js'
 import type { PersonDetail, PersonRow } from '../src/server/persons.js'
+import type { SlaveCardData } from '../src/server/overview.js'
 import type { SkillsPage } from '../src/server/skills.js'
 
 const routerRefresh = vi.fn()
@@ -136,6 +137,41 @@ function personDetail(over: Partial<PersonDetail> = {}): PersonDetail {
     selectionRationale: null,
     runs: 0,
     allSeats: row.seats,
+    ...over,
+  }
+}
+
+function workingCard(over: Partial<SlaveCardData> = {}): SlaveCardData {
+  return {
+    id: 'a1',
+    personId: 'p1',
+    name: 'Alex',
+    role: 'backend',
+    provider: 'claude_code',
+    gate: 'all-tools',
+    status: 'working',
+    taskTitle: 'Add the thing',
+    taskId: 't1',
+    taskStatus: 'running',
+    progressPct: 40,
+    stepLabel: null,
+    skill: null,
+    actionLine: null,
+    runId: 'run-1',
+    queuedMessage: null,
+    resumeRequestedAt: null,
+    recentEvents: [],
+    costUsd: 0,
+    toolCalls: 3,
+    pausedAtStep: null,
+    waitingFor: null,
+    profile: null,
+    runtimeRoles: ['backend'],
+    lifecycle: 'project',
+    released: null,
+    breakerLevel: 'none',
+    permissions: [],
+    permissionsRunKind: 'implementation',
     ...over,
   }
 }
@@ -474,6 +510,9 @@ describe('WorkforceClient row click opens the panel', () => {
       if (url === '/api/persons/p1') {
         return new Response(JSON.stringify(personDetail()), { status: 200 })
       }
+      if (url === '/api/w/w1/overview') {
+        return new Response(JSON.stringify({ slaves: [] }), { status: 200 })
+      }
       throw new Error(`unexpected fetch ${url}`)
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -501,11 +540,39 @@ describe('WorkforceClient row click opens the panel', () => {
     render(<TestWorkforceClient people={[pooled]} />)
     fireEvent.click(screen.getByTestId('person-open'))
     expect(await screen.findByRole('heading', { name: 'Alex' })).toBeTruthy()
+    expect(screen.queryByTestId('status-label')).toBeNull()
+    expect(screen.queryByTestId('pause-button')).toBeNull()
+    expect(screen.queryByTestId('resume-button')).toBeNull()
+    expect(screen.queryByTestId('stop-button')).toBeNull()
 
     openPanelGroup('profile')
     expect((screen.getByTestId('profile-save') as HTMLButtonElement).disabled).toBe(true)
     openPanelGroup('messages')
     expect((screen.getByTestId('runtime-roles-save') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('opens a Skills holder onto the live seat, not an idle stand-in', async () => {
+    search = 'tab=slaves&slave=p1'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/persons/p1') {
+        return new Response(JSON.stringify(personDetail()), { status: 200 })
+      }
+      if (url === '/api/w/w1/overview') {
+        return new Response(JSON.stringify({ slaves: [workingCard()] }), { status: 200 })
+      }
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<TestWorkforceClient />)
+
+    expect(await screen.findByTestId('status-label')).toBeTruthy()
+    expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/overview')
+    expect(screen.getByTestId('status-label').getAttribute('data-status')).toBe('working')
+    expect(screen.getByTestId('status-label').getAttribute('data-slave-id')).toBe('a1')
+    expect(screen.getByTestId('status-label').textContent).toBe('WORKING')
+    expect(screen.getByTestId('pause-button').getAttribute('disabled')).toBeNull()
   })
 
   /**

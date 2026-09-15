@@ -251,14 +251,22 @@ function openPanelGroup(group: string): void {
   fireEvent.click(toggle)
 }
 
-function stubPanelFetch(options: { person?: PersonDetail; overviewSlaves?: readonly SlaveCardData[] } = {}): void {
+function stubPanelFetch(
+  options: { person?: PersonDetail; overviewSlaves?: readonly SlaveCardData[]; haltedReason?: string | null } = {},
+): void {
   fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     if (url === '/api/persons/p1') {
       return new Response(JSON.stringify(options.person ?? personDetail()), { status: 200 })
     }
     if (url === '/api/w/w1/overview') {
-      return new Response(JSON.stringify({ slaves: options.overviewSlaves ?? [] }), { status: 200 })
+      return new Response(
+        JSON.stringify({
+          slaves: options.overviewSlaves ?? [],
+          workspace: { haltedReason: options.haltedReason ?? null },
+        }),
+        { status: 200 },
+      )
     }
     return new Response(JSON.stringify(view), { status: 200 })
   })
@@ -507,6 +515,20 @@ describe('OrganizationClient', () => {
     expect((screen.getByTestId('profile-save') as HTMLButtonElement).disabled).toBe(true)
     openPanelGroup('messages')
     expect((screen.getByTestId('runtime-roles-save') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('disables resume and shows the halt reason when the overview snapshot is halted', async () => {
+    stubPanelFetch({
+      person: personDetail(),
+      overviewSlaves: [workingCard({ status: 'paused', runId: 'run-1' })],
+      haltedReason: 'the pause gate failed open',
+    })
+    render(<OrganizationClient workspaceId="w1" initial={view} />)
+    fireEvent.click(screen.getByTestId('organization-open-p1'))
+    expect(await screen.findByTestId('resume-button')).toBeTruthy()
+    expect(screen.getByTestId('status-label').getAttribute('data-status')).toBe('paused')
+    expect(screen.getByTestId('resume-button').getAttribute('disabled')).not.toBeNull()
+    expect(screen.getByTestId('resume-halt-reason').textContent).toContain('the pause gate failed open')
   })
 
   it('seats somebody from the pool onto this project', async () => {
