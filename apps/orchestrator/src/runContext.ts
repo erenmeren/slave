@@ -364,14 +364,7 @@ function skillsSectionText(
     if (injection.provider_unsupported) {
       return block('SKILLS', ['This runtime has no skills mechanism, so none were installed for you. Work without them.'])
     }
-    // M58 R18: name the PERSON's effective set even when the files are not on disk, so a persona
-    // default is visible as a name and a revoke is visible as an absence. Spec §4 still holds for
-    // `missingSince` skills -- those never reach `assigned`.
-    return block('SKILLS', [
-      'None of the skills assigned to you are installed in this checkout. Work without them.',
-      '',
-      ...assigned.map((skill) => `- ${skill.name}: ${neutraliseMarkers(skill.description)}`),
-    ])
+    return block('SKILLS', ['None of the skills assigned to you are installed in this checkout. Work without them.'])
   }
   return block('SKILLS AVAILABLE IN THIS CHECKOUT', [
     'These are installed under `.claude/skills` in the worktree you are working in. Invoke one by',

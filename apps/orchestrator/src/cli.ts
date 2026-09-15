@@ -481,12 +481,13 @@ const USAGE = `usage: orchestrator <command> [options]
                                        --temporary hires for ONE assignment and needs --for-task:
                                        the worker is ephemeral, and release-worker ends it.
   release-worker --slave <id> --reason <text>
-                                       end an ephemeral worker's engagement: its runtime roles are
-                                       emptied so nothing dispatches it again and its finished
-                                       tasks' worktrees are removed. Nothing is deleted -- every
-                                       run, message and thing it learnt stays exactly where it is.
-                                       Refused for a worker that is not ephemeral, one already
-                                       released, and one with a live run.
+                                       end the person behind the seat: every open seat closes,
+                                       the release is stamped, runtime roles empty so nothing
+                                       dispatches them again, and finished tasks' worktrees are
+                                       collected. Nothing is deleted -- every run, message and
+                                       thing they learnt stays exactly where it is. Refused for
+                                       a person already released, one with a live run, and one
+                                       that is gone.
   set-lifecycle --person <id> | --slave <id> --lifecycle <permanent|project|ephemeral>
                                        move a slave between lifecycles by hand. --slave is accepted
                                        and resolved, with a line saying so. Nothing else ever does:

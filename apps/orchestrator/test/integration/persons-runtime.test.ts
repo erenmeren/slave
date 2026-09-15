@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
@@ -31,6 +31,13 @@ function makeRepo(): string {
 }
 
 const repos: string[] = []
+const skillTrees: string[] = []
+
+/** A skill on disk, in the shape `skillSourceDir` resolves -- same helper as `runContext.test.ts`. */
+function writeSkillDir(root: string, name: string, description: string): void {
+  mkdirSync(join(root, name), { recursive: true })
+  writeFileSync(join(root, name, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`)
+}
 
 /** Scratch worktree directory -- the same job `runContext.test.ts` does with `provisionWorktree`. */
 async function worktreeFor(slug: string): Promise<string> {
@@ -58,6 +65,7 @@ afterAll(() => {
       // best-effort cleanup of scratch repos
     }
   }
+  for (const tree of skillTrees) rmSync(tree, { recursive: true, force: true })
 })
 
 describe('the scheduler sees seats, and only open ones (R17)', () => {
@@ -158,6 +166,16 @@ describe('the run context (R18)', () => {
       data: { slaveId: seated.value.slaveId, status: 'starting', kind: 'implementation' },
     })
 
+    const skillRoot = mkdtempSync(join(tmpdir(), 'slaveofai-persons-runtime-skills-'))
+    skillTrees.push(skillRoot)
+    const skillRoots = {
+      personal: join(skillRoot, 'personal'),
+      pluginCache: join(skillRoot, 'plugins'),
+      project: join(skillRoot, 'project'),
+    }
+    mkdirSync(skillRoots.personal, { recursive: true })
+    writeSkillDir(skillRoots.personal, 'pdf', 'makes pdfs')
+
     const built = await buildRunContext({
       runId: run.id as never,
       slaveId: seated.value.slaveId as never,
@@ -166,9 +184,12 @@ describe('the run context (R18)', () => {
       kind: 'implementation',
       worktreePath: await worktreeFor('m58-c'),
       provider: 'claude_code',
+      skillRoots,
     })
     expect(built.prompt).toContain('pdf')
     expect(built.prompt).not.toContain('writes sql')
+    expect(built.prompt).toContain('SKILLS AVAILABLE IN THIS CHECKOUT')
+    expect(built.prompt).not.toContain('Work without them.')
   })
 
   it('the name in the prompt is the person’s, and is the same on both projects', async () => {
