@@ -356,15 +356,22 @@ const singleLine = (text: string): string => text.replace(/\s+/g, ' ').trim()
  */
 function skillsSectionText(
   offered: readonly { readonly name: string; readonly description: string }[],
-  assignedCount: number,
+  assigned: readonly { readonly name: string; readonly description: string }[],
   injection: SkillInjection,
 ): string {
-  if (assignedCount === 0) return ''
+  if (assigned.length === 0) return ''
   if (offered.length === 0) {
     if (injection.provider_unsupported) {
       return block('SKILLS', ['This runtime has no skills mechanism, so none were installed for you. Work without them.'])
     }
-    return block('SKILLS', ['None of the skills assigned to you are installed in this checkout. Work without them.'])
+    // M58 R18: name the PERSON's effective set even when the files are not on disk, so a persona
+    // default is visible as a name and a revoke is visible as an absence. Spec §4 still holds for
+    // `missingSince` skills -- those never reach `assigned`.
+    return block('SKILLS', [
+      'None of the skills assigned to you are installed in this checkout. Work without them.',
+      '',
+      ...assigned.map((skill) => `- ${skill.name}: ${neutraliseMarkers(skill.description)}`),
+    ])
   }
   return block('SKILLS AVAILABLE IN THIS CHECKOUT', [
     'These are installed under `.claude/skills` in the worktree you are working in. Invoke one by',
@@ -717,6 +724,9 @@ export async function renderReplanPreview(input: {
  *
  * The upsert is keyed on `runId`: a redispatch of the same run (after `failToStart`) rewrites its
  * one row rather than adding a second (spec §7).
+ *
+ * M58 R18: the profile, the name and the skills walk seat -> person -> template; a memory learnt
+ * on one project is recalled on the next because it is the PERSON's.
  */
 export async function buildRunContext(input: BuildRunContextInput): Promise<BuiltRunContext> {
   const slave = await prisma.slave.findUniqueOrThrow({
@@ -848,9 +858,13 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
       .filter((name) => descriptionOf.has(name))
       .toSorted((a, b) => a.localeCompare(b))
       .map((name) => ({ name, description: descriptionOf.get(name) ?? '' }))
+    const named = assigned
+      .filter((skill) => skill.missingSince === null)
+      .toSorted((a, b) => a.name.localeCompare(b.name))
+      .map((skill) => ({ name: skill.name, description: skill.description }))
     sections.push({
       kind: 'skills',
-      text: skillsSectionText(offered, assigned.length, injection),
+      text: skillsSectionText(offered, named, injection),
       source: { kind: 'skills', ...injection },
     })
   }

@@ -1619,16 +1619,18 @@ describe('the orchestrator CLI', () => {
       expect(result.stdout).toContain('released M50 CLI Robin')
       expect(result.stdout).toContain('0 worktrees collected')
       // R5, in the sentence an operator reads: nothing was deleted.
-      expect(result.stdout).toContain('every run, message and memory it produced is untouched')
+      expect(result.stdout).toContain('every run, message and memory they produced is untouched')
       const after = await prisma.slave.findUniqueOrThrow({ where: { id: worker.id }, include: { person: true } })
       expect(after.runtimeRoles).toEqual([])
       expect(after.person.releasedAt).not.toBeNull()
     }, 60_000)
 
-    it('refuses release-worker on a project worker, in the words the refusal wrote', async (): Promise<void> => {
+    it('releases a project worker too — a release is a fact about the person', async (): Promise<void> => {
       const result = await runCli(['release-worker', '--slave', fixture.slaveId, '--reason', 'no'])
-      expect(result.code).not.toBe(0)
-      expect(result.stderr).toContain('not a specialist brought in for one assignment')
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('released Alex of Checkout Platform')
+      const after = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })
+      expect(after.person.releasedAt).not.toBeNull()
     }, 60_000)
 
     it('moves a lifecycle by hand and prints both ends of the move', async (): Promise<void> => {
@@ -2116,8 +2118,9 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['delete-slave', '--slave', fixture.slaveId, '--yes'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toContain(`slave ${fixture.slaveId} deleted; 0 runs went with it`)
+      expect(result.stdout).toContain(`slave ${fixture.personId} deleted: 1 seat on Checkout Platform, 0 runs went with them`)
       expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).toBeNull()
+      expect(await prisma.person.findUnique({ where: { id: fixture.personId } })).toBeNull()
     })
 
     it('refuses to delete a slave without --yes, naming the footprint it would have deleted', async () => {
@@ -2125,9 +2128,10 @@ describe('the orchestrator CLI', () => {
 
       expect(result.code).toBe(1)
       expect(result.stderr).toContain(
-        `refusing without --yes: this would delete slave Alex of Checkout Platform (${fixture.slaveId}) and 0 runs`,
+        `refusing without --yes: this would delete Alex of Checkout Platform (${fixture.personId}) — 1 project (Checkout Platform) and 0 runs; all of it goes`,
       )
       expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).not.toBeNull()
+      expect(await prisma.person.findUnique({ where: { id: fixture.personId } })).not.toBeNull()
     })
 
     it('deletes a slave WITH its terminal run history with --yes', async () => {
@@ -2144,9 +2148,10 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['delete-slave', '--slave', fixture.slaveId, '--yes'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toContain(`slave ${fixture.slaveId} deleted; 1 run went with it`)
+      expect(result.stdout).toContain(`slave ${fixture.personId} deleted: 1 seat on Checkout Platform, 1 run went with them`)
       expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).toBeNull()
       expect(await prisma.slaveRun.count({ where: { slaveId: fixture.slaveId } })).toBe(0)
+      expect(await prisma.person.findUnique({ where: { id: fixture.personId } })).toBeNull()
     })
 
     it('renames a team', async () => {
@@ -2277,16 +2282,23 @@ describe('the orchestrator CLI', () => {
       expect(await prisma.slave.count({ where: { id: fixture.slaveId } })).toBe(1)
     }, 30_000)
 
-    // M58 R5: there is no roster COPY to delete any more. The verb is retired here and rebound to
-    // the `person` family in Task 4; what it says meanwhile is what it is.
-    it('delete-company-slave says the verb has been replaced', async () => {
+    it('delete-company-slave removes them from the department and keeps their projects', async () => {
       const catalog = await seedCatalog()
 
-      const result = await runCli(['delete-company-slave', '--slave', catalog.companySlaveId, '--yes'])
+      const result = await runCli([
+        'delete-company-slave',
+        '--slave',
+        catalog.companySlaveId,
+        '--team',
+        catalog.companyTeamId,
+      ])
 
-      expect(result.code).not.toBe(0)
-      expect(result.stderr).toContain('replaced by `person`')
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('left department template')
+      expect(result.stdout).toContain('keep every project they are on')
       expect(await prisma.person.findUnique({ where: { id: catalog.companySlaveId } })).not.toBeNull()
+      expect(await prisma.companyTeamMember.count({ where: { personId: catalog.companySlaveId } })).toBe(0)
+      expect(await prisma.slave.count({ where: { id: fixture.slaveId } })).toBe(1)
     }, 30_000)
 
     it('delete-template names who it unlinks without --yes, and takes nobody with it', async () => {

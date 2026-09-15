@@ -110,6 +110,12 @@ interface SlaveWorldRow {
 }
 
 /**
+ * M58 R17: OPEN seats, and the capabilities through the person join.
+ *
+ * A closed seat is history and a pooled person has no seat here at all, so neither reaches
+ * `decide()` -- and there is no second filter anywhere, which is the same discipline M50's release
+ * kept when it emptied a released worker's runtime roles instead of adding a `where`.
+ *
  * A slave is busy when it holds any `SlaveRun` in a non-terminal status -- not when it has ever
  * held one. `take: 1` on the filtered relation is enough to answer "any?" without pulling every
  * run a slave has accumulated over its lifetime.
