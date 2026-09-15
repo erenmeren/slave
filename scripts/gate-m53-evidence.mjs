@@ -688,13 +688,37 @@ try {
   workspaceIds.push(workspace.id)
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: TEAM_NAME } })
 
+  // M58 R1: a worker is a PERSON in a SEAT. The person carries the name, the persona they came from
+  // and what they provide; the seat carries the role, the runtime roles and the runtime override.
+  // Upserted by NAME because a person is not cascaded away with the workspace whose seat held them
+  // any more, so a second run of this gate meets the first run's people; every scalar is restated so
+  // an adopted survivor is the worker this run asked for and not the last one's.
   const makeWorker = async ({ name, templateId, runtimeRoles, capabilities }) => {
-    const row = await prisma.slave.create({ data: { teamId: team.id, role: WORK_ROLE, runtimeRoles: [...runtimeRoles], model: PIPELINE_MODEL, provider: 'claude_code', personId: (await prisma.person.upsert({ where: { name: name }, create: { name, capabilities: [...capabilities], ...(templateId === null ? {} : { templateId }) }, update: { capabilities: [...capabilities], ...(templateId === null ? {} : { templateId }), templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
+    const person = await prisma.person.upsert({
+      where: { name },
+      create: { name, templateId, capabilities: [...capabilities] },
+      update: {
+        templateId,
+        capabilities: [...capabilities],
+        profile: null,
+        model: null,
+        provider: null,
+        lifecycle: 'project',
+        releasedAt: null,
+        releaseReason: null,
+        selectionRationale: null,
+      },
+    })
+    const row = await prisma.slave.create({
+      data: { teamId: team.id, role: WORK_ROLE, runtimeRoles: [...runtimeRoles], model: PIPELINE_MODEL, provider: 'claude_code', personId: person.id },
+    })
     console.log(
       `stage 0: worker ${row.id} (${name}) roles=${JSON.stringify(row.runtimeRoles)} ` +
-        `capabilities=${JSON.stringify(row.capabilities)} template=${String(templateId)}`,
+        `capabilities=${JSON.stringify(person.capabilities)} template=${String(templateId)}`,
     )
-    return row
+    // The seat, with the person's name flattened on: the stages below read `worker.id` for the seat
+    // and `worker.name` for the person, and neither should have to know which row it lives in.
+    return { ...row, name: person.name }
   }
 
   // Phase A's worker is dispatchable; phase B's holds no runtime role at all and cannot be reached.

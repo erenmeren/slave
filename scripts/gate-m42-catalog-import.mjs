@@ -186,6 +186,12 @@ async function deleteGateTemplates(label) {
   if (rows.length === 0) return
   console.log(`${label}: removing ${String(rows.length)} gate template(s): ${JSON.stringify(rows.map((r) => r.name))}`)
   const ids = rows.map((r) => r.id)
+  // M58 R1: the roster copy this used to remove is a PERSON now, and a person is NOT cascaded away
+  // with the workspace whose seat held them -- so a hire this gate made survives its own teardown,
+  // keeps the persona's name and is offered back to the next run as somebody who already works
+  // here. Deleted BEFORE the templates, exactly as the `CompanySlave` sweep was: `Person.templateId`
+  // is SetNull, so a template that goes first takes the only handle on them with it.
+  await prisma.person.deleteMany({ where: { templateId: { in: ids } } }).catch(() => {})
   await prisma.slaveTemplate.deleteMany({ where: { id: { in: ids } } }).catch(() => {})
 }
 
@@ -636,15 +642,47 @@ try {
   repoPath = makeRepo()
   companyId = createdId(runCli(['create-company', '--name', COMPANY_NAME]), 'create-company')
   const engineeringTeamId = createdId(runCli(['add-team', '--company', companyId, '--name', 'Engineering']), 'add-team')
-  const coreSlaveId = createdId(
-    runCli(['add-slave', '--team', engineeringTeamId, '--template', coreBuilder3.id, '--name', 'Core']),
-    'add-slave',
-  )
+  // M58 R5: a department holds PEOPLE, so `add-slave` takes a `--person` now -- the CLI no longer
+  // copies a template onto a roster. The person is created here (Task 4 gives the CLI a `person`
+  // verb family of its own) and upserted by name, because a person outlives the workspace whose
+  // seat held them and a second run of this gate meets the first run's.
+  const coreSlaveId = (
+    await prisma.person.upsert({
+      where: { name: 'Core' },
+      create: { name: 'Core', templateId: coreBuilder3.id, lifecycle: 'permanent' },
+      update: {
+        templateId: coreBuilder3.id,
+        lifecycle: 'permanent',
+        profile: null,
+        model: null,
+        provider: null,
+        capabilities: [],
+        releasedAt: null,
+        releaseReason: null,
+        selectionRationale: null,
+      },
+    })
+  ).id
+  runCli(['add-slave', '--team', engineeringTeamId, '--person', coreSlaveId])
   const testingTeamId = createdId(runCli(['add-team', '--company', companyId, '--name', 'Testing']), 'add-team')
-  const verifySlaveId = createdId(
-    runCli(['add-slave', '--team', testingTeamId, '--template', verifier3.id, '--name', 'Verify']),
-    'add-slave',
-  )
+  const verifySlaveId = (
+    await prisma.person.upsert({
+      where: { name: 'Verify' },
+      create: { name: 'Verify', templateId: verifier3.id, lifecycle: 'permanent' },
+      update: {
+        templateId: verifier3.id,
+        lifecycle: 'permanent',
+        profile: null,
+        model: null,
+        provider: null,
+        capabilities: [],
+        releasedAt: null,
+        releaseReason: null,
+        selectionRationale: null,
+      },
+    })
+  ).id
+  runCli(['add-slave', '--team', testingTeamId, '--person', verifySlaveId])
   console.log(`company ${companyId}: roster members ${coreSlaveId} (Core) and ${verifySlaveId} (Verify)`)
 
   workspaceId = createdId(

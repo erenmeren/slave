@@ -227,7 +227,9 @@ async function deleteWorkspaceDeeply(id) {
       where: {
         OR: [
           { workspaceId: id },
-          { slave: { team: { workspaceId: id } } },
+          // M58 R3: a memory belongs to the PERSON now; the ones this project taught are the ones
+          // held by somebody who has a seat here.
+          { person: { seats: { some: { team: { workspaceId: id } } } } },
           { task: { workspaceId: id } },
           { run: { task: { workspaceId: id } } },
         ],
@@ -247,12 +249,31 @@ async function deleteWorkspaceDeeply(id) {
     await prisma.memory.deleteMany({ where: { id: { in: memoryIds } } }).catch(() => {})
     console.log(`teardown: removed ${String(memoryIds.length)} memory row(s) of ${id}`)
   }
+  // M58 R1: the PEOPLE seated here, captured before the workspace goes -- a person is not cascaded
+  // away with the seat that held them any more, and this gate names them by a fixed literal, so the
+  // next run's `person.upsert` adopts the survivor and inherits every lesson the last run taught
+  // them. Pre-M58 the worker row died with the workspace; deleting the person restores that, and
+  // takes their worker-scoped memories with it.
+  const seated = await prisma.slave.findMany({ where: { team: { workspaceId: id } }, select: { personId: true } }).catch(() => [])
+  const personIds = [...new Set(seated.map((seat) => seat.personId))]
   // `ExecutionEvent` has no FK to `Workspace` (M2's append-only log outlives entity lifecycles by
   // design), so it goes explicitly; the workspace delete then cascades Team/Slave/Task/SlaveRun/
   // RunContext/SupervisorDecision/Artifact.
   await prisma.executionEvent.deleteMany({ where: { workspaceId: id } }).catch(() => {})
   await prisma.slaveMessage.deleteMany({ where: { workspaceId: id } }).catch(() => {})
   await prisma.workspace.delete({ where: { id } }).catch(() => {})
+  if (personIds.length > 0) {
+    const workerMemories = await prisma.memory.findMany({ where: { personId: { in: personIds } }, select: { id: true } }).catch(() => [])
+    const workerMemoryIds = workerMemories.map((row) => row.id)
+    if (workerMemoryIds.length > 0) {
+      await prisma.memorySource
+        .deleteMany({ where: { OR: [{ memoryId: { in: workerMemoryIds } }, { sourceMemoryId: { in: workerMemoryIds } }] } })
+        .catch(() => {})
+      await prisma.memory.updateMany({ where: { id: { in: workerMemoryIds } }, data: { supersededById: null } }).catch(() => {})
+    }
+    const removed = await prisma.person.deleteMany({ where: { id: { in: personIds } } }).catch(() => ({ count: 0 }))
+    console.log(`teardown: removed ${String(removed.count)} person row(s) seated in ${id}`)
+  }
 }
 
 let exitCode = 1
@@ -1562,7 +1583,7 @@ try {
   const liveCount = await prisma.memory.count({
     where: {
       status: { in: ['verified', 'candidate'] },
-      OR: [{ workspaceId }, { slave: { team: { workspaceId } } }],
+      OR: [{ workspaceId }, { person: { seats: { some: { team: { workspaceId } } } } }],
     },
   })
   await assertEqual(defaultRows.length, liveCount, "stage 7: one row per piece of this project's live knowledge")

@@ -180,9 +180,11 @@ const WORKSPACE_COLUMNS = [
   'verifyCommands',
 ]
 const ACTOR_MEMBERS = ['human', 'slave', 'system']
+// M58 R14: `company` -- the roster copies a project could materialise -- became `pool`, the people
+// this installation has who hold no seat here. Same slot in the world, a different thing in it.
 const SUPERVISOR_WORLD_KEYS = [
-  'budgetExhausted', 'catalog', 'company', 'decisions', 'denials', 'evidence', 'goal', 'goalVersion',
-  'halted', 'now', 'questions', 'runbook', 'runbooks', 'runs', 'slaves', 'staffingPreferences',
+  'budgetExhausted', 'catalog', 'decisions', 'denials', 'evidence', 'goal', 'goalVersion',
+  'halted', 'now', 'pool', 'questions', 'runbook', 'runbooks', 'runs', 'slaves', 'staffingPreferences',
   'staleMemoryCandidates', 'tasks', 'taxonomy', 'workspaceId',
 ]
 

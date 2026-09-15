@@ -166,6 +166,9 @@ async function preflightCleanup() {
   const staleTemplate = await prisma.slaveTemplate.findUnique({ where: { name: TEMPLATE_NAME } })
   if (staleTemplate !== null) {
     console.log(`preflight: removing a leftover ${TEMPLATE_NAME} (${staleTemplate.id})`)
+    // M58 R1: the roster copy this used to remove is a PERSON now, and a person outlives the
+    // workspace whose seat held them. `Person.templateId` is SetNull, so they go first.
+    await prisma.person.deleteMany({ where: { templateId: staleTemplate.id } }).catch(() => {})
     await prisma.slaveTemplate.delete({ where: { id: staleTemplate.id } }).catch(() => {})
   }
 
@@ -519,7 +522,11 @@ try {
   const profileSource = sourceOfKind(implManifest, 'profile')
   console.log(`manifest profile source: ${JSON.stringify(profileSource)}`)
   if (profileSource === undefined) await fail('the manifest records no profile section')
-  if (profileSource.origin !== 'slave') await fail(`the manifest says the profile came from ${profileSource.origin}, expected slave`)
+  // M58 R7: the chain is seat -> person -> template, and the rung a `Slave.profile` answers on is
+  // called `seat` now. The persisted enum was WIDENED rather than renamed (deviation D4), so a
+  // manifest written before this milestone still reads back as `slave`; anything written since says
+  // `seat`, which is what this run is.
+  if (profileSource.origin !== 'seat') await fail(`the manifest says the profile came from ${profileSource.origin}, expected seat`)
 
   // ---- The skills it was offered, and the one it was not ----
   const namesPresent = implContext.prompt.includes(`- ${PRESENT_SKILL}: `)
@@ -626,7 +633,7 @@ try {
 
   const reviewProfile = sourceOfKind(reviewManifest, 'profile')
   console.log(`review manifest profile source: ${JSON.stringify(reviewProfile)}`)
-  if (reviewProfile === undefined || reviewProfile.origin !== 'slave') {
+  if (reviewProfile === undefined || reviewProfile.origin !== 'seat') {
     await fail(`the review run was not given the reviewer's own profile -- ${JSON.stringify(reviewProfile)}`)
   }
   if (!reviewContext.prompt.includes(SLAVE_MARK)) await fail("the review prompt does not carry the reviewer's profile text")

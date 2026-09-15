@@ -219,6 +219,12 @@ async function deleteGateTemplates(label) {
   if (rows.length === 0) return
   console.log(`${label}: removing ${String(rows.length)} gate template(s): ${JSON.stringify(rows.map((r) => r.name))}`)
   const ids = rows.map((r) => r.id)
+  // M58 R1: the roster copy this used to remove is a PERSON now, and a person is NOT cascaded away
+  // with the workspace whose seat held them -- so a hire this gate made survives its own teardown,
+  // keeps the persona's name and is offered back to the next run as somebody who already works
+  // here. Deleted BEFORE the templates, exactly as the `CompanySlave` sweep was: `Person.templateId`
+  // is SetNull, so a template that goes first takes the only handle on them with it.
+  await prisma.person.deleteMany({ where: { templateId: { in: ids } } }).catch(() => {})
   await prisma.runbookTemplate.deleteMany({ where: { sourceTemplateId: { in: ids } } }).catch(() => {})
   await prisma.slaveTemplate.deleteMany({ where: { id: { in: ids } } }).catch(() => {})
 }
@@ -970,6 +976,7 @@ try {
   }
   const second = await prisma.slave.findFirstOrThrow({
     where: { team: { workspaceId }, person: { templateId: securityTemplate.id }, id: { not: hiredId } },
+    include: { person: true },
   })
   const secondId = second.id
   console.log(`stage 8a -- the second specialist: ${describeSlave(second)}`)

@@ -314,7 +314,7 @@ try {
   companyId = company.id
   for (const [department, slaveName] of ROSTER) {
     const team = await prisma.companyTeam.create({ data: { companyId, name: department } })
-    await prisma.person.upsert({ where: { name: slaveName }, create: { templateId, name: slaveName, lifecycle: 'permanent', departments: { create: { companyTeamId: team.id } } }, update: { templateId, lifecycle: 'permanent', departments: { deleteMany: {}, create: { companyTeamId: team.id } }, templateId: null, profile: null, model: null, provider: null, capabilities: [], releasedAt: null, releaseReason: null, selectionRationale: null } })
+    await prisma.person.upsert({ where: { name: slaveName }, create: { templateId, name: slaveName, lifecycle: 'permanent', departments: { create: { companyTeamId: team.id } } }, update: { templateId, lifecycle: 'permanent', departments: { deleteMany: {}, create: { companyTeamId: team.id } }, profile: null, model: null, provider: null, capabilities: [], releasedAt: null, releaseReason: null, selectionRationale: null } })
   }
   console.log(`company created and staffed directly: ${companyId} (${COMPANY_NAME}), template ${templateId}`)
 

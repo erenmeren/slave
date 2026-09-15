@@ -274,6 +274,12 @@ async function deleteGateTemplates(label) {
   if (rows.length === 0) return
   console.log(`${label}: removing ${String(rows.length)} gate template(s): ${JSON.stringify(rows.map((r) => r.name))}`)
   const ids = rows.map((r) => r.id)
+  // M58 R1: the roster copy this used to remove is a PERSON now, and a person is NOT cascaded away
+  // with the workspace whose seat held them -- so a hire this gate made survives its own teardown,
+  // keeps the persona's name and is offered back to the next run as somebody who already works
+  // here. Deleted BEFORE the templates, exactly as the `CompanySlave` sweep was: `Person.templateId`
+  // is SetNull, so a template that goes first takes the only handle on them with it.
+  await prisma.person.deleteMany({ where: { templateId: { in: ids } } }).catch(() => {})
   await prisma.slaveTemplate.deleteMany({ where: { id: { in: ids } } }).catch(() => {})
 }
 
@@ -789,7 +795,9 @@ try {
   // this project rather than a fixture.
   const dev = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend', 'manager'], personId: (await prisma.person.upsert({ where: { name: WORKER_NAME }, create: { name: WORKER_NAME, capabilities: ['backend.api-design'] }, update: { capabilities: ['backend.api-design'], templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   const devId = dev.id
-  console.log(`slave ${devId} (${WORKER_NAME}): runtimeRoles ${JSON.stringify(dev.runtimeRoles)}, capabilities ${JSON.stringify(dev.capabilities)}`)
+  // M58 R1: what somebody provides is the PERSON's, so the diagnostic reads it off the person the
+  // upsert above just returned rather than off the seat, where the column no longer is.
+  console.log(`slave ${devId} (${WORKER_NAME}): runtimeRoles ${JSON.stringify(dev.runtimeRoles)}, capabilities ${JSON.stringify(['backend.api-design'])}`)
 
   console.log(`stage 3 -- set-goal printed: ${JSON.stringify(runCli(['set-goal', '--workspace', workspaceId, '--goal', GOAL]).trim())}`)
 

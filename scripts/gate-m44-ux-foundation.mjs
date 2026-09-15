@@ -446,7 +446,7 @@ try {
   companyId = company.id
   for (const [department, memberName] of SIM_ROSTER) {
     const companyTeam = await prisma.companyTeam.create({ data: { companyId, name: department } })
-    await prisma.person.upsert({ where: { name: memberName }, create: { templateId, name: memberName, lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } }, update: { templateId, lifecycle: 'permanent', departments: { deleteMany: {}, create: { companyTeamId: companyTeam.id } }, templateId: null, profile: null, model: null, provider: null, capabilities: [], releasedAt: null, releaseReason: null, selectionRationale: null } })
+    await prisma.person.upsert({ where: { name: memberName }, create: { templateId, name: memberName, lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } }, update: { templateId, lifecycle: 'permanent', departments: { deleteMany: {}, create: { companyTeamId: companyTeam.id } }, profile: null, model: null, provider: null, capabilities: [], releasedAt: null, releaseReason: null, selectionRationale: null } })
   }
   // An `llm` run, and NOT because anything calls a model: nothing ever steps this row (no daemon
   // runs, and it is `paused` a line below), so no call is made and nothing is spent. It is `llm`

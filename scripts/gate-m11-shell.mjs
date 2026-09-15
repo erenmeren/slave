@@ -376,7 +376,7 @@ try {
   // M58 R5: a department holds PEOPLE, so the person exists before the department picks them.
   // Created directly here (Task 4 gives the CLI and this page a `person` verb of their own); the
   // BROWSER still does the joining, which is what this stage is about.
-  const memberPerson = await prisma.person.upsert({ where: { name: MEMBER_NAME }, create: { name: MEMBER_NAME, templateId, lifecycle: 'permanent' }, update: { templateId, lifecycle: 'permanent', templateId: null, profile: null, model: null, provider: null, capabilities: [], releasedAt: null, releaseReason: null, selectionRationale: null } })
+  const memberPerson = await prisma.person.upsert({ where: { name: MEMBER_NAME }, create: { name: MEMBER_NAME, templateId, lifecycle: 'permanent' }, update: { templateId, lifecycle: 'permanent', profile: null, model: null, provider: null, capabilities: [], releasedAt: null, releaseReason: null, selectionRationale: null } })
   await page.reload({ waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
   await clickUntil(companyRow.getByTestId('company-toggle'), async () => companyDetail.first().isVisible(), `re-expanding the "${COMPANY_NAME}" row`)
   await selectReliably(teamBlock.getByLabel('member slave'), memberPerson.id, { value: memberPerson.id }, 'the member slave select')
