@@ -319,7 +319,17 @@ export type IntakeReplyOutcome =
       readonly downgraded: string | null
       readonly costUsd: number | null
     }
-  | { readonly kind: 'unusable'; readonly reason: string; readonly costUsd: number | null }
+  | {
+      readonly kind: 'unusable'
+      /** Why the call produced no answer (a spawn failure, an isolation breach, an unparseable
+       *  reply). Diagnostic only -- the caller's own log line, per R11's "writes the `assistant`
+       *  row" -- and never written to the transcript: the person sees `UNUSABLE_TEXT`, one sentence
+       *  they can act on, not this string. `downgraded` above is the transcript's own note
+       *  mechanism, and it exists for the opposite reason -- a draft that WAS produced but broke a
+       *  source rule, which is something an operator watching the card should be able to see. */
+      readonly reason: string
+      readonly costUsd: number | null
+    }
 
 /** What the conversation says when the model's answer could not be read at all. The person is not
  *  told about JSON: they are asked to say a little more, which is the only useful next step. */
@@ -346,7 +356,11 @@ export async function recordIntakeReply(
 ): Promise<Result<void, ControlRefusal>> {
   const answerText = outcome.kind === 'answer' ? outcome.answer.text : UNUSABLE_TEXT
   const draft = outcome.kind === 'answer' && outcome.answer.kind === 'draft' ? outcome.answer.draft : null
-  const note = outcome.kind === 'answer' ? outcome.downgraded : outcome.reason
+  // `unusable`'s `reason` is not a note (see the field's own docstring): the transcript's last row
+  // for a call nobody could use is the sentence the person reads, not a fact row that would sit
+  // after it and say something like "A proposal was discarded: the CLI died" -- there was no
+  // proposal to discard.
+  const note = outcome.kind === 'answer' ? outcome.downgraded : null
 
   const result = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Intake" WHERE id = ${intakeId} FOR UPDATE`

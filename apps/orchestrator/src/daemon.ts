@@ -1,6 +1,7 @@
-import { describeSync, drainModelCalls, syncSkillCatalog, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
+import { hostname } from 'node:os'
+import { describeSync, drainIntakeCalls, drainModelCalls, syncSkillCatalog, tickIntakes, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { BROKER_TIMEOUT_MS, type WorkspaceId } from '@slave-of-ai/domain'
+import { BROKER_TIMEOUT_MS, SUPERVISOR_DEFAULT_MODEL, type WorkspaceId } from '@slave-of-ai/domain'
 import { subscribeEvents, type EventSubscription } from '@slave-of-ai/events'
 import type { AdapterRegistry } from '@slave-of-ai/providers'
 import { serveBrokerRequests } from './broker.js'
@@ -202,6 +203,24 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
       // what it skipped.
       if (sims.stepped > 0 || sims.halted > 0 || sims.skippedNoDecider > 0 || sims.startedModelCalls > 0) process.stdout.write(`${JSON.stringify({ simulations: sims })}\n`)
 
+      // M59 R14: the intake pass, beside the simulations and for the same reason -- a conversation
+      // belongs to no workspace (it exists before one does), so this is a GLOBAL pass rather than
+      // part of `tick()`. Two daemons both running it is safe: `claimIntakes` decides "due" under
+      // the row lock with SKIP LOCKED.
+      const intakes = await tickIntakes({
+        now: new Date(),
+        by: `${String(process.pid)}@${hostname()}`,
+        model: deps.supervisorModel ?? SUPERVISOR_DEFAULT_MODEL,
+        ...(deps.modelDecider !== undefined ? { modelDecider: deps.modelDecider } : {}),
+        ...(deps.maxConcurrentModelCalls !== undefined ? { maxConcurrentModelCalls: deps.maxConcurrentModelCalls } : {}),
+      })
+      // `skippedNoDecider` is printed for `tickSimulations`' own reason (M31a §4): a daemon built
+      // without a decider silently doing nothing for a person waiting in a drawer is exactly the
+      // failure an operator cannot diagnose from outside.
+      if (intakes.startedModelCalls > 0 || intakes.skippedNoDecider > 0) {
+        process.stdout.write(`${JSON.stringify({ intakes })}\n`)
+      }
+
       // The guardrail sweep -- run timeout, tool-call ceiling, dead pids -- lives with the daemon,
       // not inside `tick()`: it kills processes, which is a lifecycle concern like the startup
       // reconcile above, and a one-shot CLI `tick` cancelling runs it did not start would be a
@@ -348,6 +367,10 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
     // Prisma out from under one would lose exactly the record that must not be lost. No new call
     // can start behind this: the coalescer is stopped.
     await drainModelCalls()
+    // M59 R14, and `drainModelCalls`' own reason: recording a reply is a database write for a call
+    // the account has already been billed for. No new call can start behind this -- the coalescer
+    // is stopped.
+    await drainIntakeCalls()
     await prisma.$disconnect()
     process.stdout.write('daemon stopped\n')
   }
