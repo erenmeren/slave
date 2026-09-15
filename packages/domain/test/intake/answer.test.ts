@@ -93,3 +93,63 @@ describe('parseIntakeAnswer', () => {
     expect(parsed?.answer.kind).toBe('ask')
   })
 })
+
+const twoPathFacts: IntakeFacts = {
+  paths: [
+    {
+      path: '/home/x/api',
+      exists: true,
+      isRepository: true,
+      isEmptyDir: false,
+      branches: ['main'],
+      defaultBranch: 'main',
+      verify: [{ command: 'npm test', source: 'package.json scripts.test' }],
+    },
+    {
+      path: '/home/x/worker',
+      exists: true,
+      isRepository: true,
+      isEmptyDir: false,
+      branches: ['main'],
+      defaultBranch: 'main',
+      verify: [{ command: 'pytest', source: 'pyproject.toml' }],
+    },
+  ],
+  reposRoot: '/home/x/projects',
+  existingCompanies: [],
+  catalogue: [],
+}
+
+describe('parseIntakeAnswer -- the detected check is per repository', () => {
+  it('DOWNGRADES a command detected on a path OTHER than the one the draft chose', () => {
+    const wrongRepo = {
+      ...draft,
+      repo: { mode: 'existing' as const, path: '/home/x/api' },
+      verifyCommands: [{ command: 'pytest', source: 'detected' as const }],
+    }
+    const parsed = parseIntakeAnswer(wrap({ kind: 'draft', text: 'ok', draft: wrongRepo }), twoPathFacts)
+    expect(parsed?.answer.kind).toBe('ask')
+    expect(parsed?.downgraded).toContain('pytest')
+  })
+
+  it('ACCEPTS a command detected on the SAME path the draft chose, with another path also in facts', () => {
+    const rightRepo = {
+      ...draft,
+      repo: { mode: 'existing' as const, path: '/home/x/api' },
+      verifyCommands: [{ command: 'npm test', source: 'detected' as const }],
+    }
+    const parsed = parseIntakeAnswer(wrap({ kind: 'draft', text: 'ok', draft: rightRepo }), twoPathFacts)
+    expect(parsed?.answer.kind).toBe('draft')
+    expect(parsed?.downgraded).toBeNull()
+  })
+
+  it('DOWNGRADES a detected command on a NEW repository -- nothing has been detected there yet', () => {
+    const newRepo = {
+      ...draft,
+      repo: { mode: 'new' as const, path: null },
+      verifyCommands: [{ command: 'npm test', source: 'detected' as const }],
+    }
+    const parsed = parseIntakeAnswer(wrap({ kind: 'draft', text: 'ok', draft: newRepo }), twoPathFacts)
+    expect(parsed?.answer.kind).toBe('ask')
+  })
+})

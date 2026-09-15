@@ -4,6 +4,7 @@ import {
   EXTERNAL_FENCE_OPEN,
   EXTERNAL_FENCE_PREAMBLE,
   INTAKE_ANSWER_MARKER,
+  INTAKE_PROMPT_MESSAGES_MAX,
   buildIntakePrompt,
   type IntakeFacts,
 } from '../../src/index.js'
@@ -71,5 +72,21 @@ describe('buildIntakePrompt', () => {
     const prompt = buildIntakePrompt({ transcript: [{ role: 'human', text: 'an idea' }], facts: null, callsLeft: 12 })
     expect(prompt).toContain(INTAKE_ANSWER_MARKER)
     expect(prompt).toContain('nothing has been detected yet')
+  })
+
+  it('keeps only the newest INTAKE_PROMPT_MESSAGES_MAX transcript lines, dropping the oldest', () => {
+    const total = INTAKE_PROMPT_MESSAGES_MAX + 5
+    const pad = (n: number): string => String(n).padStart(3, '0')
+    const transcript = Array.from({ length: total }, (_, i) => ({ role: 'human' as const, text: `msg-${pad(i)}` }))
+    const prompt = buildIntakePrompt({ transcript, facts, callsLeft: 11 })
+
+    for (let i = 0; i < total - INTAKE_PROMPT_MESSAGES_MAX; i += 1) {
+      expect(prompt).not.toContain(`msg-${pad(i)}`)
+    }
+    const oldestKept = total - INTAKE_PROMPT_MESSAGES_MAX
+    for (let i = oldestKept; i < total; i += 1) {
+      expect(prompt).toContain(`msg-${pad(i)}`)
+    }
+    expect(prompt.indexOf(`msg-${pad(oldestKept)}`)).toBeLessThan(prompt.indexOf(`msg-${pad(total - 1)}`))
   })
 })

@@ -36,15 +36,26 @@ export interface ParsedIntakeAnswer {
 /**
  * Which rule the draft broke, or null (M59 R9). Checked AFTER the schema parse, because these are
  * claims about the world rather than about the shape.
+ *
+ * The "detected" check is PER REPOSITORY: a command really found in some OTHER path this
+ * conversation looked at is not evidence for the repository THIS draft proposes, so `detected` is
+ * built only from the one `facts.paths` entry whose `path` equals `draft.repo.path` (empty if no
+ * entry matches). A `new` repository has nothing detected at all -- there is nothing there yet to
+ * have found anything in -- which is exactly why a new-repo draft may only use `source: 'draft'`.
  */
 function draftBreach(draft: IntakeDraft, facts: IntakeFacts | null): string | null {
-  const detected = new Set((facts?.paths ?? []).flatMap((path) => path.verify.map((finding) => finding.command)))
+  const detected =
+    draft.repo.mode === 'existing'
+      ? new Set(
+          facts?.paths.find((path) => path.path === draft.repo.path)?.verify.map((finding) => finding.command) ?? [],
+        )
+      : new Set<string>()
   for (const entry of draft.verifyCommands) {
     if (entry.source === 'operator') {
       return `the model marked "${entry.command}" as typed by the operator, which only a person can be`
     }
     if (entry.source === 'detected' && !detected.has(entry.command)) {
-      return `"${entry.command}" is marked as detected and was not found in any repository`
+      return `"${entry.command}" is marked as detected and was not found in the repository this project uses`
     }
     if (entry.source === 'draft' && draft.repo.mode !== 'new') {
       return `"${entry.command}" is marked as a proposal, and this project uses a repository that already exists`
