@@ -79,6 +79,25 @@ describe('person list', () => {
     expect(pool).toContain('Pooled')
     expect(pool).not.toContain('Seated')
   })
+
+  it('still applies --department when --pool is written first', async () => {
+    const { teamId } = await project('Alpha')
+    const company = await prisma.company.create({ data: { name: 'Acme' } })
+    const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
+
+    await main(['person', 'create', '--name', 'Seated'])
+    await main(['person', 'create', '--name', 'PooledOther'])
+    await main(['person', 'create', '--name', 'PooledInDept', '--department', companyTeam.id])
+    const seated = await prisma.person.findUniqueOrThrow({ where: { name: 'Seated' } })
+    await main(['person', 'assign', '--person', seated.id, '--team', teamId])
+
+    const out = await captureStdout(() =>
+      main(['person', 'list', '--pool', '--department', companyTeam.id]),
+    )
+    expect(out).toContain('PooledInDept')
+    expect(out).not.toContain('PooledOther')
+    expect(out).not.toContain('Seated')
+  })
 })
 
 describe('person assign / unassign / move', () => {
@@ -117,6 +136,14 @@ describe('person delete', () => {
     const out = await captureStdout(() => main(['person', 'delete', '--person', person.id, '--yes']))
     expect(out).toContain('Alpha')
     expect(out).toContain('Beta')
+    expect(await prisma.person.count()).toBe(0)
+  })
+
+  it('still reads --person when --yes is written first', async () => {
+    await main(['person', 'create', '--name', 'Atlas'])
+    const person = await prisma.person.findUniqueOrThrow({ where: { name: 'Atlas' } })
+    const out = await captureStdout(() => main(['person', 'delete', '--yes', '--person', person.id]))
+    expect(out).toContain(person.id)
     expect(await prisma.person.count()).toBe(0)
   })
 })

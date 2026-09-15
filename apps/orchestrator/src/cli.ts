@@ -761,6 +761,10 @@ const VALUELESS: ReadonlySet<string> = new Set([
   'active',
   'inactive',
   'dismissed',
+  'pool',
+  'released',
+  // person delete --yes --person <id> otherwise records pool-style swallow: flags.yes='--person'.
+  'yes',
 ])
 
 /**
