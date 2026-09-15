@@ -42,7 +42,16 @@ export async function buildOfficeSnapshot(workspaceId: string): Promise<OfficeSn
         archivedAt: true,
         teams: {
           orderBy: { name: 'asc' },
-          select: { id: true, name: true, slaves: { orderBy: { name: 'asc' }, select: { id: true, name: true, role: true } } },
+          // M58 R17: OPEN seats only, named by the person in each (R2).
+          select: {
+            id: true,
+            name: true,
+            slaves: {
+              where: { closedAt: null },
+              orderBy: { person: { name: 'asc' } },
+              select: { id: true, role: true, person: { select: { name: true } } },
+            },
+          },
         },
       },
     }),
@@ -56,7 +65,7 @@ export async function buildOfficeSnapshot(workspaceId: string): Promise<OfficeSn
     color: DEPT_COLORS[i % DEPT_COLORS.length] as string,
     slaves: team.slaves.map((slave) => ({
       slaveId: slave.id,
-      name: slave.name,
+      name: slave.person.name,
       role: slave.role,
       color: SLAVE_COLORS[slaveIndex++ % SLAVE_COLORS.length] as string,
     })),

@@ -7,6 +7,7 @@ import {
   PERMISSION_PROVIDERS,
   TOOLS_BY_KIND,
   userSlaveStatus,
+  type OverrideOrigin,
   type PermissionKind,
   type PermissionRunKind,
 } from '@slave-of-ai/domain'
@@ -28,15 +29,15 @@ type ControlAction = 'pause' | 'resume' | 'stop' | 'message' | 'answer' | 'profi
  * What the Profile block says about where the text in its box came from, and what saving over it
  * will do (M37 §6).
  *
- * The origin is the whole point of showing it: only a `slave` text is this worker's OWN, and
- * saving over an inherited one writes a worker-level override rather than editing the roster row
- * or the template -- which is what those two routes would need, and this panel is not addressed at
- * them (spec erratum E3: the catalog levels have no workspace to be scoped by).
+ * The origin is the whole point of showing it (M58 R7): only a `seat` text is this seat's OWN, and
+ * saving over an inherited one writes a SEAT-level override rather than editing the person or the
+ * persona -- which is what those two routes would need, and this panel is not addressed at them
+ * (spec erratum E3: neither level has a workspace to be scoped by).
  */
-const PROFILE_ORIGIN_TEXT: Record<'slave' | 'company' | 'template', string> = {
-  slave: "this worker's own profile",
-  company: 'inherited from its roster row — saving writes an override on this worker',
-  template: 'inherited from its template — saving writes an override on this worker',
+const PROFILE_ORIGIN_TEXT: Record<OverrideOrigin, string> = {
+  seat: "this worker's own profile",
+  person: 'inherited from the slave themself — saving writes an override on this seat',
+  template: 'inherited from its persona — saving writes an override on this seat',
 }
 
 /**

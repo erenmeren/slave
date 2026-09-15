@@ -193,7 +193,7 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
       where: { workspaceId },
       orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
       include: {
-        runs: { orderBy: { startedAt: 'desc' }, include: { checkpoint: true, slave: true } },
+        runs: { orderBy: { startedAt: 'desc' }, include: { checkpoint: true, slave: { include: { person: { select: { name: true } } } } } },
         artifacts: { orderBy: { createdAt: 'desc' } },
       },
     }),
@@ -217,9 +217,9 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         orderBy: { seq: 'desc' },
         select: { senderRunId: true, recipientSlaveId: true, recipientRole: true },
       }),
-      prisma.slave.findMany({ where: { team: { workspaceId } }, select: { id: true, name: true } }),
+      prisma.slave.findMany({ where: { team: { workspaceId } }, select: { id: true, person: { select: { name: true } } } }),
     ])
-    const nameById = new Map(slaves.map((slave) => [slave.id, slave.name]))
+    const nameById = new Map(slaves.map((slave) => [slave.id, slave.person.name]))
     for (const question of questions) {
       // Descending `seq`, so the first row seen for a run is its latest question: a run that asked,
       // was answered, resumed and asked again is waiting on the second one.
@@ -274,7 +274,7 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         priority: task.priority,
         attempt: task.attempt,
         maxAttempts: task.maxAttempts,
-        assigneeName: liveRun?.slave.name ?? null,
+        assigneeName: liveRun?.slave.person.name ?? null,
         branch: task.branch,
         lastRejectionReason: task.lastRejectionReason,
         goalVersion: task.goalVersion,

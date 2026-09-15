@@ -14,7 +14,7 @@ async function seed(): Promise<Fixture> {
     data: { name: 'Checkout', repoPath: '/tmp/analytics-fixture', verifyCommands: ['true'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   return { workspaceId: workspace.id, slaveId: slave.id }
 }
 
@@ -29,7 +29,7 @@ describe('buildAnalytics', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -131,7 +131,7 @@ describe('buildAnalytics', () => {
       data: { name: 'Other', repoPath: '/tmp/other', verifyCommands: ['true'], setupCommands: [] },
     })
     const otherTeam = await prisma.team.create({ data: { workspaceId: other.id, name: 'T' } })
-    const otherSlave = await prisma.slave.create({ data: { teamId: otherTeam.id, name: 'Bea', role: 'qa' } })
+    const otherSlave = await prisma.slave.create({ data: { teamId: otherTeam.id, role: 'qa', personId: (await prisma.person.create({ data: { name: 'Bea' } })).id } })
     await prisma.slaveRun.create({
       data: { slaveId: otherSlave.id, status: 'succeeded', provider: 'claude_code', toolCalls: 7, terminalAt: new Date(), endedAt: new Date() },
     })

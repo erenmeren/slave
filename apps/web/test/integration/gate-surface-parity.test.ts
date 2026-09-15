@@ -52,7 +52,7 @@ describe('the gate reads the same facts the web builders publish', () => {
     // `SupervisorDecision`, `GoalVersion` and `RunContext` through their FKs to the tables named
     // here, so nothing this fixture writes outlives the run.
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     const workspace = await prisma.workspace.create({
       data: {
@@ -67,9 +67,7 @@ describe('the gate reads the same facts the web builders publish', () => {
     })
     workspaceId = workspace.id
     const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
-    const dev = await prisma.slave.create({
-      data: { teamId: team.id, name: 'Dev', role: 'Senior Engineer', runtimeRoles: ['backend'] },
-    })
+    const dev = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Dev' } })).id } })
     expect((await setGoal(workspaceId, 'Ship the thing')).ok).toBe(true)
     await prisma.task.create({
       data: { workspaceId, title: 'One', description: 'a task', status: 'ready', requiredRole: 'backend', maxAttempts: 5, goalVersion: 1 },

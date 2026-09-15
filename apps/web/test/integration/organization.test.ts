@@ -70,9 +70,7 @@ describe('buildOrganization', () => {
     // the roster row it was materialised from and the company it belongs to.
     const company = await prisma.company.create({ data: { name: 'M47 Co' } })
     const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Platform' } })
-    const rosterRow = await prisma.companySlave.create({
-      data: { companyTeamId: companyTeam.id, templateId: platform.id, name: 'Alex' },
-    })
+    const rosterRow = await prisma.person.create({ data: { templateId: platform.id, name: 'Alex', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
     await prisma.workspace.update({ where: { id: workspaceId }, data: { companyId: company.id } })
     // `lifecycle: 'permanent'` beside the roster link (M50 R1): a worker materialised from a
     // company roster IS somebody the organisation has, which is exactly what the migration's one
@@ -84,48 +82,15 @@ describe('buildOrganization', () => {
 
     // Rae predates all of this: no rationale, no roster row, and the `backend` role that makes
     // `backend.api-design` a covered capability rather than a gap.
-    await prisma.slave.create({
-      data: {
-        teamId: fixture.teamId,
-        name: 'Rae',
-        role: 'backend',
-        // `data` and `qa` are here so the settled tasks below ask for something Rae genuinely
-        // provides AND may be dispatched for -- the case is about the task's STATUS, not about a
-        // gap dressed up as one.
-        runtimeRoles: ['backend', 'data', 'qa'],
-        capabilities: ['backend.api-design', 'data.pipelines', 'qa.test-automation'],
-      },
-    })
+    await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', runtimeRoles: ['backend', 'data', 'qa'], personId: (await prisma.person.create({ data: { name: 'Rae', capabilities: ['backend.api-design', 'data.pipelines', 'qa.test-automation'] } })).id } })
     // Hired for this project, and PROVIDES the missing capability without holding its role -- the
     // shape `formTeam` turns into an `assign_capability` proposal.
-    await prisma.slave.create({
-      data: {
-        teamId: fixture.teamId,
-        name: 'Security Reviewer',
-        role: 'security',
-        runtimeRoles: ['reviewer'],
-        capabilities: ['security.application'],
-        hiredFromTemplateId: security.id,
-        selectionRationale: 'Hired for security.application because the board needs it',
-      },
-    })
+    await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'security', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Security Reviewer', capabilities: ['security.application'], templateId: security.id, selectionRationale: 'Hired for security.application because the board needs it' } })).id } })
     // A temporary specialist whose engagement is over (M50 R3/D7). The name sorts FIRST of the
     // four, so the row landing LAST is a statement about the sort and not about the alphabet.
-    await prisma.slave.create({
-      data: {
-        teamId: fixture.teamId,
-        name: 'Aaron',
-        role: 'security',
-        // Nothing to dispatch and nothing to cover: this row is about the SORT and the released
+    await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'security', runtimeRoles: this row is about the SORT and the released
         // marker, and a capability on it would quietly move the coverage the cases below pin.
-        runtimeRoles: [],
-        capabilities: [],
-        lifecycle: 'ephemeral',
-        releasedAt: new Date('2026-09-12T10:00:00.000Z'),
-        releaseReason: 'the engagement is over',
-        selectionRationale: 'Brought in for the security pass',
-      },
-    })
+        runtimeRoles: [], personId: (await prisma.person.create({ data: { name: 'Aaron', capabilities: [], lifecycle: 'ephemeral', releasedAt: new Date('2026-09-12T10:00:00.000Z'), releaseReason: 'the engagement is over', selectionRationale: 'Brought in for the security pass' } })).id } })
 
     for (const [title, capability, status] of [
       ['Ship the checkout API', 'backend.api-design', 'ready'],

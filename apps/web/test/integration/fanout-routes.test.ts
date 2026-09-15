@@ -19,7 +19,7 @@ async function seed(): Promise<{ workspaceId: string; slaveId: string }> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'dev', runtimeRoles: ['dev'] } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'dev', runtimeRoles: ['dev'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   return { workspaceId: workspace.id, slaveId: slave.id }
 }
 

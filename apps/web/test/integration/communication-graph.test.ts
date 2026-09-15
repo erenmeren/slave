@@ -29,11 +29,11 @@ async function seed(): Promise<Fixture> {
     data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const mgr = await prisma.slave.create({ data: { teamId: team.id, name: 'Mgr', role: 'planner' } })
-  const alex = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  const maya = await prisma.slave.create({ data: { teamId: team.id, name: 'Maya', role: 'reviewer' } })
+  const mgr = await prisma.slave.create({ data: { teamId: team.id, role: 'planner', personId: (await prisma.person.create({ data: { name: 'Mgr' } })).id } })
+  const alex = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+  const maya = await prisma.slave.create({ data: { teamId: team.id, role: 'reviewer', personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
   // Never emits an event -- proves a slave with no edges still appears as a node.
-  const sam = await prisma.slave.create({ data: { teamId: team.id, name: 'Sam', role: 'backend' } })
+  const sam = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Sam' } })).id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -60,7 +60,7 @@ describe('buildCommunicationGraph', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })

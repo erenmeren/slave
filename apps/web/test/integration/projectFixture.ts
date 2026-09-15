@@ -32,7 +32,7 @@ export interface SeedOptions {
  *  `RunContext` are reached through their FKs by `CASCADE`, the same way every neighbouring
  *  integration test reaches them. */
 const TRUNCATE =
-  'TRUNCATE TABLE "ExecutionEvent", "Approval", "Artifact", "Checkpoint", "SlaveMessage", "RunContext", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE'
+  'TRUNCATE TABLE "ExecutionEvent", "Approval", "Artifact", "Checkpoint", "SlaveMessage", "RunContext", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE'
 
 export async function truncateAll(): Promise<void> {
   await prisma.$executeRawUnsafe(TRUNCATE)
@@ -53,9 +53,7 @@ export async function seedWorkspace(options: SeedOptions = {}): Promise<ProjectF
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Alex', role, runtimeRoles: [role] },
-  })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role, runtimeRoles: [role], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   return { workspaceId: workspace.id, teamId: team.id, slaveId: slave.id }
 }
 

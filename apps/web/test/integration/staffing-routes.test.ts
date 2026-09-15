@@ -47,7 +47,7 @@ describe('the staffing preference routes (M53 R9)', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "SlaveTemplate", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "SlaveTemplate", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })

@@ -171,27 +171,39 @@ export function SkillsClient({ page }: { readonly page: SkillsPage }): React.JSX
                         </Button>
                       </span>
 
-                      {skill.slaveIds.length > 0 && (
+                      {skill.holders.length > 0 && (
                         <span className="flex flex-wrap justify-end gap-1">
-                          {skill.slaveIds.map((slaveId) => {
-                            const slave = slavesById.get(slaveId)
+                          {skill.holders.map(({ personId, origin }) => {
+                            const slave = slavesById.get(personId)
                             const state = slave === undefined ? 'idle' : cardStateForSlave(slave.status)
                             return (
-                              <Chip key={slaveId} tone={CARD_STATE_TONE[state].tone}>
-                                {/* The id, not a dash, when the slave is not in the list: an
-                                    assignment pointing at somebody this page cannot name is a
-                                    fact worth showing rather than blanking. */}
-                                {slave?.name ?? slaveId}
-                                <button
-                                  type="button"
-                                  data-testid={`skill-unassign-${skill.id}-${slaveId}`}
-                                  aria-label={`unassign ${skill.name} from ${slave?.name ?? slaveId}`}
-                                  disabled={pending}
-                                  onClick={() => void send('DELETE', slaveId, skill.id)}
-                                  className="ml-1 leading-none disabled:cursor-not-allowed disabled:opacity-50"
-                                >
-                                  ×
-                                </button>
+                              <Chip key={personId} tone={CARD_STATE_TONE[state].tone}>
+                                {/* The id, not a dash, when the slave is not in the list: a holder
+                                    this page cannot name is a fact worth showing rather than
+                                    blanking. */}
+                                {slave?.name ?? personId}
+                                {/* M58 R3: a persona's default is not this person's to take away --
+                                    removing it is an edit to the persona, on the catalog page. */}
+                                {origin === 'persona' ? (
+                                  <span
+                                    data-testid={`skill-inherited-${skill.id}-${personId}`}
+                                    title="from their persona"
+                                    className="ml-1 leading-none"
+                                  >
+                                    ·
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    data-testid={`skill-unassign-${skill.id}-${personId}`}
+                                    aria-label={`unassign ${skill.name} from ${slave?.name ?? personId}`}
+                                    disabled={pending}
+                                    onClick={() => void send('DELETE', personId, skill.id)}
+                                    className="ml-1 leading-none disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    ×
+                                  </button>
+                                )}
                               </Chip>
                             )
                           })}
@@ -229,7 +241,7 @@ export function SkillsClient({ page }: { readonly page: SkillsPage }): React.JSX
                   {provider.name}
                 </span>
                 <span className="shrink-0 text-[9.5px] text-text-faint">
-                  {skill.slaveIds.length} {skill.slaveIds.length === 1 ? 'slave' : 'slaves'}
+                  {skill.holders.length} {skill.holders.length === 1 ? 'slave' : 'slaves'}
                 </span>
               </div>
             </div>

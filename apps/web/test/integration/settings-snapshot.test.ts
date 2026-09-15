@@ -22,7 +22,7 @@ async function seedWorkspace(name: string): Promise<{ workspaceId: string; teamI
 describe('the Settings query module', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "SlavePermission", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "SlavePermission", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -77,7 +77,7 @@ describe('the Settings query module', () => {
 
     it('counts the runs bound to each real adapter', async (): Promise<void> => {
       const { teamId } = await seedWorkspace('Checkout Platform')
-      const slave = await prisma.slave.create({ data: { teamId, name: 'Alex', role: 'backend' } })
+      const slave = await prisma.slave.create({ data: { teamId: teamId, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
       await prisma.slaveRun.createMany({
         data: [
           { slaveId: slave.id, provider: 'claude_code', status: 'succeeded' },
@@ -110,7 +110,7 @@ describe('the Settings query module', () => {
   describe('buildPermissionMatrix', () => {
     it('maps unset to null, and allow/deny to themselves', async (): Promise<void> => {
       const { teamId } = await seedWorkspace('Checkout Platform')
-      const slave = await prisma.slave.create({ data: { teamId, name: 'Alex', role: 'backend' } })
+      const slave = await prisma.slave.create({ data: { teamId: teamId, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
       await prisma.slavePermission.createMany({
         data: [
           { slaveId: slave.id, kind: 'read_repo', mode: 'allow' },
@@ -137,8 +137,8 @@ describe('the Settings query module', () => {
     it('groups the rows by workspace, so same-named slaves in two projects stay apart', async (): Promise<void> => {
       const checkout = await seedWorkspace('Checkout Platform')
       const ledger = await seedWorkspace('Ledger')
-      const here = await prisma.slave.create({ data: { teamId: checkout.teamId, name: 'Alex', role: 'backend' } })
-      const there = await prisma.slave.create({ data: { teamId: ledger.teamId, name: 'Alex', role: 'backend' } })
+      const here = await prisma.slave.create({ data: { teamId: checkout.teamId, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+      const there = await prisma.slave.create({ data: { teamId: ledger.teamId, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
       await prisma.slavePermission.create({ data: { slaveId: here.id, kind: 'read_repo', mode: 'allow' } })
 
       const sections = await buildPermissionMatrix()
@@ -156,8 +156,8 @@ describe('the Settings query module', () => {
     it("orders a workspace's slaves by name across all of its teams", async (): Promise<void> => {
       const { workspaceId, teamId } = await seedWorkspace('Checkout Platform')
       const other = await prisma.team.create({ data: { workspaceId, name: 'Platform' } })
-      await prisma.slave.create({ data: { teamId, name: 'Zoe', role: 'backend' } })
-      await prisma.slave.create({ data: { teamId: other.id, name: 'Alex', role: 'frontend' } })
+      await prisma.slave.create({ data: { teamId: teamId, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Zoe' } })).id } })
+      await prisma.slave.create({ data: { teamId: other.id, role: 'frontend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
 
       const sections = await buildPermissionMatrix()
       // Sorted across the two teams, not concatenated team by team.

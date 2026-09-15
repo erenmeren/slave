@@ -21,7 +21,7 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -40,7 +40,7 @@ describe('buildOverviewSnapshot', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "Artifact", "Checkpoint", "SlaveMessage", "RunContext", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "Artifact", "Checkpoint", "SlaveMessage", "RunContext", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -515,7 +515,7 @@ describe('buildOverviewSnapshot', () => {
       data: { name: 'Other', repoPath: '/tmp/other', verifyCommands: ['true'], setupCommands: [] },
     })
     const otherTeam = await prisma.team.create({ data: { workspaceId: other.id, name: 'T' } })
-    await prisma.slave.create({ data: { teamId: otherTeam.id, name: 'Zoe', role: 'backend' } })
+    await prisma.slave.create({ data: { teamId: otherTeam.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Zoe' } })).id } })
 
     const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
 
@@ -632,7 +632,7 @@ describe('buildOverviewSnapshot', () => {
 
   it('tells the card and panel that a slave is waiting, and on whom (M36 t2)', async (): Promise<void> => {
     const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
-    const answerer = await prisma.slave.create({ data: { teamId: team.id, name: 'Maya', role: 'answerer' } })
+    const answerer = await prisma.slave.create({ data: { teamId: team.id, role: 'answerer', personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
     const run = await prisma.slaveRun.create({
       data: {
         taskId: fixture.taskId,
@@ -914,9 +914,7 @@ describe('buildOverviewSnapshot', () => {
       const template = await prisma.slaveTemplate.create({
         data: { name: 'Backend Engineer', role: 'backend', profile: profiles.template },
       })
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas', profile: profiles.company },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', profile: profiles.company, lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
       await prisma.slave.update({
         where: { id: fixture.slaveId },
         data: { companySlaveId: companySlave.id, profile: profiles.slave },

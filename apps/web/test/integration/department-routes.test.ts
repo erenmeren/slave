@@ -35,14 +35,12 @@ async function seed(): Promise<Fixture> {
   })
   const engineering = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const qa = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'QA' } })
-  const slave = await prisma.slave.create({ data: { teamId: engineering.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: engineering.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Developer', role: 'backend', description: '' } })
   const company = await prisma.company.create({ data: { name: 'Atlas Software' } })
   const templateTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Backend' } })
   const emptyTemplateTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Design' } })
-  const companySlave = await prisma.companySlave.create({
-    data: { companyTeamId: templateTeam.id, templateId: template.id, name: 'Sam' },
-  })
+  const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Sam', lifecycle: 'permanent', departments: { create: { companyTeamId: templateTeam.id } } } })
   return {
     workspaceId: workspace.id,
     engineeringId: engineering.id,
@@ -58,7 +56,7 @@ let fixture: Fixture
 
 beforeEach(async () => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
   fixture = await seed()
 })
@@ -92,7 +90,7 @@ describe('PUT /api/slaves/[slaveId]/team', () => {
 
   // M25 final fix wave added the refusal; this is the route-level pin the review parked.
   it('409s a move into a department that already has a slave of that name', async () => {
-    await prisma.slave.create({ data: { teamId: fixture.qaId, name: 'Alex', role: 'qa' } })
+    await prisma.slave.create({ data: { teamId: fixture.qaId, role: 'qa', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
     const response = await moveSlaveRoute(json({ teamId: fixture.qaId }, 'PUT'), { params: Promise.resolve({ slaveId: fixture.slaveId }) })
     expect(response.status).toBe(409)
     expect((await response.json()).error).toContain('Alex')

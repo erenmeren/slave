@@ -27,9 +27,10 @@ export async function buildCommunicationGraph(workspaceId: string): Promise<Comm
 
   const [slaves, rows] = await Promise.all([
     prisma.slave.findMany({
-      where: { team: { workspaceId } },
-      select: { id: true, name: true, role: true },
-      orderBy: { name: 'asc' },
+      // M58 R17: OPEN seats only, named by the person in each (R2).
+      where: { closedAt: null, team: { workspaceId } },
+      select: { id: true, role: true, person: { select: { name: true } } },
+      orderBy: { person: { name: 'asc' } },
     }),
     prisma.executionEvent.findMany({
       where: { workspaceId, type: { in: [...EVENT_TYPES] } },
@@ -55,5 +56,5 @@ export async function buildCommunicationGraph(workspaceId: string): Promise<Comm
     }))
 
   const { edges } = foldCommunication(events)
-  return { slaves, edges }
+  return { slaves: slaves.map((slave) => ({ id: slave.id, name: slave.person.name, role: slave.role })), edges }
 }

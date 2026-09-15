@@ -48,8 +48,10 @@ export function actionText(action: Action, taskTitles: Readonly<Record<string, s
     // decision row for anyone who needs it.
     case 'assign_capability':
       return `give ${action.slaveId} the "${action.role}" runtime role, for ${action.capabilityLabel}`
+    // M58 R16: the KIND keeps its name (a stored decision must still say what it said), and the
+    // sentence says what it now does -- seat somebody who already works here.
     case 'materialise_company_worker':
-      return `bring ${action.name} onto this project from the company roster, for ${action.capabilityLabel}`
+      return `seat ${action.name} on this project from the pool, for ${action.capabilityLabel}`
     case 'hire_from_catalog':
       return `hire ${action.name} from the catalog${action.temporary ? ' as a temporary specialist' : ''}, for ${action.capabilityLabel}`
     // M48 R5: the runbook's NAME, off the action itself -- this function runs in the browser and

@@ -27,7 +27,7 @@ describe('listAllSlaves', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -50,24 +50,16 @@ describe('listAllSlaves', () => {
 
     // Two catalog members on the one company team: one gets materialized into a project slave
     // below, the other never does.
-    const materializedMember = await prisma.companySlave.create({
-      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' },
-    })
-    const catalogOnlyMember = await prisma.companySlave.create({
-      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Nova' },
-    })
+    const materializedMember = await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
+    const catalogOnlyMember = await prisma.person.create({ data: { templateId: template.id, name: 'Nova', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
     // The materialized project slave, roster-linked via companySlaveId.
-    await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Atlas', role: 'backend', companySlaveId: materializedMember.id },
-    })
+    await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', personId: materializedMember.id } })
     // A hand-made project slave with no companySlaveId at all -- listWorkers' "no roster filter"
     // rule (server/org.ts, WorkerRow docstring) applies here too. Carries its own `model`
     // override (fix round 1, Important finding 2): a hand-made slave has no roster row for
     // `listAllSlaves` to read a chain result off, so its row's `model` must come straight off
     // this `Slave.model` column instead of silently reading back `null`.
-    const blair = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Blair', role: 'frontend', model: 'claude-haiku-4' },
-    })
+    const blair = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'frontend', model: 'claude-haiku-4', personId: (await prisma.person.create({ data: { name: 'Blair' } })).id } })
     // A live run so `blair`'s row carries a resolved `gate` (M24 final review, Important 3):
     // `listWorkers` reads a worker's gate off its LIVE run's provider, not off any finished one.
     await prisma.slaveRun.create({ data: { slaveId: blair.id, status: 'working', provider: 'claude_code' } })
@@ -130,12 +122,8 @@ describe('listAllSlaves', () => {
     const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
     const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
     const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
-    const member = await prisma.companySlave.create({
-      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Nova' },
-    })
-    const worker = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Alex', role: 'Senior Engineer', runtimeRoles: ['backend', 'reviewer'] },
-    })
+    const member = await prisma.person.create({ data: { templateId: template.id, name: 'Nova', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
+    const worker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Senior Engineer', runtimeRoles: ['backend', 'reviewer'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
 
     const { rows } = await listAllSlaves()
 
@@ -150,22 +138,9 @@ describe('listAllSlaves', () => {
     const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
     const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
     const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
-    const member = await prisma.companySlave.create({
-      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Nova' },
-    })
-    const ordinary = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Alex', role: 'Senior Engineer' },
-    })
-    const released = await prisma.slave.create({
-      data: {
-        teamId: fixture.teamId,
-        name: 'Robin',
-        role: 'Security',
-        lifecycle: 'ephemeral',
-        releasedAt: new Date('2026-09-12T10:00:00.000Z'),
-        releaseReason: 'the engagement is over',
-      },
-    })
+    const member = await prisma.person.create({ data: { templateId: template.id, name: 'Nova', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
+    const ordinary = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Senior Engineer', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+    const released = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Security', personId: (await prisma.person.create({ data: { name: 'Robin', lifecycle: 'ephemeral', releasedAt: new Date('2026-09-12T10:00:00.000Z'), releaseReason: 'the engagement is over' } })).id } })
 
     const { rows } = await listAllSlaves()
 
@@ -181,7 +156,7 @@ describe('listAllSlaves', () => {
   })
 
   it('hides an archived project\'s rows unless includeArchived is set', async (): Promise<void> => {
-    await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Blair', role: 'frontend' } })
+    await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'frontend', personId: (await prisma.person.create({ data: { name: 'Blair' } })).id } })
     await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { archivedAt: new Date() } })
 
     expect((await listAllSlaves()).rows).toEqual([])
@@ -198,8 +173,8 @@ describe('listAllSlaves', () => {
     const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
     const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
     const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
-    const member = await prisma.companySlave.create({ data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' } })
-    await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Atlas', role: 'backend', companySlaveId: member.id } })
+    const member = await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
+    await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', personId: member.id } })
 
     await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { archivedAt: new Date() } })
 

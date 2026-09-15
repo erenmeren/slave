@@ -33,7 +33,7 @@ export function MemberRow({ member }: { readonly member: RosterMemberRow }): Rea
       <span className="font-mono text-xs text-text-2">{member.effectiveModel ?? '—'}</span>
       {/* M12 Task 13 fix round 1, Important finding 3: `effectiveProvider` had no reader here. */}
       <span className="font-mono text-xs text-text-2">{member.effectiveProvider ?? '—'}</span>
-      <SlaveRowActions name={member.name} role={member.role} catalog={{ companySlaveId: member.companySlaveId }} />
+      <SlaveRowActions name={member.name} role={member.role} pool={{ personId: member.personId }} />
     </Row>
   )
 }
@@ -167,7 +167,7 @@ export function TeamBlock({
       ) : (
         <DataTable columns={MEMBER_COLUMNS} header={[...MEMBER_HEADER]}>
           {members.map((member) => (
-            <MemberRow key={member.companySlaveId} member={member} />
+            <MemberRow key={member.personId} member={member} />
           ))}
         </DataTable>
       )}

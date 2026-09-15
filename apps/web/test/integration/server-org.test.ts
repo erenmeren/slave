@@ -21,7 +21,7 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -40,7 +40,7 @@ describe('org query module', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "SupervisorDecision", "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "SupervisorDecision", "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -165,12 +165,8 @@ describe('org query module', () => {
       const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
       const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
       const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' },
-      })
-      await prisma.slave.create({
-        data: { teamId: fixture.teamId, name: 'Atlas (worker)', role: 'backend', companySlaveId: companySlave.id },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
+      await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', personId: companySlave.id } })
 
       const projects = await listProjects()
       const project = projects.find((p) => p.id === fixture.workspaceId)
@@ -187,7 +183,7 @@ describe('org query module', () => {
     // team uncapped; the CLIENT is what caps the avatar row at six for display).
     it('reports the same count in workerCount as it puts faces in the avatar row', async (): Promise<void> => {
       const otherTeam = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Design' } })
-      await prisma.slave.create({ data: { teamId: otherTeam.id, name: 'Bea', role: 'design' } })
+      await prisma.slave.create({ data: { teamId: otherTeam.id, role: 'design', personId: (await prisma.person.create({ data: { name: 'Bea' } })).id } })
 
       const project = (await listProjects()).find((p) => p.id === fixture.workspaceId)
 
@@ -301,9 +297,7 @@ describe('org query module', () => {
 
     it('groups companies -> teams -> members, and returns no workers for an unmaterialized member', async (): Promise<void> => {
       const { companyId, companyTeamId, templateId } = await seedRoster()
-      await prisma.companySlave.create({
-        data: { companyTeamId, templateId, name: 'Atlas' },
-      })
+      await prisma.person.create({ data: { templateId, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeamId } } } })
 
       const roster = await listRoster()
       const company = roster.find((c) => c.companyId === companyId)
@@ -319,9 +313,7 @@ describe('org query module', () => {
 
     it("modelSource is 'roster' when the roster row's model is set", async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedRoster()
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId, templateId, name: 'Atlas', model: 'opus' },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId, name: 'Atlas', model: 'opus', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeamId } } } })
 
       const roster = await listRoster()
       const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
@@ -334,9 +326,7 @@ describe('org query module', () => {
 
     it("modelSource is 'template' when the roster row's model is unset but the template default is set", async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedRoster()
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId, templateId, name: 'Atlas' },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeamId } } } })
 
       const roster = await listRoster()
       const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
@@ -350,9 +340,7 @@ describe('org query module', () => {
       const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
       const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
       const template = await prisma.slaveTemplate.create({ data: { name: 'QA Engineer', role: 'qa' } })
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Nova' },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Nova', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
 
       const roster = await listRoster()
       const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
@@ -363,12 +351,8 @@ describe('org query module', () => {
 
     it("modelSource is 'worker-varies' when any of the member's materialized workers overrides its own model, even though the roster row has a model", async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedRoster()
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId, templateId, name: 'Atlas', model: 'opus' },
-      })
-      await prisma.slave.create({
-        data: { teamId: fixture.teamId, name: 'Atlas (worker)', role: 'backend', companySlaveId: companySlave.id, model: 'haiku' },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId, name: 'Atlas', model: 'opus', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeamId } } } })
+      await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', model: 'haiku', personId: companySlave.id } })
 
       const roster = await listRoster()
       const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
@@ -386,9 +370,7 @@ describe('org query module', () => {
     // one function computing both.
     it("providerSource is 'roster' when the roster row's provider is set", async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedRoster()
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId, templateId, name: 'Atlas', model: 'opus', provider: 'claude_code' },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId, name: 'Atlas', model: 'opus', provider: 'claude_code', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeamId } } } })
 
       const roster = await listRoster()
       const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
@@ -403,9 +385,7 @@ describe('org query module', () => {
       const template = await prisma.slaveTemplate.create({
         data: { name: 'Backend Engineer', role: 'backend', defaultModel: 'sonnet', provider: 'cursor' },
       })
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
 
       const roster = await listRoster()
       const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
@@ -416,9 +396,7 @@ describe('org query module', () => {
 
     it("providerSource is 'none' when neither the roster row nor the template default has a provider", async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedRoster()
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId, templateId, name: 'Atlas' },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeamId } } } })
 
       const roster = await listRoster()
       const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
@@ -429,19 +407,8 @@ describe('org query module', () => {
 
     it("providerSource is 'worker-varies' when any of the member's materialized workers overrides its own provider, even though the roster row has a provider", async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedRoster()
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId, templateId, name: 'Atlas', model: 'opus', provider: 'cursor' },
-      })
-      await prisma.slave.create({
-        data: {
-          teamId: fixture.teamId,
-          name: 'Atlas (worker)',
-          role: 'backend',
-          companySlaveId: companySlave.id,
-          model: 'haiku',
-          provider: 'claude_code',
-        },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId, name: 'Atlas', model: 'opus', provider: 'cursor', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeamId } } } })
+      await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', model: 'haiku', provider: 'claude_code', personId: companySlave.id } })
 
       const roster = await listRoster()
       const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
@@ -454,12 +421,8 @@ describe('org query module', () => {
 
     it("reuses overview's status/current-task derivation for each worker sub-row", async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedRoster()
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId, templateId, name: 'Atlas' },
-      })
-      const worker = await prisma.slave.create({
-        data: { teamId: fixture.teamId, name: 'Atlas (worker)', role: 'backend', companySlaveId: companySlave.id },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeamId } } } })
+      const worker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', personId: companySlave.id } })
       const run = await prisma.slaveRun.create({
         data: { taskId: fixture.taskId, slaveId: worker.id, status: 'working', toolCalls: 50 },
       })
@@ -478,12 +441,8 @@ describe('org query module', () => {
 
     it('reports idle with no current task for a worker with no live run', async (): Promise<void> => {
       const { companyTeamId, templateId } = await seedRoster()
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId, templateId, name: 'Atlas' },
-      })
-      await prisma.slave.create({
-        data: { teamId: fixture.teamId, name: 'Atlas (worker)', role: 'backend', companySlaveId: companySlave.id },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeamId } } } })
+      await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', personId: companySlave.id } })
 
       const roster = await listRoster()
       const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
@@ -498,12 +457,8 @@ describe('org query module', () => {
       const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
       const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
       const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' },
-      })
-      await prisma.slave.create({
-        data: { teamId: fixture.teamId, name: 'Atlas (worker)', role: 'backend', companySlaveId: companySlave.id },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
+      await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', personId: companySlave.id } })
       // `seed()`'s hand-made 'Alex' has no roster link. Re-pointed by the M14 fix wave (review
       // I4): it MUST appear -- the old filter is what rendered the Slaves page as a bare header
       // on every development database whose slaves were never staffed from a company.
@@ -542,12 +497,8 @@ describe('org query module', () => {
       const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
       const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
       const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' },
-      })
-      await prisma.slave.create({
-        data: { teamId: fixture.teamId, name: 'Atlas (worker)', role: 'backend', companySlaveId: companySlave.id },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
+      await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', personId: companySlave.id } })
 
       const workers = await listWorkers()
       // Re-pointed by the M14 fix wave (review I4): `listWorkers` no longer filters to
@@ -565,12 +516,8 @@ describe('org query module', () => {
       const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
       const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
       const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' },
-      })
-      const worker = await prisma.slave.create({
-        data: { teamId: fixture.teamId, name: 'Atlas (worker)', role: 'backend', companySlaveId: companySlave.id },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
+      const worker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', personId: companySlave.id } })
 
       // Re-pointed by the M14 fix wave (review I4), same reason as above: by name, not by index.
       const atlasIn = (rows: readonly { name: string }[]): number =>
@@ -641,9 +588,7 @@ describe('org query module', () => {
       })
       const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
       const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Platform' } })
-      await prisma.companySlave.create({
-        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' },
-      })
+      await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
 
       const templates = await listTemplates()
 

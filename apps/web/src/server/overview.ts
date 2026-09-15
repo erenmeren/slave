@@ -3,13 +3,14 @@ import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, EVENT_TYPE_BY_DOMAIN_TYPE, toRunState } 
 import { capabilitiesOf, listDecisions, workspaceDefaultProvider, workspaceSpend, type ProviderCapabilities, type ProviderKind } from '@slave-of-ai/control'
 import {
   deriveSlaveStatus,
-  effectiveProfile,
+  effectiveProfileFor,
   grantsFor,
   mergeQueueOrder,
   sumSpend,
   NON_TERMINAL_RUN_STATUSES,
   type BreakerLevel,
   type KindGrant,
+  type OverrideOrigin,
   type PermissionRunKind,
   type SlaveLifecycle,
   type SlaveStatus,
@@ -71,6 +72,9 @@ export interface SlaveGrant extends KindGrant {
 
 export interface SlaveCardData {
   readonly id: string
+  /** M58 R2: the person sitting in this seat -- the identity every person-scoped verb is addressed
+   *  by, and what the panel's own edits are about. */
+  readonly personId: string
   readonly name: string
   readonly role: string
   /**
@@ -99,10 +103,10 @@ export interface SlaveCardData {
    * `null` when no level carries one: the run then gets no profile section at all (spec §7), and
    * the panel says so rather than showing an empty box that looks like a saved blank.
    *
-   * `origin` is what makes the panel's edit honest: a `company` or `template` text is inherited,
-   * and typing over it writes a `slave`-level OVERRIDE rather than editing what was shown.
+   * `origin` is what makes the panel's edit honest: a `person` or `template` text is inherited, and
+   * typing over it writes a `seat`-level OVERRIDE rather than editing what was shown (M58 R7).
    */
-  readonly profile: { readonly text: string; readonly origin: 'slave' | 'company' | 'template' } | null
+  readonly profile: { readonly text: string; readonly origin: OverrideOrigin } | null
   /**
    * The roles this worker may be DISPATCHED as (M37 §5) -- the scheduler match, reviewer/manager
    * staffing and role-addressed messaging all read this set, and `role` above is now only the
@@ -422,13 +426,14 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
   const provider = await workspaceDefaultProvider(workspaceId)
 
   const slaves = await prisma.slave.findMany({
-    where: { team: { workspaceId } },
-    orderBy: { name: 'asc' },
-    // The roster/template legs of the profile override chain (M37 t4), included rather than
-    // queried per worker: `effectiveProfile` needs both levels below the worker's own column, and
-    // a second round trip per row is how a roster of thirty becomes thirty-one queries.
+    // M58 R17: OPEN seats only. A closed seat keeps its history and is on nobody's Team band.
+    where: { closedAt: null, team: { workspaceId } },
+    orderBy: { person: { name: 'asc' } },
+    // The person/template legs of the profile override chain (M37 t4, M58 R7), included rather
+    // than queried per worker: `effectiveProfileFor` needs both levels below the seat's own column,
+    // and a second round trip per row is how a roster of thirty becomes thirty-one queries.
     include: {
-      companySlave: { select: { profile: true, template: { select: { profile: true } } } },
+      person: { include: { template: { select: { profile: true } } } },
       // M52 R7: the worker's own permission rows, on the `include` that is already here rather
       // than a query per worker -- `grantsFor` needs the rows and nothing else, and a roster of
       // thirty would otherwise be thirty-one round trips (`workspaceStats`' one-reading rule).
@@ -496,7 +501,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
     { readonly recipient: string; readonly question: string | null; readonly messageId: string | null }
   >()
   if (waitingRunIds.length > 0) {
-    const nameById = new Map(slaves.map((slave) => [slave.id, slave.name]))
+    const nameById = new Map(slaves.map((slave) => [slave.id, slave.person.name]))
     const questions = await prisma.slaveMessage.findMany({
       where: { senderRunId: { in: waitingRunIds }, kind: 'question' },
       orderBy: { seq: 'desc' },
@@ -618,7 +623,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         OR: [{ pauseReason: null }, { pauseReason: { not: 'waiting_for_answer' } }],
       },
       orderBy: { startedAt: 'asc' },
-      include: { slave: true },
+      include: { slave: { include: { person: { select: { name: true } } } } },
     }),
     prisma.executionEvent.findMany({
       where: { workspaceId, type: { notIn: CHATTER_TYPES.map((type) => EVENT_TYPE_BY_DOMAIN_TYPE[type]) } },
@@ -665,7 +670,7 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
     ...pausedRuns.map((run) => ({
       kind: 'run' as const,
       id: run.id,
-      title: run.slave.name,
+      title: run.slave.person.name,
       detail: run.status === 'paused' ? `paused at step ${run.pausedAtStep ?? 0}` : 'pause requested',
       // Only a run that has actually landed on `paused` can be resumed -- `requestResume` refuses
       // a `pause_requested` one, and offering a button that always refuses is worse than none.
@@ -757,11 +762,16 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
       const run = liveRunBySlave.get(slave.id) ?? null
       return {
         id: slave.id,
-        name: slave.name,
+        personId: slave.personId,
+        name: slave.person.name,
         role: slave.role,
-        // Walked by the domain's own function, not restated here (M37 t4): this is the same call
-        // `buildRunContext` makes, so what the panel shows is what the next dispatch will send.
-        profile: effectiveProfile(slave),
+        // Walked by the domain's own function, not restated here (M37 t4, M58 R7): this is the same
+        // call `buildRunContext` makes, so what the panel shows is what the next dispatch will send.
+        profile: effectiveProfileFor({
+          seat: slave.profile,
+          person: slave.person.profile,
+          template: slave.person.template?.profile ?? null,
+        }),
         // M52 R7. The domain's own projection, off the rows the `include` already carried in, for
         // the LIVE run's kind -- `implementation` with no run in sight, which is the kind a worker
         // is next dispatched as and the one the sentence beside each baseline then names.
@@ -779,12 +789,12 @@ export async function buildOverviewSnapshot(workspaceId: string): Promise<Overvi
         ).map((grant): SlaveGrant => ({ ...grant, byName: grant.by === null ? null : (granterNames.get(grant.by) ?? null) })),
         permissionsRunKind: (run?.kind ?? 'implementation') satisfies PermissionRunKind,
         runtimeRoles: slave.runtimeRoles,
-        // Straight off the row the `include` above already loads in full -- no `select` to widen.
-        lifecycle: slave.lifecycle,
+        // Straight off the PERSON the `include` above already loads in full (M58 R1).
+        lifecycle: slave.person.lifecycle,
         released:
-          slave.releasedAt === null
+          slave.person.releasedAt === null
             ? null
-            : { at: slave.releasedAt.toISOString(), reason: slave.releaseReason ?? 'released' },
+            : { at: slave.person.releasedAt.toISOString(), reason: slave.person.releaseReason ?? 'released' },
         // The run's own column, not a constant (M12 Task 9, ruling R10). `SlaveRun.provider` has
         // been written by every dispatch since Task 8, so the surface finally has real data where
         // it used to have `'claude-code' as const` -- which was not even the `ProviderKind`

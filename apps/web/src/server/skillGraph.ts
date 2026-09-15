@@ -85,7 +85,7 @@ export async function buildSkillGraph(workspaceId: string): Promise<SkillGraph |
   const runRows = await prisma.slaveRun.findMany({
     where: { id: { in: runIds } },
     orderBy: { startedAt: 'desc' },
-    include: { task: true, slave: true },
+    include: { task: true, slave: { include: { person: { select: { name: true } } } } },
   })
 
   // Step 2: the ordered event fetch, bounded to exactly those runs -- rides the `(runId, seq)`
@@ -140,7 +140,7 @@ export async function buildSkillGraph(workspaceId: string): Promise<SkillGraph |
   const runs: SkillGraphRun[] = runRows.map((run) => ({
     runId: run.id,
     taskTitle: run.task?.title ?? null,
-    slaveName: run.slave.name,
+    slaveName: run.slave.person.name,
     live: (NON_TERMINAL_RUN_STATUSES as readonly RunStatus[]).includes(run.status),
     startedAt: run.startedAt.toISOString(),
     chain: chainByRun.get(run.id) ?? [],

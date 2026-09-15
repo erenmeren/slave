@@ -68,7 +68,7 @@ async function seed(): Promise<Fixture> {
     data: { name: 'Other', repoPath: mkdtempSync(join(tmpdir(), 'slaveofai-web-control-other-')), verifyCommands: ['npm test'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'Backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   const task = await prisma.task.create({
     data: { workspaceId: workspace.id, title: 'Add checkout retry', description: 'Retry failed payments', maxAttempts: workspace.maxAttempts },
   })
@@ -114,7 +114,7 @@ describe('the control routes', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "RunContext", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "SupervisorDecision", "Workspace", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "RunContext", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "SupervisorDecision", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
     cookieValue.current = null
     fixture = await seed()

@@ -20,7 +20,7 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   return { workspaceId: workspace.id, slaveId: slave.id }
 }
 
@@ -29,7 +29,7 @@ describe('buildTasksSnapshot', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -67,9 +67,7 @@ describe('buildTasksSnapshot', () => {
   })
 
   it('names who a waiting run is waiting on, and leaves an ordinary pause alone (M36 t3)', async (): Promise<void> => {
-    const maya = await prisma.slave.create({
-      data: { teamId: (await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })).id, name: 'Maya', role: 'product' },
-    })
+    const maya = await prisma.slave.create({ data: { teamId: (await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })).id, role: 'product', personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
     const task = await prisma.task.create({
       data: {
         workspaceId: fixture.workspaceId,

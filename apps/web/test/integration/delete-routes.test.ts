@@ -26,7 +26,7 @@ async function seed(): Promise<Fixture> {
   const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Developer', role: 'backend', description: '' } })
   const company = await prisma.company.create({ data: { name: 'Atlas Software' } })
   const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Backend' } })
-  const companySlave = await prisma.companySlave.create({ data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Sam' } })
+  const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Sam', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
   const workspace = await prisma.workspace.create({
     data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [], companyId: company.id },
   })
@@ -36,7 +36,7 @@ async function seed(): Promise<Fixture> {
 let f: Fixture
 beforeEach(async () => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
   f = await seed()
 })

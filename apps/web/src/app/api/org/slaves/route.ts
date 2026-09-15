@@ -1,42 +1,27 @@
-import { addCompanySlave, type ProviderKind } from '@slave-of-ai/control'
+import { addDepartmentMember } from '@slave-of-ai/control'
 import { orgControlResponse } from '../../../../server/orgControlRoute'
 import { requirePrincipal } from '../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
 
+const SHAPE = 'the body must be { "companyTeamId": string, "personId": string }'
+
+/**
+ * Puts an EXISTING person in a department (M58 R5). The verb it replaces created a roster row -- a
+ * copy of a template with a name of its own -- and there is no such thing any more, so the body
+ * names a person rather than a template and a name.
+ *
+ * (Task 5 replaces this route's POST with `createPerson`, which is where somebody is MADE; this one
+ * keeps the department control honest in the meantime.)
+ */
 export async function POST(request: Request): Promise<Response> {
   const gate = await requirePrincipal()
   if ('response' in gate) return gate.response
   const body: unknown = await request.json().catch(() => null)
-  if (body === null || typeof body !== 'object') {
-    return Response.json(
-      { error: 'the body must be { "companyTeamId": string, "templateId": string, "name": string }' },
-      { status: 400 },
-    )
+  if (body === null || typeof body !== 'object') return Response.json({ error: SHAPE }, { status: 400 })
+  const { companyTeamId, personId } = body as { companyTeamId?: unknown; personId?: unknown }
+  if (typeof companyTeamId !== 'string' || typeof personId !== 'string') {
+    return Response.json({ error: SHAPE }, { status: 400 })
   }
-  const { companyTeamId, templateId, name, model, provider } = body as {
-    companyTeamId?: unknown
-    templateId?: unknown
-    name?: unknown
-    model?: unknown
-    provider?: unknown
-  }
-  if (typeof companyTeamId !== 'string' || typeof templateId !== 'string' || typeof name !== 'string') {
-    return Response.json(
-      { error: 'the body must be { "companyTeamId": string, "templateId": string, "name": string }' },
-      { status: 400 },
-    )
-  }
-  if (model !== undefined && typeof model !== 'string') {
-    return Response.json({ error: 'model must be a string' }, { status: 400 })
-  }
-  if (provider !== undefined && typeof provider !== 'string') {
-    return Response.json({ error: 'provider must be a string' }, { status: 400 })
-  }
-  return orgControlResponse(() =>
-    addCompanySlave(companyTeamId, templateId, name, {
-      ...(model !== undefined ? { model } : {}),
-      ...(provider !== undefined ? { provider: provider as ProviderKind } : {}),
-    }),
-  )
+  return orgControlResponse(() => addDepartmentMember(companyTeamId, personId))
 }

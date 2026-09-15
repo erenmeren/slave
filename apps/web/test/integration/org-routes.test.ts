@@ -63,7 +63,7 @@ describe('the org routes', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "CatalogImport", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "CatalogImport", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -322,7 +322,7 @@ describe('the org routes', () => {
   describe('POST /api/slaves/[slaveId]/model', () => {
     async function seedWorker(): Promise<{ slaveId: string }> {
       const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Engineering' } })
-      const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Atlas', role: 'backend' } })
+      const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Atlas' } })).id } })
       return { slaveId: slave.id }
     }
 
@@ -406,13 +406,9 @@ describe('the org routes', () => {
       const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
       const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
       const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
       const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Engineering' } })
-      await prisma.slave.create({
-        data: { teamId: team.id, name: 'Atlas (worker)', role: 'backend', companySlaveId: companySlave.id },
-      })
+      await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: companySlave.id } })
 
       const response = await workersGET()
       expect(response.status).toBe(200)
@@ -445,8 +441,8 @@ describe('the org routes', () => {
   describe('PUT /api/slaves/[slaveId]/name', () => {
     async function seedTwoSlaves(): Promise<{ readonly aliceId: string; readonly bobId: string }> {
       const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Engineering' } })
-      const alice = await prisma.slave.create({ data: { teamId: team.id, name: 'Alice', role: 'backend' } })
-      const bob = await prisma.slave.create({ data: { teamId: team.id, name: 'Bob', role: 'frontend' } })
+      const alice = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alice' } })).id } })
+      const bob = await prisma.slave.create({ data: { teamId: team.id, role: 'frontend', personId: (await prisma.person.create({ data: { name: 'Bob' } })).id } })
       return { aliceId: alice.id, bobId: bob.id }
     }
 
@@ -479,7 +475,7 @@ describe('the org routes', () => {
   describe('PUT /api/slaves/[slaveId]/role', () => {
     async function seedSlave(): Promise<string> {
       const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Engineering' } })
-      const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alice', role: 'backend' } })
+      const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alice' } })).id } })
       return slave.id
     }
 
@@ -519,7 +515,7 @@ describe('the org routes', () => {
   describe('DELETE /api/slaves/[slaveId]', () => {
     async function seedSlave(): Promise<string> {
       const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Engineering' } })
-      const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alice', role: 'backend' } })
+      const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alice' } })).id } })
       return slave.id
     }
 
@@ -604,7 +600,7 @@ describe('the org routes', () => {
     // its slaves, refused only while one of them holds a live run.
     it('200s deleting a team WITH its slaves', async (): Promise<void> => {
       const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Engineering' } })
-      const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alice', role: 'backend' } })
+      const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alice' } })).id } })
 
       const response = await teamDELETE(deleteRequest(), teamParams(team.id))
       expect(response.status).toBe(200)
@@ -614,7 +610,7 @@ describe('the org routes', () => {
 
     it('409s with the live-runs refusal text while one of its slaves holds a live run', async (): Promise<void> => {
       const team = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Engineering' } })
-      const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alice', role: 'backend' } })
+      const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alice' } })).id } })
       await prisma.slaveRun.create({ data: { slaveId: slave.id, status: 'working' } })
 
       const response = await teamDELETE(deleteRequest(), teamParams(team.id))

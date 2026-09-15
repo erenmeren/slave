@@ -84,7 +84,7 @@ describe('the workforce catalog read model', () => {
     // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than left
     // to the cascade, so the reach is documented rather than accidental (M48 final review, I2).
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "CatalogImport", "CompanyTeamMember", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
     await importCatalog(
       {
@@ -514,7 +514,7 @@ describe('listTemplates is not a page (M55 E2)', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "CatalogImport", "CompanyTeamMember", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
     await prisma.slaveTemplate.createMany({
       data: Array.from({ length: COUNT }, (_unused, index) => ({
@@ -527,7 +527,7 @@ describe('listTemplates is not a page (M55 E2)', () => {
 
   afterAll(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "CatalogImport", "CompanyTeamMember", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 

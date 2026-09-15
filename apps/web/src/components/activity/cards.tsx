@@ -872,16 +872,19 @@ function OrgChangedCard(props: ActivityCardProps): ReactElement {
 // in the `workspace` filter chip and share its `idle` tone -- a change to how a worker is
 // configured, never a run outcome (spec §1 forbids model output from writing either).
 
-/** Which level of the profile override chain was written, in the words the panel uses. */
-const PROFILE_TARGET_LABEL: Record<'slave' | 'template' | 'company_slave', string> = {
-  slave: 'this worker',
-  template: 'its template',
+/** Which level of the profile override chain was written, in the words the panel uses. Four
+ *  members, not three (M58 R7): `person` is the middle rung now, and `company_slave` is what a row
+ *  written before this milestone says -- this page renders history and may not stop naming it. */
+const PROFILE_TARGET_LABEL: Record<'slave' | 'template' | 'company_slave' | 'person', string> = {
+  slave: 'this seat',
+  person: 'the slave themself',
+  template: 'its persona',
   company_slave: 'its roster row',
 }
 
 function SlaveProfileChangedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
-    target: 'slave' | 'template' | 'company_slave'
+    target: 'slave' | 'template' | 'company_slave' | 'person'
     targetId: string
     // `null` is a CLEARED profile -- the level below the written one shows through again.
     sha256: string | null
