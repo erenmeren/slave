@@ -318,7 +318,10 @@ export async function mergeRuntimeRoles(
  *  and writes `Person.capabilities` under this lock, `setPersonCapabilities` writes the same column
  *  under a lock on the PERSON, and two seat rows can hold the same person -- so a hire and a
  *  set-capabilities on one person serialised against nothing and one of the two writes was lost.
- *  Person -> Slave, the same order `setPersonCapabilities` takes, so the two can never deadlock.
+ *  PERSON FIRST, then the seat. That is the ONE lock order in this package -- `setPersonCapabilities`
+ *  below and `releaseWorker` in `lifecycle.ts` both take it -- and taking one order everywhere is
+ *  the whole of why none of them can deadlock against each other. `releaseWorker` used to take
+ *  seat -> person and did deadlock (40P01) against this branch; fix round 2 hoisted its person lock.
  *  The person is resolved and locked in ONE statement (`FOR UPDATE OF p`), because reading the id
  *  first and locking it second is the very race this is closing. */
 async function lockedSlave(
@@ -589,29 +592,42 @@ export async function hireFromTemplate(
       // The worker was deleted between the two reads inside this transaction. Nothing is written,
       // so this is a returned refusal; the caller may hire again and will create one.
       if (locked === null) return { kind: 'vanished' as const, slaveId: existing.id }
-      const merged = [...new Set([...locked.capabilities, ...capabilities])].toSorted()
-      const roles = [...locked.runtimeRoles]
-      for (const role of runtimeRoles) if (!roles.includes(role)) roles.push(role)
-      // Both sets only ever grow here, so a length that did not move is a set that did not move.
-      const rolesChanged = roles.length !== locked.runtimeRoles.length
-      const capabilitiesChanged = merged.length !== locked.capabilities.length
-      // The cap, before the write and before anything else in this transaction has written either
-      // (M47 final review, Minor 7).
-      const refusal = overCap(roles)
-      if (refusal !== null) return { kind: 'refused' as const, refusal }
-      // M58 R1: the capabilities are the PERSON's and the runtime roles are the SEAT's, so the
-      // one merge lands in two rows.
-      if (capabilitiesChanged) await tx.person.update({ where: { id: locked.personId }, data: { capabilities: merged } })
-      if (rolesChanged) await tx.slave.update({ where: { id: existing.id }, data: { runtimeRoles: roles } })
-      return {
-        kind: 'reused' as const,
-        slaveId: existing.id,
-        personId: locked.personId,
-        capabilities: merged,
-        runtimeRoles: roles,
-        before: locked.capabilities,
-        rolesChanged,
-        capabilitiesChanged,
+      // Fix round 2: `existing` was read with `releasedAt: null` above, but that read takes NO lock
+      // and a concurrent `releaseWorker` can release this very person before `lockedSlave`'s own
+      // lock is granted -- `releaseWorker` now locks the person FIRST too (the shared order this
+      // docstring names), so the two transactions never deadlock, but ONE of them still runs
+      // second, and if that one is the release, this reuse's own eligibility read is stale.
+      // Re-checked under the lock this file's own docstring on `lockedSlave` promises: without it,
+      // `runtimeRoles` below -- computed from `template.role` plus every capability THIS call
+      // wants, not from what the seat currently holds -- would re-arm a person who was just
+      // released with the very roles their release just emptied. A released person names no
+      // eligible seat, which is exactly the outcome an unraced call gets from the `releasedAt: null`
+      // filter above; falling through to the create branch below gives a raced call the same one.
+      if (locked.releasedAt === null) {
+        const merged = [...new Set([...locked.capabilities, ...capabilities])].toSorted()
+        const roles = [...locked.runtimeRoles]
+        for (const role of runtimeRoles) if (!roles.includes(role)) roles.push(role)
+        // Both sets only ever grow here, so a length that did not move is a set that did not move.
+        const rolesChanged = roles.length !== locked.runtimeRoles.length
+        const capabilitiesChanged = merged.length !== locked.capabilities.length
+        // The cap, before the write and before anything else in this transaction has written either
+        // (M47 final review, Minor 7).
+        const refusal = overCap(roles)
+        if (refusal !== null) return { kind: 'refused' as const, refusal }
+        // M58 R1: the capabilities are the PERSON's and the runtime roles are the SEAT's, so the
+        // one merge lands in two rows.
+        if (capabilitiesChanged) await tx.person.update({ where: { id: locked.personId }, data: { capabilities: merged } })
+        if (rolesChanged) await tx.slave.update({ where: { id: existing.id }, data: { runtimeRoles: roles } })
+        return {
+          kind: 'reused' as const,
+          slaveId: existing.id,
+          personId: locked.personId,
+          capabilities: merged,
+          runtimeRoles: roles,
+          before: locked.capabilities,
+          rolesChanged,
+          capabilitiesChanged,
+        }
       }
     }
 

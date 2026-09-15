@@ -57,11 +57,19 @@ export async function releaseWorker(
   const recorded = (trimmed === '' ? RELEASE_REASON_FALLBACK : trimmed).slice(0, RELEASE_REASON_MAX)
 
   const plan = await prisma.$transaction(async (tx) => {
+    // M58 R1: the lifecycle and the release are the PERSON's, and both rows are locked here. PERSON
+    // FIRST, then the seat -- the one order every paired write in this package takes
+    // (`lockedSlave` and `setPersonCapabilities` in `capability.ts` take the same one). It used to
+    // be the other way round, which deadlocked (40P01) against a `hireFromTemplate` reusing this
+    // person's seat: that path locks the person and then the seat, and two transactions holding
+    // one lock each and waiting for the other is exactly what Postgres aborts.
+    //
+    // Resolved and locked in ONE statement, because reading the `personId` off the seat first and
+    // locking it second would need the seat lock to be taken first -- the very inversion this
+    // closes.
+    await tx.$queryRaw`SELECT p.id FROM "Person" p JOIN "Slave" s ON s."personId" = p.id WHERE s.id = ${slaveId} FOR UPDATE OF p`
     const slave = await lockSlave(tx, slaveId)
     if (slave === null) return { refusal: { kind: 'slave_not_found', slaveId } as ControlRefusal }
-    // M58 R1: the lifecycle and the release are the PERSON's. Locked in the same transaction as the
-    // seat, in the order seat -> person that every other paired write in this package takes.
-    await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${slave.personId} FOR UPDATE`
     const person = await tx.person.findUnique({
       where: { id: slave.personId },
       select: { id: true, name: true, lifecycle: true, releasedAt: true },

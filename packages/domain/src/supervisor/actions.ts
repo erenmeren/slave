@@ -166,7 +166,7 @@ const actionUnion = z.discriminatedUnion('kind', [
   }),
   z.object({
     kind: z.literal('materialise_company_worker'),
-    // E9: BOTH optional in the shape, exactly one required by the refinement below. A
+    // E9: BOTH optional in the shape, at least one required by the refinement below. A
     // `discriminatedUnion` member may not be a `ZodEffects`, so the rule lives on the union.
     personId: z.string().min(1).optional(),
     companySlaveId: z.string().min(1).optional(),
@@ -237,9 +237,14 @@ const actionUnion = z.discriminatedUnion('kind', [
 ])
 
 /**
- * Spec erratum E9's one cross-field rule: a `materialise_company_worker` names its subject with
- * EXACTLY one of the two fields -- `personId` on anything written since M58, `companySlaveId` on a
- * row stored before it. A row carrying neither names nobody and is not an action.
+ * Spec erratum E9's one cross-field rule: a `materialise_company_worker` names its subject with AT
+ * LEAST one of the two fields -- `personId` on anything written since M58, `companySlaveId` on a
+ * row stored before it. A row carrying NEITHER names nobody and is not an action.
+ *
+ * At least, not exactly: a row carrying BOTH parses too. Nothing writes that pair -- the migration
+ * swaps the old key for the new one rather than adding to it -- and refusing it would buy nothing,
+ * while `parsedOrThrow` throwing over a hand-edited payload takes the whole Supervisor view with
+ * it. `carryOut` reads `personId` and only refuses when it is absent.
  */
 export const actionSchema: z.ZodType<Action, z.ZodTypeDef, unknown> = actionUnion.superRefine((value, ctx) => {
   if (value.kind !== 'materialise_company_worker') return

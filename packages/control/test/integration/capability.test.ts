@@ -509,6 +509,57 @@ describe('hireFromTemplate', () => {
     ]).toContainEqual(row.person.capabilities)
   })
 
+  /**
+   * Fix round 2, Important 1. Fix round 1 gave `lockedSlave` a Person lock and left `releaseWorker`
+   * taking Slave -> Person, which is the OTHER order: a release and a reusing hire on the same
+   * person could each hold one of the two rows and wait for the other, and Postgres aborts one with
+   * 40P01 rather than letting them wait forever. Both take PERSON FIRST now, which is the one order
+   * this package uses everywhere.
+   *
+   * A deadlock is a race, so this runs the pair five times over fresh fixtures: with the inverted
+   * order it fails on the round that happens to interleave, and a `40P01` is a REJECTED promise
+   * rather than a refusal, which is why `allSettled` is what this reads.
+   */
+  it('never deadlocks a release against a hire reusing the same person', async (): Promise<void> => {
+    const rounds = 5
+    for (let round = 0; round < rounds; round += 1) {
+      const { workspaceId } = await workspace()
+      const template = await prisma.slaveTemplate.create({
+        data: { name: `Deadlock Probe ${String(round)}`, role: 'security', capabilityKeys: ['security.application'] },
+      })
+      const task = await engagement(workspaceId)
+      const first = await hireFromTemplate(workspaceId, template.id, {
+        rationale: 'one assignment',
+        temporary: true,
+        engagementTaskId: task.id,
+      })
+      expect(first.ok).toBe(true)
+      if (!first.ok) return
+
+      const outcomes = await Promise.allSettled([
+        releaseWorker(first.value.slaveId, 'the engagement is over'),
+        hireFromTemplate(workspaceId, template.id, { rationale: 'again', capabilities: ['qa.test-automation'] }),
+      ])
+
+      // Nothing THREW. A refusal is a returned value; only an aborted transaction rejects, and the
+      // message a deadlock rejects with is the one this assertion prints.
+      expect(outcomes.filter((outcome) => outcome.status === 'rejected').map((outcome) => String((outcome as PromiseRejectedResult).reason))).toEqual([])
+      const [release, hire] = outcomes
+      expect(release.status === 'fulfilled' && release.value.ok).toBe(true)
+      expect(hire.status === 'fulfilled' && hire.value.ok).toBe(true)
+
+      // One of the two serial results, and nothing in between. Release first: the person is released,
+      // the reuse branch's `releasedAt: null` filter skips them and the hire creates a second person
+      // and seat. Hire first: it merges into the seat they already hold and the release then empties
+      // its runtime roles -- one seat either way for the person who was released.
+      const seats = await prisma.slave.findMany({ where: { team: { workspaceId } }, include: { person: true } })
+      expect([1, 2]).toContain(seats.length)
+      const releasedSeat = seats.find((seat) => seat.id === first.value.slaveId)
+      expect(releasedSeat?.person.releasedAt).not.toBeNull()
+      expect(releasedSeat?.runtimeRoles).toEqual([])
+    }
+  })
+
   // Final review, Minor 5c: the event a person reads carries the WORDS. The keys are on the slave
   // row this event names, so nothing is lost.
   it('records a reuse that only added capabilities in labels, not in keys', async (): Promise<void> => {

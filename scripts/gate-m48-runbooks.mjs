@@ -793,11 +793,29 @@ try {
   // The ONLY worker at this point: it PROVIDES `backend.api-design` and is dispatchable as backend
   // and manager. One worker is what makes stage 7's covered/uncovered capability chips a fact about
   // this project rather than a fixture.
-  const dev = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend', 'manager'], personId: (await prisma.person.upsert({ where: { name: WORKER_NAME }, create: { name: WORKER_NAME, capabilities: ['backend.api-design'] }, update: { capabilities: ['backend.api-design'], templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
+  // M58 R1: what somebody provides is the PERSON's, so the person is created first and the
+  // diagnostic below reads the capability set off the row the database actually returned -- not off
+  // the seat, where the column no longer is, and not off the literal that was asked for.
+  const devPerson = await prisma.person.upsert({
+    where: { name: WORKER_NAME },
+    create: { name: WORKER_NAME, capabilities: ['backend.api-design'] },
+    update: {
+      capabilities: ['backend.api-design'],
+      templateId: null,
+      profile: null,
+      model: null,
+      provider: null,
+      lifecycle: 'project',
+      releasedAt: null,
+      releaseReason: null,
+      selectionRationale: null,
+    },
+  })
+  const dev = await prisma.slave.create({
+    data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend', 'manager'], personId: devPerson.id },
+  })
   const devId = dev.id
-  // M58 R1: what somebody provides is the PERSON's, so the diagnostic reads it off the person the
-  // upsert above just returned rather than off the seat, where the column no longer is.
-  console.log(`slave ${devId} (${WORKER_NAME}): runtimeRoles ${JSON.stringify(dev.runtimeRoles)}, capabilities ${JSON.stringify(['backend.api-design'])}`)
+  console.log(`slave ${devId} (${WORKER_NAME}): runtimeRoles ${JSON.stringify(dev.runtimeRoles)}, capabilities ${JSON.stringify(devPerson.capabilities)}`)
 
   console.log(`stage 3 -- set-goal printed: ${JSON.stringify(runCli(['set-goal', '--workspace', workspaceId, '--goal', GOAL]).trim())}`)
 
