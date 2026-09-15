@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { SITUATION_LABEL, type Action } from '@slave-of-ai/domain'
+import { SITUATION_LABEL, type Action, type TeamSource } from '@slave-of-ai/domain'
 // Type-only, so nothing from `server/supervisor.ts` (and nothing it imports -- control, and the
 // Prisma client under it) reaches the client bundle. The same rule `useOverview.ts` states for
 // `OverviewSnapshot`.
@@ -33,6 +33,28 @@ type Question = SupervisorView['questions'][number]
  * uuid is not something anyone can say yes or no to. A task the world no longer holds falls back to
  * its id, which is findable, rather than to a name this function would have to invent.
  */
+/** M58 R16: the middle tier is the POOL now -- somebody who already works here, seated on a second
+ *  project with the same memory and the same skills. The word an operator reads says so. */
+const SOURCE_LABEL: Record<TeamSource, string> = {
+  existing_worker: 'ALREADY HERE',
+  pool_person: 'FROM THE POOL',
+  project_worker: 'NEW SLAVE',
+  temporary: 'FOR ONE ASSIGNMENT',
+}
+
+function sourceOf(action: Action): TeamSource | null {
+  switch (action.kind) {
+    case 'assign_capability':
+      return 'existing_worker'
+    case 'materialise_company_worker':
+      return 'pool_person'
+    case 'hire_from_catalog':
+      return action.temporary ? 'temporary' : 'project_worker'
+    default:
+      return null
+  }
+}
+
 export function actionText(action: Action, taskTitles: Readonly<Record<string, string>> = {}): string {
   switch (action.kind) {
     case 'unblock_task':
@@ -228,8 +250,13 @@ export function ProposalRow({
   // few seconds, and a refetch that reset this box would delete what an operator was typing.
   const seed = draft?.editedBody ?? draft?.body ?? ''
   const [body, setBody] = useState(seed)
+  const source = sourceOf(decision.action)
   return (
-    <li data-testid="supervisor-proposal" className="flex flex-col gap-1 rounded border border-line p-2">
+    <li
+      data-testid="supervisor-proposal"
+      {...(source === null ? {} : { 'data-source': source })}
+      className="flex flex-col gap-1 rounded border border-line p-2"
+    >
       <div className="flex items-baseline gap-2">
         {/* R5 leak 5: this chip printed the `SituationKind` member. The domain's own label says
           * what is stuck; the raw kind stays in `title`.
@@ -244,6 +271,16 @@ export function ProposalRow({
         <span data-testid="supervisor-proposal-kind" title={decision.situationKind} className="shrink-0 font-mono text-[10px] text-text-3">
           {SITUATION_LABEL[decision.situationKind] ?? decision.situationKind}
         </span>
+        {source !== null && (
+          <span
+            data-testid="supervisor-proposal-source"
+            data-source={source}
+            title={source}
+            className="shrink-0 font-mono text-[10px] text-text-3"
+          >
+            {SOURCE_LABEL[source]}
+          </span>
+        )}
         {/* Every one of these is another party's text -- the situation the rules wrote, and a
           * rationale a MODEL may have written. Interpolated as JSX children, so it is characters
           * on the page and never elements (spec §1: another party's text is data). */}

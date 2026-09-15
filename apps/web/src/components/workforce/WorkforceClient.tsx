@@ -157,6 +157,10 @@ export function WorkforceClient({
   )
   const assignableProjects = useMemo(() => assignableProjectsOf(teams), [teams])
   const [selectedPerson, setSelectedPerson] = useState<string | null>(null)
+  const namedPerson = searchParams.get('slave')
+  useEffect((): void => {
+    if (namedPerson !== null && namedPerson !== '') setSelectedPerson(namedPerson)
+  }, [namedPerson])
   const [personTick, setPersonTick] = useState(0)
   const [panel, setPanel] = useState<
     { readonly kind: 'idle' } | { readonly kind: 'loading' } | { readonly kind: 'error' } | { readonly kind: 'ready'; readonly person: PersonDetail }
@@ -250,7 +254,7 @@ export function WorkforceClient({
       {tab === 'catalog' && (
         <div className="flex flex-col gap-4">
           <Panel title="Workforce catalog">
-            <WorkforceCatalog initial={catalog} taxonomy={taxonomy} />
+            <WorkforceCatalog initial={catalog} taxonomy={taxonomy} skillCatalogue={skillCatalogue} />
           </Panel>
           <Panel title="Companies">
             {/* M58 R5: a department holds PEOPLE, so the add-member form picks from everybody this

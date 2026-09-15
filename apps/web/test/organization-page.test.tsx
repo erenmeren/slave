@@ -7,6 +7,10 @@ import type { OrganizationView } from '../src/server/organization'
 import { OrganizationClient } from '../src/components/organization/OrganizationClient'
 import { SECTION_LABEL_CLASS } from '../src/components/ui/SectionLabel'
 
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ refresh: vi.fn(), replace: vi.fn() }),
+}))
+
 const decision: DecisionView = {
   id: 'd1',
   workspaceId: 'w1',
@@ -48,6 +52,7 @@ const view: OrganizationView = {
   workers: [
     {
       slaveId: 's1',
+      personId: 'p1',
       name: 'Alex',
       roleLabel: 'engineering',
       lifecycle: 'permanent',
@@ -59,6 +64,7 @@ const view: OrganizationView = {
     },
     {
       slaveId: 's2',
+      personId: 'p2',
       name: 'Rae',
       roleLabel: 'backend',
       lifecycle: 'project',
@@ -70,6 +76,7 @@ const view: OrganizationView = {
     },
     {
       slaveId: 's3',
+      personId: 'p3',
       name: 'Security Reviewer',
       roleLabel: 'security',
       lifecycle: 'ephemeral',
@@ -84,6 +91,7 @@ const view: OrganizationView = {
     // this fixture pins here is that the component renders the order it is given and hides nobody.
     {
       slaveId: 's4',
+      personId: 'p4',
       name: 'Aaron',
       roleLabel: 'security',
       lifecycle: 'ephemeral',
@@ -134,6 +142,8 @@ const view: OrganizationView = {
     { id: 't-api', name: 'API Designer' },
     { id: 't-sec', name: 'Security Reviewer' },
   ],
+  pool: [{ personId: 'pool-1', name: 'Sam' }],
+  teamId: 'team-1',
 }
 
 const EMPTY: OrganizationView = {
@@ -145,6 +155,8 @@ const EMPTY: OrganizationView = {
   pendingElsewhere: 0,
   taskTitles: {},
   templates: [],
+  pool: [],
+  teamId: '',
 }
 
 /** `count` advisory edges, so the collapsed case has something to collapse. */
@@ -362,5 +374,33 @@ describe('OrganizationClient', () => {
     expect(screen.getByTestId('organization-empty')).toBeTruthy()
     expect(screen.queryByTestId('organization-needs')).toBeNull()
     expect(screen.queryByTestId('organization-unfillable')).toBeNull()
+  })
+
+  // M58 R27: the name opens the person, and Add offers the pool first.
+  it('opens the person panel from a worker name, keyed on personId', async () => {
+    render(<OrganizationClient workspaceId="w1" initial={view} />)
+    fireEvent.click(screen.getByTestId('organization-open-p1'))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/persons/p1'))
+  })
+
+  it('seats somebody from the pool onto this project', async () => {
+    render(<OrganizationClient workspaceId="w1" initial={view} />)
+    fireEvent.change(screen.getByTestId('organization-pool-person'), { target: { value: 'pool-1' } })
+    fireEvent.click(screen.getByTestId('organization-pool-submit'))
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.map((call) => String(call[0]))).toEqual([
+        '/api/persons/pool-1/assign',
+        '/api/w/w1/organization',
+      ]),
+    )
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'POST' })
+    expect(JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1]?.body))).toEqual({ teamId: 'team-1' })
+  })
+
+  it('offers to make a new slave beside the pool picker', () => {
+    render(<OrganizationClient workspaceId="w1" initial={view} />)
+    expect(screen.getByTestId('organization-add-from-pool').textContent).toContain('or make a new slave')
+    fireEvent.click(screen.getByTestId('organization-add-from-pool'))
+    expect(screen.getByTestId('new-slave-drawer')).toBeTruthy()
   })
 })

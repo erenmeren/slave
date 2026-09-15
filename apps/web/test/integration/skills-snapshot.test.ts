@@ -117,7 +117,7 @@ describe('buildSkillsPage', () => {
   it('lists who holds a skill, and how', async (): Promise<void> => {
     await prisma.personSkill.create({ data: { personId, skillId, mode: 'granted' } })
     const page = await buildSkillsPage()
-    expect(page.providers[0]?.skills[0]?.holders).toEqual([{ personId, origin: 'person' }])
+    expect(page.providers[0]?.skills[0]?.holders).toEqual([{ personId, name: 'Alex', origin: 'person' }])
   })
 
   // The persona's default reaches everybody hired from it with no row of their own -- computed on
@@ -127,7 +127,7 @@ describe('buildSkillsPage', () => {
     await prisma.templateSkill.create({ data: { templateId: template.id, skillId } })
     await prisma.person.update({ where: { id: personId }, data: { templateId: template.id } })
 
-    expect((await buildSkillsPage()).providers[0]?.skills[0]?.holders).toEqual([{ personId, origin: 'persona' }])
+    expect((await buildSkillsPage()).providers[0]?.skills[0]?.holders).toEqual([{ personId, name: 'Alex', origin: 'persona' }])
 
     await prisma.personSkill.create({ data: { personId, skillId, mode: 'revoked' } })
     expect((await buildSkillsPage()).providers[0]?.skills[0]?.holders).toEqual([])
@@ -151,7 +151,7 @@ describe('the /api/skills/assign route', () => {
     const assigned = await assignPOST(jsonRequest('POST', { personId, skillId }))
     expect(assigned.status).toBe(200)
     expect(await assigned.json()).toEqual({ ok: true })
-    expect((await buildSkillsPage()).providers[0]?.skills[0]?.holders).toEqual([{ personId, origin: 'person' }])
+    expect((await buildSkillsPage()).providers[0]?.skills[0]?.holders).toEqual([{ personId, name: 'Alex', origin: 'person' }])
 
     const removed = await assignDELETE(jsonRequest('DELETE', { personId, skillId }))
     expect(removed.status).toBe(200)

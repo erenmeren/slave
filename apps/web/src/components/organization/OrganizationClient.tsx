@@ -1,11 +1,14 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { SLAVE_LIFECYCLE_LABEL } from '@slave-of-ai/domain'
 // Type-only, so nothing from `server/organization.ts` -- and nothing under it, control and the
 // Prisma client -- reaches the client bundle. The rule `supervisor/ProposalRow.tsx` states for
 // `SupervisorView`.
 import type { OrganizationPreference, OrganizationView } from '../../server/organization'
+import type { CatalogRowView, ProjectTeamRow, RosterCompany } from '../../server/org'
+import type { PersonDetail } from '../../server/persons'
+import type { SlaveCardData } from '../../server/overview'
 import { useShellFacts } from '../../hooks/useShellFacts'
 import { plural } from '../../lib/plural'
 import { postControl, sendControl } from '../../lib/postControl'
@@ -15,11 +18,15 @@ import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
 import { DetailsGroup } from '../ui/DetailsGroup'
 import { EmptyState } from '../ui/EmptyState'
-import { INPUT_SHELL } from '../ui/FormControls'
+import { INPUT_SHELL, SelectField } from '../ui/FormControls'
+import { LoadingState } from '../ui/LoadingState'
 import { PageShell } from '../ui/PageShell'
 import { Panel } from '../ui/Panel'
 import { SectionLabel } from '../ui/SectionLabel'
 import { CapabilityChips } from './CapabilityChips'
+import { SlavePanel } from '../SlavePanel'
+import { NewSlaveDrawer } from '../slaves/NewSlaveDrawer'
+import type { AssignableProject } from '../persons/PersonProjectsGroup'
 
 /** How many advisory edges stand open. Five is what fits under the roster without turning the page
  *  into a list of suggestions; past it the group is folded and says how to open it. */
@@ -42,9 +49,17 @@ const ADVICE_OPEN_MAX = 5
 export function OrganizationClient({
   workspaceId,
   initial,
+  roster = [],
+  templates = [],
+  teams = [],
+  skillCatalogue = [],
 }: {
   readonly workspaceId: string
   readonly initial: OrganizationView
+  readonly roster?: readonly RosterCompany[]
+  readonly templates?: readonly CatalogRowView[]
+  readonly teams?: readonly ProjectTeamRow[]
+  readonly skillCatalogue?: readonly { readonly skillId: string; readonly name: string; readonly providerName: string }[]
 }): React.JSX.Element {
   const [view, setView] = useState<OrganizationView>(initial)
   // `/organization` publishes no `shellFacts` of its own (`ShellFactsSeed`'s own note names exactly
@@ -57,6 +72,17 @@ export function OrganizationClient({
   const [busyId, setBusyId] = useState<string | null>(null)
   const [errors, setErrors] = useState<Readonly<Record<string, string>>>({})
   const [stale, setStale] = useState(false)
+  const [poolPersonId, setPoolPersonId] = useState('')
+  const [pending, setPending] = useState(false)
+  const [newOpen, setNewOpen] = useState(false)
+  const [selectedPerson, setSelectedPerson] = useState<string | null>(null)
+  const [personTick, setPersonTick] = useState(0)
+  const [panel, setPanel] = useState<
+    { readonly kind: 'idle' } | { readonly kind: 'loading' } | { readonly kind: 'error' } | { readonly kind: 'ready'; readonly person: PersonDetail }
+  >({ kind: 'idle' })
+  const assignableProjects = useMemo(() => assignableProjectsOf(teams), [teams])
+  const teamId = view.teamId
+  const pool = view.pool
 
   /** Re-read this page after a write. The rows already on screen stay until the new ones land: a
    *  page that empties itself between an approval and its answer is harder to read than one that
@@ -90,10 +116,42 @@ export function OrganizationClient({
     await reload()
   }
 
+  useEffect((): void => {
+    if (selectedPerson === null) {
+      setPanel({ kind: 'idle' })
+      return
+    }
+    setPanel({ kind: 'loading' })
+    void fetch(`/api/persons/${selectedPerson}`)
+      .then(async (response) => (response.ok ? ((await response.json()) as unknown) : null))
+      .then((detail) => {
+        const person =
+          detail !== null && typeof detail === 'object' && 'personId' in detail && typeof (detail as { personId: unknown }).personId === 'string'
+            ? (detail as PersonDetail)
+            : null
+        setPanel(person === null ? { kind: 'error' } : { kind: 'ready', person })
+      })
+      .catch(() => setPanel({ kind: 'error' }))
+  }, [selectedPerson, personTick])
+
+  const seat = async (): Promise<void> => {
+    if (poolPersonId === '' || teamId === '') return
+    setPending(true)
+    const error = await sendControl(`/api/persons/${poolPersonId}/assign`, { method: 'POST', body: { teamId } })
+    setPending(false)
+    if (error !== null) {
+      setErrors((was) => ({ ...was, pool: error }))
+      return
+    }
+    setPoolPersonId('')
+    await reload()
+  }
+
   const nobodyHere = view.workers.length === 0
 
   return (
-    <PageShell flush>
+    <>
+      <PageShell flush>
       <div className="flex flex-col gap-[11px] px-[20px] pt-[16px]">
         <div>
           <h1 className="m-0 text-[22px] font-semibold tracking-[-.3px] text-t1">Team</h1>
@@ -109,6 +167,40 @@ export function OrganizationClient({
         )}
 
         <Panel title="who works on this">
+          <div className="flex flex-wrap items-end gap-2">
+            <SelectField
+              label="Add somebody"
+              selectProps={{
+                'aria-label': 'add somebody from the pool',
+                'data-testid': 'organization-pool-person',
+                value: poolPersonId,
+                disabled: pending,
+                onChange: (event) => setPoolPersonId(event.target.value),
+              } as React.SelectHTMLAttributes<HTMLSelectElement>}
+            >
+              <option value="">somebody who already works here…</option>
+              {pool.map((person) => (
+                <option key={person.personId} value={person.personId}>{person.name}</option>
+              ))}
+            </SelectField>
+            <Button
+              variant="primary"
+              size="sm"
+              data-testid="organization-pool-submit"
+              disabled={pending || poolPersonId === '' || teamId === ''}
+              onClick={() => void seat()}
+            >
+              Seat them
+            </Button>
+            <Button variant="ghost" size="sm" data-testid="organization-add-from-pool" onClick={() => setNewOpen(true)}>
+              or make a new slave
+            </Button>
+          </div>
+          {errors.pool !== undefined && (
+            <span role="alert" data-testid="organization-error" className="text-[11px] text-tone-blocked">
+              {errors.pool}
+            </span>
+          )}
           {nobodyHere ? (
             <EmptyState
               testId="organization-empty"
@@ -133,7 +225,14 @@ export function OrganizationClient({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <span className="flex min-w-0 flex-col">
-                      <span className="truncate font-semibold text-t1">{worker.name}</span>
+                      <button
+                        type="button"
+                        data-testid={`organization-open-${worker.personId}`}
+                        onClick={() => setSelectedPerson(worker.personId)}
+                        className="truncate text-left font-semibold text-t1 hover:text-t2"
+                      >
+                        {worker.name}
+                      </button>
                       {/* The role a person reads, with the runtime roles that actually decide
                         * dispatch one hover away (M44 R5). */}
                       <span title={worker.runtimeRoles.join(', ')} className="truncate text-[12px] text-t3">
@@ -324,6 +423,37 @@ export function OrganizationClient({
         )}
       </div>
     </PageShell>
+      <NewSlaveDrawer
+        open={newOpen}
+        onClose={() => setNewOpen(false)}
+        roster={roster}
+        templates={templates}
+        teams={teams}
+        {...(teamId === '' ? {} : { defaultTeamId: teamId })}
+      />
+      {panel.kind === 'loading' && <LoadingState testId="organization-panel-loading" message="opening this slave…" />}
+      {panel.kind === 'error' && (
+        <Alert variant="error" testId="organization-panel-error">
+          could not open this slave — they may have been deleted. Try clicking the name again.
+        </Alert>
+      )}
+      {panel.kind === 'ready' && (
+        <div className="fixed inset-y-0 right-0 z-10 w-96 border-l border-line bg-panel shadow-resting motion-safe:animate-[panel-in_160ms_ease-out]">
+          <SlavePanel
+            key={panel.person.personId}
+            slave={slaveCardForPerson(panel.person, workspaceId)}
+            person={panel.person}
+            projects={assignableProjects}
+            skillCatalogue={skillCatalogue}
+            liveEvents={[]}
+            workspaceId={workspaceId}
+            haltedReason={null}
+            onClose={() => setSelectedPerson(null)}
+            onPersonChanged={() => setPersonTick((tick) => tick + 1)}
+          />
+        </div>
+      )}
+    </>
   )
 }
 
@@ -467,4 +597,56 @@ function askedFor(preference: OrganizationPreference): string {
  *  is findable, rather than a name this component would have to invent. */
 function nameOf(slaveId: string, view: OrganizationView): string {
   return view.workers.find((worker) => worker.slaveId === slaveId)?.name ?? slaveId
+}
+
+function assignableProjectsOf(teams: readonly ProjectTeamRow[]): readonly AssignableProject[] {
+  const byWorkspace = new Map<string, { workspaceId: string; projectName: string; teams: { teamId: string; name: string }[] }>()
+  for (const team of teams) {
+    const existing = byWorkspace.get(team.workspaceId)
+    if (existing === undefined) {
+      byWorkspace.set(team.workspaceId, {
+        workspaceId: team.workspaceId,
+        projectName: team.projectName,
+        teams: [{ teamId: team.teamId, name: team.name }],
+      })
+    } else {
+      existing.teams.push({ teamId: team.teamId, name: team.name })
+    }
+  }
+  return [...byWorkspace.values()]
+}
+
+function slaveCardForPerson(person: PersonDetail, workspaceId: string): SlaveCardData {
+  const seat = person.seats.find((one) => one.workspaceId === workspaceId) ?? person.seats[0]
+  return {
+    id: seat?.slaveId ?? person.personId,
+    personId: person.personId,
+    name: person.name,
+    role: seat?.role ?? person.personaName ?? '',
+    provider: person.provider?.value ?? null,
+    gate: null,
+    status: 'idle',
+    taskTitle: null,
+    taskId: null,
+    taskStatus: null,
+    progressPct: 0,
+    stepLabel: null,
+    skill: null,
+    actionLine: null,
+    runId: null,
+    queuedMessage: null,
+    resumeRequestedAt: null,
+    recentEvents: [],
+    costUsd: 0,
+    toolCalls: 0,
+    pausedAtStep: null,
+    waitingFor: null,
+    profile: person.profile,
+    runtimeRoles: seat === undefined ? [] : [...seat.runtimeRoles],
+    lifecycle: person.lifecycle,
+    released: person.releasedAt === null ? null : { at: person.releasedAt, reason: person.releaseReason ?? '' },
+    breakerLevel: 'none',
+    permissions: [],
+    permissionsRunKind: 'implementation',
+  }
 }

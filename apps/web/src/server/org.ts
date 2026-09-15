@@ -1008,6 +1008,10 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
 export type CatalogRowView = Omit<WorkforceCatalogRow, 'importedAt' | 'activationChangedAt'> & {
   readonly importedAt: string | null
   readonly activationChangedAt: string | null
+  /** M58 R25: this persona's DEFAULT skills. Changing the list changes every person hired from it. */
+  readonly defaultSkillIds: readonly string[]
+  /** How many people were hired from this persona -- the blast radius the Default skills note names. */
+  readonly hiredCount: number
 }
 
 export interface WorkforceCatalogView {
@@ -1038,7 +1042,7 @@ export async function listWorkforceCatalogPage(
 ): Promise<WorkforceCatalogView> {
   const page = await listWorkforceCatalog(filters, options)
   return {
-    rows: page.rows.map(catalogRowViewOf),
+    rows: await withPersonaSkills(page.rows.map(catalogRowViewOf)),
     facets: page.facets,
     total: page.total,
     nextCursor: page.nextCursor,
@@ -1053,7 +1057,38 @@ function catalogRowViewOf(row: WorkforceCatalogRow): CatalogRowView {
     ...row,
     importedAt: row.importedAt === null ? null : row.importedAt.toISOString(),
     activationChangedAt: row.activationChangedAt === null ? null : row.activationChangedAt.toISOString(),
+    defaultSkillIds: [],
+    hiredCount: 0,
   }
+}
+
+/** M58 R25: two grouped reads for the whole page, never one per row -- the persona's default skill
+ *  ids and how many people were hired from it. */
+async function withPersonaSkills(rows: readonly CatalogRowView[]): Promise<readonly CatalogRowView[]> {
+  const ids = rows.map((row) => row.id)
+  if (ids.length === 0) return rows
+  const [skills, hired] = await Promise.all([
+    prisma.templateSkill.findMany({
+      where: { templateId: { in: ids } },
+      select: { templateId: true, skillId: true },
+      orderBy: [{ templateId: 'asc' }, { skillId: 'asc' }],
+    }),
+    prisma.person.groupBy({ by: ['templateId'], where: { templateId: { in: ids } }, _count: { _all: true } }),
+  ])
+  const skillsBy = new Map<string, string[]>()
+  for (const row of skills) {
+    const list = skillsBy.get(row.templateId)
+    if (list === undefined) skillsBy.set(row.templateId, [row.skillId])
+    else list.push(row.skillId)
+  }
+  const hiredBy = new Map(
+    hired.flatMap((group) => (group.templateId === null ? [] : [[group.templateId, group._count._all] as const])),
+  )
+  return rows.map((row) => ({
+    ...row,
+    defaultSkillIds: skillsBy.get(row.id) ?? [],
+    hiredCount: hiredBy.get(row.id) ?? 0,
+  }))
 }
 
 /** Every slave template, UNPAGED and unfiltered -- the shape `CompanyManager`'s member `<select>`,
@@ -1072,7 +1107,7 @@ function catalogRowViewOf(row: WorkforceCatalogRow): CatalogRowView {
  *  were running twice for one render of `/workforce`. */
 export async function listTemplates(): Promise<readonly CatalogRowView[]> {
   const page = await listWorkforceCatalog({}, { pageSize: TEMPLATE_PICKER_MAX, facets: false })
-  return page.rows.map(catalogRowViewOf)
+  return withPersonaSkills(page.rows.map(catalogRowViewOf))
 }
 
 /** One runbook as the Workforce tab reads it (M48 R7): the whole runbook, plus the NAME of the

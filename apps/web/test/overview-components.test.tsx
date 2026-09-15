@@ -203,7 +203,7 @@ describe('SlaveCard', () => {
       render(<SlaveCard slave={waiting} workspaceId="w1" onOpen={onOpen} />)
       expect(screen.queryByTestId('card-resume')).toBeNull()
       fireEvent.click(screen.getByTestId('card-answer'))
-      expect(onOpen).toHaveBeenCalledWith('a1')
+      expect(onOpen).toHaveBeenCalledWith('p1')
     })
 
     it('still offers Resume for an ordinary operator pause', () => {
@@ -217,7 +217,7 @@ describe('SlaveCard', () => {
     const onOpen = vi.fn()
     render(<SlaveCard slave={slave({ id: 'a9', status: 'working' })} workspaceId="w1" onOpen={onOpen} />)
     fireEvent.click(screen.getByRole('button', { name: /open alex's detail panel/i }))
-    expect(onOpen).toHaveBeenCalledWith('a9')
+    expect(onOpen).toHaveBeenCalledWith('p1')
     // The M5 controls live in the panel now (spec §6) — the card carries no pause/stop of its own.
     expect(screen.queryByTitle('arrives in M5')).toBeNull()
     expect(screen.queryByTitle('stop arrives in M5')).toBeNull()
@@ -359,7 +359,7 @@ describe('SlaveCard — the handoff anatomy', () => {
     render(<SlaveCard slave={slave({ status: 'idle', taskStatus: 'blocked' })} workspaceId="w1" onOpen={onOpen} />)
     expect(screen.queryByTestId('card-pause')).toBeNull()
     fireEvent.click(screen.getByTestId('card-unblock'))
-    expect(onOpen).toHaveBeenCalledWith('a1')
+    expect(onOpen).toHaveBeenCalledWith('p1')
   })
 
   it('sweeps the top hairline only while working', () => {
@@ -483,7 +483,7 @@ describe('SlaveCard — the handoff anatomy', () => {
       <SlaveCard slave={slave({ status: 'working', taskStatus: 'running', runId: 'r1' })} workspaceId="w1" onOpen={onOpen} />,
     )
     fireEvent.click(screen.getByTestId('card-more'))
-    expect(onOpen).toHaveBeenCalledWith('a1')
+    expect(onOpen).toHaveBeenCalledWith('p1')
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -819,7 +819,7 @@ describe('shell facts and stream state reach the project header, never the sideb
 /** The snapshot the mount test publishes from: two working slaves, two active tasks. */
 const PUBLISHED: OverviewSnapshot = snapshot([
   slave({ id: 'a1', status: 'working' }),
-  slave({ id: 'a2', name: 'Sam Yates', status: 'working' }),
+  slave({ id: 'a2', personId: 'p2', name: 'Sam Yates', status: 'working' }),
 ])
 
 /** The README's five bands, in the order the Overview reads top to bottom (M57 R17). */

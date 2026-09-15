@@ -20,10 +20,10 @@ export interface SkillRow {
   /** `'missing'` when `missingSince` is set — the skill is gone from disk but its history is not
    *  (Decision 6). */
   readonly state: 'ready' | 'missing'
-  /** M58 R3: WHO has this skill, and how. The effective set is `TemplateSkill ∪ granted − revoked`
+  /** M58 R26: WHO has this skill, and how. The effective set is `TemplateSkill ∪ granted − revoked`
    *  computed on read, so a persona's default reaches every person hired from it without a row --
    *  and `origin` is what lets the page say which of the two a holder is. */
-  readonly holders: readonly { readonly personId: string; readonly origin: SkillOrigin }[]
+  readonly holders: readonly { readonly personId: string; readonly name: string; readonly origin: SkillOrigin }[]
 }
 
 export interface SkillProviderRow {
@@ -111,20 +111,25 @@ export async function buildSkillsPage(): Promise<SkillsPage> {
     if (list === undefined) templateSkillIdsByTemplate.set(row.templateId, [row.skillId])
     else list.push(row.skillId)
   }
-  const holdersBySkill = new Map<string, { readonly personId: string; readonly origin: SkillOrigin }[]>()
+  const holdersBySkill = new Map<string, { personId: string; name: string; origin: SkillOrigin }[]>()
   for (const person of persons) {
     const own = personSkills.filter((row) => row.personId === person.id)
-    for (const skill of effectiveSkills({
+    const effective = effectiveSkills({
       templateSkillIds: person.templateId === null ? [] : (templateSkillIdsByTemplate.get(person.templateId) ?? []),
       granted: own.filter((row) => row.mode === 'granted').map((row) => row.skillId),
       revoked: own.filter((row) => row.mode === 'revoked').map((row) => row.skillId),
-    })) {
-      const list = holdersBySkill.get(skill.skillId)
-      const holder = { personId: person.id, origin: skill.origin }
-      if (list === undefined) holdersBySkill.set(skill.skillId, [holder])
+    })
+    for (const row of effective) {
+      const list = holdersBySkill.get(row.skillId)
+      const holder = { personId: person.id, name: person.name, origin: row.origin }
+      if (list === undefined) holdersBySkill.set(row.skillId, [holder])
       else list.push(holder)
     }
   }
+  // One pass over every person, not one query per skill: `effectiveSkills` is pure and the two
+  // lists are already in memory.
+  const holdersOf = (skillId: string) =>
+    (holdersBySkill.get(skillId) ?? []).toSorted((a, b) => a.name.localeCompare(b.name))
 
   // A person is "working" when any of their OPEN seats holds a live run: the status the chips tone
   // is the person's, because the chip names the person (M58 R3).
@@ -151,7 +156,11 @@ export async function buildSkillsPage(): Promise<SkillsPage> {
           // key.
           runs: totals.get(key) ?? 0,
           state: skill.missingSince === null ? ('ready' as const) : ('missing' as const),
-          holders: holdersBySkill.get(skill.id) ?? [],
+          /** M58 R26: WHO has this skill, and whether they have it because of their persona or
+           *  because somebody gave it to them. Computed from the two join tables with
+           *  `effectiveSkills`, so this page and the person panel can never disagree about who has
+           *  what. */
+          holders: holdersOf(skill.id),
         }
       }),
     })),

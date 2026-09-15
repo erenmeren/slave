@@ -52,11 +52,13 @@ const CHIPS = 3
 export function WorkforceCatalog({
   initial,
   taxonomy = [],
+  skillCatalogue = [],
 }: {
   readonly initial: WorkforceCatalogView
   /** The capability taxonomy, read once by the page beside the catalog (M47 §2) -- what turns the
    *  drawer's `capabilityKeys` into words. Defaults to empty, where every key prints as itself. */
   readonly taxonomy?: readonly CapabilityRecord[]
+  readonly skillCatalogue?: readonly { readonly skillId: string; readonly name: string; readonly providerName: string }[]
 }): React.JSX.Element {
   const router = useRouter()
   const { filters, setFilters } = useCatalogFilters()
@@ -77,6 +79,8 @@ export function WorkforceCatalog({
     readonly id: string
     readonly name: string
     readonly capabilityKeys: readonly string[]
+    readonly defaultSkillIds: readonly string[]
+    readonly hiredCount: number
   } | null>(null)
 
   /**
@@ -196,7 +200,15 @@ export function WorkforceCatalog({
                 key={row.id}
                 data-testid={`catalog-row-${row.id}`}
                 data-mapping-quality={row.mappingQuality ?? ''}
-                onClick={() => setOpen({ id: row.id, name: row.name, capabilityKeys: row.capabilityKeys })}
+                onClick={() =>
+                  setOpen({
+                    id: row.id,
+                    name: row.name,
+                    capabilityKeys: row.capabilityKeys,
+                    defaultSkillIds: row.defaultSkillIds,
+                    hiredCount: row.hiredCount,
+                  })
+                }
               >
                 {/* `last` because this `Row` is the only child of its wrapper, so its own
                   * `:last-child` selector would match every row and draw no separator at all. */}
@@ -205,7 +217,15 @@ export function WorkforceCatalog({
                     <button
                       type="button"
                       data-testid={`catalog-open-${row.id}`}
-                      onClick={() => setOpen({ id: row.id, name: row.name, capabilityKeys: row.capabilityKeys })}
+                      onClick={() =>
+                  setOpen({
+                    id: row.id,
+                    name: row.name,
+                    capabilityKeys: row.capabilityKeys,
+                    defaultSkillIds: row.defaultSkillIds,
+                    hiredCount: row.hiredCount,
+                  })
+                }
                       className="truncate text-left text-sm text-text-1 hover:text-text-2"
                     >
                       {row.name}
@@ -345,15 +365,25 @@ export function WorkforceCatalog({
           name={open.name}
           capabilityKeys={open.capabilityKeys}
           taxonomy={taxonomy}
+          defaultSkillIds={page.rows.find((row) => row.id === open.id)?.defaultSkillIds ?? open.defaultSkillIds}
+          hiredCount={page.rows.find((row) => row.id === open.id)?.hiredCount ?? open.hiredCount}
+          skillCatalogue={skillCatalogue}
           onClose={() => setOpen(null)}
           onChanged={() => reload(filters)}
           /* M55 R6: the drawer's Duplicates group names the other template as a BUTTON that opens
            * ITS drawer. The keys come off the loaded page when the row is on it; a row that is not
            * (the pair points past the first hundred) opens with none, and the drawer's "Matchable
            * capabilities" block simply does not render -- everything else in it is fetched by id. */
-          onOpenTemplate={(id, name) =>
-            setOpen({ id, name, capabilityKeys: page.rows.find((candidate) => candidate.id === id)?.capabilityKeys ?? [] })
-          }
+          onOpenTemplate={(id, name) => {
+            const candidate = page.rows.find((row) => row.id === id)
+            setOpen({
+              id,
+              name,
+              capabilityKeys: candidate?.capabilityKeys ?? [],
+              defaultSkillIds: candidate?.defaultSkillIds ?? [],
+              hiredCount: candidate?.hiredCount ?? 0,
+            })
+          }}
         />
       )}
     </div>

@@ -189,6 +189,8 @@ function templateRow(over: Partial<CatalogRowView> = {}): CatalogRowView {
     activationChangedBy: null,
     duplicate: null,
     duplicateCount: 0,
+    defaultSkillIds: [],
+    hiredCount: 0,
     ...over,
   }
 }

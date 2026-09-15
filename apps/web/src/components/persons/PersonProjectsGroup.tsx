@@ -13,6 +13,25 @@ export interface AssignableProject {
   readonly teams: readonly { readonly teamId: string; readonly name: string }[]
 }
 
+export function assignableProjectsOf(
+  teams: readonly { readonly teamId: string; readonly name: string; readonly workspaceId: string; readonly projectName: string }[],
+): readonly AssignableProject[] {
+  const byWorkspace = new Map<string, { workspaceId: string; projectName: string; teams: { teamId: string; name: string }[] }>()
+  for (const team of teams) {
+    const existing = byWorkspace.get(team.workspaceId)
+    if (existing === undefined) {
+      byWorkspace.set(team.workspaceId, {
+        workspaceId: team.workspaceId,
+        projectName: team.projectName,
+        teams: [{ teamId: team.teamId, name: team.name }],
+      })
+    } else {
+      existing.teams.push({ teamId: team.teamId, name: team.name })
+    }
+  }
+  return [...byWorkspace.values()]
+}
+
 /**
  * The person panel's Projects group (M58 R23): every seat this person holds, what they are on each
  * one, and the two acts that change it -- "remove from project" per seat, and "assign to project"

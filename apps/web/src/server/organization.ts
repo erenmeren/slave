@@ -1,4 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
+import { listPoolCandidates } from './persons'
 import {
   listCapabilities,
   listDecisions,
@@ -21,6 +22,8 @@ import {
  *  provide, and what they are doing right now. */
 export interface OrganizationRow {
   readonly slaveId: string
+  /** M58 R2: the person sitting in this seat -- a name click opens their panel. */
+  readonly personId: string
   readonly name: string
   readonly roleLabel: string
   /** M50 R1: WHY this worker is here, off `Slave.lifecycle`. Replaces the `company | project`
@@ -111,6 +114,10 @@ export interface OrganizationView {
    *  person can ask for a specialist who is not on the project yet, which is exactly the case a
    *  preference is for. */
   readonly templates: readonly { readonly id: string; readonly name: string }[]
+  /** Who this project could seat: people not released who hold no OPEN seat here (R27). */
+  readonly pool: readonly { readonly personId: string; readonly name: string }[]
+  /** The team a pool seat lands on. Empty only when the project has no team row at all. */
+  readonly teamId: string
 }
 
 /**
@@ -143,7 +150,7 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
   // preference this project holds, and the pick list behind every preference control. The setter
   // ids inside the preferences are resolved to usernames in ONE further query below, and in none
   // at all for a project nobody has decided anything about -- `overview.ts`'s granter rule.
-  const [pending, preferenceRows, templates] = await Promise.all([
+  const [pending, preferenceRows, templates, pool, homeTeam] = await Promise.all([
     listDecisions(workspaceId, { pending: true }),
     listStaffingPreferences(workspaceId),
     // TWO COLUMNS, and deliberately not `listTemplates()` beside it (final wave, carried minor):
@@ -151,6 +158,8 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
     // grouped counts, and this control is a pick list of names. The read stays here rather than
     // becoming a third catalog verb nobody else would call.
     prisma.slaveTemplate.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
+    listPoolCandidates(workspaceId),
+    prisma.team.findFirst({ where: { workspaceId }, orderBy: { name: 'asc' }, select: { id: true } }),
   ])
   const preferences = await preferencesByCapability(preferenceRows)
   const taskTitles = Object.fromEntries(world.tasks.map((task) => [task.id, task.title] as const))
@@ -204,6 +213,7 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
     workers: org.value.workers
       .map((worker) => ({
         slaveId: worker.slaveId,
+        personId: worker.personId,
         name: worker.name,
         roleLabel: worker.role,
         lifecycle: worker.lifecycle,
@@ -235,6 +245,8 @@ export async function buildOrganization(workspaceId: string, now: Date = new Dat
     ).length,
     taskTitles,
     templates,
+    pool,
+    teamId: homeTeam?.id ?? '',
   }
 }
 
