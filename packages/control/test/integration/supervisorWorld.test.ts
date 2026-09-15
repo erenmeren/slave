@@ -951,6 +951,9 @@ describe('workspaceSpend', () => {
       runsMeasuredUsd: 1.5,
       supervisorMeasuredUsd: 0.25,
       supervisorUnmeasuredCalls: 2,
+      // M59 R12: no intake made this project, so its two terms are zero.
+      intakeMeasuredUsd: 0,
+      intakeUnmeasuredCalls: 0,
       spentUsd: 1.5 + 0.25 + 2 * SUPERVISOR_PER_CALL_CAP_USD,
     })
   })
@@ -961,6 +964,8 @@ describe('workspaceSpend', () => {
       runsMeasuredUsd: 0,
       supervisorMeasuredUsd: 0,
       supervisorUnmeasuredCalls: 0,
+      intakeMeasuredUsd: 0,
+      intakeUnmeasuredCalls: 0,
       spentUsd: 0,
     })
   })

@@ -69,6 +69,22 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   // M59 R3: `setInstallationSettings`'s own kind. 409 by the suffix rule -- the installation is
   // there, the request just names a path that cannot be the repositories folder.
   invalid_repos_root: true,
+  // M59 Task 4: the intake verbs' kinds and `initRepository`'s. `intake_not_found` and
+  // `parent_not_found` answer 404 by the suffix rule and join the not-found list below; the rest
+  // are 409 -- a conversation or a path that is there, in a state the request does not make sense
+  // against.
+  intake_not_found: true,
+  intake_not_open: true,
+  intake_not_abandonable: true,
+  intake_busy: true,
+  intake_already_created: true,
+  intake_budget_exhausted: true,
+  invalid_message: true,
+  invalid_draft: true,
+  parent_not_found: true,
+  path_not_empty: true,
+  inside_repository: true,
+  repo_init_failed: true,
   repo_not_found: true,
   not_a_git_repository: true,
   base_branch_not_found: true,
@@ -162,6 +178,7 @@ const ALL = Object.keys(ALL_KINDS) as ControlRefusal['kind'][]
  */
 const TODAYS_NOT_FOUND_KINDS = [
   'run_not_found',
+  'intake_not_found',
   'task_not_found',
   'dependency_not_found',
   'workspace_not_found',
@@ -177,6 +194,7 @@ const TODAYS_NOT_FOUND_KINDS = [
   'user_not_found',
   'simulation_not_found',
   'message_not_found',
+  'parent_not_found',
   'decision_not_found',
   'capability_not_found',
   'runbook_not_found',
@@ -188,10 +206,10 @@ const TODAYS_NOT_FOUND_KINDS = [
 ] as const satisfies readonly ControlRefusal['kind'][]
 
 describe('refusalStatus', () => {
-  it('is 404 for exactly the twenty-four kinds ending in _not_found today', () => {
+  it('is 404 for exactly the twenty-six kinds ending in _not_found today', () => {
     const bySuffix = ALL.filter((kind) => kind.endsWith('_not_found')).sort()
     expect(bySuffix).toEqual([...TODAYS_NOT_FOUND_KINDS].sort())
-    expect(bySuffix).toHaveLength(24)
+    expect(bySuffix).toHaveLength(26)
   })
 
   it('maps every kind in the taxonomy to 404 iff it ends in _not_found, 409 otherwise', () => {

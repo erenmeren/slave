@@ -23,6 +23,7 @@ import {
   deriveSlaveStatus,
   needsYou,
   sumSpendFromGroups,
+  INTAKE_PER_CALL_CAP_USD,
   NON_TERMINAL_RUN_STATUSES,
   SUPERVISOR_PER_CALL_CAP_USD,
   type BreakerLevel,
@@ -160,7 +161,7 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
     orderBy: { name: 'asc' },
   })
 
-  const [taskGroups, unintegratedDoneGroups, slaveRows, spendGroups, decisionGroups, pendingDecisionGroups] = await Promise.all([
+  const [taskGroups, unintegratedDoneGroups, slaveRows, spendGroups, decisionGroups, pendingDecisionGroups, intakeRows] = await Promise.all([
     prisma.task.groupBy({ by: ['workspaceId', 'status'], _count: { _all: true } }),
     // The second half of `needsYou` (M44 R1): finished work sitting on a branch nothing will merge
     // by itself. `integratedAt` is not a `by` column and cannot be counted out of the group above,
@@ -212,6 +213,15 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
       where: { status: 'pending' },
       _count: { _all: true },
     }),
+    // M59 R12: the money one conversation spent before the project existed. ONE read for every
+    // project -- `Intake.workspaceId` is unique, so this is at most one row per card -- and it is
+    // here rather than left out because the card's figure and `workspaceSpend`'s are kept
+    // identical on purpose (see `spendOf` below): a project that looks cheaper on this list than
+    // on its own page is a list nobody can act on.
+    prisma.intake.findMany({
+      where: { workspaceId: { not: null } },
+      select: { workspaceId: true, modelCostUsd: true, unmeasuredCalls: true },
+    }),
   ])
 
   // Grouped first, then summed through `sumSpendFromGroups` (M12 Task 9 ruling R3; M17 Task 13's
@@ -257,15 +267,25 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
     supervisorByWorkspace.set(group.workspaceId, running)
   }
 
-  /** One project's two spend figures. `spend` is the whole workspace's money -- runs and Supervisor
-   *  together, `workspaceSpend`'s `spentUsd`. `unmeasuredRuns` stays a count of RUNS: a Supervisor
-   *  call nobody measured is already IN the total at the cap, and counting it here as well would
-   *  answer a question this stat does not ask. */
+  const intakeByWorkspace = new Map(
+    intakeRows.flatMap((row) => (row.workspaceId === null ? [] : [[row.workspaceId, row] as const])),
+  )
+
+  /** One project's two spend figures. `spend` is the whole workspace's money -- runs, Supervisor
+   *  and the intake that created it, together, `workspaceSpend`'s `spentUsd`. `unmeasuredRuns`
+   *  stays a count of RUNS: a Supervisor or intake call nobody measured is already IN the total at
+   *  the cap, and counting it here as well would answer a question this stat does not ask. */
   const spendOf = (workspaceId: string): { readonly spend: number; readonly unmeasuredRuns: number } => {
     const runs = spendOfGroups(groupsByWorkspace.get(workspaceId) ?? [])
     const supervisor = supervisorByWorkspace.get(workspaceId) ?? { measuredUsd: 0, unmeasuredCalls: 0 }
+    const intake = intakeByWorkspace.get(workspaceId)
     return {
-      spend: runs.spend + supervisor.measuredUsd + supervisor.unmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD,
+      spend:
+        runs.spend +
+        supervisor.measuredUsd +
+        supervisor.unmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD +
+        (intake?.modelCostUsd ?? 0) +
+        (intake?.unmeasuredCalls ?? 0) * INTAKE_PER_CALL_CAP_USD,
       unmeasuredRuns: runs.unmeasuredRuns,
     }
   }
