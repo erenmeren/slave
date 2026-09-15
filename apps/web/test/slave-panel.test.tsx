@@ -7,6 +7,7 @@ import type { SlaveCardData, SlaveFeedEvent } from '../src/server/overview.js'
 
 const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
   id: 'a1',
+  personId: 'p1',
   name: 'Alex',
   role: 'backend',
   // M12 Task 9 / ruling R10: `'claude_code'` is the `ProviderKind` (the column). The old value
@@ -635,7 +636,7 @@ describe('SlavePanel', () => {
     }
 
     it("shows the effective profile as TEXT in a textarea, with the level it came from", () => {
-      render_({ profile: { text: '# Persona\n<b>careful</b> with payments', origin: 'company' } })
+      render_({ profile: { text: '# Persona\n<b>careful</b> with payments', origin: 'person' } })
 
       openGroup('profile')
       const input = screen.getByTestId('profile-input') as HTMLTextAreaElement
@@ -643,11 +644,11 @@ describe('SlavePanel', () => {
       // control, never as elements.
       expect(input.value).toBe('# Persona\n<b>careful</b> with payments')
       expect(input.querySelector('b')).toBeNull()
-      expect(screen.getByTestId('profile-origin').textContent).toMatch(/roster/i)
+      expect(screen.getByTestId('profile-origin').textContent).toMatch(/the slave themself/i)
     })
 
     it("names the worker-level profile as the worker's own", () => {
-      render_({ profile: { text: 'mine', origin: 'slave' } })
+      render_({ profile: { text: 'mine', origin: 'seat' } })
 
       openGroup('profile')
       expect(screen.getByTestId('profile-origin').textContent).toMatch(/own/i)
@@ -677,7 +678,7 @@ describe('SlavePanel', () => {
     })
 
     it('clearing the textarea and saving sends an explicit null — the override goes, the level below shows through', async () => {
-      render_({ profile: { text: 'my override', origin: 'slave' } })
+      render_({ profile: { text: 'my override', origin: 'seat' } })
 
       openGroup('profile')
       fireEvent.change(screen.getByTestId('profile-input'), { target: { value: '   ' } })

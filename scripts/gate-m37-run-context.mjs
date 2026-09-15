@@ -107,7 +107,7 @@ const SLAVE_MARK = 'THIS WORKER OVERRODE ITS TEMPLATE'
 // The skill that exists on disk, and the one the catalog remembers and the disk has forgotten.
 // Their DESCRIPTIONS are what `preflightCleanup` identifies a leftover row by: the names alone are
 // ordinary words an operator could have installed for real, and deleting a real `Skill` row
-// cascades its `SlaveSkill` assignments away silently. These two strings are written by this file
+// cascades its `PersonSkill` grants away silently. These two strings are written by this file
 // and by nothing else, so a row carrying one is unambiguously a previous run of this gate.
 const PRESENT_SKILL = 'alpha'
 const MISSING_SKILL = 'ghost'
@@ -166,7 +166,6 @@ async function preflightCleanup() {
   const staleTemplate = await prisma.slaveTemplate.findUnique({ where: { name: TEMPLATE_NAME } })
   if (staleTemplate !== null) {
     console.log(`preflight: removing a leftover ${TEMPLATE_NAME} (${staleTemplate.id})`)
-    await prisma.companySlave.deleteMany({ where: { templateId: staleTemplate.id } }).catch(() => {})
     await prisma.slaveTemplate.delete({ where: { id: staleTemplate.id } }).catch(() => {})
   }
 
@@ -176,7 +175,7 @@ async function preflightCleanup() {
   // P2002 inside `prisma.skill.create` before it had a workspace to clean up -- a gate that could
   // only be recovered with hand-written SQL against the shared dev database. Matched on the
   // description as well as the name, so a skill an operator genuinely installed under either name
-  // is never deleted out from under them (that would cascade its `SlaveSkill` assignments too).
+  // is never deleted out from under them (that would cascade its `PersonSkill` grants too).
   const staleSkills = await prisma.skill.deleteMany({
     where: {
       provider: { name: 'personal' },
@@ -368,16 +367,13 @@ try {
   const company = await prisma.company.create({ data: { name: COMPANY_NAME } })
   companyId = company.id
   const companyTeam = await prisma.companyTeam.create({ data: { companyId, name: 'Engineering' } })
-  const companySlave = await prisma.companySlave.create({
-    data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' },
-  })
+  const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
 
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
   const slave = await prisma.slave.create({
     data: {
       teamId: team.id,
-      companySlaveId: companySlave.id,
-      name: 'Atlas',
+      personId: companySlave.id,
       // The TITLE. Matched by nothing since M37 -- and deliberately not any role in this scenario.
       role: 'Senior Engineer',
       // Only `backend` for now: see the header. `reviewer` is granted through the real CLI in
@@ -386,10 +382,11 @@ try {
       profile: SLAVE_PROFILE,
     },
   })
-  await prisma.slaveSkill.createMany({
+  // M58 R3: a skill is the PERSON's, as an explicit grant over the persona's (empty) default set.
+  await prisma.personSkill.createMany({
     data: [
-      { slaveId: slave.id, skillId: presentSkill.id },
-      { slaveId: slave.id, skillId: missingSkill.id },
+      { personId: companySlave.id, skillId: presentSkill.id, mode: 'granted' },
+      { personId: companySlave.id, skillId: missingSkill.id, mode: 'granted' },
     ],
   })
   console.log(
@@ -708,13 +705,16 @@ try {
       }
     }
     await prisma.executionEvent.deleteMany({ where: { workspaceId } }).catch(() => {})
-    // Cascades Team/Slave (and its SlaveSkill links)/Task/SlaveRun/RunContext.
+    // Cascades Team/Slave/Task/SlaveRun/RunContext. The person's grants go with the PERSON, which
+    // the company delete below takes with its membership -- see there.
     await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})
   }
   // The org rows belong to no workspace, so nothing above cascaded them: the company takes its
-  // department template and roster slave with it, and the template goes last because a CompanySlave
-  // holds a non-cascading reference to it.
+  // department template and its memberships with it, the PERSON is deleted by name (M58 R13:
+  // deleting a person cascades their seats, their grants and their memberships), and the template
+  // goes last -- it now takes nobody with it (`Person.templateId` is `SetNull`).
   if (companyId !== null) await prisma.company.delete({ where: { id: companyId } }).catch(() => {})
+  await prisma.person.deleteMany({ where: { name: 'Atlas', template: { name: TEMPLATE_NAME } } }).catch(() => {})
   if (templateId !== null) await prisma.slaveTemplate.delete({ where: { id: templateId } }).catch(() => {})
   // Only rows this gate inserted, and only then the stamps its temp-root sync put on everybody
   // else's: a shared dev catalog must read the same before and after this gate ran.

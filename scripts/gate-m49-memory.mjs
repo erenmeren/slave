@@ -543,19 +543,9 @@ try {
   await prisma.providerConfiguration.create({ data: { workspaceId, kind: 'claude_code', settings: {} } })
 
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
-  const dev = await prisma.slave.create({
-    data: {
-      teamId: team.id,
-      name: WORKER_NAME,
-      role: 'Senior Engineer',
-      runtimeRoles: ['backend', 'manager'],
-      capabilities: ['backend.api-design'],
-    },
-  })
+  const dev = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend', 'manager'], personId: (await prisma.person.create({ data: { name: WORKER_NAME, capabilities: ['backend.api-design'] } })).id } })
   const devId = dev.id
-  const reader = await prisma.slave.create({
-    data: { teamId: team.id, name: REVIEWER_NAME, role: 'Reviewer', runtimeRoles: ['reviewer'], capabilities: [] },
-  })
+  const reader = await prisma.slave.create({ data: { teamId: team.id, role: 'Reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: REVIEWER_NAME, capabilities: [] } })).id } })
   console.log(`slave ${devId} (${WORKER_NAME}) and slave ${reader.id} (${REVIEWER_NAME})`)
 
   console.log(`setup -- set-goal printed: ${JSON.stringify(runCli(['set-goal', '--workspace', workspaceId, '--goal', GOAL]).trim())}`)
@@ -760,10 +750,12 @@ try {
   await prisma.providerConfiguration.create({ data: { workspaceId: workspaceId2, kind: 'claude_code', settings: {} } })
   const team2 = await prisma.team.create({ data: { workspaceId: workspaceId2, name: 'Engineering' } })
   const hand = await prisma.slave.create({
-    data: { teamId: team2.id, name: WORKER_NAME_2, role: 'Engineer', runtimeRoles: ['backend'], capabilities: [] },
+    data: { teamId: team2.id, role: 'Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: WORKER_NAME_2, capabilities: [] } })).id },
+    include: { person: true },
   })
   const eyes = await prisma.slave.create({
-    data: { teamId: team2.id, name: REVIEWER_NAME_2, role: 'Reviewer', runtimeRoles: ['reviewer'], capabilities: [] },
+    data: { teamId: team2.id, role: 'Reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: REVIEWER_NAME_2, capabilities: [] } })).id },
+    include: { person: true },
   })
   console.log(`slave ${hand.id} (${WORKER_NAME_2}) writes the diff; slave ${eyes.id} (${REVIEWER_NAME_2}) reads it`)
   const rejectedTask = await prisma.task.create({
@@ -800,7 +792,7 @@ try {
     {
       type: lesson[0].type,
       scope: lesson[0].scope,
-      slaveId: lesson[0].slaveId,
+      personId: lesson[0].personId,
       workspaceId: lesson[0].workspaceId,
       verifiedBy: lesson[0].verifiedBy,
       body: lesson[0].body,
@@ -808,7 +800,7 @@ try {
     {
       type: 'lesson',
       scope: 'worker',
-      slaveId: hand.id,
+      personId: hand.personId,
       workspaceId: null,
       verifiedBy: 'review',
       body: REJECT_REASON,
@@ -816,10 +808,10 @@ try {
     "stage 2: the lesson belongs to the worker that WROTE the diff, in the reviewer's own words",
   )
   // The negative beside the positive (plan erratum E2): the slave that CAUGHT it learns nothing.
-  const reviewerLessons = await prisma.memory.count({ where: { slaveId: eyes.id } })
+  const reviewerLessons = await prisma.memory.count({ where: { personId: eyes.personId } })
   console.log(`stage 2 -- memories belonging to ${REVIEWER_NAME_2}, who caught it: ${String(reviewerLessons)}`)
   if (reviewerLessons !== 0) await fail(`stage 2: the reviewer was taught ${String(reviewerLessons)} lesson(s), expected none`)
-  if (lesson[0].slaveId === eyes.id) await fail('stage 2: the lesson was filed against the reviewer')
+  if (lesson[0].personId === eyes.personId) await fail('stage 2: the lesson was filed against the reviewer')
   const lessonId = lesson[0].id
   await stopDaemon(daemon2)
 

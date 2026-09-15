@@ -260,26 +260,8 @@ try {
   })
   workspaceId = workspace.id
   const team = await prisma.team.create({ data: { workspaceId, name: TEAM_NAME } })
-  const developer = await prisma.slave.create({
-    data: {
-      teamId: team.id,
-      name: DEVELOPER_NAME,
-      role: 'developer',
-      runtimeRoles: ['developer'],
-      model: 'sonnet',
-      provider: 'claude_code',
-    },
-  })
-  const reviewer = await prisma.slave.create({
-    data: {
-      teamId: team.id,
-      name: REVIEWER_NAME,
-      role: 'reviewer',
-      runtimeRoles: ['reviewer'],
-      model: 'sonnet',
-      provider: 'claude_code',
-    },
-  })
+  const developer = await prisma.slave.create({ data: { teamId: team.id, role: 'developer', runtimeRoles: ['developer'], model: 'sonnet', provider: 'claude_code', personId: (await prisma.person.create({ data: { name: DEVELOPER_NAME } })).id } })
+  const reviewer = await prisma.slave.create({ data: { teamId: team.id, role: 'reviewer', runtimeRoles: ['reviewer'], model: 'sonnet', provider: 'claude_code', personId: (await prisma.person.create({ data: { name: REVIEWER_NAME } })).id } })
   console.log(`stage 0: workspace ${workspaceId} (${WORKSPACE_NAME}) · team ${team.id}`)
   console.log(`stage 0: slaves ${developer.id} (${DEVELOPER_NAME}/developer) · ${reviewer.id} (${REVIEWER_NAME}/reviewer)`)
 

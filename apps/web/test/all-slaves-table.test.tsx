@@ -13,7 +13,7 @@ vi.mock('next/navigation', () => ({
 function row(over: Partial<AllSlaveRow> = {}): AllSlaveRow {
   return {
     slaveId: 'a1',
-    companySlaveId: null,
+    personId: 'p1',
     name: 'Alex',
     role: 'backend',
     departmentName: 'Engineering',
@@ -120,7 +120,7 @@ describe('AllSlavesTable', () => {
   it('shows "—" for a catalog member\'s project, no rename/re-role, and a catalog-slave-delete (not slave-delete)', () => {
     render(
       <AllSlavesTable
-        initial={page([row({ slaveId: null, companySlaveId: 'ca1', name: 'Nova', projectName: null, workspaceId: null })])}
+        initial={page([row({ slaveId: null, personId: 'ca1', name: 'Nova', projectName: null, workspaceId: null })])}
         onOpen={() => {}}
       />,
     )
@@ -244,7 +244,7 @@ describe('AllSlavesTable', () => {
     it('says nothing about dispatch on a catalog row: no worker exists yet to dispatch', () => {
       render(
         <AllSlavesTable
-          initial={page([row({ slaveId: null, companySlaveId: 'ca1', name: 'Nova', projectName: null, workspaceId: null })])}
+          initial={page([row({ slaveId: null, personId: 'ca1', name: 'Nova', projectName: null, workspaceId: null })])}
           onOpen={() => {}}
         />,
       )
@@ -282,7 +282,7 @@ describe('AllSlavesTable', () => {
     it('names a catalog member Permanent: a roster member IS somebody the organisation has', () => {
       render(
         <AllSlavesTable
-          initial={page([row({ slaveId: null, companySlaveId: 'ca1', name: 'Nova', projectName: null, workspaceId: null, lifecycle: 'permanent' })])}
+          initial={page([row({ slaveId: null, personId: 'ca1', name: 'Nova', projectName: null, workspaceId: null, lifecycle: 'permanent' })])}
           onOpen={() => {}}
         />,
       )
@@ -316,7 +316,7 @@ describe('AllSlavesTable', () => {
         <AllSlavesTable
           initial={page([
             row({ slaveId: 'a1', name: 'Alex', status: 'working' }),
-            row({ slaveId: null, companySlaveId: 'ca1', name: 'Nova', projectName: null, workspaceId: null, status: 'idle' }),
+            row({ slaveId: null, personId: 'ca1', name: 'Nova', projectName: null, workspaceId: null, status: 'idle' }),
           ])}
           onOpen={() => {}}
         />,
@@ -365,7 +365,7 @@ describe('AllSlavesTable', () => {
         <AllSlavesTable
           initial={page([
             row({ slaveId: 'a1', name: 'Alex' }),
-            row({ slaveId: null, companySlaveId: 'ca1', name: 'Nova', projectName: null, workspaceId: null }),
+            row({ slaveId: null, personId: 'ca1', name: 'Nova', projectName: null, workspaceId: null }),
           ])}
           onOpen={() => {}}
         />,
@@ -423,7 +423,7 @@ describe('AllSlavesTable', () => {
           initial={page([
             row({ slaveId: 'a1', name: 'Alex' }),
             row({ slaveId: 'a2', name: 'Blair', projectName: 'Billing' }),
-            row({ slaveId: null, companySlaveId: 'ca1', name: 'Nova', projectName: null, workspaceId: null }),
+            row({ slaveId: null, personId: 'ca1', name: 'Nova', projectName: null, workspaceId: null }),
           ])}
           onOpen={() => {}}
         />,
@@ -515,7 +515,7 @@ describe('the department select', () => {
   it('lists the company templates on a catalog row and PUTs the catalog move', async () => {
     render(
       <AllSlavesTable
-        initial={page([row({ slaveId: null, workspaceId: null, projectName: null, teamId: null, companySlaveId: 'ca1', companyId: 'c1', companyTeamId: 'ct1', departmentName: 'Backend' })])}
+        initial={page([row({ slaveId: null, workspaceId: null, projectName: null, teamId: null, personId: 'ca1', companyId: 'c1', companyTeamId: 'ct1', departmentName: 'Backend' })])}
         onOpen={() => {}}
       />,
     )

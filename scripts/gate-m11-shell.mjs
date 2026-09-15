@@ -58,8 +58,8 @@ const runTimestamp = new Date().toISOString()
 // CLI-driven names are, because these are typed into real form fields the way an operator would
 // type them. Left as exact literals means a prior run that crashed before its own `finally`
 // cleanup (killed mid-run, etc.) can collide on `SlaveTemplate.name`/`Company.name`/
-// `CompanyTeam(companyId,name)`/`CompanySlave(companyTeamId,name)`'s unique constraints --
-// `preflightCleanup` below removes any such leftovers before this run creates its own.
+// `CompanyTeam(companyId,name)`/`Person.name`'s unique constraints -- `preflightCleanup` below
+// removes any such leftovers before this run creates its own.
 const TEMPLATE_NAME = 'M11 Gate Template'
 const COMPANY_NAME = 'M11 Gate Co'
 const TEAM_NAME = 'Crew'
@@ -103,8 +103,9 @@ async function findFreePort() {
 
 /** Removes any "M11 Gate"-named rows a prior interrupted run left behind, in the same FK order
  *  the `finally` block below uses: workspaces first (cascades Team/Slave), then the company
- *  (cascades CompanyTeam/CompanySlave), then the template. Safe to run against an empty slate --
- *  every step is a no-op when nothing matches. */
+ *  (cascades CompanyTeam/CompanyTeamMember), then this gate's own PERSON -- who outlives every
+ *  project (M58 R1) and whose deletion cascades their seats -- then the template. Safe to run
+ *  against an empty slate -- every step is a no-op when nothing matches. */
 async function preflightCleanup() {
   const staleWorkspaces = await prisma.workspace.findMany({
     where: { name: { startsWith: 'M11 Gate Project ' } },
@@ -116,6 +117,7 @@ async function preflightCleanup() {
   }
   const staleCompany = await prisma.company.findUnique({ where: { name: COMPANY_NAME } })
   if (staleCompany !== null) await prisma.company.delete({ where: { id: staleCompany.id } }).catch(() => {})
+  await prisma.person.deleteMany({ where: { name: MEMBER_NAME } }).catch(() => {})
   const staleTemplate = await prisma.slaveTemplate.findUnique({ where: { name: TEMPLATE_NAME } })
   if (staleTemplate !== null) await prisma.slaveTemplate.delete({ where: { id: staleTemplate.id } }).catch(() => {})
 }
@@ -146,7 +148,7 @@ async function dumpOrgRows() {
       id: true,
       name: true,
       companyId: true,
-      teams: { select: { id: true, name: true, slaves: { select: { id: true, name: true, model: true, companySlaveId: true } } } },
+      teams: { select: { id: true, name: true, slaves: { select: { id: true, model: true, personId: true, person: { select: { name: true } } } } } },
     },
   })
   return JSON.stringify({ templates, companies, workspaces })
@@ -370,14 +372,19 @@ try {
   const companyTeamId = companyTeam.id
   console.log(`team created and asserted: ${companyTeamId}`)
 
-  await selectReliably(teamBlock.getByLabel('member template'), templateId, { label: TEMPLATE_NAME }, 'the member template select')
-  await fillReliably(teamBlock.getByLabel('member name'), MEMBER_NAME, 'the member name field')
+  // M58 R5: a department holds PEOPLE, so the person exists before the department picks them.
+  // Created directly here (Task 4 gives the CLI and this page a `person` verb of their own); the
+  // BROWSER still does the joining, which is what this stage is about.
+  const memberPerson = await prisma.person.create({ data: { name: MEMBER_NAME, templateId, lifecycle: 'permanent' } })
+  await page.reload({ waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await clickUntil(companyRow.getByTestId('company-toggle'), async () => companyDetail.first().isVisible(), `re-expanding the "${COMPANY_NAME}" row`)
+  await selectReliably(teamBlock.getByLabel('member slave'), memberPerson.id, { value: memberPerson.id }, 'the member slave select')
   const memberRowInSettings = teamBlock.getByTestId('data-table-row').filter({ hasText: MEMBER_NAME })
   await clickUntil(teamBlock.getByTestId('member-submit'), async () => memberRowInSettings.first().isVisible(), `"${MEMBER_NAME}" member submit`)
   await waitVisible(memberRowInSettings, `the "${MEMBER_NAME}" member row`)
-  const companySlave = await prisma.companySlave.findFirst({ where: { companyTeamId, name: MEMBER_NAME } })
-  if (companySlave === null) await fail(`the "${MEMBER_NAME}" row appeared in the browser but is missing from the DB`)
-  const companySlaveId = companySlave.id
+  const membership = await prisma.companyTeamMember.findFirst({ where: { companyTeamId, personId: memberPerson.id } })
+  if (membership === null) await fail(`the "${MEMBER_NAME}" row appeared in the browser but is missing from the DB`)
+  const companySlaveId = memberPerson.id
   console.log(`member created and asserted: ${companySlaveId}`)
   console.log('stage 1 (/workforce?tab=catalog) complete: template, company, team and member all created and asserted through the browser')
 
@@ -537,14 +544,14 @@ try {
   await clickUntil(
     targetWorkerRow.getByTestId('model-override-set'),
     async () => {
-      const slave = await prisma.slave.findFirst({ where: { team: { workspaceId: workspaceIdA }, companySlaveId, name: MEMBER_NAME } })
+      const slave = await prisma.slave.findFirst({ where: { team: { workspaceId: workspaceIdA }, personId: companySlaveId } })
       return slave?.model === MODEL_OVERRIDE && slave?.provider === PROVIDER_OVERRIDE
     },
     `setting "${MODEL_OVERRIDE}" on the "${workspaceNameA}" worker`,
   )
 
-  const workerSlaveA = await prisma.slave.findFirst({ where: { team: { workspaceId: workspaceIdA }, companySlaveId, name: MEMBER_NAME } })
-  const workerSlaveB = await prisma.slave.findFirst({ where: { team: { workspaceId: workspaceIdB }, companySlaveId, name: MEMBER_NAME } })
+  const workerSlaveA = await prisma.slave.findFirst({ where: { team: { workspaceId: workspaceIdA }, personId: companySlaveId } })
+  const workerSlaveB = await prisma.slave.findFirst({ where: { team: { workspaceId: workspaceIdB }, personId: companySlaveId } })
   if (workerSlaveA === null || workerSlaveB === null) {
     await fail(`could not find both materialized "${MEMBER_NAME}" workers in the DB -- A=${JSON.stringify(workerSlaveA)} B=${JSON.stringify(workerSlaveB)}`)
   }
@@ -582,7 +589,7 @@ try {
     { value: otherDepartment.id },
     `the "${workspaceNameA}" worker's department select`,
   )
-  const movedSlave = await prisma.slave.findFirst({ where: { team: { workspaceId: workspaceIdA }, companySlaveId, name: MEMBER_NAME } })
+  const movedSlave = await prisma.slave.findFirst({ where: { team: { workspaceId: workspaceIdA }, personId: companySlaveId } })
   if (movedSlave === null || movedSlave.teamId !== otherDepartment.id) {
     await fail(
       `"${MEMBER_NAME}"'s teamId is ${JSON.stringify(movedSlave?.teamId)}, expected ${JSON.stringify(otherDepartment.id)} ` +
@@ -735,9 +742,7 @@ try {
   // fixture needs no cleanup of its own.
   const officeDepartmentB = await prisma.team.findFirst({ where: { workspaceId: workspaceIdB } })
   if (officeDepartmentB === null) await fail(`"${workspaceNameB}" has no department to add the office fixture slave to`)
-  const officeFixtureSlave = await prisma.slave.create({
-    data: { teamId: officeDepartmentB.id, name: 'M11 Gate Second Slave', role: 'qa', runtimeRoles: ['qa'] },
-  })
+  const officeFixtureSlave = await prisma.slave.create({ data: { teamId: officeDepartmentB.id, role: 'qa', runtimeRoles: ['qa'], personId: (await prisma.person.create({ data: { name: 'M11 Gate Second Slave' } })).id } })
   console.log(`created a second "${workspaceNameB}" slave directly for the office floor: ${officeFixtureSlave.id}`)
 
   const officeDepartments = await prisma.team.count({ where: { workspaceId: workspaceIdB } })
@@ -826,9 +831,9 @@ try {
     if (nextProc.exitCode === null) nextProc.kill('SIGKILL')
   }
   // FK-ordered cleanup, identical order to `gate-m10-org.mjs`: events, then the workspaces
-  // (cascades Team/Slave/Task/SlaveRun/...), then the company (cascades CompanyTeam/CompanySlave
-  // -- safe only once no Slave row references a CompanySlave any more, which the workspace
-  // deletes above already guarantee), then the template.
+  // (cascades Team/Slave/Task/SlaveRun/...), then the company (cascades
+  // CompanyTeam/CompanyTeamMember), then this gate's own PERSON -- who outlives every project
+  // (M58 R1) -- then the template, which takes nobody with it (`Person.templateId` is `SetNull`).
   for (const workspaceId of [workspaceIdA, workspaceIdB]) {
     if (workspaceId !== null) {
       await prisma.executionEvent.deleteMany({ where: { workspaceId } }).catch(() => {})
@@ -842,6 +847,7 @@ try {
   if (companyId !== null) {
     await prisma.company.delete({ where: { id: companyId } }).catch(() => {})
   }
+  await prisma.person.deleteMany({ where: { name: MEMBER_NAME } }).catch(() => {})
   if (templateId !== null) {
     await prisma.slaveTemplate.delete({ where: { id: templateId } }).catch(() => {})
   }

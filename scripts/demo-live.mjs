@@ -43,9 +43,9 @@ await prisma.providerConfiguration.create({
 const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Demo Team' } })
 // Lowercase roles, matching the exact-match conventions: `manager` plans the goal (M8b),
 // `backend` implements the planned tasks, `reviewer` keeps them from stalling in `reviewing`.
-await prisma.slave.create({ data: { teamId: team.id, name: 'Atlas', role: 'manager', runtimeRoles: ['manager'] } })
-await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] } })
-await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'reviewer', runtimeRoles: ['reviewer'] } })
+await prisma.slave.create({ data: { teamId: team.id, role: 'manager', runtimeRoles: ['manager'], personId: (await prisma.person.create({ data: { name: 'Atlas' } })).id } })
+await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+await prisma.slave.create({ data: { teamId: team.id, role: 'reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Riley' } })).id } })
 await prisma.$disconnect()
 
 // 3. The daemon, inheriting SLAVEOFAI_CLAUDE_BIN/ARGS so the same script smoke-tests against the

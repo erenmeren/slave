@@ -274,7 +274,6 @@ async function deleteGateTemplates(label) {
   if (rows.length === 0) return
   console.log(`${label}: removing ${String(rows.length)} gate template(s): ${JSON.stringify(rows.map((r) => r.name))}`)
   const ids = rows.map((r) => r.id)
-  await prisma.companySlave.deleteMany({ where: { templateId: { in: ids } } }).catch(() => {})
   await prisma.slaveTemplate.deleteMany({ where: { id: { in: ids } } }).catch(() => {})
 }
 
@@ -788,15 +787,7 @@ try {
   // The ONLY worker at this point: it PROVIDES `backend.api-design` and is dispatchable as backend
   // and manager. One worker is what makes stage 7's covered/uncovered capability chips a fact about
   // this project rather than a fixture.
-  const dev = await prisma.slave.create({
-    data: {
-      teamId: team.id,
-      name: WORKER_NAME,
-      role: 'Senior Engineer',
-      runtimeRoles: ['backend', 'manager'],
-      capabilities: ['backend.api-design'],
-    },
-  })
+  const dev = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend', 'manager'], personId: (await prisma.person.create({ data: { name: WORKER_NAME, capabilities: ['backend.api-design'] } })).id } })
   const devId = dev.id
   console.log(`slave ${devId} (${WORKER_NAME}): runtimeRoles ${JSON.stringify(dev.runtimeRoles)}, capabilities ${JSON.stringify(dev.capabilities)}`)
 
@@ -945,9 +936,7 @@ try {
   )
   // Somebody who did not write the code has to read it. No capabilities: a reviewer that provided
   // one would change what stage 7 measures.
-  const reader = await prisma.slave.create({
-    data: { teamId: team.id, name: REVIEWER_NAME, role: 'Reviewer', runtimeRoles: ['reviewer'], capabilities: [] },
-  })
+  const reader = await prisma.slave.create({ data: { teamId: team.id, role: 'Reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: REVIEWER_NAME, capabilities: [] } })).id } })
   console.log(`slave ${reader.id} (${REVIEWER_NAME}): runtimeRoles ${JSON.stringify(reader.runtimeRoles)}`)
 
   // ============================================================================================
@@ -1088,9 +1077,7 @@ try {
   console.log(`workspace ${workspaceId2} (${GATE_WORKSPACE_2}), repo ${repoPath2}`)
   await prisma.providerConfiguration.create({ data: { workspaceId: workspaceId2, kind: 'claude_code', settings: {} } })
   const team2 = await prisma.team.create({ data: { workspaceId: workspaceId2, name: 'Engineering' } })
-  await prisma.slave.create({
-    data: { teamId: team2.id, name: 'Hand', role: 'Engineer', runtimeRoles: ['backend'], capabilities: [] },
-  })
+  await prisma.slave.create({ data: { teamId: team2.id, role: 'Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Hand', capabilities: [] } })).id } })
   console.log(
     `stage 6 -- adopt-runbook printed: ` +
       JSON.stringify(runCli(['adopt-runbook', '--workspace', workspaceId2, '--runbook', HUMAN_RUNBOOK.key]).trim()),

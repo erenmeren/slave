@@ -56,7 +56,7 @@ interface Fixture {
   readonly task: { readonly id: string }
   readonly run: { readonly id: string }
   /** M37 t4: the profile and runtime-role routes are addressed at the SLAVE, not at a run. */
-  readonly slave: { readonly id: string }
+  readonly slave: { readonly id: string; readonly personId: string }
 }
 
 async function seed(): Promise<Fixture> {
@@ -80,7 +80,7 @@ async function seed(): Promise<Fixture> {
     otherWorkspace: { id: otherWorkspace.id },
     task: { id: task.id },
     run: { id: run.id },
-    slave: { id: slave.id },
+    slave: { id: slave.id, personId: slave.personId },
   }
 }
 
@@ -222,7 +222,7 @@ describe('the control routes', () => {
     async function askAQuestion(workspaceId: string): Promise<string> {
       const question = await prisma.slaveMessage.create({
         data: {
-          slaveId: (await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: fixture.workspace.id } } })).id,
+          slaveId: (await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: fixture.workspace.id } }, include: { person: true } })).id,
           workspaceId,
           senderRunId: fixture.run.id,
           taskId: fixture.task.id,
@@ -294,7 +294,7 @@ describe('the control routes', () => {
 
       const information = await prisma.slaveMessage.create({
         data: {
-          slaveId: (await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: fixture.workspace.id } } })).id,
+          slaveId: (await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: fixture.workspace.id } }, include: { person: true } })).id,
           workspaceId: fixture.workspace.id,
           threadId: 'thread-2',
           kind: 'information',
@@ -333,7 +333,7 @@ describe('the control routes', () => {
 
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ ok: true })
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).profile).toBe(
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).profile).toBe(
         'You are careful with payments.',
       )
       expect(await prisma.executionEvent.count({ where: { type: 'slave_profile_changed' } })).toBe(1)
@@ -345,7 +345,7 @@ describe('the control routes', () => {
       const response = await patch(fixture.workspace.id, fixture.slave.id, { profile: null })
 
       expect(response.status).toBe(200)
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).profile).toBeNull()
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).profile).toBeNull()
     })
 
     it('404s a slave in another workspace, and an unknown slave, writing nothing', async (): Promise<void> => {
@@ -355,7 +355,7 @@ describe('the control routes', () => {
       const unknown = await patch(fixture.workspace.id, '00000000-0000-4000-8000-000000000000', { profile: 'nobody' })
       expect(unknown.status).toBe(404)
 
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).profile).toBeNull()
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).profile).toBeNull()
       expect(await prisma.executionEvent.count({ where: { type: 'slave_profile_changed' } })).toBe(0)
     })
 
@@ -368,7 +368,7 @@ describe('the control routes', () => {
         { params: Promise.resolve({ workspaceId: fixture.workspace.id, slaveId: fixture.slave.id }) },
       )
       expect(malformed.status).toBe(400)
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).profile).toBeNull()
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).profile).toBeNull()
     })
 
     it("maps the verb's own refusal to 409 with its text", async (): Promise<void> => {
@@ -376,7 +376,7 @@ describe('the control routes', () => {
 
       expect(response.status).toBe(409)
       expect((await response.json()).error).toContain(String(PROFILE_MAX_CHARS))
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).profile).toBeNull()
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).profile).toBeNull()
     })
   })
 
@@ -395,7 +395,7 @@ describe('the control routes', () => {
 
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ ok: true })
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).runtimeRoles).toEqual([
         'backend',
         'reviewer',
       ])
@@ -408,7 +408,7 @@ describe('the control routes', () => {
       const response = await patch(fixture.workspace.id, fixture.slave.id, { roles: [] })
 
       expect(response.status).toBe(200)
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([])
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).runtimeRoles).toEqual([])
     })
 
     it('404s a slave in another workspace, and an unknown slave, writing nothing', async (): Promise<void> => {
@@ -417,7 +417,7 @@ describe('the control routes', () => {
         (await patch(fixture.workspace.id, '00000000-0000-4000-8000-000000000000', { roles: ['backend'] })).status,
       ).toBe(404)
 
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([])
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).runtimeRoles).toEqual([])
       expect(await prisma.executionEvent.count({ where: { type: 'slave_runtime_roles_changed' } })).toBe(0)
     })
 
@@ -431,7 +431,7 @@ describe('the control routes', () => {
         { params: Promise.resolve({ workspaceId: fixture.workspace.id, slaveId: fixture.slave.id }) },
       )
       expect(malformed.status).toBe(400)
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([])
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).runtimeRoles).toEqual([])
     })
 
     it("maps the verb's own refusal to 409 with its reason", async (): Promise<void> => {
@@ -439,7 +439,7 @@ describe('the control routes', () => {
 
       expect(response.status).toBe(409)
       expect((await response.json()).error).toContain('named twice')
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([])
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).runtimeRoles).toEqual([])
     })
   })
 
@@ -471,7 +471,7 @@ describe('the control routes', () => {
 
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ ok: true })
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).lifecycle).toBe('ephemeral')
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).person.lifecycle).toBe('ephemeral')
       const events = await prisma.executionEvent.findMany({ where: { type: 'org_changed' } })
       expect(events).toHaveLength(1)
       expect(events[0]?.payload).toMatchObject({ field: 'lifecycle', from: 'project', to: 'ephemeral' })
@@ -487,14 +487,14 @@ describe('the control routes', () => {
       expect(await prisma.executionEvent.count({ where: { type: 'org_changed' } })).toBe(1)
     })
 
-    it('409s `permanent` for a worker on no company roster, with the verb\'s own reason', async (): Promise<void> => {
+    it('409s `permanent` for somebody in no company department, with the verb\'s own reason', async (): Promise<void> => {
       await settleTheRun()
 
       const response = await setLifecycle(fixture.workspace.id, fixture.slave.id, { lifecycle: 'permanent' })
 
       expect(response.status).toBe(409)
-      expect(((await response.json()) as { error: string }).error).toContain('roster')
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).lifecycle).toBe('project')
+      expect(((await response.json()) as { error: string }).error).toContain('department')
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).person.lifecycle).toBe('project')
     })
 
     it('400s a lifecycle this product does not have, and unparseable JSON', async (): Promise<void> => {
@@ -506,23 +506,21 @@ describe('the control routes', () => {
         { params: Promise.resolve({ workspaceId: fixture.workspace.id, slaveId: fixture.slave.id }) },
       )
       expect(malformed.status).toBe(400)
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).lifecycle).toBe('project')
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).person.lifecycle).toBe('project')
     })
 
     it('ends an engagement: the date, the sentence, an empty dispatch set and one slave.released event', async (): Promise<void> => {
       await settleTheRun()
-      await prisma.slave.update({
-        where: { id: fixture.slave.id },
-        data: { lifecycle: 'ephemeral', runtimeRoles: ['backend'] },
-      })
+      await prisma.person.update({ where: { id: fixture.slave.personId }, data: { lifecycle: 'ephemeral' } })
+      await prisma.slave.update({ where: { id: fixture.slave.id }, data: { runtimeRoles: ['backend'] } })
 
       const response = await release(fixture.workspace.id, fixture.slave.id, { reason: 'the security pass is done' })
 
       expect(response.status).toBe(200)
       expect(await response.json()).toEqual({ ok: true })
-      const slave = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })
-      expect(slave.releasedAt).not.toBeNull()
-      expect(slave.releaseReason).toBe('the security pass is done')
+      const slave = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })
+      expect(slave.person.releasedAt).not.toBeNull()
+      expect(slave.person.releaseReason).toBe('the security pass is done')
       // The empty set is the WHOLE of how a released worker stops being dispatched (spec R3).
       expect(slave.runtimeRoles).toEqual([])
       expect(await prisma.executionEvent.count({ where: { type: 'slave_released' } })).toBe(1)
@@ -532,7 +530,7 @@ describe('the control routes', () => {
       const notEphemeral = await release(fixture.workspace.id, fixture.slave.id, { reason: 'over' })
       expect(notEphemeral.status).toBe(409)
 
-      await prisma.slave.update({ where: { id: fixture.slave.id }, data: { lifecycle: 'ephemeral' } })
+      await prisma.person.update({ where: { id: fixture.slave.personId }, data: { lifecycle: 'ephemeral' } })
       const liveRun = await release(fixture.workspace.id, fixture.slave.id, { reason: 'over' })
       expect(liveRun.status).toBe(409)
 
@@ -546,19 +544,19 @@ describe('the control routes', () => {
 
     it('404s a slave in another workspace and an unknown slave, releasing nobody', async (): Promise<void> => {
       await settleTheRun()
-      await prisma.slave.update({ where: { id: fixture.slave.id }, data: { lifecycle: 'ephemeral' } })
+      await prisma.person.update({ where: { id: fixture.slave.personId }, data: { lifecycle: 'ephemeral' } })
 
       expect((await release(fixture.otherWorkspace.id, fixture.slave.id, { reason: 'not yours' })).status).toBe(404)
       expect((await release(fixture.workspace.id, '00000000-0000-4000-8000-000000000000', { reason: 'nobody' })).status).toBe(404)
       expect((await setLifecycle(fixture.otherWorkspace.id, fixture.slave.id, { lifecycle: 'project' })).status).toBe(404)
 
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).releasedAt).toBeNull()
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).person.releasedAt).toBeNull()
       expect(await prisma.executionEvent.count({ where: { type: 'slave_released' } })).toBe(0)
     })
 
     it('400s a release with no reason and a blank one: the sentence is what makes the row explainable', async (): Promise<void> => {
       await settleTheRun()
-      await prisma.slave.update({ where: { id: fixture.slave.id }, data: { lifecycle: 'ephemeral' } })
+      await prisma.person.update({ where: { id: fixture.slave.personId }, data: { lifecycle: 'ephemeral' } })
 
       expect((await release(fixture.workspace.id, fixture.slave.id, {})).status).toBe(400)
       expect((await release(fixture.workspace.id, fixture.slave.id, { reason: '' })).status).toBe(400)
@@ -568,7 +566,7 @@ describe('the control routes', () => {
         { params: Promise.resolve({ workspaceId: fixture.workspace.id, slaveId: fixture.slave.id }) },
       )
       expect(malformed.status).toBe(400)
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).releasedAt).toBeNull()
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).person.releasedAt).toBeNull()
     })
   })
 
@@ -1157,7 +1155,7 @@ describe('the control routes', () => {
       const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })
       expect(row.status).toBe('approved')
       expect(row.resolvedAt).not.toBeNull()
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual(['reviewer'])
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).runtimeRoles).toEqual(['reviewer'])
       expect(await prisma.executionEvent.count({ where: { type: 'supervisor_resolved' } })).toBe(1)
     })
 
@@ -1169,7 +1167,7 @@ describe('the control routes', () => {
       expect((await approve(fixture.workspace.id, '00000000-0000-4000-8000-000000000000')).status).toBe(404)
 
       expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })).status).toBe('pending')
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([])
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).runtimeRoles).toEqual([])
       expect(await prisma.executionEvent.count()).toBe(0)
     })
 
@@ -1180,7 +1178,7 @@ describe('the control routes', () => {
 
       expect(response.status).toBe(409)
       expect((await response.json()).error).toContain('applied')
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([])
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).runtimeRoles).toEqual([])
     })
 
     it('rejecting keeps the action out of the world and keeps the reason', async (): Promise<void> => {
@@ -1190,7 +1188,7 @@ describe('the control routes', () => {
 
       expect(response.status).toBe(200)
       expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decisionId } })).status).toBe('rejected')
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id } })).runtimeRoles).toEqual([])
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slave.id }, include: { person: true } })).runtimeRoles).toEqual([])
       const resolved = await prisma.executionEvent.findFirstOrThrow({ where: { type: 'supervisor_resolved' } })
       expect(resolved.payload).toMatchObject({ outcome: 'rejected', reason: 'Alex is on the payments rewrite' })
     })

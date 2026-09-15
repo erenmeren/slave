@@ -199,7 +199,6 @@ async function deleteGateTemplates(label) {
   if (rows.length === 0) return
   console.log(`${label}: removing ${String(rows.length)} gate template(s): ${JSON.stringify(rows.map((r) => r.name))}`)
   const ids = rows.map((r) => r.id)
-  await prisma.companySlave.deleteMany({ where: { templateId: { in: ids } } }).catch(() => {})
   // M48: an import also writes a `RunbookTemplate` per persona workflow, and `sourceTemplateId` is
   // SetNull -- so a runbook whose template goes first can never be found again, and every run of
   // this gate left one more behind. Removed BEFORE the templates, in both the preflight and the
@@ -637,16 +636,11 @@ try {
   // whether the title reads as the role, and a gate whose candidate matched on the title would be
   // proving the ordering rather than the decision.
   const dev = await prisma.slave.create({
-    data: {
-      teamId: team.id,
-      name: WORKER_NAME,
-      role: 'Senior Engineer',
-      runtimeRoles: ['backend', 'manager'],
-      capabilities: ['backend.api-design'],
-    },
+    data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend', 'manager'], personId: (await prisma.person.create({ data: { name: WORKER_NAME, capabilities: ['backend.api-design'] } })).id },
+    include: { person: true },
   })
   const devId = dev.id
-  console.log(`slave ${devId} (${WORKER_NAME}): runtimeRoles ${JSON.stringify(dev.runtimeRoles)}, capabilities ${JSON.stringify(dev.capabilities)}`)
+  console.log(`slave ${devId} (${WORKER_NAME}): runtimeRoles ${JSON.stringify(dev.runtimeRoles)}, capabilities ${JSON.stringify(dev.person.capabilities)}`)
 
   console.log(`stage 3 -- set-goal printed: ${JSON.stringify(runCli(['set-goal', '--workspace', workspaceId, '--goal', GOAL]).trim())}`)
 
@@ -723,14 +717,14 @@ try {
   console.log(`stage 5 -- the decision after approval: ${describeDecision(approved)}`)
   if (approved.status !== 'approved') await fail(`stage 5: the approved decision is ${approved.status}, expected approved`)
 
-  const hired = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId }, hiredFromTemplateId: reviewer.id } })
+  const hired = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId }, person: { templateId: reviewer.id } }, include: { person: true } })
   console.log(
-    `stage 5 -- the hire ${hired.id} (${hired.name}): role ${JSON.stringify(hired.role)}, runtimeRoles ` +
-      `${JSON.stringify(hired.runtimeRoles)}, capabilities ${JSON.stringify(hired.capabilities)}, why ${JSON.stringify(hired.selectionRationale)}`,
+    `stage 5 -- the hire ${hired.id} (${hired.person.name}): role ${JSON.stringify(hired.role)}, runtimeRoles ` +
+      `${JSON.stringify(hired.runtimeRoles)}, capabilities ${JSON.stringify(hired.person.capabilities)}, why ${JSON.stringify(hired.person.selectionRationale)}`,
   )
   if (!hired.runtimeRoles.includes('security')) await fail(`stage 5: the hire is not dispatchable as security: ${JSON.stringify(hired.runtimeRoles)}`)
-  if (!hired.capabilities.includes('security.application')) await fail('stage 5: the hire does not provide what it was hired for')
-  if (hired.selectionRationale === null) await fail('stage 5: nothing says why this worker is here')
+  if (!hired.person.capabilities.includes('security.application')) await fail('stage 5: the hire does not provide what it was hired for')
+  if (hired.person.selectionRationale === null) await fail('stage 5: nothing says why this worker is here')
   if ((await prisma.slave.count({ where: { team: { workspaceId } } })) !== 2) {
     await fail('stage 5: approving one hire did not put exactly one new worker on the project')
   }
@@ -741,7 +735,7 @@ try {
     note(row === null ? 'no run for the authentication task on the hire yet' : 'dispatched')
     return row
   })
-  console.log(`stage 5: run ${run.id} started for ${AUTH_TASK_TITLE} on ${hired.name}`)
+  console.log(`stage 5: run ${run.id} started for ${AUTH_TASK_TITLE} on ${hired.person.name}`)
   console.log(
     'stage 5 complete: the Supervisor reasoned in capabilities, a person approved, and the scheduler dispatched on one string ' +
       '-- exactly as it has since M37',
@@ -769,8 +763,8 @@ try {
     `stage 6 -- set-runtime-roles printed: ` +
       JSON.stringify(runCli(['set-runtime-roles', '--slave', devId, '--roles', 'backend,manager']).trim()),
   )
-  const devBefore = await prisma.slave.findUniqueOrThrow({ where: { id: devId } })
-  console.log(`stage 6 -- ${WORKER_NAME} before: runtimeRoles ${JSON.stringify(devBefore.runtimeRoles)}, capabilities ${JSON.stringify(devBefore.capabilities)}`)
+  const devBefore = await prisma.slave.findUniqueOrThrow({ where: { id: devId }, include: { person: true } })
+  console.log(`stage 6 -- ${WORKER_NAME} before: runtimeRoles ${JSON.stringify(devBefore.runtimeRoles)}, capabilities ${JSON.stringify(devBefore.person.capabilities)}`)
   if (devBefore.runtimeRoles.includes('qa')) await fail('stage 6: the precondition failed -- Dev already holds the role its capability projects to')
 
   await prisma.task.create({
@@ -810,7 +804,7 @@ try {
   console.log(`stage 6 -- the routine decision: ${describeDecision(assigned)}`)
   if (assigned.tier !== 'applied' || assigned.status !== 'applied') await fail(`stage 6: this one is routine and must not wait: ${describeDecision(assigned)}`)
   if (assigned.action.kind !== 'assign_capability') await fail(`stage 6: the offer is ${assigned.action.kind}, expected assign_capability`)
-  const devAfter = await prisma.slave.findUniqueOrThrow({ where: { id: devId } })
+  const devAfter = await prisma.slave.findUniqueOrThrow({ where: { id: devId }, include: { person: true } })
   console.log(`stage 6 -- ${WORKER_NAME} after: runtimeRoles ${JSON.stringify(devAfter.runtimeRoles)}`)
   if (!devAfter.runtimeRoles.includes('qa')) await fail('stage 6: the role the capability projects to was not granted')
   if (!devAfter.runtimeRoles.includes('backend')) await fail('stage 6: a union took a role away')
@@ -972,7 +966,7 @@ try {
   await waitVisible(page.getByTestId(`organization-row-${hired.id}`), "the hired specialist's row")
   await waitVisible(page.getByTestId(`organization-row-${devId}`), "the worker who was already here")
   const why = await page.getByTestId(`organization-why-${hired.id}`).textContent()
-  console.log(`stage 7: why ${hired.name} is here = ${JSON.stringify(why)}`)
+  console.log(`stage 7: why ${hired.person.name} is here = ${JSON.stringify(why)}`)
   if (!String(why).includes('Application security')) await fail('stage 7: the row does not say why this worker was chosen')
   const chips = await page.getByTestId(`organization-row-${hired.id}`).getByTestId('capability-chip').allTextContents()
   if (!chips.includes('Application security')) await fail(`stage 7: the row shows ${JSON.stringify(chips)}`)

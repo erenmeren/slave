@@ -4,7 +4,6 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { RosterCompany } from '../../server/org'
 import { sendControl } from '../../lib/postControl'
-import type { TemplateRow } from '../workforce/TemplateForm'
 import { TextField } from '../ui/FormControls'
 import { TeamBlock } from './TeamBlock'
 import { Button } from '../ui/Button'
@@ -14,11 +13,12 @@ import { Button } from '../ui/Button'
 export function CompanyDetail({
   companyId,
   teams,
-  templates,
+  people,
 }: {
   readonly companyId: string
   readonly teams: RosterCompany['teams']
-  readonly templates: readonly TemplateRow[]
+  /** M58 R5: everybody this installation has -- what a department's add-member form picks from. */
+  readonly people: readonly { readonly personId: string; readonly name: string }[]
 }): React.JSX.Element {
   const router = useRouter()
   const [teamName, setTeamName] = useState('')
@@ -44,7 +44,7 @@ export function CompanyDetail({
         <p className="text-xs text-text-3">no departments yet.</p>
       ) : (
         teams.map((team) => (
-          <TeamBlock key={team.companyTeamId} companyTeamId={team.companyTeamId} teamName={team.teamName} members={team.members} templates={templates} />
+          <TeamBlock key={team.companyTeamId} companyTeamId={team.companyTeamId} teamName={team.teamName} members={team.members} people={people} />
         ))
       )}
       <form

@@ -52,9 +52,9 @@ describe('listAllSlaves', () => {
     // below, the other never does.
     const materializedMember = await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
     const catalogOnlyMember = await prisma.person.create({ data: { templateId: template.id, name: 'Nova', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
-    // The materialized project slave, roster-linked via companySlaveId.
+    // The materialized project slave, roster-linked via personId.
     await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', personId: materializedMember.id } })
-    // A hand-made project slave with no companySlaveId at all -- listWorkers' "no roster filter"
+    // A hand-made project slave with no personId at all -- listWorkers' "no roster filter"
     // rule (server/org.ts, WorkerRow docstring) applies here too. Carries its own `model`
     // override (fix round 1, Important finding 2): a hand-made slave has no roster row for
     // `listAllSlaves` to read a chain result off, so its row's `model` must come straight off
@@ -70,7 +70,7 @@ describe('listAllSlaves', () => {
 
     const [atlas, blairRow, nova] = rows
     expect(atlas?.slaveId).not.toBeNull()
-    expect(atlas?.companySlaveId).toBe(materializedMember.id)
+    expect(atlas?.personId).toBe(materializedMember.id)
     expect(atlas?.projectName).toBe('Checkout Platform')
     // No live run at all -- `gate` is `null`, not a guess at what one might resolve to.
     expect(atlas?.gate).toBeNull()
@@ -80,7 +80,7 @@ describe('listAllSlaves', () => {
     expect(atlas?.companyTeamId).toBeNull()
 
     expect(blairRow?.slaveId).not.toBeNull()
-    expect(blairRow?.companySlaveId).toBeNull()
+    expect(blairRow?.personId).not.toBe('')
     expect(blairRow?.projectName).toBe('Checkout Platform')
     expect(blairRow?.model).toBe('claude-haiku-4')
     expect(blairRow?.gate).toBe('all-tools')
@@ -94,7 +94,7 @@ describe('listAllSlaves', () => {
     expect(blairRow?.companyTeamId).toBeNull()
 
     expect(nova?.slaveId).toBeNull()
-    expect(nova?.companySlaveId).toBe(catalogOnlyMember.id)
+    expect(nova?.personId).toBe(catalogOnlyMember.id)
     expect(nova?.projectName).toBeNull()
     expect(nova?.workspaceId).toBeNull()
     expect(nova?.status).toBe('idle')
@@ -128,13 +128,12 @@ describe('listAllSlaves', () => {
     const { rows } = await listAllSlaves()
 
     expect(rows.find((r) => r.slaveId === worker.id)?.runtimeRoles).toEqual(['backend', 'reviewer'])
-    expect(rows.find((r) => r.companySlaveId === member.id)?.runtimeRoles).toEqual([])
+    expect(rows.find((r) => r.personId === member.id)?.runtimeRoles).toEqual([])
   })
 
-  // M50 R1/R6: the Slaves table's Lifecycle column. A project row reads its worker's own column;
-  // a catalog row has no `Slave` at all, and `permanent` is the one honest answer for a member the
-  // organisation HAS -- with no engagement that could ever be over.
-  it('reads a project row\'s lifecycle off the column, and calls a catalog member permanent', async (): Promise<void> => {
+  // M50 R1/R6, on `Person.lifecycle` since M58 R1: the Slaves table's Lifecycle column. One column
+  // for a seated row and a pooled one alike, which is what moving it to the person bought.
+  it('reads every row\'s lifecycle off the person, seated or pooled', async (): Promise<void> => {
     const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
     const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Eng' } })
     const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
@@ -144,7 +143,7 @@ describe('listAllSlaves', () => {
 
     const { rows } = await listAllSlaves()
 
-    const catalogRow = rows.find((r) => r.companySlaveId === member.id && r.slaveId === null)
+    const catalogRow = rows.find((r) => r.personId === member.id && r.slaveId === null)
     expect(catalogRow?.lifecycle).toBe('permanent')
     expect(catalogRow?.released).toBeNull()
     expect(rows.find((r) => r.slaveId === ordinary.id)?.lifecycle).toBe('project')
@@ -180,6 +179,6 @@ describe('listAllSlaves', () => {
 
     const { rows } = await listAllSlaves()
     expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ slaveId: null, companySlaveId: member.id, name: 'Atlas', runCount: 0 })
+    expect(rows[0]).toMatchObject({ slaveId: null, personId: member.id, name: 'Atlas', runCount: 0 })
   })
 })

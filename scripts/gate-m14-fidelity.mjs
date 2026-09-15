@@ -325,7 +325,7 @@ async function dumpGateRows() {
     })
     const runs = await prisma.slaveRun.findMany({
       where: { slave: { team: { workspaceId: workspace.id } } },
-      include: { slave: { select: { name: true } } },
+      include: { slave: { select: { person: { select: { name: true } } } } },
       orderBy: { startedAt: 'asc' },
     })
     const events = await prisma.executionEvent.findMany({
@@ -338,7 +338,7 @@ async function dumpGateRows() {
       tasks,
       runs: runs.map((run) => ({
         id: run.id,
-        slave: run.slave.name,
+        slave: run.slave.person.name,
         provider: run.provider,
         status: run.status,
         pid: run.pid,
@@ -587,9 +587,7 @@ try {
   workspaceId = workspace.id
   teamId = (await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })).id
   slaveId = (
-    await prisma.slave.create({
-      data: { teamId, name: WORKER_NAME, role: 'backend', runtimeRoles: ['backend'], provider: WORKER_PROVIDER, model: WORKER_MODEL },
-    })
+    await prisma.slave.create({ data: { teamId: teamId, role: 'backend', runtimeRoles: ['backend'], provider: WORKER_PROVIDER, model: WORKER_MODEL, personId: (await prisma.person.create({ data: { name: WORKER_NAME } })).id } })
   ).id
   taskId = (
     await prisma.task.create({

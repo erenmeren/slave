@@ -26,6 +26,7 @@ vi.mock('next/headers', () => ({
 let workspaceId = ''
 let otherWorkspaceId = ''
 let taskId = ''
+let personId = ''
 let slaveId = ''
 
 interface MemorySeed {
@@ -38,7 +39,7 @@ interface MemorySeed {
   readonly taskId?: string | null
   readonly runId?: string | null
   readonly workspaceId?: string | null
-  readonly slaveId?: string | null
+  readonly personId?: string | null
   readonly verifiedBy?: string | null
   readonly supersededById?: string | null
   readonly capabilities?: readonly string[]
@@ -52,7 +53,7 @@ async function seedMemory(seed: MemorySeed): Promise<{ readonly id: string }> {
       type: (seed.type ?? 'fact') as never,
       scope: (seed.scope ?? 'workspace') as never,
       workspaceId: seed.workspaceId === undefined ? workspaceId : seed.workspaceId,
-      slaveId: seed.slaveId ?? null,
+      personId: seed.personId ?? null,
       title: seed.title,
       body: seed.body ?? 'the body of the thing this organisation knows',
       status: (seed.status ?? 'verified') as never,
@@ -79,6 +80,7 @@ beforeEach(async () => {
   await syncCapabilityTaxonomy()
   const fixture = await seedWorkspace({ goal: 'Ship the checkout API' })
   workspaceId = fixture.workspaceId
+  personId = fixture.personId
   slaveId = fixture.slaveId
   const task = await seedTask(workspaceId, { title: 'Ship the checkout API', status: 'done' })
   taskId = task.id
@@ -167,7 +169,7 @@ describe('buildKnowledge', () => {
   it('filters by scope, by type and by a word in the title', async () => {
     await seedMemory({ title: 'How we release', type: 'procedure' })
     await seedMemory({ title: 'The orders route needs a session', type: 'fact' })
-    await seedMemory({ title: 'A worker lesson', type: 'lesson', scope: 'worker', workspaceId: null, slaveId })
+    await seedMemory({ title: 'A worker lesson', type: 'lesson', scope: 'worker', workspaceId: null, personId })
 
     expect((await buildKnowledge(workspaceId, { type: 'procedure' }))?.rows.map((r) => r.memory.title)).toEqual([
       'How we release',
@@ -402,7 +404,7 @@ describe('the five routes', () => {
       type: 'lesson',
       scope: 'worker',
       workspaceId: null,
-      slaveId,
+      personId,
       status: 'candidate',
       verifiedBy: null,
     })

@@ -902,9 +902,9 @@ describe('buildOverviewSnapshot', () => {
   // M37 t4: the panel's Profile block and role chips read these two fields, so the chain is walked
   // ONCE here, server-side, with `effectiveProfile` -- never a second copy in a component.
   describe('the profile and runtime roles a panel shows (M37 §6)', () => {
-    /** Links the fixture's worker to a roster row on a template, so all three levels of the
-     *  override chain exist and each can be given (or denied) a profile per case. */
-    async function linkToRoster(profiles: {
+    /** Gives the fixture's SEAT a person hired from a persona, so all three levels of the M58 R7
+     *  chain exist and each can be given (or denied) a profile per case. */
+    async function linkToPersona(profiles: {
       readonly slave: string | null
       readonly company: string | null
       readonly template: string | null
@@ -914,29 +914,35 @@ describe('buildOverviewSnapshot', () => {
       const template = await prisma.slaveTemplate.create({
         data: { name: 'Backend Engineer', role: 'backend', profile: profiles.template },
       })
-      const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', profile: profiles.company, lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
-      await prisma.slave.update({
-        where: { id: fixture.slaveId },
-        data: { companySlaveId: companySlave.id, profile: profiles.slave },
+      const seat = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, select: { personId: true } })
+      await prisma.person.update({
+        where: { id: seat.personId },
+        data: {
+          templateId: template.id,
+          profile: profiles.company,
+          lifecycle: 'permanent',
+          departments: { create: { companyTeamId: companyTeam.id } },
+        },
       })
+      await prisma.slave.update({ where: { id: fixture.slaveId }, data: { profile: profiles.slave } })
     }
 
-    it("reports the worker's own profile with origin 'slave'", async (): Promise<void> => {
-      await linkToRoster({ slave: 'You are careful with payments.', company: 'roster text', template: 'template text' })
+    it("reports the seat's own profile with origin 'seat'", async (): Promise<void> => {
+      await linkToPersona({ slave: 'You are careful with payments.', company: 'person text', template: 'template text' })
 
       const snapshot = await buildOverviewSnapshot(fixture.workspaceId)
 
-      expect(snapshot?.slaves[0]?.profile).toEqual({ text: 'You are careful with payments.', origin: 'slave' })
+      expect(snapshot?.slaves[0]?.profile).toEqual({ text: 'You are careful with payments.', origin: 'seat' })
     })
 
-    it("falls through to the roster row with origin 'company', then the template with origin 'template'", async (): Promise<void> => {
-      await linkToRoster({ slave: null, company: 'roster text', template: 'template text' })
+    it("falls through to the person with origin 'person', then the persona with origin 'template'", async (): Promise<void> => {
+      await linkToPersona({ slave: null, company: 'person text', template: 'template text' })
       expect((await buildOverviewSnapshot(fixture.workspaceId))?.slaves[0]?.profile).toEqual({
-        text: 'roster text',
-        origin: 'company',
+        text: 'person text',
+        origin: 'person',
       })
 
-      await prisma.companySlave.updateMany({ data: { profile: null } })
+      await prisma.person.updateMany({ data: { profile: null } })
       expect((await buildOverviewSnapshot(fixture.workspaceId))?.slaves[0]?.profile).toEqual({
         text: 'template text',
         origin: 'template',
@@ -946,7 +952,7 @@ describe('buildOverviewSnapshot', () => {
     it('reports null when no level of the chain carries one — including a worker with no roster link', async (): Promise<void> => {
       expect((await buildOverviewSnapshot(fixture.workspaceId))?.slaves[0]?.profile).toBeNull()
 
-      await linkToRoster({ slave: null, company: null, template: null })
+      await linkToPersona({ slave: null, company: null, template: null })
       expect((await buildOverviewSnapshot(fixture.workspaceId))?.slaves[0]?.profile).toBeNull()
     })
 

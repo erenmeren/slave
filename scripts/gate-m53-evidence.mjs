@@ -689,18 +689,7 @@ try {
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: TEAM_NAME } })
 
   const makeWorker = async ({ name, templateId, runtimeRoles, capabilities }) => {
-    const row = await prisma.slave.create({
-      data: {
-        teamId: team.id,
-        name,
-        role: WORK_ROLE,
-        runtimeRoles: [...runtimeRoles],
-        capabilities: [...capabilities],
-        model: PIPELINE_MODEL,
-        provider: 'claude_code',
-        ...(templateId === null ? {} : { hiredFromTemplateId: templateId }),
-      },
-    })
+    const row = await prisma.slave.create({ data: { teamId: team.id, role: WORK_ROLE, runtimeRoles: [...runtimeRoles], model: PIPELINE_MODEL, provider: 'claude_code', personId: (await prisma.person.create({ data: { name, capabilities: [...capabilities], ...(templateId === null ? {} : { templateId }) } })).id } })
     console.log(
       `stage 0: worker ${row.id} (${name}) roles=${JSON.stringify(row.runtimeRoles)} ` +
         `capabilities=${JSON.stringify(row.capabilities)} template=${String(templateId)}`,
@@ -737,9 +726,7 @@ try {
   })
   workspaceIds.push(foil.id)
   const foilTeam = await prisma.team.create({ data: { workspaceId: foil.id, name: TEAM_NAME } })
-  const foilWorker = await prisma.slave.create({
-    data: { teamId: foilTeam.id, name: 'Fen', role: WORK_ROLE, runtimeRoles: [], model: PIPELINE_MODEL, provider: 'claude_code' },
-  })
+  const foilWorker = await prisma.slave.create({ data: { teamId: foilTeam.id, role: WORK_ROLE, runtimeRoles: [], model: PIPELINE_MODEL, provider: 'claude_code', personId: (await prisma.person.create({ data: { name: 'Fen' } })).id } })
   const foilRun = await prisma.slaveRun.create({
     data: { slaveId: foilWorker.id, status: 'working', kind: 'implementation', provider: 'claude_code', model: PIPELINE_MODEL, pid: null },
   })

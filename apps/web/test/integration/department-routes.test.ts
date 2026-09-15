@@ -5,7 +5,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { POST as createTeam } from '../../src/app/api/w/[workspaceId]/teams/route.js'
 import { PUT as moveSlaveRoute } from '../../src/app/api/slaves/[slaveId]/team/route.js'
-import { PUT as moveCompanySlaveRoute } from '../../src/app/api/org/slaves/[companySlaveId]/team/route.js'
+import { PUT as movePersonRoute } from '../../src/app/api/org/slaves/[personId]/team/route.js'
 import { PUT as renameTemplate } from '../../src/app/api/org/teams/[companyTeamId]/name/route.js'
 import { DELETE as deleteTemplate } from '../../src/app/api/org/teams/[companyTeamId]/route.js'
 
@@ -84,17 +84,20 @@ describe('PUT /api/slaves/[slaveId]/team', () => {
   it('moves the slave', async () => {
     const response = await moveSlaveRoute(json({ teamId: fixture.qaId }, 'PUT'), { params: Promise.resolve({ slaveId: fixture.slaveId }) })
     expect(response.status).toBe(200)
-    const row = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })
     expect(row.teamId).toBe(fixture.qaId)
   })
 
   // M25 final fix wave added the refusal; this is the route-level pin the review parked.
-  it('409s a move into a department that already has a slave of that name', async () => {
-    await prisma.slave.create({ data: { teamId: fixture.qaId, role: 'qa', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+  // M58 R2 restates the rule as `@@unique([personId, teamId])`: a move into a department this
+  // person already sits in is `already_assigned`, and the seat they were moving from stays put.
+  it('409s a move into a department this person already holds an open seat in', async () => {
+    const seat = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, select: { personId: true } })
+    await prisma.slave.create({ data: { teamId: fixture.qaId, role: 'qa', personId: seat.personId } })
     const response = await moveSlaveRoute(json({ teamId: fixture.qaId }, 'PUT'), { params: Promise.resolve({ slaveId: fixture.slaveId }) })
     expect(response.status).toBe(409)
-    expect((await response.json()).error).toContain('Alex')
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).teamId).toBe(fixture.engineeringId)
+    expect((await response.json()).error).toContain('already has a seat')
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })).teamId).toBe(fixture.engineeringId)
   })
 
   it('400s without a teamId', async () => {
@@ -105,12 +108,13 @@ describe('PUT /api/slaves/[slaveId]/team', () => {
 
 describe('PUT /api/org/slaves/[companySlaveId]/team', () => {
   it('moves the catalog slave', async () => {
-    const response = await moveCompanySlaveRoute(json({ companyTeamId: fixture.emptyTemplateTeamId }, 'PUT'), {
-      params: Promise.resolve({ companySlaveId: fixture.companySlaveId }),
+    const response = await movePersonRoute(json({ companyTeamId: fixture.emptyTemplateTeamId }, 'PUT'), {
+      params: Promise.resolve({ personId: fixture.companySlaveId }),
     })
     expect(response.status).toBe(200)
-    const row = await prisma.companySlave.findUniqueOrThrow({ where: { id: fixture.companySlaveId } })
-    expect(row.companyTeamId).toBe(fixture.emptyTemplateTeamId)
+    // M58 R5: they LEFT the one department and JOINED the other -- one membership, repointed.
+    const memberships = await prisma.companyTeamMember.findMany({ where: { personId: fixture.companySlaveId } })
+    expect(memberships.map((row) => row.companyTeamId)).toEqual([fixture.emptyTemplateTeamId])
   })
 })
 
@@ -123,12 +127,13 @@ describe('PUT /api/org/teams/[companyTeamId]/name and DELETE /api/org/teams/[com
   })
 
   // M27 §4.3: `deleteCompanyTeam` no longer refuses a template that still has members -- it
-  // deletes the template WITH its catalog slaves (the schema cascades `CompanySlave`).
-  it('200s deleting a template with members (cascading its catalog slaves), and an empty one', async () => {
+  // deletes the template WITH its memberships (M58 R5: the people themselves stay).
+  it('200s deleting a template with members (cascading its memberships), and an empty one', async () => {
     const full = await deleteTemplate(new Request('http://test/api', { method: 'DELETE' }), { params: Promise.resolve({ companyTeamId: fixture.templateTeamId }) })
     expect(full.status).toBe(200)
     expect(await prisma.companyTeam.findUnique({ where: { id: fixture.templateTeamId } })).toBeNull()
-    expect(await prisma.companySlave.findUnique({ where: { id: fixture.companySlaveId } })).toBeNull()
+    expect(await prisma.companyTeamMember.count({ where: { personId: fixture.companySlaveId } })).toBe(0)
+    expect(await prisma.person.findUnique({ where: { id: fixture.companySlaveId } })).not.toBeNull()
 
     const empty = await deleteTemplate(new Request('http://test/api', { method: 'DELETE' }), { params: Promise.resolve({ companyTeamId: fixture.emptyTemplateTeamId }) })
     expect(empty.status).toBe(200)

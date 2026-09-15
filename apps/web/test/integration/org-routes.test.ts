@@ -182,103 +182,62 @@ describe('the org routes', () => {
     })
   })
 
-  describe('POST /api/org/slaves', () => {
-    it('creates a slave with no model and returns 200', async (): Promise<void> => {
+  describe('POST /api/org/slaves (M58 R5: a department holds PEOPLE)', () => {
+    async function seedDepartmentAndPerson(): Promise<{ companyTeamId: string; personId: string }> {
       const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
       const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
       const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+      const person = await prisma.person.create({ data: { name: 'Atlas', templateId: template.id } })
+      return { companyTeamId: companyTeam.id, personId: person.id }
+    }
 
-      const response = await slavesPOST(
-        jsonRequest({ companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' }),
-      )
+    it('puts an existing person in the department and returns 200', async (): Promise<void> => {
+      const { companyTeamId, personId } = await seedDepartmentAndPerson()
+
+      const response = await slavesPOST(jsonRequest({ companyTeamId, personId }))
+
       expect(response.status).toBe(200)
-      const slave = await prisma.companySlave.findFirstOrThrow({ where: { companyTeamId: companyTeam.id, name: 'Atlas' } })
-      expect(slave.model).toBeNull()
+      expect(await prisma.companyTeamMember.count({ where: { companyTeamId, personId } })).toBe(1)
     })
 
-    // M12 Task 7: `addCompanySlave` now writes `model` and `provider` as one pair, and this route
-    // does not carry a provider in its body yet (Task 13 owns widening it) -- so a `model` given
-    // through this route always refuses. This test used to assert a successful create with a
-    // model; it now asserts that refusal.
-    it('409s with the model-without-provider refusal on a model given with no provider', async (): Promise<void> => {
-      const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
-      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-      const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+    it('is idempotent: a second call adds no second membership', async (): Promise<void> => {
+      const { companyTeamId, personId } = await seedDepartmentAndPerson()
 
-      const response = await slavesPOST(
-        jsonRequest({ companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas', model: 'opus' }),
-      )
-      expect(response.status).toBe(409)
-      expect((await response.json()).error).toBe('a model must name the provider that runs it')
-      expect(
-        await prisma.companySlave.findFirst({ where: { companyTeamId: companyTeam.id, name: 'Atlas' } }),
-      ).toBeNull()
+      expect((await slavesPOST(jsonRequest({ companyTeamId, personId }))).status).toBe(200)
+      expect((await slavesPOST(jsonRequest({ companyTeamId, personId }))).status).toBe(200)
+
+      expect(await prisma.companyTeamMember.count()).toBe(1)
     })
 
-    it('404s with the template-not-found refusal text on an unknown templateId', async (): Promise<void> => {
-      const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
-      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
+    it('404s with the person-not-found refusal text on an unknown personId', async (): Promise<void> => {
+      const { companyTeamId } = await seedDepartmentAndPerson()
+      const unknown = '00000000-0000-4000-8000-000000000000'
 
-      const response = await slavesPOST(
-        jsonRequest({ companyTeamId: companyTeam.id, templateId: '00000000-0000-4000-8000-000000000000', name: 'Atlas' }),
-      )
+      const response = await slavesPOST(jsonRequest({ companyTeamId, personId: unknown }))
+
       expect(response.status).toBe(404)
-      expect((await response.json()).error).toBe('no template with id 00000000-0000-4000-8000-000000000000')
+      expect((await response.json()).error).toBe(`no slave with id ${unknown}`)
+      expect(await prisma.companyTeamMember.count()).toBe(0)
     })
 
-    it('404s with the company-team-not-found refusal text on an unknown companyTeamId', async (): Promise<void> => {
-      const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+    it('404s with the team-not-found refusal text on an unknown companyTeamId', async (): Promise<void> => {
+      const { personId } = await seedDepartmentAndPerson()
+      const unknown = '00000000-0000-4000-8000-000000000000'
 
-      const response = await slavesPOST(
-        jsonRequest({ companyTeamId: '00000000-0000-4000-8000-000000000000', templateId: template.id, name: 'Atlas' }),
-      )
+      const response = await slavesPOST(jsonRequest({ companyTeamId: unknown, personId }))
+
       expect(response.status).toBe(404)
-      expect((await response.json()).error).toBe('no company team with id 00000000-0000-4000-8000-000000000000')
+      expect((await response.json()).error).toBe(`no company team with id ${unknown}`)
+      expect(await prisma.companyTeamMember.count()).toBe(0)
     })
 
-    it('409s with the invalid-model refusal text on a whitespace-only model', async (): Promise<void> => {
-      const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
-      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-      const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
+    it('400s a body missing either half, and a malformed one', async (): Promise<void> => {
+      const { companyTeamId, personId } = await seedDepartmentAndPerson()
 
-      const response = await slavesPOST(
-        jsonRequest({ companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas', model: '   ' }),
-      )
-      expect(response.status).toBe(409)
-      expect((await response.json()).error).toBe('a model must be a non-empty text')
-    })
-
-    it('400s on a malformed body', async (): Promise<void> => {
-      const response = await slavesPOST(malformedRequest())
-      expect(response.status).toBe(400)
-    })
-
-    // M12 Task 13: this route now carries `provider` beside `model`, so the pair Task 7's guard
-    // above always refused can now actually be written.
-    it('creates a slave with a paired model and provider', async (): Promise<void> => {
-      const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
-      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-      const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
-
-      const response = await slavesPOST(
-        jsonRequest({ companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas', model: 'opus', provider: 'claude_code' }),
-      )
-      expect(response.status).toBe(200)
-      const slave = await prisma.companySlave.findFirstOrThrow({ where: { companyTeamId: companyTeam.id, name: 'Atlas' } })
-      expect(slave.model).toBe('opus')
-      expect(slave.provider).toBe('claude_code')
-    })
-
-    it('409s with the invalid-provider refusal text on an unrecognized provider', async (): Promise<void> => {
-      const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
-      const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-      const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
-
-      const response = await slavesPOST(
-        jsonRequest({ companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas', model: 'opus', provider: 'not-a-provider' }),
-      )
-      expect(response.status).toBe(409)
-      expect((await response.json()).error).toBe('a provider must be a configured kind')
+      expect((await slavesPOST(jsonRequest({ companyTeamId }))).status).toBe(400)
+      expect((await slavesPOST(jsonRequest({ personId }))).status).toBe(400)
+      expect((await slavesPOST(malformedRequest())).status).toBe(400)
+      expect(await prisma.companyTeamMember.count()).toBe(0)
     })
   })
 
@@ -335,7 +294,7 @@ describe('the org routes', () => {
       const response = await modelPOST(jsonRequest({ model: 'opus' }), { params: Promise.resolve({ slaveId }) })
       expect(response.status).toBe(409)
       expect((await response.json()).error).toBe('a model must name the provider that runs it')
-      const slave = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })
+      const slave = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })
       expect(slave.model).toBeNull()
     })
 
@@ -344,7 +303,7 @@ describe('the org routes', () => {
       await prisma.slave.update({ where: { id: slaveId }, data: { model: 'opus', provider: 'claude_code' } })
       const response = await modelPOST(jsonRequest({ model: null }), { params: Promise.resolve({ slaveId }) })
       expect(response.status).toBe(200)
-      const slave = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })
+      const slave = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })
       expect(slave.model).toBeNull()
       expect(slave.provider).toBeNull()
     })
@@ -386,7 +345,7 @@ describe('the org routes', () => {
         params: Promise.resolve({ slaveId }),
       })
       expect(response.status).toBe(200)
-      const slave = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })
+      const slave = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })
       expect(slave.model).toBe('opus')
       expect(slave.provider).toBe('claude_code')
     })
@@ -414,7 +373,7 @@ describe('the org routes', () => {
       expect(response.status).toBe(200)
       const body = (await response.json()) as { workers: readonly { name: string }[] }
       expect(body.workers).toHaveLength(1)
-      expect(body.workers[0]?.name).toBe('Atlas (worker)')
+      expect(body.workers[0]?.name).toBe('Atlas')
     })
 
     // Renamed by the M14 fix wave (review I4): the route lists every slave now, so "empty" means
@@ -450,16 +409,18 @@ describe('the org routes', () => {
       const { aliceId } = await seedTwoSlaves()
       const response = await slaveNamePUT(jsonPutRequest({ name: 'Alexis' }), slaveParams(aliceId))
       expect(response.status).toBe(200)
-      const slave = await prisma.slave.findUniqueOrThrow({ where: { id: aliceId } })
-      expect(slave.name).toBe('Alexis')
+      const slave = await prisma.slave.findUniqueOrThrow({ where: { id: aliceId }, include: { person: true } })
+      expect(slave.person.name).toBe('Alexis')
     })
 
     it('409s with the duplicate-name refusal text when renaming onto a sibling', async (): Promise<void> => {
       const { aliceId } = await seedTwoSlaves()
       const response = await slaveNamePUT(jsonPutRequest({ name: 'Bob' }), slaveParams(aliceId))
       expect(response.status).toBe(409)
-      expect((await response.json()).error).toBe('the name "Bob" is already taken')
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: aliceId } })).name).toBe('Alice')
+      expect((await response.json()).error).toBe(
+        'the name "Bob" belongs to another slave; a slave\'s name is theirs across every project',
+      )
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: aliceId }, include: { person: true } })).person.name).toBe('Alice')
     })
 
     it('400s on a malformed body and on a missing name key', async (): Promise<void> => {
@@ -483,7 +444,7 @@ describe('the org routes', () => {
       const slaveId = await seedSlave()
       const response = await slaveRolePUT(jsonPutRequest({ role: 'frontend' }), slaveParams(slaveId))
       expect(response.status).toBe(200)
-      const slave = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })
+      const slave = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })
       expect(slave.role).toBe('frontend')
     })
 
@@ -499,7 +460,7 @@ describe('the org routes', () => {
       expect((await response.json()).error).toBe(
         `slave ${slaveId} has a live run (${run.id}); change its role when the run has ended`,
       )
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })).role).toBe('backend')
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })).role).toBe('backend')
     })
 
     it('400s on a malformed body and on a missing role key', async (): Promise<void> => {
@@ -523,7 +484,7 @@ describe('the org routes', () => {
       const slaveId = await seedSlave()
       const response = await slaveDELETE(deleteRequest(), slaveParams(slaveId))
       expect(response.status).toBe(200)
-      expect(await prisma.slave.findUnique({ where: { id: slaveId } })).toBeNull()
+      expect(await prisma.slave.findUnique({ where: { id: slaveId }, include: { person: true } })).toBeNull()
     })
 
     // M27 §4.1: `deleteSlave` no longer refuses on run history -- it deletes the slave WITH its
@@ -537,7 +498,7 @@ describe('the org routes', () => {
 
       const response = await slaveDELETE(deleteRequest(), slaveParams(slaveId))
       expect(response.status).toBe(200)
-      expect(await prisma.slave.findUnique({ where: { id: slaveId } })).toBeNull()
+      expect(await prisma.slave.findUnique({ where: { id: slaveId }, include: { person: true } })).toBeNull()
       expect(await prisma.slaveRun.count({ where: { slaveId } })).toBe(0)
     })
 
@@ -551,7 +512,7 @@ describe('the org routes', () => {
       const response = await slaveDELETE(deleteRequest(), slaveParams(slaveId))
       expect(response.status).toBe(409)
       expect((await response.json()).error).toBe(`slave ${slaveId} has 1 live run; wait for them to finish or stop them first`)
-      expect(await prisma.slave.findUnique({ where: { id: slaveId } })).not.toBeNull()
+      expect(await prisma.slave.findUnique({ where: { id: slaveId }, include: { person: true } })).not.toBeNull()
     })
   })
 
@@ -605,7 +566,7 @@ describe('the org routes', () => {
       const response = await teamDELETE(deleteRequest(), teamParams(team.id))
       expect(response.status).toBe(200)
       expect(await prisma.team.findUnique({ where: { id: team.id } })).toBeNull()
-      expect(await prisma.slave.findUnique({ where: { id: slave.id } })).toBeNull()
+      expect(await prisma.slave.findUnique({ where: { id: slave.id }, include: { person: true } })).toBeNull()
     })
 
     it('409s with the live-runs refusal text while one of its slaves holds a live run', async (): Promise<void> => {

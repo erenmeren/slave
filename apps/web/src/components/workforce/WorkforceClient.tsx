@@ -254,7 +254,13 @@ export function WorkforceClient({
             <WorkforceCatalog initial={catalog} taxonomy={taxonomy} />
           </Panel>
           <Panel title="Companies">
-            <CompanyManager companies={companies} roster={roster} templates={templates} />
+            {/* M58 R5: a department holds PEOPLE, so the add-member form picks from everybody this
+                installation has -- which is exactly what the Slaves tab's own rows already are. */}
+            <CompanyManager
+              companies={companies}
+              roster={roster}
+              people={slaves.rows.map((row) => ({ personId: row.personId, name: row.name }))}
+            />
           </Panel>
           {/* M46 plan erratum E7: the import log is per-import-RUN, not per template, so it stays
               one panel on the tab instead of being repeated inside every profile drawer. It is

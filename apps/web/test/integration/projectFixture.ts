@@ -15,6 +15,8 @@ export interface ProjectFixture {
   readonly workspaceId: string
   readonly teamId: string
   readonly slaveId: string
+  /** M58 R2: the person in that seat -- what a memory, a lifecycle and a skill are all about. */
+  readonly personId: string
 }
 
 export interface SeedOptions {
@@ -53,8 +55,9 @@ export async function seedWorkspace(options: SeedOptions = {}): Promise<ProjectF
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, role, runtimeRoles: [role], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
-  return { workspaceId: workspace.id, teamId: team.id, slaveId: slave.id }
+  const person = await prisma.person.create({ data: { name: 'Alex' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role, runtimeRoles: [role], personId: person.id } })
+  return { workspaceId: workspace.id, teamId: team.id, slaveId: slave.id, personId: person.id }
 }
 
 /** A task, with the two columns the schema requires and no test cares about filled in. */

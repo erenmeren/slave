@@ -39,33 +39,33 @@ export function MemberRow({ member }: { readonly member: RosterMemberRow }): Rea
 }
 
 /** One department template's header (inline rename; delete -- M27 §5.1) plus its members and its
- *  own "add member" form (template `<select>`, name, provider `<select>`, optional model via a
- *  `ModelSelect` fed by that provider) -- its own pending/error state so a refusal on one
- *  department template's RENAME never touches another (the delete's pending/error is
- *  `DangerConfirm`'s own). `deleteCompanyTeam` no longer refuses a non-empty department template
- *  -- it cascades the template's catalog slaves along with it -- so the delete is always enabled;
- *  its confirm names that cascade instead of a disabled button naming a refusal that no longer
- *  exists. */
+ *  own "add member" form -- its own pending/error state so a refusal on one department template's
+ *  RENAME never touches another (the delete's pending/error is `DangerConfirm`'s own).
+ *  `deleteCompanyTeam` no longer refuses a non-empty department template -- it cascades the
+ *  template's memberships along with it -- so the delete is always enabled; its confirm names that
+ *  cascade instead of a disabled button naming a refusal that no longer exists.
+ *
+ *  M58 R5: a department holds PEOPLE, so the form picks one from those the installation already
+ *  has rather than typing a name and a template. The persona, the model and the provider left with
+ *  the roster row -- they are the PERSON's, edited where the person is (Task 5's own surface). */
 export function TeamBlock({
   companyTeamId,
   teamName,
   members,
-  templates,
+  people,
 }: {
   readonly companyTeamId: string
   readonly teamName: string
   readonly members: readonly RosterMemberRow[]
-  readonly templates: readonly TemplateRow[]
+  /** Everybody this installation has, by id and name -- the add-member `<select>`'s options. */
+  readonly people: readonly { readonly personId: string; readonly name: string }[]
 }): React.JSX.Element {
   const router = useRouter()
   const [renaming, setRenaming] = useState(false)
   const [draft, setDraft] = useState(teamName)
   const [pending, setPending] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
-  const [templateId, setTemplateId] = useState('')
-  const [name, setName] = useState('')
-  const [model, setModel] = useState('')
-  const [provider, setProvider] = useState<ProviderKind | ''>('')
+  const [personId, setPersonId] = useState('')
   const [memberPending, setMemberPending] = useState(false)
   const [memberErrorText, setMemberErrorText] = useState<string | null>(null)
 
@@ -88,24 +88,10 @@ export function TeamBlock({
   const submit = async (): Promise<void> => {
     setMemberPending(true)
     setMemberErrorText(null)
-    const error = await sendControl('/api/org/slaves', {
-      method: 'POST',
-      body: {
-        companyTeamId,
-        templateId,
-        name,
-        // A `provider` never travels without the `model` it names (controller resolution 2):
-        // if the operator left the model blank, nothing here is sent even when a provider is
-        // selected -- that pairing is the server's to refuse, not this form's to invent.
-        ...(model !== '' ? { model, ...(provider !== '' ? { provider } : {}) } : {}),
-      },
-    })
+    const error = await sendControl('/api/org/slaves', { method: 'POST', body: { companyTeamId, personId } })
     if (error === null) {
       router.refresh()
-      setTemplateId('')
-      setName('')
-      setModel('')
-      setProvider('')
+      setPersonId('')
     } else {
       setMemberErrorText(error)
     }
@@ -149,7 +135,7 @@ export function TeamBlock({
         <DangerConfirm
           label="delete"
           testId="department-template-delete"
-          confirmText={`deletes ${teamName} and its ${plural(members.length, 'catalog slave')}; project departments stay`}
+          confirmText={`deletes ${teamName} and its ${plural(members.length, 'membership')}; the slaves and the project departments stay`}
           onConfirm={async () => {
             const error = await sendControl(`/api/org/teams/${companyTeamId}`, { method: 'DELETE' })
             if (error === null) router.refresh()
@@ -180,63 +166,26 @@ export function TeamBlock({
         }}
       >
         <SelectField
-          label="Template"
+          label="Slave"
           selectProps={
             {
-              'aria-label': 'member template',
-              'data-testid': 'member-template-select',
-              value: templateId,
-              onChange: (event) => setTemplateId(event.target.value),
+              'aria-label': 'member slave',
+              'data-testid': 'member-person-select',
+              value: personId,
+              onChange: (event) => setPersonId(event.target.value),
               disabled: memberPending,
-              className: 'w-40',
+              className: 'w-52',
             } as React.SelectHTMLAttributes<HTMLSelectElement>
           }
         >
-          <option value="">select a template</option>
-          {templates.map((template) => (
-            <option key={template.id} value={template.id}>
-              {template.name}
+          <option value="">select a slave</option>
+          {people.map((person) => (
+            <option key={person.personId} value={person.personId}>
+              {person.name}
             </option>
           ))}
         </SelectField>
-        <TextField
-          label="Name"
-          inputProps={
-            {
-              'aria-label': 'member name',
-              'data-testid': 'member-name-input',
-              value: name,
-              onChange: (event) => setName(event.target.value),
-              disabled: memberPending,
-              className: 'w-36',
-            } as React.InputHTMLAttributes<HTMLInputElement>
-          }
-        />
-        <label className="flex flex-col gap-1">
-          <FieldLabel>Provider</FieldLabel>
-          <ProviderSelect
-            testId="member-provider-select"
-            ariaLabel="member provider"
-            value={provider}
-            onChange={setProvider}
-            disabled={memberPending}
-            placeholder="select a provider"
-            className={`w-28 ${INPUT_SHELL}`}
-          />
-        </label>
-        <label className="flex flex-col gap-1">
-          <FieldLabel>Model</FieldLabel>
-          <ModelSelect
-            provider={provider}
-            value={model}
-            onChange={setModel}
-            disabled={memberPending}
-            ariaLabel="member model"
-            inputTestId="member-model-input"
-            className="w-40"
-          />
-        </label>
-        <Button variant="ghost" size="sm" type="submit" data-testid="member-submit" disabled={memberPending || templateId === '' || name === ''}>
+        <Button variant="ghost" size="sm" type="submit" data-testid="member-submit" disabled={memberPending || personId === ''}>
           Add member
         </Button>
         {memberErrorText !== null && (

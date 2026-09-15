@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { DELETE as deleteCompany } from '../../src/app/api/org/companies/[companyId]/route.js'
-import { DELETE as deleteCompanySlave } from '../../src/app/api/org/slaves/[companySlaveId]/route.js'
+import { DELETE as leaveRoster } from '../../src/app/api/org/slaves/[personId]/route.js'
 import { DELETE as deleteTemplate } from '../../src/app/api/org/templates/[templateId]/route.js'
 
 const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-web-delete-routes-'))
@@ -42,17 +42,20 @@ beforeEach(async () => {
 })
 
 describe('catalog delete routes', () => {
-  it('DELETE /api/org/slaves/[companySlaveId] removes the catalog slave', async () => {
-    const res = await deleteCompanySlave(req(), { params: Promise.resolve({ companySlaveId: f.companySlaveId }) })
+  // M58 R5: taking somebody off the roster is losing every membership -- the person keeps working.
+  it('DELETE /api/org/slaves/[personId] takes them off every department, leaving them there', async () => {
+    const res = await leaveRoster(req(), { params: Promise.resolve({ personId: f.companySlaveId }) })
     expect(res.status).toBe(200)
-    expect(await prisma.companySlave.findUnique({ where: { id: f.companySlaveId } })).toBeNull()
+    expect(await prisma.companyTeamMember.count({ where: { personId: f.companySlaveId } })).toBe(0)
+    expect(await prisma.person.findUnique({ where: { id: f.companySlaveId } })).not.toBeNull()
   })
 
-  it('DELETE /api/org/templates/[templateId] removes the template and its catalog slaves', async () => {
+  it('DELETE /api/org/templates/[templateId] removes the persona and unlinks everybody hired from it', async () => {
     const res = await deleteTemplate(req(), { params: Promise.resolve({ templateId: f.templateId }) })
     expect(res.status).toBe(200)
     expect(await prisma.slaveTemplate.findUnique({ where: { id: f.templateId } })).toBeNull()
-    expect(await prisma.companySlave.count({ where: { templateId: f.templateId } })).toBe(0)
+    expect(await prisma.person.count({ where: { templateId: f.templateId } })).toBe(0)
+    expect(await prisma.person.findUnique({ where: { id: f.companySlaveId } })).not.toBeNull()
   })
 
   it('DELETE /api/org/companies/[companyId] removes the company and clears the workspace\'s companyId', async () => {
@@ -63,9 +66,9 @@ describe('catalog delete routes', () => {
   })
 
   it('404s each on an unknown id with the refusal text', async () => {
-    const companySlave = await deleteCompanySlave(req(), { params: Promise.resolve({ companySlaveId: 'nope' }) })
-    expect(companySlave.status).toBe(404)
-    expect(((await companySlave.json()) as { error: string }).error).toBe('no catalog slave with id nope')
+    const person = await leaveRoster(req(), { params: Promise.resolve({ personId: 'nope' }) })
+    expect(person.status).toBe(404)
+    expect(((await person.json()) as { error: string }).error).toBe('no slave with id nope')
 
     const template = await deleteTemplate(req(), { params: Promise.resolve({ templateId: 'nope' }) })
     expect(template.status).toBe(404)

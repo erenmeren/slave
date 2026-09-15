@@ -296,15 +296,11 @@ try {
 
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
   // The only worker who can be dispatched the gate's tasks, and therefore the only asker.
-  const dev = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Dev', role: 'Senior Engineer', runtimeRoles: ['backend'] },
-  })
+  const dev = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Dev' } })).id } })
   // The recipient the first three questions are addressed to -- by ROLE, and the role is taken away
   // from it after each ask (see the header). It holds no task-shaped role, so the scheduler never
   // dispatches it and it never answers anything.
-  const qa = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Quinn', role: 'QA Engineer', runtimeRoles: [ASKED_ROLE] },
-  })
+  const qa = await prisma.slave.create({ data: { teamId: team.id, role: 'QA Engineer', runtimeRoles: [ASKED_ROLE], personId: (await prisma.person.create({ data: { name: 'Quinn' } })).id } })
   console.log(
     `slaves: Dev ${dev.id} runtimeRoles ${JSON.stringify(dev.runtimeRoles)}, Quinn ${qa.id} runtimeRoles ${JSON.stringify(qa.runtimeRoles)}`,
   )
@@ -749,9 +745,7 @@ try {
   // makes Dev BUSY for this stage and gives the new question a real asker that is really waiting.
   await stopDaemon(daemon3)
 
-  const ops = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Ops', role: 'Platform Engineer', runtimeRoles: ['backend'] },
-  })
+  const ops = await prisma.slave.create({ data: { teamId: team.id, role: 'Platform Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Ops' } })).id } })
   console.log(`stage 4: second backend holder Ops ${ops.id}, idle`)
 
   // The same verb `ask.ts` writes a question with -- the sender is derived from the run, so this is

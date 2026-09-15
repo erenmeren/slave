@@ -99,7 +99,7 @@ try {
     data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Latency Team' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Lex', role: 'backend', runtimeRoles: ['backend'] } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Lex' } })).id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,

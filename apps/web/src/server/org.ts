@@ -925,7 +925,17 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
   // for a project that has since been archived, or removed from every seat they held, is a person
   // this installation still has and used to vanish from the page that lists them.
   const pooled = await prisma.person.findMany({
-    where: { seats: { none: { closedAt: null } } },
+    // Two clauses, and the second is fix round 1's Important finding 1 restated for people.
+    //
+    // The first is the pool itself under this page's own `notArchived` gate: nobody with an open
+    // seat on a project this read shows. The second keeps the row that finding was about -- a
+    // member of a company department whose only project has since been archived -- while leaving
+    // somebody who belongs to no department hidden along with the project they sit on, which is
+    // what the page did before there was a `Person` row to show instead.
+    where: {
+      seats: { none: { closedAt: null, team: { workspace: notArchived(options?.includeArchived) } } },
+      OR: [{ seats: { none: { closedAt: null } } }, { departments: { some: {} } }],
+    },
     orderBy: { name: 'asc' },
     include: {
       template: { select: { role: true, defaultModel: true, provider: true } },

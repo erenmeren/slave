@@ -200,10 +200,10 @@ try {
   await prisma.providerConfiguration.create({ data: { workspaceId, kind: 'claude_code', settings: {} } })
 
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
-  const asker = await prisma.slave.create({ data: { teamId: team.id, name: 'Gate Asker', role: 'backend', runtimeRoles: ['backend'] } })
+  const asker = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Gate Asker' } })).id } })
   // The one the question is addressed to. Its role is deliberately NOT `reviewer`: this gate stops
   // at `reviewing`, and a reviewer here would start a second run mid-assertion.
-  const answerer = await prisma.slave.create({ data: { teamId: team.id, name: 'Gate Answerer', role: 'qa', runtimeRoles: ['qa'] } })
+  const answerer = await prisma.slave.create({ data: { teamId: team.id, role: 'qa', runtimeRoles: ['qa'], personId: (await prisma.person.create({ data: { name: 'Gate Answerer' } })).id } })
   console.log(`asker ${asker.id} (backend), answerer ${answerer.id} (qa)`)
 
   const task = await prisma.task.create({

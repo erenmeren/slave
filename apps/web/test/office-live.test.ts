@@ -4,7 +4,7 @@ import type { OverviewSnapshot, SlaveCardData } from '../src/server/overview.js'
 
 function card(over: Partial<SlaveCardData> = {}): SlaveCardData {
   return {
-    id: 's1', name: 'Alex', role: 'backend', provider: null, gate: null, status: 'idle', breakerLevel: 'none', taskTitle: null, taskId: null,
+    id: 's1', personId: 'p1', name: 'Alex', role: 'backend', provider: null, gate: null, status: 'idle', breakerLevel: 'none', taskTitle: null, taskId: null,
     taskStatus: null, progressPct: 0, stepLabel: null, skill: null, actionLine: null, runId: null, queuedMessage: null,
     resumeRequestedAt: null, recentEvents: [], costUsd: null, toolCalls: 0, pausedAtStep: null, waitingFor: null,
     profile: null, runtimeRoles: [],

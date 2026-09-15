@@ -358,9 +358,7 @@ try {
   otherWorkspaceId = other.id
   const team = await prisma.team.create({ data: { workspaceId, name: TEAM_NAME } })
   teamId = team.id
-  const slave = await prisma.slave.create({
-    data: { teamId, name: SLAVE_NAME, role: 'engineer', runtimeRoles: ['engineer'], model: 'sonnet', provider: 'claude_code' },
-  })
+  const slave = await prisma.slave.create({ data: { teamId: teamId, role: 'engineer', runtimeRoles: ['engineer'], model: 'sonnet', provider: 'claude_code', personId: (await prisma.person.create({ data: { name: SLAVE_NAME } })).id } })
   slaveId = slave.id
 
   // ONE TASK PER COLUMN, named by the column it belongs in so a failure in stage 6 reads itself.
@@ -449,7 +447,7 @@ try {
   companyId = company.id
   for (const [department, memberName] of SIM_ROSTER) {
     const companyTeam = await prisma.companyTeam.create({ data: { companyId, name: department } })
-    await prisma.companySlave.create({ data: { companyTeamId: companyTeam.id, templateId, name: memberName } })
+    await prisma.person.create({ data: { templateId, name: memberName, lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
   }
   for (const [name, policy] of [[SIMULATION_A_NAME, 'A'], [SIMULATION_B_NAME, 'B']]) {
     const created = await createSimulation({ companyId, name, sector: 'trade', policy, seed: 5 })

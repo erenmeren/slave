@@ -137,8 +137,12 @@ describe('the Settings query module', () => {
     it('groups the rows by workspace, so same-named slaves in two projects stay apart', async (): Promise<void> => {
       const checkout = await seedWorkspace('Checkout Platform')
       const ledger = await seedWorkspace('Ledger')
-      const here = await prisma.slave.create({ data: { teamId: checkout.teamId, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
-      const there = await prisma.slave.create({ data: { teamId: ledger.teamId, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+      // M58 R1: two projects cannot hold two slaves of one name any more -- the name is the
+      // PERSON's, across the installation. What this case is about is the SECTIONS, so it is one
+      // person seated on both projects: the strongest form of "they stay apart".
+      const alex = await prisma.person.create({ data: { name: 'Alex' } })
+      const here = await prisma.slave.create({ data: { teamId: checkout.teamId, role: 'backend', personId: alex.id } })
+      const there = await prisma.slave.create({ data: { teamId: ledger.teamId, role: 'backend', personId: alex.id } })
       await prisma.slavePermission.create({ data: { slaveId: here.id, kind: 'read_repo', mode: 'allow' } })
 
       const sections = await buildPermissionMatrix()

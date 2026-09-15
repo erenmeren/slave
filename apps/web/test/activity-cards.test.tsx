@@ -494,7 +494,7 @@ describe('targeted card bodies', () => {
     const Card = ACTIVITY_CARDS['slave.profile_changed']
     render(<Card event={fixtureFor('slave.profile_changed')} {...CARD_PROPS} />)
     expect(screen.getByTestId('transition-label').textContent).toBe('profile set')
-    expect(screen.getByTestId('profile-target').textContent).toBe('this worker')
+    expect(screen.getByTestId('profile-target').textContent).toBe('this seat')
     expect(screen.getByTestId('profile-actor').textContent).toBe('eren')
     expect(screen.getByTestId('profile-sha').textContent).toBe(' · abcdef012345')
   })
@@ -504,7 +504,7 @@ describe('targeted card bodies', () => {
     const event = baseEvent('slave.profile_changed', { target: 'template', targetId: 'st-1', sha256: null, actor: 'eren' })
     render(<Card event={event} {...CARD_PROPS} />)
     expect(screen.getByTestId('transition-label').textContent).toBe('profile cleared')
-    expect(screen.getByTestId('profile-target').textContent).toBe('its template')
+    expect(screen.getByTestId('profile-target').textContent).toBe('its persona')
     expect(screen.queryByTestId('profile-sha')).toBeNull()
   })
 

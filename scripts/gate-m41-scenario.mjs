@@ -199,6 +199,12 @@ const FIXTURES_DIR = join(repoRoot, 'packages/providers/test/fixtures')
 // on this exact name, in the same FK order the `finally` block uses.
 const WORKSPACE_NAME = 'M41 Scenario Project'
 
+/** The crew, prefixed so this gate's people cannot collide with anybody else's on a shared
+ *  development database -- `Person.name` is unique across the INSTALLATION (M58 R1) -- and so
+ *  `preflightCleanup` and the `finally` block can find exactly its own to remove. */
+const CREW_PREFIX = 'M41 '
+const CREW = ['Atlas', 'Dev', 'Ops', 'Rae', 'Quinn']
+
 /** The two requirements this story sets, in order. Each is ONE line, which is what makes the
  *  `goal-history` diff assertion exact: `goalDiff` is a set difference over trimmed non-blank
  *  lines, so a one-line edit is one addition and one removal and nothing else. */
@@ -266,14 +272,26 @@ function makeRepo() {
 
 /** Removes what a prior interrupted run left behind, in the same order the `finally` block uses:
  *  the workspace's events (no FK), then the workspace, which cascades Team/Slave/Task/SlaveRun/
- *  RunContext/GoalVersion/TaskDependency/SlaveMessage and SupervisorDecision. This gate creates no
- *  org rows and no skill rows, so there is nothing else of its own anywhere in the database. */
+ *  RunContext/GoalVersion/TaskDependency/SlaveMessage and SupervisorDecision -- and then this
+ *  gate's own PEOPLE, who outlive every project (M58 R1) and whose names are unique installation-
+ *  wide. This gate creates no other org rows and no skill rows. */
 async function preflightCleanup() {
   const stale = await prisma.workspace.findUnique({ where: { name: WORKSPACE_NAME } })
-  if (stale === null) return
-  console.log(`preflight: removing a leftover ${WORKSPACE_NAME} (${stale.id}) from an earlier interrupted run`)
-  await prisma.executionEvent.deleteMany({ where: { workspaceId: stale.id } }).catch(() => {})
-  await prisma.workspace.delete({ where: { id: stale.id } }).catch(() => {})
+  if (stale !== null) {
+    console.log(`preflight: removing a leftover ${WORKSPACE_NAME} (${stale.id}) from an earlier interrupted run`)
+    await prisma.executionEvent.deleteMany({ where: { workspaceId: stale.id } }).catch(() => {})
+    await prisma.workspace.delete({ where: { id: stale.id } }).catch(() => {})
+  }
+  await removeCrew('preflight')
+}
+
+/** This gate's own people, by their prefixed names. Deleting a person cascades their seats, their
+ *  messages and their runs (M58 R13), so this runs AFTER the workspace delete on both paths. */
+async function removeCrew(label) {
+  const removed = await prisma.person
+    .deleteMany({ where: { name: { in: CREW.map((name) => `${CREW_PREFIX}${name}`) } } })
+    .catch(() => ({ count: 0 }))
+  if (removed.count > 0) console.log(`${label}: removed ${String(removed.count)} of this gate's own slaves`)
 }
 
 let exitCode = 1
@@ -428,13 +446,21 @@ try {
   // it reviews -- `dispatchReview` excludes nobody, so a reviewer that also coded COULD review its
   // own diff, and a fourth slave removes the ambiguity at zero product cost (ruling R5). Quinn
   // holds `qa` only until the question has been asked (erratum E1).
-  const atlas = await prisma.slave.create({ data: { teamId: team.id, name: 'Atlas', role: 'Engineering Manager', runtimeRoles: ['manager'] } })
-  const dev = await prisma.slave.create({ data: { teamId: team.id, name: 'Dev', role: 'Senior Engineer', runtimeRoles: ['backend'] } })
-  const ops = await prisma.slave.create({ data: { teamId: team.id, name: 'Ops', role: 'Platform Engineer', runtimeRoles: ['backend'] } })
-  const rae = await prisma.slave.create({ data: { teamId: team.id, name: 'Rae', role: 'Staff Reviewer', runtimeRoles: ['reviewer'] } })
-  const quinn = await prisma.slave.create({ data: { teamId: team.id, name: 'Quinn', role: 'QA Engineer', runtimeRoles: [ASKED_ROLE] } })
+  // M58 R2: the crew are PEOPLE, and the seats name them. The names carry this gate's own prefix
+  // because `Person.name` is unique across the INSTALLATION (R1) and this gate shares a development
+  // database with every other one.
+  const seat = async (role, runtimeRoles, name) =>
+    prisma.slave.create({
+      data: { teamId: team.id, role, runtimeRoles, personId: (await prisma.person.create({ data: { name: `${CREW_PREFIX}${name}` } })).id },
+      include: { person: true },
+    })
+  const atlas = await seat('Engineering Manager', ['manager'], 'Atlas')
+  const dev = await seat('Senior Engineer', ['backend'], 'Dev')
+  const ops = await seat('Platform Engineer', ['backend'], 'Ops')
+  const rae = await seat('Staff Reviewer', ['reviewer'], 'Rae')
+  const quinn = await seat('QA Engineer', [ASKED_ROLE], 'Quinn')
   for (const slave of [atlas, dev, ops, rae, quinn]) {
-    console.log(`slave ${slave.name} ${slave.id} runtimeRoles ${JSON.stringify(slave.runtimeRoles)}`)
+    console.log(`slave ${slave.person.name} ${slave.id} runtimeRoles ${JSON.stringify(slave.runtimeRoles)}`)
   }
 
   /** The environment a child of this gate gets. `--ask-on-task`, `--replan-cancel` and the ask
@@ -770,13 +796,13 @@ try {
   })
 
   const coreRunStarted = await waitUntil('a run for the core task', DISPATCH_TIMEOUT_MS, async (note) => {
-    const run = await prisma.slaveRun.findFirst({ where: { taskId: coreTask.id }, include: { slave: true } })
+    const run = await prisma.slaveRun.findFirst({ where: { taskId: coreTask.id }, include: { slave: { include: { person: true } } } })
     note(run === null ? 'no SlaveRun row yet' : `run ${run.id} is ${run.status}`)
     return run
   })
   // WHICH of the two backend workers took it is recorded, not asserted: `decide()` picks the first
   // non-busy holder in the world's own slave order, and the story is true whichever it is.
-  console.log(`act 2: core was dispatched to ${coreRunStarted.slave.name} (${coreRunStarted.slaveId}) as run ${coreRunStarted.id}`)
+  console.log(`act 2: core was dispatched to ${coreRunStarted.slave.person.name} (${coreRunStarted.slaveId}) as run ${coreRunStarted.id}`)
 
   const parkedRun = await waitUntil('the run to park waiting for an answer', WAITING_TIMEOUT_MS, async (note) => {
     const run = await prisma.slaveRun.findUnique({ where: { id: coreRunStarted.id } })
@@ -947,9 +973,9 @@ try {
     if (!rows.some((row) => row.taskId === coreTask.id)) await fail(`act 4: core reached done with no ${type} event`)
   }
   // Rae reviewed it, and Rae is not the author (ruling R5).
-  const coreReview = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: coreTask.id, kind: 'review' }, include: { slave: true } })
-  console.log(`act 4 core review run ${coreReview.id} by ${coreReview.slave.name} (${coreReview.status})`)
-  if (coreReview.slaveId !== rae.id) await fail(`act 4's core review was taken by ${coreReview.slave.name}, expected Rae`)
+  const coreReview = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: coreTask.id, kind: 'review' }, include: { slave: { include: { person: true } } } })
+  console.log(`act 4 core review run ${coreReview.id} by ${coreReview.slave.person.name} (${coreReview.status})`)
+  if (coreReview.slaveId !== rae.id) await fail(`act 4's core review was taken by ${coreReview.slave.person.name}, expected Rae`)
 
   // M35's whole claim, measured through the snapshot the SCHEDULER decides from: work that is done
   // but not merged does not unblock anything.
@@ -991,8 +1017,8 @@ try {
   })
   console.log(`act 4 api: ${describeTask(apiDone)}, integratedAt ${JSON.stringify(apiDone.integratedAt)}, branch ${JSON.stringify(apiDone.branch)}`)
   if (apiDone.integratedAt !== null) await fail('act 4: api integrated itself on a workspace that does not auto-merge')
-  const apiRuns = await prisma.slaveRun.findMany({ where: { taskId: apiTask.id }, include: { slave: true } })
-  console.log(`act 4 api runs: ${apiRuns.map((run) => `${run.kind} by ${run.slave.name} (${run.status})`).join(', ')}`)
+  const apiRuns = await prisma.slaveRun.findMany({ where: { taskId: apiTask.id }, include: { slave: { include: { person: true } } } })
+  console.log(`act 4 api runs: ${apiRuns.map((run) => `${run.kind} by ${run.slave.person.name} (${run.status})`).join(', ')}`)
   const apiImplementations = apiRuns.filter((run) => run.kind === 'implementation')
   if (apiImplementations.length !== 1) {
     await fail(
@@ -1461,6 +1487,7 @@ try {
     // SupervisorDecision.
     await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})
   }
+  await removeCrew('cleanup')
   // The last two are the only statements left in this block that can throw, and a throw HERE is the
   // worst kind (fix round 1, minor 5): out of a `finally` it replaces whatever the `try` was failing
   // with -- the gate's own diagnosis, row dump and all -- and on the success path it would skip

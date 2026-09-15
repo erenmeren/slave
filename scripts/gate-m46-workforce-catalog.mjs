@@ -186,7 +186,6 @@ async function deleteGateTemplates(label) {
   if (rows.length === 0) return
   console.log(`${label}: removing ${String(rows.length)} gate template(s): ${JSON.stringify(rows.map((r) => r.name))}`)
   const ids = rows.map((r) => r.id)
-  await prisma.companySlave.deleteMany({ where: { templateId: { in: ids } } }).catch(() => {})
   // M48: an import also writes a `RunbookTemplate` per persona workflow, and `sourceTemplateId` is
   // SetNull -- so a runbook whose template goes first can never be found again, and every run of
   // this gate left one more behind. Removed BEFORE the templates, in both the preflight and the

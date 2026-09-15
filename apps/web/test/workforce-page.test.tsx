@@ -55,7 +55,7 @@ vi.mock('../src/server/evidence.js', () => ({
 function slaveRow(over: Partial<AllSlaveRow> = {}): AllSlaveRow {
   return {
     slaveId: 'a1',
-    companySlaveId: null,
+    personId: 'p1',
     name: 'Alex',
     role: 'backend',
     departmentName: 'Engineering',
@@ -95,7 +95,7 @@ function skillsPage(over: Partial<SkillsPage> = {}): SkillsPage {
       {
         id: 'p1',
         name: 'plugin:superpowers',
-        skills: [{ id: 's1', name: 'writing-plans', description: 'plans things', runs: 18, state: 'ready', slaveIds: [] }],
+        skills: [{ id: 's1', name: 'writing-plans', description: 'plans things', runs: 18, state: 'ready', holders: [] }],
       },
     ],
     slaves: [{ id: 'a1', name: 'Alex Turner', status: 'working' }],

@@ -207,7 +207,6 @@ async function deleteGateTemplates(label) {
   if (rows.length === 0) return
   console.log(`${label}: removing ${String(rows.length)} gate template(s)`)
   const ids = rows.map((row) => row.id)
-  await prisma.companySlave.deleteMany({ where: { templateId: { in: ids } } }).catch(() => {})
   await prisma.slaveTemplate.deleteMany({ where: { id: { in: ids } } }).catch(() => {})
 }
 
@@ -1605,8 +1604,8 @@ try {
   await page.keyboard.press('Escape')
 
   // And the one function §4 says this milestone may not touch, asserted FROM the module.
-  await assertEqual(profileKeyOf({ slaveId: 's1', hiredFromTemplateId: 't1' }), 'template:t1', 'stage 10: profileKeyOf for a hired worker')
-  await assertEqual(profileKeyOf({ slaveId: 's1', hiredFromTemplateId: null }), 'slave:s1', 'stage 10: profileKeyOf for a bespoke worker')
+  await assertEqual(profileKeyOf({ slaveId: 's1', templateId: 't1' }), 'template:t1', 'stage 10: profileKeyOf for a hired worker')
+  await assertEqual(profileKeyOf({ slaveId: 's1', templateId: null }), 'slave:s1', 'stage 10: profileKeyOf for a bespoke worker')
   console.log(
     'stage 10 PASSED: nothing this milestone drew prints a raw member as its own words, every raw value is one ' +
       'attribute away, and evidence still keys on the profile it always did',

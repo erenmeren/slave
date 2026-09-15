@@ -223,7 +223,7 @@ async function dumpGateRows() {
   for (const workspace of workspaces) {
     const runs = await prisma.slaveRun.findMany({
       where: { slave: { team: { workspaceId: workspace.id } } },
-      include: { slave: { select: { name: true } }, checkpoint: true },
+      include: { slave: { select: { person: { select: { name: true } } } }, checkpoint: true },
       orderBy: { startedAt: 'asc' },
     })
     const events = await prisma.executionEvent.findMany({
@@ -235,7 +235,7 @@ async function dumpGateRows() {
       workspace,
       runs: runs.map((run) => ({
         id: run.id,
-        slave: run.slave.name,
+        slave: run.slave.person.name,
         provider: run.provider,
         status: run.status,
         pid: run.pid,
@@ -385,9 +385,7 @@ try {
     await fail(`${BUDGETED_WORKSPACE} was created with a null budget: stage 4 cannot test a budgeted workspace with no budget`)
   }
   const budgetedTeam = await prisma.team.create({ data: { workspaceId: budgeted.id, name: 'Gate Team' } })
-  await prisma.slave.create({
-    data: { teamId: budgetedTeam.id, name: CURSOR_WORKER, role: 'backend', runtimeRoles: ['backend'], model: CURSOR_MODEL, provider: 'cursor' },
-  })
+  await prisma.slave.create({ data: { teamId: budgetedTeam.id, role: 'backend', runtimeRoles: ['backend'], model: CURSOR_MODEL, provider: 'cursor', personId: (await prisma.person.create({ data: { name: CURSOR_WORKER } })).id } })
   const budgetedTask = await prisma.task.create({
     data: {
       workspaceId: budgeted.id,
@@ -476,12 +474,8 @@ try {
   // Both workers carry an explicit pair. `resolveRuntime` only consults a level that NAMES a model,
   // so a worker with a null model would fall through to the workspace default and both would
   // resolve to `claude_code` -- the seam this stage exists to prove would be invisible.
-  const claudeSlave = await prisma.slave.create({
-    data: { teamId: team.id, name: CLAUDE_WORKER, role: 'backend', runtimeRoles: ['backend'], model: CLAUDE_MODEL, provider: 'claude_code' },
-  })
-  const cursorSlave = await prisma.slave.create({
-    data: { teamId: team.id, name: CURSOR_WORKER, role: 'backend', runtimeRoles: ['backend'], model: CURSOR_MODEL, provider: 'cursor' },
-  })
+  const claudeSlave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], model: CLAUDE_MODEL, provider: 'claude_code', personId: (await prisma.person.create({ data: { name: CLAUDE_WORKER } })).id } })
+  const cursorSlave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], model: CURSOR_MODEL, provider: 'cursor', personId: (await prisma.person.create({ data: { name: CURSOR_WORKER } })).id } })
   // Two tasks, one per worker, both `maxAttempts: 1` for the spend reason stage 4's task gives.
   for (const suffix of ['A', 'B']) {
     await prisma.task.create({

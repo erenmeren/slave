@@ -143,10 +143,10 @@ describe('SlaveRowActions', () => {
   })
 
   it('a catalog row deletes through /api/org/slaves/:id', async () => {
-    render(<SlaveRowActions name="Sam" role="backend" catalog={{ companySlaveId: 'cs1' }} />)
+    render(<SlaveRowActions name="Sam" role="backend" pool={{ personId: 'cs1' }} />)
 
     fireEvent.click(screen.getByTestId('catalog-slave-delete'))
-    expect(screen.getByTestId('catalog-slave-delete-confirm').textContent).toBe('deletes Sam from the catalog; project copies stay')
+    expect(screen.getByTestId('catalog-slave-delete-confirm').textContent).toBe('takes Sam off every company roster; they keep working and keep every seat')
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('catalog-slave-delete-confirm'))

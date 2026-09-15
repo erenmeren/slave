@@ -15,9 +15,9 @@ function page(over: Partial<SkillsPage> = {}): SkillsPage {
         id: 'p1',
         name: 'plugin:superpowers',
         skills: [
-          { id: 's1', name: 'writing-plans', description: 'plans things', runs: 18, state: 'ready', slaveIds: [] },
-          { id: 's2', name: 'brainstorming', description: 'explores intent', runs: 24, state: 'ready', slaveIds: ['a1'] },
-          { id: 's3', name: 'gone', description: 'was here once', runs: 2, state: 'missing', slaveIds: [] },
+          { id: 's1', name: 'writing-plans', description: 'plans things', runs: 18, state: 'ready', holders: [] },
+          { id: 's2', name: 'brainstorming', description: 'explores intent', runs: 24, state: 'ready', holders: [{ personId: 'a1', origin: 'person' }] },
+          { id: 's3', name: 'gone', description: 'was here once', runs: 2, state: 'missing', holders: [] },
         ],
       },
     ],
@@ -57,7 +57,7 @@ describe('SkillsClient', () => {
             {
               id: 'p1',
               name: 'personal',
-              skills: [{ id: 's1', name: 'quiet', description: 'never called', runs: 0, state: 'ready', slaveIds: [] }],
+              skills: [{ id: 's1', name: 'quiet', description: 'never called', runs: 0, state: 'ready', holders: [] }],
             },
           ],
         })}

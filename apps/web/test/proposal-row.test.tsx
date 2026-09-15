@@ -135,17 +135,17 @@ describe('actionText', () => {
     ).toBe('give Rae the "security" runtime role, for Application security')
   })
 
-  it('names the worker a materialise_company_worker brings over', () => {
+  it('names the person a materialise_company_worker seats', () => {
     expect(
       actionText({
         kind: 'materialise_company_worker',
-        companySlaveId: 'cs1',
+        personId: 'p1',
         capability: 'security.application',
         capabilityLabel: 'Application security',
         name: 'Sam',
         rationale: 'Sam is already on the company roster and provides Application security.',
       }),
-    ).toBe('bring Sam onto this project from the company roster, for Application security')
+    ).toBe('seat Sam on this project from the pool, for Application security')
   })
 
   it('says when a catalog hire is a temporary specialist, and says nothing when it is not', () => {

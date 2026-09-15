@@ -41,6 +41,7 @@ function renderInShell(ui: React.ReactElement): ReturnType<typeof render> {
 
 const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
   id: 'a1',
+  personId: 'p1',
   name: 'Alex',
   role: 'backend',
   // M12 Task 9 / ruling R10: `'claude_code'` is the `ProviderKind` (the column). The old value

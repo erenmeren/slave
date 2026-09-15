@@ -171,7 +171,7 @@ describe('org query module', () => {
       const projects = await listProjects()
       const project = projects.find((p) => p.id === fixture.workspaceId)
 
-      // Re-pointed by the M14 fix wave (review I4): fixture.slaveId ('Alex') has no companySlaveId
+      // Re-pointed by the M14 fix wave (review I4): fixture.slaveId ('Alex') has no personId
       // and IS a slave, so both count. Company staffing is metadata about a slave, not what
       // makes one.
       expect(project?.workerCount).toBe(2)
@@ -316,7 +316,7 @@ describe('org query module', () => {
       const companySlave = await prisma.person.create({ data: { templateId, name: 'Atlas', model: 'opus', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeamId } } } })
 
       const roster = await listRoster()
-      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
+      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.personId === companySlave.id)
 
       expect(member?.modelSource).toBe('roster')
       expect(member?.effectiveModel).toBe('opus')
@@ -329,7 +329,7 @@ describe('org query module', () => {
       const companySlave = await prisma.person.create({ data: { templateId, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeamId } } } })
 
       const roster = await listRoster()
-      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
+      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.personId === companySlave.id)
 
       expect(member?.modelSource).toBe('template')
       expect(member?.effectiveModel).toBe('sonnet')
@@ -343,7 +343,7 @@ describe('org query module', () => {
       const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Nova', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
 
       const roster = await listRoster()
-      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
+      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.personId === companySlave.id)
 
       expect(member?.modelSource).toBe('none')
       expect(member?.effectiveModel).toBeNull()
@@ -355,7 +355,7 @@ describe('org query module', () => {
       await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', model: 'haiku', personId: companySlave.id } })
 
       const roster = await listRoster()
-      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
+      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.personId === companySlave.id)
 
       expect(member?.modelSource).toBe('worker-varies')
       // effectiveModel still ignores the worker override -- it is the chain result.
@@ -373,7 +373,7 @@ describe('org query module', () => {
       const companySlave = await prisma.person.create({ data: { templateId, name: 'Atlas', model: 'opus', provider: 'claude_code', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeamId } } } })
 
       const roster = await listRoster()
-      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
+      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.personId === companySlave.id)
 
       expect(member?.providerSource).toBe('roster')
       expect(member?.effectiveProvider).toBe('claude_code')
@@ -388,7 +388,7 @@ describe('org query module', () => {
       const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
 
       const roster = await listRoster()
-      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
+      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.personId === companySlave.id)
 
       expect(member?.providerSource).toBe('template')
       expect(member?.effectiveProvider).toBe('cursor')
@@ -399,7 +399,7 @@ describe('org query module', () => {
       const companySlave = await prisma.person.create({ data: { templateId, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeamId } } } })
 
       const roster = await listRoster()
-      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
+      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.personId === companySlave.id)
 
       expect(member?.providerSource).toBe('none')
       expect(member?.effectiveProvider).toBeNull()
@@ -411,7 +411,7 @@ describe('org query module', () => {
       await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', model: 'haiku', provider: 'claude_code', personId: companySlave.id } })
 
       const roster = await listRoster()
-      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
+      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.personId === companySlave.id)
 
       expect(member?.providerSource).toBe('worker-varies')
       // effectiveProvider still ignores the worker override -- it is the chain result.
@@ -429,7 +429,7 @@ describe('org query module', () => {
       await prisma.task.update({ where: { id: fixture.taskId }, data: { activeRunId: run.id } })
 
       const roster = await listRoster()
-      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
+      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.personId === companySlave.id)
       const workerRow = member?.workers.find((w) => w.slaveId === worker.id)
 
       expect(workerRow?.status).toBe('working')
@@ -445,7 +445,7 @@ describe('org query module', () => {
       await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', personId: companySlave.id } })
 
       const roster = await listRoster()
-      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.companySlaveId === companySlave.id)
+      const member = roster.flatMap((c) => c.teams).flatMap((t) => t.members).find((m) => m.personId === companySlave.id)
 
       expect(member?.workers[0]?.status).toBe('idle')
       expect(member?.workers[0]?.currentTask).toBeNull()
@@ -464,8 +464,8 @@ describe('org query module', () => {
       // on every development database whose slaves were never staffed from a company.
       const workers = await listWorkers()
 
-      expect(workers.map((w) => w.name)).toEqual(['Alex', 'Atlas (worker)'])
-      const atlas = workers.find((w) => w.name === 'Atlas (worker)')
+      expect(workers.map((w) => w.name)).toEqual(['Alex', 'Atlas'])
+      const atlas = workers.find((w) => w.name === 'Atlas')
       expect(atlas?.role).toBe('backend')
       expect(atlas?.workspaceId).toBe(fixture.workspaceId)
       expect(atlas?.projectName).toBe('Checkout Platform')
@@ -502,9 +502,9 @@ describe('org query module', () => {
 
       const workers = await listWorkers()
       // Re-pointed by the M14 fix wave (review I4): `listWorkers` no longer filters to
-      // roster-linked slaves, so `seed()`'s 'Alex' sorts ahead of 'Atlas (worker)' and index 0 is
+      // roster-linked slaves, so `seed()`'s 'Alex' sorts ahead of 'Atlas' and index 0 is
       // no longer this test's subject. Selected by name instead of by position.
-      const atlas = workers.find((w) => w.name === 'Atlas (worker)')
+      const atlas = workers.find((w) => w.name === 'Atlas')
 
       // No run at all yet -- `provider` is null exactly as `SlaveCardData.provider` is with no
       // live run: a worker's runtime is not decided until a run resolves it.
@@ -521,7 +521,7 @@ describe('org query module', () => {
 
       // Re-pointed by the M14 fix wave (review I4), same reason as above: by name, not by index.
       const atlasIn = (rows: readonly { name: string }[]): number =>
-        rows.findIndex((w) => w.name === 'Atlas (worker)')
+        rows.findIndex((w) => w.name === 'Atlas')
 
       const before = await listWorkers()
       expect(before[atlasIn(before)]?.tokens).toBeNull()

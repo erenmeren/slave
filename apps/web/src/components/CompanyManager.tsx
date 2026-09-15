@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation'
 import type { RosterCompany } from '../server/org'
 import { plural } from '../lib/plural'
 import { sendControl } from '../lib/postControl'
-import type { TemplateRow } from './workforce/TemplateForm'
 import { CompanyDetail } from './company/CompanyDetail'
 import { DangerConfirm } from './ui/DangerConfirm'
 import { EmptyTile } from './ui/EmptyTile'
@@ -33,11 +32,12 @@ export interface CompanyRow {
 export function CompanyManager({
   companies,
   roster,
-  templates,
+  people,
 }: {
   readonly companies: readonly CompanyRow[]
   readonly roster: readonly RosterCompany[]
-  readonly templates: readonly TemplateRow[]
+  /** M58 R5: everybody this installation has -- what a department's add-member form picks from. */
+  readonly people: readonly { readonly personId: string; readonly name: string }[]
 }): React.JSX.Element {
   const router = useRouter()
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -106,7 +106,7 @@ export function CompanyManager({
                     }}
                   />
                 </div>
-                {expanded && <CompanyDetail companyId={company.id} teams={teamsFor(company.id)} templates={templates} />}
+                {expanded && <CompanyDetail companyId={company.id} teams={teamsFor(company.id)} people={people} />}
               </li>
             )
           })}

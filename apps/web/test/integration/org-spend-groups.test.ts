@@ -35,7 +35,11 @@ async function seed(name = 'Spend Groups Fixture'): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+  // Named after the project: `Person.name` is unique across the installation (M58 R1) and this
+  // helper is called once per project.
+  const slave = await prisma.slave.create({
+    data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: `Alex of ${name}` } })).id },
+  })
   return { workspaceId: workspace.id, teamId: team.id, slaveId: slave.id }
 }
 

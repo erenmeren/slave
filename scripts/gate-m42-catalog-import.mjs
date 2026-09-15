@@ -186,7 +186,6 @@ async function deleteGateTemplates(label) {
   if (rows.length === 0) return
   console.log(`${label}: removing ${String(rows.length)} gate template(s): ${JSON.stringify(rows.map((r) => r.name))}`)
   const ids = rows.map((r) => r.id)
-  await prisma.companySlave.deleteMany({ where: { templateId: { in: ids } } }).catch(() => {})
   await prisma.slaveTemplate.deleteMany({ where: { id: { in: ids } } }).catch(() => {})
 }
 

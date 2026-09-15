@@ -315,7 +315,7 @@ try {
   companyId = company.id
   for (const [department, slaveName] of ROSTER) {
     const team = await prisma.companyTeam.create({ data: { companyId, name: department } })
-    await prisma.companySlave.create({ data: { companyTeamId: team.id, templateId, name: slaveName } })
+    await prisma.person.create({ data: { templateId, name: slaveName, lifecycle: 'permanent', departments: { create: { companyTeamId: team.id } } } })
   }
   console.log(`company created and staffed directly: ${companyId} (${COMPANY_NAME}), template ${templateId}`)
 

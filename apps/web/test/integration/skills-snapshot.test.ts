@@ -12,6 +12,7 @@ import { DELETE as assignDELETE, POST as assignPOST } from '../../src/app/api/sk
  * zero (and not a placeholder) is to read it back out of Postgres.
  */
 let slaveId: string
+let personId: string
 let skillId: string
 let providerId: string
 
@@ -31,7 +32,8 @@ beforeEach(async (): Promise<void> => {
     data: { name: 'W', repoPath: '/tmp/skills-page', verifyCommands: ['true'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'T' } })
-  slaveId = (await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })).id
+  personId = (await prisma.person.create({ data: { name: 'Alex' } })).id
+  slaveId = (await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId } })).id
   const provider = await prisma.skillProvider.create({ data: { name: 'plugin:superpowers' } })
   providerId = provider.id
   skillId = (await prisma.skill.create({ data: { providerId: provider.id, name: 'writing-plans', description: 'plans things' } })).id
@@ -111,16 +113,30 @@ describe('buildSkillsPage', () => {
     expect(page.providers[0]?.skills[0]?.state).toBe('missing')
   })
 
-  it('lists the slaves a skill is assigned to', async (): Promise<void> => {
-    await prisma.slaveSkill.create({ data: { slaveId, skillId } })
+  // M58 R3: a grant is the PERSON's, and the page says which of the two ways they hold it.
+  it('lists who holds a skill, and how', async (): Promise<void> => {
+    await prisma.personSkill.create({ data: { personId, skillId, mode: 'granted' } })
     const page = await buildSkillsPage()
-    expect(page.providers[0]?.skills[0]?.slaveIds).toEqual([slaveId])
+    expect(page.providers[0]?.skills[0]?.holders).toEqual([{ personId, origin: 'person' }])
   })
 
-  it('reports each slave with the status derived from its live run', async (): Promise<void> => {
+  // The persona's default reaches everybody hired from it with no row of their own -- computed on
+  // read, which is the whole of D4.
+  it('counts a persona default as a holder, and a revoke takes it away again', async (): Promise<void> => {
+    const template = await prisma.slaveTemplate.create({ data: { name: 'Planner', role: 'planner' } })
+    await prisma.templateSkill.create({ data: { templateId: template.id, skillId } })
+    await prisma.person.update({ where: { id: personId }, data: { templateId: template.id } })
+
+    expect((await buildSkillsPage()).providers[0]?.skills[0]?.holders).toEqual([{ personId, origin: 'persona' }])
+
+    await prisma.personSkill.create({ data: { personId, skillId, mode: 'revoked' } })
+    expect((await buildSkillsPage()).providers[0]?.skills[0]?.holders).toEqual([])
+  })
+
+  it('reports each slave with the status derived from the live run of a seat they hold', async (): Promise<void> => {
     await prisma.slaveRun.create({ data: { slaveId, status: 'working', provider: 'claude_code' } })
     const page = await buildSkillsPage()
-    expect(page.slaves).toEqual([{ id: slaveId, name: 'Alex', status: 'working' }])
+    expect(page.slaves).toEqual([{ id: personId, name: 'Alex', status: 'working' }])
   })
 
   it('names the three scanned roots without offering to change them', async (): Promise<void> => {
@@ -132,24 +148,24 @@ describe('buildSkillsPage', () => {
 
 describe('the /api/skills/assign route', () => {
   it('assigns and unassigns, and the DTO shows both ends of the round trip', async (): Promise<void> => {
-    const assigned = await assignPOST(jsonRequest('POST', { slaveId, skillId }))
+    const assigned = await assignPOST(jsonRequest('POST', { personId, skillId }))
     expect(assigned.status).toBe(200)
     expect(await assigned.json()).toEqual({ ok: true })
-    expect((await buildSkillsPage()).providers[0]?.skills[0]?.slaveIds).toEqual([slaveId])
+    expect((await buildSkillsPage()).providers[0]?.skills[0]?.holders).toEqual([{ personId, origin: 'person' }])
 
-    const removed = await assignDELETE(jsonRequest('DELETE', { slaveId, skillId }))
+    const removed = await assignDELETE(jsonRequest('DELETE', { personId, skillId }))
     expect(removed.status).toBe(200)
-    expect((await buildSkillsPage()).providers[0]?.skills[0]?.slaveIds).toEqual([])
+    expect((await buildSkillsPage()).providers[0]?.skills[0]?.holders).toEqual([])
   })
 
   it('refuses an unknown skill with the control layer’s own words', async (): Promise<void> => {
-    const response = await assignPOST(jsonRequest('POST', { slaveId, skillId: 'nope' }))
+    const response = await assignPOST(jsonRequest('POST', { personId, skillId: 'nope' }))
     expect(response.status).toBe(404)
     expect(await response.json()).toEqual({ error: 'no skill with id nope' })
   })
 
   it('refuses an unknown slave on the DELETE too', async (): Promise<void> => {
-    const response = await assignDELETE(jsonRequest('DELETE', { slaveId: 'nope', skillId }))
+    const response = await assignDELETE(jsonRequest('DELETE', { personId: 'nope', skillId }))
     expect(response.status).toBe(404)
     expect(await response.json()).toEqual({ error: 'no slave with id nope' })
   })
@@ -157,7 +173,7 @@ describe('the /api/skills/assign route', () => {
   it('calls a malformed body a 400, not a refusal', async (): Promise<void> => {
     expect((await assignPOST(malformedRequest('POST'))).status).toBe(400)
     expect((await assignDELETE(malformedRequest('DELETE'))).status).toBe(400)
-    expect((await assignPOST(jsonRequest('POST', { slaveId: 1, skillId }))).status).toBe(400)
+    expect((await assignPOST(jsonRequest('POST', { personId: 1, skillId }))).status).toBe(400)
     // `providerId` is seeded but never a valid body field — the guard is on shape, not on ids.
     expect((await assignPOST(jsonRequest('POST', { providerId }))).status).toBe(400)
   })

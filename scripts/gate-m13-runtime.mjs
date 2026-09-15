@@ -396,7 +396,7 @@ async function dumpGateRows() {
     })
     const runs = await prisma.slaveRun.findMany({
       where: { slave: { team: { workspaceId: workspace.id } } },
-      include: { slave: { select: { name: true } }, checkpoint: true },
+      include: { slave: { select: { person: { select: { name: true } } } }, checkpoint: true },
       orderBy: { startedAt: 'asc' },
     })
     const events = await prisma.executionEvent.findMany({
@@ -410,7 +410,7 @@ async function dumpGateRows() {
       tasks,
       runs: runs.map((run) => ({
         id: run.id,
-        slave: run.slave.name,
+        slave: run.slave.person.name,
         provider: run.provider,
         status: run.status,
         pid: run.pid,
@@ -721,9 +721,7 @@ try {
     await fail(`${BUDGETED_WORKSPACE} was created with a null budget: stage 4 cannot test a budgeted workspace with no budget`)
   }
   const budgetedTeam = await prisma.team.create({ data: { workspaceId: budgeted.id, name: 'Gate Team' } })
-  await prisma.slave.create({
-    data: { teamId: budgetedTeam.id, name: CURSOR_WORKER, role: 'backend', runtimeRoles: ['backend'], model: CURSOR_MODEL, provider: 'cursor' },
-  })
+  await prisma.slave.create({ data: { teamId: budgetedTeam.id, role: 'backend', runtimeRoles: ['backend'], model: CURSOR_MODEL, provider: 'cursor', personId: (await prisma.person.create({ data: { name: CURSOR_WORKER } })).id } })
   const budgetedTask = await prisma.task.create({
     data: {
       workspaceId: budgeted.id,
@@ -934,12 +932,8 @@ try {
   // that NAMES a model, so a worker with a null model would fall through to the workspace default
   // (now `cursor`, thanks to stage 1) and both runs would land on the same runtime -- which is the
   // one thing this stage cannot afford.
-  const claudeSlave = await prisma.slave.create({
-    data: { teamId: team.id, name: CLAUDE_WORKER, role: 'backend', runtimeRoles: ['backend'], model: CLAUDE_MODEL, provider: 'claude_code' },
-  })
-  const cursorSlave = await prisma.slave.create({
-    data: { teamId: team.id, name: CURSOR_WORKER, role: 'backend', runtimeRoles: ['backend'], model: CURSOR_MODEL, provider: 'cursor' },
-  })
+  const claudeSlave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], model: CLAUDE_MODEL, provider: 'claude_code', personId: (await prisma.person.create({ data: { name: CLAUDE_WORKER } })).id } })
+  const cursorSlave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], model: CURSOR_MODEL, provider: 'cursor', personId: (await prisma.person.create({ data: { name: CURSOR_WORKER } })).id } })
   for (const suffix of ['A', 'B']) {
     await prisma.task.create({
       data: {
@@ -1592,9 +1586,7 @@ try {
   // vocabulary. Nothing else is touched: `requestResume` is the real verb, the daemon's own resume
   // pass is what claims it, and `concludeFailedResume` is what has to count the attempt.
   // ============================================================================================
-  const attemptSlave = await prisma.slave.create({
-    data: { teamId: team.id, name: ATTEMPT_WORKER, role: 'stage5', runtimeRoles: ['stage5'], model: CLAUDE_MODEL, provider: 'claude_code' },
-  })
+  const attemptSlave = await prisma.slave.create({ data: { teamId: team.id, role: 'stage5', runtimeRoles: ['stage5'], model: CLAUDE_MODEL, provider: 'claude_code', personId: (await prisma.person.create({ data: { name: ATTEMPT_WORKER } })).id } })
   const attemptTask = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
