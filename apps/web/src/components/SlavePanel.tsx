@@ -15,7 +15,11 @@ import type { SlaveFeedEvent } from '../lib/feedSummary'
 import { formatUsd } from '../lib/realMoney'
 import { providerLabel } from '../lib/providerLabel'
 import type { SlaveCardData, SlaveGrant } from '../server/overview'
+import type { PersonDetail } from '../server/persons'
 import { sendControl } from '../lib/postControl'
+import { DeletePersonButton } from './persons/DeletePersonButton'
+import { PersonProjectsGroup, type AssignableProject } from './persons/PersonProjectsGroup'
+import { PersonSkillsGroup } from './persons/PersonSkillsGroup'
 import { RuntimeRoleChips } from './RuntimeRoleChips'
 import { DOT } from './SlaveCard'
 import { ShellOnlyMark } from './ShellOnlyMark'
@@ -170,6 +174,10 @@ export function SlavePanel({
   workspaceId,
   haltedReason,
   onClose,
+  person = null,
+  projects = [],
+  skillCatalogue = [],
+  onPersonChanged,
 }: {
   readonly slave: SlaveCardData
   readonly liveEvents: readonly SlaveFeedEvent[]
@@ -178,6 +186,12 @@ export function SlavePanel({
    *  cell of the enable/disable matrix (spec §6). */
   readonly haltedReason: string | null
   readonly onClose: () => void
+  /** When set, this is the PERSON's panel (M58 R23): Projects, the effective skill set, and Delete
+   *  with the count. Seat-level controls above stay exactly where they are. */
+  readonly person?: PersonDetail | null
+  readonly projects?: readonly AssignableProject[]
+  readonly skillCatalogue?: readonly { readonly skillId: string; readonly name: string; readonly providerName: string }[]
+  readonly onPersonChanged?: () => void
 }): React.JSX.Element {
   const [pending, setPending] = useState<ReadonlySet<ControlAction>>(new Set())
   const [errorText, setErrorText] = useState<string | null>(null)
@@ -243,6 +257,23 @@ export function SlavePanel({
   const answerEnabled = !workspaceHalted && !resumeRequestedWhilePaused && draft.trim() !== ''
 
   const feed = useMemo(() => mergeFeed(slave.recentEvents, liveEvents), [slave.recentEvents, liveEvents])
+  const inPerson = person !== null
+  const projectSeats = person === null
+    ? []
+    : workspaceId === ''
+      ? [...person.allSeats]
+      : [
+          ...person.allSeats.filter((seat) => seat.workspaceId === workspaceId),
+          ...person.allSeats.filter((seat) => seat.workspaceId !== workspaceId),
+        ]
+  const otherProjects = person === null
+    ? []
+    : [...new Set(
+        person.seats
+          .filter((seat) => workspaceId === '' || seat.workspaceId !== workspaceId)
+          .map((seat) => seat.projectName),
+      )]
+  const refreshPerson = onPersonChanged ?? ((): void => {})
 
   /** The one place this panel writes: mark the control busy, clear the last refusal, dial the
    *  shared `sendControl`, and show whatever it refused with. Every button below goes through it,
@@ -396,8 +427,18 @@ export function SlavePanel({
         * `pause` needs it rendered.
         * ======================================================================================= */}
 
+      {inPerson && person !== null && (
+        <PersonProjectsGroup
+          personId={person.personId}
+          seats={projectSeats}
+          projects={projects}
+          onChanged={refreshPerson}
+        />
+      )}
+
       {/* The one group this panel leads with: what the current run is doing right now. The money
         * moved one group down, to Cost, so this line answers one question rather than two. */}
+      {!inPerson && (
       <DetailsGroup group="run" title="Run" defaultOpen>
         <div className="flex items-center gap-3 font-mono text-xs text-text-2">
           <span data-testid="run-tool-calls">{slave.toolCalls} calls</span>
@@ -407,6 +448,7 @@ export function SlavePanel({
           {waitingFor !== null && <span data-testid="run-waiting-step">waiting at step {slave.pausedAtStep ?? 0}</span>}
         </div>
       </DetailsGroup>
+      )}
 
       {/* The provider chip in the header, expanded: the runtime's WORD, its raw kind in `title`,
         * and what its gate actually permits (spec §8 / Decision 8) with the raw gate in `title`.
@@ -461,9 +503,14 @@ export function SlavePanel({
         </section>
       </DetailsGroup>
 
-      {/* The card's own latest-skill chip, said in full. This is a LIVE fact about this run -- the
-        * `summary` of its most recent `Skill` tool call (`server/overview.ts`) -- and not a list of
-        * what this worker may use; that catalog is its own page. */}
+      {inPerson && person !== null ? (
+        <PersonSkillsGroup
+          personId={person.personId}
+          skills={person.skills}
+          catalogue={skillCatalogue}
+          onChanged={refreshPerson}
+        />
+      ) : (
       <DetailsGroup group="skills" title="Skills">
         <p className="text-xs text-text-2">
           <span data-testid="panel-skill" className="font-mono">{slave.skill ?? '—'}</span>
@@ -475,6 +522,7 @@ export function SlavePanel({
           </Link>
         </p>
       </DetailsGroup>
+      )}
 
       {/* M52 R7. The list is what a person needs at a glance; WHO decided and WHEN is a raw value,
         * so it lives under Advanced -- `docs/ia.md` rule 5, and this panel's own rule that
@@ -625,6 +673,14 @@ export function SlavePanel({
           )}
         </section>
       </DetailsGroup>
+      {inPerson && person !== null && (
+        <DeletePersonButton
+          personId={person.personId}
+          name={person.name}
+          projects={otherProjects}
+          onDeleted={onClose}
+        />
+      )}
     </aside>
   )
 }
