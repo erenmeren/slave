@@ -197,8 +197,9 @@ model Team {
   /// The roster link (M11): null for legacy hand-made teams created before the organization
   /// model, or for a team whose roster row has since been deleted. `assignCompany` matches
   /// project teams by this id first, adopting (stamping) a legacy same-named team on first
-  /// assign rather than duplicating it. `onDelete: SetNull` (not Cascade), mirroring
-  /// `Slave.companySlaveId`: a team with run history must survive its roster row's deletion.
+  /// assign rather than duplicating it. `onDelete: SetNull` (not Cascade), the rule
+  /// `Person.templateId` also follows: a team with run history must survive its roster row's
+  /// deletion.
   companyTeamId String?
 
   workspace   Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -236,104 +237,163 @@ enum BreakerLevel {
   constrained
 }
 
-model Slave {
-  id             String        @id @default(uuid())
-  teamId         String
-  name           String
-  /// The profile's title -- display and persona only (M37 t1). No longer what the scheduler,
-  /// review pass or planning pass dispatch on; that is `runtimeRoles` now. `setSlaveRole` still
-  /// writes this column, unchanged.
-  role           String
-  /// The roles this slave may be dispatched as (M37 t1): the scheduler match, review/manager
-  /// staffing, and message role-addressing all read this set (Task 3), not `role`. Backfilled in
-  /// migration `20260908190000_m37_profiles_roles` from the pre-M37 `role`/`requiredRole` pair --
-  /// see that migration's own comment for the exact rule. An empty set means "cannot be
-  /// dispatched" (M37 spec §2, §7); the web warns. `@default([])`, unlike
-  /// `Workspace.verifyCommands`/`setupCommands`: an empty set is a real (if undispatchable) state,
-  /// not a refusal, so every `slave.create()` call that predates this task keeps compiling and
-  /// keeps inserting a real empty array through the migration's DB-level default.
-  runtimeRoles   String[]      @default([])
-  /// M47 R2: what this worker PROVIDES -- its template's normalised capabilities plus whatever an
-  /// operator added (`set-capabilities`). `runtimeRoles` above is what it may be DISPATCHED as and
-  /// is seeded with the roles these project to; the two are kept apart because a capability is a
-  /// fact about the specialist and a runtime role is a decision about the schedule.
-  capabilities   String[]      @default([])
-  /// Why this worker is on this project, in one sentence a person can read (R6). Written by
-  /// `hireFromTemplate`/`materialiseCompanySlave` from the Supervisor's own rationale; NULL for
-  /// every worker seeded or materialised before M47, where the Organization view says "seeded" or
-  /// "assigned from <company>" instead.
-  selectionRationale String?
-  /// The catalog row this worker was hired from (R4). `onDelete: SetNull`: a worker with run
-  /// history must survive the deletion of the template it came from, exactly as `companySlaveId`
-  /// survives its roster row.
-  hiredFromTemplateId String?
-  /// The roster link (M10): null for legacy hand-made slaves created before the organization
-  /// model, or for a worker whose roster row has since been deleted. `onDelete: SetNull` (not
-  /// Cascade) on the relation below is a binding ruling, not an oversight -- a worker with run
-  /// history must survive its roster row's deletion; deleting a company must never cascade into
-  /// deleting the runs it produced.
-  companySlaveId String?
-  /// The worker-level model override (M10 §6): first non-null wins in
-  /// `worker.model ?? companySlave.model ?? template.defaultModel ?? null`. Legacy slaves with no
-  /// roster link resolve through this column alone.
-  model          String?
-  /// The worker-level provider override (M12 Task 6), mirroring `model`'s resolution chain.
-  /// Nullable: this task only adds the column -- Task 7/8 write and resolve it, and every
-  /// existing row reads back null until then.
-  provider       ProviderKind?
-  /// The worker-level override of the persona Markdown (M37 §2): first non-null wins in
-  /// `slave.profile ?? companySlave.profile ?? template.profile ?? null`, the same chain `model`
-  /// already follows. Nullable: most workers read their profile from the roster/template.
-  profile        String?
-  /// M50 R1: WHY this worker exists, written at the creation site and never derived. Until this
-  /// milestone three surfaces each read `companySlaveId === null ? 'project' : 'company'` for
-  /// themselves, and none of them could say "this one is temporary" because no column held the
-  /// fact. `assignCompanyTx` and `materialiseCompanySlave` write `permanent`; `hireFromTemplate`
-  /// writes `project`, or `ephemeral` with an `engagementTaskId` when the Supervisor asked for one
-  /// assignment. `@default(project)` is the honest default for a hand-made row -- the migration's
-  /// one data statement corrects the roster-linked ones, which the default would call project
-  /// hires.
+/// M58 R1: the PERSON. A slave exists here whether or not any project has a seat for them -- which
+/// is the whole milestone: before it, `Slave.teamId` was required and a `Team` belongs to a
+/// `Workspace`, so nobody could exist without a project.
+///
+/// `name` is unique across the INSTALLATION, not per team: it is the name every project sees and
+/// the name a run's prompt carries, so two people cannot share it the way two materialised workers
+/// on two projects once could. `createPerson` resolves a collision by suffixing ` 2`, ` 3`.
+///
+/// `capabilities` is what this specialist PROVIDES (M47 R2), moved here from the seat because it is
+/// a fact about the person and not about one project's schedule -- `Slave.runtimeRoles` is the
+/// schedule decision and stays on the seat.
+model Person {
+  id                 String         @id @default(uuid())
+  name               String         @unique
+  /// The persona this person was hired from (R1). `onDelete: SetNull`, the rule
+  /// `Slave.hiredFromTemplateId` followed: a person with run history must survive the deletion of
+  /// the template they came from. NULL for a person made from nothing.
+  templateId         String?
+  /// The PERSON-level override of the persona Markdown -- the middle rung of the seat -> person ->
+  /// template chain (R7). Inherits `CompanySlave.profile`'s old position in that chain.
+  profile            String?
+  /// The person-level model override, and the provider that runs it. Always both or neither
+  /// (`pairRefusal`, `packages/control/src/org.ts`).
+  model              String?
+  provider           ProviderKind?
+  /// M47 R2, moved from `Slave` (R1): what this specialist provides, in taxonomy keys.
+  capabilities       String[]       @default([])
+  /// M50 R1, moved from `Slave` (R1): WHY this person exists. Three members, not two -- see the
+  /// plan's pre-flight note 3; `SlaveLifecycle` is pinned member-for-member by
+  /// `packages/db/test/integration/enum-parity.test.ts` and `project` is still a real answer.
   lifecycle          SlaveLifecycle @default(project)
-  /// M50 R2: the ONE assignment an `ephemeral` worker was brought in for -- what `engagement_over`
-  /// measures the end of the engagement against. `onDelete: SetNull`, the rule `companySlaveId` and
-  /// `hiredFromTemplateId` already follow: a worker with run history must survive the deletion of
-  /// the task it was hired for. NULL on every other lifecycle.
-  engagementTaskId   String?
-  /// M50 R3: when the engagement ended. NULL is "still engaged". A released worker keeps every row
-  /// it ever wrote and holds no runtime roles -- that empty set is what stops `decide()` picking
-  /// it, and there is no second filter anywhere.
+  /// M50 R3, moved from `Slave`: when the engagement ended. A released person is not in the pool.
   releasedAt         DateTime?
-  /// M50 R3: the sentence the release was recorded with -- the Supervisor's own situation summary,
-  /// or an operator's `--reason`.
   releaseReason      String?
-  /// M50 R1: when this worker joined the project. Every row that predates this milestone reads back
-  /// the migration's own timestamp, which is the only honest answer a table with no history can
-  /// give -- and is why no surface presents it as a hire date.
-  createdAt          DateTime @default(now())
+  /// M47 R6, moved from `Slave`: why this person is here, in one sentence.
+  selectionRationale String?
+  createdAt          DateTime       @default(now())
 
-  team         Team          @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  companySlave CompanySlave? @relation(fields: [companySlaveId], references: [id], onDelete: SetNull)
-  hiredFromTemplate SlaveTemplate? @relation("HiredWorkers", fields: [hiredFromTemplateId], references: [id], onDelete: SetNull)
-  engagementTask    Task?          @relation("EngagementWorkers", fields: [engagementTaskId], references: [id], onDelete: SetNull)
-
-  permissions SlavePermission[]
-  skills      SlaveSkill[]
-  runs        SlaveRun[]
-  messages    SlaveMessage[]
-  /// M49 R1: this WORKER's own lessons and procedures (`scope: worker`).
+  template    SlaveTemplate?      @relation("HiredPersons", fields: [templateId], references: [id], onDelete: SetNull)
+  /// Every project seat this person holds, open or closed (R2).
+  seats       Slave[]
+  skills      PersonSkill[]
+  departments CompanyTeamMember[]
+  /// M58 R4: what this PERSON learnt, on whichever project they learnt it.
   memories    Memory[]
 
+  @@index([templateId])
+}
+
+/// M58 R3: whether a `PersonSkill` row ADDS a skill to the persona's default set or TAKES one out
+/// of it. One row per (person, skill), so the two can never both be true of one pair.
+enum SkillGrantMode {
+  granted
+  revoked
+}
+
+/// M58 R3: the per-person adjustment to the persona's default skills. The effective set is
+/// `TemplateSkill ∪ granted − revoked`, computed on read by `effectiveSkills`
+/// (`packages/domain/src/persons/effectiveSkills.ts`) and NEVER copied into a row -- which is what
+/// makes changing a persona's defaults change every person hired from it at once (D4).
+model PersonSkill {
+  personId String
+  skillId  String
+  mode     SkillGrantMode
+
+  person Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+  skill  Skill  @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([personId, skillId])
+  @@index([skillId])
+}
+
+/// M58 R3: the persona's DEFAULT skills. Give a skill to the persona once and every person hired
+/// from it has it.
+model TemplateSkill {
+  templateId String
+  skillId    String
+
+  template SlaveTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  skill    Skill         @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([templateId, skillId])
+  @@index([skillId])
+}
+
+/// M58 R5: department membership. Replaces `CompanySlave`, which was a COPY of a template onto a
+/// roster; this is a person BEING IN a department. Assigning a company to a project opens one seat
+/// per member -- binding, not copying.
+model CompanyTeamMember {
+  companyTeamId String
+  personId      String
+
+  companyTeam CompanyTeam @relation(fields: [companyTeamId], references: [id], onDelete: Cascade)
+  person      Person      @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@id([companyTeamId, personId])
+  @@index([personId])
+}
+
+/// M58 R2: the SEAT. This table keeps its name, its id and every child it has ever had -- runs,
+/// permissions, messages, tasks -- because the scheduler, the runs and the permissions are all
+/// about one person on one project, and renaming the table would have been a milestone of churn
+/// for a name (spec D6, which rejected exactly that).
+///
+/// What it is NOT any more is an identity: `name`, `capabilities`, `lifecycle`, `releasedAt`,
+/// `releaseReason`, `selectionRationale`, `hiredFromTemplateId` and `companySlaveId` all moved to
+/// `Person`, and `SlaveSkill` is gone (no seat-level skill difference was ever wanted).
+model Slave {
+  id           String   @id @default(uuid())
+  teamId       String
+  /// M58 R2: WHO sits here. Required and immutable -- moving a person between projects closes one
+  /// seat and opens another (`movePerson`), it does not repoint this column.
+  personId     String
+  /// The profile's title -- display and persona only (M37 t1), and a SEAT fact: the same person may
+  /// be "Reviewer" on one project and "Lead" on another.
+  role         String
+  /// The roles this seat may be DISPATCHED as (M37 t1): the scheduler match, review/manager
+  /// staffing and message role-addressing all read this set, not `role`. A schedule decision, so it
+  /// stays on the seat while `Person.capabilities` -- what the specialist provides -- does not.
+  runtimeRoles String[] @default([])
+  /// The SEAT-level overrides: the top rung of the seat -> person -> template chain (R7).
+  model        String?
+  provider     ProviderKind?
+  profile      String?
+  /// M50 R2: the ONE assignment an ephemeral person was seated for. `onDelete: SetNull`.
+  engagementTaskId String?
+  /// M58 R2: this seat was removed from the project. A closed seat keeps its runs, messages and
+  /// permissions as HISTORY and the scheduler never looks at it again (R17); seating the same
+  /// person on the same team again REOPENS this row rather than adding a second.
+  closedAt     DateTime?
+  createdAt    DateTime @default(now())
+
+  team           Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  /// Cascade, and deliberately so (R13): deleting a person deletes every seat with its runs,
+  /// messages, checkpoints and permissions -- which is exactly what deleting a slave did before
+  /// this milestone.
+  person         Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+  engagementTask Task?  @relation("EngagementWorkers", fields: [engagementTaskId], references: [id], onDelete: SetNull)
+
+  permissions SlavePermission[]
+  runs        SlaveRun[]
+  messages    SlaveMessage[]
+
+  /// R2: one seat per person per team. This is what makes reopening a closed seat the only way the
+  /// same pair can happen twice.
+  @@unique([personId, teamId])
   @@index([teamId])
-  /// M50 R3: `engagement_over`'s own read -- "which workers were brought in for this task".
+  @@index([personId])
   @@index([engagementTaskId])
 }
 
 /// The global catalog (M10 §3): role-shaped cookie cutters a company's roster is instantiated
 /// from. `role` is the SAME exact-match string the scheduler, review pass and planning pass
 /// already key on -- a template whose role is `reviewer` produces workers the review pass can
-/// staff. No new role machinery. Templates can be deleted (M27 §5, `deleteSlaveTemplate`) -- the
-/// verb removes its `CompanySlave`s first (the relation below has no cascade); project slaves
-/// keep the role they were materialized with.
+/// staff. No new role machinery. Templates can be deleted (M27 §5, `deleteSlaveTemplate`) -- M58
+/// R1 made `Person.templateId` a `SetNull` relation, so the verb deletes nothing before the
+/// template row and every person hired from it keeps the role they were hired with.
 model SlaveTemplate {
   id            String         @id @default(uuid())
   name          String         @unique
@@ -400,8 +460,8 @@ model SlaveTemplate {
   ///
   /// ONE reader gates on it: `loadCatalogEntries` (`packages/control/src/supervisorWorld.ts`), the
   /// single place a template becomes a `SupervisorCatalogEntry`. `formTeam` and `rankCandidates` are
-  /// pure functions over a world and are untouched. `addCompanySlave`, `assignCompany`,
-  /// `materialiseCompanySlave` and `add-slave --template` all keep working on an inactive row: an
+  /// pure functions over a world and are untouched. `addDepartmentMember`, `assignCompany`,
+  /// `seatMember` and `add-slave --template` all keep working on an inactive row: an
   /// operator naming a specific row by hand is the same deliberate act as activating it, and a
   /// worker already hired from a template does not stop working when the template is deactivated.
   ///
@@ -443,11 +503,11 @@ model SlaveTemplate {
   /// `searchText`'s reason.
   recommendedSkills String[] @default([])
   createdAt     DateTime       @default(now())
-  companySlaves CompanySlave[]
+  hiredPersons  Person[]        @relation("HiredPersons")
+  defaultSkills TemplateSkill[]
 
   collaborationHints CollaborationHint[] @relation("CollaborationHintOwner")
   advisedBy          CollaborationHint[] @relation("CollaborationHintTarget")
-  hiredWorkers       Slave[]             @relation("HiredWorkers")
   runbooks           RunbookTemplate[]   @relation("RunbookFromTemplate")
   /// M55 R5: the pairs this template is the LOW half of, and the pairs it is the high half of.
   /// Two relations because `aId < bId` is a writer's rule and a pair therefore names this row
@@ -610,8 +670,8 @@ model CompanyTeam {
   companyId String
   name      String
 
-  company      Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
-  slaves       CompanySlave[]
+  company      Company             @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  members      CompanyTeamMember[]
   /// The project `Team` rows materialized/adopted from this roster team across every workspace
   /// it has been assigned to (M11).
   projectTeams Team[]
@@ -619,33 +679,6 @@ model CompanyTeam {
   @@unique([companyId, name])
 }
 
-model CompanySlave {
-  id            String        @id @default(uuid())
-  companyTeamId String
-  templateId    String
-  /// The durable identity -- "Atlas" -- statistics and history accrue to this name across every
-  /// project the company is assigned to, even though each project gets its own materialized
-  /// worker `Slave` row.
-  name          String
-  /// Roster-level override of the template default (M10 §6): sits between
-  /// `SlaveTemplate.defaultModel` and the worker's own `Slave.model` in the resolution chain.
-  model         String?
-  /// Roster-level provider override (M12 Task 6), mirroring `model`'s position in the chain.
-  /// Nullable: this task only adds the column, Task 7/8 write and resolve it.
-  provider      ProviderKind?
-  /// Roster-level override of the template persona (M37 §2): sits between
-  /// `SlaveTemplate.profile` and the worker's own `Slave.profile` in the resolution chain.
-  profile       String?
-
-  companyTeam CompanyTeam   @relation(fields: [companyTeamId], references: [id], onDelete: Cascade)
-  /// Deliberately NOT cascading: a template CAN be deleted now (M27 §5), and this relation carries
-  /// no `onDelete` rule for it, so `deleteSlaveTemplate` must delete every `CompanySlave` of the
-  /// template explicitly, in the same transaction, before deleting the template row itself.
-  template    SlaveTemplate @relation(fields: [templateId], references: [id])
-  workers     Slave[]
-
-  @@unique([companyTeamId, name])
-}
 
 enum PermissionMode {
   allow
@@ -929,21 +962,13 @@ model Skill {
   /// legible. Cleared the moment a later scan finds it again.
   missingSince DateTime?
 
-  provider SkillProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
-  slaves   SlaveSkill[]
+  provider  SkillProvider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  persons   PersonSkill[]
+  templates TemplateSkill[]
 
   @@unique([providerId, name])
 }
 
-model SlaveSkill {
-  slaveId String
-  skillId String
-
-  slave Slave @relation(fields: [slaveId], references: [id], onDelete: Cascade)
-  skill Skill @relation(fields: [skillId], references: [id], onDelete: Cascade)
-
-  @@id([slaveId, skillId])
-}
 
 model ProviderConfiguration {
   id          String       @id @default(uuid())
@@ -1392,7 +1417,7 @@ model RunContext {
 /// from. NOTHING here is ever deleted -- `status: superseded` points at what replaced it and
 /// `status: removed` keeps the reason, and both rows stay.
 ///
-/// Exactly one of `companyId`/`workspaceId`/`slaveId` is set, and it is the one `scope` names.
+/// Exactly one of `companyId`/`workspaceId`/`personId` is set, and it is the one `scope` names.
 /// Enforced by `memoryDraftSchema` and `recordMemory` rather than by a CHECK constraint (plan
 /// decision D1): Prisma's PSL cannot express one, and this milestone's migration has to survive
 /// `prisma migrate diff` reporting no difference.
@@ -1406,7 +1431,7 @@ model Memory {
   scope           MemoryScope
   companyId       String?
   workspaceId     String?
-  slaveId         String?
+  personId        String?
   title           String
   body            String
   status          MemoryStatus     @default(candidate)
@@ -1432,7 +1457,7 @@ model Memory {
 
   company      Company?       @relation(fields: [companyId], references: [id], onDelete: Cascade)
   workspace    Workspace?     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  slave        Slave?         @relation(fields: [slaveId], references: [id], onDelete: Cascade)
+  person       Person?        @relation(fields: [personId], references: [id], onDelete: Cascade)
   task         Task?          @relation(fields: [taskId], references: [id], onDelete: SetNull)
   run          SlaveRun?      @relation(fields: [runId], references: [id], onDelete: SetNull)
   supersededBy Memory?        @relation("MemorySupersedes", fields: [supersededById], references: [id], onDelete: SetNull)
@@ -1445,7 +1470,7 @@ model Memory {
   /// The three retrieval reads, one index each -- `memoriesForRun` asks for all three scopes at
   /// once and the Supervisor's world asks the first for a count alone.
   @@index([workspaceId, status, type, createdAt])
-  @@index([slaveId, status, type, createdAt])
+  @@index([personId, status, type, createdAt])
   @@index([companyId, status, type, createdAt])
   @@index([taskId])
 }

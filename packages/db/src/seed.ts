@@ -28,12 +28,22 @@ const COMPANY_TEAM_NAME = 'Engineering'
 export const DEMO_TRADING_COMPANY_NAME = 'Demo Trading Co.'
 const TRADE_ROSTER: readonly (readonly [string, string])[] = [['Sales', 'Sonia'], ['Purchasing', 'Pete'], ['Operations', 'Olga'], ['Finance', 'Fin']]
 
-/** Atlas Software's Engineering roster -- mirrors today's seeded crew, one member per template. */
+/**
+ * Atlas Software's Engineering department -- mirrors today's seeded crew, one member per template.
+ *
+ * M58 R1: `Person.name` is unique across the INSTALLATION, and these four are NOT the Checkout
+ * Platform crew of the same first names: they are hired from the M10 catalog's own templates
+ * (`Engineering Manager`, `Backend Developer`, ...) where the crew are hired from `Checkout <role>`,
+ * and a person may be hired from one persona only. The ` 2` suffix is not decoration -- it is
+ * exactly the name `uniquePersonName` gives the second `Atlas`, and exactly the name the M58
+ * migration's own de-duplication gives this row on an upgraded database, so a seeded install and an
+ * upgraded one read the same.
+ */
 const ROSTER: readonly { name: string; template: string }[] = [
-  { name: 'Atlas', template: 'Engineering Manager' },
-  { name: 'Alex', template: 'Backend Developer' },
-  { name: 'Emma', template: 'Frontend Developer' },
-  { name: 'Riley', template: 'QA Reviewer' },
+  { name: 'Atlas 2', template: 'Engineering Manager' },
+  { name: 'Alex 2', template: 'Backend Developer' },
+  { name: 'Emma 2', template: 'Frontend Developer' },
+  { name: 'Riley 2', template: 'QA Reviewer' },
 ]
 
 /**
@@ -46,7 +56,7 @@ const ROSTER: readonly { name: string; template: string }[] = [
  */
 export async function seed(): Promise<void> {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "MemorySource", "Memory", "InboundEvent", "CatalogImport", "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "CollaborationHint", "RunbookTemplate", "Capability", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "MemorySource", "Memory", "InboundEvent", "CatalogImport", "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "PersonSkill", "TemplateSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Workspace", "CompanyTeamMember", "Person", "CompanyTeam", "Company", "CollaborationHint", "RunbookTemplate", "Capability", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
 
   // M47 R1: the taxonomy is DATA, and a seeded database has it. Written straight through Prisma
@@ -109,11 +119,32 @@ export async function seed(): Promise<void> {
     (await prisma.team.findMany()).map((team) => [team.name, team.id] as const),
   )
 
+  // M58 R1: the crew are PEOPLE first. One `Person` per member, hired from the `Checkout <role>`
+  // persona -- created here rather than in the catalog-company section below because a person may
+  // only be hired from one persona, and this is the one they were hired from. The Checkout Platform
+  // catalog company further down puts these same people in its departments: the file's own rule
+  // ("one literal for both, because two copies of the crew could disagree") is now a rule the
+  // database keeps, not one the seed re-types.
+  const checkoutTemplateIds = new Map<string, string>()
+  for (const role of new Set(CHECKOUT_PLATFORM_ROSTER.map((member) => member.role))) {
+    const template = await prisma.slaveTemplate.create({ data: { name: checkoutPlatformTemplateName(role), role, defaultModel: null, active: true } })
+    checkoutTemplateIds.set(role, template.id)
+  }
+
+  const personIdsByName = new Map<string, string>()
   for (const member of CHECKOUT_PLATFORM_ROSTER) {
     const teamId = teamsByName.get(member.departmentName)
     if (teamId === undefined) {
       throw new Error(`seed is inconsistent: no team named ${member.departmentName}`)
     }
+    const templateId = checkoutTemplateIds.get(member.role)
+    if (templateId === undefined) {
+      throw new Error(`seed is inconsistent: no template for role ${member.role}`)
+    }
+    const person = await prisma.person.create({
+      data: { name: member.slaveName, templateId, lifecycle: 'project' },
+    })
+    personIdsByName.set(member.slaveName, person.id)
     // `runtimeRoles: [member.role]` (M37 t1 fix round 1): this is the one non-test
     // `slave.create` in the repo that predates `runtimeRoles`, and it would otherwise rely on
     // the column's `@default([])` -- fine today (nothing reads `runtimeRoles` yet), but every
@@ -121,7 +152,7 @@ export async function seed(): Promise<void> {
     // wires the scheduler onto this column instead of `role`. Mirrors the same placeholder
     // `packages/control/src/org.ts` `assignCompanyTx` writes.
     await prisma.slave.create({
-      data: { teamId, name: member.slaveName, role: member.role, runtimeRoles: [member.role], lifecycle: 'project' },
+      data: { teamId, personId: person.id, role: member.role, runtimeRoles: [member.role] },
     })
   }
 
@@ -152,9 +183,10 @@ export async function seed(): Promise<void> {
     if (templateId === undefined) {
       throw new Error(`seed is inconsistent: no template named ${member.template}`)
     }
-    await prisma.companySlave.create({
-      data: { companyTeamId: companyTeam.id, templateId, name: member.name },
+    const person = await prisma.person.create({
+      data: { name: member.name, templateId, lifecycle: 'permanent' },
     })
+    await prisma.companyTeamMember.create({ data: { companyTeamId: companyTeam.id, personId: person.id } })
   }
 
   // M29: a second, non-software company so the Simulations page has a roster to freeze. Four
@@ -162,9 +194,10 @@ export async function seed(): Promise<void> {
   // generic template. Synthetic like everything else here; never assigned to a workspace.
   const tradeTemplate = await prisma.slaveTemplate.create({ data: { name: 'Trade Clerk', role: 'clerk', defaultModel: null, active: true } })
   const trading = await prisma.company.create({ data: { name: DEMO_TRADING_COMPANY_NAME } })
-  for (const [department, slave] of TRADE_ROSTER) {
+  for (const [department, clerk] of TRADE_ROSTER) {
     const team = await prisma.companyTeam.create({ data: { companyId: trading.id, name: department } })
-    await prisma.companySlave.create({ data: { companyTeamId: team.id, templateId: tradeTemplate.id, name: slave } })
+    const person = await prisma.person.create({ data: { name: clerk, templateId: tradeTemplate.id, lifecycle: 'permanent' } })
+    await prisma.companyTeamMember.create({ data: { companyTeamId: team.id, personId: person.id } })
   }
 
   // M31b final fix wave: a catalog company the SOFTWARE sector actually fits. Neither of the two
@@ -173,24 +206,20 @@ export async function seed(): Promise<void> {
   // the drawer's software list was empty on freshly-seeded data and the README had to tell an
   // operator to build a company by hand. This is the legacy workspace's own crew as a catalog
   // company: the same departments, the same roles, so `rosterOf` reads exactly the roster
-  // `packages/simulation/test/software/roster.ts` pins its figures against. One template per
-  // distinct role, because `rosterOf` takes a catalog slave's role off its TEMPLATE.
-  const checkoutTemplateIds = new Map<string, string>()
-  for (const role of new Set(CHECKOUT_PLATFORM_ROSTER.map((member) => member.role))) {
-    const template = await prisma.slaveTemplate.create({ data: { name: checkoutPlatformTemplateName(role), role, defaultModel: null, active: true } })
-    checkoutTemplateIds.set(role, template.id)
-  }
+  // `packages/simulation/test/software/roster.ts` pins its figures against. Since M58 it is
+  // literally the same PEOPLE -- the departments name the persons seated in the legacy workspace
+  // above, whose `Checkout <role>` persona is where `rosterOf` still reads the catalog role from.
   const checkout = await prisma.company.create({ data: { name: CHECKOUT_PLATFORM_COMPANY_NAME } })
   for (const department of CHECKOUT_PLATFORM_TEAMS) {
     const members = CHECKOUT_PLATFORM_ROSTER.filter((member) => member.departmentName === department)
     if (members.length === 0) continue
     const team = await prisma.companyTeam.create({ data: { companyId: checkout.id, name: department } })
     for (const member of members) {
-      const templateId = checkoutTemplateIds.get(member.role)
-      if (templateId === undefined) {
-        throw new Error(`seed is inconsistent: no template for role ${member.role}`)
+      const personId = personIdsByName.get(member.slaveName)
+      if (personId === undefined) {
+        throw new Error(`seed is inconsistent: no person named ${member.slaveName}`)
       }
-      await prisma.companySlave.create({ data: { companyTeamId: team.id, templateId, name: member.slaveName } })
+      await prisma.companyTeamMember.create({ data: { companyTeamId: team.id, personId } })
     }
   }
 

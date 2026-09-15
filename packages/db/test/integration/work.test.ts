@@ -20,14 +20,15 @@ async function seedWorkspace(): Promise<{ workspaceId: string; slaveId: string; 
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
+  const person = await prisma.person.create({ data: { name: 'Alex' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, personId: person.id, role: 'Backend' } })
   return { workspaceId: workspace.id, slaveId: slave.id, maxAttempts: workspace.maxAttempts }
 }
 
 describe('work tables', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "Approval", "SlaveMessage", "Artifact", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "Approval", "SlaveMessage", "Artifact", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 

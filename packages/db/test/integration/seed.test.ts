@@ -15,8 +15,9 @@ describe('seed data', () => {
     const teams = await prisma.team.findMany({ include: { slaves: true }, orderBy: { name: 'asc' } })
     expect(teams.map((t) => t.name)).toEqual(['Engineering', 'Management', 'Marketing', 'Product', 'Security'])
 
-    const slaves = await prisma.slave.findMany({ orderBy: { name: 'asc' } })
-    expect(slaves.map((a) => a.name)).toEqual([
+    // M58 R2: a seat has no name -- the PERSON sitting in it does.
+    const slaves = await prisma.slave.findMany({ include: { person: true }, orderBy: { person: { name: 'asc' } } })
+    expect(slaves.map((a) => a.person.name)).toEqual([
       'Alex',
       'Atlas',
       'Daniel',
@@ -30,7 +31,7 @@ describe('seed data', () => {
 
     // Lowercase, matching the M8b planning dispatch's exact-match `role === 'manager'` -- the
     // same convention `role === 'reviewer'` (M8a) already follows.
-    const atlas = slaves.find((slave) => slave.name === 'Atlas')
+    const atlas = slaves.find((slave) => slave.person.name === 'Atlas')
     expect(atlas?.role).toBe('manager')
   })
 
@@ -68,7 +69,7 @@ describe('seed data', () => {
     ])
   })
 
-  it('seeds Atlas Software with an Engineering roster mirroring the seeded crew', async () => {
+  it('seeds Atlas Software with an Engineering department mirroring the seeded crew', async () => {
     await seed()
 
     const company = await prisma.company.findUniqueOrThrow({ where: { name: 'Atlas Software' } })
@@ -77,16 +78,19 @@ describe('seed data', () => {
     expect(companyTeams.map((t) => t.name)).toEqual(['Engineering'])
 
     const companyTeam = await prisma.companyTeam.findFirstOrThrow({ where: { companyId: company.id } })
-    const roster = await prisma.companySlave.findMany({
+    // M58 R1/R5: four PEOPLE in a department, and their names carry the ` 2` suffix
+    // `uniquePersonName` would give them -- the Checkout Platform crew already hold the plain ones,
+    // and these four are hired from different personas, so they are different people.
+    const roster = await prisma.companyTeamMember.findMany({
       where: { companyTeamId: companyTeam.id },
-      include: { template: true },
-      orderBy: { name: 'asc' },
+      include: { person: { include: { template: true } } },
+      orderBy: { person: { name: 'asc' } },
     })
-    expect(roster.map((member) => ({ name: member.name, template: member.template.name }))).toEqual([
-      { name: 'Alex', template: 'Backend Developer' },
-      { name: 'Atlas', template: 'Engineering Manager' },
-      { name: 'Emma', template: 'Frontend Developer' },
-      { name: 'Riley', template: 'QA Reviewer' },
+    expect(roster.map((member) => ({ name: member.person.name, template: member.person.template?.name }))).toEqual([
+      { name: 'Alex 2', template: 'Backend Developer' },
+      { name: 'Atlas 2', template: 'Engineering Manager' },
+      { name: 'Emma 2', template: 'Frontend Developer' },
+      { name: 'Riley 2', template: 'QA Reviewer' },
     ])
 
     // The legacy seeded workspace is untouched by the company catalog (spec Decision 7): its
@@ -104,12 +108,12 @@ describe('seed data', () => {
     const companyTeams = await prisma.companyTeam.findMany({ where: { companyId: company.id }, orderBy: { name: 'asc' } })
     expect(companyTeams.map((t) => t.name)).toEqual(['Finance', 'Operations', 'Purchasing', 'Sales'])
 
-    const roster = await prisma.companySlave.findMany({
+    const roster = await prisma.companyTeamMember.findMany({
       where: { companyTeam: { companyId: company.id } },
-      include: { template: true },
-      orderBy: { name: 'asc' },
+      include: { person: { include: { template: true } } },
+      orderBy: { person: { name: 'asc' } },
     })
-    expect(roster.map((member) => ({ name: member.name, template: member.template.name }))).toEqual([
+    expect(roster.map((member) => ({ name: member.person.name, template: member.person.template?.name }))).toEqual([
       { name: 'Fin', template: 'Trade Clerk' },
       { name: 'Olga', template: 'Trade Clerk' },
       { name: 'Pete', template: 'Trade Clerk' },
@@ -130,9 +134,19 @@ describe('seed data', () => {
     const roster = await prisma.companyTeam.findMany({
       where: { companyId: company.id },
       orderBy: { name: 'asc' },
-      select: { name: true, slaves: { orderBy: { name: 'asc' }, select: { name: true, template: { select: { role: true } } } } },
+      select: {
+        name: true,
+        members: {
+          orderBy: { person: { name: 'asc' } },
+          select: { person: { select: { name: true, template: { select: { role: true } } } } },
+        },
+      },
     })
-    expect(roster.flatMap((team) => team.slaves.map((slave) => `${team.name}/${slave.name}/${slave.template.role}`))).toEqual([
+    expect(
+      roster.flatMap((team) =>
+        team.members.map((member) => `${team.name}/${member.person.name}/${member.person.template?.role ?? ''}`),
+      ),
+    ).toEqual([
       'Engineering/Alex/Backend',
       'Engineering/Daniel/DevOps',
       'Engineering/Emma/Frontend',
@@ -171,7 +185,8 @@ describe('seed data', () => {
       templates: await prisma.slaveTemplate.count(),
       companies: await prisma.company.count(),
       companyTeams: await prisma.companyTeam.count(),
-      companySlaves: await prisma.companySlave.count(),
+      persons: await prisma.person.count(),
+      departmentMembers: await prisma.companyTeamMember.count(),
     }
 
     await seed()
@@ -182,7 +197,8 @@ describe('seed data', () => {
       templates: await prisma.slaveTemplate.count(),
       companies: await prisma.company.count(),
       companyTeams: await prisma.companyTeam.count(),
-      companySlaves: await prisma.companySlave.count(),
+      persons: await prisma.person.count(),
+      departmentMembers: await prisma.companyTeamMember.count(),
     }
 
     expect(second).toEqual(first)

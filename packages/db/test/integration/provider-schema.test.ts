@@ -6,13 +6,14 @@ async function seedWorkspaceWithSlave(): Promise<{ workspaceId: string; slaveId:
     data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommands: ['npm test'], setupCommands: ['npm ci'] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const person = await prisma.person.create({ data: { name: 'Alex' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, personId: person.id, role: 'backend' } })
   return { workspaceId: workspace.id, slaveId: slave.id }
 }
 
 beforeEach(async (): Promise<void> => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "Checkpoint", "SlaveRun", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "Checkpoint", "SlaveRun", "Task", "Slave", "Team", "Workspace", "CompanyTeamMember", "Person", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
 })
 
@@ -39,7 +40,7 @@ describe('the provider pair columns', () => {
     expect(slave.provider).toBeNull()
   })
 
-  it('stamps provider on Slave, SlaveTemplate, CompanySlave, SlaveRun and Checkpoint', async () => {
+  it('stamps provider on Slave, SlaveTemplate, Person, SlaveRun and Checkpoint', async () => {
     const { slaveId } = await seedWorkspaceWithSlave()
 
     const template = await prisma.slaveTemplate.create({
@@ -49,10 +50,13 @@ describe('the provider pair columns', () => {
 
     const company = await prisma.company.create({ data: { name: 'Atlas Software' } })
     const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-    const companySlave = await prisma.companySlave.create({
-      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas', provider: 'cursor' },
+    // M58 R7: the middle rung of the chain is the PERSON, and it is the person that carries the
+    // provider override the roster row used to.
+    const person = await prisma.person.create({
+      data: { name: 'Atlas', templateId: template.id, provider: 'cursor' },
     })
-    expect(companySlave.provider).toBe('cursor')
+    await prisma.companyTeamMember.create({ data: { companyTeamId: companyTeam.id, personId: person.id } })
+    expect(person.provider).toBe('cursor')
 
     const stampedSlave = await prisma.slave.update({ where: { id: slaveId }, data: { provider: 'claude_code' } })
     expect(stampedSlave.provider).toBe('claude_code')
