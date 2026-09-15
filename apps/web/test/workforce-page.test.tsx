@@ -245,6 +245,14 @@ afterEach(() => {
   search = ''
 })
 
+/** Opens one `DetailsGroup` by `data-group`. A closed group renders no children. */
+function openPanelGroup(group: string): void {
+  const section = document.querySelector(`[data-testid="details-group"][data-group="${group}"]`)
+  const toggle = section?.querySelector('button')
+  if (toggle === null || toggle === undefined) throw new Error(`no DetailsGroup named ${group} on screen`)
+  fireEvent.click(toggle)
+}
+
 describe('WorkforceClient tabs (M44 R1)', () => {
   // The four surfaces the M44 audit found for "a slave" -- a sidebar row, another sidebar row, a
   // section on the Projects home and a panel inside a project -- are four tabs on one page now.
@@ -472,6 +480,30 @@ describe('WorkforceClient row click opens the panel', () => {
     fireEvent.click(screen.getByTestId('person-open'))
 
     expect(await screen.findByRole('heading', { name: 'Alex' })).toBeTruthy()
+  })
+
+  it('disables profile and runtime-roles save for a person in the pool (no seat)', async () => {
+    const pooled = personRow({ seats: [], state: 'pool', stateLabel: 'IN THE POOL' })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/persons/p1') {
+        return new Response(
+          JSON.stringify(personDetail({ seats: [], allSeats: [], state: 'pool', stateLabel: 'IN THE POOL' })),
+          { status: 200 },
+        )
+      }
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<TestWorkforceClient people={[pooled]} />)
+    fireEvent.click(screen.getByTestId('person-open'))
+    expect(await screen.findByRole('heading', { name: 'Alex' })).toBeTruthy()
+
+    openPanelGroup('profile')
+    expect((screen.getByTestId('profile-save') as HTMLButtonElement).disabled).toBe(true)
+    openPanelGroup('messages')
+    expect((screen.getByTestId('runtime-roles-save') as HTMLButtonElement).disabled).toBe(true)
   })
 
   /**

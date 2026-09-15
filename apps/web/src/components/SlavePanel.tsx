@@ -258,6 +258,11 @@ export function SlavePanel({
 
   const feed = useMemo(() => mergeFeed(slave.recentEvents, liveEvents), [slave.recentEvents, liveEvents])
   const inPerson = person !== null
+  // Person-mode synthesizes `slave.id` from the first seat, or from `personId` when there is none
+  // (`WorkforceClient.slaveCardForPerson`). Profile and runtime-roles PATCH seat routes, so a
+  // pool row with `workspaceId === ''` and `id === personId` must not look writable.
+  const canPatchSeat = person === null
+    || (workspaceId !== '' && person.seats.some((seat) => seat.slaveId === slave.id))
   const projectSeats = person === null
     ? []
     : workspaceId === ''
@@ -487,15 +492,16 @@ export function SlavePanel({
           <Button
             variant="ghost"
             data-testid="profile-save"
-            disabled={pending.has('profile')}
+            disabled={!canPatchSeat || pending.has('profile')}
             // A blank box means "clear my override", which only an explicit `null` expresses: an
             // empty string would win the `??` chain and render nothing, leaving the roster row and
             // the template unable to show through again.
-            onClick={() =>
+            onClick={() => {
+              if (!canPatchSeat) return
               void patch('profile', `/api/w/${workspaceId}/slaves/${slave.id}/profile`, {
                 profile: profileDraft.trim() === '' ? null : profileDraft,
               })
-            }
+            }}
             className="self-end"
           >
             save
@@ -635,12 +641,13 @@ export function SlavePanel({
           <Button
             variant="ghost"
             data-testid="runtime-roles-save"
-            disabled={pending.has('runtime-roles')}
-            onClick={() =>
+            disabled={!canPatchSeat || pending.has('runtime-roles')}
+            onClick={() => {
+              if (!canPatchSeat) return
               void patch('runtime-roles', `/api/w/${workspaceId}/slaves/${slave.id}/runtime-roles`, {
                 roles: parseRoles(rolesDraft),
               })
-            }
+            }}
             className="self-end"
           >
             save
