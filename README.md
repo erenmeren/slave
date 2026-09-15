@@ -37,6 +37,31 @@ npm run web                          # the UI at http://127.0.0.1:3000
 Everything uses the development database named in `.env`. Running slaves spend real money on your
 provider account.
 
+### Or run it all in Docker
+
+The same image runs the UI and the daemon; Postgres is the service above. One command builds and
+starts the three:
+
+```bash
+cp .env.example .env                 # once; set SLAVEOFAI_UID/GID if `id -u` is not 1000
+docker compose --profile app up -d --build
+```
+
+The `web` container migrates the database, seeds the demo company only if the database holds no
+workspace yet (the seed truncates, so it never runs over data you already have), and serves
+http://localhost:3000; `orchestrator` runs the daemon. Your `~/.claude` login and your repositories folder (`SLAVEOFAI_REPOS`, default
+`~/projects`) are mounted in, the repositories at the same absolute path as on the host, so a
+workspace attached from either side works from both. Any CLI verb runs in the image too:
+
+```bash
+docker compose --profile app run --rm orchestrator create-user --name you
+docker compose --profile app run --rm orchestrator seed   # re-seed: wipes the demo data
+docker compose --profile app logs -f orchestrator
+```
+
+Plain `docker compose up -d` still starts Postgres alone. Do not run the daemon on the host and in
+the container at once: two schedulers on one database pick up the same tasks.
+
 ## Attach your repository
 
 A workspace is a local git clone you already have. Attach it from the CLI or from the **Projects**

@@ -1,0 +1,13 @@
+.git
+.superpowers
+.env
+.slaveofai
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+apps/web/.next
+packages/db/src/generated
+docs/superpowers/fidelity
+design_handoff_ai_team_os
+spike

@@ -1,3 +1,8 @@
+# `docker compose up -d` starts Postgres only -- the host-side flow in README's Quick start
+# (`npm run web`, `npm run orchestrator -- daemon`) is unchanged.
+# `docker compose --profile app up -d --build` also builds and starts the two app containers:
+# `web` on http://localhost:3000 and `orchestrator` (the daemon). Never run the daemon on the host
+# AND in the container against the same database: two schedulers would pick up the same tasks.
 services:
   postgres:
     image: postgres:17-alpine
@@ -17,5 +22,48 @@ services:
       timeout: 3s
       retries: 30
 
+  web:
+    build: .
+    image: slaveofai:local
+    profiles: [app]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: web
+    ports:
+      - "3000:3000"
+    # Run as your own uid so anything a slave writes into a mounted repository is yours, not root's.
+    # Set SLAVEOFAI_UID / SLAVEOFAI_GID in .env if `id -u` / `id -g` is not 1000.
+    user: "${SLAVEOFAI_UID:-1000}:${SLAVEOFAI_GID:-1000}"
+    environment: &app-env
+      DATABASE_URL: postgresql://slaveofai:slaveofai@postgres:5432/slaveofai
+      SLAVEOFAI_STATE_DIR: /state
+      # Empty = loopback mode (the browser reaches the container as localhost:3000, which the Host
+      # rule accepts). Set it in .env to turn on accounts, exactly as on the host.
+      SLAVEOFAI_SESSION_SECRET: ${SLAVEOFAI_SESSION_SECRET:-}
+      HOME: /home/app
+    volumes: &app-volumes
+      - slaveofai-state:/state
+      # The slave CLI's login lives in your home; the image ships the CLI, you lend it the account.
+      - ${HOME}/.claude:/home/app/.claude
+      - ${HOME}/.claude.json:/home/app/.claude.json
+      # Repositories are mounted at the SAME absolute path as on the host: Workspace.repoPath stores
+      # the host path, so host and container can attach, run and read the same workspaces.
+      - ${SLAVEOFAI_REPOS:-${HOME}/projects}:${SLAVEOFAI_REPOS:-${HOME}/projects}
+
+  orchestrator:
+    image: slaveofai:local
+    profiles: [app]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      web:
+        condition: service_started
+    command: daemon
+    user: "${SLAVEOFAI_UID:-1000}:${SLAVEOFAI_GID:-1000}"
+    environment: *app-env
+    volumes: *app-volumes
+
 volumes:
   slaveofai-pgdata:
+  slaveofai-state:
