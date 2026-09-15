@@ -137,9 +137,7 @@ async function seed(): Promise<Ids> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
-  })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -169,14 +167,7 @@ async function seed(): Promise<Ids> {
 
 /** A second run on the same workspace, for the two-gate-failures case. */
 async function seedSecondRun(ids: Ids): Promise<Ids> {
-  const slave = await prisma.slave.create({
-    data: {
-      teamId: (await prisma.team.findFirstOrThrow()).id,
-      name: 'Blair',
-      role: 'backend',
-      runtimeRoles: ['backend'],
-    },
-  })
+  const slave = await prisma.slave.create({ data: { teamId: (await prisma.team.findFirstOrThrow()).id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Blair' } })).id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: ids.workspaceId,

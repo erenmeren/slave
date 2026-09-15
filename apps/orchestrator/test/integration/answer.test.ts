@@ -137,7 +137,7 @@ async function makeRunner(
   name: string,
   role: string,
 ): Promise<Runner> {
-  const slave = await prisma.slave.create({ data: { teamId, name, role, runtimeRoles: [role] } })
+  const slave = await prisma.slave.create({ data: { teamId: teamId, role: role, runtimeRoles: [role], personId: (await prisma.person.create({ data: { name: name } })).id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -173,7 +173,7 @@ async function seed(): Promise<Fixture> {
 
   // A question in the other workspace, addressed to a role Maya also holds -- the cross-workspace
   // boundary is the only thing that can refuse it.
-  const zoe = await prisma.slave.create({ data: { teamId: otherTeam.id, name: 'Zoe', role: 'backend', runtimeRoles: ['backend'] } })
+  const zoe = await prisma.slave.create({ data: { teamId: otherTeam.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Zoe' } })).id } })
   const zoeRun = await prisma.slaveRun.create({ data: { slaveId: zoe.id, status: 'working', kind: 'planning' } })
   const foreign = await prisma.slaveMessage.create({
     data: {
@@ -427,10 +427,12 @@ describe('a slave answers, and the asker resumes', () => {
       const before = await rosterSection(fixture.alex.slaveId, fixture.workspaceId)
       expect(before?.text).toContain('Maya')
 
-      await prisma.slave.update({
-        where: { id: fixture.maya.slaveId },
-        data: { lifecycle: 'ephemeral', releasedAt: new Date(), releaseReason: 'the engagement is over', runtimeRoles: [] },
+      const maya = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.maya.slaveId }, select: { personId: true } })
+      await prisma.person.update({
+        where: { id: maya.personId },
+        data: { lifecycle: 'ephemeral', releasedAt: new Date(), releaseReason: 'the engagement is over' },
       })
+      await prisma.slave.update({ where: { id: fixture.maya.slaveId }, data: { runtimeRoles: [] } })
 
       const after = await rosterSection(fixture.alex.slaveId, fixture.workspaceId)
       expect(after?.text).not.toContain('Maya')
@@ -442,7 +444,7 @@ describe('a slave answers, and the asker resumes', () => {
         data: { name: 'Solo', repoPath: '/tmp/solo', verifyCommands: ['true'], setupCommands: [] },
       })
       const team = await prisma.team.create({ data: { workspaceId: alone.id, name: 'Engineering' } })
-      const only = await prisma.slave.create({ data: { teamId: team.id, name: 'Robin', role: 'backend', runtimeRoles: ['backend'] } })
+      const only = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Robin' } })).id } })
 
       // No roster, and `buildRunContext` teaches the envelope only alongside one.
       expect(await rosterSection(only.id, alone.id)).toBeNull()

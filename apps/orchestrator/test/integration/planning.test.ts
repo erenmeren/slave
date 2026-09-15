@@ -95,15 +95,13 @@ async function seed(goal: string | null, goalSetByUserId?: string | null): Promi
  * `dispatchPlanning` happened to read.
  */
 async function addManager(teamId: string, name = 'Atlas'): Promise<string> {
-  const slave = await prisma.slave.create({
-    data: { teamId, name, role: 'Engineering Lead', runtimeRoles: ['manager'] },
-  })
+  const slave = await prisma.slave.create({ data: { teamId: teamId, role: 'Engineering Lead', runtimeRoles: ['manager'], personId: (await prisma.person.create({ data: { name: name } })).id } })
   return slave.id
 }
 
 /** A `backend` slave -- the role every task the `plan-graph` fixture describes requires. */
 async function addBackendSlave(teamId: string, name = 'Beryl'): Promise<string> {
-  const slave = await prisma.slave.create({ data: { teamId, name, role: 'backend', runtimeRoles: ['backend'] } })
+  const slave = await prisma.slave.create({ data: { teamId: teamId, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: name } })).id } })
   return slave.id
 }
 
@@ -267,9 +265,7 @@ describe('dispatchPlanning', () => {
   it('never staffs a slave titled manager whose runtime role set is empty', async (): Promise<void> => {
     const fixture = await seed('Ship the checkout redesign')
     repos.push(fixture.repoPath)
-    await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Parked', role: 'manager', runtimeRoles: [] },
-    })
+    await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'manager', runtimeRoles: [], personId: (await prisma.person.create({ data: { name: 'Parked' } })).id } })
 
     expect(await dispatchPlanning(depsFor(fixture.workspaceId))).toBeNull()
     expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(0)

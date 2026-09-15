@@ -48,15 +48,9 @@ async function seedFixture(): Promise<Fixture> {
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
 
-  const slaveWithRun = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
-  })
-  const idleSlave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Blair', role: 'backend', runtimeRoles: ['backend'] },
-  })
-  const retiredRunSlave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Casey', role: 'backend', runtimeRoles: ['backend'] },
-  })
+  const slaveWithRun = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+  const idleSlave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Blair' } })).id } })
+  const retiredRunSlave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Casey' } })).id } })
 
   const doneDep = await prisma.task.create({
     data: {
@@ -235,12 +229,8 @@ describe('loadWorld', () => {
   // whatever the title says.
   it('carries each slave\'s runtimeRoles, not its title', async (): Promise<void> => {
     const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
-    const titled = await prisma.slave.create({
-      data: { teamId: team.id, name: 'Senior', role: 'backend', runtimeRoles: ['reviewer'] },
-    })
-    const parked = await prisma.slave.create({
-      data: { teamId: team.id, name: 'Parked', role: 'backend', runtimeRoles: [] },
-    })
+    const titled = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Senior' } })).id } })
+    const parked = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: [], personId: (await prisma.person.create({ data: { name: 'Parked' } })).id } })
 
     const { world } = await loadWorld(workspaceId(fixture.workspaceId))
 
@@ -302,9 +292,7 @@ async function seedRuns(specs: readonly RunSpec[]): Promise<string> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Dana', role: 'backend', runtimeRoles: ['backend'] },
-  })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Dana' } })).id } })
 
   for (const [index, spec] of specs.entries()) {
     const task = await prisma.task.create({
@@ -591,7 +579,7 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
       },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-    const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Planner', role: 'planner', runtimeRoles: ['planner'] } })
+    const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'planner', runtimeRoles: ['planner'], personId: (await prisma.person.create({ data: { name: 'Planner' } })).id } })
     await prisma.slaveRun.create({
       data: { slaveId: slave.id, kind: 'planning', status: 'working', costUsd: 2.5 },
     })
@@ -629,9 +617,7 @@ describe('loadWorld stats.globalActiveRuns', () => {
     const otherTeam = await prisma.team.create({
       data: { workspaceId: otherWorkspace.id, name: 'Other Team' },
     })
-    const otherSlave = await prisma.slave.create({
-      data: { teamId: otherTeam.id, name: 'Other Slave', role: 'backend', runtimeRoles: ['backend'] },
-    })
+    const otherSlave = await prisma.slave.create({ data: { teamId: otherTeam.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Other Slave' } })).id } })
     const otherTask = await prisma.task.create({
       data: {
         workspaceId: otherWorkspace.id,

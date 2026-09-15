@@ -57,6 +57,8 @@ interface Fixture {
   readonly teamId: string
   readonly taskId: string
   readonly slaveId: string
+  /** M58 R3: the skills a run mounts are the PERSON's grants over their persona's defaults. */
+  readonly personId: string
   readonly runId: string
   readonly repoPath: string
   readonly worktreePath: string
@@ -87,13 +89,14 @@ async function seed(options: { readonly profile?: string } = {}): Promise<Fixtur
     data: { name: 'Checkout Platform', repoPath, baseBranch: 'main', verifyCommands: ['true'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+  const person = await prisma.person.create({ data: { name: 'Alex' } })
   const slave = await prisma.slave.create({
     data: {
       teamId: team.id,
-      name: 'Alex',
       role: 'Senior Engineer',
       runtimeRoles: ['backend'],
       ...(options.profile === undefined ? {} : { profile: options.profile }),
+      personId: person.id,
     },
   })
   const task = await prisma.task.create({
@@ -122,6 +125,7 @@ async function seed(options: { readonly profile?: string } = {}): Promise<Fixtur
     teamId: team.id,
     taskId: task.id,
     slaveId: slave.id,
+    personId: person.id,
     runId: run.id,
     repoPath,
     worktreePath: worktree.path,
@@ -156,7 +160,7 @@ async function assign(
       ...(options.missing === true ? { missingSince: new Date() } : {}),
     },
   })
-  await prisma.slaveSkill.create({ data: { slaveId: fixture.slaveId, skillId: skill.id } })
+  await prisma.personSkill.create({ data: { personId: fixture.personId, skillId: skill.id, mode: 'granted' } })
   return skill.id
 }
 
@@ -194,9 +198,7 @@ describe('buildRunContext', () => {
 
   describe('an implementation run', () => {
     it('puts the profile, the roster, the skills and the task in front of the slave, in that order', async () => {
-      await prisma.slave.create({
-        data: { teamId: fixture.teamId, name: 'Maya', role: 'Product Lead', runtimeRoles: ['product'] },
-      })
+      await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Product Lead', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
       await assign(fixture, 'writing-plans', { description: 'plans things' })
 
       const { prompt, manifest } = await buildImplementation(fixture)
@@ -221,7 +223,8 @@ describe('buildRunContext', () => {
       const { manifest } = await buildImplementation(fixture)
 
       const profile = manifest.sections.find((section) => section.kind === 'profile')
-      expect(profile).toEqual({ kind: 'profile', origin: 'slave', sha256: expect.stringMatching(/^[0-9a-f]{64}$/) })
+      // M58 R7: the chain's top rung is the SEAT, and that is the word the manifest records.
+      expect(profile).toEqual({ kind: 'profile', origin: 'seat', sha256: expect.stringMatching(/^[0-9a-f]{64}$/) })
     })
 
     it('omits the profile section entirely when nothing in the chain has one', async () => {
@@ -247,9 +250,7 @@ describe('buildRunContext', () => {
     })
 
     it('lists every peer by rosterLine and never the slave itself', async () => {
-      const maya = await prisma.slave.create({
-        data: { teamId: fixture.teamId, name: 'Maya', role: 'Product Lead', runtimeRoles: ['product', 'reviewer'] },
-      })
+      const maya = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Product Lead', runtimeRoles: ['product', 'reviewer'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
 
       const { prompt, manifest } = await buildImplementation(fixture)
 
@@ -264,13 +265,13 @@ describe('buildRunContext', () => {
       expect(alone.prompt).not.toContain(ASK_BLOCK_OPEN)
       expect(alone.manifest.sections.some((section) => section.kind === 'ask_protocol')).toBe(false)
 
-      await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Maya', role: 'Product Lead', runtimeRoles: ['product'] } })
+      await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Product Lead', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
       const withPeer = await buildImplementation(fixture)
       expect(withPeer.prompt).toContain(ASK_BLOCK_OPEN)
     })
 
     it('carries a pending question, its id and the answer envelope, and neutralises what the asker wrote', async () => {
-      const maya = await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Maya', role: 'Product Lead', runtimeRoles: ['product'] } })
+      const maya = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Product Lead', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
       const askerRun = await prisma.slaveRun.create({
         data: { slaveId: maya.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'planning' },
       })
@@ -397,7 +398,7 @@ describe('buildRunContext', () => {
       mkdirSync(join(fixture.worktreePath, '.claude/skills/hand-written'), { recursive: true })
       writeFileSync(join(fixture.worktreePath, '.claude/skills/hand-written/SKILL.md'), 'not ours\n')
 
-      await prisma.slaveSkill.deleteMany({ where: { slaveId: fixture.slaveId, skillId: stale } })
+      await prisma.personSkill.deleteMany({ where: { personId: fixture.personId, skillId: stale } })
       await assign(fixture, 'new-skill')
       const { manifest } = await buildImplementation(fixture)
 
@@ -411,7 +412,7 @@ describe('buildRunContext', () => {
       // A previous dispatch's skill, so this one has directories to remove before it copies.
       const stale = await assign(fixture, 'old-skill')
       await buildImplementation(fixture)
-      await prisma.slaveSkill.deleteMany({ where: { slaveId: fixture.slaveId, skillId: stale } })
+      await prisma.personSkill.deleteMany({ where: { personId: fixture.personId, skillId: stale } })
 
       // Two skills, injected in name order. The second's source carries a file the daemon cannot
       // read, which makes `cpSync` throw AFTER it has already created the destination directory --
@@ -565,7 +566,7 @@ describe('buildRunContext', () => {
 
   describe('a review run', () => {
     it('carries the reviewer profile, the task and the diff, and never an inbox or an ask', async () => {
-      await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Maya', role: 'Product Lead', runtimeRoles: ['product'] } })
+      await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Product Lead', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
       await assign(fixture, 'writing-plans')
       const reviewRun = await prisma.slaveRun.create({
         data: { taskId: fixture.taskId, slaveId: fixture.slaveId, status: 'starting', kind: 'review' },
@@ -1259,7 +1260,7 @@ describe('buildRunContext', () => {
         scope: 'workspace',
         companyId: null,
         workspaceId: fixture.workspaceId,
-        slaveId: null,
+        personId: null,
         title: 'Task: Ship the checkout API',
         body: 'Every orders route requires a signed session.',
         status: 'verified',
@@ -1471,7 +1472,7 @@ describe('buildRunContext', () => {
         type: 'lesson',
         scope: 'worker',
         workspaceId: null,
-        slaveId: fixture.slaveId,
+        personId: fixture.personId,
         title: 'Rework on Add the thing',
         body: 'The empty-input case was not handled.',
         verifiedBy: 'review',
@@ -1492,14 +1493,15 @@ describe('buildRunContext', () => {
 
     // A lesson is somebody's own mistake: it reaches its own worker's run and nobody else's.
     it('shows a worker its own lesson and never somebody else’s', async () => {
-      const other = await prisma.slave.create({
-        data: { teamId: fixture.teamId, name: 'Maya', role: 'Senior Engineer', runtimeRoles: ['backend'] },
-      })
+      // M58 R4: a lesson belongs to the PERSON, so "somebody else's" means another person -- and
+      // the seat they happen to sit in is beside the point.
+      const other = await prisma.person.create({ data: { name: 'Maya' } })
+      await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Senior Engineer', runtimeRoles: ['backend'], personId: other.id } })
       await remember({
         type: 'lesson',
         scope: 'worker',
         workspaceId: null,
-        slaveId: other.id,
+        personId: other.id,
         title: 'Rework on Add the thing',
         body: 'Somebody else’s mistake.',
         verifiedBy: 'review',
@@ -1508,7 +1510,7 @@ describe('buildRunContext', () => {
         type: 'lesson',
         scope: 'worker',
         workspaceId: null,
-        slaveId: fixture.slaveId,
+        personId: fixture.personId,
         title: 'Rework on Add the thing',
         body: 'My own mistake.',
         verifiedBy: 'verification',

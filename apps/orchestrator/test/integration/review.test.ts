@@ -56,9 +56,7 @@ async function seed(): Promise<Fixture> {
   // exist at all, or every dispatch here refuses instead of starting the run under test.
   await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
-  })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -124,7 +122,7 @@ async function seedReviewingTask(fixture: Fixture, reviewFixture = 'review-appro
  */
 async function addReviewer(): Promise<void> {
   const team = await prisma.team.findFirstOrThrow()
-  await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] } })
+  await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Riley' } })).id } })
 }
 
 async function eventsOf(
@@ -158,7 +156,7 @@ describe('dispatchReviews', () => {
   it('starts a review run for a reviewing task with an idle reviewer', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] } })
+    await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Riley' } })).id } })
 
     const started = await dispatchReviews(reviewDeps)
 
@@ -184,7 +182,7 @@ describe('dispatchReviews', () => {
     // reached review rather than that the review itself was refused.
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    const reviewer = await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] } })
+    const reviewer = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Riley' } })).id } })
     await prisma.slave.update({ where: { id: reviewer.id }, data: { model: 'whatever', provider: 'cursor' } })
     await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { budgetUsd: 20 } })
 
@@ -205,7 +203,7 @@ describe('dispatchReviews', () => {
   it('starts nothing a second time while the review run it started is still live', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] } })
+    await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Riley' } })).id } })
 
     const first = await dispatchReviews(reviewDeps)
     expect(first).toHaveLength(1)
@@ -352,7 +350,7 @@ describe('dispatchReviews', () => {
   it('never staffs a slave titled reviewer whose runtime role set is empty', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.slave.create({ data: { teamId: team.id, name: 'Parked', role: 'reviewer', runtimeRoles: [] } })
+    await prisma.slave.create({ data: { teamId: team.id, role: 'reviewer', runtimeRoles: [], personId: (await prisma.person.create({ data: { name: 'Parked' } })).id } })
 
     const started = await dispatchReviews(reviewDeps)
 
@@ -369,7 +367,7 @@ describe('dispatchReviews', () => {
   it('starts nothing once two review runs newer than the implementation run have failed', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] } })
+    await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Riley' } })).id } })
     const reviewer = await prisma.slave.findFirstOrThrow({ where: { runtimeRoles: { has: 'reviewer' } } })
 
     const latestImpl = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'implementation' } })
@@ -406,7 +404,7 @@ describe('dispatchReviews', () => {
   it('concludes the run failed instead of throwing when the diff itself cannot be produced', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.slave.create({ data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] } })
+    await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Riley' } })).id } })
     // A branch recorded on the task but gone from git itself -- the step-2 null check cannot catch
     // it, so the dispatch reaches `git diff` and the diff fails.
     await prisma.task.update({ where: { id: fixture.taskId }, data: { branch: 'no-such-branch' } })
@@ -822,12 +820,8 @@ describe('what a review teaches (M49 R2)', () => {
       data: { name: 'Checkout Platform', repoPath, baseBranch: 'main', verifyCommands: ['true'], setupCommands: [] },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-    const worker = await prisma.slave.create({
-      data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
-    })
-    const reviewer = await prisma.slave.create({
-      data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] },
-    })
+    const worker = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+    const reviewer = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Riley' } })).id } })
     const task = await prisma.task.create({
       data: {
         workspaceId: workspace.id,
@@ -902,8 +896,11 @@ describe('what a review teaches (M49 R2)', () => {
     const lessons = await prisma.memory.findMany({ where: { taskId: fixture.taskId, type: 'lesson' } })
     expect(lessons).toHaveLength(1)
     expect(lessons[0]?.scope).toBe('worker')
-    expect(lessons[0]?.slaveId).toBe(fixture.workerId)
-    expect(lessons[0]?.slaveId).not.toBe(fixture.reviewerId)
+    // M58 R4: a lesson belongs to the PERSON who did the work, not to the seat they did it from.
+    const worker = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.workerId }, select: { personId: true } })
+    const reviewer = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.reviewerId }, select: { personId: true } })
+    expect(lessons[0]?.personId).toBe(worker.personId)
+    expect(lessons[0]?.personId).not.toBe(reviewer.personId)
     expect(lessons[0]?.verifiedBy).toBe('review')
     expect(lessons[0]?.sourceKind).toBe('review')
     expect(lessons[0]?.body).toBe('The diff does not handle the empty-input case the task requires.')
@@ -962,12 +959,8 @@ describe('the review verdict settles the rejection column, on the IMPLEMENTER ro
       data: { name: 'Checkout Platform', repoPath, baseBranch: 'main', verifyCommands: ['true'], setupCommands: [] },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-    const worker = await prisma.slave.create({
-      data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
-    })
-    const reviewer = await prisma.slave.create({
-      data: { teamId: team.id, name: 'Riley', role: 'Senior Engineer', runtimeRoles: ['reviewer'] },
-    })
+    const worker = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+    const reviewer = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Riley' } })).id } })
     const task = await prisma.task.create({
       data: {
         workspaceId: workspace.id,

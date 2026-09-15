@@ -82,9 +82,7 @@ async function seed(
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
-  })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   const ids: string[] = []
   for (let index = 0; index < (options.blockedTasks ?? 1); index += 1) {
     ids.push(await blockedAtTheReviewCap(workspace.id, `Add the thing ${String(index)}`))
@@ -497,12 +495,8 @@ describe('supervise', () => {
       data: { name: 'Waiting Platform', repoPath: '/tmp/waiting', verifyCommands: ['npm test'], setupCommands: [] },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-    const asker = await prisma.slave.create({
-      data: { teamId: team.id, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
-    })
-    await prisma.slave.create({
-      data: { teamId: team.id, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer'] },
-    })
+    const asker = await prisma.slave.create({ data: { teamId: team.id, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
+    await prisma.slave.create({ data: { teamId: team.id, role: 'QA', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Robin' } })).id } })
     const askerRun = await prisma.slaveRun.create({
       data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' },
     })
@@ -585,12 +579,8 @@ async function seedQuestion(
 }> {
   // No blocked task unless a case asks for one: the question is meant to be the ONLY situation.
   const fixture = await seed({ blockedTasks: options.blockedTasks ?? 0 })
-  const asker = await prisma.slave.create({
-    data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
-  })
-  const holder = await prisma.slave.create({
-    data: { teamId: fixture.teamId, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer'] },
-  })
+  const asker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
+  const holder = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'QA', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Robin' } })).id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: fixture.workspaceId,

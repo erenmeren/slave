@@ -58,7 +58,10 @@ async function seed(
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] } })
+  // M58 R1: named after the workspace, because `Person.name` is unique across the installation and
+  // the cases below seed a SECOND project to prove one project's sweep leaves the other alone.
+  const person = await prisma.person.create({ data: { name: `Alex of ${workspace.name}` } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: person.id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,

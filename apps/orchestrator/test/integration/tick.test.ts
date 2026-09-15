@@ -90,9 +90,7 @@ async function seed(options: { readonly setupCommands?: readonly string[] } = {}
   // (`workspaceDefaultProvider` returns `null`) instead of starting the run under test.
   await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
-  })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -207,7 +205,7 @@ describe('tick', () => {
     /** A question from somebody else, addressed to the slave this fixture is about to dispatch. */
     async function askTheFixtureSlave(body: string): Promise<string> {
       const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
-      const asker = await prisma.slave.create({ data: { teamId: team.id, name: 'Maya', role: 'product', runtimeRoles: ['product'] } })
+      const asker = await prisma.slave.create({ data: { teamId: team.id, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
       // `pauseReason` matters, not just `paused`: a question is pending only while its asker is
       // still waiting on it (`stillPendingQuestion`, packages/control/src/messaging.ts), which is
       // exactly the state `ask.ts` parks a run in.
@@ -286,7 +284,7 @@ describe('tick', () => {
 
     it('teaches an implementation run the ask envelope, and names the peers it may address (final review)', async (): Promise<void> => {
       const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
-      await prisma.slave.create({ data: { teamId: team.id, name: 'Maya', role: 'product', runtimeRoles: ['product'] } })
+      await prisma.slave.create({ data: { teamId: team.id, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
       const recorder = recordingAdapter()
 
       await tick({ ...deps, registry: singleAdapterRegistry(recorder.adapter) })
@@ -998,7 +996,7 @@ describe('tick', () => {
     // task the tick left in either would be handed straight to that slave one second later, and
     // the same work would be done twice on two branches.
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.slave.create({ data: { teamId: team.id, name: 'Blair', role: 'backend', runtimeRoles: ['backend'] } })
+    await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Blair' } })).id } })
 
     const second = await tick(deps)
 
@@ -1135,7 +1133,7 @@ describe('tick', () => {
       data: { setupCommands: ['sleep 1'] },
     })
     const team = await prisma.team.findFirstOrThrow()
-    await prisma.slave.create({ data: { teamId: team.id, name: 'Blair', role: 'backend', runtimeRoles: ['backend'] } })
+    await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Blair' } })).id } })
 
     // Spec §3.1 runs this on a 1000ms timer while provisioning is awaited inline and a setup
     // command may take minutes -- so overlapping ticks are the normal case on the first real

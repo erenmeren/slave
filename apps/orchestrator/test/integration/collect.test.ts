@@ -75,7 +75,10 @@ async function seedTask(
 ): Promise<TaskFixture> {
   const worktreePath = overrides.worktreePath ?? addWorktree(repoPath, n)
   const team = await prisma.team.create({ data: { workspaceId, name: `Engineering ${n}` } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] } })
+  // Numbered with the fixture: `Person.name` is unique across the installation (M58 R1) and this
+  // helper is called once per task.
+  const person = await prisma.person.create({ data: { name: `Alex ${n}` } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: person.id } })
   const task = await prisma.task.create({
     data: {
       workspaceId,
