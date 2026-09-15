@@ -3,7 +3,7 @@ import { accessSync, appendFileSync, constants, existsSync, readFileSync, realpa
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  addCompanySlave,
+  addDepartmentMember,
   addCompanyTeam,
   addCredential,
   bindBrokerOp,
@@ -35,7 +35,6 @@ import {
   createUser,
   createWorkspace,
   deleteCompany,
-  deleteCompanySlave,
   deleteSlave,
   deleteCompanyTeam,
   deleteSlaveTemplate,
@@ -70,7 +69,6 @@ import {
   loadSupervisorWorld,
   mapExternalRepository,
   moveSlave,
-  moveCompanySlave,
   pauseSimulation,
   reassignQuestion,
   readMemory,
@@ -96,7 +94,7 @@ import {
   setStaffingPreference,
   setTemplateActivation,
   setTemplateDuplicateDismissal,
-  setSlaveCapabilities,
+  setPersonCapabilities,
   setSlaveModel,
   setSlaveRole,
   setGoal,
@@ -330,10 +328,9 @@ const USAGE = `usage: orchestrator <command> [options]
                                        --provider are a pair: give both or neither.
   create-company --name <n>            add a company (a persistent roster) to the catalog
   add-team --company <id> --name <n>   add a department template to a company's roster
-  add-slave --team <companyTeamId> --template <id> --name <n> [--model <m> --provider <p>]
-                                       add a roster member to a company team, instantiated from a
-                                       template. --model and --provider are a pair: give both or
-                                       neither.
+  add-slave --team <companyTeamId> --person <id>
+                                       put an existing slave in a department template. A department
+                                       holds PEOPLE now, not copies of a template.
   assign-company --workspace <id> --company <id>
                                        assign a company's roster to a workspace, materializing a
                                        project team/worker for every roster member with no
@@ -348,7 +345,7 @@ const USAGE = `usage: orchestrator <command> [options]
   set-role --slave <id> --role <r>     change a project slave's TITLE -- the heading of its
                                        persona, not what it is dispatched as. Refused while the
                                        slave holds a live run.
-  set-profile --slave <id> | --template <id> | --company-slave <id>
+  set-profile --slave <id> | --template <id> | --person <id>
               (--file <path> | --clear) [--by <name>]
                                        set (or clear) the persona Markdown at one level of the
                                        override chain: the worker's own, its roster row's, or its
@@ -445,7 +442,8 @@ const USAGE = `usage: orchestrator <command> [options]
                                        each stage's state -- done, active, pending or missing from
                                        the plan.
   set-capabilities --slave <id> --capabilities a,b [--by <name>]
-                                       what this slave PROVIDES. Keys, labels and synonyms are all
+                                       what the slave in this seat PROVIDES -- a fact about the
+                                       person, so it holds on every project they sit on. Keys, labels and synonyms are all
                                        accepted and resolved to keys; a word matching nothing is
                                        reported on stderr and not stored. The capabilities replace;
                                        the runtime roles they project to are ADDED, never removed
@@ -521,23 +519,18 @@ const USAGE = `usage: orchestrator <command> [options]
                                        add a department to a project (no template link)
   move-slave --slave <id> --team <id>  move a project slave to another department of the same
                                        project -- refused while the slave holds a live run
-  move-company-slave --slave <companySlaveId> --team <companyTeamId>
-                                       move a catalog slave to another department template of
-                                       the same company
   rename-company-team --team <companyTeamId> --name <n>
                                        rename a department template
   delete-company-team --team <companyTeamId> --yes
                                        remove a department template WITH its catalog slaves;
                                        project departments copied from it keep living. Omit --yes
                                        to see what would be deleted without doing it.
-  delete-company --company <id> --yes  remove a company with its department templates and catalog
-                                       slaves; projects keep their copies. Omit --yes to preview.
-  delete-company-slave --slave <companySlaveId> --yes
-                                       remove a catalog slave; project copies survive. Omit --yes
-                                       to see how many of them stay.
+  delete-company --company <id> --yes  remove a company with its department templates and their
+                                       memberships; every slave who was a member keeps working, and
+                                       projects keep their seats. Omit --yes to preview.
   delete-template --template <id> --yes
-                                       remove a slave template with the catalog slaves made from
-                                       it; project slaves keep their role
+                                       remove a slave template; every slave hired from it keeps
+                                       working and simply stops naming a persona
   create-simulation --sector ${SECTOR_CHOICES} --company <id> --name <n> --policy A|B [--seed <n>]
       [--decision-provider rules|llm] [--model-provider claude_code] [--model <id>]
       [--max-model-cost-usd <n>]
@@ -1659,11 +1652,13 @@ export async function main(argv: readonly string[]): Promise<number> {
       // nothing. One query for the whole roster, not one per row.
       const roster = await prisma.slave.findMany({
         where: { team: { workspaceId } },
-        select: { id: true, name: true, role: true },
+        select: { id: true, role: true, person: { select: { name: true } } },
       })
       // `displayName` (`@slave-of-ai/domain`), not a local `${name} (${role})` -- M37 §3 made that
       // one function so the CLI, the inbox, the ask roster and delivery cannot drift apart.
-      const nameById = new Map(roster.map((slave) => [slave.id, displayName(slave)]))
+      const nameById = new Map(
+        roster.map((slave) => [slave.id, displayName({ name: slave.person.name, role: slave.role })]),
+      )
       // The id first on every line: it is the one thing an operator has to copy into `answer`.
       for (const message of result.value) {
         const from = nameById.get(message.senderSlaveId) ?? message.senderSlaveId
@@ -2012,17 +2007,13 @@ export async function main(argv: readonly string[]): Promise<number> {
     }
 
     case 'add-slave': {
+      // M58 R5: a department holds PEOPLE. This verb puts an existing person in one; Task 4's
+      // `person` family is where somebody is CREATED, and `--person` is what this takes now.
       const companyTeamId = requireFlag(flags, 'team')
-      const templateId = requireFlag(flags, 'template')
-      const name = requireFlag(flags, 'name')
-      const model = flagText(flags, 'model')
-      const provider = flagText(flags, 'provider')
-      const result = await addCompanySlave(companyTeamId, templateId, name, {
-        ...(model !== undefined ? { model } : {}),
-        ...(provider !== undefined ? { provider: provider as ProviderKind } : {}),
-      })
+      const personId = requireFlag(flags, 'person')
+      const result = await addDepartmentMember(companyTeamId, personId)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`slave ${result.value.id} created\n`)
+      process.stdout.write(`slave ${personId} joined department template ${companyTeamId}\n`)
       return 0
     }
 
@@ -2138,10 +2129,10 @@ export async function main(argv: readonly string[]): Promise<number> {
       const targets: ProfileTarget[] = [
         ...(flagText(flags, 'slave') !== undefined ? [{ slaveId: requireFlag(flags, 'slave') }] : []),
         ...(flagText(flags, 'template') !== undefined ? [{ templateId: requireFlag(flags, 'template') }] : []),
-        ...(flagText(flags, 'company-slave') !== undefined ? [{ companySlaveId: requireFlag(flags, 'company-slave') }] : []),
+        ...(flagText(flags, 'person') !== undefined ? [{ personId: requireFlag(flags, 'person') }] : []),
       ]
       if (targets.length !== 1 || targets[0] === undefined) {
-        throw new Error('exactly one of --slave, --template or --company-slave is required')
+        throw new Error('exactly one of --slave, --template or --person is required')
       }
       const target = targets[0]
 
@@ -2156,7 +2147,7 @@ export async function main(argv: readonly string[]): Promise<number> {
 
       const result = await setProfile(target, profile, operatorName(flags))
       if (!result.ok) throw new Error(refusalText(result.error))
-      const which = 'slaveId' in target ? target.slaveId : 'templateId' in target ? target.templateId : target.companySlaveId
+      const which = 'slaveId' in target ? target.slaveId : 'templateId' in target ? target.templateId : target.personId
       process.stdout.write(clear ? `profile cleared on ${which}\n` : `profile set on ${which}\n`)
       return 0
     }
@@ -2584,9 +2575,13 @@ export async function main(argv: readonly string[]): Promise<number> {
 
     case 'set-capabilities': {
       const slaveId = requireFlag(flags, 'slave')
+      // M58 R1: what a specialist provides is the PERSON's, so the seat named here is resolved to
+      // the person sitting in it and every one of their open seats gains the projected roles.
+      const seat = await prisma.slave.findUnique({ where: { id: slaveId }, select: { personId: true } })
+      if (seat === null) throw new Error(refusalText({ kind: 'slave_not_found', slaveId }))
       // `--capabilities ''` clears them, the `--roles ''` idiom: an empty set is a real state.
       const raw = requireFlag(flags, 'capabilities')
-      const result = await setSlaveCapabilities(slaveId, raw.trim() === '' ? [] : raw.split(','), operatorName(flags))
+      const result = await setPersonCapabilities(seat.personId, raw.trim() === '' ? [] : raw.split(','), operatorName(flags))
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(
         `${slaveId} provides ${result.value.keys.length === 0 ? 'nothing' : result.value.keys.join(', ')}; ` +
@@ -2764,9 +2759,9 @@ export async function main(argv: readonly string[]): Promise<number> {
       // `'yes' in flags`, not `flags['yes'] !== undefined`: same reasoning as `set-model`'s
       // `--clear` above -- a bare `--yes` records `undefined` as its value, not the string `true`.
       if (!('yes' in flags)) {
-        const slave = await prisma.slave.findUnique({ where: { id: slaveId }, select: { name: true } })
+        const slave = await prisma.slave.findUnique({ where: { id: slaveId }, select: { person: { select: { name: true } } } })
         const runs = await prisma.slaveRun.count({ where: { slaveId } })
-        throw new Error(`refusing without --yes: this would delete slave ${slave?.name ?? slaveId} (${slaveId}) and ${plural(runs, 'run')}`)
+        throw new Error(`refusing without --yes: this would delete slave ${slave?.person.name ?? slaveId} (${slaveId}) and ${plural(runs, 'run')}`)
       }
       const result = await deleteSlave(slaveId)
       if (!result.ok) throw new Error(refusalText(result.error))
@@ -2784,9 +2779,9 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (!result.ok) throw new Error(refusalText(result.error))
       // The NAME, read back after the write: an operator who typed an id deserves to see who it
       // was, and the row is still there to ask -- which is the whole ruling of R5.
-      const worker = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, select: { name: true } })
+      const worker = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, select: { person: { select: { name: true } } } })
       process.stdout.write(
-        `released ${worker.name} (${slaveId}): runtime roles cleared, ` +
+        `released ${worker.person.name} (${slaveId}): runtime roles cleared, ` +
           `${plural(result.value.worktreesCollected, 'worktree')} collected; ` +
           'every run, message and memory it produced is untouched\n',
       )
@@ -2795,12 +2790,16 @@ export async function main(argv: readonly string[]): Promise<number> {
 
     case 'set-lifecycle': {
       const slaveId = requireFlag(flags, 'slave')
+      // M58 R1: a lifecycle is the PERSON's, so the seat named here is resolved to whoever sits in
+      // it. Task 4's `person` family takes a `--person` directly.
+      const seat = await prisma.slave.findUnique({ where: { id: slaveId }, select: { personId: true } })
+      if (seat === null) throw new Error(refusalText({ kind: 'slave_not_found', slaveId }))
       // Checked here rather than in the verb: the verb's parameter is typed, and the honest error
       // for a word an operator mistyped is the list of the three there are. `oneOfFlag` is the
       // M49 helper that already words it that way for the memory vocabularies.
       const wanted = oneOfFlag(flags, 'lifecycle', SLAVE_LIFECYCLES)
       if (wanted === undefined) throw new Error('--lifecycle is required')
-      const result = await setLifecycle(slaveId, wanted)
+      const result = await setLifecycle(seat.personId, wanted)
       if (!result.ok) throw new Error(refusalText(result.error))
       // The LABEL on the way out, the key on the way in (`docs/ia.md` rule 3): an operator types
       // `ephemeral` because that is the value the flag takes, and reads `Ephemeral` because that
@@ -2856,12 +2855,10 @@ export async function main(argv: readonly string[]): Promise<number> {
     }
 
     case 'move-company-slave': {
-      const companySlaveId = requireFlag(flags, 'slave')
-      const companyTeamId = requireFlag(flags, 'team')
-      const result = await moveCompanySlave(companySlaveId, companyTeamId)
-      if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`catalog slave ${companySlaveId} moved to department template ${companyTeamId}\n`)
-      return 0
+      // M58 R5: there is no roster row to move any more -- a department is a set of people, and
+      // moving somebody between two is leaving one and joining the other. Task 4 binds this verb to
+      // `leaveDepartment`/`joinDepartment` and writes its text.
+      throw new Error('replaced by `person` -- see `person --help`')
     }
 
     case 'rename-company-team': {
@@ -2877,7 +2874,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       const companyTeamId = requireFlag(flags, 'team')
       if (!('yes' in flags)) {
         const team = await prisma.companyTeam.findUnique({ where: { id: companyTeamId }, select: { name: true } })
-        const catalogSlaves = await prisma.companySlave.count({ where: { companyTeamId } })
+        const catalogSlaves = await prisma.companyTeamMember.count({ where: { companyTeamId } })
         throw new Error(
           `refusing without --yes: this would delete department template ${team?.name ?? companyTeamId} (${companyTeamId}) and ${plural(catalogSlaves, 'catalog slave')}`,
         )
@@ -2893,7 +2890,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (!('yes' in flags)) {
         const company = await prisma.company.findUnique({ where: { id: companyId }, select: { name: true } })
         const templates = await prisma.companyTeam.count({ where: { companyId } })
-        const catalogSlaves = await prisma.companySlave.count({ where: { companyTeam: { companyId } } })
+        const catalogSlaves = await prisma.companyTeamMember.count({ where: { companyTeam: { companyId } } })
         throw new Error(
           `refusing without --yes: this would delete company ${company?.name ?? companyId} (${companyId}) and ${plural(templates, 'department template')}, ${plural(catalogSlaves, 'catalog slave')}`,
         )
@@ -2907,36 +2904,25 @@ export async function main(argv: readonly string[]): Promise<number> {
     }
 
     case 'delete-company-slave': {
-      const companySlaveId = requireFlag(flags, 'slave')
-      if (!('yes' in flags)) {
-        const slave = await prisma.companySlave.findUnique({ where: { id: companySlaveId }, select: { name: true } })
-        // Spec §5.2: every preview prints the footprint. This verb's footprint is what SURVIVES
-        // rather than what goes -- `Slave.companySlaveId` is `SetNull`, so each project copy stays
-        // and is simply unlinked -- and saying so is the whole point of the preview here: the
-        // number an operator is deciding against is "how many working slaves does this touch".
-        const copies = await prisma.slave.count({ where: { companySlaveId } })
-        throw new Error(
-          `refusing without --yes: this would delete catalog slave ${slave?.name ?? companySlaveId} (${companySlaveId}); ${copies === 1 ? '1 project copy stays' : `${copies} project copies stay`}`,
-        )
-      }
-      const result = await deleteCompanySlave(companySlaveId)
-      if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`catalog slave ${companySlaveId} deleted\n`)
-      return 0
+      // M58 R5: deleting a roster COPY is gone with the copy. Leaving a department is Task 4's
+      // `leaveDepartment`; deleting the person themself is its `person delete`.
+      throw new Error('replaced by `person` -- see `person --help`')
     }
 
     case 'delete-template': {
       const templateId = requireFlag(flags, 'template')
       if (!('yes' in flags)) {
         const template = await prisma.slaveTemplate.findUnique({ where: { id: templateId }, select: { name: true } })
-        const catalogSlaves = await prisma.companySlave.count({ where: { templateId } })
+        // M58 R1: `Person.templateId` is `SetNull`, so nothing goes with the template -- what the
+        // preview names is how many people stop naming a persona and keep working.
+        const persons = await prisma.person.count({ where: { templateId } })
         throw new Error(
-          `refusing without --yes: this would delete template ${template?.name ?? templateId} (${templateId}) and ${plural(catalogSlaves, 'catalog slave')}`,
+          `refusing without --yes: this would delete template ${template?.name ?? templateId} (${templateId}) and unlink ${plural(persons, 'slave')}`,
         )
       }
       const result = await deleteSlaveTemplate(templateId)
       if (!result.ok) throw new Error(refusalText(result.error))
-      process.stdout.write(`template ${templateId} deleted; ${plural(result.value.catalogSlaves, 'catalog slave')} went with it\n`)
+      process.stdout.write(`template ${templateId} deleted; ${plural(result.value.personsUnlinked, 'slave')} unlinked from it\n`)
       return 0
     }
 

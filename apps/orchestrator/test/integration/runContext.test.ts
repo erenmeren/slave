@@ -20,7 +20,7 @@ import { RunContextRefused, buildRunContext, injectSkills, renderReplanPreview }
 import { provisionWorktree } from '../../src/worktree.js'
 
 const TRUNCATE =
-  'TRUNCATE TABLE "ExecutionEvent", "SlaveMessage", "SlaveSkill", "Skill", "SkillProvider", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE'
+  'TRUNCATE TABLE "ExecutionEvent", "SlaveMessage", "PersonSkill", "TemplateSkill", "Skill", "SkillProvider", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE'
 
 function git(args: readonly string[], cwd: string): string {
   return execFileSync('git', [...args], { cwd, encoding: 'utf8' }).trim()

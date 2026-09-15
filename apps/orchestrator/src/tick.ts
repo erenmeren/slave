@@ -553,12 +553,12 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
   // `companySlave -> template` included so `resolveRuntime` (M12 Task 8) can walk the whole override
   // chain -- a legacy slave with no roster link carries `companySlave: null` and resolves through
   // its own column alone.
-  // `permissions` included alongside `companySlave -> template` (M18 Task 5): the resolved deny
-  // list `writePermissionsFile` writes below is computed from this run's own slave row, at
-  // dispatch time, the same snapshot-at-spawn discipline `resolveRuntime` already uses for model.
+  // `permissions` included alongside `person -> template` (M18 Task 5, M58 R7): the resolved deny
+  // list `writePermissionsFile` writes below is computed from this run's own seat row, at dispatch
+  // time, the same snapshot-at-spawn discipline `resolveRuntime` already uses for model.
   const slave = await prisma.slave.findUniqueOrThrow({
     where: { id: slaveId },
-    include: { companySlave: { include: { template: true } }, permissions: true },
+    include: { person: { include: { template: true } }, permissions: true },
   })
   const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: task.workspaceId } })
 
@@ -634,7 +634,14 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
     // does not resolve itself on the next tick, so the operator needs to see it as a failure,
     // counted against the task's attempt cap, not silently retried forever.
     const workspaceDefault = await workspaceDefaultProvider(workspace.id)
-    const resolved = resolveRuntime(slave, workspaceDefault)
+    const resolved = resolveRuntime(
+      {
+        model: slave.model,
+        provider: slave.provider,
+        person: { model: slave.person.model, provider: slave.person.provider, template: slave.person.template },
+      },
+      workspaceDefault,
+    )
     if (resolved.provider === null) {
       throw new Error(
         'no runtime could be resolved for this run: either this workspace has no configured ' +
@@ -726,7 +733,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
       runDir,
       permissionsFilePath,
       runToken,
-      gitIdentity: { name: slave.name, email: `${emailLocalPart(slave)}@slaveofai.local` },
+      gitIdentity: { name: slave.person.name, email: `${emailLocalPart({ id: slave.id, name: slave.person.name })}@slaveofai.local` },
       // Conditional spread, not `model`, because `exactOptionalPropertyTypes` treats an explicit
       // `model: undefined` as a different (and disallowed) thing from the key being absent.
       ...(model !== undefined ? { model } : {}),
@@ -783,7 +790,7 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
       spawn: {
         ...checkpointRunFiles(resolved.provider, handle),
         pauseFlagPath,
-        gitIdentity: { name: slave.name, email: `${emailLocalPart(slave)}@slaveofai.local` },
+        gitIdentity: { name: slave.person.name, email: `${emailLocalPart({ id: slave.id, name: slave.person.name })}@slaveofai.local` },
         // Recorded so a pause's checkpoint carries the provider the run actually started with
         // (M12 Task 6/8; spec §4) -- `resume()` replays it verbatim, never re-resolving.
         provider: resolved.provider,

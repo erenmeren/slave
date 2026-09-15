@@ -36,9 +36,10 @@ const safe = (text: string): string => defuseRoutingLiterals(neutraliseMarkers(s
 
 export interface MemorySectionInput {
   readonly workspaceId: string
-  /** The worker this run is for, or `null` for the re-plan preview, which picks no persona (plan
-   *  erratum E14) and therefore claims no worker scope and no lessons. */
-  readonly slaveId: string | null
+  /** M58 R19: the PERSON this run is for -- so what they learnt on one project is recalled on the
+   *  next. `null` for the re-plan preview, which picks no persona (plan erratum E14) and therefore
+   *  claims no worker scope and no lessons. */
+  readonly personId: string | null
   readonly taskId: string | null
   readonly kind: 'implementation' | 'planning'
 }

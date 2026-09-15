@@ -49,9 +49,11 @@ export async function inboxSection(slaveId: string): Promise<Section | null> {
 
   const senders = await prisma.slave.findMany({
     where: { id: { in: [...new Set(pending.value.map((message) => message.senderSlaveId))] } },
-    select: { id: true, name: true, role: true },
+    select: { id: true, role: true, person: { select: { name: true } } },
   })
-  const nameById = new Map(senders.map((slave) => [slave.id, displayName(slave)]))
+  const nameById = new Map(
+    senders.map((slave) => [slave.id, displayName({ name: slave.person.name, role: slave.role })]),
+  )
 
   const items = pending.value.map((message) => {
     const from = nameById.get(message.senderSlaveId) ?? message.senderSlaveId
@@ -113,12 +115,14 @@ const ROSTER_CAP = 25
  * a question that reaches one anyway is `unanswerable_question` at once rather than in an hour.
  */
 export async function rosterSection(slaveId: string, workspaceId: string): Promise<Section | null> {
-  const peers = await prisma.slave.findMany({
-    where: { id: { not: slaveId }, team: { workspaceId }, releasedAt: null },
-    select: { id: true, name: true, role: true, runtimeRoles: true },
-    orderBy: [{ role: 'asc' }, { name: 'asc' }],
+  const rows = await prisma.slave.findMany({
+    // M58 R17: an OPEN seat, held by somebody who has not been released.
+    where: { id: { not: slaveId }, team: { workspaceId }, closedAt: null, person: { releasedAt: null } },
+    select: { id: true, role: true, runtimeRoles: true, person: { select: { name: true } } },
+    orderBy: [{ role: 'asc' }, { person: { name: 'asc' } }],
     take: ROSTER_CAP,
   })
+  const peers = rows.map((row) => ({ id: row.id, name: row.person.name, role: row.role, runtimeRoles: row.runtimeRoles }))
   if (peers.length === 0) return null
 
   const text = [

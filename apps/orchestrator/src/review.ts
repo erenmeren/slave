@@ -208,7 +208,7 @@ export async function concludeReview(runId: RunId): Promise<void> {
     workspaceId: task.workspaceId,
     taskId: task.id,
     taskTitle: task.title,
-    slaveId: await implementerOf(task.id, null),
+    personId: await implementerOf(task.id, null),
     runId: run.id,
     reason: parsed.value.reason,
     by: 'review',
@@ -351,7 +351,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
   const reviewers = await prisma.slave.findMany({
     where: { runtimeRoles: { has: 'reviewer' }, team: { workspaceId: task.workspaceId } },
     orderBy: { id: 'asc' },
-    include: { companySlave: { include: { template: true } }, permissions: true },
+    include: { person: { include: { template: true } }, permissions: true },
   })
 
   if (reviewers.length === 0) {
@@ -453,7 +453,14 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     // reasoning (a misconfigured provider is an attempted run that failed, not a "nothing to
     // attempt" that would retry silently forever).
     const workspaceDefault = await workspaceDefaultProvider(workspace.id)
-    const resolved = resolveRuntime(reviewer, workspaceDefault)
+    const resolved = resolveRuntime(
+      {
+        model: reviewer.model,
+        provider: reviewer.provider,
+        person: { model: reviewer.person.model, provider: reviewer.person.provider, template: reviewer.person.template },
+      },
+      workspaceDefault,
+    )
     if (resolved.provider === null) {
       throw new Error(
         'no runtime could be resolved for this run: either this workspace has no configured ' +
@@ -520,7 +527,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
       runToken,
     })
 
-    const gitIdentity = { name: reviewer.name, email: `${emailLocalPart(reviewer)}@slaveofai.local` }
+    const gitIdentity = { name: reviewer.person.name, email: `${emailLocalPart({ id: reviewer.id, name: reviewer.person.name })}@slaveofai.local` }
 
     // M37 Task 2: the one builder, given the diff this function just computed. Inside the same
     // `try` as the diff itself and for the same reason -- a `RunContextRefused` (a reviewer profile

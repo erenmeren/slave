@@ -96,7 +96,10 @@ function expectedOutputOf(handoff: unknown): string | null {
 }
 
 /**
- * The worker that DID the work this outcome is about (M49 R2d, plan erratum E2).
+ * The PERSON who DID the work this outcome is about (M49 R2d, plan erratum E2; M58 R4).
+ *
+ * A person id and no longer a seat id: a lesson is what somebody learnt, and M58 made that a fact
+ * about them rather than about the project they were sitting on when they learnt it.
  *
  * `hint` is the run the caller already holds, used only when it turns out to be an IMPLEMENTATION
  * run -- `advance`'s is. `concludeReview`'s is the REVIEWER's, so it passes null and this reads the
@@ -105,15 +108,18 @@ function expectedOutputOf(handoff: unknown): string | null {
  */
 export async function implementerOf(taskId: string, hint: string | null): Promise<string | null> {
   if (hint !== null) {
-    const run = await prisma.slaveRun.findUnique({ where: { id: hint }, select: { kind: true, slaveId: true } })
-    if (run?.kind === 'implementation') return run.slaveId
+    const run = await prisma.slaveRun.findUnique({
+      where: { id: hint },
+      select: { kind: true, slave: { select: { personId: true } } },
+    })
+    if (run?.kind === 'implementation') return run.slave.personId
   }
   const latest = await prisma.slaveRun.findFirst({
     where: { taskId, kind: 'implementation' },
     orderBy: { startedAt: 'desc' },
-    select: { slaveId: true },
+    select: { slave: { select: { personId: true } } },
   })
-  return latest?.slaveId ?? null
+  return latest?.slave.personId ?? null
 }
 
 /**
@@ -314,7 +320,7 @@ export async function stageGatesFor(
 export async function verifyConcludedRun(runId: RunId): Promise<void> {
   const run = await prisma.slaveRun.findUnique({
     where: { id: runId },
-    include: { task: { include: { workspace: true } } },
+    include: { task: { include: { workspace: true } }, slave: { select: { personId: true } } },
   })
   if (run === null) return
 
@@ -438,7 +444,7 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
       taskId: task.id,
       taskTitle: task.title,
       runId: run.id,
-      slaveId: run.slaveId,
+      personId: run.slave.personId,
       finalText:
         lastOutput === null ? '' : ((lastOutput.payload as { text?: unknown }).text as string | undefined) ?? '',
       lastOutputSeq: lastOutput === null ? null : Number(lastOutput.seq),
@@ -674,7 +680,7 @@ export async function advance(input: AdvanceInput): Promise<void> {
     workspaceId,
     taskId: task.id,
     taskTitle: task.title,
-    slaveId: await implementerOf(task.id, runId),
+    personId: await implementerOf(task.id, runId),
     runId,
     reason: input.result.output,
     by: 'verification',

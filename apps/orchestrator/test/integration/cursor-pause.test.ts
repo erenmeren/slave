@@ -87,7 +87,7 @@ describe('pumpRun, when a paused Cursor run ends', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     dir = mkdtempSync(path.join(tmpdir(), 'slaveofai-cursor-pump-'))
     writeFileSync(path.join(dir, 'pause.flag'), 'meren\n')

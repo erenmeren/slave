@@ -10,7 +10,8 @@ import {
   SECTION_ORDER,
   TERMINAL,
   defuseRoutingLiterals,
-  effectiveProfile,
+  effectiveProfileFor,
+  effectiveSkillIds,
   handoffCanonicalJson,
   neutraliseMarkers,
   parseHandoffContract,
@@ -688,12 +689,12 @@ export async function renderReplanPreview(input: {
   // part of the prompt, so it is part of the preview.
   sections.push(await processSection(input.workspaceId))
   // M49 R3, plan erratum E14: the preview IS the prompt, so it carries the same section.
-  // `slaveId: null` for this function's own reason -- it picks no persona, so it can claim no
+  // `personId: null` for this function's own reason -- it picks no persona, so it can claim no
   // worker scope and no lessons, and the run an operator eventually gets may carry more than the
   // preview showed.
   const memory = await memorySection({
     workspaceId: input.workspaceId,
-    slaveId: null,
+    personId: null,
     taskId: null,
     kind: 'planning',
   })
@@ -721,10 +722,23 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
   const slave = await prisma.slave.findUniqueOrThrow({
     where: { id: input.slaveId },
     include: {
-      companySlave: { include: { template: true } },
-      skills: { include: { skill: { include: { provider: true } } } },
+      person: {
+        include: {
+          template: { select: { profile: true } },
+          skills: { include: { skill: { include: { provider: true } } } },
+        },
+      },
     },
   })
+  // M58 R3: the persona's default skills, read beside the person's own adjustments. Two queries and
+  // never one per skill -- `effectiveSkillIds` is handed both lists and decides.
+  const templateSkills =
+    slave.person.templateId === null
+      ? []
+      : await prisma.templateSkill.findMany({
+          where: { templateId: slave.person.templateId },
+          include: { skill: { include: { provider: true } } },
+        })
   const task =
     input.taskId === null
       ? null
@@ -759,7 +773,12 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
   // 1. Who the slave is. Re-checked against the cap here and not only at write (spec §7): a
   // profile written while the cap was higher is unsendable, and the honest thing to do with it is
   // refuse the dispatch rather than truncate a persona halfway through a sentence.
-  const profile = effectiveProfile(slave)
+  // M58 R7/R18: seat -> person -> template, one chain for profile, model and provider.
+  const profile = effectiveProfileFor({
+    seat: slave.profile,
+    person: slave.person.profile,
+    template: slave.person.template?.profile ?? null,
+  })
   if (profile !== null) {
     if (profile.text.length > PROFILE_MAX_CHARS) {
       throw new RunContextRefused('profile_too_long', { limit: PROFILE_MAX_CHARS, length: profile.text.length })
@@ -787,12 +806,28 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
 
   // 3. What it can do. Injected for every kind (the flags are part of the record), but rendered
   // only where the run kind's order has a place for it -- planning has none (erratum E4).
-  const assigned: readonly AssignedSkill[] = slave.skills.map((link) => ({
-    name: link.skill.name,
-    description: link.skill.description,
-    providerName: link.skill.provider.name,
-    missingSince: link.skill.missingSince,
-  }))
+  // M58 R18: the skills mounted for a run are the PERSON's effective set -- the persona's defaults
+  // plus their grants, minus their revokes -- computed here and copied nowhere.
+  const skillRowById = new Map(
+    [...templateSkills.map((row) => row.skill), ...slave.person.skills.map((row) => row.skill)].map(
+      (skill) => [skill.id, skill] as const,
+    ),
+  )
+  const assigned: readonly AssignedSkill[] = effectiveSkillIds({
+    templateSkillIds: templateSkills.map((row) => row.skillId),
+    granted: slave.person.skills.filter((row) => row.mode === 'granted').map((row) => row.skillId),
+    revoked: slave.person.skills.filter((row) => row.mode === 'revoked').map((row) => row.skillId),
+  }).flatMap((skillId) => {
+    const skill = skillRowById.get(skillId)
+    return skill === undefined
+      ? []
+      : [{
+          name: skill.name,
+          description: skill.description,
+          providerName: skill.provider.name,
+          missingSince: skill.missingSince,
+        }]
+  })
   const injection = await injectSkills({
     worktreePath: input.worktreePath,
     provider: input.provider,
@@ -855,7 +890,7 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
   if (order.includes('memory') && input.kind === 'implementation') {
     const memory = await memorySection({
       workspaceId: input.workspaceId,
-      slaveId: input.slaveId,
+      personId: slave.personId,
       taskId: input.taskId,
       kind: 'implementation',
     })
@@ -899,7 +934,7 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
     // above the trailer that asks for the graph. No task: a plan is about the goal.
     const memory = await memorySection({
       workspaceId: input.workspaceId,
-      slaveId: input.slaveId,
+      personId: slave.personId,
       taskId: null,
       kind: 'planning',
     })

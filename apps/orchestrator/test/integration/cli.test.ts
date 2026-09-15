@@ -188,7 +188,7 @@ describe('the orchestrator CLI', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "SupervisorDecision", "ExecutionEvent", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate", "CatalogImport", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "SupervisorDecision", "ExecutionEvent", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate", "CatalogImport", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })

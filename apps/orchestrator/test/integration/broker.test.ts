@@ -86,7 +86,7 @@ function script(dir: string, name: string, body: string): string {
 
 beforeEach(async (): Promise<void> => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "BrokerBinding", "Credential", "SlavePermission", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "BrokerBinding", "Credential", "SlavePermission", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
   )
   executions = 0
   resetBrokerCursors()

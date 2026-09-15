@@ -62,7 +62,11 @@ export interface Section {
  * the provenance a reader wants alongside it.
  */
 export type SectionSource =
-  | { readonly kind: 'profile'; readonly origin: 'slave' | 'company' | 'template'; readonly sha256: string }
+  /** M58 R7: the chain is seat -> person -> template, so a NEW row says `seat` or `person`.
+   *  `slave` and `company` stay members and are written by nothing: a `RunContext` row recorded
+   *  before this milestone names them, and `runContextSchema` is what a debugger reads history
+   *  back through. */
+  | { readonly kind: 'profile'; readonly origin: 'slave' | 'company' | 'seat' | 'person' | 'template'; readonly sha256: string }
   | { readonly kind: 'roster'; readonly slaveIds: readonly string[] }
   | {
       readonly kind: 'skills'
@@ -139,7 +143,7 @@ export interface Manifest {
 
 const profileSourceSchema = z.object({
   kind: z.literal('profile'),
-  origin: z.enum(['slave', 'company', 'template']),
+  origin: z.enum(['slave', 'company', 'seat', 'person', 'template']),
   sha256: z.string(),
 })
 

@@ -119,7 +119,9 @@ async function loadSlaveRows(
   workspaceId: WorkspaceId,
 ): Promise<readonly SlaveWorldRow[]> {
   return tx.slave.findMany({
-    where: { team: { workspaceId } },
+    // M58 R17: OPEN seats only. A seat somebody was removed from keeps its history and enters no
+    // tick; a person in the pool has no seat here at all and enters none either.
+    where: { team: { workspaceId }, closedAt: null },
     select: {
       id: true,
       runtimeRoles: true,

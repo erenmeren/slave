@@ -243,9 +243,12 @@ async function claimTheAnswer(questionId: string): Promise<ClaimedAnswer | null>
  */
 async function describeAnswerer(answer: { readonly slaveId: string; readonly actor: string }): Promise<string> {
   if (answer.actor === 'human') return 'the operator'
-  const slave = await prisma.slave.findUnique({ where: { id: answer.slaveId }, select: { name: true, role: true } })
+  const slave = await prisma.slave.findUnique({
+    where: { id: answer.slaveId },
+    select: { role: true, person: { select: { name: true } } },
+  })
   // `displayName` (`@slave-of-ai/domain`), not a local `${name} (${role})`: M37 §3 made that
   // formatting one function so the inbox, the ask roster, delivery and the CLI cannot drift. The
   // TITLE is right here -- the answer's envelope introduces a person, not a dispatch target.
-  return slave === null ? 'another slave' : displayName(slave)
+  return slave === null ? 'another slave' : displayName({ name: slave.person.name, role: slave.role })
 }

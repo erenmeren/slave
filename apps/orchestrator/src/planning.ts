@@ -432,7 +432,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   const managers = await prisma.slave.findMany({
     where: { runtimeRoles: { has: 'manager' }, team: { workspaceId: deps.workspaceId } },
     orderBy: { id: 'asc' },
-    include: { companySlave: { include: { template: true } }, permissions: true },
+    include: { person: { include: { template: true } }, permissions: true },
   })
 
   if (managers.length === 0) {
@@ -503,7 +503,14 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
     // reasoning (a misconfigured provider is an attempted run that failed, `failToStart`'s spec
     // §13 category, not a "nothing to attempt" that would retry silently forever).
     const workspaceDefault = await workspaceDefaultProvider(workspace.id)
-    const resolved = resolveRuntime(manager, workspaceDefault)
+    const resolved = resolveRuntime(
+      {
+        model: manager.model,
+        provider: manager.provider,
+        person: { model: manager.person.model, provider: manager.person.provider, template: manager.person.template },
+      },
+      workspaceDefault,
+    )
     if (resolved.provider === null) {
       throw new Error(
         'no runtime could be resolved for this run: either this workspace has no configured ' +
@@ -554,7 +561,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       runToken,
     })
 
-    const gitIdentity = { name: manager.name, email: `${emailLocalPart(manager)}@slaveofai.local` }
+    const gitIdentity = { name: manager.person.name, email: `${emailLocalPart({ id: manager.id, name: manager.person.name })}@slaveofai.local` }
 
     // M37 Task 2: the one builder. `worktreePath: null` because a planning run reads the primary
     // checkout (spec Decision 5) -- skills are never injected there, and the manifest says so
