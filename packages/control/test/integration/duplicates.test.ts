@@ -18,7 +18,7 @@ import {
 } from '../../src/duplicates.js'
 
 const TRUNCATE =
-  'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE'
+  'TRUNCATE TABLE "CatalogImport", "CompanyTeamMember", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE'
 
 /** Sixty distinct words, so a body has enough shingles for a Jaccard to mean something. */
 const words = (seed: string, count: number): string =>

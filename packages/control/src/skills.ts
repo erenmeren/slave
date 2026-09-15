@@ -385,31 +385,3 @@ export function describeSync(result: SyncResult): string {
   const detail = result.skippedRoots.map((skipped) => `${skipped.root} (${skipped.path}): ${skipped.code}`).join('; ')
   return `${head}skipped ${result.skippedRoots.length} unreadable root(s), nothing marked missing under them: ${detail}\n`
 }
-
-/** Gives a slave a skill. Idempotent: the composite primary key `(slaveId, skillId)` makes a
- *  second call a no-op rather than a duplicate row. */
-export async function assignSkill(slaveId: string, skillId: string): Promise<Result<void, ControlRefusal>> {
-  const skill = await prisma.skill.findUnique({ where: { id: skillId }, select: { id: true } })
-  if (skill === null) return err({ kind: 'skill_not_found', skillId })
-  const slave = await prisma.slave.findUnique({ where: { id: slaveId }, select: { id: true } })
-  if (slave === null) return err({ kind: 'slave_not_found', slaveId })
-
-  await prisma.slaveSkill.upsert({
-    where: { slaveId_skillId: { slaveId, skillId } },
-    update: {},
-    create: { slaveId, skillId },
-  })
-  return ok(undefined)
-}
-
-/** Takes it away. Idempotent for the same reason, via `deleteMany` rather than `delete` (which
- *  throws on a row that is already gone). */
-export async function unassignSkill(slaveId: string, skillId: string): Promise<Result<void, ControlRefusal>> {
-  const skill = await prisma.skill.findUnique({ where: { id: skillId }, select: { id: true } })
-  if (skill === null) return err({ kind: 'skill_not_found', skillId })
-  const slave = await prisma.slave.findUnique({ where: { id: slaveId }, select: { id: true } })
-  if (slave === null) return err({ kind: 'slave_not_found', slaveId })
-
-  await prisma.slaveSkill.deleteMany({ where: { slaveId, skillId } })
-  return ok(undefined)
-}

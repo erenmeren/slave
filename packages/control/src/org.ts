@@ -177,48 +177,26 @@ export async function addCompanyTeam(
 }
 
 /**
- * Adds a roster member -- a durable identity such as "Atlas" -- to a company team, instantiated
- * from a template. Slave names are unique per team, not globally: the same name in two different
- * teams (even in the same company) is unrelated identities and is allowed.
+ * M58 R5: puts an EXISTING person in a department. The verb it replaces (`addCompanySlave`) created
+ * a roster row -- a copy of a template with a name of its own -- and there is no such thing any
+ * more: a department is a set of people.
  *
- * Workspace-independent, like `createTemplate` above, and so deliberately carries no budget
- * admission -- see that function's comment for the reasoning.
+ * Idempotent on the composite key, so a second call is a no-op rather than a duplicate row.
  */
-export async function addCompanySlave(
+export async function addDepartmentMember(
   companyTeamId: string,
-  templateId: string,
-  name: string,
-  options?: { readonly model?: string; readonly provider?: ProviderKind },
-): Promise<Result<{ readonly id: string }, ControlRefusal>> {
-  if (name.trim() === '') return err({ kind: 'invalid_name' })
-  if (options?.model !== undefined && options.model.trim() === '') return err({ kind: 'invalid_model' })
-  if (options?.provider !== undefined && !isProviderKind(options.provider)) {
-    return err({ kind: 'invalid_provider', provider: options.provider })
-  }
-  const pairErr = pairRefusal(options?.model, options?.provider)
-  if (pairErr !== null) return err(pairErr)
-
+  personId: string,
+): Promise<Result<void, ControlRefusal>> {
   const team = await prisma.companyTeam.findUnique({ where: { id: companyTeamId }, select: { id: true } })
   if (team === null) return err({ kind: 'company_team_not_found', companyTeamId })
-
-  const template = await prisma.slaveTemplate.findUnique({ where: { id: templateId }, select: { id: true } })
-  if (template === null) return err({ kind: 'template_not_found', templateId })
-
-  try {
-    const slave = await prisma.companySlave.create({
-      data: {
-        companyTeamId,
-        templateId,
-        name,
-        ...(options?.model !== undefined ? { model: options.model } : {}),
-        ...(options?.provider !== undefined ? { provider: options.provider } : {}),
-      },
-    })
-    return ok({ id: slave.id })
-  } catch (error) {
-    if (isUniqueConstraintViolation(error)) return err({ kind: 'duplicate_name', name })
-    throw error
-  }
+  const person = await prisma.person.findUnique({ where: { id: personId }, select: { id: true } })
+  if (person === null) return err({ kind: 'person_not_found', personId })
+  await prisma.companyTeamMember.upsert({
+    where: { companyTeamId_personId: { companyTeamId, personId } },
+    update: {},
+    create: { companyTeamId, personId },
+  })
+  return ok(undefined)
 }
 
 /**
@@ -259,18 +237,22 @@ export async function admitRoster(
   if (workspace.budgetUsd === null) return null
 
   const workspaceDefault = await workspaceDefaultProvider(workspace.id)
-  const members = await prisma.companySlave.findMany({
+  const members = await prisma.companyTeamMember.findMany({
     where: { companyTeam: { companyId } },
-    include: { template: true },
+    include: { person: { include: { template: true } } },
   })
 
   for (const member of members) {
-    // A materialized worker starts with no override of its own, so the chain it resolves through
-    // is its roster row, then its template, then the workspace default -- exactly what
-    // `resolveRuntime` walks, called here rather than reimplemented so the write surface can
-    // never admit a pair that dispatch would resolve differently.
+    // A new seat starts with no override of its own, so the chain it resolves through is the
+    // PERSON, then their persona, then the workspace default -- exactly what `resolveRuntime`
+    // walks, called here rather than reimplemented so the write surface can never admit a pair
+    // that dispatch would resolve differently.
     const resolved = resolveRuntime(
-      { model: null, provider: null, companySlave: { model: member.model, provider: member.provider, template: member.template } },
+      {
+        model: null,
+        provider: null,
+        person: { model: member.person.model, provider: member.person.provider, template: member.person.template },
+      },
       workspaceDefault,
     )
     if (resolved.provider === null) continue
@@ -284,7 +266,7 @@ export async function admitRoster(
 /** What {@link assignCompany} created -- the gate and M11's UI report this back to an operator. */
 export interface AssignReport {
   readonly createdTeams: readonly string[]
-  readonly createdWorkers: readonly { readonly companySlaveId: string; readonly name: string; readonly role: string }[]
+  readonly createdWorkers: readonly { readonly personId: string; readonly name: string; readonly role: string }[]
 }
 
 /**
@@ -431,18 +413,20 @@ export async function assignCompanyTx(
     const current = await tx.company.findUniqueOrThrow({ where: { id: lockedCompanyId } })
     return err({ kind: 'company_already_assigned', workspaceId, companyName: current.name })
   }
-  const companyTeams = await tx.companyTeam.findMany({ where: { companyId }, include: { slaves: true } })
+  const companyTeams = await tx.companyTeam.findMany({
+    where: { companyId },
+    include: { members: { include: { person: { include: { template: true } } } } },
+  })
 
-  // Before the FIRST write (M33 review round 1): a roster name is unique per DEPARTMENT
-  // (`CompanySlave` is unique on `(companyTeamId, name)`), not per company, so an override keyed by
-  // name can address two roster rows. Which of two "Atlas"es the run meant by its lead is not
-  // something to guess -- the whole adoption is refused, and a person renames one or sets the role
-  // by hand.
+  // Before the FIRST write (M33 review round 1): an override keyed by NAME must address exactly one
+  // person. M58 R1 makes `Person.name` unique installation-wide, so two members of one company can
+  // no longer share one -- but the check stays, because it is what turns a roster this verb cannot
+  // read unambiguously into a refusal rather than a guess.
   const overrideNames = Object.keys(options?.roleOverrides ?? {})
   if (overrideNames.length > 0) {
     const counts = new Map<string, number>()
     for (const companyTeam of companyTeams) {
-      for (const companySlave of companyTeam.slaves) counts.set(companySlave.name, (counts.get(companySlave.name) ?? 0) + 1)
+      for (const member of companyTeam.members) counts.set(member.person.name, (counts.get(member.person.name) ?? 0) + 1)
     }
     const ambiguous = overrideNames.find((name) => (counts.get(name) ?? 0) > 1)
     if (ambiguous !== undefined) {
@@ -453,68 +437,77 @@ export async function assignCompanyTx(
   await tx.workspace.update({ where: { id: workspaceId }, data: { companyId } })
 
   const createdTeams: string[] = []
-  const createdWorkers: { companySlaveId: string; name: string; role: string }[] = []
+  const createdWorkers: { personId: string; name: string; role: string }[] = []
 
   for (const companyTeam of companyTeams) {
-    // Found, else adopted, else created -- one helper, shared with `materialiseCompanySlave` so a
-    // project staffed one worker at a time and one assigned wholesale end up with the same
-    // departments (M47 t2 fix round 1). It throws `AssignmentRefused` for the unique-index race,
-    // which is what makes Prisma roll back the `companyId` this transaction has already written.
+    // Found, else adopted, else created -- one helper, shared with `seatMember` so a project
+    // staffed one worker at a time and one assigned wholesale end up with the same departments
+    // (M47 t2 fix round 1). It throws `AssignmentRefused` for the unique-index race, which is what
+    // makes Prisma roll back the `companyId` this transaction has already written.
     const department = await departmentFor(tx, workspaceId, companyTeam)
     const team = department.team
     if (department.created) createdTeams.push(team.name)
 
-    for (const companySlave of companyTeam.slaves) {
-      // Scoped to the WORKSPACE, not to this template's own copied department (M25 final
-      // review, Critical): `moveSlave` keeps `companySlaveId` and only changes `teamId`, so a
-      // worker moved to a different department of the same project is still this exact catalog
-      // row's materialization -- looking it up by `{ teamId: team.id, companySlaveId }` would
-      // miss it there and this loop would create a second `Slave` with the same name and the
-      // same `companySlaveId` (there is no unique index on that column to catch it).
-      const existingWorker = await tx.slave.findFirst({
-        where: { companySlaveId: companySlave.id, team: { workspaceId } },
+    for (const member of companyTeam.members) {
+      const person = member.person
+      // M58 R5: the SAME person, on a second project. `@@unique([personId, teamId])` is what makes
+      // this find-or-reopen rather than a copy -- a seat that was closed by `unassignPerson` is
+      // REOPENED here, keeping its runs, messages and permissions as history (R2).
+      const existing = await tx.slave.findUnique({
+        where: { personId_teamId: { personId: person.id, teamId: team.id } },
       })
-      if (existingWorker !== null) continue
+      if (existing !== null) {
+        if (existing.closedAt !== null) {
+          await tx.slave.update({ where: { id: existing.id }, data: { closedAt: null } })
+          createdWorkers.push({ personId: person.id, name: person.name, role: existing.role })
+        }
+        continue
+      }
+      // A person already seated somewhere else in THIS workspace is not seated twice: the old
+      // `companySlaveId`-scoped check said the same thing about a roster row, and `moveSlave` moving
+      // somebody between departments of one project must not make this loop create a second seat.
+      const elsewhere = await tx.slave.findFirst({
+        where: { personId: person.id, team: { workspaceId }, closedAt: null },
+      })
+      if (elsewhere !== null) continue
 
-      const template = await tx.slaveTemplate.findUniqueOrThrow({ where: { id: companySlave.templateId } })
-      // M33 §3 (ruling R2): an override replaces the role this worker is materialized WITH, and
-      // nothing else -- `Slave.role` is the persona title; `runtimeRoles` (M37 t1) is what the
-      // runtime actually dispatches on, so the override IS the runtime role, already translated
-      // by the caller. `Task.requiredRole` stays untouched: it names the role a TASK needs, and
-      // neither verb here creates a task.
+      // M33 §3 (ruling R2): an override replaces the role this person is SEATED with, and nothing
+      // else -- `Slave.role` is the persona title; `runtimeRoles` (M37 t1) is what the runtime
+      // actually dispatches on, so the override IS the runtime role, already translated by the
+      // caller. `Task.requiredRole` stays untouched: it names the role a TASK needs, and neither
+      // verb here creates a task.
       //
-      // The runtime role set is BOTH (M37 t3): the overridden role and the catalog one, in that
+      // The runtime role set is BOTH (M37 t3): the overridden role and the persona's own, in that
       // order, deduplicated -- which is a one-element set whenever there is no override, exactly
       // what this verb wrote before. Both, and not just the override, because an override is a
-      // TRANSLATION and not a replacement of what the worker can do: adoption
-      // (`packages/control/src/simulation/adopt.ts`) maps a simulation's `lead` onto `manager` so
-      // a planning pass can find it, and a worker that stopped being dispatchable as its catalog
-      // role in the process would silently drop off every task whose `requiredRole` the planner
-      // emits -- the planner emits CATALOG roles. `role` itself keeps the override, unchanged from
-      // M33: it is the title an operator reads on the roster.
-      const override = options?.roleOverrides?.[companySlave.name]
-      // M47 R2: a materialised worker carries what its template PROVIDES, and its runtime roles
-      // are seeded with the roles those capabilities project to -- ADDITIVELY, on top of the
-      // override-and-catalog pair M33/M37 already write. The set only ever grows here: an
-      // override is a translation, a projection is an addition, and neither is a replacement.
-      const capabilities = template.capabilityKeys
+      // TRANSLATION and not a replacement of what somebody can do: adoption
+      // (`packages/control/src/simulation/adopt.ts`) maps a simulation's `lead` onto `manager` so a
+      // planning pass can find it, and a worker that stopped being dispatchable as its catalog role
+      // in the process would silently drop off every task whose `requiredRole` the planner emits --
+      // the planner emits CATALOG roles. `role` itself keeps the override, unchanged from M33: it is
+      // the title an operator reads on the roster.
+      //
+      // M47 R2: the capabilities are the PERSON's now (M58 R1), and the seat's runtime roles are
+      // seeded with the roles those project to -- ADDITIVELY, on top of the override-and-catalog
+      // pair. The set only ever grows here.
+      //
+      // No `lifecycle` write: a person's lifecycle is the PERSON's and was decided when they were
+      // created, not when a seat opened.
+      const template = person.template
+      const override = options?.roleOverrides?.[person.name]
+      const role = override ?? template?.role ?? 'worker'
+      const capabilities = person.capabilities
       const worker = await tx.slave.create({
         data: {
           teamId: team.id,
-          name: companySlave.name,
-          role: override ?? template.role,
+          personId: person.id,
+          role,
           runtimeRoles: [
-            ...new Set([override ?? template.role, template.role, ...projectRoles(capabilities, options?.taxonomy ?? [])]),
+            ...new Set([role, template?.role ?? role, ...projectRoles(capabilities, options?.taxonomy ?? [])]),
           ],
-          capabilities: [...capabilities],
-          companySlaveId: companySlave.id,
-          // M50 R1: a roster worker EXISTS in the organisation, which is what `permanent` means.
-          // Written here rather than left to the column default, which would call every one of
-          // them a project hire.
-          lifecycle: 'permanent',
         },
       })
-      createdWorkers.push({ companySlaveId: companySlave.id, name: worker.name, role: worker.role })
+      createdWorkers.push({ personId: person.id, name: person.name, role: worker.role })
     }
   }
 
@@ -629,6 +622,7 @@ export async function setSlaveModel(
 export type LockedSlave = Prisma.SlaveGetPayload<{
   include: {
     team: { select: { id: true; workspaceId: true } }
+    person: { select: { id: true; name: true } }
     runs: { select: { id: true; status: true } }
   }
 }>
@@ -654,6 +648,8 @@ export async function lockSlave(tx: Prisma.TransactionClient, slaveId: string): 
     where: { id: slaveId },
     include: {
       team: { select: { id: true, workspaceId: true } },
+      // M58 R2: the name is the PERSON's, and every one of these verbs reports it.
+      person: { select: { id: true, name: true } },
       runs: { select: { id: true, status: true } },
     },
   })
@@ -670,11 +666,13 @@ async function lockTeam(tx: Prisma.TransactionClient, teamId: string) {
 }
 
 /**
- * Renames a project slave. Sibling names are unique per TEAM, matching `addCompanySlave`'s own
- * rule for the roster template this slave may have been instantiated from -- but there is no
- * unique index to lean on here (unlike that insert path): `Slave` carries no `@@unique([teamId,
- * name])`, so the check is a `findFirst` run inside the same locked transaction as the update,
- * not a caught constraint violation.
+ * Renames the PERSON sitting in a seat (M58 R1). A seat has no name of its own any more, so this
+ * writes `Person.name` -- which is the name every project sees, because the name is unique across
+ * the INSTALLATION rather than per team.
+ *
+ * The duplicate check is still a `findFirst` inside the same locked transaction as the update
+ * rather than a caught constraint violation: it names the person it collided with, which a P2002
+ * cannot.
  */
 export async function renameSlave(
   slaveId: string,
@@ -687,11 +685,11 @@ export async function renameSlave(
     const slave = await lockSlave(tx, slaveId)
     if (slave === null) return { ok: false as const, error: { kind: 'slave_not_found', slaveId } as ControlRefusal }
 
-    const sibling = await tx.slave.findFirst({ where: { teamId: slave.teamId, name, NOT: { id: slaveId } } })
-    if (sibling !== null) return { ok: false as const, error: { kind: 'duplicate_name', name } as ControlRefusal }
+    const taken = await tx.person.findFirst({ where: { name, NOT: { id: slave.personId } } })
+    if (taken !== null) return { ok: false as const, error: { kind: 'person_name_taken', name } as ControlRefusal }
 
-    await tx.slave.update({ where: { id: slaveId }, data: { name } })
-    return { ok: true as const, value: { workspaceId: slave.team.workspaceId, from: slave.name } }
+    await tx.person.update({ where: { id: slave.personId }, data: { name } })
+    return { ok: true as const, value: { workspaceId: slave.team.workspaceId, from: slave.person.name } }
   })
 
   if (!outcome.ok) return err(outcome.error)
@@ -761,11 +759,15 @@ export async function setSlaveRole(
 }
 
 /**
- * Removes a project slave WITH its run history; refused only while a run is live (M27 §4.1).
+ * Removes a project SEAT with its run history; refused only while a run is live (M27 §4.1).
  * `Slave.runs` cascades on delete (schema.prisma) -- and everything under a run (`Checkpoint`),
- * plus `SlavePermission`, `SlaveSkill`, `SlaveMessage`. `ExecutionEvent.slaveId` has no FK and
- * keeps its value; the activity feed already renders past events from their payload and tolerates
- * a slave it can no longer resolve.
+ * plus `SlavePermission` and `SlaveMessage`. `ExecutionEvent.slaveId` has no FK and keeps its
+ * value; the activity feed already renders past events from their payload and tolerates a seat it
+ * can no longer resolve.
+ *
+ * M58 R13: deleting the PERSON is `deletePerson` (`packages/control/src/persons.ts`), and that is
+ * what `delete-slave` and the web's Delete are bound to. This verb stays as the seat-level delete
+ * the simulation adoption path and `deleteTeam`'s cascade still need.
  */
 export async function deleteSlave(
   slaveId: string,
@@ -778,8 +780,8 @@ export async function deleteSlave(
     const live = await liveRunCount(tx, { slaveId })
     if (live > 0) return { ok: false as const, error: { kind: 'live_runs', entity: 'slave', id: slaveId, runs: live } as ControlRefusal }
     const runs = slave.runs.length
-    await tx.slave.delete({ where: { id: slaveId } })   // cascades SlaveRun (+Checkpoint), SlavePermission, SlaveSkill, SlaveMessage
-    return { ok: true as const, value: { workspaceId: slave.team.workspaceId, from: slave.name, runs } }
+    await tx.slave.delete({ where: { id: slaveId } })   // cascades SlaveRun (+Checkpoint), SlavePermission, SlaveMessage
+    return { ok: true as const, value: { workspaceId: slave.team.workspaceId, from: slave.person.name, runs } }
   })
 
   if (!outcome.ok) return err(outcome.error)
@@ -928,17 +930,17 @@ export async function createProjectTeam(
 }
 
 /**
- * Moves a project slave to another department of the SAME project. `companySlaveId` is left
- * alone: the slave still knows which catalog row it came from, only its department changed, and
- * `assignCompany` run again later finds it by that id anywhere in the project and leaves it where
- * it is (M25 final review corrected that lookup, which used to be scoped to the template's own
- * department -- §12 entry 13). Refused while the slave holds a live run, the rule
- * {@link setSlaveRole} applies -- and, as of the same review, while the target department already
- * has a slave of that name, the rule {@link renameSlave} applies (M25 final review, Important:
- * `moveSlave` was the one write path that skipped the per-department unique-name rule every
- * sibling verb enforces). A move to the slave's CURRENT department is a no-op: nothing changes,
- * so there is nothing to check the name clash against and nothing worth an `org.changed` event
- * over -- the transaction returns `value: null` for that case and the event below is skipped.
+ * Moves a seat to another department of the SAME project. The person is unchanged: only which
+ * department they sit in moves, and `assignCompany` run again later finds their seat anywhere in
+ * the project and leaves it where it is. Refused while the seat holds a live run, the rule
+ * {@link setSlaveRole} applies.
+ *
+ * M58 R2: `@@unique([personId, teamId])` is what the clash check reads now -- one seat per person
+ * per team. An OPEN seat in the target department is `already_assigned`; a CLOSED one is reopened
+ * and this seat's row goes with it, which is what makes moving somebody back where they were a
+ * return rather than a second row. A move to the seat's CURRENT department is a no-op: nothing
+ * changes, so there is nothing to check and nothing worth an `org.changed` event over -- the
+ * transaction returns `value: null` for that case and the event below is skipped.
  */
 export async function moveSlave(
   slaveId: string,
@@ -964,11 +966,20 @@ export async function moveSlave(
 
     if (slave.team.id === teamId) return { ok: true as const, value: null }
 
-    const clash = await tx.slave.findFirst({ where: { teamId, name: slave.name, NOT: { id: slaveId } } })
-    if (clash !== null) return { ok: false as const, error: { kind: 'duplicate_name', name: slave.name } as ControlRefusal }
+    const clash = await tx.slave.findUnique({ where: { personId_teamId: { personId: slave.personId, teamId } } })
+    if (clash !== null && clash.closedAt === null) {
+      return { ok: false as const, error: { kind: 'already_assigned', personId: slave.personId, teamId } as ControlRefusal }
+    }
 
     const from = await tx.team.findUniqueOrThrow({ where: { id: slave.team.id }, select: { name: true } })
-    await tx.slave.update({ where: { id: slaveId }, data: { teamId } })
+    if (clash !== null) {
+      // A seat this person already held here and left: reopen it and retire the one they are
+      // leaving, rather than adding a second row the unique index would refuse anyway.
+      await tx.slave.update({ where: { id: clash.id }, data: { closedAt: null, role: slave.role, runtimeRoles: slave.runtimeRoles } })
+      await tx.slave.delete({ where: { id: slaveId } })
+    } else {
+      await tx.slave.update({ where: { id: slaveId }, data: { teamId } })
+    }
     return { ok: true as const, value: { workspaceId: target.workspaceId, from: from.name, to: target.name } }
   })
 
@@ -986,33 +997,6 @@ export async function moveSlave(
   }
 
   return ok(undefined)
-}
-
-/** Moves a catalog slave to another department template of the SAME company. The unique index
- *  `@@unique([companyTeamId, name])` is what refuses a name clash, caught the way
- *  {@link addCompanySlave} catches it. No event: the catalog has no workspace. */
-export async function moveCompanySlave(
-  companySlaveId: string,
-  companyTeamId: string,
-  _principal?: Principal,
-): Promise<Result<void, ControlRefusal>> {
-  const slave = await prisma.companySlave.findUnique({
-    where: { id: companySlaveId },
-    select: { id: true, name: true, companyTeam: { select: { companyId: true } } },
-  })
-  if (slave === null) return err({ kind: 'slave_not_found', slaveId: companySlaveId })
-
-  const target = await prisma.companyTeam.findUnique({ where: { id: companyTeamId }, select: { id: true, companyId: true } })
-  if (target === null) return err({ kind: 'company_team_not_found', companyTeamId })
-  if (target.companyId !== slave.companyTeam.companyId) return err({ kind: 'company_mismatch', companySlaveId, companyTeamId })
-
-  try {
-    await prisma.companySlave.update({ where: { id: companySlaveId }, data: { companyTeamId } })
-    return ok(undefined)
-  } catch (error) {
-    if (isUniqueConstraintViolation(error)) return err({ kind: 'duplicate_name', name: slave.name })
-    throw error
-  }
 }
 
 /** Renames a department template. `@@unique([companyId, name])` refuses a sibling clash. No event. */
@@ -1036,12 +1020,13 @@ export async function renameCompanyTeam(
 }
 
 /**
- * Deletes a department template WITH its catalog slaves; project departments copied from it
- * survive (`onDelete: SetNull` on `Team.companyTeam`). No event.
+ * Deletes a department template WITH its memberships; project departments copied from it survive
+ * (`onDelete: SetNull` on `Team.companyTeam`), and so does every PERSON who was a member -- M58 R5
+ * made a department a set of people, and losing the set does not lose the people. No event.
  *
  * Locked check-then-delete, the same shape as {@link deleteTeam}: `SELECT ... FOR UPDATE` first
- * serialises against a concurrent `addCompanySlave`/`moveCompanySlave` into this template, the same
- * `lockTeam` idiom.
+ * serialises against a concurrent `addDepartmentMember` into this template, the same `lockTeam`
+ * idiom.
  */
 export async function deleteCompanyTeam(
   companyTeamId: string,
@@ -1051,10 +1036,10 @@ export async function deleteCompanyTeam(
     await tx.$queryRaw`SELECT id FROM "CompanyTeam" WHERE id = ${companyTeamId} FOR UPDATE`
     const team = await tx.companyTeam.findUnique({
       where: { id: companyTeamId },
-      select: { id: true, _count: { select: { slaves: true } } },
+      select: { id: true, _count: { select: { members: true } } },
     })
     if (team === null) return { ok: false as const, error: { kind: 'company_team_not_found', companyTeamId } as ControlRefusal }
-    const catalogSlaves = team._count.slaves
+    const catalogSlaves = team._count.members
 
     await tx.companyTeam.delete({ where: { id: companyTeamId } })
     return { ok: true as const, value: { catalogSlaves } }
@@ -1064,49 +1049,29 @@ export async function deleteCompanyTeam(
 }
 
 /**
- * Removes a catalog slave (M27 §5). The project slaves materialized from it survive with
- * `companySlaveId` null (`SetNull`). No event: the catalog has no workspace.
- *
- * Locked check-then-delete, the same shape as {@link deleteSlaveTemplate} and {@link deleteCompany}
- * below (spec §5: every catalog verb locks the row it deletes).
- */
-export async function deleteCompanySlave(
-  companySlaveId: string,
-  _principal?: Principal,
-): Promise<Result<void, ControlRefusal>> {
-  const outcome = await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT id FROM "CompanySlave" WHERE id = ${companySlaveId} FOR UPDATE`
-    const row = await tx.companySlave.findUnique({ where: { id: companySlaveId }, select: { id: true } })
-    if (row === null) return { ok: false as const, error: { kind: 'company_slave_not_found', companySlaveId } as ControlRefusal }
-    await tx.companySlave.delete({ where: { id: companySlaveId } })
-    return { ok: true as const, value: undefined }
-  })
-  return outcome.ok ? ok(undefined) : err(outcome.error)
-}
-
-/**
- * Removes a slave template WITH the catalog slaves instantiated from it (M27 §5): the schema says
- * nothing about `CompanySlave.template` (Restrict), so the verb deletes them first, in the same
- * transaction behind a row lock. Project slaves keep the role that was copied at
- * materialization. No event.
+ * Removes a persona from the catalog (M27 §5). M58 R1 made `Person.templateId` a `SetNull`
+ * relation, so this verb deletes NOTHING before the template row: every person hired from it keeps
+ * working, keeps their name and their capabilities, and simply stops naming a persona. What the
+ * caller is told is how many of them that was. No event.
  */
 export async function deleteSlaveTemplate(
   templateId: string,
   _principal?: Principal,
-): Promise<Result<{ readonly catalogSlaves: number }, ControlRefusal>> {
+): Promise<Result<{ readonly personsUnlinked: number }, ControlRefusal>> {
   const outcome = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "SlaveTemplate" WHERE id = ${templateId} FOR UPDATE`
     const row = await tx.slaveTemplate.findUnique({ where: { id: templateId }, select: { id: true } })
     if (row === null) return { ok: false as const, error: { kind: 'template_not_found', templateId } as ControlRefusal }
-    const { count: catalogSlaves } = await tx.companySlave.deleteMany({ where: { templateId } })
+    const personsUnlinked = await tx.person.count({ where: { templateId } })
     await tx.slaveTemplate.delete({ where: { id: templateId } })
-    return { ok: true as const, value: { catalogSlaves } }
+    return { ok: true as const, value: { personsUnlinked } }
   })
   return outcome.ok ? ok(outcome.value) : err(outcome.error)
 }
 
 /**
- * Removes a company WITH its department templates and catalog slaves (the schema cascades both).
+ * Removes a company WITH its department templates and their memberships (the schema cascades both);
+ * every PERSON who was a member survives (M58 R5).
  * `Workspace.companyId` is an optional FK with no explicit `onDelete`, which Prisma emits as
  * `ON DELETE SET NULL` -- the database would clear it on its own -- but the verb detaches assigned
  * projects itself first, with an explicit `updateMany`, so it can COUNT what was detached
@@ -1126,7 +1091,7 @@ export async function deleteCompany(
     if (row === null) return { ok: false as const, error: { kind: 'company_not_found', companyId } as ControlRefusal }
     const simulations = await tx.simulationRun.count({ where: { companyId } })
     if (simulations > 0) return { ok: false as const, error: { kind: 'live_simulations', companyId, simulations } as ControlRefusal }
-    const catalogSlaves = await tx.companySlave.count({ where: { companyTeam: { companyId } } })
+    const catalogSlaves = await tx.companyTeamMember.count({ where: { companyTeam: { companyId } } })
     const { count: projectsDetached } = await tx.workspace.updateMany({ where: { companyId }, data: { companyId: null } })
     await tx.company.delete({ where: { id: companyId } })
     return { ok: true as const, value: { templates: row._count.teams, catalogSlaves, projectsDetached } }

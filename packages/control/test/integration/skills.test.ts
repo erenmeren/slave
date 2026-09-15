@@ -15,7 +15,7 @@ import {
 } from '../../src/skills.js'
 
 const TRUNCATE =
-  'TRUNCATE TABLE "ExecutionEvent", "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE'
+  'TRUNCATE TABLE "ExecutionEvent", "PersonSkill", "TemplateSkill", "Skill", "SkillProvider", "SlavePermission", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE'
 
 let root: string
 

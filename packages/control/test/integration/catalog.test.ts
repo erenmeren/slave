@@ -24,7 +24,7 @@ const DIRECTORY = '/tmp/catalog-m42'
  *  truncated CASCADE reaches `TemplateDuplicate` (M55) as well, which is why that table is not
  *  named here (plan erratum E4). */
 const TRUNCATE_FOR_THIS_FILE =
-  'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE'
+  'TRUNCATE TABLE "CatalogImport", "CompanyTeamMember", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE'
 
 const persona = (name: string, body = 'You build the core module and its tests.'): string =>
   `---\nname: ${name}\ndescription: ${name} does one thing well.\nvibe: One thing, well.\n---\n\n# ${name}\n\n${body}\n`

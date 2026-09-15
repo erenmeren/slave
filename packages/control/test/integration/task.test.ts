@@ -19,7 +19,7 @@ async function seed(): Promise<Fixture> {
 
 const reset = async (): Promise<void> => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "SlaveRun", "Task", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "SlaveRun", "Task", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
   )
 }
 

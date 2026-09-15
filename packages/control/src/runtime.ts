@@ -1,12 +1,14 @@
 import { prisma } from '@slave-of-ai/db/client'
+import { resolveOverride } from '@slave-of-ai/domain'
 import type { ProviderKind } from '@slave-of-ai/providers'
 
 /**
  * The pair a run is dispatched with (M12 §5). `resolveRuntime` replaces `resolveModel` (M10 §6):
- * the override chain is the same one -- worker's own column wins over its roster row's, which
- * wins over its template's default, which falls back to the workspace's own configured default
- * when every link above is unset -- but now the chain carries the PROVIDER alongside the model,
- * from the same level, never from two different ones (spec Decision 5).
+ * the override chain is the same one -- the SEAT's own columns win over the PERSON's (M58 R7,
+ * where the roster row used to sit), which win over their persona's default, which falls back to
+ * the workspace's own configured default when every link above is unset -- but the chain carries
+ * the PROVIDER alongside the model, from the same level, never from two different ones (spec
+ * Decision 5).
  *
  * `provider: null` in the result is a refusal, not "assume Claude" -- the caller must check it
  * before dispatching and treat a null the way it treats any other reason a run cannot start. It
@@ -18,8 +20,8 @@ import type { ProviderKind } from '@slave-of-ai/providers'
  * 2. A HALF-PAIR: some level names a model but has no provider recorded for it. This is possible
  *    only on a row written before M12 existed -- Task 7 made writing a model without its provider
  *    a refusal at every level this chain reads (`packages/control/src/org.ts`), but it could not
- *    repair a row that predates the guard (`SlaveTemplate` is append-only, `CompanySlave` has no
- *    update verb). When this level is reached, two silent moves are both available and both wrong:
+ *    repair a row that predates the guard (`SlaveTemplate` is append-only). When this level is
+ *    reached, two silent moves are both available and both wrong:
  *    falling through to a LOWER level's provider would pair THIS level's model with a provider
  *    nobody ever chose for it (the exact "incompatible combination" Decision 5 says must be
  *    unable to be expressed); falling through to a lower level's MODEL as well would silently
@@ -27,53 +29,48 @@ import type { ProviderKind } from '@slave-of-ai/providers'
  *    substitution this milestone exists to remove, so the half-pair is unresolvable: refused, not
  *    repaired here, not guessed at.
  *
- * A legacy slave with no `companySlaveId` link (`companySlave: null`) resolves through its own
- * column alone, same as `resolveModel` did -- there is nothing else to consult.
+ * A seat whose person is not loaded (`person: null`) resolves through its own columns alone, same
+ * as `resolveModel` did -- there is nothing else to consult.
  */
 export interface ResolvedRuntime {
   readonly provider: ProviderKind | null
   readonly model: string | undefined
 }
 
-interface RuntimeLevel {
+/** M58 R7: the three levels of the chain, as `resolveRuntime` reads them. `person` is null only
+ *  where the caller has not loaded one -- every seat has a person. */
+export interface RuntimeLevels {
   readonly model: string | null
   readonly provider: ProviderKind | null
-}
-
-export function resolveRuntime(
-  worker: {
+  readonly person: {
     readonly model: string | null
     readonly provider: ProviderKind | null
-    readonly companySlave: {
-      readonly model: string | null
-      readonly provider: ProviderKind | null
-      readonly template: { readonly defaultModel: string | null; readonly provider: ProviderKind | null }
-    } | null
-  },
-  workspaceDefault: ProviderKind | null,
-): ResolvedRuntime {
-  const levels: readonly RuntimeLevel[] = [
-    { model: worker.model, provider: worker.provider },
-    ...(worker.companySlave === null
-      ? []
-      : [
-          { model: worker.companySlave.model, provider: worker.companySlave.provider },
-          { model: worker.companySlave.template.defaultModel, provider: worker.companySlave.template.provider },
-        ]),
-  ]
+    readonly template: { readonly defaultModel: string | null; readonly provider: ProviderKind | null } | null
+  } | null
+}
 
-  for (const level of levels) {
-    // A level with no model has nothing to name -- its provider column, if somehow set, names
-    // nothing to run and is not consulted (Task 7's write guard makes "provider set, model unset"
-    // unwritable going forward, so this branch only ever sees `provider: null` here in practice).
-    if (level.model === null) continue
-    // The half-pair case (see the docstring above): this level names a model with no provider.
-    // Refused here, at the level that has the problem, rather than falling through to any other
-    // level.
-    return { provider: level.provider, model: level.provider === null ? undefined : level.model }
-  }
+/** One rung of the ladder, and never half of one. A rung EXISTS for `resolveOverride` only when it
+ *  names a model: a level with no model has nothing to name, and its provider column -- if somehow
+ *  set -- names nothing to run and is not consulted (Task 7's write guard makes "provider set,
+ *  model unset" unwritable going forward). Pairing the two INTO the rung is what keeps Decision 5's
+ *  rule true: the provider that comes back is always the provider of the level whose model came
+ *  back with it, and never a lower level's. */
+type RuntimeRung = { readonly model: string; readonly provider: ProviderKind | null }
 
-  return { provider: workspaceDefault, model: undefined }
+const rung = (model: string | null, provider: ProviderKind | null): RuntimeRung | null =>
+  model === null ? null : { model, provider }
+
+export function resolveRuntime(levels: RuntimeLevels, workspaceDefault: ProviderKind | null): ResolvedRuntime {
+  const chosen = resolveOverride<RuntimeRung>({
+    seat: rung(levels.model, levels.provider),
+    person: rung(levels.person?.model ?? null, levels.person?.provider ?? null),
+    template: rung(levels.person?.template?.defaultModel ?? null, levels.person?.template?.provider ?? null),
+  })
+
+  if (chosen === null) return { provider: workspaceDefault, model: undefined }
+  // The half-pair case (see the docstring above): this level names a model with no provider.
+  // Refused here, at the level that has the problem, rather than falling through to any other.
+  return { provider: chosen.value.provider, model: chosen.value.provider === null ? undefined : chosen.value.model }
 }
 
 /**

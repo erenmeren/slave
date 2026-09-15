@@ -79,7 +79,7 @@ const reset = async (): Promise<void> => {
   // NOT here: it is the seeded taxonomy every other integration file in this database reads, and
   // truncating it would empty it under a test in another file (the `capability.test.ts` idiom).
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "SlaveRun", "Task", "Slave", "Team", "Workspace", "User", "CollaborationHint", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "SlaveRun", "Task", "Slave", "Person", "Team", "Workspace", "User", "CollaborationHint", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
 }
 

@@ -25,7 +25,7 @@ import { setRuntimeRoles } from '../../src/profile.js'
  * duplicates -- and any seed row a case hand-edits, which `syncCapabilityTaxonomy` puts back.
  */
 const TRUNCATE =
-  'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CollaborationHint", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE'
+  'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CollaborationHint", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE'
 
 beforeEach(async (): Promise<void> => {
   await prisma.$executeRawUnsafe(TRUNCATE)

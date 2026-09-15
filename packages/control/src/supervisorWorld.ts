@@ -22,7 +22,7 @@ import {
   type Runbook,
   type SituationKind,
   type SupervisorCatalogEntry,
-  type SupervisorCompanyWorker,
+  type SupervisorPoolPerson,
   type SupervisorDenial,
   type SupervisorProfileEvidence,
   type SupervisorQuestion,
@@ -98,26 +98,27 @@ async function loadTaxonomy(tx: Prisma.TransactionClient): Promise<readonly Capa
   return rows.map((row) => ({ key: row.key, label: row.label, domain: row.domain, role: row.role, synonyms: row.synonyms }))
 }
 
-/** The company's roster rows that are NOT already materialised into this project (R4's second
- *  place to look). One query: the `NOT EXISTS` is Postgres's, never a filter in JavaScript over a
- *  roster that may be a hundred people. */
-async function loadCompanyRoster(
+/** M58 R16: everybody who works here and holds NO open seat on this project -- R4's second place to
+ *  look, and the whole installation rather than one company's roster, because a person is not a
+ *  company's copy of a template any more. A released person is not in the pool: their engagement is
+ *  over. One query: the `NOT EXISTS` is Postgres's, never a filter in JavaScript over a pool that
+ *  may be a hundred people. */
+async function loadPool(
   tx: Prisma.TransactionClient,
   workspaceId: string,
-): Promise<readonly SupervisorCompanyWorker[]> {
-  return tx.$queryRaw<SupervisorCompanyWorker[]>`
-    SELECT cs.id AS "companySlaveId", cs.name, cs."templateId" AS "templateId", t."capabilityKeys" AS capabilities
-    FROM "CompanySlave" cs
-    JOIN "CompanyTeam" ct ON ct.id = cs."companyTeamId"
-    JOIN "Workspace" w ON w."companyId" = ct."companyId"
-    JOIN "SlaveTemplate" t ON t.id = cs."templateId"
-    WHERE w.id = ${workspaceId}
-      AND NOT EXISTS (
-        SELECT 1 FROM "Slave" s JOIN "Team" tm ON tm.id = s."teamId"
-        WHERE s."companySlaveId" = cs.id AND tm."workspaceId" = ${workspaceId}
-      )
-    ORDER BY cs.id ASC
-  `
+): Promise<readonly SupervisorPoolPerson[]> {
+  return tx.person.findMany({
+    where: { releasedAt: null, seats: { none: { team: { workspaceId }, closedAt: null } } },
+    select: { id: true, name: true, templateId: true, capabilities: true },
+    orderBy: { id: 'asc' },
+  }).then((rows) =>
+    rows.map((row) => ({
+      personId: row.id,
+      name: row.name,
+      templateId: row.templateId,
+      capabilities: row.capabilities,
+    })),
+  )
 }
 
 /** Every ACTIVE catalog template that provides ANY capability, plus whether a worker already here
@@ -149,8 +150,7 @@ async function loadCatalogEntries(
             where: {
               targetTemplateId: { not: null },
               OR: [
-                { template: { hiredWorkers: { some: { id: { in: slaveRows.map((row) => row.id) } } } } },
-                { template: { companySlaves: { some: { workers: { some: { id: { in: slaveRows.map((row) => row.id) } } } } } } },
+                { template: { hiredPersons: { some: { seats: { some: { id: { in: slaveRows.map((row) => row.id) } } } } } } },
               ],
             },
             select: { targetTemplateId: true },
@@ -164,8 +164,8 @@ async function loadCatalogEntries(
     division: template.sourceDivision,
     recommended: recommended.has(template.id),
     // M53 R9 (plan erratum E7): what a TEMPLATE candidate's model is. Nobody has hired it, so there
-    // is no worker row to resolve the `Slave.model ?? CompanySlave.model ?? defaultModel` chain
-    // through -- this column is the whole chain.
+    // is no seat to resolve the `Slave.model ?? Person.model ?? defaultModel` chain through -- this
+    // column is the whole chain.
     defaultModel: template.defaultModel,
   }))
 }
@@ -841,30 +841,39 @@ export async function loadSupervisorWorld(
             )
 
       const slaveRows = await tx.slave.findMany({
-        where: { team: { workspaceId } },
+        // M58 R17: OPEN seats only. A seat somebody was removed from keeps its history and is in no
+        // world the Supervisor reasons about.
+        where: { team: { workspaceId }, closedAt: null },
         select: {
           id: true,
-          name: true,
+          personId: true,
           role: true,
           runtimeRoles: true,
-          // M47 R4: what the worker PROVIDES, which is what `assign_capability` is offered off --
-          // a worker that already provides the missing capability and was never given its role.
-          capabilities: true,
-          // M50 R3: the three facts `engagement_over` is decided from. `lifecycle` says whether the
-          // question applies at all, `engagementTaskId` names the assignment, and `releasedAt` is
-          // what keeps a released worker out of `formTeam`'s roster and out of `staffableSlaves`.
-          lifecycle: true,
-          engagementTaskId: true,
-          releasedAt: true,
-          // M53 R1/R9 (plan erratum E7): the PROFILE KEY's ingredient and the three halves of the
-          // model chain `Slave.model ?? CompanySlave.model ?? SlaveTemplate.defaultModel`
-          // (`schema.prisma:261-264`). All four ride on this `findMany` through nested selects
-          // rather than costing a query of their own, and the chain is resolved at the EDGE below so
-          // the pure functions never have to.
-          hiredFromTemplateId: true,
           model: true,
-          companySlave: { select: { model: true } },
-          hiredFromTemplate: { select: { defaultModel: true } },
+          person: {
+            select: {
+              name: true,
+              // M47 R4: what the PERSON provides (M58 R1), which is what `assign_capability` is
+              // offered off -- somebody who already provides the missing capability and was never
+              // given its role.
+              capabilities: true,
+              // M50 R3: the lifecycle facts `engagement_over` is decided from. `lifecycle` says
+              // whether the question applies at all and `releasedAt` is what keeps a released
+              // person out of `formTeam`'s roster and out of `staffableSlaves`; the engagement task
+              // itself is the SEAT's and is selected beside it.
+              lifecycle: true,
+              releasedAt: true,
+              // M53 R1/R9 (plan erratum E7): the PROFILE KEY's ingredient and the two lower halves
+              // of the model chain `Slave.model ?? Person.model ?? SlaveTemplate.defaultModel`
+              // (M58 R7). All of them ride on this `findMany` through nested selects rather than
+              // costing a query of their own, and the chain is resolved at the EDGE below so the
+              // pure functions never have to.
+              templateId: true,
+              model: true,
+              template: { select: { defaultModel: true } },
+            },
+          },
+          engagementTaskId: true,
           // "Busy" is "holds a run that can still leave a non-terminal status", the same predicate
           // `world.ts` gives the scheduler -- not "has ever held one". `take: 1` answers "any?".
           runs: { where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } }, select: { id: true }, take: 1 },
@@ -910,25 +919,25 @@ export async function loadSupervisorWorld(
       // company roster and the catalog still wait for `asksForCapabilities`: they answer a staffing
       // question nobody here asked.
       const taxonomy = asksForCapabilities || workspace.runbookId !== null || canRecommend ? await loadTaxonomy(tx) : []
-      const companyRows = asksForCapabilities ? await loadCompanyRoster(tx, workspaceId) : []
+      const poolRows = asksForCapabilities ? await loadPool(tx, workspaceId) : []
       const catalogRows = asksForCapabilities ? await loadCatalogEntries(tx, slaveRows) : []
 
-      // M53 R9/R3 (plan errata E7/E8). The preference and the record wait on the SAME gate the
-      // company roster and the catalog do -- a project whose board asks for no capability has no
-      // staffing question, so it pays for neither. The candidate set is roster ∪ company ∪ catalog,
-      // deduplicated: a company worker and a catalog template can name the same template, and
-      // asking for one key twice would be one predicate longer for no extra row.
+      // M53 R9/R3 (plan errata E7/E8). The preference and the record wait on the SAME gate the pool
+      // and the catalog do -- a project whose board asks for no capability has no staffing
+      // question, so it pays for neither. The candidate set is roster ∪ pool ∪ catalog,
+      // deduplicated: a pooled person and a catalog template can name the same persona, and asking
+      // for one key twice would be one predicate longer for no extra row.
       const staffingPreferences = asksForCapabilities
         ? await loadStaffingPreferences(tx, workspaceId, taxonomy)
         : []
       const evidence = asksForCapabilities
         ? await loadProfileEvidence(tx, [
             ...new Set([
-              ...slaveRows.map((row) => profileKeyOf({ slaveId: row.id, hiredFromTemplateId: row.hiredFromTemplateId })),
+              ...slaveRows.map((row) => profileKeyOf({ slaveId: row.id, templateId: row.person.templateId })),
               // `profileKeyOf` and never a `template:` literal (final wave): R1's key has one
-              // spelling, and both kinds always carry a template, so both answer `template:<id>`.
-              ...companyRows.map((row) => profileKeyOf({ slaveId: row.companySlaveId, hiredFromTemplateId: row.templateId })),
-              ...catalogRows.map((row) => profileKeyOf({ slaveId: row.templateId, hiredFromTemplateId: row.templateId })),
+              // spelling, and a candidate with no persona answers with its own id instead.
+              ...poolRows.map((row) => profileKeyOf({ slaveId: row.personId, templateId: row.templateId })),
+              ...catalogRows.map((row) => profileKeyOf({ slaveId: row.templateId, templateId: row.templateId })),
             ]),
           ])
         : []
@@ -1076,23 +1085,24 @@ export async function loadSupervisorWorld(
 
       const slaves: SupervisorSlave[] = slaveRows.map((row) => ({
         id: row.id,
-        name: row.name,
+        personId: row.personId,
+        name: row.person.name,
         role: row.role,
         runtimeRoles: row.runtimeRoles,
-        capabilities: row.capabilities,
+        capabilities: row.person.capabilities,
         busy: row.runs.length > 0,
         // M50 R1/R3 (plan erratum E4): the three lifecycle facts, straight off the columns.
         // `released` is `releasedAt !== null` -- the world carries the ANSWER, not the timestamp,
         // because that is the whole of what the rules ask of it.
-        lifecycle: row.lifecycle,
+        lifecycle: row.person.lifecycle,
         engagementTaskId: row.engagementTaskId,
-        released: row.releasedAt !== null,
-        // M53 R10/R1/R9 (plan erratum E7). `deniedKinds` is empty for a worker with no `deny` row,
-        // which is every worker on a project nobody has restricted; `model` is the resolution chain
-        // `schema.prisma:261-264` spells, answered here so `rankCandidates` never has to.
+        released: row.person.releasedAt !== null,
+        // M53 R10/R1/R9 (plan erratum E7). `deniedKinds` is empty for a seat with no `deny` row,
+        // which is every seat on a project nobody has restricted; `model` is M58 R7's resolution
+        // chain, answered here so `rankCandidates` never has to.
         deniedKinds: deniedKinds.get(row.id) ?? [],
-        hiredFromTemplateId: row.hiredFromTemplateId,
-        model: row.model ?? row.companySlave?.model ?? row.hiredFromTemplate?.defaultModel ?? null,
+        templateId: row.person.templateId,
+        model: row.model ?? row.person.model ?? row.person.template?.defaultModel ?? null,
       }))
 
       const world: SupervisorWorld = {
@@ -1159,7 +1169,7 @@ export async function loadSupervisorWorld(
           resolvedAt: row.resolvedAt?.getTime() ?? null,
         })),
         taxonomy,
-        company: companyRows,
+        pool: poolRows,
         catalog: catalogRows,
         runbook: adopted,
         runbooks,
@@ -1169,8 +1179,8 @@ export async function loadSupervisorWorld(
         // person could move; this list is every refusal the window holds, unjudged.
         denials,
         // M53 R9/R3: what a person asked for, and the record of every candidate profile. Both EMPTY
-        // on a project whose board asks for no capability -- the gate `company` and `catalog` wait
-        // on -- so the Supervisor's ordinary tick is unchanged for a project with nothing to staff.
+        // on a project whose board asks for no capability -- the gate `pool` and `catalog` wait on
+        // -- so the Supervisor's ordinary tick is unchanged for a project with nothing to staff.
         staffingPreferences,
         evidence,
       }

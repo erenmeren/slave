@@ -160,7 +160,19 @@ export async function adoptionPreview(simulationId: string): Promise<Result<Adop
   // rather than the frozen list the run was created from.
   const company = await prisma.company.findUnique({
     where: { id: summary.companyId },
-    select: { name: true, teams: { orderBy: { name: 'asc' }, select: { name: true, slaves: { orderBy: { name: 'asc' }, select: { name: true, template: { select: { role: true } } } } } } },
+    select: {
+      name: true,
+      teams: {
+        orderBy: { name: 'asc' },
+        select: {
+          name: true,
+          members: {
+            orderBy: { person: { name: 'asc' } },
+            select: { person: { select: { name: true, template: { select: { role: true } } } } },
+          },
+        },
+      },
+    },
   })
   if (company === null) return err({ kind: 'company_not_found', companyId: summary.companyId })
 
@@ -308,21 +320,24 @@ export async function adoptSimulation(
       }
 
       // Paid use stays an explicit choice (§1 principle 4): only with `applyModel`, only from an
-      // `llm` run, and only onto the lead's OWN roster row. Resolved to ONE row here, before
-      // anything is written (review round 1): `CompanySlave` is unique on `(companyTeamId, name)`,
-      // not on `(companyId, name)`, so a company with an "Atlas" in two departments has two rows a
-      // name-scoped update would both have written -- one of them a roster row nobody chose to
-      // spend money on. Ambiguity is refused, never guessed.
+      // `llm` run, and only onto the lead PERSON's own columns. Resolved to ONE row here, before
+      // anything is written (review round 1). M58 R1 makes `Person.name` unique installation-wide,
+      // so the two-departments-one-"Atlas" case this guard was written for cannot arise any more --
+      // the guard stays because the read is still by NAME, and a name that answers to nothing or to
+      // somebody outside this company must be refused rather than guessed at.
       const model = modelOf(loaded.summary)
       const leadName = leadNameOf(loaded.definition)
       const wantsModel = input.applyModel === true && model !== null && leadName !== null
-      let leadRowId: string | null = null
+      let leadPersonId: string | null = null
       if (wantsModel) {
-        const leadRows = await tx.companySlave.findMany({ where: { name: leadName as string, companyTeam: { companyId } }, select: { id: true } })
+        const leadRows = await tx.person.findMany({
+          where: { name: leadName as string, departments: { some: { companyTeam: { companyId } } } },
+          select: { id: true },
+        })
         if (leadRows.length !== 1) {
           throw new AdoptionRefused({ kind: 'invalid_simulation_input', detail: "the lead's name is ambiguous in the roster; set the model by hand" })
         }
-        leadRowId = leadRows[0]?.id ?? null
+        leadPersonId = leadRows[0]?.id ?? null
       }
 
       const roleOverrides = roleOverridesOf(loaded.definition)
@@ -349,8 +364,8 @@ export async function adoptSimulation(
       })
 
       let appliedModel: { readonly provider: string; readonly model: string } | null = null
-      if (leadRowId !== null && model !== null) {
-        await tx.companySlave.update({ where: { id: leadRowId }, data: { model: model.model, provider: model.provider } })
+      if (leadPersonId !== null && model !== null) {
+        await tx.person.update({ where: { id: leadPersonId }, data: { model: model.model, provider: model.provider } })
         appliedModel = model
       }
 

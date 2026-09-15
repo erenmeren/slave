@@ -26,7 +26,7 @@ async function changes(): Promise<
 
 beforeEach(async (): Promise<void> => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "SlavePermission", "SlaveSkill", "Skill", "SkillProvider", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "SlavePermission", "PersonSkill", "TemplateSkill", "Skill", "SkillProvider", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
   )
   // A REAL account, with the id the cases below pass as a principal: `ExecutionEvent.userId` is a
   // foreign key to `User`, so an invented id would make the append throw rather than record who

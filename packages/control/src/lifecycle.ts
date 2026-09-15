@@ -59,21 +59,33 @@ export async function releaseWorker(
   const plan = await prisma.$transaction(async (tx) => {
     const slave = await lockSlave(tx, slaveId)
     if (slave === null) return { refusal: { kind: 'slave_not_found', slaveId } as ControlRefusal }
-    if (slave.lifecycle !== 'ephemeral') {
-      return { refusal: { kind: 'not_ephemeral', slaveId, lifecycle: slave.lifecycle } as ControlRefusal }
+    // M58 R1: the lifecycle and the release are the PERSON's. Locked in the same transaction as the
+    // seat, in the order seat -> person that every other paired write in this package takes.
+    await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${slave.personId} FOR UPDATE`
+    const person = await tx.person.findUnique({
+      where: { id: slave.personId },
+      select: { id: true, name: true, lifecycle: true, releasedAt: true },
+    })
+    if (person === null) return { refusal: { kind: 'slave_not_found', slaveId } as ControlRefusal }
+    if (person.lifecycle !== 'ephemeral') {
+      return { refusal: { kind: 'not_ephemeral', slaveId, lifecycle: person.lifecycle } as ControlRefusal }
     }
-    if (slave.releasedAt !== null) {
-      return { refusal: { kind: 'already_released', slaveId, at: slave.releasedAt.toISOString() } as ControlRefusal }
+    if (person.releasedAt !== null) {
+      return { refusal: { kind: 'already_released', slaveId, at: person.releasedAt.toISOString() } as ControlRefusal }
     }
     const live = await liveRunCount(tx, { slaveId })
     if (live > 0) {
       return { refusal: { kind: 'live_runs', entity: 'slave', id: slaveId, runs: live } as ControlRefusal }
     }
 
-    await tx.slave.update({
-      where: { id: slaveId },
-      data: { releasedAt: new Date(), releaseReason: recorded, runtimeRoles: [] },
+    await tx.person.update({
+      where: { id: person.id },
+      data: { releasedAt: new Date(), releaseReason: recorded },
     })
+    // The empty runtime-role set is the WHOLE of how a released person stops being dispatched, so
+    // it is written on every OPEN seat they hold -- a release is the end of the engagement, not of
+    // one project's part in it. A closed seat is history and is left exactly as it was.
+    await tx.slave.updateMany({ where: { personId: person.id, closedAt: null }, data: { runtimeRoles: [] } })
 
     // The tasks whose worktrees this worker's runs are still holding: terminal, with a path on the
     // row. Read inside the lock so the list cannot grow under the release; collected outside it.
@@ -84,7 +96,8 @@ export async function releaseWorker(
     })
     return {
       workspaceId: slave.team.workspaceId,
-      name: slave.name,
+      personId: person.id,
+      name: person.name,
       taskIds: [...new Set(runs.flatMap((run) => (run.taskId === null ? [] : [run.taskId])))],
     }
   })
@@ -108,7 +121,7 @@ export async function releaseWorker(
     workspaceId: plan.workspaceId,
     slaveId,
     actor: origin,
-    payload: { slaveId, name: plan.name, reason: recorded, worktreesCollected },
+    payload: { slaveId, personId: plan.personId, name: plan.name, reason: recorded, worktreesCollected },
     userId: principal?.userId ?? null,
   })
 
@@ -116,9 +129,9 @@ export async function releaseWorker(
 }
 
 /**
- * A person moves a worker between lifecycles (M50 R4). The ONLY path that changes the column after
- * creation: nothing promotes a worker automatically, and a tick that did would be the Supervisor
- * deciding who works here.
+ * A person moves somebody between lifecycles (M50 R4, on `Person` since M58 R1). The ONLY path that
+ * changes the column after creation: nothing promotes anybody automatically, and a tick that did
+ * would be the Supervisor deciding who works here.
  *
  * Human-only by construction (plan decision D11): no `origin`, no `carryOut` arm, no Supervisor
  * action, `actor: 'human'` on the event -- the shape `renameSlave` and `setSlaveRole` already have.
@@ -133,47 +146,67 @@ export async function releaseWorker(
  * labelled it releases it themselves with `release-worker`, which asks for no engagement.
  */
 export async function setLifecycle(
-  slaveId: string,
+  personId: string,
   lifecycle: SlaveLifecycle,
   principal?: Principal,
 ): Promise<Result<{ readonly from: SlaveLifecycle; readonly to: SlaveLifecycle }, ControlRefusal>> {
   const outcome = await prisma.$transaction(async (tx) => {
-    const slave = await lockSlave(tx, slaveId)
-    if (slave === null) return { refusal: { kind: 'slave_not_found', slaveId } as ControlRefusal }
-    const live = await liveRunCount(tx, { slaveId })
-    if (live > 0) {
-      return { refusal: { kind: 'live_runs', entity: 'slave', id: slaveId, runs: live } as ControlRefusal }
-    }
-    // The no-move BEFORE the roster check (fix round 1, Minor 1): `companySlaveId` is `SetNull`, so
-    // a permanent worker whose roster row was deleted is still permanent -- and asking for the
-    // lifecycle it already has must be the no-op it is, never a refusal about a change nobody made.
-    const from = slave.lifecycle
-    if (from === lifecycle) return { workspaceId: slave.team.workspaceId, from, changed: false as const }
-    // `permanent` is not a label somebody may apply: it MEANS "this worker exists in the company
-    // roster", and the roster link is the only thing that can say so.
-    if (lifecycle === 'permanent' && slave.companySlaveId === null) {
-      return { refusal: { kind: 'not_in_roster', slaveId } as ControlRefusal }
-    }
-    await tx.slave.update({
-      where: { id: slaveId },
-      data: {
-        lifecycle,
-        ...(from === 'ephemeral' ? { engagementTaskId: null, releasedAt: null, releaseReason: null } : {}),
+    await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${personId} FOR UPDATE`
+    const person = await tx.person.findUnique({
+      where: { id: personId },
+      select: {
+        id: true,
+        lifecycle: true,
+        departments: { select: { companyTeamId: true } },
+        // M58 R1: the lifecycle is the person's, so the live-run check is over every seat they hold
+        // and the event is written per seat -- an event stream is workspace-scoped and a person is
+        // not. A person with no open seat changes lifecycle silently, which is honest: there is no
+        // project log to write it to.
+        seats: { where: { closedAt: null }, select: { id: true, team: { select: { workspaceId: true } } }, orderBy: { id: 'asc' } },
       },
     })
-    return { workspaceId: slave.team.workspaceId, from, changed: true as const }
+    if (person === null) return { refusal: { kind: 'person_not_found', personId } as ControlRefusal }
+    for (const seat of person.seats) {
+      const live = await liveRunCount(tx, { slaveId: seat.id })
+      if (live > 0) {
+        return { refusal: { kind: 'live_runs', entity: 'slave', id: seat.id, runs: live } as ControlRefusal }
+      }
+    }
+    // The no-move BEFORE the department check (fix round 1, Minor 1): a person whose department was
+    // deleted is still permanent -- and asking for the lifecycle they already have must be the
+    // no-op it is, never a refusal about a change nobody made.
+    const from = person.lifecycle
+    if (from === lifecycle) return { seats: person.seats, from, changed: false as const }
+    // `permanent` is not a label somebody may apply: it MEANS "this person is in a department of a
+    // company" (M58 R5), and a membership is the only thing that can say so.
+    if (lifecycle === 'permanent' && person.departments.length === 0) {
+      return { refusal: { kind: 'not_in_roster', personId } as ControlRefusal }
+    }
+    await tx.person.update({
+      where: { id: personId },
+      data: {
+        lifecycle,
+        ...(from === 'ephemeral' ? { releasedAt: null, releaseReason: null } : {}),
+      },
+    })
+    if (from === 'ephemeral') {
+      await tx.slave.updateMany({ where: { personId, closedAt: null }, data: { engagementTaskId: null } })
+    }
+    return { seats: person.seats, from, changed: true as const }
   })
   if ('refusal' in outcome) return err(outcome.refusal)
 
   if (outcome.changed) {
-    await appendEvent({
-      type: 'org.changed',
-      workspaceId: outcome.workspaceId,
-      slaveId,
-      actor: 'human',
-      payload: { entity: 'slave', id: slaveId, field: 'lifecycle', from: outcome.from, to: lifecycle },
-      userId: principal?.userId ?? null,
-    })
+    for (const seat of outcome.seats) {
+      await appendEvent({
+        type: 'org.changed',
+        workspaceId: seat.team.workspaceId,
+        slaveId: seat.id,
+        actor: 'human',
+        payload: { entity: 'slave', id: seat.id, personId, field: 'lifecycle', from: outcome.from, to: lifecycle },
+        userId: principal?.userId ?? null,
+      })
+    }
   }
 
   return ok({ from: outcome.from, to: lifecycle })

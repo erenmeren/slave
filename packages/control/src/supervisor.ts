@@ -27,7 +27,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { steerRun } from './breaker.js'
-import { hireFromTemplate, materialiseCompanySlave, mergeRuntimeRoles } from './capability.js'
+import { hireFromTemplate, seatMember, mergeRuntimeRoles } from './capability.js'
 import { releaseWorker } from './lifecycle.js'
 import { discardStaleCandidates, recordMemory } from './memory.js'
 import { answerQuestion, reassignQuestion } from './messaging.js'
@@ -374,7 +374,7 @@ type Reach = 'applied' | 'none'
 interface CarriedDecision {
   readonly id: string
   /** The project the decision was made for (M47). Read off the row {@link applyDecision} already
-   *  fetched rather than looked up again: `hireFromTemplate` and `materialiseCompanySlave` are
+   *  fetched rather than looked up again: `hireFromTemplate` and `seatMember` are
    *  workspace-scoped verbs, and a second read would be a second chance for the two to disagree
    *  about which project a worker is joining. */
   readonly workspaceId: string
@@ -412,9 +412,7 @@ async function carryOut(
       // The rationale the rules wrote, verbatim -- `formTeam`'s sentence names the capability in
       // the taxonomy's WORDS ("Application security"), and that sentence is what the Organization
       // view shows beside the worker months later (fix round 1, Minor 5).
-      return reached(
-        await materialiseCompanySlave(decision.workspaceId, action.companySlaveId, { rationale: action.rationale }),
-      )
+      return reached(await seatMember(decision.workspaceId, action.personId, { rationale: action.rationale }))
     case 'hire_from_catalog':
       // M50 R2, fix round 1 (Minor 8). `actionOf` never produces this pair, so a temporary hire
       // with no assignment is a decision recorded by an older build or edited by hand. It is
@@ -641,11 +639,12 @@ async function addRuntimeRoles(
 ): Promise<Result<void, ControlRefusal>> {
   const slave = await prisma.slave.findUnique({
     where: { id: slaveId },
-    select: { runtimeRoles: true, releasedAt: true },
+    // M58 R1: whether the engagement is over is the PERSON's fact.
+    select: { runtimeRoles: true, person: { select: { releasedAt: true } } },
   })
   if (slave === null) return err({ kind: 'slave_not_found', slaveId })
-  if (slave.releasedAt !== null) {
-    return err({ kind: 'already_released', slaveId, at: slave.releasedAt.toISOString() })
+  if (slave.person.releasedAt !== null) {
+    return err({ kind: 'already_released', slaveId, at: slave.person.releasedAt.toISOString() })
   }
   const union = [...slave.runtimeRoles]
   for (const role of adds) if (!union.includes(role)) union.push(role)

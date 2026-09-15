@@ -71,9 +71,9 @@ const RUN_SELECT = {
   endedAt: true,
   slave: {
     select: {
-      name: true,
-      hiredFromTemplateId: true,
-      hiredFromTemplate: { select: { name: true } },
+      // M58 R1: the name and the persona are the PERSON's, joined here so the derivation below
+      // keeps reading one flat row.
+      person: { select: { name: true, templateId: true, template: { select: { name: true } } } },
       team: { select: { workspaceId: true, workspace: { select: { repoPath: true } } } },
     },
   },
@@ -182,11 +182,11 @@ export async function recordRunEvidence(
     workspaceId,
     slaveId: run.slaveId,
     taskId: run.taskId,
-    profileKey: profileKeyOf({ slaveId: run.slaveId, hiredFromTemplateId: run.slave.hiredFromTemplateId }),
-    // The template's name when it came from one, the worker's own otherwise. A deleted template
-    // leaves `hiredFromTemplate` null while `hiredFromTemplateId` still reads -- `onDelete: SetNull`
-    // fires on the column, so this fallback is the "a surface must print a word" half of R1.
-    profileName: run.slave.hiredFromTemplate?.name ?? run.slave.name,
+    profileKey: profileKeyOf({ slaveId: run.slaveId, templateId: run.slave.person.templateId }),
+    // The persona's name when they came from one, the person's own otherwise. `Person.templateId`
+    // is `onDelete: SetNull`, so a deleted persona leaves both null and this fallback is the
+    // "a surface must print a word" half of R1.
+    profileName: run.slave.person.template?.name ?? run.slave.person.name,
     model: run.model,
     repositoryKey: normaliseRepositoryKey(run.slave.team.workspace.repoPath),
     domains: [...domainsFor(required, taxonomy)],

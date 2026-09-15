@@ -207,10 +207,10 @@ export type ControlRefusal =
   /** `releaseWorker` (M50 R3): this engagement is already over. Nothing is released twice -- the row
    *  keeps the timestamp and the sentence the first release wrote. */
   | { readonly kind: 'already_released'; readonly slaveId: string; readonly at: string }
-  /** `setLifecycle` (M50 R4): `permanent` MEANS "exists in the company roster", and this worker has
-   *  no roster row to exist in. A label a person could apply anyway would make the word a
+  /** `setLifecycle` (M50 R4): `permanent` MEANS "is in a department of a company" (M58 R5), and
+   *  this person belongs to none. A label a person could apply anyway would make the word a
    *  decoration. */
-  | { readonly kind: 'not_in_roster'; readonly slaveId: string }
+  | { readonly kind: 'not_in_roster'; readonly personId: string }
   /** M58 R14: `assignPerson` was asked to open a seat this person already holds on this team. Not
    *  an error a caller must avoid -- a re-assign is an ordinary double click -- but a refusal
    *  rather than a silent no-op, because the caller asked for a seat and none was opened. */
@@ -576,7 +576,7 @@ export function refusalText(refusal: ControlRefusal): string {
     case 'already_released':
       return `slave ${refusal.slaveId} was already released at ${refusal.at}`
     case 'not_in_roster':
-      return `slave ${refusal.slaveId} is on no company roster, so it cannot be made permanent; assign it from a company first`
+      return `slave ${refusal.personId} is in no company department, so they cannot be made permanent; put them in one first`
     case 'already_assigned':
       return `that slave already has a seat on this project; there is nothing to open`
     case 'person_released':

@@ -41,7 +41,8 @@ export const MAX_RUNTIME_ROLES = 20
 export type ProfileTarget =
   | { readonly slaveId: string }
   | { readonly templateId: string }
-  | { readonly companySlaveId: string }
+  /** M58 R7: the middle rung of the chain, where the roster row used to sit. */
+  | { readonly personId: string }
 
 const sha256 = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex')
 
@@ -71,13 +72,13 @@ function normaliseProfile(profile: string | null): Result<string | null, Control
  * no run-scoped path into this and `actor` is a human's name rather than anything derived from a
  * run.
  *
- * **Why only a slave target emits an event** (spec erratum E3). `ExecutionEvent.workspaceId` is
- * NOT NULL and every reader of the log is workspace-scoped, but a `SlaveTemplate` and a
- * `CompanySlave` belong to the CATALOG -- one template can be materialised into workers in any
- * number of projects, and a company is assigned to workspaces rather than owned by one. There is
- * no workspace to write those rows against and no org-level stream to write them to, so the verb
- * writes the column and stays quiet rather than inventing a workspace for the event. The gap is
- * real and is named here so it is not mistaken for an oversight.
+ * **Why only a seat target emits an event** (spec erratum E3). `ExecutionEvent.workspaceId` is
+ * NOT NULL and every reader of the log is workspace-scoped, but a `SlaveTemplate` belongs to the
+ * CATALOG and a `Person` (M58 R1) belongs to the INSTALLATION -- one persona can be hired into any
+ * number of projects, and one person can sit on several. There is no workspace to write those rows
+ * against and no org-level stream to write them to, so the verb writes the column and stays quiet
+ * rather than inventing a workspace for the event. The gap is real and is named here so it is not
+ * mistaken for an oversight.
  *
  * Not refused while the slave holds a live run, unlike `setSlaveRole`: a run's prompt is assembled
  * once, at dispatch, and recorded in its own `RunContext` row, so a profile written mid-run cannot
@@ -103,12 +104,9 @@ export async function setProfile(
     return ok(undefined)
   }
 
-  if ('companySlaveId' in target) {
-    const written = await prisma.companySlave.updateMany({
-      where: { id: target.companySlaveId },
-      data: { profile: text },
-    })
-    if (written.count === 0) return err({ kind: 'company_slave_not_found', companySlaveId: target.companySlaveId })
+  if ('personId' in target) {
+    const written = await prisma.person.updateMany({ where: { id: target.personId }, data: { profile: text } })
+    if (written.count === 0) return err({ kind: 'person_not_found', personId: target.personId })
     return ok(undefined)
   }
 

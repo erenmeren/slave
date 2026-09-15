@@ -219,7 +219,20 @@ export async function companiesForSector(sector: SectorName, client: PrismaClien
   if (plugin === undefined) return err({ kind: 'unsupported_simulation', sector, mode: 'simulation' })
   const companies = await client.company.findMany({
     orderBy: { name: 'asc' },
-    select: { id: true, name: true, teams: { orderBy: { name: 'asc' }, select: { name: true, slaves: { orderBy: { name: 'asc' }, select: { name: true, template: { select: { role: true } } } } } } },
+    select: {
+      id: true,
+      name: true,
+      teams: {
+        orderBy: { name: 'asc' },
+        select: {
+          name: true,
+          members: {
+            orderBy: { person: { name: 'asc' } },
+            select: { person: { select: { name: true, template: { select: { role: true } } } } },
+          },
+        },
+      },
+    },
   })
   return ok(companies.flatMap((company) => {
     const roster = rosterOf(company.teams)
@@ -229,8 +242,23 @@ export async function companiesForSector(sector: SectorName, client: PrismaClien
 
 /** The one reading of a catalog company's roster (M31b §4), shared by `companiesForSector` here and
  *  `createSimulation` in `write.ts` so the list and the create verb can never disagree about what a
- *  roster is. `role` is the CATALOG role, which lives on the template rather than on the roster row
- *  -- the software sector reads an engineer's expertise from it, and trade ignores it. */
-export function rosterOf(teams: readonly { readonly name: string; readonly slaves: readonly { readonly name: string; readonly template: { readonly role: string } }[] }[]): readonly RosterEntry[] {
-  return teams.flatMap((team) => team.slaves.map((slave) => ({ slaveName: slave.name, departmentName: team.name, role: slave.template.role })))
+ *  roster is. `role` is the CATALOG role, which lives on the persona rather than on the person --
+ *  the software sector reads an engineer's expertise from it, and trade ignores it.
+ *
+ *  M58 R5: a department holds MEMBERS, and a member is a person. Somebody hired from no persona has
+ *  no catalog role at all and answers `''`, which no sector's `rosterFits` accepts -- the honest
+ *  answer, since the sector's whole question is what role each member plays. */
+export function rosterOf(
+  teams: readonly {
+    readonly name: string
+    readonly members: readonly { readonly person: { readonly name: string; readonly template: { readonly role: string } | null } }[]
+  }[],
+): readonly RosterEntry[] {
+  return teams.flatMap((team) =>
+    team.members.map((member) => ({
+      slaveName: member.person.name,
+      departmentName: team.name,
+      role: member.person.template?.role ?? '',
+    })),
+  )
 }

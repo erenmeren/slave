@@ -54,7 +54,7 @@ const RUN_ENDED_AT = new Date('2026-09-12T09:00:03.500Z')
  * own tables are cleared without tracing a foreign key. `Capability` is deliberately absent.
  */
 const TRUNCATE =
-  'TRUNCATE TABLE "EvidenceRecord", "StaffingPreference", "ExecutionEvent", "SupervisorDecision", "SlavePermission", "SlaveMessage", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "User", "CollaborationHint", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE'
+  'TRUNCATE TABLE "EvidenceRecord", "StaffingPreference", "ExecutionEvent", "SupervisorDecision", "SlavePermission", "SlaveMessage", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "User", "CollaborationHint", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE'
 
 /**
  * Seed the world above and answer the ids every case addresses it by.
