@@ -52,7 +52,7 @@ export interface MemoryView {
   readonly scope: MemoryScope
   readonly companyId: string | null
   readonly workspaceId: string | null
-  readonly slaveId: string | null
+  readonly personId: string | null
   readonly title: string
   readonly body: string
   readonly status: MemoryStatus
@@ -89,7 +89,7 @@ export interface MemoryDraft {
   readonly scope: MemoryScope
   readonly companyId: string | null
   readonly workspaceId: string | null
-  readonly slaveId: string | null
+  readonly personId: string | null
   readonly title: string
   readonly body: string
   readonly status: MemoryStatus
@@ -169,22 +169,22 @@ const targetRule = (
     scope: MemoryScope
     companyId: string | null
     workspaceId: string | null
-    slaveId: string | null
+    personId: string | null
   },
   ctx: z.RefinementCtx,
 ): void => {
-  const targets = [value.companyId, value.workspaceId, value.slaveId].filter((one) => one !== null)
+  const targets = [value.companyId, value.workspaceId, value.personId].filter((one) => one !== null)
   if (targets.length !== 1) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'a memory names exactly one of companyId, workspaceId, slaveId',
+      message: 'a memory names exactly one of companyId, workspaceId, personId',
     })
     return
   }
   const expected: Record<MemoryScope, string | null> = {
     company: value.companyId,
     workspace: value.workspaceId,
-    worker: value.slaveId,
+    worker: value.personId,
   }
   if (expected[value.scope] === null) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: `a ${value.scope} memory must name its own target` })
@@ -197,7 +197,7 @@ export const memoryDraftSchema: z.ZodType<MemoryDraft, z.ZodTypeDef, unknown> = 
     scope: z.enum(MEMORY_SCOPES),
     companyId: z.string().min(1).nullable(),
     workspaceId: z.string().min(1).nullable(),
-    slaveId: z.string().min(1).nullable(),
+    personId: z.string().min(1).nullable(),
     title,
     body,
     status: z.enum(MEMORY_STATUSES),
@@ -222,7 +222,7 @@ export const memorySchema: z.ZodType<MemoryView, z.ZodTypeDef, unknown> = z
     scope: z.enum(MEMORY_SCOPES),
     companyId: z.string().min(1).nullable(),
     workspaceId: z.string().min(1).nullable(),
-    slaveId: z.string().min(1).nullable(),
+    personId: z.string().min(1).nullable(),
     title,
     body,
     status: z.enum(MEMORY_STATUSES),

@@ -13,7 +13,7 @@ describe('promotionFor: a finished implementation run (R2a)', () => {
     taskId: 't1',
     taskTitle: 'Ship the checkout API',
     runId: 'r1',
-    slaveId: 'ag-1',
+    personId: 'ag-1',
     finalText: 'Both files are created in the worktree.',
     lastOutputSeq: 412,
     requiredCapabilities: ['backend.api-design'],
@@ -28,7 +28,7 @@ describe('promotionFor: a finished implementation run (R2a)', () => {
       scope: 'workspace',
       companyId: null,
       workspaceId: 'w1',
-      slaveId: null,
+      personId: null,
       title: 'Task: Ship the checkout API',
       body: 'Both files are created in the worktree.',
       status: 'candidate',
@@ -265,7 +265,7 @@ describe('promotionFor: work that came back (R2d)', () => {
     workspaceId: 'w1',
     taskId: 't1',
     taskTitle: 'Ship the checkout API',
-    slaveId: 'ag-1',
+    personId: 'ag-1',
     runId: 'r1',
     reason: 'The diff does not handle the empty-input case the task requires.',
     by: 'review' as const,
@@ -278,7 +278,7 @@ describe('promotionFor: work that came back (R2d)', () => {
     const draft = promotionFor(input)
     expect(draft?.type).toBe('lesson')
     expect(draft?.scope).toBe('worker')
-    expect(draft?.slaveId).toBe('ag-1')
+    expect(draft?.personId).toBe('ag-1')
     expect(draft?.workspaceId).toBeNull()
     expect(draft?.status).toBe('verified')
     expect(draft?.confidence).toBe('sourced')
@@ -295,7 +295,7 @@ describe('promotionFor: work that came back (R2d)', () => {
 
   // Plan erratum E2: there is nobody to teach.
   it('is nothing when no worker can be named, and nothing when nothing was said', () => {
-    expect(promotionFor({ ...input, slaveId: null })).toBeNull()
+    expect(promotionFor({ ...input, personId: null })).toBeNull()
     expect(promotionFor({ ...input, reason: '' })).toBeNull()
   })
 })
@@ -313,7 +313,7 @@ describe('promotionFor produces drafts the schema accepts', () => {
     taskId: 't1',
     taskTitle: 'Ship the checkout API',
     runId: 'r1',
-    slaveId: 'ag-1',
+    personId: 'ag-1',
     finalText: 'Both files are created in the worktree.',
     lastOutputSeq: 412,
     requiredCapabilities: ['backend.api-design'],
@@ -358,7 +358,7 @@ describe('promotionFor produces drafts the schema accepts', () => {
         workspaceId: 'w1',
         taskId: 't1',
         taskTitle: 'Ship the checkout API',
-        slaveId: 'ag-1',
+        personId: 'ag-1',
         runId: 'r1',
         reason: 'The diff does not handle the empty-input case.',
         by: 'review',

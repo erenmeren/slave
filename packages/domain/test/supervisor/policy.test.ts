@@ -20,11 +20,11 @@ const ACTIONS: Readonly<Record<Action['kind'], Action>> = {
   },
   materialise_company_worker: {
     kind: 'materialise_company_worker',
-    companySlaveId: 'cs1',
+    personId: 'p1',
     capability: 'security.application',
     capabilityLabel: 'Application security',
     name: 'Sam',
-    rationale: 'Sam is already on the company roster and provides Application security.',
+    rationale: 'Sam already works here and provides Application security.',
   },
   hire_from_catalog: {
     kind: 'hire_from_catalog',

@@ -129,32 +129,33 @@ export interface SupervisorSlave {
    * permission row at all.
    */
   readonly deniedKinds: readonly PermissionKind[]
-  /** M53 R1 (plan erratum E7): the catalog persona this worker was hired from, or null for a
+  /** M58 R2: WHO sits in this seat. The identity every other surface joins on -- the name, the
+   *  capabilities and the memory are the person's, and the seat is where they sit. */
+  readonly personId: string
+  /** M53 R1 (plan erratum E7): the catalog persona this person was hired from, or null for a
    *  hand-made one. Half of the PROFILE KEY -- `profileKeyOf` makes `template:<id>` from it and
    *  `slave:<id>` without it -- and the world carries the ingredient rather than the key so nothing
    *  in the domain has to agree on a string format twice. */
-  readonly hiredFromTemplateId: string | null
+  readonly templateId: string | null
   /** M53 R9 (plan erratum E7): the model this worker would actually dispatch with, resolved by the
-   *  loader through `Slave.model ?? CompanySlave.model ?? SlaveTemplate.defaultModel ?? null`
-   *  (`schema.prisma:261-264`). Resolved at the EDGE so the pure functions never have to -- a
-   *  preference may name a model, and a candidate that cannot say which model it is on cannot be
-   *  matched against one. */
+   *  loader through `Slave.model ?? Person.model ?? SlaveTemplate.defaultModel ?? null` (M58 R7).
+   *  Resolved at the EDGE so the pure functions never have to -- a preference may name a model, and
+   *  a candidate that cannot say which model it is on cannot be matched against one. */
   readonly model: string | null
 }
 
 /**
- * A company roster worker who is NOT already on this project (R4) -- the second place the
- * Supervisor looks. Loaded only when the board actually asks for a capability.
+ * M58 R16: somebody who already works here and holds NO open seat on this project -- the second
+ * place the Supervisor looks. Loaded only when the board actually asks for a capability.
  */
-export interface SupervisorCompanyWorker {
-  readonly companySlaveId: string
+export interface SupervisorPoolPerson {
+  readonly personId: string
   readonly name: string
   readonly capabilities: readonly string[]
-  /** M53 R1 (plan erratum E7): the template behind this roster worker. `CompanySlave.templateId` is
-   *  NOT NULL (`schema.prisma:508`), so a company candidate always has a profile key and it is
-   *  always `template:<this>` -- which is what lets a preference naming a template match a worker
-   *  nobody has hired yet. */
-  readonly templateId: string
+  /** M53 R1 (plan erratum E7): the persona behind this person. NULL for somebody made from nothing
+   *  (`Person.templateId` is nullable since M58 R1), in which case the profile key falls back to
+   *  the person themself rather than to a template a preference could match. */
+  readonly templateId: string | null
 }
 
 /**
@@ -394,12 +395,12 @@ export interface SupervisorWorld {
    * which is exactly right: nothing matches on a key that is not a row.
    */
   readonly taxonomy: readonly CapabilityRecord[]
-  /** The company roster this project could be staffed from, minus whoever is already on it (R4).
-   *  EMPTY unless some task on the board actually asks for a capability -- the loader does not pay
-   *  for a roster query nobody's plan needs. */
-  readonly company: readonly SupervisorCompanyWorker[]
+  /** M58 R16: the people this project could be staffed from, minus whoever already holds an open
+   *  seat on it (R4). EMPTY unless some task on the board actually asks for a capability -- the
+   *  loader does not pay for a query nobody's plan needs. */
+  readonly pool: readonly SupervisorPoolPerson[]
   /** The catalog templates that provide something, bounded by the loader (R4). Empty under the
-   *  same condition as {@link company}. */
+   *  same condition as {@link pool}. */
   readonly catalog: readonly SupervisorCatalogEntry[]
   /** The runbook this workspace has adopted (R5), or null. Loaded whenever `Workspace.runbookId`
    *  is set -- the Overview, verify and the escalation sentence all read the same row. */
@@ -422,9 +423,9 @@ export interface SupervisorWorld {
    *  where nothing has been refused. */
   readonly denials: readonly SupervisorDenial[]
   /** M53 R9: what a person asked for, per capability. EMPTY unless some staffable task asks for a
-   *  capability -- the same gate {@link company} and {@link catalog} wait on. */
+   *  capability -- the same gate {@link pool} and {@link catalog} wait on. */
   readonly staffingPreferences: readonly SupervisorStaffingPreference[]
-  /** M53 R3/R8: the record of every candidate profile -- roster, company roster and catalog --
+  /** M53 R3/R8: the record of every candidate profile -- seated, pooled and catalog --
    *  and of nobody else. EMPTY under the same gate, and bounded by the CANDIDATE SET rather than
    *  by a window: `WHERE profileKey = ANY(...)` is an index probe on
    *  `(profileKey, model, repositoryKey)` (plan erratum E8). */

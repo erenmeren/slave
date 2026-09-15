@@ -169,7 +169,10 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     ...envelope,
     type: z.literal('slave.profile_changed'),
     payload: z.object({
-      target: z.enum(['slave', 'template', 'company_slave']),
+      // M58 R7: the middle rung is the PERSON. `company_slave` stays a member -- and only a member:
+      // nothing writes it any more. A `slave.profile_changed` row written before this milestone
+      // names it, and `parseExecutionEvent` is what the Activity page reads history through.
+      target: z.enum(['slave', 'template', 'company_slave', 'person']),
       targetId: z.string().min(1),
       sha256: z.string().min(1).nullable(),
       /** WHO, by name -- `answerQuestion`'s `answeredBy` precedent, not the envelope's `actor`,
@@ -187,6 +190,8 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('slave.runtime_roles_changed'),
     payload: z.object({
       slaveId: z.string().min(1),
+      /** M58 R9: the person in the seat whose roles changed. */
+      personId: z.string().min(1).optional(),
       roles: z.array(z.string().min(1)),
       /** WHO, by name -- see `slave.profile_changed`'s own field. */
       actor: z.string().min(1),
@@ -431,7 +436,7 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     ...envelope,
     type: z.literal('org.changed'),
     payload: z.object({
-      entity: z.enum(['slave', 'team']),
+      entity: z.enum(['slave', 'team', 'person']),
       id: z.string().min(1),
       /** `capabilities` is M47 t2's: `hireFromTemplate` REUSED a worker and merged new capability
        *  keys into it without its runtime role set moving. `from`/`to` are the key lists, comma
@@ -441,6 +446,10 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       field: z.enum(['name', 'role', 'model', 'deleted', 'created', 'team', 'capabilities', 'lifecycle']),
       from: z.string().nullable(),
       to: z.string().nullable(),
+      /** M58 R9: WHO this row is about, when the row is a seat. The catalogue is still 61 types --
+       *  a person's creation and seating are recorded with the `slave.*` types that already carry a
+       *  `slaveId`, and this is the person behind that seat. */
+      personId: z.string().min(1).optional(),
       /** `deleteSlave`/`deleteTeam` only (M27): runs the cascade took with the row. */
       runs: z.number().int().nonnegative().optional(),
       /** `deleteTeam` only (M27): slaves the cascade took with the department. */
@@ -604,6 +613,8 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('slave.released'),
     payload: z.object({
       slaveId: z.string().min(1),
+      /** M58 R9: the person released, behind the seat this row names. */
+      personId: z.string().min(1).optional(),
       name: z.string().min(1),
       reason: z.string().min(1),
       worktreesCollected: z.number().int().nonnegative(),

@@ -24,11 +24,14 @@ export type Action =
    *  browser, where there is no taxonomy, and a decision row read a year from now must still say
    *  what it was about in the vocabulary of the day it was made. The key stays for the machines. */
   | { readonly kind: 'assign_capability'; readonly slaveId: string; readonly capability: string; readonly capabilityLabel: string; readonly role: string }
-  /** `materialiseCompanySlave`: one worker off the company roster onto this project. `rationale`
-   *  is the sentence stored on the worker (`Slave.selectionRationale`), exactly as it is for a
-   *  catalog hire -- what the Organization view shows a person months later, in words rather than
-   *  in taxonomy keys (fix round 1, Minor 5). */
-  | { readonly kind: 'materialise_company_worker'; readonly companySlaveId: string; readonly capability: string; readonly capabilityLabel: string; readonly name: string; readonly rationale: string }
+  /** `seatMember`: one person already working here, seated on this project. `rationale` is the
+   *  sentence stored on them (`Person.selectionRationale`), exactly as it is for a catalog hire --
+   *  what the Organization view shows a person months later, in words rather than in taxonomy keys
+   *  (fix round 1, Minor 5).
+   *
+   *  M58 R16: the field is a `Person.id` now -- the migration rewrote every pending row's payload.
+   *  The KIND keeps its name: a stored decision read a year later must still name what it named. */
+  | { readonly kind: 'materialise_company_worker'; readonly personId: string; readonly capability: string; readonly capabilityLabel: string; readonly name: string; readonly rationale: string }
   /** `hireFromTemplate`: a new project worker from a catalog template. `rationale` is the sentence
    *  stored on the worker (`Slave.selectionRationale`) and shown on the Organization view --
    *  "why selected", months later. `temporary` is M50's lifecycle: true makes the hire `ephemeral`
@@ -147,7 +150,7 @@ export const actionSchema: z.ZodType<Action, z.ZodTypeDef, unknown> = z.discrimi
   }),
   z.object({
     kind: z.literal('materialise_company_worker'),
-    companySlaveId: z.string().min(1),
+    personId: z.string().min(1),
     capability: z.string().min(1),
     capabilityLabel: z.string().min(1),
     name: z.string().min(1),

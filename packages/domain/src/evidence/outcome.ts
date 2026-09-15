@@ -65,6 +65,6 @@ export const INSUFFICIENT_EVIDENCE = 'Insufficient evidence'
 export const MODEL_NOT_RECORDED_LABEL = 'Model not recorded'
 
 /** The chip beside a profile that is one hand-made worker rather than a catalog persona (M53 R1) --
- *  a `Slave` with `hiredFromTemplateId` null, which every pre-M46 row and every "New slave" row is.
+ *  a `Person` with `templateId` null, which every pre-M46 row and every "New slave" row is.
  *  The chip is what stops a reader taking a bespoke row for a template's record. */
 export const BESPOKE_PROFILE_LABEL = 'Bespoke'

@@ -19,7 +19,7 @@ export type PromotionInput =
       readonly taskId: string
       readonly taskTitle: string
       readonly runId: string
-      readonly slaveId: string
+      readonly personId: string
       /** The LAST `run.output` event's text -- what the worker finally said, not the whole
        *  transcript, which is the thing R1 exists to stop storing. */
       readonly finalText: string
@@ -80,7 +80,7 @@ export type PromotionInput =
       readonly taskTitle: string
       /** The worker that DID the work -- never the reviewer (plan erratum E2). Null when no
        *  implementation run is on record, and then there is nobody to teach. */
-      readonly slaveId: string | null
+      readonly personId: string | null
       readonly runId: string | null
       readonly reason: string
       readonly by: 'review' | 'verification'
@@ -125,7 +125,7 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
         scope: 'workspace',
         companyId: null,
         workspaceId: input.workspaceId,
-        slaveId: null,
+        personId: null,
         title: titleOf(`Task: ${input.taskTitle}`),
         body,
         // A CANDIDATE, and that is the whole of R2(a): a worker saying it did the thing is not the
@@ -159,7 +159,7 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
         scope: 'workspace',
         companyId: null,
         workspaceId: input.workspaceId,
-        slaveId: null,
+        personId: null,
         title: titleOf(`Task: ${input.taskTitle}`),
         body,
         status: 'verified',
@@ -193,7 +193,7 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
         scope: 'workspace',
         companyId: null,
         workspaceId: input.workspaceId,
-        slaveId: null,
+        personId: null,
         title: titleOf(`${word}: ${rationale}`),
         body: bodyOf(reason === '' ? `${word}: ${rationale}` : `${word}: ${rationale} — ${reason}`),
         status: 'verified',
@@ -230,7 +230,7 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
         scope: 'workspace',
         companyId: null,
         workspaceId: input.workspaceId,
-        slaveId: null,
+        personId: null,
         title: `Goal v${String(input.version)}`,
         body,
         status: 'verified',
@@ -266,7 +266,7 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
     case 'work_rejected': {
       // Plan erratum E2: a lesson belongs to somebody. With no implementation run on record there
       // is no worker to teach, and a project-scoped copy of a rejection is just the rejection.
-      if (input.slaveId === null) return null
+      if (input.personId === null) return null
       const body = bodyOf(input.reason)
       if (body === '') return null
       return {
@@ -274,7 +274,7 @@ export function promotionFor(input: PromotionInput): MemoryDraft | null {
         scope: 'worker',
         companyId: null,
         workspaceId: null,
-        slaveId: input.slaveId,
+        personId: input.personId,
         title: titleOf(`Rework on ${input.taskTitle}`),
         body,
         status: 'verified',

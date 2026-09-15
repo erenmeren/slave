@@ -96,11 +96,12 @@ export function slave(overrides: Partial<SupervisorSlave> = {}): SupervisorSlave
     lifecycle: 'project',
     engagementTaskId: null,
     released: false,
-    // M53 R10/R1/R9: nothing has been refused this worker, nobody hired it from a template and no
-    // model is pinned to it -- so the permission, preference and cost steps of `rankCandidates` only
-    // ever decide in a test that says which denial, which template or which model it is about.
+    // M53 R10/R1/R9: nothing has been refused this worker, nobody hired them from a persona and no
+    // model is pinned to them -- so the permission, preference and cost steps of `rankCandidates`
+    // only ever decide in a test that says which denial, which template or which model it is about.
     deniedKinds: [],
-    hiredFromTemplateId: null,
+    personId: 'p-default',
+    templateId: null,
     model: null,
     ...overrides,
   }
@@ -190,7 +191,7 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     // M47: an EMPTY taxonomy is a real state -- a database whose taxonomy has never been synced --
     // and every capability rule is a no-op under it. That is what keeps every pre-M47 case in this
     // directory reading exactly as it always did.
-    company: [],
+    pool: [],
     catalog: [],
     taxonomy: [],
     // M48: no runbook adopted and none on offer, so `runbook_recommended` only ever fires in a

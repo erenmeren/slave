@@ -43,9 +43,10 @@ export interface RetrieveInput {
   readonly scopes: {
     readonly companyId: string | null
     readonly workspaceId: string
-    /** The worker this run is FOR. Null for a preview that has picked no persona (plan erratum
-     *  E14) -- and then no worker-scoped memory and no lesson qualifies at all. */
-    readonly slaveId: string | null
+    /** M58 R19: the PERSON this run is for -- so what they learnt on one project is recalled on
+     *  the next. Null for a preview that has picked no persona (plan erratum E14) -- and then no
+     *  worker-scoped memory and no lesson qualifies at all. */
+    readonly personId: string | null
   }
   readonly refs: {
     readonly taskId: string | null
@@ -92,17 +93,17 @@ function specificity(memory: MemoryView): number {
  * {@link MEMORIES_PER_TYPE_MAX} in a first pass, so one crowded type cannot own the whole prompt.
  */
 export function retrieveMemories(input: RetrieveInput): readonly MemoryView[] {
-  const { companyId, workspaceId, slaveId } = input.scopes
+  const { companyId, workspaceId, personId } = input.scopes
   const wanted = new Set(input.refs.requiredCapabilities)
 
   const eligible = input.memories.filter((memory) => {
     if (memory.status !== 'verified') return false
     if (memory.scope === 'workspace' && memory.workspaceId !== workspaceId) return false
     if (memory.scope === 'company' && (companyId === null || memory.companyId !== companyId)) return false
-    if (memory.scope === 'worker' && (slaveId === null || memory.slaveId !== slaveId)) return false
+    if (memory.scope === 'worker' && (personId === null || memory.personId !== personId)) return false
     // Belt and braces beside the scope rule above: a lesson is worker-scoped by construction
     // (`promotionFor`), and a hand-written one that is not stays out of everybody else's prompt.
-    if (memory.type === 'lesson' && (slaveId === null || memory.slaveId !== slaveId)) return false
+    if (memory.type === 'lesson' && (personId === null || memory.personId !== personId)) return false
     return true
   })
 

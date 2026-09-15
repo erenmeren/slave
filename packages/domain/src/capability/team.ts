@@ -17,8 +17,11 @@ export interface TeamRosterMember {
   readonly busy: boolean
 }
 
-export interface TeamCompanyWorker {
-  readonly companySlaveId: string
+/** M58 R16: a person in the POOL -- somebody who works here and holds no seat on this project. The
+ *  tier that used to be "a company roster row nobody materialised here yet"; the same position in
+ *  the preference order, a different noun, and a proposal that SEATS rather than copies. */
+export interface TeamPoolPerson {
+  readonly personId: string
   readonly name: string
   readonly capabilities: readonly CapabilityKey[]
 }
@@ -45,8 +48,8 @@ export interface TeamInput {
    */
   readonly requiredBy: ReadonlyMap<CapabilityKey, readonly string[]>
   readonly roster: readonly TeamRosterMember[]
-  /** The company's roster rows that are NOT already materialised into this project. */
-  readonly company: readonly TeamCompanyWorker[]
+  /** The people already in this installation who hold no OPEN seat on this project (R16). */
+  readonly pool: readonly TeamPoolPerson[]
   readonly catalog: readonly TeamCatalogEntry[]
   readonly taxonomy: readonly CapabilityRecord[]
   /** Templates a current worker's own profile recommends pairing with (R5). A tie-break and a
@@ -64,7 +67,7 @@ export interface TeamInput {
  * plan it got before, because with no ranking context the chain falls through to step 7 and the
  * candidate id, which IS the tie-break those callers already had.
  *
- * Every map is keyed on the CANDIDATE's own id (a `Slave.id`, a `CompanySlave.id` or a
+ * Every map is keyed on the CANDIDATE's own id (a `Slave.id`, a `Person.id` or a
  * `SlaveTemplate.id`), never on a profile key: a candidate is what this function ranks, and the
  * profile key is one of the things it looks up about one.
  */
@@ -73,8 +76,8 @@ export interface TeamRanking {
   readonly preferences: ReadonlyMap<CapabilityKey, RankPreference>
   /** R3: one record per profile key, from the world's bounded read. */
   readonly evidence: ReadonlyMap<string, RankEvidence>
-  /** R10: the `deny` rows per EXISTING worker, by `Slave.id`. Templates and company workers carry
-   *  none and are neither favoured nor penalised for it. */
+  /** R10: the `deny` rows per EXISTING seat, by `Slave.id`. Templates and pool persons carry none
+   *  and are neither favoured nor penalised for it. */
   readonly deniedKinds: ReadonlyMap<string, readonly PermissionKind[]>
   /** The catalog template behind each candidate, by the candidate's own id. R9's preference names a
    *  template, and this is how a roster worker is matched against one. */
@@ -88,16 +91,16 @@ export interface TeamRanking {
   readonly runKind: PermissionRunKind
 }
 
-/** Where a proposed worker would come from, in the preference order R4 fixes: an existing capable
- *  worker, an existing company worker, a new project worker, a temporary specialist. `temporary` is
- *  a CATALOG pick whose gap belongs to exactly one startable task (M50 R2) -- the same hire, with
- *  an end written into it. */
-export type TeamSource = 'existing_worker' | 'company_worker' | 'project_worker' | 'temporary'
+/** Where a proposed worker would come from, in the preference order R4 fixes, with M58 R16's middle
+ *  rung renamed: somebody already seated here, somebody in the pool, a new person from a persona,
+ *  a temporary specialist. `temporary` is a CATALOG pick whose gap belongs to exactly one startable
+ *  task (M50 R2) -- the same hire, with an end written into it. */
+export type TeamSource = 'existing_worker' | 'pool_person' | 'project_worker' | 'temporary'
 
 export interface TeamProposal {
   readonly capability: CapabilityKey
   readonly source: TeamSource
-  readonly pick: { readonly kind: 'slave' | 'company_slave' | 'template'; readonly id: string; readonly name: string }
+  readonly pick: { readonly kind: 'slave' | 'person' | 'template'; readonly id: string; readonly name: string }
   /** Every missing capability this one pick would cover -- what makes "one worker instead of two"
    *  visible to a person rather than implicit in the count. */
   readonly covers: readonly CapabilityKey[]
@@ -183,8 +186,8 @@ function bestOf(input: TeamInput, capability: CapabilityKey, field: readonly Ran
  *
  * The capability the two are ranked FOR is the first of their two keys in sorted order, which makes
  * the comparison symmetric: which candidate happens to be the challenger this round cannot change
- * the answer. Both are `busy: false` because neither kind can be busy -- a company worker not yet
- * materialised into this project holds no run, and a catalog template is not a worker at all.
+ * the answer. Both are `busy: false` because neither kind can be busy -- a person with no seat on
+ * this project holds no run of its, and a catalog template is not a person at all.
  */
 function rankBreakFor(
   input: TeamInput,
@@ -215,7 +218,7 @@ function rankBreakFor(
  *
  *  1. an existing worker who PROVIDES the capability but was never given its role -- one
  *     `set_runtime_roles` away from dispatchable, and the cheapest fix there is;
- *  2. a company roster worker not yet on this project;
+ *  2. somebody who already works here and holds no seat on this project (M58 R16);
  *  3. a catalog template, chosen by SET COVER: the entry covering the most still-missing
  *     capabilities wins, so one worker who can do two things beats two who can do one each.
  *
@@ -304,29 +307,33 @@ export function formTeam(input: TeamInput): TeamPlan {
     })
   }
 
-  // 2 and 3. Set cover over the company roster first, then the catalog. Both loops are the same
-  // shape, so a change to the minimality rule is one change and not two.
+  // 2 and 3. Set cover over the POOL first, then the catalog. Both loops are the same shape, so a
+  // change to the minimality rule is one change and not two.
   coverWith(
     outstanding,
-    [...input.company].toSorted((a, b) => a.companySlaveId.localeCompare(b.companySlaveId)).map((worker) => ({
-      id: worker.companySlaveId,
-      name: worker.name,
-      capabilities: worker.capabilities,
+    [...input.pool].toSorted((a, b) => a.personId.localeCompare(b.personId)).map((person) => ({
+      id: person.personId,
+      name: person.name,
+      capabilities: person.capabilities,
       recommended: false,
     })),
     (pick, covers) =>
       proposals.push({
         capability: covers[0] as CapabilityKey,
-        source: 'company_worker',
-        pick: { kind: 'company_slave', id: pick.id, name: pick.name },
+        source: 'pool_person',
+        pick: { kind: 'person', id: pick.id, name: pick.name },
         covers,
         temporary: false,
         engagementTaskId: null,
+        // M58 R16, proposal text 1 of 2: SEAT somebody who already works here. The old sentence said
+        // "staffed from people who already work here rather than by hiring", which was true of a
+        // roster COPY; this one is true of the person themself, on a second project, with the same
+        // memory and the same skills.
         rationale:
-          `${pick.name} is already on the company roster and provides ${labelList(covers, input.taxonomy)}, so this ` +
-          'project can be staffed from people who already work here rather than by hiring.',
+          `${pick.name} already works here, provides ${labelList(covers, input.taxonomy)} and holds no seat on ` +
+          'this project -- seating them puts that experience on this board without hiring anybody.',
       }),
-    rankBreakFor(input, 'company_slave'),
+    rankBreakFor(input, 'person'),
   )
 
   coverWith(
@@ -353,8 +360,8 @@ export function formTeam(input: TeamInput): TeamPlan {
         engagementTaskId,
         rationale:
           engagementTaskId === null
-            ? `${pick.name} provides ${labelList(covers, input.taxonomy)}, which nobody on this project or on the ` +
-              `company roster does${recommendedClause}.`
+            ? `Nobody here or in the pool provides ${labelList(covers, input.taxonomy)}, so create a ` +
+              `${pick.name} and seat them on this project${recommendedClause}.`
             : `${pick.name} provides ${labelList(covers, input.taxonomy)}, which nobody on this project or on the ` +
               `company roster does, and exactly one piece of startable work needs it -- so this is one assignment ` +
               `rather than a standing seat${recommendedClause}.`,

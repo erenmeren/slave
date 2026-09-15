@@ -17,16 +17,19 @@ import { costProvenanceOf, type CostProvenance, type CostRow } from '../guardrai
  * worker itself when nobody hired it from anything.
  *
  * `template:<id>` and `slave:<id>` are two namespaces on purpose -- a bespoke worker is its OWN
- * profile and is never unified with the template it resembles. `CompanySlave` is deliberately not
- * the key: its own comment (`schema.prisma:508-511`) claims statistics accrue to the durable name
- * across projects, nothing has ever implemented that, and choosing it would key a company-wide
- * record on a row a project hire does not have.
+ * profile and is never unified with the template it resembles.
+ *
+ * M58 R1: the persona comes off the PERSON (`Person.templateId`) rather than off the seat or its
+ * old roster row, which is why the field is simply `templateId` now. The fallback is unchanged, and
+ * deliberately so: it is the key every `EvidenceRecord` written before this milestone carries, and
+ * a migration that renamed columns has no business silently orphaning a record of how somebody
+ * worked.
  */
 export function profileKeyOf(input: {
   readonly slaveId: string
-  readonly hiredFromTemplateId: string | null
+  readonly templateId: string | null
 }): string {
-  return input.hiredFromTemplateId === null ? `slave:${input.slaveId}` : `template:${input.hiredFromTemplateId}`
+  return input.templateId === null ? `slave:${input.slaveId}` : `template:${input.templateId}`
 }
 
 /** True for a profile key that names one worker rather than a catalog persona -- what the `Bespoke`

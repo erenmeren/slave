@@ -422,7 +422,7 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
       taxonomy: TAXONOMY,
       tasks: [task({ status: 'ready', requiredCapabilities: ['security.application'] })],
       slaves: [slave({ id: 's1', name: 'Rae', capabilities: ['security.application'], runtimeRoles: ['backend'] })],
-      company: [{ companySlaveId: 'cs1', name: 'Sam', capabilities: ['security.application'], templateId: 'tpl1' }],
+      pool: [{ personId: 'p1', name: 'Sam', capabilities: ['security.application'], templateId: 'tpl1' }],
       catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false, defaultModel: null }],
     })
     const offers = candidates(situation, w)
@@ -437,11 +437,11 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
     expect(offers[0]?.why).toContain('Application security')
   })
 
-  it('offers the company worker as a PROPOSAL when nobody on the project provides it', () => {
+  it('offers somebody from the pool as a PROPOSAL when nobody on the project provides it', () => {
     const w = world({
       taxonomy: TAXONOMY,
       tasks: [task({ status: 'ready', requiredCapabilities: ['security.application'] })],
-      company: [{ companySlaveId: 'cs1', name: 'Sam', capabilities: ['security.application'], templateId: 'tpl1' }],
+      pool: [{ personId: 'p1', name: 'Sam', capabilities: ['security.application'], templateId: 'tpl1' }],
       catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security', recommended: false, defaultModel: null }],
     })
     const offers = candidates(situation, w)
@@ -450,7 +450,7 @@ describe('candidates -- capability_unstaffed (M47 R4)', () => {
     // capability KEY is not that sentence.
     expect(offers[0]?.action).toEqual({
       kind: 'materialise_company_worker',
-      companySlaveId: 'cs1',
+      personId: 'p1',
       capability: 'security.application',
       capabilityLabel: 'Application security',
       name: 'Sam',
@@ -602,8 +602,8 @@ describe('teamPlanOf (M47 R4)', () => {
       taxonomy: TAXONOMY,
       tasks: [task({ status: 'ready', requiredCapabilities: ['security.application'] })],
       slaves: [
-        slave({ id: 's1', name: 'Alex', capabilities: ['security.application'], runtimeRoles: [], hiredFromTemplateId: 'tpl-a' }),
-        slave({ id: 's2', name: 'Rae', capabilities: ['security.application'], runtimeRoles: [], hiredFromTemplateId: 'tpl-b' }),
+        slave({ id: 's1', name: 'Alex', capabilities: ['security.application'], runtimeRoles: [], templateId: 'tpl-a' }),
+        slave({ id: 's2', name: 'Rae', capabilities: ['security.application'], runtimeRoles: [], templateId: 'tpl-b' }),
       ],
       // R9: a template, for one capability. `s1` would win on the id alone, which is exactly what
       // makes this case about the preference rather than about the order the roster came back in.

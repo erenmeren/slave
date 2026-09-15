@@ -82,10 +82,10 @@ export interface RankEvidence {
 /** One candidate for one capability, with every fact the six steps read. Built by `teamPlanOf` from
  *  `SupervisorWorld` and by nothing else. */
 export interface RankCandidate {
-  /** The tie-break of last resort, and the id the caller will act on: a `Slave.id`, a
-   *  `CompanySlave.id` or a `SlaveTemplate.id`, matching {@link RankCandidate.kind}. */
+  /** The tie-break of last resort, and the id the caller will act on: a `Slave.id`, a `Person.id`
+   *  or a `SlaveTemplate.id`, matching {@link RankCandidate.kind}. */
   readonly id: string
-  readonly kind: 'slave' | 'company_slave' | 'template'
+  readonly kind: 'slave' | 'person' | 'template'
   readonly name: string
   /** R1: `template:<id>` or `slave:<id>` -- what {@link RankCandidate.evidence} was looked up by. */
   readonly profileKey: string
@@ -98,9 +98,9 @@ export interface RankCandidate {
   /** Every still-missing capability this candidate would cover. Step 1 reads its LENGTH. */
   readonly covers: readonly CapabilityKey[]
   readonly busy: boolean
-  /** R10: the `deny` rows this candidate carries. EMPTY for a template and for a company worker not
-   *  yet materialised -- neither has a `SlavePermission` row, and neither is favoured nor penalised
-   *  for it. There is no "would this profile be granted X" oracle in this milestone. */
+  /** R10: the `deny` rows this candidate carries. EMPTY for a template and for a person holding no
+   *  seat here -- neither has a `SlavePermission` row on this project, and neither is favoured nor
+   *  penalised for it. There is no "would this profile be granted X" oracle in this milestone. */
   readonly deniedKinds: readonly PermissionKind[]
   /** This profile's record, or null when nothing has ever been recorded about it. */
   readonly evidence: RankEvidence | null

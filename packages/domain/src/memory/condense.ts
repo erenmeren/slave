@@ -58,7 +58,7 @@ const typeOf = (type: MemoryType, scope: MemoryScope): MemoryType =>
 /** Which id a memory of this scope is filed under. The three target columns are exclusive by
  *  construction (`targetRule`), so this is a read and never a guess. */
 const targetOf = (memory: MemoryView): string | null =>
-  memory.scope === 'company' ? memory.companyId : memory.scope === 'workspace' ? memory.workspaceId : memory.slaveId
+  memory.scope === 'company' ? memory.companyId : memory.scope === 'workspace' ? memory.workspaceId : memory.personId
 
 /**
  * The `MEMORY_CAPABILITIES_MAX` keys the sources name MOST, ties broken by key (fix round 1,
@@ -169,7 +169,7 @@ export function condenseMemories(input: CondenseInput): Condensation | null {
       scope: input.scope,
       companyId: input.scope === 'company' ? input.targetId : null,
       workspaceId: input.scope === 'workspace' ? input.targetId : null,
-      slaveId: input.scope === 'worker' ? input.targetId : null,
+      personId: input.scope === 'worker' ? input.targetId : null,
       title,
       body: capCodePoints(body, MEMORY_BODY_MAX),
       status: 'verified',
