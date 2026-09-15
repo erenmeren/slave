@@ -232,4 +232,12 @@ tests, `gate:m26-vocabulary`, `tsc --build`, `typecheck`, `web:build` and a comm
 
 ## 10. Errata — where execution corrects this spec
 
-(none yet)
+Plan-time (2026-09-15, from the plan's pre-flight notes; ruled by the controller):
+
+- **E1 (amends R8)** — a roster row that was already materialised onto projects yields NO extra pooled person: its copies become the persons and the row contributes only its department memberships to them; only a roster row with no seat becomes a pooled person. The literal reading would manufacture duplicate people on upgrade.
+- **E2 (amends R1)** — `Person.lifecycle` keeps all three `SlaveLifecycle` members (`permanent | project | ephemeral`); the enum is pinned member-for-member by `enum-parity.test.ts`, read by `setLifecycle`, rendered by the Organization page and asserted by `gate-m50`. R1's two-member parenthesis was shorthand.
+- **E3 (amends R14)** — six refusal kinds, not four: `person_not_found` and `person_not_seated` join `already_assigned`, `person_released`, `run_in_progress`, `person_name_taken`. A seat's `slave_not_found` names a seat and cannot stand in for a person.
+- **E4 (amends R28)** — `USER_PERSON_LABEL` holds `IN THE POOL` / `ASSIGNED` / `RELEASED`, the house style of every `USER_*_LABEL` table (`tones.ts` reads them verbatim); a surface may lower-case for a sentence-shaped pill; the gate asserts case-insensitively.
+- **E5 (amends R16)** — the pool-tier proposal keeps its persisted action KIND (`materialise_company_worker`) and renames only the payload field to `personId`; the migration rewrites the payload of PENDING decisions; approved/rejected rows stay as decided.
+- **E6 (amends R8, confirmation)** — ONE migration stands. Task 2 rebinds every reader (124 tracked files) in the same commit because the drops make the tree uncompilable otherwise; it is reviewed in its six step-groups (schema / migration / migration test / domain / control / apps+scripts) on the most capable model rather than split into an additive migration plus a later drop.
+- **E7 (process)** — the plan's header says "automated workers" and names `superpowers:executing-plans` because the prescribed wording contains the vocabulary rule's forbidden token; `gate:m26` excludes `docs/superpowers`, so this is the controller's stricter rule, kept on purpose.
