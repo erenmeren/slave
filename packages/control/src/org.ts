@@ -938,7 +938,8 @@ export async function createProjectTeam(
  * Moves a seat to another department of the SAME project. The person is unchanged: only which
  * department they sit in moves, and `assignCompany` run again later finds their seat anywhere in
  * the project and leaves it where it is. Refused while the seat holds a live run, the rule
- * {@link setSlaveRole} applies.
+ * {@link setSlaveRole} applies, and refused when `Person.releasedAt` is set -- a closed clash is
+ * not reopened and `teamId` is not rewritten.
  *
  * M58 R2: `@@unique([personId, teamId])` is what the clash check reads now -- one seat per person
  * per team. An OPEN seat in the target department is `already_assigned`; a CLOSED one is reopened
@@ -955,6 +956,21 @@ export async function moveSlave(
   const outcome = await prisma.$transaction(async (tx) => {
     const slave = await lockSlave(tx, slaveId)
     if (slave === null) return { ok: false as const, error: { kind: 'slave_not_found', slaveId } as ControlRefusal }
+
+    // Person lock AFTER the seat: this verb already holds the Slave row, and hire/capability lock
+    // Person then Slave -- inverting here would deadlock. `releasedAt` is decided before any write
+    // so a clash reopen cannot undo `releasePerson`.
+    await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${slave.personId} FOR UPDATE`
+    const person = await tx.person.findUnique({ where: { id: slave.personId }, select: { releasedAt: true } })
+    if (person === null) {
+      return { ok: false as const, error: { kind: 'person_not_found', personId: slave.personId } as ControlRefusal }
+    }
+    if (person.releasedAt !== null) {
+      return {
+        ok: false as const,
+        error: { kind: 'person_released', personId: slave.personId, at: person.releasedAt.toISOString() } as ControlRefusal,
+      }
+    }
 
     // Copy `setSlaveRole`'s live-run check here verbatim (the `slave_run_active` refusal keyed on
     // `NON_TERMINAL_RUN_STATUSES`), so both verbs refuse on the same definition of "live".

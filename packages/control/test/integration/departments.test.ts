@@ -10,6 +10,7 @@ import {
   moveSlave,
   renameCompanyTeam,
 } from '../../src/org.js'
+import { assignPerson, releasePerson, unassignPerson } from '../../src/persons.js'
 
 // A real directory (M23 G3): a placeholder repo path fails runFilePaths' statSync preflight.
 const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-control-departments-'))
@@ -257,6 +258,37 @@ describe('moveSlave', () => {
     const row = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })
     expect(row.teamId).toBe(fixture.engineeringId)
     expect(await orgChangedEvents(fixture.workspaceId)).toHaveLength(0)
+  })
+
+  // After unassign, a later seat, then release: both seats are closed and `releasedAt` is set.
+  // `moveSlave` used to reopen the Engineering clash anyway because it never read that stamp.
+  it('refuses to reopen a closed clash for a released person', async () => {
+    const seat = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, select: { personId: true } })
+    const design = await prisma.team.create({ data: { workspaceId: fixture.workspaceId, name: 'Design' } })
+
+    const unassigned = await unassignPerson(seat.personId, fixture.engineeringId, { reason: 'moving on' })
+    expect(unassigned.ok).toBe(true)
+
+    const seated = await assignPerson(seat.personId, design.id)
+    expect(seated.ok).toBe(true)
+    if (!seated.ok) throw new Error('setup')
+
+    const released = await releasePerson(seat.personId, 'the engagement is over')
+    expect(released.ok).toBe(true)
+
+    const result = await moveSlave(seated.value.slaveId, fixture.engineeringId)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.kind).toBe('person_released')
+      if (result.error.kind === 'person_released') {
+        expect(result.error.personId).toBe(seat.personId)
+        expect(result.error.at).toEqual(expect.any(String))
+      }
+    }
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).closedAt).not.toBeNull()
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: seated.value.slaveId } })).closedAt).not.toBeNull()
+    expect(await prisma.slave.count({ where: { personId: seat.personId, closedAt: null } })).toBe(0)
   })
 })
 
