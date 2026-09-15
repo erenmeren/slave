@@ -142,7 +142,12 @@ export async function setPersonCapabilities(
   const { keys, unresolved } = normaliseCapabilities(values, taxonomy)
   const projected = projectRoles(keys, taxonomy)
   const outcome = await prisma.$transaction(async (tx) => {
+    // The person AND every seat this write will touch, under `FOR UPDATE` before either is read
+    // (final review's Important 1, restated for the split): the runtime-role union below is
+    // computed off these reads, and `setRuntimeRoles`/`mergeRuntimeRoles` lock the SEAT row -- so
+    // without the second lock a role granted between the read and the write is silently dropped.
     await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${personId} FOR UPDATE`
+    await tx.$queryRaw`SELECT id FROM "Slave" WHERE "personId" = ${personId} AND "closedAt" IS NULL ORDER BY id FOR UPDATE`
     const person = await tx.person.findUnique({
       where: { id: personId },
       select: {

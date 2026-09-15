@@ -221,6 +221,28 @@ describe('moveSlave', () => {
     expect(await orgChangedEvents(fixture.workspaceId)).toHaveLength(0)
   })
 
+  // The other half of the same rule: a CLOSED seat in the target is a seat this person once held
+  // there, so the move REOPENS it and closes the one they are leaving -- both rows keep their runs.
+  it('reopens a closed seat in the target department rather than opening a second one', async () => {
+    const seat = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, select: { personId: true, role: true } })
+    const closed = await prisma.slave.create({
+      data: { teamId: fixture.qaId, role: 'qa', personId: seat.personId, closedAt: new Date() },
+    })
+    const historicRun = await prisma.slaveRun.create({ data: { slaveId: closed.id, status: 'succeeded' } })
+
+    const result = await moveSlave(fixture.slaveId, fixture.qaId)
+
+    expect(result.ok).toBe(true)
+    const reopened = await prisma.slave.findUniqueOrThrow({ where: { id: closed.id } })
+    expect(reopened.closedAt).toBeNull()
+    expect(reopened.role).toBe(seat.role)
+    // Nothing was deleted: the reopened seat keeps the run it recorded before it was closed, and
+    // the seat they left keeps its own history as a closed row.
+    expect(await prisma.slaveRun.findUnique({ where: { id: historicRun.id } })).not.toBeNull()
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).closedAt).not.toBeNull()
+    expect(await prisma.slave.count({ where: { personId: seat.personId, teamId: fixture.qaId } })).toBe(1)
+  })
+
   it('moving to the current department is a no-op with no event', async () => {
     const result = await moveSlave(fixture.slaveId, fixture.engineeringId)
 

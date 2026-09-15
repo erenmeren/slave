@@ -437,6 +437,27 @@ describe('assignCompany', () => {
     }
   })
 
+  // M58 R2: a seat somebody was removed from is REOPENED by the next assign, not replaced -- which
+  // is what keeps their runs, messages and permissions on this project as history.
+  it('reopens a closed seat rather than opening a second one for the same person', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const { companyId } = await seedCompanyWithRoster(1)
+    expect((await assignCompany(workspace.id, companyId)).ok).toBe(true)
+    const seat = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: workspace.id } } })
+    const run = await prisma.slaveRun.create({ data: { slaveId: seat.id, status: 'succeeded' } })
+    await prisma.slave.update({ where: { id: seat.id }, data: { closedAt: new Date() } })
+
+    const again = await assignCompany(workspace.id, companyId)
+
+    expect(again.ok).toBe(true)
+    if (!again.ok) return
+    expect(again.value.createdWorkers.map((worker) => worker.personId)).toEqual([seat.personId])
+    const rows = await prisma.slave.findMany({ where: { personId: seat.personId } })
+    expect(rows.map((row) => row.id)).toEqual([seat.id])
+    expect(rows[0]?.closedAt).toBeNull()
+    expect(await prisma.slaveRun.findUnique({ where: { id: run.id } })).not.toBeNull()
+  })
+
   it('refuses when the workspace is already assigned to a different company, changing nothing', async (): Promise<void> => {
     const workspace = await seedWorkspace()
     const { companyId: firstCompanyId } = await seedCompanyWithRoster(1)

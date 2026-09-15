@@ -973,10 +973,12 @@ export async function moveSlave(
 
     const from = await tx.team.findUniqueOrThrow({ where: { id: slave.team.id }, select: { name: true } })
     if (clash !== null) {
-      // A seat this person already held here and left: reopen it and retire the one they are
-      // leaving, rather than adding a second row the unique index would refuse anyway.
+      // A seat this person already held in the target department and left: REOPEN it and CLOSE the
+      // one they are leaving, rather than adding a second row the unique index would refuse anyway.
+      // Closed, never deleted (R2): both seats keep their runs, messages and permissions, which is
+      // exactly what repointing `teamId` used to preserve and what a delete here would destroy.
       await tx.slave.update({ where: { id: clash.id }, data: { closedAt: null, role: slave.role, runtimeRoles: slave.runtimeRoles } })
-      await tx.slave.delete({ where: { id: slaveId } })
+      await tx.slave.update({ where: { id: slaveId }, data: { closedAt: new Date() } })
     } else {
       await tx.slave.update({ where: { id: slaveId }, data: { teamId } })
     }
