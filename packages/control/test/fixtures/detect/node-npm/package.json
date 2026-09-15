@@ -1,0 +1,11 @@
+{
+  "name": "detect-fixture-npm",
+  "private": true,
+  "scripts": {
+    "build": "tsc -b",
+    "lint": "eslint .",
+    "start": "node index.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  }
+}
