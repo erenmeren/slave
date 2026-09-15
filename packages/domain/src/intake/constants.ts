@@ -117,3 +117,8 @@ export const INTAKE_CATALOGUE_MAX = 300
  *  that one; a case in `packages/control/test/integration/intake.test.ts` pins the two together,
  *  which is the only place both can be imported at once. */
 export const INTAKE_MAX_RUNTIME_ROLES = 20
+
+/** How many transcript lines one prompt carries, newest last. Forty: a conversation this long has
+ *  already hit `INTAKE_MAX_MODEL_CALLS`, so this is a bound on a pathological paste rather than on
+ *  an ordinary intake -- `THREAD_MESSAGES_MAX`' own number and its own reason. */
+export const INTAKE_PROMPT_MESSAGES_MAX = 40
