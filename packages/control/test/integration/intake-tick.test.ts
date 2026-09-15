@@ -1,6 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { INTAKE_ANSWER_MARKER, INTAKE_PER_CALL_CAP_USD } from '@slave-of-ai/domain'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { openIntake, readIntake, sendIntakeMessage } from '../../src/intake.js'
 import { drainIntakeCalls, tickIntakes } from '../../src/intakeTick.js'
 import type { ModelDecider } from '../../src/simulation/llm.js'
@@ -103,16 +103,29 @@ describe('tickIntakes', () => {
   it('charges a failed call and tells the person something they can act on', async (): Promise<void> => {
     const id = await waiting()
     const failing: ModelDecider = async () => ({ kind: 'failed', reason: 'the CLI died', costUsd: null, tokens: null })
-    await tickIntakes({ now: new Date(), by: 'test', model: 'm', modelDecider: failing })
-    await drainIntakeCalls()
+    // The transcript stays clean -- the person reads one sentence, not this reason -- but the
+    // reason must not simply vanish: an operator watching stderr needs to be able to tell a dead
+    // CLI from an isolation breach, which a shared UNUSABLE_TEXT sentence cannot say on its own.
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    try {
+      await tickIntakes({ now: new Date(), by: 'test', model: 'm', modelDecider: failing })
+      await drainIntakeCalls()
 
-    const row = await prisma.intake.findUniqueOrThrow({ where: { id } })
-    expect(row.status).toBe('open')
-    expect(row.modelCalls).toBe(1)
-    expect(row.unmeasuredCalls).toBe(1)
-    const last = await prisma.intakeMessage.findFirstOrThrow({ where: { intakeId: id }, orderBy: { seq: 'desc' } })
-    expect(last.role).toBe('assistant')
-    expect(last.text).not.toContain('JSON')
+      const row = await prisma.intake.findUniqueOrThrow({ where: { id } })
+      expect(row.status).toBe('open')
+      expect(row.modelCalls).toBe(1)
+      expect(row.unmeasuredCalls).toBe(1)
+      const last = await prisma.intakeMessage.findFirstOrThrow({ where: { intakeId: id }, orderBy: { seq: 'desc' } })
+      expect(last.role).toBe('assistant')
+      expect(last.text).not.toContain('JSON')
+
+      const logged = stderr.mock.calls.map((call) => String(call[0]))
+      expect(logged).toHaveLength(1)
+      expect(logged[0]).toContain(id)
+      expect(logged[0]).toContain('the CLI died')
+    } finally {
+      stderr.mockRestore()
+    }
   })
 
   it('treats an isolation breach as an unusable answer rather than a draft', async (): Promise<void> => {

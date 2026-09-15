@@ -63,6 +63,12 @@ function startIntakeCall(intake: ClaimedIntake, decider: ModelDecider, model: st
         // breach is not silently absorbed -- the reason names it, and it reaches the conversation
         // as a sentence rather than as a card built from a call that reached for a tool.
         const reason = outcome.kind === 'failed' ? outcome.reason : `isolation breach: ${outcome.tools.join(', ')}`
+        // The transcript stays clean (the person reads `UNUSABLE_TEXT`, one sentence, not this
+        // string), but the reason must not simply vanish: this is the sink `IntakeReplyOutcome`'s
+        // `unusable.reason` docstring promises, the same convention `ask.ts`/`answer.ts` use for a
+        // decider's own failure reason. Without it an operator watching a conversation stall on the
+        // generic sentence could not tell a dead CLI from an isolation breach.
+        process.stderr.write(`[intake] ${intake.id}: model answer unusable — ${reason}\n`)
         const recorded = await recordIntakeReply(intake.id, { kind: 'unusable', reason, costUsd: outcome.costUsd })
         if (!recorded.ok) process.stderr.write(`[intake] ${intake.id}: ${refusalText(recorded.error)}\n`)
         return
