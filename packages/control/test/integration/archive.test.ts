@@ -24,7 +24,7 @@ async function seed(): Promise<Fixture> {
   })
   const engineering = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   await prisma.team.create({ data: { workspaceId: workspace.id, name: 'QA' } })
-  const slave = await prisma.slave.create({ data: { teamId: engineering.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: engineering.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   const task = await prisma.task.create({
     data: { workspaceId: workspace.id, title: 'Add the thing', description: 'make it work', maxAttempts: 3 },
   })

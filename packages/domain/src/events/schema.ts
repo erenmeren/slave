@@ -363,9 +363,19 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('workspace.company_assigned'),
     payload: z.object({
       company: z.string().min(1),
-      // Deliberately NO .min(1): a pure re-sync that added nobody still emits with an empty array.
+      // Deliberately NO .min(1): a pure re-sync that seated nobody still emits with an empty array.
+      //
+      // M58 R5: each entry names the PERSON who was seated. `companySlaveId` stays declared and
+      // optional -- nothing writes it any more, and a row written before this milestone carries it
+      // where `personId` now is. Both are optional so the two shapes parse, which is what a log
+      // read a year later needs.
       workers: z.array(
-        z.object({ companySlaveId: z.string().min(1), name: z.string().min(1), role: z.string().min(1) }),
+        z.object({
+          personId: z.string().min(1).optional(),
+          companySlaveId: z.string().min(1).optional(),
+          name: z.string().min(1),
+          role: z.string().min(1),
+        }),
       ),
     }),
   }),

@@ -35,15 +35,9 @@ async function seed(): Promise<Fixture> {
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const otherTeam = await prisma.team.create({ data: { workspaceId: otherWorkspace.id, name: 'Engineering' } })
 
-  const sender = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Alex', role: 'Senior Engineer', runtimeRoles: ['asker'] },
-  })
-  const recipient = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Maya', role: 'Product Lead', runtimeRoles: ['answerer'] },
-  })
-  const outsider = await prisma.slave.create({
-    data: { teamId: otherTeam.id, name: 'Zoe', role: 'Product Lead', runtimeRoles: ['answerer'] },
-  })
+  const sender = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['asker'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+  const recipient = await prisma.slave.create({ data: { teamId: team.id, role: 'Product Lead', runtimeRoles: ['answerer'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
+  const outsider = await prisma.slave.create({ data: { teamId: otherTeam.id, role: 'Product Lead', runtimeRoles: ['answerer'], personId: (await prisma.person.create({ data: { name: 'Zoe' } })).id } })
 
   const task = await prisma.task.create({
     data: { workspaceId: workspace.id, title: 'Add checkout retry', description: 'Retry failed payments', maxAttempts: workspace.maxAttempts },
@@ -107,9 +101,7 @@ async function askDirectly(fixture: Fixture, toSlaveId: string, taskId: string |
 /** A second worker in the same project holding exactly `role`. */
 async function peerHolding(fixture: Fixture, role: string, name: string): Promise<string> {
   const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspace.id } })
-  const peer = await prisma.slave.create({
-    data: { teamId: team.id, name, role: 'Staff Engineer', runtimeRoles: [role] },
-  })
+  const peer = await prisma.slave.create({ data: { teamId: team.id, role: 'Staff Engineer', runtimeRoles: [role], personId: (await prisma.person.create({ data: { name: name } })).id } })
   return peer.id
 }
 
@@ -271,9 +263,7 @@ describe('sendMessage', () => {
   it('reaches every holder of a RUNTIME role, and nobody by their title', async () => {
     const { run, recipient } = fixture
     const recipientRow = await prisma.slave.findUniqueOrThrow({ where: { id: recipient.id } })
-    const second = await prisma.slave.create({
-      data: { teamId: recipientRow.teamId, name: 'Noor', role: 'Support Engineer', runtimeRoles: ['answerer', 'triage'] },
-    })
+    const second = await prisma.slave.create({ data: { teamId: recipientRow.teamId, role: 'Support Engineer', runtimeRoles: ['answerer', 'triage'], personId: (await prisma.person.create({ data: { name: 'Noor' } })).id } })
 
     const byTitle = await sendMessage(run.id, question({ recipientRole: 'Product Lead' }))
     expect(byTitle.ok).toBe(true)
@@ -385,9 +375,7 @@ describe('listMessagesForSlave', () => {
   it('never lists its own role-broadcast, even though it holds the addressed role -- but a peer holding the same role sees it', async () => {
     const { run, sender } = fixture
     const senderRow = await prisma.slave.findUniqueOrThrow({ where: { id: sender.id } })
-    const peer = await prisma.slave.create({
-      data: { teamId: senderRow.teamId, name: 'Priya', role: 'Staff Engineer', runtimeRoles: [sender.role] },
-    })
+    const peer = await prisma.slave.create({ data: { teamId: senderRow.teamId, role: 'Staff Engineer', runtimeRoles: [sender.role], personId: (await prisma.person.create({ data: { name: 'Priya' } })).id } })
 
     const sent = await sendMessage(run.id, question({ recipientRole: sender.role }))
     expect(sent.ok).toBe(true)

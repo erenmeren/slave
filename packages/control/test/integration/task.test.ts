@@ -99,9 +99,7 @@ describe('failTask', () => {
 
   it('refuses a task that still carries an activeRunId, without touching it', async () => {
     const team = await prisma.team.create({ data: { workspaceId: f.workspaceId, name: 'Engineering' } })
-    const slave = await prisma.slave.create({
-      data: { teamId: team.id, name: 'Maya', role: 'Senior Engineer', runtimeRoles: ['backend'] },
-    })
+    const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
     const task = await makeTask(f.workspaceId, { status: 'blocked' })
     const run = await prisma.slaveRun.create({
       data: { slaveId: slave.id, taskId: task.id, status: 'working' },
@@ -203,9 +201,7 @@ describe('cancelTask', () => {
 
   it('refuses a task that still carries an activeRunId, without touching it', async () => {
     const team = await prisma.team.create({ data: { workspaceId: f.workspaceId, name: 'Engineering' } })
-    const slave = await prisma.slave.create({
-      data: { teamId: team.id, name: 'Maya', role: 'Senior Engineer', runtimeRoles: ['backend'] },
-    })
+    const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
     const task = await makeTask(f.workspaceId, { status: 'ready' })
     const run = await prisma.slaveRun.create({ data: { slaveId: slave.id, taskId: task.id, status: 'working' } })
     await prisma.task.update({ where: { id: task.id }, data: { activeRunId: run.id } })
@@ -224,9 +220,7 @@ describe('cancelTask', () => {
     // urgent of the two reasons: nothing about this task's own board status should move while a run
     // still holds it.
     const team = await prisma.team.create({ data: { workspaceId: f.workspaceId, name: 'Engineering' } })
-    const slave = await prisma.slave.create({
-      data: { teamId: team.id, name: 'Rae', role: 'Reviewer', runtimeRoles: ['reviewer'] },
-    })
+    const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'Reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Rae' } })).id } })
     const task = await makeTask(f.workspaceId, { status: 'reviewing' })
     const run = await prisma.slaveRun.create({
       data: { slaveId: slave.id, taskId: task.id, kind: 'review', status: 'working' },

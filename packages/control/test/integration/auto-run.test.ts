@@ -7,7 +7,7 @@ async function seedTradingCompany(name = 'Demo Trading Co.'): Promise<string> {
   const company = await prisma.company.create({ data: { name } })
   for (const [department, slave] of [['Sales', 'Sonia'], ['Purchasing', 'Pete'], ['Operations', 'Olga'], ['Finance', 'Fin']] as const) {
     const team = await prisma.companyTeam.create({ data: { companyId: company.id, name: department } })
-    await prisma.companySlave.create({ data: { companyTeamId: team.id, templateId: template.id, name: slave } })
+    await prisma.person.create({ data: { templateId: template.id, name: slave, lifecycle: 'permanent', departments: { create: { companyTeamId: team.id } } } })
   }
   return company.id
 }

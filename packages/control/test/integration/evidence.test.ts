@@ -33,7 +33,8 @@ describe('recordRunEvidence (M53 R1, R3)', () => {
   })
 
   it('keys a HAND-MADE worker on itself -- there is always a profile (R1)', async (): Promise<void> => {
-    await prisma.slave.update({ where: { id: fixture.slaveId }, data: { hiredFromTemplateId: null, name: 'Sam' } })
+    const seat = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, select: { personId: true } })
+    await prisma.person.update({ where: { id: seat.personId }, data: { templateId: null, name: 'Sam' } })
     await recordRunEvidence(fixture.runId)
     const row = await prisma.evidenceRecord.findUniqueOrThrow({ where: { runId: fixture.runId } })
     expect(row.profileKey).toBe(`slave:${fixture.slaveId}`)

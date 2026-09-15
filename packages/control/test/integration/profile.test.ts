@@ -15,11 +15,11 @@ interface Fixture {
   readonly workspaceId: string
   readonly slaveId: string
   readonly templateId: string
-  readonly companySlaveId: string
+  readonly memberPersonId: string
 }
 
 /** One workspace with a worker linked to a roster row, so all three levels of the profile
- *  override chain (`slave` > `companySlave` > `template`) have a real row to be written on. */
+ *  override chain (`slave` > `person` > `template`) have a real row to be written on. */
 async function seed(): Promise<Fixture> {
   const workspace = await prisma.workspace.create({
     data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommands: ['npm test'], setupCommands: ['npm ci'] },
@@ -30,23 +30,13 @@ async function seed(): Promise<Fixture> {
   })
   const company = await prisma.company.create({ data: { name: 'Acme' } })
   const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-  const companySlave = await prisma.companySlave.create({
-    data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Maya' },
-  })
-  const slave = await prisma.slave.create({
-    data: {
-      teamId: team.id,
-      name: 'Maya',
-      role: 'Senior Engineer',
-      runtimeRoles: ['backend'],
-      companySlaveId: companySlave.id,
-    },
-  })
+  const member = await prisma.person.create({ data: { templateId: template.id, name: 'Maya', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend'], personId: member.id } })
   return {
     workspaceId: workspace.id,
     slaveId: slave.id,
     templateId: template.id,
-    companySlaveId: companySlave.id,
+    memberPersonId: member.id,
   }
 }
 
@@ -68,26 +58,26 @@ describe('setProfile', () => {
 
   it('writes the whole override chain, each level on its own row', async () => {
     expect((await setProfile({ slaveId: fixture.slaveId }, 'worker text', 'operator')).ok).toBe(true)
-    expect((await setProfile({ companySlaveId: fixture.companySlaveId }, 'roster text', 'operator')).ok).toBe(true)
+    expect((await setProfile({ personId: fixture.memberPersonId }, 'person text', 'operator')).ok).toBe(true)
     expect((await setProfile({ templateId: fixture.templateId }, 'template text', 'operator')).ok).toBe(true)
 
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).profile).toBe('worker text')
-    expect((await prisma.companySlave.findUniqueOrThrow({ where: { id: fixture.companySlaveId } })).profile).toBe('roster text')
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })).profile).toBe('worker text')
+    expect((await prisma.person.findUniqueOrThrow({ where: { id: fixture.memberPersonId } })).profile).toBe('person text')
     expect((await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: fixture.templateId } })).profile).toBe('template text')
   })
 
   it('trims, and turns an emptied text into null rather than an empty string', async () => {
     expect((await setProfile({ slaveId: fixture.slaveId }, '  padded  ', 'operator')).ok).toBe(true)
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).profile).toBe('padded')
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })).profile).toBe('padded')
 
     expect((await setProfile({ slaveId: fixture.slaveId }, '   ', 'operator')).ok).toBe(true)
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).profile).toBeNull()
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })).profile).toBeNull()
   })
 
   it('clears on null', async () => {
     await setProfile({ slaveId: fixture.slaveId }, 'worker text', 'operator')
     expect((await setProfile({ slaveId: fixture.slaveId }, null, 'operator')).ok).toBe(true)
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).profile).toBeNull()
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })).profile).toBeNull()
   })
 
   it('refuses a profile past the cap, measured AFTER trimming, and writes nothing', async () => {
@@ -98,7 +88,7 @@ describe('setProfile', () => {
       expect(result.error).toEqual({ kind: 'profile_too_long', limit: PROFILE_MAX_CHARS, length: PROFILE_MAX_CHARS + 1 })
       expect(refusalText(result.error)).toContain(String(PROFILE_MAX_CHARS))
     }
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).profile).toBeNull()
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })).profile).toBeNull()
     expect(await profileEvents(fixture.workspaceId)).toHaveLength(0)
   })
 
@@ -114,8 +104,8 @@ describe('setProfile', () => {
     expect(await setProfile({ templateId: 'nope' }, 'text', 'operator')).toEqual({
       ok: false, error: { kind: 'template_not_found', templateId: 'nope' },
     })
-    expect(await setProfile({ companySlaveId: 'nope' }, 'text', 'operator')).toEqual({
-      ok: false, error: { kind: 'company_slave_not_found', companySlaveId: 'nope' },
+    expect(await setProfile({ personId: 'nope' }, 'text', 'operator')).toEqual({
+      ok: false, error: { kind: 'person_not_found', personId: 'nope' },
     })
   })
 
@@ -134,9 +124,9 @@ describe('setProfile', () => {
     })
   })
 
-  it('emits nothing for a template or catalog-slave target -- the catalog has no event stream', async () => {
+  it('emits nothing for a template or PERSON target -- neither belongs to a workspace', async () => {
     await setProfile({ templateId: fixture.templateId }, 'template text', 'operator')
-    await setProfile({ companySlaveId: fixture.companySlaveId }, 'roster text', 'operator')
+    await setProfile({ personId: fixture.memberPersonId }, 'person text', 'operator')
     expect(await prisma.executionEvent.count({ where: { type: 'slave_profile_changed' } })).toBe(0)
   })
 
@@ -156,7 +146,7 @@ describe('setRuntimeRoles', () => {
 
   it('replaces the set, trimming each entry, and emits the new list', async () => {
     expect((await setRuntimeRoles(fixture.slaveId, [' backend ', 'reviewer'], 'operator')).ok).toBe(true)
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).runtimeRoles).toEqual([
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })).runtimeRoles).toEqual([
       'backend',
       'reviewer',
     ])
@@ -181,7 +171,7 @@ describe('setRuntimeRoles', () => {
 
   it('allows an empty set -- the parked, undispatchable state', async () => {
     expect((await setRuntimeRoles(fixture.slaveId, [], 'operator')).ok).toBe(true)
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).runtimeRoles).toEqual([])
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })).runtimeRoles).toEqual([])
     const [event] = await prisma.executionEvent.findMany({ where: { type: 'slave_runtime_roles_changed' } })
     expect((event?.payload as { roles: unknown }).roles).toEqual([])
   })
@@ -192,7 +182,7 @@ describe('setRuntimeRoles', () => {
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error.kind).toBe('invalid_runtime_roles')
     }
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).runtimeRoles).toEqual(['backend'])
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })).runtimeRoles).toEqual(['backend'])
     expect(await prisma.executionEvent.count({ where: { type: 'slave_runtime_roles_changed' } })).toBe(0)
   })
 

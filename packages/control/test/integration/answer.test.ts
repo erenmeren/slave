@@ -22,12 +22,8 @@ async function seed(): Promise<Fixture> {
     data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommands: ['npm test'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const asker = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Alex', role: 'Senior Engineer', runtimeRoles: ['asker'] },
-  })
-  const answerer = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Maya', role: 'Product Lead', runtimeRoles: ['answerer'] },
-  })
+  const asker = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['asker'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+  const answerer = await prisma.slave.create({ data: { teamId: team.id, role: 'Product Lead', runtimeRoles: ['answerer'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
   const task = await prisma.task.create({
     data: { workspaceId: workspace.id, title: 'Add checkout retry', description: 'retry', maxAttempts: workspace.maxAttempts },
   })

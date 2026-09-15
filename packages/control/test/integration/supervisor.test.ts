@@ -53,9 +53,7 @@ async function seed(): Promise<Fixture> {
     data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommands: ['npm test'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Maya', role: 'Senior Engineer', runtimeRoles: ['backend'] },
-  })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -90,18 +88,7 @@ async function seedReleasableWorker(fixture: Fixture): Promise<{ slaveId: string
   const template = await prisma.slaveTemplate.create({
     data: { name: `M50 Security ${String(Date.now())}`, role: 'security', capabilityKeys: [] },
   })
-  const slave = await prisma.slave.create({
-    data: {
-      teamId: team.id,
-      name: 'Robin',
-      role: 'Security Reviewer',
-      runtimeRoles: ['security'],
-      hiredFromTemplateId: template.id,
-      lifecycle: 'ephemeral',
-      engagementTaskId: fixture.taskId,
-      selectionRationale: 'brought in for the authentication path',
-    },
-  })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'Security Reviewer', runtimeRoles: ['security'], engagementTaskId: fixture.taskId, personId: (await prisma.person.create({ data: { name: 'Robin', templateId: template.id, lifecycle: 'ephemeral', selectionRationale: 'brought in for the authentication path' } })).id } })
   return { slaveId: slave.id }
 }
 
@@ -185,9 +172,7 @@ interface AskedQuestion {
  */
 async function askAQuestion(f: Fixture): Promise<AskedQuestion> {
   const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: f.workspaceId } })
-  const asker = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Alex', role: 'Engineer', runtimeRoles: ['asker'] },
-  })
+  const asker = await prisma.slave.create({ data: { teamId: team.id, role: 'Engineer', runtimeRoles: ['asker'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   const run = await prisma.slaveRun.create({ data: { taskId: f.taskId, slaveId: asker.id, status: 'working' } })
   const sent = await sendMessage(run.id, {
     kind: 'question',
@@ -604,10 +589,10 @@ describe('applyDecision', () => {
     expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
 
     expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('applied')
-    const worker = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })
+    const worker = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })
     expect(worker.runtimeRoles).toEqual([])
-    expect(worker.releasedAt).not.toBeNull()
-    expect(worker.releaseReason).toBe('the engagement is over')
+    expect(worker.person.releasedAt).not.toBeNull()
+    expect(worker.person.releaseReason).toBe('the engagement is over')
     // A tick released this, so the timeline says `system` -- `carryOut` passes no principal.
     const [released] = await eventsOfType('slave_released')
     expect(released?.actor).toBe('system')
@@ -781,7 +766,7 @@ describe('applyDecision', () => {
     expect(applied.ok).toBe(false)
     expect(applied.ok ? null : applied.error.kind).toBe('already_released')
     // Nothing written, and the decision keeps the refusal rather than pretending it went through.
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })).runtimeRoles).toEqual([])
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })).runtimeRoles).toEqual([])
     expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('failed')
   })
 
@@ -799,7 +784,7 @@ describe('applyDecision', () => {
     const approved = await approveDecision(decision.id, { userId: f.userId })
     expect(approved.ok).toBe(false)
     expect(approved.ok ? null : approved.error.kind).toBe('already_released')
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })).runtimeRoles).toEqual([])
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })).runtimeRoles).toEqual([])
   })
 
   it('raise_max_attempts unblocks a task at its ceiling, raising maxAttempts to attempt + 1', async () => {
@@ -817,7 +802,7 @@ describe('applyDecision', () => {
     const decision = await record(f, { kind: 'set_runtime_roles', slaveId: f.slaveId, roles: ['backend', 'reviewer'] }, 'proposed')
     expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
 
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId } })).runtimeRoles).toEqual([
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId }, include: { person: true } })).runtimeRoles).toEqual([
       'backend',
       'reviewer',
     ])
@@ -840,7 +825,7 @@ describe('applyDecision', () => {
 
     expect((await approveDecision(decision.id, { userId: f.userId })).ok).toBe(true)
 
-    const roles = (await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId } })).runtimeRoles
+    const roles = (await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId }, include: { person: true } })).runtimeRoles
     expect(roles).toEqual(['backend', 'frontend', 'reviewer'])
     const [changed] = await eventsOfType('slave_runtime_roles_changed')
     expect(changed?.payload).toEqual({ slaveId: f.slaveId, roles: ['backend', 'frontend', 'reviewer'], actor: 'supervisor' })
@@ -868,7 +853,7 @@ describe('applyDecision', () => {
 
     expect((await approveDecision(decision.id, { userId: f.userId })).ok).toBe(true)
 
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId } })).runtimeRoles).toEqual(['reviewer'])
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId }, include: { person: true } })).runtimeRoles).toEqual(['reviewer'])
   })
 
   it('set_runtime_roles refuses slave_not_found when the worker is gone by the time it is applied', async () => {
@@ -1252,7 +1237,7 @@ describe('approveDecision', () => {
     expect(row.status).toBe('approved')
     expect(row.resolvedAt).not.toBeNull()
     expect(row.resolvedByUserId).toBe(f.userId)
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId } })).runtimeRoles).toEqual([
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId }, include: { person: true } })).runtimeRoles).toEqual([
       'backend',
       'reviewer',
     ])
@@ -1652,7 +1637,7 @@ describe('rejectDecision', () => {
     const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })
     expect(row.status).toBe('rejected')
     expect(row.resolvedByUserId).toBe(f.userId)
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId } })).runtimeRoles).toEqual(['backend'])
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId }, include: { person: true } })).runtimeRoles).toEqual(['backend'])
 
     const [resolved] = await eventsOfType('supervisor_resolved')
     expect(resolved?.actor).toBe('human')
@@ -1793,7 +1778,7 @@ describe('applyDecision -- discard_stale_candidates (M49 R2, E12)', () => {
     scope: 'workspace',
     companyId: null,
     workspaceId,
-    slaveId: null,
+    personId: null,
     title,
     body: 'the worker says it did the thing',
     status: 'candidate',
@@ -2048,7 +2033,8 @@ describe('applyDecision -- the M47 capability actions', () => {
 
   it('applies an assign_capability decision as a union of the roles (M47 R4)', async () => {
     // Maya holds `backend` and provides the capability; nobody gave her the role it projects to.
-    await prisma.slave.update({ where: { id: f.slaveId }, data: { capabilities: [CAPABILITY] } })
+    const maya = await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId }, select: { personId: true } })
+    await prisma.person.update({ where: { id: maya.personId }, data: { capabilities: [CAPABILITY] } })
     const recorded = await record(
       f,
       { kind: 'assign_capability', slaveId: f.slaveId, capability: CAPABILITY, capabilityLabel: 'Application security', role: 'security' },
@@ -2059,7 +2045,7 @@ describe('applyDecision -- the M47 capability actions', () => {
 
     const applied = await applyDecision(recorded.id, 'system')
     expect(applied.ok).toBe(true)
-    const row = await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId }, include: { person: true } })
     expect(row.runtimeRoles).toEqual(['backend', 'security'])
   })
 
@@ -2089,32 +2075,30 @@ describe('applyDecision -- the M47 capability actions', () => {
 
     const approved = await approveDecision(recorded.id, { userId: f.userId })
     expect(approved.ok).toBe(true)
-    const hired = await prisma.slave.findFirstOrThrow({ where: { hiredFromTemplateId: template.id } })
-    expect(hired.selectionRationale).toContain('Application security')
+    const hired = await prisma.slave.findFirstOrThrow({ where: { person: { templateId: template.id } }, include: { person: true } })
+    expect(hired.person.selectionRationale).toContain('Application security')
     expect(hired.runtimeRoles).toContain('security')
-    expect(hired.capabilities).toContain(CAPABILITY)
+    expect(hired.person.capabilities).toContain(CAPABILITY)
   })
 
-  it('brings a company roster worker onto the project when a human approves', async () => {
+  it('seats somebody already working here on the project when a human approves (M58 R16)', async () => {
     const template = await prisma.slaveTemplate.create({
       data: { name: 'Roster Security Reviewer', role: 'security', capabilityKeys: [CAPABILITY] },
     })
     const company = await prisma.company.create({ data: { name: 'Acme' } })
     const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Security' } })
-    const rosterWorker = await prisma.companySlave.create({
-      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Sam' },
-    })
+    const rosterWorker = await prisma.person.create({ data: { templateId: template.id, name: 'Sam', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
     await prisma.workspace.update({ where: { id: f.workspaceId }, data: { companyId: company.id } })
 
     const recorded = await record(
       f,
       {
         kind: 'materialise_company_worker',
-        companySlaveId: rosterWorker.id,
+        personId: rosterWorker.id,
         capability: CAPABILITY,
         capabilityLabel: 'Application security',
         name: 'Sam',
-        rationale: 'Sam is already on the company roster and provides Application security.',
+        rationale: 'Sam already works here and provides Application security.',
       },
       'proposed',
       { subjectId: CAPABILITY, situation: capabilitySituation() },
@@ -2122,13 +2106,11 @@ describe('applyDecision -- the M47 capability actions', () => {
     expect(recorded.status).toBe('pending')
 
     expect((await approveDecision(recorded.id, { userId: f.userId })).ok).toBe(true)
-    const materialised = await prisma.slave.findFirstOrThrow({ where: { companySlaveId: rosterWorker.id } })
+    const materialised = await prisma.slave.findFirstOrThrow({ where: { personId: rosterWorker.id }, include: { person: true } })
     expect(materialised.runtimeRoles).toContain('security')
     // Fix round 1, Minor 5: the sentence the rules wrote, in the taxonomy's WORDS -- what the
     // Organization view shows beside this worker months later -- not the raw key.
-    expect(materialised.selectionRationale).toBe(
-      'Sam is already on the company roster and provides Application security.',
-    )
+    expect(materialised.person.selectionRationale).toBe('Sam already works here and provides Application security.')
   })
 
   it('records a failed decision rather than throwing when the template has since been deleted', async () => {

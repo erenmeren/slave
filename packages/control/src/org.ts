@@ -275,9 +275,9 @@ export interface AssignReport {
  * matching row there yet.
  *
  * Additive only (Decision 6): an existing project team or worker is never renamed, re-rowed, or
- * removed -- find-or-create by `companyTeamId` (teams, M11) and by `companySlaveId` (workers,
- * within the workspace, whichever department it was moved to) is the whole mechanism, so a re-run
- * against the same company is a no-op re-sync rather than a second copy. A team match falls back
+ * removed -- find-or-create by `companyTeamId` (teams, M11) and by `personId` (seats, within the
+ * workspace, whichever department they were moved to) is the whole mechanism, so a re-run against
+ * the same company is a no-op re-sync rather than a second seat. A team match falls back
  * to name once, ONLY against a legacy row with no
  * `companyTeamId` of its own: that row is adopted (stamped with the id, not renamed or re-rowed)
  * rather than duplicated, so a hand-made team from before M10 is linked exactly once and a

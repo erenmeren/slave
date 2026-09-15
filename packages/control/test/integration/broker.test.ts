@@ -56,7 +56,7 @@ beforeEach(async (): Promise<void> => {
     })
   ).id
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
-  slaveId = (await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })).id
+  slaveId = (await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })).id
   const task = await prisma.task.create({
     data: { workspaceId, title: 'Ship it', description: 'ship', status: 'running', maxAttempts: 3 },
   })

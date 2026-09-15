@@ -18,8 +18,8 @@ import {
 
 let companyId = ''
 let workspaceId = ''
-let slaveId = ''
-let otherSlaveId = ''
+let personId = ''
+let otherPersonId = ''
 let taskId = ''
 let userId = ''
 
@@ -28,7 +28,7 @@ const draft = (overrides: Record<string, unknown> = {}): Record<string, unknown>
   scope: 'workspace',
   companyId: null,
   workspaceId,
-  slaveId: null,
+  personId: null,
   title: 'Task: Ship the checkout API',
   body: 'Both files are created in the worktree.',
   status: 'candidate',
@@ -71,14 +71,14 @@ beforeAll(async () => {
   })
   workspaceId = workspace.id
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
-  const slave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Dev', role: 'backend', runtimeRoles: ['backend'] },
-  })
-  slaveId = slave.id
-  const other = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Reader', role: 'reviewer', runtimeRoles: ['reviewer'] },
-  })
-  otherSlaveId = other.id
+  // M58 R4: a memory belongs to the PERSON, so what these tests scope a memory to is the person in
+  // the seat and never the seat.
+  const dev = await prisma.person.create({ data: { name: 'Dev' } })
+  await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: dev.id } })
+  personId = dev.id
+  const reader = await prisma.person.create({ data: { name: 'Reader' } })
+  await prisma.slave.create({ data: { teamId: team.id, role: 'reviewer', runtimeRoles: ['reviewer'], personId: reader.id } })
+  otherPersonId = reader.id
   const task = await prisma.task.create({
     data: {
       workspaceId,
@@ -105,14 +105,14 @@ beforeEach(async () => {
   await prisma.executionEvent.deleteMany({ where: { workspaceId } })
   await prisma.memorySource.deleteMany({})
   await prisma.memory.deleteMany({
-    where: { OR: [{ workspaceId }, { companyId }, { slaveId: { in: [slaveId, otherSlaveId] } }] },
+    where: { OR: [{ workspaceId }, { companyId }, { personId: { in: [personId, otherPersonId] } }] },
   })
 })
 
 afterAll(async () => {
   await prisma.memorySource.deleteMany({})
   await prisma.memory.deleteMany({
-    where: { OR: [{ workspaceId }, { companyId }, { slaveId: { in: [slaveId, otherSlaveId] } }] },
+    where: { OR: [{ workspaceId }, { companyId }, { personId: { in: [personId, otherPersonId] } }] },
   })
   await prisma.executionEvent.deleteMany({ where: { workspaceId } })
   await prisma.task.deleteMany({ where: { workspaceId } })
@@ -149,7 +149,7 @@ describe('recordMemory', () => {
 
   it('refuses a draft that names two targets, and writes nothing', async () => {
     const before = await prisma.memory.count({ where: { workspaceId } })
-    const result = await recordMemory(draft({ slaveId }))
+    const result = await recordMemory(draft({ personId }))
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.error.kind).toBe('invalid_memory')
@@ -212,7 +212,7 @@ describe('recordMemory', () => {
         type: 'lesson',
         scope: 'worker',
         workspaceId: null,
-        slaveId,
+        personId,
         status: 'verified',
         confidence: 'sourced',
         verifiedBy: 'review',
@@ -225,7 +225,7 @@ describe('recordMemory', () => {
     expect(written.ok).toBe(true)
     if (!written.ok) return
     expect(written.value.workspaceId).toBeNull()
-    expect(written.value.slaveId).toBe(slaveId)
+    expect(written.value.personId).toBe(personId)
     expect(await prisma.executionEvent.count({ where: { workspaceId, type: 'memory_recorded' } })).toBe(before + 1)
   })
 
@@ -236,7 +236,7 @@ describe('recordMemory', () => {
         type: 'lesson',
         scope: 'worker',
         workspaceId: null,
-        slaveId: otherSlaveId,
+        personId: otherPersonId,
         status: 'verified',
         confidence: 'sourced',
         verifiedBy: 'review',
@@ -409,7 +409,7 @@ describe('recordMemory retires what the new row replaces', () => {
     })
     expect(live).toBe(1)
     // And the run after the rework is given ONE of them.
-    const given = await memoriesForRun({ workspaceId, slaveId, taskId })
+    const given = await memoriesForRun({ workspaceId, personId, taskId })
     expect(given.memories.filter((one) => one.id === first.value.id)).toEqual([])
     expect(given.memories.some((one) => one.id === second.value.id)).toBe(true)
   })
@@ -510,7 +510,7 @@ describe('the verbs a person uses', () => {
       {
         workspaceId,
         companyId,
-        slaveId,
+        personId,
         scope: 'workspace',
         type: 'fact',
         title: 'Only the project',
@@ -523,7 +523,7 @@ describe('the verbs a person uses', () => {
     if (!added.ok) return
     expect(added.value.workspaceId).toBe(workspaceId)
     expect(added.value.companyId).toBeNull()
-    expect(added.value.slaveId).toBeNull()
+    expect(added.value.personId).toBeNull()
   })
 
   // Fix round 1, minor 3: a corrected condensation still knows what it is a summary of.
@@ -604,7 +604,7 @@ describe('a human verb on a row with no project of its own still reaches a timel
       type: 'lesson',
       scope: 'worker',
       workspaceId: null,
-      slaveId,
+      personId,
       status: 'candidate',
       confidence: 'sourced',
       verifiedBy: null,
@@ -653,7 +653,7 @@ describe('a human verb on a row with no project of its own still reaches a timel
     if (!corrected.ok) return
     // The ROW is still the worker's: only the event was given a project to be read in.
     expect(corrected.value.created.workspaceId).toBeNull()
-    expect(corrected.value.created.slaveId).toBe(slaveId)
+    expect(corrected.value.created.personId).toBe(personId)
     expect(await changedIn()).toEqual([{ memoryId: written.value.id, from: 'candidate', to: 'superseded' }])
     expect(
       await prisma.executionEvent.count({ where: { workspaceId, type: 'memory_recorded' } }),
@@ -735,7 +735,7 @@ describe('listMemories and memoriesForRun', () => {
         type: 'lesson',
         scope: 'worker',
         workspaceId: null,
-        slaveId,
+        personId,
         status: 'verified',
         confidence: 'sourced',
         verifiedBy: 'review',
@@ -747,7 +747,7 @@ describe('listMemories and memoriesForRun', () => {
         type: 'lesson',
         scope: 'worker',
         workspaceId: null,
-        slaveId: otherSlaveId,
+        personId: otherPersonId,
         status: 'verified',
         confidence: 'sourced',
         verifiedBy: 'review',
@@ -766,7 +766,7 @@ describe('listMemories and memoriesForRun', () => {
         title: 'company fact',
       }),
     )
-    const given = await memoriesForRun({ workspaceId, slaveId, taskId })
+    const given = await memoriesForRun({ workspaceId, personId, taskId })
     expect(given.memories.map((one) => one.title)).toEqual(['mine', 'project fact', 'company fact'])
     // Nothing was left out, so nothing was capped (fix round 1, item 3).
     expect(given.eligible).toBe(3)
@@ -788,7 +788,7 @@ describe('listMemories and memoriesForRun', () => {
       )
       expect(written.ok).toBe(true)
     }
-    const exactly = await memoriesForRun({ workspaceId, slaveId, taskId })
+    const exactly = await memoriesForRun({ workspaceId, personId, taskId })
     expect(exactly.memories).toHaveLength(MEMORIES_IN_PROMPT)
     expect(exactly.eligible).toBe(MEMORIES_IN_PROMPT)
 
@@ -802,7 +802,7 @@ describe('listMemories and memoriesForRun', () => {
       }),
     )
     expect(extra.ok).toBe(true)
-    const over = await memoriesForRun({ workspaceId, slaveId, taskId })
+    const over = await memoriesForRun({ workspaceId, personId, taskId })
     expect(over.memories).toHaveLength(MEMORIES_IN_PROMPT)
     expect(over.eligible).toBe(MEMORIES_IN_PROMPT + 1)
   })
@@ -812,7 +812,7 @@ describe('listMemories and memoriesForRun', () => {
   it('never loads an unverified candidate, however well it matches the task', async () => {
     const claim = await recordMemory(draft({ title: 'a claim nobody checked' }))
     expect(claim.ok).toBe(true)
-    expect(await memoriesForRun({ workspaceId, slaveId, taskId })).toEqual({
+    expect(await memoriesForRun({ workspaceId, personId, taskId })).toEqual({
       memories: [],
       eligible: 0,
     })
@@ -820,7 +820,7 @@ describe('listMemories and memoriesForRun', () => {
 
   it('answers an unknown project with nothing at all rather than throwing', async () => {
     expect(await listMemories({ workspaceId: 'nope' })).toEqual([])
-    expect(await memoriesForRun({ workspaceId: 'nope', slaveId: null, taskId: null })).toEqual({
+    expect(await memoriesForRun({ workspaceId: 'nope', personId: null, taskId: null })).toEqual({
       memories: [],
       eligible: 0,
     })
@@ -1068,7 +1068,7 @@ describe('condenseWorkspaceMemories (R5)', () => {
 
     // Plan erratum E4, through the database: the summary is what a run is given, and its twenty
     // sources are not given again beside it.
-    const given = await memoriesForRun({ workspaceId, slaveId, taskId })
+    const given = await memoriesForRun({ workspaceId, personId, taskId })
     expect(given.memories.map((one) => one.id)).toEqual([memoryId])
     expect(given.eligible).toBe(1)
 
@@ -1085,7 +1085,7 @@ describe('condenseWorkspaceMemories (R5)', () => {
           type: 'lesson',
           scope: 'worker',
           workspaceId: null,
-          slaveId,
+          personId,
           status: 'verified',
           confidence: 'sourced',
           verifiedBy: 'review',
@@ -1127,7 +1127,7 @@ describe('condenseWorkspaceMemories (R5)', () => {
     if (!summary.ok) return
     expect(summary.value.memory.type).toBe('procedure')
     expect(summary.value.memory.scope).toBe('worker')
-    expect(summary.value.memory.slaveId).toBe(slaveId)
+    expect(summary.value.memory.personId).toBe(personId)
     expect(summary.value.memory.title).toMatch(/^What this worker has learned to do \(20 sources, /)
     expect(await prisma.memory.count({ where: { id: { in: companyFacts }, status: 'verified' } })).toBe(20)
   })

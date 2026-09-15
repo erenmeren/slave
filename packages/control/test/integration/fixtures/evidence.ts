@@ -78,16 +78,7 @@ export async function seedEvidenceFixture(): Promise<EvidenceFixture> {
       defaultModel: EVIDENCE_MODEL,
     },
   })
-  const slave = await prisma.slave.create({
-    data: {
-      teamId: team.id,
-      name: 'Atlas',
-      role: 'Backend Developer',
-      runtimeRoles: ['backend'],
-      capabilities: ['backend.services'],
-      hiredFromTemplateId: template.id,
-    },
-  })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'Backend Developer', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Atlas', capabilities: ['backend.services'], templateId: template.id } })).id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,

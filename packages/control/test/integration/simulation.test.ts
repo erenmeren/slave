@@ -23,7 +23,7 @@ async function seedTradingCompany(name = 'Demo Trading Co.'): Promise<string> {
   const company = await prisma.company.create({ data: { name } })
   for (const [department, slave] of [['Sales', 'Sonia'], ['Purchasing', 'Pete'], ['Operations', 'Olga'], ['Finance', 'Fin']] as const) {
     const team = await prisma.companyTeam.create({ data: { companyId: company.id, name: department } })
-    await prisma.companySlave.create({ data: { companyTeamId: team.id, templateId: template.id, name: slave } })
+    await prisma.person.create({ data: { templateId: template.id, name: slave, lifecycle: 'permanent', departments: { create: { companyTeamId: team.id } } } })
   }
   return company.id
 }
@@ -46,7 +46,7 @@ describe('createSimulation', () => {
     const id = await create()
     const team = await prisma.companyTeam.findFirstOrThrow({ where: { companyId, name: 'Sales' } })
     await renameCompanyTeam(team.id, 'Revenue')
-    await prisma.companySlave.updateMany({ where: { companyTeamId: team.id }, data: { name: 'Someone Else' } })
+    await prisma.person.updateMany({ where: { departments: { some: { companyTeamId: team.id } } }, data: { name: 'Someone Else' } })
     const loaded = await loadSimulation(id)
     expect(loaded.ok && loaded.value.definition.roles[0]).toMatchObject({ name: 'sales', slaveName: 'Sonia' })
     // M31b: `definition` is the run's own sector's, so a trade-only field is read as one.

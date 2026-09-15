@@ -106,7 +106,7 @@ const candidateDraft = (workspaceId: string, title: string): Record<string, unkn
   scope: 'workspace',
   companyId: null,
   workspaceId,
-  slaveId: null,
+  personId: null,
   title,
   body: 'the worker says it did the thing',
   status: 'candidate',
@@ -233,12 +233,8 @@ describe('loadSupervisorWorld', () => {
 
   it('reports a slave as busy only while it holds a non-terminal run', async (): Promise<void> => {
     const fixture = await seed()
-    const busy = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Alex', role: 'Senior Engineer', runtimeRoles: ['backend'] },
-    })
-    const idle = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Blair', role: 'QA Reviewer', runtimeRoles: [] },
-    })
+    const busy = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Senior Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+    const idle = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'QA Reviewer', runtimeRoles: [], personId: (await prisma.person.create({ data: { name: 'Blair' } })).id } })
     await prisma.slaveRun.create({ data: { slaveId: busy.id, status: 'working', kind: 'implementation' } })
     await prisma.slaveRun.create({ data: { slaveId: idle.id, status: 'succeeded', kind: 'implementation' } })
 
@@ -254,9 +250,7 @@ describe('loadSupervisorWorld', () => {
 
   it('carries only questions somebody is still waiting on', async (): Promise<void> => {
     const fixture = await seed()
-    const asker = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
-    })
+    const asker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
     const waitingRun = await prisma.slaveRun.create({
       data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' },
     })
@@ -301,12 +295,8 @@ describe('loadSupervisorWorld', () => {
 
   it('carries the whole question: its body, its task, its thread, the asker run context and who may answer', async (): Promise<void> => {
     const fixture = await seed({ goal: 'ship checkout' })
-    const asker = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
-    })
-    const reviewer = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer', 'backend'] },
-    })
+    const asker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
+    const reviewer = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'QA', runtimeRoles: ['reviewer', 'backend'], personId: (await prisma.person.create({ data: { name: 'Robin' } })).id } })
     const taskId = await makeTask(fixture, { title: 'Wire the database', status: 'running' })
     const waitingRun = await prisma.slaveRun.create({
       data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation', taskId },
@@ -399,9 +389,7 @@ describe('loadSupervisorWorld', () => {
 
   it('caps a thread body and a run prompt rather than putting a pasted file into a prompt', async (): Promise<void> => {
     const fixture = await seed()
-    const asker = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
-    })
+    const asker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
     const waitingRun = await prisma.slaveRun.create({
       data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' },
     })
@@ -435,9 +423,7 @@ describe('loadSupervisorWorld', () => {
 
   it('gives a question with no task, no run context and no holder the empty values rather than guesses', async (): Promise<void> => {
     const fixture = await seed()
-    const asker = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
-    })
+    const asker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
     const waitingRun = await prisma.slaveRun.create({
       data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'planning' },
     })
@@ -469,19 +455,11 @@ describe('loadSupervisorWorld', () => {
     // Erratum E5, the case the two halves of `holders` differ on: a question addressed to ONE
     // worker may also be answered by anybody who could have been dispatched the asking task.
     const fixture = await seed()
-    const asker = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
-    })
-    const addressed = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer'] },
-    })
-    const peer = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Sam', role: 'Backend', runtimeRoles: ['backend'] },
-    })
+    const asker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
+    const addressed = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'QA', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Robin' } })).id } })
+    const peer = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Sam' } })).id } })
     // Holds neither the addressee's identity nor the task's role.
-    await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Kim', role: 'Design', runtimeRoles: ['design'] },
-    })
+    await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Design', runtimeRoles: ['design'], personId: (await prisma.person.create({ data: { name: 'Kim' } })).id } })
     const taskId = await makeTask(fixture, { title: 'Wire the database', status: 'running', requiredRole: 'backend' })
     const waitingRun = await prisma.slaveRun.create({
       data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation', taskId },
@@ -514,12 +492,8 @@ describe('loadSupervisorWorld', () => {
   it('never counts the ASKER as a holder, even though it holds the asking task\'s own role', async (): Promise<void> => {
     const fixture = await seed()
     // The asker holds `backend`, the very role its task requires.
-    const asker = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Maya', role: 'Backend', runtimeRoles: ['backend'] },
-    })
-    const addressed = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer'] },
-    })
+    const asker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
+    const addressed = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'QA', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Robin' } })).id } })
     const taskId = await makeTask(fixture, { title: 'Wire the database', status: 'running', requiredRole: 'backend' })
     const waitingRun = await prisma.slaveRun.create({
       data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation', taskId },
@@ -545,12 +519,8 @@ describe('loadSupervisorWorld', () => {
 
   it('never counts the asker as a holder of a ROLE-addressed question it happens to hold', async (): Promise<void> => {
     const fixture = await seed()
-    const asker = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Maya', role: 'Reviewer', runtimeRoles: ['reviewer'] },
-    })
-    const reviewer = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer'] },
-    })
+    const asker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
+    const reviewer = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'QA', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Robin' } })).id } })
     const waitingRun = await prisma.slaveRun.create({
       data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' },
     })
@@ -579,12 +549,8 @@ describe('loadSupervisorWorld', () => {
    */
   it('carries at most THREAD_MESSAGES_MAX thread messages, newest last, question always among them', async (): Promise<void> => {
     const fixture = await seed()
-    const asker = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
-    })
-    const peer = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer'] },
-    })
+    const asker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
+    const peer = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'QA', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Robin' } })).id } })
     const waitingRun = await prisma.slaveRun.create({
       data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' },
     })
@@ -638,15 +604,9 @@ describe('loadSupervisorWorld', () => {
     // Erratum E5's parenthesis: a null or EMPTY `requiredRole` is not a role to match on, so the
     // addressee is the only holder -- the empty string must not read as "everybody".
     const fixture = await seed()
-    const asker = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
-    })
-    const addressed = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer'] },
-    })
-    await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Sam', role: 'Backend', runtimeRoles: ['backend'] },
-    })
+    const asker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
+    const addressed = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'QA', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Robin' } })).id } })
+    await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Sam' } })).id } })
     const taskId = await makeTask(fixture, { title: 'Anything goes', status: 'running', requiredRole: '' })
     const waitingRun = await prisma.slaveRun.create({
       data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation', taskId },
@@ -673,12 +633,8 @@ describe('loadSupervisorWorld', () => {
   it('never lists a slave from another workspace as a holder', async (): Promise<void> => {
     const fixture = await seed()
     const other = await seed()
-    await prisma.slave.create({
-      data: { teamId: other.teamId, name: 'Stranger', role: 'QA', runtimeRoles: ['reviewer'] },
-    })
-    const asker = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
-    })
+    await prisma.slave.create({ data: { teamId: other.teamId, role: 'QA', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Stranger' } })).id } })
+    const asker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
     const waitingRun = await prisma.slaveRun.create({
       data: { slaveId: asker.id, status: 'paused', pauseReason: 'waiting_for_answer', kind: 'implementation' },
     })
@@ -817,9 +773,7 @@ describe('loadSupervisorWorld', () => {
 
   it('leaves an unbudgeted workspace unexhausted however much it spent', async (): Promise<void> => {
     const fixture = await seed({ budgetUsd: null })
-    const slave = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
-    })
+    const slave = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
     await prisma.slaveRun.create({ data: { slaveId: slave.id, status: 'succeeded', kind: 'implementation', costUsd: 99 } })
 
     const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
@@ -870,9 +824,7 @@ describe('the halt the Supervisor sees (erratum E7)', () => {
 
   /** Spends `usd` on a concluded run, which is what a budget guardrail reads. */
   async function spend(fixture: Fixture, usd: number): Promise<void> {
-    const slave = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: `Spender ${String(Math.random()).slice(2)}`, role: 'backend', runtimeRoles: ['backend'] },
-    })
+    const slave = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: `Spender ${String(Math.random()).slice(2)}` } })).id } })
     await prisma.slaveRun.create({ data: { slaveId: slave.id, status: 'succeeded', kind: 'implementation', costUsd: usd } })
   }
 
@@ -896,9 +848,7 @@ describe('the halt the Supervisor sees (erratum E7)', () => {
 
   it('halts on the circuit breaker', async (): Promise<void> => {
     const fixture = await seed()
-    const slave = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Unlucky', role: 'backend', runtimeRoles: ['backend'] },
-    })
+    const slave = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Unlucky' } })).id } })
     for (let index = 0; index < 3; index += 1) {
       await prisma.slaveRun.create({
         data: { slaveId: slave.id, status: 'failed', kind: 'implementation', terminalAt: ago(index * 60_000) },
@@ -912,9 +862,7 @@ describe('the halt the Supervisor sees (erratum E7)', () => {
   it('does NOT halt on a concurrency cap -- a busy workspace is not a stuck one', async (): Promise<void> => {
     const fixture = await seed()
     await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { maxConcurrentRuns: 1 } })
-    const slave = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Busy', role: 'backend', runtimeRoles: ['backend'] },
-    })
+    const slave = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Busy' } })).id } })
     await prisma.slaveRun.create({ data: { slaveId: slave.id, status: 'working', kind: 'implementation' } })
 
     const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
@@ -938,9 +886,7 @@ describe('workspaceStats', () => {
 
   it('reads the limits, the run counts, the streak and the halt in one go', async (): Promise<void> => {
     const fixture = await seed({ budgetUsd: 5, haltedReason: 'emergency stop' })
-    const slave = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
-    })
+    const slave = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
     await prisma.slaveRun.create({ data: { slaveId: slave.id, status: 'working', kind: 'implementation' } })
     await prisma.slaveRun.create({
       data: { slaveId: slave.id, status: 'failed', kind: 'implementation', costUsd: 1.25, terminalAt: NOW },
@@ -966,9 +912,7 @@ describe('workspaceSpend', () => {
 
   it('adds measured run spend, measured supervisor spend, and every unmeasured model call at the per-call cap', async (): Promise<void> => {
     const fixture = await seed()
-    const slave = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
-    })
+    const slave = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
     await prisma.slaveRun.create({ data: { slaveId: slave.id, status: 'succeeded', kind: 'implementation', costUsd: 1.5 } })
     await prisma.slaveRun.create({ data: { slaveId: slave.id, status: 'working', kind: 'implementation', costUsd: null } })
 
@@ -1025,7 +969,7 @@ describe('workspaceSpend', () => {
 /**
  * M47 R4. Three facts the world gained, and the condition under which they are read at all: a
  * project whose board names no capability must cost exactly the queries it cost before this
- * milestone, so `taxonomy`, `company` and `catalog` stay empty for it.
+ * milestone, so `taxonomy`, `pool` and `catalog` stay empty for it.
  */
 describe('loadSupervisorWorld -- the capability facts (M47 R4)', () => {
   beforeEach(reset)
@@ -1033,16 +977,14 @@ describe('loadSupervisorWorld -- the capability facts (M47 R4)', () => {
   it('reads neither the taxonomy, the roster nor the catalog when no task asks for a capability', async () => {
     const f = await seed()
     await makeTask(f, { title: 'plain', status: 'ready' })
-    await prisma.slave.create({
-      data: { teamId: f.teamId, name: 'Maya', role: 'Engineer', runtimeRoles: ['backend'], capabilities: ['security.application'] },
-    })
+    await prisma.slave.create({ data: { teamId: f.teamId, role: 'Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Maya', capabilities: ['security.application'] } })).id } })
     await prisma.slaveTemplate.create({
       data: { name: 'M47 World Reviewer', role: 'security', capabilityKeys: ['security.application'] },
     })
 
     const { world } = await loadSupervisorWorld(f.workspaceId, NOW)
     expect(world.taxonomy).toEqual([])
-    expect(world.company).toEqual([])
+    expect(world.pool).toEqual([])
     expect(world.catalog).toEqual([])
     // The per-row facts are carried either way -- they come off rows the loader already reads.
     expect(world.tasks[0]?.requiredCapabilities).toEqual([])
@@ -1062,7 +1004,7 @@ describe('loadSupervisorWorld -- the capability facts (M47 R4)', () => {
 
     const { world } = await loadSupervisorWorld(f.workspaceId, NOW)
     expect(world.taxonomy).toEqual([])
-    expect(world.company).toEqual([])
+    expect(world.pool).toEqual([])
     expect(world.catalog).toEqual([])
     // The task's own keys are still carried: they come off a row the loader already reads.
     expect(world.tasks.map((task) => task.requiredCapabilities)).toEqual([
@@ -1125,7 +1067,7 @@ describe('loadSupervisorWorld -- the capability facts (M47 R4)', () => {
     ])
   })
 
-  it('offers the company roster minus whoever is already on this project', async () => {
+  it('offers the pool -- everybody who works here minus whoever already holds a seat on this project', async () => {
     const f = await seed()
     await makeTask(f, { title: 'harden', status: 'ready', requiredCapabilities: ['security.application'] })
     const template = await prisma.slaveTemplate.create({
@@ -1133,22 +1075,20 @@ describe('loadSupervisorWorld -- the capability facts (M47 R4)', () => {
     })
     const company = await prisma.company.create({ data: { name: `M47 World Co ${String(Math.random()).slice(2)}` } })
     const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Security' } })
-    const here = await prisma.companySlave.create({
-      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Already Here' },
+    const here = await prisma.person.create({
+      data: { templateId: template.id, name: 'Already Here', capabilities: ['security.application'], lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } },
     })
-    const notHere = await prisma.companySlave.create({
-      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Sam' },
+    const notHere = await prisma.person.create({
+      data: { templateId: template.id, name: 'Sam', capabilities: ['security.application'], lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } },
     })
     await prisma.workspace.update({ where: { id: f.workspaceId }, data: { companyId: company.id } })
-    await prisma.slave.create({
-      data: { teamId: f.teamId, name: 'Already Here', role: 'security', runtimeRoles: [], companySlaveId: here.id },
-    })
+    await prisma.slave.create({ data: { teamId: f.teamId, role: 'security', runtimeRoles: [], personId: here.id } })
 
     const { world } = await loadSupervisorWorld(f.workspaceId, NOW)
-    expect(world.company).toEqual([
-      // M53 plan erratum E7: `templateId` rides along, because a company worker's profile key is
-      // `template:<it>` and `CompanySlave.templateId` is NOT NULL.
-      { companySlaveId: notHere.id, name: 'Sam', capabilities: ['security.application'], templateId: template.id },
+    expect(world.pool).toEqual([
+      // M53 plan erratum E7: `templateId` rides along, because a pooled person's profile key is
+      // `template:<it>` whenever they were hired from a persona.
+      { personId: notHere.id, name: 'Sam', capabilities: ['security.application'], templateId: template.id },
     ])
   })
 
@@ -1164,9 +1104,7 @@ describe('loadSupervisorWorld -- the capability facts (M47 R4)', () => {
     await prisma.collaborationHint.create({
       data: { templateId: source.id, text: 'Ask the Security Reviewer before shipping.', targetTemplateId: target.id },
     })
-    await prisma.slave.create({
-      data: { teamId: f.teamId, name: 'Maya', role: 'backend', runtimeRoles: ['backend'], hiredFromTemplateId: source.id },
-    })
+    await prisma.slave.create({ data: { teamId: f.teamId, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Maya', templateId: source.id } })).id } })
 
     const { world } = await loadSupervisorWorld(f.workspaceId, NOW)
     expect(world.catalog.find((entry) => entry.templateId === target.id)?.recommended).toBe(true)
@@ -1221,7 +1159,7 @@ describe('loadSupervisorWorld -- the runbook fields (M48 R5, E6, E8)', () => {
     expect(world.tasks).toEqual([])
     expect(world.taxonomy.find((row) => row.key === 'security.application')?.label).toBe('Application security')
     // The staffing reads stay behind their own gate: nothing here asks who could be hired.
-    expect(world.company).toEqual([])
+    expect(world.pool).toEqual([])
     expect(world.catalog).toEqual([])
   })
 
@@ -1297,12 +1235,8 @@ describe('loadSupervisorWorld -- the runbook fields (M48 R5, E6, E8)', () => {
 
   it('carries the asking task\'s handoff behind a pending question, and null for one that will not parse', async (): Promise<void> => {
     const fixture = await seed({ goal: 'ship checkout' })
-    const asker = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
-    })
-    await prisma.slave.create({
-      data: { teamId: fixture.teamId, name: 'Robin', role: 'QA', runtimeRoles: ['reviewer'] },
-    })
+    const asker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
+    await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'QA', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: 'Robin' } })).id } })
     const contract = {
       objective: 'Add an authentication path to the orders endpoint.',
       expectedOutput: 'Every orders route requires a signed session.',
@@ -1345,9 +1279,7 @@ describe('loadSupervisorWorld -- the runbook fields (M48 R5, E6, E8)', () => {
   describe('world.runs (M51 R3)', () => {
     it('carries the workspace’s non-terminal runs, and leaves the terminal ones out', async (): Promise<void> => {
       const fixture = await seed()
-      const slave = await prisma.slave.create({
-        data: { teamId: fixture.teamId, name: 'Alex', role: 'Senior Engineer', runtimeRoles: ['backend'] },
-      })
+      const slave = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Senior Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
       const taskId = await makeTask(fixture, { title: 'the work', status: 'running' })
       const live = await prisma.slaveRun.create({
         data: { slaveId: slave.id, taskId, status: 'working', kind: 'implementation', toolCalls: 12 },
@@ -1378,9 +1310,7 @@ describe('loadSupervisorWorld -- the runbook fields (M48 R5, E6, E8)', () => {
       // the queries it paid before M51. Proved by writing a `run.breaker` row for a run the loader
       // will NOT read the trip of -- if the query ran unconditionally, the trip would appear.
       const fixture = await seed()
-      const slave = await prisma.slave.create({
-        data: { teamId: fixture.teamId, name: 'Alex', role: 'Senior Engineer', runtimeRoles: [] },
-      })
+      const slave = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Senior Engineer', runtimeRoles: [], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
       const run = await prisma.slaveRun.create({
         data: { slaveId: slave.id, status: 'working', kind: 'implementation' },
       })
@@ -1399,9 +1329,7 @@ describe('loadSupervisorWorld -- the runbook fields (M48 R5, E6, E8)', () => {
 
     it('projects the NEWEST run.breaker onto a steered run, so the Supervisor has a sentence to send', async (): Promise<void> => {
       const fixture = await seed()
-      const slave = await prisma.slave.create({
-        data: { teamId: fixture.teamId, name: 'Alex', role: 'Senior Engineer', runtimeRoles: [] },
-      })
+      const slave = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Senior Engineer', runtimeRoles: [], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
       const run = await prisma.slaveRun.create({
         data: {
           slaveId: slave.id,
@@ -1463,9 +1391,7 @@ describe('loadSupervisorWorld -- the denials (M52 R5)', () => {
   }
 
   async function liveRun(fixture: Fixture, name: string): Promise<{ slaveId: string; runId: string }> {
-    const slave = await prisma.slave.create({
-      data: { teamId: fixture.teamId, name, role: 'Senior Engineer', runtimeRoles: ['backend'] },
-    })
+    const slave = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Senior Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: name } })).id } })
     const run = await prisma.slaveRun.create({
       data: { slaveId: slave.id, status: 'working', kind: 'implementation' },
     })
@@ -1576,7 +1502,7 @@ describe('the world M53 hands the ranker (R8, R9, R10, errata E7/E8)', () => {
   it('carries the profile key ingredients: the template a worker was hired from, and its resolved model', async (): Promise<void> => {
     const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
     const slave = world.slaves.find((s) => s.id === fixture.slaveId)
-    expect(slave?.hiredFromTemplateId).toBe(fixture.templateId)
+    expect(slave?.templateId).toBe(fixture.templateId)
     expect(slave?.model).toBe('claude-sonnet-4-20250514')
   })
 
@@ -1605,7 +1531,7 @@ describe('the world M53 hands the ranker (R8, R9, R10, errata E7/E8)', () => {
     const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
     expect(world.evidence).toEqual([])
     expect(world.staffingPreferences).toEqual([])
-    expect(world.company).toEqual([])
+    expect(world.pool).toEqual([])
     expect(world.catalog).toEqual([])
     // ...and the DENIES wait on the same gate (final wave, R10). The only reader of `deniedKinds`
     // is the ranker's permission step, and the ranker runs only where the four above run -- so an

@@ -57,7 +57,7 @@ async function seedEngagement(opts: {
   /** A REAL repository and a real worktree on disk, so `collectTaskWorktree` can succeed and the
    *  release can count it. Overrides {@link worktreePath}. */
   readonly realWorktree?: boolean
-}): Promise<{ workspaceId: string; slaveId: string; taskId: string; runId: string; worktreePath: string | null }> {
+}): Promise<{ workspaceId: string; slaveId: string; personId: string; taskId: string; runId: string; worktreePath: string | null }> {
   const stamp = `${String(Date.now())}-${String(Math.random()).slice(2, 8)}`
   const repo = opts.realWorktree === true ? makeRepo() : null
   const worktreePath =
@@ -88,18 +88,19 @@ async function seedEngagement(opts: {
       ...(repo === null ? {} : { branch: BRANCH }),
     },
   })
-  const slave = await prisma.slave.create({
+  // M58 R1: `Person.name` is unique across the INSTALLATION, so the fixture's name carries the same
+  // stamp its workspace and template already do -- this file seeds more than once per run.
+  const person = await prisma.person.create({
     data: {
-      teamId: team.id,
-      name: 'Robin',
-      role: 'Security Reviewer',
-      runtimeRoles: ['security'],
+      name: `Robin ${stamp}`,
       capabilities: ['security.application'],
       selectionRationale: 'brought in for the authentication path',
-      hiredFromTemplateId: template.id,
+      templateId: template.id,
       lifecycle: opts.lifecycle ?? 'ephemeral',
-      engagementTaskId: task.id,
     },
+  })
+  const slave = await prisma.slave.create({
+    data: { teamId: team.id, role: 'Security Reviewer', runtimeRoles: ['security'], engagementTaskId: task.id, personId: person.id },
   })
   const run = await prisma.slaveRun.create({
     data: {
@@ -110,7 +111,7 @@ async function seedEngagement(opts: {
       worktreePath,
     },
   })
-  return { workspaceId: workspace.id, slaveId: slave.id, taskId: task.id, runId: run.id, worktreePath }
+  return { workspaceId: workspace.id, slaveId: slave.id, personId: person.id, taskId: task.id, runId: run.id, worktreePath }
 }
 
 // FK order, scoped to this file's own name prefixes (`memory.test.ts`'s idiom). This file does NOT
@@ -139,16 +140,16 @@ describe('releaseWorker', () => {
     const result = await releaseWorker(slaveId, 'the engagement is over')
     expect(result.ok).toBe(true)
 
-    const after = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })
+    const after = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })
     expect(after.runtimeRoles).toEqual([])
-    expect(after.releasedAt).not.toBeNull()
-    expect(after.releaseReason).toBe('the engagement is over')
+    expect(after.person.releasedAt).not.toBeNull()
+    expect(after.person.releaseReason).toBe('the engagement is over')
     // R5: nothing else moved.
-    expect(after.lifecycle).toBe('ephemeral')
+    expect(after.person.lifecycle).toBe('ephemeral')
     expect(after.engagementTaskId).toBe(taskId)
-    expect(after.capabilities).toEqual(['security.application'])
-    expect(after.selectionRationale).not.toBeNull()
-    expect(after.hiredFromTemplateId).not.toBeNull()
+    expect(after.person.capabilities).toEqual(['security.application'])
+    expect(after.person.selectionRationale).not.toBeNull()
+    expect(after.person.templateId).not.toBeNull()
     expect(await prisma.slaveRun.count({ where: { slaveId } })).toBe(1)
     expect(await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })).toBeDefined()
 
@@ -172,8 +173,8 @@ describe('releaseWorker', () => {
     const second = await releaseWorker(slaveId, 'second')
     expect(second.ok).toBe(false)
     expect(second.ok ? null : second.error.kind).toBe('already_released')
-    const after = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })
-    expect(after.releaseReason).toBe('first')
+    const after = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })
+    expect(after.person.releaseReason).toBe('first')
   })
 
   it('refuses while a run is live, and leaves the roles alone', async () => {
@@ -181,7 +182,7 @@ describe('releaseWorker', () => {
     const result = await releaseWorker(slaveId, 'no')
     expect(result.ok).toBe(false)
     expect(result.ok ? null : result.error.kind).toBe('live_runs')
-    const after = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })
+    const after = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })
     expect(after.runtimeRoles).toEqual(['security'])
   })
 
@@ -198,7 +199,7 @@ describe('releaseWorker', () => {
     const result = await releaseWorker(slaveId, 'the engagement is over')
     expect(result.ok).toBe(true)
     expect(result.ok ? result.value.worktreesCollected : -1).toBe(0)
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })).releasedAt).not.toBeNull()
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })).person.releasedAt).not.toBeNull()
   })
 
   // Fix round 1, Minor 5: the count is a MEASUREMENT, so one case has to see it reach 1 against a
@@ -222,7 +223,7 @@ describe('releaseWorker', () => {
     const { workspaceId, slaveId } = await seedEngagement({ taskStatus: 'done' })
     const result = await releaseWorker(slaveId, '   ')
     expect(result.ok).toBe(true)
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })).releaseReason).toBe('released')
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })).person.releaseReason).toBe('released')
     const event = await prisma.executionEvent.findFirstOrThrow({
       where: { workspaceId, type: 'slave_released' },
       orderBy: { seq: 'desc' },
@@ -244,10 +245,10 @@ describe('a released worker and who may re-arm it', () => {
 
     const result = await setRuntimeRoles(slaveId, ['security'], 'operator')
     expect(result.ok).toBe(true)
-    const after = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })
+    const after = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })
     expect(after.runtimeRoles).toEqual(['security'])
-    expect(after.releasedAt).not.toBeNull()
-    expect(after.releaseReason).toBe('the engagement is over')
+    expect(after.person.releasedAt).not.toBeNull()
+    expect(after.person.releaseReason).toBe('the engagement is over')
   })
 
   // The other half of the same rule: the Supervisor's own union verb refuses the row a person may
@@ -259,22 +260,22 @@ describe('a released worker and who may re-arm it', () => {
     const merged = await mergeRuntimeRoles(slaveId, ['security'], 'supervisor', 'system')
     expect(merged.ok).toBe(false)
     expect(merged.ok ? null : merged.error.kind).toBe('already_released')
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })).runtimeRoles).toEqual([])
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })).runtimeRoles).toEqual([])
   })
 })
 
 describe('setLifecycle', () => {
   it('moves ephemeral to project, clearing the engagement and the release with it', async () => {
-    const { workspaceId, slaveId } = await seedEngagement({ taskStatus: 'done' })
+    const { workspaceId, slaveId, personId } = await seedEngagement({ taskStatus: 'done' })
     expect((await releaseWorker(slaveId, 'over')).ok).toBe(true)
 
-    const result = await setLifecycle(slaveId, 'project')
+    const result = await setLifecycle(personId, 'project')
     expect(result.ok).toBe(true)
-    const after = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })
-    expect(after.lifecycle).toBe('project')
+    const after = await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })
+    expect(after.person.lifecycle).toBe('project')
     expect(after.engagementTaskId).toBeNull()
-    expect(after.releasedAt).toBeNull()
-    expect(after.releaseReason).toBeNull()
+    expect(after.person.releasedAt).toBeNull()
+    expect(after.person.releaseReason).toBeNull()
     // R4: nothing is restored. The person sets the roles.
     expect(after.runtimeRoles).toEqual([])
 
@@ -285,39 +286,39 @@ describe('setLifecycle', () => {
     expect(event.payload).toMatchObject({ entity: 'slave', field: 'lifecycle', from: 'ephemeral', to: 'project' })
   })
 
-  it('refuses permanent for a worker with no roster row', async () => {
-    const { slaveId } = await seedEngagement({ taskStatus: 'done' })
-    const result = await setLifecycle(slaveId, 'permanent')
+  it('refuses permanent for a person in no department', async () => {
+    const { slaveId, personId } = await seedEngagement({ taskStatus: 'done' })
+    const result = await setLifecycle(personId, 'permanent')
     expect(result.ok).toBe(false)
     expect(result.ok ? null : result.error.kind).toBe('not_in_roster')
   })
 
-  // Fix round 1, Minor 1: the no-move is decided BEFORE the roster check. `companySlaveId` is
-  // `SetNull`, so a permanent worker whose roster row was deleted is still permanent -- and asking
-  // for the lifecycle it already has is a no-op, never a refusal about a change nobody made.
-  it('is a no-op, not not_in_roster, for a permanent worker with no roster row asked to stay permanent', async () => {
-    const { workspaceId, slaveId } = await seedEngagement({ taskStatus: 'done' })
-    await prisma.slave.update({ where: { id: slaveId }, data: { lifecycle: 'permanent' } })
+  // Fix round 1, Minor 1: the no-move is decided BEFORE the department check.
+  // A permanent person whose department was deleted is still permanent -- and asking for the
+  // lifecycle they already have is a no-op, never a refusal about a change nobody made.
+  it('is a no-op, not not_in_roster, for a permanent person in no department asked to stay permanent', async () => {
+    const { workspaceId, slaveId, personId } = await seedEngagement({ taskStatus: 'done' })
+    await prisma.person.update({ where: { id: personId }, data: { lifecycle: 'permanent' } })
     const before = await prisma.executionEvent.count({ where: { workspaceId, type: 'org_changed' } })
 
-    const result = await setLifecycle(slaveId, 'permanent')
+    const result = await setLifecycle(personId, 'permanent')
     expect(result.ok).toBe(true)
     expect(result.ok ? result.value : null).toEqual({ from: 'permanent', to: 'permanent' })
-    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId } })).lifecycle).toBe('permanent')
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: slaveId }, include: { person: true } })).person.lifecycle).toBe('permanent')
     expect(await prisma.executionEvent.count({ where: { workspaceId, type: 'org_changed' } })).toBe(before)
   })
 
   it('refuses while a run is live', async () => {
-    const { slaveId } = await seedEngagement({ taskStatus: 'done', runStatus: 'working' })
-    const result = await setLifecycle(slaveId, 'project')
+    const { slaveId, personId } = await seedEngagement({ taskStatus: 'done', runStatus: 'working' })
+    const result = await setLifecycle(personId, 'project')
     expect(result.ok).toBe(false)
     expect(result.ok ? null : result.error.kind).toBe('live_runs')
   })
 
   it('writes no event when the lifecycle did not move', async () => {
-    const { workspaceId, slaveId } = await seedEngagement({ taskStatus: 'done' })
+    const { workspaceId, slaveId, personId } = await seedEngagement({ taskStatus: 'done' })
     const before = await prisma.executionEvent.count({ where: { workspaceId, type: 'org_changed' } })
-    expect((await setLifecycle(slaveId, 'ephemeral')).ok).toBe(true)
+    expect((await setLifecycle(personId, 'ephemeral')).ok).toBe(true)
     expect(await prisma.executionEvent.count({ where: { workspaceId, type: 'org_changed' } })).toBe(before)
   })
 })
