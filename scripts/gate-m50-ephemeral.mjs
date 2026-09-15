@@ -991,8 +991,8 @@ try {
   // (this worker never ran, so it left no worktree at all), and the promise R5 is named for.
   await assertEqual(
     releaseOutput,
-    `released ${SECURITY_PERSONA} 2 (${secondId}): runtime roles cleared, 0 worktrees collected; ` +
-      'every run, message and memory it produced is untouched',
+    `released ${SECURITY_PERSONA} 2 (${second.personId}): 1 seat closed, 0 worktrees collected; ` +
+      'every run, message and memory they produced is untouched',
     'stage 8a: what a person reads when they release somebody by hand',
   )
   const secondReleased = await prisma.slave.findUniqueOrThrow({ where: { id: secondId }, include: { person: true } })
@@ -1004,7 +1004,8 @@ try {
   console.log(`stage 8b -- set-lifecycle printed: ${JSON.stringify(lifecycleOutput)}`)
   await assertEqual(
     lifecycleOutput,
-    `${hiredId} moved from ${LIFECYCLE_WORD.ephemeral} to ${LIFECYCLE_WORD.project}`,
+    `a lifecycle belongs to the slave, not the seat: applied to slave ${hired.personId}, on every project they are on\n` +
+      `${hired.personId} moved from ${LIFECYCLE_WORD.ephemeral} to ${LIFECYCLE_WORD.project}`,
     'stage 8b: what a person reads when they move a lifecycle by hand',
   )
   const promoted = await prisma.slave.findUniqueOrThrow({ where: { id: hiredId }, include: { person: true } })
@@ -1028,20 +1029,27 @@ try {
     'stage 8b: the log says exactly what moved',
   )
 
-  const devBefore = await prisma.slave.findUniqueOrThrow({ where: { id: devId }, include: { person: true } })
-  const refusal = runCliExpectingRefusal(['release-worker', '--slave', devId, '--reason', 'x'])
-  console.log(`stage 8c -- release-worker on a project worker: status ${String(refusal.status)}, stdout ${JSON.stringify(refusal.stdout)}, stderr ${JSON.stringify(refusal.stderr)}`)
-  if (refusal.status === 0) await fail('stage 8c: releasing a project worker was allowed')
-  if (!refusal.stderr.includes('not a specialist brought in for one assignment')) {
-    await fail(`stage 8c: the refusal does not say why: ${JSON.stringify(refusal.stderr)}`)
+  // M58 R9: a release is the end of an engagement, not a lifecycle check. A project worker
+  // may be released. Dev stays on the board -- this person is made for the proof and left.
+  const projectPerson = await prisma.person.create({
+    data: { name: 'M50 Gate Project Release', lifecycle: 'project' },
+  })
+  const projectSeat = await prisma.slave.create({
+    data: { teamId: (await prisma.slave.findUniqueOrThrow({ where: { id: devId }, select: { teamId: true } })).teamId, personId: projectPerson.id, role: 'dev' },
+  })
+  const projectRelease = runCli(['release-worker', '--slave', projectSeat.id, '--reason', 'the engagement is over']).trim()
+  console.log(`stage 8c -- release-worker on a project worker: ${JSON.stringify(projectRelease)}`)
+  if (!projectRelease.startsWith(`released M50 Gate Project Release (${projectPerson.id})`)) {
+    await fail(`stage 8c: releasing a project worker was refused: ${JSON.stringify(projectRelease)}`)
   }
-  if (refusal.stdout.trim() !== '') await fail(`stage 8c: a refusal wrote to stdout: ${JSON.stringify(refusal.stdout)}`)
+  if (!(await prisma.person.findUniqueOrThrow({ where: { id: projectPerson.id } })).releasedAt) {
+    await fail('stage 8c: the project worker was not released')
+  }
   const devAfter = await prisma.slave.findUniqueOrThrow({ where: { id: devId }, include: { person: true } })
-  await assertEqual(devAfter.runtimeRoles, devBefore.runtimeRoles, 'stage 8c: a refused release changed nothing')
-  await assertEqual(devAfter.person.releasedAt, null, 'stage 8c: and released nobody')
+  await assertEqual(devAfter.person.releasedAt, null, 'stage 8c: releasing somebody else did not touch Dev')
   console.log(
     'stage 8 complete: a second specialist was hired beside the one who had gone, a lifecycle moved by hand cleared the ' +
-      'engagement and the release, and releasing a project worker is refused in words',
+      'engagement and the release, and a project worker can be released the same way',
   )
 
   // ============================================================================================

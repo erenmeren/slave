@@ -84,7 +84,7 @@ export function TeamBlock({
   const submit = async (): Promise<void> => {
     setMemberPending(true)
     setMemberErrorText(null)
-    const error = await sendControl('/api/org/slaves', { method: 'POST', body: { companyTeamId, personId } })
+    const error = await sendControl(`/api/org/slaves/${personId}/team`, { method: 'PUT', body: { companyTeamId } })
     if (error === null) {
       router.refresh()
       setPersonId('')

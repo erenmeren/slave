@@ -770,7 +770,7 @@ try {
     // M44 R8/E8: the Slaves page IS the Workforce page's Slaves tab now, and `/slaves` is a 307
     // into it. Screenshotted at its real route, so the committed evidence shows the page a person
     // actually lands on rather than a redirect's destination reached the long way round.
-    { name: 'workforce', path: () => '/workforce', testId: 'data-table' },
+    { name: 'workforce', path: () => '/workforce', testId: 'people-rows' },
     { name: 'tasks', path: () => `/w/${workspaceId}/tasks`, testId: 'column' },
     // M47 R6: the project's fifth tab. In `PAGES` and deliberately NOT in `LIVE_PAGES` -- the rows
     // it lists are who is on the project and what they provide, and neither of those changes when
@@ -991,63 +991,53 @@ try {
   await assertComputed('project-settings', '[data-testid="runtime-timeout"]', 'font-size', '10.5px')
   console.log('stage 2a: the project Settings tab carries perm-caption and a 10.5px mono runtime-timeout figure')
 
-  // The Slaves table's ten columns (M24 §5.3: one table, slave/role/team/project/status/current
-  // task/provider/cost/actions -- plus the LIFECYCLE column M50 R6 puts between project and
-  // status). Asserted TWICE and deliberately: `getComputedStyle` resolves `grid-template-columns`
-  // to USED track sizes, so the `1fr` comes back as a pixel width and a literal string comparison
-  // against the README's template could never pass. The computed read is what proves the nine
-  // fixed tracks really are 200/110/150/120/100/110/90/90/160 in the browser's own reckoning and
-  // that the flexible track actually took the remaining space; the authored inline value is what
-  // proves the template is the README's string and not nine coincidences.
-  const SLAVES_COLUMNS = '200px 110px 150px 120px 100px 110px 1fr 90px 90px 160px'
+  // M58 R22: People is one row per person -- Name, Persona, Departments, Skills, Where they
+  // work, and the open control. Asserted TWICE and deliberately: `getComputedStyle` resolves
+  // `grid-template-columns` to USED track sizes, so the two `1fr` tracks come back as pixel
+  // widths and a literal string comparison against the authored template could never pass.
+  const PEOPLE_COLUMNS = '160px 140px 1fr 70px 1fr 40px'
   await gotoReliably(`${baseUrl}/workforce`)
-  // The Slaves page opens on the one table now (M24 Task 7): Roster and Workers were two names for
-  // the same list of slaves and are gone, folded into `workforce-tab-slaves` (default) beside
-  // `workforce-segment-departments` (M57 R13 folded the Departments TAB into a segment under
-  // People, erratum E15). That table is the WORKFORCE page's Slaves tab since M44 R1, and
-  // `/slaves` is a 307 into it -- the route above is the one a person lands on. The `clickUntil`
-  // below is kept anyway -- it is idempotent on an already-selected tab, and it is what makes this
-  // stage assert the template rather than assume which tab happened to be default.
-  // Keyed on the TABLE, not on its rows. `listAllSlaves()` renders every project slave AND every
-  // catalog member no project has materialized yet, so a seeded development database does render
-  // rows here -- but a database with no slaves at all still renders the header alone, which is the
-  // same ten-column grid this stage measures, and waiting for a row would hang on a page that is
-  // rendering correctly.
+  // The People tab is the Workforce default (`workforce-tab-slaves`). The `clickUntil` is kept
+  // anyway -- it is idempotent on an already-selected tab, and it is what makes this stage
+  // assert the template rather than assume which tab happened to be default.
+  // Keyed on `people-rows`, not a bare `data-table-header`: other tables on the page must not
+  // satisfy this wait. An empty installation renders `people-empty` instead; this gate's fixture
+  // always has at least the seeded person, so the header is there to measure.
   await clickUntil(
     page.getByTestId('workforce-tab-slaves'),
     async () =>
       (await page.evaluate(
-        () => document.querySelector('[data-testid="data-table-header"]')?.style.gridTemplateColumns ?? null,
-      )) === SLAVES_COLUMNS,
-    'the Workforce page\'s Slaves tab',
+        () => document.querySelector('[data-testid="people-rows"] [data-testid="data-table-header"]')?.style.gridTemplateColumns ?? null,
+      )) === PEOPLE_COLUMNS,
+    'the Workforce page\'s People table',
   )
-  const workerHeaderCells = await page.getByTestId('data-table-header-cell').count()
-  if (workerHeaderCells !== 10) {
-    await fail(`stage 2 (workforce): the Slaves table has ${String(workerHeaderCells)} header cell(s), expected 10`)
+  const workerHeaderCells = await page.getByTestId('people-rows').getByTestId('data-table-header-cell').count()
+  if (workerHeaderCells !== 6) {
+    await fail(`stage 2 (workforce): the People table has ${String(workerHeaderCells)} header cell(s), expected 6`)
   }
-  const slavesComputed = normalize((await computed('[data-testid="data-table-header"]', 'grid-template-columns')) ?? '')
-  const slavesUsed = /^200px 110px 150px 120px 100px 110px (\d+(?:\.\d+)?)px 90px 90px 160px$/.exec(slavesComputed)
+  const slavesComputed = normalize((await computed('[data-testid="people-rows"] [data-testid="data-table-header"]', 'grid-template-columns')) ?? '')
+  const slavesUsed = /^160px 140px (\d+(?:\.\d+)?)px 70px (\d+(?:\.\d+)?)px 40px$/.exec(slavesComputed)
   if (slavesUsed === null) {
     await fail(
-      `stage 2 (workforce): [data-testid="data-table-header"] grid-template-columns is ${JSON.stringify(slavesComputed)}, ` +
-        `expected the used form of ${JSON.stringify(SLAVES_COLUMNS)} -- ` +
-        '`200px 110px 150px 120px 100px 110px <the 1fr track>px 90px 90px 160px`',
+      `stage 2 (workforce): [data-testid="people-rows"] [data-testid="data-table-header"] grid-template-columns is ${JSON.stringify(slavesComputed)}, ` +
+        `expected the used form of ${JSON.stringify(PEOPLE_COLUMNS)} -- ` +
+        '`160px 140px <the first 1fr>px 70px <the second 1fr>px 40px`',
     )
   }
-  if (Number(slavesUsed[1]) <= 0) {
-    await fail(`stage 2 (workforce): the \`1fr\` column resolved to ${slavesUsed[1]}px at 1440x900 -- it has no room at all`)
+  if (Number(slavesUsed[1]) <= 0 || Number(slavesUsed[2]) <= 0) {
+    await fail(`stage 2 (workforce): a \`1fr\` column resolved to ${slavesUsed[1]}px / ${slavesUsed[2]}px at 1440x900 -- it has no room at all`)
   }
   const slavesAuthored = await page.evaluate(
-    () => document.querySelector('[data-testid="data-table-header"]')?.style.gridTemplateColumns ?? null,
+    () => document.querySelector('[data-testid="people-rows"] [data-testid="data-table-header"]')?.style.gridTemplateColumns ?? null,
   )
-  if (normalize(slavesAuthored ?? '') !== SLAVES_COLUMNS) {
+  if (normalize(slavesAuthored ?? '') !== PEOPLE_COLUMNS) {
     await fail(
-      `stage 2 (workforce): the Slaves table is laid out on ${JSON.stringify(slavesAuthored)}, ` +
-        `expected ${JSON.stringify(SLAVES_COLUMNS)}`,
+      `stage 2 (workforce): the People table is laid out on ${JSON.stringify(slavesAuthored)}, ` +
+        `expected ${JSON.stringify(PEOPLE_COLUMNS)}`,
     )
   }
   console.log(
-    `stage 2 (workforce): [data-testid="data-table-header"] grid-template-columns = ${JSON.stringify(SLAVES_COLUMNS)} ` +
+    `stage 2 (workforce): [data-testid="people-rows"] [data-testid="data-table-header"] grid-template-columns = ${JSON.stringify(PEOPLE_COLUMNS)} ` +
       `(used: ${slavesComputed})`,
   )
   console.log(`stage 2a PASSED: ${String(NUMBERS.length + 2)} README values read back from getComputedStyle`)

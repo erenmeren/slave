@@ -361,7 +361,7 @@ export async function releasePerson(
     return {
       seatsClosed: closed.count,
       name: person.name,
-      workspaceIds: [...new Set(person.seats.map((seat) => seat.team.workspaceId))],
+      seats: person.seats.map((seat) => ({ slaveId: seat.id, workspaceId: seat.team.workspaceId })),
       taskIds: [...new Set(runs.flatMap((run) => (run.taskId === null ? [] : [run.taskId])))],
     }
   })
@@ -380,12 +380,18 @@ export async function releasePerson(
     }
   }
 
-  // One event per project the person was on: `slave.released`'s envelope needs a workspace, and a
-  // release that touched three boards is three things three activity feeds have to be able to show.
-  for (const workspaceId of plan.workspaceIds) {
+  // One event per project the person was on: `slave.released`'s envelope needs a workspace AND
+  // the seat that project closed, so a feed keyed on the worker (and gate:m50's
+  // `slaveId: hiredId`) still finds the row. The payload names the PERSON (`slaveId` there is
+  // the person, with `personId` beside it) -- two ids, one fact.
+  const seenWorkspaces = new Set<string>()
+  for (const seat of plan.seats) {
+    if (seenWorkspaces.has(seat.workspaceId)) continue
+    seenWorkspaces.add(seat.workspaceId)
     await appendEvent({
       type: 'slave.released',
-      workspaceId,
+      workspaceId: seat.workspaceId,
+      slaveId: seat.slaveId,
       actor: origin,
       payload: { slaveId: personId, name: plan.name, reason: recorded, worktreesCollected, personId },
       userId: principal?.userId ?? null,

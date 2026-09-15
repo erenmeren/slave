@@ -66,10 +66,13 @@ describe('setPersonSkills', () => {
     const changed = await setPersonSkills(person.value.personId, { grant: [sql] })
     expect(changed.ok && [...changed.value.effective].toSorted()).toEqual([pdf, sql].toSorted())
     const effective = await personEffectiveSkills(person.value.personId)
-    expect(effective.ok && effective.value.map((row) => [row.name, row.origin])).toEqual([
-      ['pdf', 'persona'],
-      ['sql', 'person'],
-    ])
+    expect(effective.ok).toBe(true)
+    if (!effective.ok) return
+    // Order is `skillId` (the domain function), not name -- uuid order is not a claim.
+    expect(Object.fromEntries(effective.value.map((row) => [row.name, row.origin]))).toEqual({
+      pdf: 'persona',
+      sql: 'person',
+    })
   })
 
   it('a revoke takes an inherited skill away from THIS person only', async () => {

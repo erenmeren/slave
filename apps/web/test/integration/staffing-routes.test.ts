@@ -1,3 +1,4 @@
+import { syncCapabilityTaxonomy } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -49,6 +50,9 @@ describe('the staffing preference routes (M53 R9)', () => {
     await prisma.$executeRawUnsafe(
       'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "SlaveTemplate", "User" RESTART IDENTITY CASCADE',
     )
+    // Neighbouring suites truncate `Capability`; a PUT 404s `capability_not_found` when the
+    // seeded key is gone, which is the three failures the full vitest run saw.
+    await syncCapabilityTaxonomy()
     fixture = await seed()
   })
 

@@ -342,6 +342,9 @@ const USAGE = `usage: orchestrator <command> [options]
                                        no project. The roster row it used to create does not exist
                                        any more; this is a pooled person who is a member of a
                                        department.
+  add-slave --team <companyTeamId> --person <id>
+                                       seat an existing person in a department. No create: they
+                                       already are a slave; this is only the membership.
   person create [--template <id>] [--name <name>] [--profile <text>] [--model <m> --provider <p>]
                 [--capabilities a,b] [--department <companyTeamId>] [--project <teamId>]
   person list [--pool] [--released] [--department <companyTeamId>]
@@ -2051,14 +2054,26 @@ export async function main(argv: readonly string[]): Promise<number> {
 
     case 'add-slave': {
       const companyTeamId = requireFlag(flags, 'team')
-      const templateId = requireFlag(flags, 'template')
-      const name = requireFlag(flags, 'name')
+      const personId = flagText(flags, 'person')
+      const templateId = flagText(flags, 'template')
+      const name = flagText(flags, 'name')
       const model = flagText(flags, 'model')
       const provider = flagText(flags, 'provider')
-      // M58 R11: the verb an operator already knows, on the new model -- a PERSON in a department,
-      // and no project. The roster row it used to create does not exist any more; what it meant
-      // ("somebody the organisation has, not yet on a board") is exactly a pooled person who is a
-      // member of a department.
+      // M58 R11 / R5: a department holds PEOPLE. `--person` seats somebody who already exists;
+      // `--template` + `--name` still creates, then joins. Exactly one of those two shapes.
+      if (personId !== undefined) {
+        if (templateId !== undefined || name !== undefined || model !== undefined || provider !== undefined) {
+          throw new Error('--person seats an existing slave; do not also pass --template, --name, --model or --provider')
+        }
+        const joined = await joinDepartment(personId, companyTeamId)
+        if (!joined.ok) throw new Error(refusalText(joined.error))
+        const seated = await prisma.person.findUnique({ where: { id: personId }, select: { name: true } })
+        if (seated === null) throw new Error(refusalText({ kind: 'person_not_found', personId }))
+        process.stdout.write(`slave ${personId} (${seated.name}) joined department ${companyTeamId}\n`)
+        return 0
+      }
+      if (templateId === undefined) throw new Error('--template is required')
+      if (name === undefined) throw new Error('--name is required')
       const created = await createPerson({
         templateId,
         name,

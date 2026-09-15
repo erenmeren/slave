@@ -5,6 +5,19 @@ import type { Principal } from './principal.js'
 import { type ControlRefusal } from './refusal.js'
 import { liveRunCount } from './workspace.js'
 
+function uniqueWorkspaceSeats<T extends { readonly id: string; readonly team: { readonly workspaceId: string } }>(
+  seats: readonly T[],
+): readonly T[] {
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const seat of seats) {
+    if (seen.has(seat.team.workspaceId)) continue
+    seen.add(seat.team.workspaceId)
+    out.push(seat)
+  }
+  return out
+}
+
 // M58 R10: `releaseWorker` moved to `packages/control/src/persons.ts` as `releasePerson`, because
 // a release is a fact about a PERSON and closes every seat they hold, which a verb keyed on one
 // seat could not say.
@@ -43,11 +56,12 @@ export async function setLifecycle(
         // and the event is written per seat -- an event stream is workspace-scoped and a person is
         // not. A person with no open seat changes lifecycle silently, which is honest: there is no
         // project log to write it to.
-        seats: { where: { closedAt: null }, select: { id: true, team: { select: { workspaceId: true } } }, orderBy: { id: 'asc' } },
+        seats: { select: { id: true, closedAt: true, team: { select: { workspaceId: true } } }, orderBy: { id: 'asc' } },
       },
     })
     if (person === null) return { refusal: { kind: 'person_not_found', personId } as ControlRefusal }
-    for (const seat of person.seats) {
+    const openSeats = person.seats.filter((seat) => seat.closedAt === null)
+    for (const seat of openSeats) {
       const live = await liveRunCount(tx, { slaveId: seat.id })
       if (live > 0) {
         return { refusal: { kind: 'live_runs', entity: 'slave', id: seat.id, runs: live } as ControlRefusal }
@@ -57,7 +71,7 @@ export async function setLifecycle(
     // deleted is still permanent -- and asking for the lifecycle they already have must be the
     // no-op it is, never a refusal about a change nobody made.
     const from = person.lifecycle
-    if (from === lifecycle) return { seats: person.seats, from, changed: false as const }
+    if (from === lifecycle) return { seats: openSeats, from, changed: false as const }
     // `permanent` is not a label somebody may apply: it MEANS "this person is in a department of a
     // company" (M58 R5), and a membership is the only thing that can say so.
     if (lifecycle === 'permanent' && person.departments.length === 0) {
@@ -71,9 +85,14 @@ export async function setLifecycle(
       },
     })
     if (from === 'ephemeral') {
-      await tx.slave.updateMany({ where: { personId, closedAt: null }, data: { engagementTaskId: null } })
+      // Every seat, including closed ones: a released ephemeral worker still holds the
+      // assignment pointer, and leaving ephemeral is what clears it (M50 R4).
+      await tx.slave.updateMany({ where: { personId }, data: { engagementTaskId: null } })
     }
-    return { seats: person.seats, from, changed: true as const }
+    // A released person has no open seat. The project they were on still needs the log
+    // line -- one event per workspace, first seat wins.
+    const eventSeats = openSeats.length > 0 ? openSeats : uniqueWorkspaceSeats(person.seats)
+    return { seats: eventSeats, from, changed: true as const }
   })
   if ('refusal' in outcome) return err(outcome.refusal)
 

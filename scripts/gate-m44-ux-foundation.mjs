@@ -760,7 +760,7 @@ try {
   // ============================================================================================
   const PAGES = [
     { name: 'projects', path: `/`, testId: 'project-card', fidelity: true },
-    { name: 'workforce', path: `/workforce`, testId: 'data-table', fidelity: true },
+    { name: 'workforce', path: `/workforce`, testId: 'people-rows', fidelity: true },
     { name: 'skills', path: `/skills`, testId: 'empty-tile', fidelity: true },
     { name: 'analytics', path: `/analytics?workspace=${workspaceId}`, testId: 'kpi-tile', fidelity: true },
     { name: 'settings', path: `/settings`, testId: 'security-posture', fidelity: true },
@@ -887,14 +887,15 @@ try {
 
     // ---- Stage 4's positive counterparts, so the negative is not vacuous. ----------------------
     if (target.name === 'workforce') {
-      const row = page.getByTestId('data-table-row').filter({ hasText: SLAVE_NAME })
+      // M58 R22: People is one row per person. The fixture worker is seated, so the derived
+      // state is `assigned` -- there is no run pill on this table any more.
+      const row = page.locator('[data-testid^="person-row-"]').filter({ hasText: SLAVE_NAME })
       await waitVisible(row, `the fixture worker's row on /workforce`)
-      const pill = await row.first().getByTestId('status-pill').first()
-      const word = (await pill.textContent())?.trim() ?? ''
-      const raw = await pill.getAttribute('title')
-      console.log(`stage 4 (workforce) POSITIVE: the pausing worker's pill reads ${JSON.stringify(word)}, title=${JSON.stringify(raw)}`)
-      if (word !== 'PAUSING') await fail(`stage 4 (workforce): the pill reads ${JSON.stringify(word)}, expected "PAUSING"`)
-      if (raw !== 'pausing') await fail(`stage 4 (workforce): the pill's title is ${JSON.stringify(raw)}, expected "pausing"`)
+      const state = await row.first().getAttribute('data-person-state')
+      const released = await row.first().getAttribute('data-released')
+      console.log(`stage 4 (workforce) POSITIVE: the person's state is ${JSON.stringify(state)}, released=${JSON.stringify(released)}`)
+      if (state !== 'assigned') await fail(`stage 4 (workforce): data-person-state is ${JSON.stringify(state)}, expected "assigned"`)
+      if (released !== 'false') await fail(`stage 4 (workforce): data-released is ${JSON.stringify(released)}, expected "false"`)
       // The PageShell frame -- `/workforce` is the one page built on it (R3). Its `testId` prop is
       // `workforce`, so `page-shell` is the default nobody uses; the frame is asserted by name.
       const frame = await page.getByTestId('workforce').count()

@@ -569,7 +569,7 @@ describe('CompanyManager', () => {
       expect(screen.queryByTestId('member-provider-select')).toBeNull()
     })
 
-    it('posts { companyTeamId, personId } and refreshes on 200', async () => {
+    it('joins the chosen slave into the department and refreshes on 200', async () => {
       renderForm()
       fireEvent.change(screen.getByLabelText('member slave'), { target: { value: 'p1' } })
 
@@ -578,8 +578,8 @@ describe('CompanyManager', () => {
       })
 
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/org/slaves',
-        expect.objectContaining({ method: 'POST', body: JSON.stringify({ companyTeamId: 'ct1', personId: 'p1' }) }),
+        '/api/org/slaves/p1/team',
+        expect.objectContaining({ method: 'PUT', body: JSON.stringify({ companyTeamId: 'ct1' }) }),
       )
       expect(routerRefresh).toHaveBeenCalled()
     })
