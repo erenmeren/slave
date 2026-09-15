@@ -863,7 +863,7 @@ try {
     ['claude_code', CLAUDE_WORKER, CLAUDE_MODEL],
     ['cursor', CURSOR_WORKER, CURSOR_MODEL],
   ]) {
-    workers[kind] = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], model: model, provider: kind, personId: (await prisma.person.create({ data: { name: name } })).id } })
+    workers[kind] = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], model: model, provider: kind, personId: (await prisma.person.upsert({ where: { name: name }, create: { name: name }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
     console.log(`  worker ${name} = ${workers[kind].id} (${kind}/${model})`)
   }
   for (const suffix of ['A', 'B']) {

@@ -389,7 +389,7 @@ try {
   workspaceId = workspace.id
   const team = await prisma.team.create({ data: { workspaceId, name: TEAM_NAME } })
   teamId = team.id
-  const slave = await prisma.slave.create({ data: { teamId: teamId, role: 'engineer', runtimeRoles: ['engineer'], model: 'sonnet', provider: 'claude_code', personId: (await prisma.person.create({ data: { name: SLAVE_NAME } })).id } })
+  const slave = await prisma.slave.create({ data: { teamId: teamId, role: 'engineer', runtimeRoles: ['engineer'], model: 'sonnet', provider: 'claude_code', personId: (await prisma.person.upsert({ where: { name: SLAVE_NAME }, create: { name: SLAVE_NAME }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   slaveId = slave.id
   const task = await prisma.task.create({
     data: { workspaceId, title: 'M44 gate task', description: 'The task the paused run belongs to.', status: 'running', maxAttempts: 3, assigneeId: slaveId },
@@ -446,7 +446,7 @@ try {
   companyId = company.id
   for (const [department, memberName] of SIM_ROSTER) {
     const companyTeam = await prisma.companyTeam.create({ data: { companyId, name: department } })
-    await prisma.person.create({ data: { templateId, name: memberName, lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
+    await prisma.person.upsert({ where: { name: memberName }, create: { templateId, name: memberName, lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } }, update: { templateId, lifecycle: 'permanent', departments: { deleteMany: {}, create: { companyTeamId: companyTeam.id } }, templateId: null, profile: null, model: null, provider: null, capabilities: [], releasedAt: null, releaseReason: null, selectionRationale: null } })
   }
   // An `llm` run, and NOT because anything calls a model: nothing ever steps this row (no daemon
   // runs, and it is `paused` a line below), so no call is made and nothing is spent. It is `llm`

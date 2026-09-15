@@ -260,8 +260,8 @@ try {
   })
   workspaceId = workspace.id
   const team = await prisma.team.create({ data: { workspaceId, name: TEAM_NAME } })
-  const developer = await prisma.slave.create({ data: { teamId: team.id, role: 'developer', runtimeRoles: ['developer'], model: 'sonnet', provider: 'claude_code', personId: (await prisma.person.create({ data: { name: DEVELOPER_NAME } })).id } })
-  const reviewer = await prisma.slave.create({ data: { teamId: team.id, role: 'reviewer', runtimeRoles: ['reviewer'], model: 'sonnet', provider: 'claude_code', personId: (await prisma.person.create({ data: { name: REVIEWER_NAME } })).id } })
+  const developer = await prisma.slave.create({ data: { teamId: team.id, role: 'developer', runtimeRoles: ['developer'], model: 'sonnet', provider: 'claude_code', personId: (await prisma.person.upsert({ where: { name: DEVELOPER_NAME }, create: { name: DEVELOPER_NAME }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
+  const reviewer = await prisma.slave.create({ data: { teamId: team.id, role: 'reviewer', runtimeRoles: ['reviewer'], model: 'sonnet', provider: 'claude_code', personId: (await prisma.person.upsert({ where: { name: REVIEWER_NAME }, create: { name: REVIEWER_NAME }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   console.log(`stage 0: workspace ${workspaceId} (${WORKSPACE_NAME}) · team ${team.id}`)
   console.log(`stage 0: slaves ${developer.id} (${DEVELOPER_NAME}/developer) · ${reviewer.id} (${REVIEWER_NAME}/reviewer)`)
 

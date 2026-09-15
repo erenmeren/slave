@@ -636,7 +636,7 @@ try {
   // whether the title reads as the role, and a gate whose candidate matched on the title would be
   // proving the ordering rather than the decision.
   const dev = await prisma.slave.create({
-    data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend', 'manager'], personId: (await prisma.person.create({ data: { name: WORKER_NAME, capabilities: ['backend.api-design'] } })).id },
+    data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend', 'manager'], personId: (await prisma.person.upsert({ where: { name: WORKER_NAME }, create: { name: WORKER_NAME, capabilities: ['backend.api-design'] }, update: { capabilities: ['backend.api-design'], templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id },
     include: { person: true },
   })
   const devId = dev.id

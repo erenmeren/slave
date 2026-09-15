@@ -495,7 +495,7 @@ try {
   workspaceId = workspace.id
   teamId = (await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })).id
   slaveId = (
-    await prisma.slave.create({ data: { teamId: teamId, role: 'backend', runtimeRoles: ['backend'], provider: WORKER_PROVIDER, model: WORKER_MODEL, personId: (await prisma.person.create({ data: { name: WORKER_NAME } })).id } })
+    await prisma.slave.create({ data: { teamId: teamId, role: 'backend', runtimeRoles: ['backend'], provider: WORKER_PROVIDER, model: WORKER_MODEL, personId: (await prisma.person.upsert({ where: { name: WORKER_NAME }, create: { name: WORKER_NAME }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   ).id
   // Stage 1's deny. M52 R1: `run tests` is `run_commands`, and it still resolves to `Bash` for
   // claude_code (`TOOLS_BY_KIND`, `packages/domain/src/permission/kinds.ts`) -- the same tool the

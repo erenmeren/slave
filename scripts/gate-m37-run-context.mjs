@@ -367,7 +367,7 @@ try {
   const company = await prisma.company.create({ data: { name: COMPANY_NAME } })
   companyId = company.id
   const companyTeam = await prisma.companyTeam.create({ data: { companyId, name: 'Engineering' } })
-  const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
+  const companySlave = await prisma.person.upsert({ where: { name: 'Atlas' }, create: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } }, update: { templateId: template.id, lifecycle: 'permanent', departments: { deleteMany: {}, create: { companyTeamId: companyTeam.id } }, profile: null, model: null, provider: null, capabilities: [], releasedAt: null, releaseReason: null, selectionRationale: null } })
 
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
   const slave = await prisma.slave.create({

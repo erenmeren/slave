@@ -603,7 +603,7 @@ try {
   // It is dispatchable as nothing else, which is what makes stage 3's two gaps facts about this
   // project rather than fixtures. Its title deliberately does not read as a role.
   const dev = await prisma.slave.create({
-    data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend', 'manager', 'reviewer'], personId: (await prisma.person.create({ data: { name: WORKER_NAME, capabilities: ['backend.api-design'] } })).id },
+    data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend', 'manager', 'reviewer'], personId: (await prisma.person.upsert({ where: { name: WORKER_NAME }, create: { name: WORKER_NAME, capabilities: ['backend.api-design'] }, update: { capabilities: ['backend.api-design'], templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id },
     include: { person: true },
   })
   const devId = dev.id

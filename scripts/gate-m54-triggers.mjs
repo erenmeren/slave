@@ -616,7 +616,7 @@ try {
   // The ONLY worker. It can be staffed as a manager (planning, and therefore a delta re-plan) and as
   // nothing else, and every task on this board asks for `backend` -- so the board sits still for the
   // whole gate, which is what makes every count in it a measurement rather than a race.
-  const atlas = await prisma.slave.create({ data: { teamId: team.id, role: 'Engineering Manager', runtimeRoles: ['manager'], personId: (await prisma.person.create({ data: { name: 'Atlas' } })).id } })
+  const atlas = await prisma.slave.create({ data: { teamId: team.id, role: 'Engineering Manager', runtimeRoles: ['manager'], personId: (await prisma.person.upsert({ where: { name: 'Atlas' }, create: { name: 'Atlas' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   console.log(`stage 0: workspace ${workspaceId} (${WORKSPACE_NAME}); worker Atlas ${atlas.id} holds only 'manager'`)
 
   // The requirement a PERSON set, through the real CLI: v1, `origin: null`, actor `human`. Stage 11

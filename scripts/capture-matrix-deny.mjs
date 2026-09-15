@@ -398,7 +398,7 @@ try {
   })
   workspaceId = workspace.id
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], provider: WORKER_PROVIDER, model: WORKER_MODEL, personId: (await prisma.person.create({ data: { name: WORKER_NAME } })).id } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], provider: WORKER_PROVIDER, model: WORKER_MODEL, personId: (await prisma.person.upsert({ where: { name: WORKER_NAME }, create: { name: WORKER_NAME }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   // `gate-m18-skill-and-teeth.mjs`'s seed, verbatim: `run_commands` resolves to `Bash` for
   // `claude_code` (`TOOLS_BY_KIND`), which is exactly the tool the task below is certain to try.
   await prisma.slavePermission.create({ data: { slaveId: slave.id, kind: DENIED_PERMISSION_KIND, mode: 'deny' } })

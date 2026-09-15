@@ -451,7 +451,7 @@ try {
   // database with every other one.
   const seat = async (role, runtimeRoles, name) =>
     prisma.slave.create({
-      data: { teamId: team.id, role, runtimeRoles, personId: (await prisma.person.create({ data: { name: `${CREW_PREFIX}${name}` } })).id },
+      data: { teamId: team.id, role, runtimeRoles, personId: (await prisma.person.upsert({ where: { name: `${CREW_PREFIX}${name}` }, create: { name: `${CREW_PREFIX}${name}` }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id },
       include: { person: true },
     })
   const atlas = await seat('Engineering Manager', ['manager'], 'Atlas')

@@ -147,7 +147,7 @@ try {
   // verb family of its own) and put in the department through the real `add-slave`, which is what
   // that verb does now.
   for (const [name, templateId] of [['Atlas', managerTemplateId], ['Nova', backendTemplateId], ['Rhea', reviewerTemplateId]]) {
-    const person = await prisma.person.create({ data: { name: `${name} ${runTimestamp}`, templateId, lifecycle: 'permanent' } })
+    const person = await prisma.person.upsert({ where: { name: `${name} ${runTimestamp}` }, create: { name: `${name} ${runTimestamp}`, templateId, lifecycle: 'permanent' }, update: { templateId, lifecycle: 'permanent', templateId: null, profile: null, model: null, provider: null, capabilities: [], releasedAt: null, releaseReason: null, selectionRationale: null } })
     cli(['add-slave', '--team', companyTeamId, '--person', person.id])
   }
 

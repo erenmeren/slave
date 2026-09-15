@@ -139,7 +139,8 @@ async function dumpSimRows() {
   const companies = await prisma.company.findMany({
     where: { name: { contains: 'M31a Gate' } },
     include: {
-      teams: { include: { slaves: true } },
+      // M58 R5: a department holds MEMBERS, and a member is a person.
+      teams: { include: { members: { include: { person: true } } } },
       simulations: { select: { id: true, name: true, status: true, simTime: true, version: true, decisionProvider: true, model: true, maxModelCostUsd: true, autoRunEveryMs: true, autoRunUntilDay: true, haltedReason: true } },
     },
   })
@@ -315,7 +316,7 @@ try {
   companyId = company.id
   for (const [department, slaveName] of ROSTER) {
     const team = await prisma.companyTeam.create({ data: { companyId, name: department } })
-    await prisma.person.create({ data: { templateId, name: slaveName, lifecycle: 'permanent', departments: { create: { companyTeamId: team.id } } } })
+    await prisma.person.upsert({ where: { name: slaveName }, create: { templateId, name: slaveName, lifecycle: 'permanent', departments: { create: { companyTeamId: team.id } } }, update: { templateId, lifecycle: 'permanent', departments: { deleteMany: {}, create: { companyTeamId: team.id } }, templateId: null, profile: null, model: null, provider: null, capabilities: [], releasedAt: null, releaseReason: null, selectionRationale: null } })
   }
   console.log(`company created and staffed directly: ${companyId} (${COMPANY_NAME}), template ${templateId}`)
 

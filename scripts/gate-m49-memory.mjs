@@ -543,9 +543,9 @@ try {
   await prisma.providerConfiguration.create({ data: { workspaceId, kind: 'claude_code', settings: {} } })
 
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
-  const dev = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend', 'manager'], personId: (await prisma.person.create({ data: { name: WORKER_NAME, capabilities: ['backend.api-design'] } })).id } })
+  const dev = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend', 'manager'], personId: (await prisma.person.upsert({ where: { name: WORKER_NAME }, create: { name: WORKER_NAME, capabilities: ['backend.api-design'] }, update: { capabilities: ['backend.api-design'], templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   const devId = dev.id
-  const reader = await prisma.slave.create({ data: { teamId: team.id, role: 'Reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: REVIEWER_NAME, capabilities: [] } })).id } })
+  const reader = await prisma.slave.create({ data: { teamId: team.id, role: 'Reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.upsert({ where: { name: REVIEWER_NAME }, create: { name: REVIEWER_NAME, capabilities: [] }, update: { capabilities: [], templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   console.log(`slave ${devId} (${WORKER_NAME}) and slave ${reader.id} (${REVIEWER_NAME})`)
 
   console.log(`setup -- set-goal printed: ${JSON.stringify(runCli(['set-goal', '--workspace', workspaceId, '--goal', GOAL]).trim())}`)
@@ -750,11 +750,11 @@ try {
   await prisma.providerConfiguration.create({ data: { workspaceId: workspaceId2, kind: 'claude_code', settings: {} } })
   const team2 = await prisma.team.create({ data: { workspaceId: workspaceId2, name: 'Engineering' } })
   const hand = await prisma.slave.create({
-    data: { teamId: team2.id, role: 'Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: WORKER_NAME_2, capabilities: [] } })).id },
+    data: { teamId: team2.id, role: 'Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.upsert({ where: { name: WORKER_NAME_2 }, create: { name: WORKER_NAME_2, capabilities: [] }, update: { capabilities: [], templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id },
     include: { person: true },
   })
   const eyes = await prisma.slave.create({
-    data: { teamId: team2.id, role: 'Reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.create({ data: { name: REVIEWER_NAME_2, capabilities: [] } })).id },
+    data: { teamId: team2.id, role: 'Reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.upsert({ where: { name: REVIEWER_NAME_2 }, create: { name: REVIEWER_NAME_2, capabilities: [] }, update: { capabilities: [], templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id },
     include: { person: true },
   })
   console.log(`slave ${hand.id} (${WORKER_NAME_2}) writes the diff; slave ${eyes.id} (${REVIEWER_NAME_2}) reads it`)

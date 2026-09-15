@@ -179,8 +179,8 @@ try {
   console.log(`workspace ${workspaceId} (${WORKSPACE_NAME}), autoMerge ${workspace.autoMerge}, repo ${repoPath}`)
 
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
-  const backendSlave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Gate Backend' } })).id } })
-  const qaSlave = await prisma.slave.create({ data: { teamId: team.id, role: 'qa', runtimeRoles: ['qa'], personId: (await prisma.person.create({ data: { name: 'Gate QA' } })).id } })
+  const backendSlave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.upsert({ where: { name: 'Gate Backend' }, create: { name: 'Gate Backend' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
+  const qaSlave = await prisma.slave.create({ data: { teamId: team.id, role: 'qa', runtimeRoles: ['qa'], personId: (await prisma.person.upsert({ where: { name: 'Gate QA' }, create: { name: 'Gate QA' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   console.log(`backend slave ${backendSlave.id} (idle), qa slave ${qaSlave.id} (idle)`)
 
   // ================= Stage 1: done does not unblock a dependent until integrated =================

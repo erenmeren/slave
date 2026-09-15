@@ -140,7 +140,8 @@ async function dumpOrgRows() {
   const templates = await prisma.slaveTemplate.findMany({ where: { name: { contains: 'M11 Gate' } } })
   const companies = await prisma.company.findMany({
     where: { name: { contains: 'M11 Gate' } },
-    include: { teams: { include: { slaves: { include: { workers: true } } } } },
+    // M58 R5: a department holds MEMBERS, and a member is a person with seats.
+    include: { teams: { include: { members: { include: { person: { include: { seats: true } } } } } } },
   })
   const workspaces = await prisma.workspace.findMany({
     where: { name: { contains: 'M11 Gate' } },
@@ -375,7 +376,7 @@ try {
   // M58 R5: a department holds PEOPLE, so the person exists before the department picks them.
   // Created directly here (Task 4 gives the CLI and this page a `person` verb of their own); the
   // BROWSER still does the joining, which is what this stage is about.
-  const memberPerson = await prisma.person.create({ data: { name: MEMBER_NAME, templateId, lifecycle: 'permanent' } })
+  const memberPerson = await prisma.person.upsert({ where: { name: MEMBER_NAME }, create: { name: MEMBER_NAME, templateId, lifecycle: 'permanent' }, update: { templateId, lifecycle: 'permanent', templateId: null, profile: null, model: null, provider: null, capabilities: [], releasedAt: null, releaseReason: null, selectionRationale: null } })
   await page.reload({ waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
   await clickUntil(companyRow.getByTestId('company-toggle'), async () => companyDetail.first().isVisible(), `re-expanding the "${COMPANY_NAME}" row`)
   await selectReliably(teamBlock.getByLabel('member slave'), memberPerson.id, { value: memberPerson.id }, 'the member slave select')
@@ -742,7 +743,7 @@ try {
   // fixture needs no cleanup of its own.
   const officeDepartmentB = await prisma.team.findFirst({ where: { workspaceId: workspaceIdB } })
   if (officeDepartmentB === null) await fail(`"${workspaceNameB}" has no department to add the office fixture slave to`)
-  const officeFixtureSlave = await prisma.slave.create({ data: { teamId: officeDepartmentB.id, role: 'qa', runtimeRoles: ['qa'], personId: (await prisma.person.create({ data: { name: 'M11 Gate Second Slave' } })).id } })
+  const officeFixtureSlave = await prisma.slave.create({ data: { teamId: officeDepartmentB.id, role: 'qa', runtimeRoles: ['qa'], personId: (await prisma.person.upsert({ where: { name: 'M11 Gate Second Slave' }, create: { name: 'M11 Gate Second Slave' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   console.log(`created a second "${workspaceNameB}" slave directly for the office floor: ${officeFixtureSlave.id}`)
 
   const officeDepartments = await prisma.team.count({ where: { workspaceId: workspaceIdB } })
