@@ -584,6 +584,9 @@ export interface WorkerRow {
   readonly slaveId: string
   /** M58 R2: the person sitting in this seat -- what every person-scoped verb is addressed by. */
   readonly personId: string
+  /** M58 R22: the OTHER projects this person is on, so a project surface can say "also on Beta"
+   *  without a second query per row. Never includes this row's own project. */
+  readonly otherProjects: readonly string[]
   readonly name: string
   readonly role: string
   /**
@@ -715,6 +718,23 @@ export async function listWorkers(options?: { readonly includeArchived?: boolean
     if (!liveProviderBySlave.has(run.slaveId)) liveProviderBySlave.set(run.slaveId, run.provider)
   }
 
+  // M58 R15: every OPEN seat of every person on this page, in one query -- so "also on Beta" costs
+  // one read for the page rather than one per row.
+  const personIds = [...new Set(slaves.map((slave) => slave.personId))]
+  const allSeats =
+    personIds.length === 0
+      ? []
+      : await prisma.slave.findMany({
+          where: { personId: { in: personIds }, closedAt: null },
+          select: { personId: true, team: { select: { workspace: { select: { name: true } } } } },
+        })
+  const projectsByPerson = new Map<string, string[]>()
+  for (const seat of allSeats) {
+    const list = projectsByPerson.get(seat.personId)
+    if (list === undefined) projectsByPerson.set(seat.personId, [seat.team.workspace.name])
+    else list.push(seat.team.workspace.name)
+  }
+
   return slaves.map((slave) => {
     const info = liveInfo.get(slave.id)
     const liveProvider = liveProviderBySlave.get(slave.id) ?? null
@@ -723,6 +743,7 @@ export async function listWorkers(options?: { readonly includeArchived?: boolean
     return {
       slaveId: slave.id,
       personId: slave.personId,
+      otherProjects: (projectsByPerson.get(slave.personId) ?? []).filter((name) => name !== slave.team.workspace.name),
       name: slave.person.name,
       role: slave.role,
       runtimeRoles: slave.runtimeRoles,

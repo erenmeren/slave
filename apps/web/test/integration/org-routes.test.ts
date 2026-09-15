@@ -182,62 +182,41 @@ describe('the org routes', () => {
     })
   })
 
-  describe('POST /api/org/slaves (M58 R5: a department holds PEOPLE)', () => {
-    async function seedDepartmentAndPerson(): Promise<{ companyTeamId: string; personId: string }> {
+  describe('POST /api/org/slaves (M58 R15: a new person)', () => {
+    it('creates a person with only a name and returns their id', async (): Promise<void> => {
+      const response = await slavesPOST(jsonRequest({ name: 'Atlas' }))
+      expect(response.status).toBe(200)
+      const body = (await response.json()) as { personId: string; name: string }
+      expect(body.name).toBe('Atlas')
+      const person = await prisma.person.findUniqueOrThrow({ where: { id: body.personId }, include: { seats: true, departments: true } })
+      expect(person.seats).toEqual([])
+      expect(person.departments).toEqual([])
+    })
+
+    it('joins an optional department after the person exists', async (): Promise<void> => {
       const company = await prisma.company.create({ data: { name: 'Acme Robotics' } })
       const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-      const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
-      const person = await prisma.person.create({ data: { name: 'Atlas', templateId: template.id } })
-      return { companyTeamId: companyTeam.id, personId: person.id }
-    }
 
-    it('puts an existing person in the department and returns 200', async (): Promise<void> => {
-      const { companyTeamId, personId } = await seedDepartmentAndPerson()
-
-      const response = await slavesPOST(jsonRequest({ companyTeamId, personId }))
-
+      const response = await slavesPOST(jsonRequest({ name: 'Atlas', companyTeamId: companyTeam.id }))
       expect(response.status).toBe(200)
-      expect(await prisma.companyTeamMember.count({ where: { companyTeamId, personId } })).toBe(1)
+      const body = (await response.json()) as { personId: string }
+      expect(await prisma.companyTeamMember.count({ where: { companyTeamId: companyTeam.id, personId: body.personId } })).toBe(1)
     })
 
-    it('is idempotent: a second call adds no second membership', async (): Promise<void> => {
-      const { companyTeamId, personId } = await seedDepartmentAndPerson()
-
-      expect((await slavesPOST(jsonRequest({ companyTeamId, personId }))).status).toBe(200)
-      expect((await slavesPOST(jsonRequest({ companyTeamId, personId }))).status).toBe(200)
-
-      expect(await prisma.companyTeamMember.count()).toBe(1)
-    })
-
-    it('404s with the person-not-found refusal text on an unknown personId', async (): Promise<void> => {
-      const { companyTeamId } = await seedDepartmentAndPerson()
+    it('404s the unknown department without undoing the person', async (): Promise<void> => {
       const unknown = '00000000-0000-4000-8000-000000000000'
-
-      const response = await slavesPOST(jsonRequest({ companyTeamId, personId: unknown }))
-
+      const response = await slavesPOST(jsonRequest({ name: 'Atlas', companyTeamId: unknown }))
       expect(response.status).toBe(404)
-      expect((await response.json()).error).toBe(`no slave with id ${unknown}`)
-      expect(await prisma.companyTeamMember.count()).toBe(0)
+      const body = (await response.json()) as { error: string; personId: string; created: boolean }
+      expect(body.error).toBe(`no company team with id ${unknown}`)
+      expect(body.created).toBe(true)
+      expect(await prisma.person.findUnique({ where: { id: body.personId } })).not.toBeNull()
     })
 
-    it('404s with the team-not-found refusal text on an unknown companyTeamId', async (): Promise<void> => {
-      const { personId } = await seedDepartmentAndPerson()
-      const unknown = '00000000-0000-4000-8000-000000000000'
-
-      const response = await slavesPOST(jsonRequest({ companyTeamId: unknown, personId }))
-
-      expect(response.status).toBe(404)
-      expect((await response.json()).error).toBe(`no company team with id ${unknown}`)
-      expect(await prisma.companyTeamMember.count()).toBe(0)
-    })
-
-    it('400s a body missing either half, and a malformed one', async (): Promise<void> => {
-      const { companyTeamId, personId } = await seedDepartmentAndPerson()
-
-      expect((await slavesPOST(jsonRequest({ companyTeamId }))).status).toBe(400)
-      expect((await slavesPOST(jsonRequest({ personId }))).status).toBe(400)
+    it('400s on a malformed body and on a missing name', async (): Promise<void> => {
       expect((await slavesPOST(malformedRequest())).status).toBe(400)
-      expect(await prisma.companyTeamMember.count()).toBe(0)
+      expect((await slavesPOST(jsonRequest({}))).status).toBe(400)
+      expect(await prisma.person.count()).toBe(0)
     })
   })
 
@@ -382,7 +361,7 @@ describe('the org routes', () => {
     it('returns an empty list when the database holds no slaves at all', async (): Promise<void> => {
       const response = await workersGET()
       expect(response.status).toBe(200)
-      expect(await response.json()).toEqual({ workers: [] })
+      expect(await response.json()).toEqual({ workers: [], people: [] })
     })
   })
 
@@ -507,11 +486,13 @@ describe('the org routes', () => {
       const task = await prisma.task.create({
         data: { workspaceId: fixture.workspaceId, title: 'Ship it', description: 'ship it', maxAttempts: 3 },
       })
-      await prisma.slaveRun.create({ data: { taskId: task.id, slaveId, status: 'working' } })
+      const run = await prisma.slaveRun.create({ data: { taskId: task.id, slaveId, status: 'working' } })
 
       const response = await slaveDELETE(deleteRequest(), slaveParams(slaveId))
       expect(response.status).toBe(409)
-      expect((await response.json()).error).toBe(`slave ${slaveId} has 1 live run; wait for them to finish or stop them first`)
+      expect((await response.json()).error).toBe(
+        `that slave has a run in progress (${run.id}) on one of their projects; wait for it to finish or stop it first`,
+      )
       expect(await prisma.slave.findUnique({ where: { id: slaveId }, include: { person: true } })).not.toBeNull()
     })
   })

@@ -1,13 +1,14 @@
-import { deleteSlave } from '@slave-of-ai/control'
+import { deletePerson } from '@slave-of-ai/control'
+import { prisma } from '@slave-of-ai/db/client'
 import { orgControlResponse } from '../../../../server/orgControlRoute'
 import { requirePrincipal } from '../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
 
-/** `SlaveRowActions`'s delete write (M23 D2) -- no body: the slave IS the resource this route
- *  addresses (`slaveId` from the path), the same shape `skills/assign/route.ts`'s DELETE takes
- *  for a pair. `deleteSlave` now deletes the slave WITH its run history (M27 §4.1); it is refused
- *  only while a run is live. */
+/** M58 R13/R15: this route addresses a SEAT and deletes the PERSON sitting in it -- every seat,
+ *  every run, everywhere. That is the operator's own ruling (D5), and the confirmation the caller
+ *  had to pass first is what makes it safe: `DeletePersonButton` states the project count. To take
+ *  somebody off ONE project, `POST /api/persons/:id/unassign`. */
 export async function DELETE(
   _request: Request,
   context: { params: Promise<{ slaveId: string }> },
@@ -15,5 +16,7 @@ export async function DELETE(
   const gate = await requirePrincipal()
   if ('response' in gate) return gate.response
   const { slaveId } = await context.params
-  return orgControlResponse(() => deleteSlave(slaveId, gate.principal ?? undefined))
+  const seat = await prisma.slave.findUnique({ where: { id: slaveId }, select: { personId: true } })
+  if (seat === null) return Response.json({ error: `no slave with id ${slaveId}` }, { status: 404 })
+  return orgControlResponse(() => deletePerson(seat.personId, gate.principal ?? undefined))
 }
