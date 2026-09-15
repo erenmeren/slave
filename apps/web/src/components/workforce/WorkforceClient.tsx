@@ -338,6 +338,7 @@ export function WorkforceClient({
               ?? panel.person.seats[0]?.workspaceId
               ?? ''
             }
+            openedGlobally
             haltedReason={panel.haltedReason}
             onClose={() => setSelectedPerson(null)}
             onPersonChanged={() => setPersonTick((tick) => tick + 1)}

@@ -178,6 +178,7 @@ export function SlavePanel({
   projects = [],
   skillCatalogue = [],
   onPersonChanged,
+  openedGlobally = false,
 }: {
   /** The live Team-band seat. `null` when this is a person with no seat on this workspace -- do
    *  not invent an idle card; run controls stay hidden and seat writes stay disabled. */
@@ -194,6 +195,9 @@ export function SlavePanel({
   readonly projects?: readonly AssignableProject[]
   readonly skillCatalogue?: readonly { readonly skillId: string; readonly name: string; readonly providerName: string }[]
   readonly onPersonChanged?: () => void
+  /** Workforce (and any other non-project surface): the confirmation counts every open project,
+   *  because there is no "this" project to subtract. */
+  readonly openedGlobally?: boolean
 }): React.JSX.Element {
   const [pending, setPending] = useState<ReadonlySet<ControlAction>>(new Set())
   const [errorText, setErrorText] = useState<string | null>(null)
@@ -285,7 +289,7 @@ export function SlavePanel({
     ? []
     : [...new Set(
         person.seats
-          .filter((seat) => workspaceId === '' || seat.workspaceId !== workspaceId)
+          .filter((seat) => openedGlobally || workspaceId === '' || seat.workspaceId !== workspaceId)
           .map((seat) => seat.projectName),
       )]
   const refreshPerson = onPersonChanged ?? ((): void => {})

@@ -1250,20 +1250,23 @@ try {
   }
 
   await gotoReliably(`${baseUrl}/workforce`)
-  await waitVisible(page.getByTestId('worker-lifecycle').first(), 'the Slaves table lifecycle column')
-  const tableWords = await page
-    .locator('[data-testid="worker-lifecycle"]')
-    .evaluateAll((nodes) => nodes.map((node) => (node.textContent ?? '').trim()))
-  console.log(`stage 9 -- the Slaves table's lifecycle column: ${JSON.stringify(tableWords)}`)
-  if (!tableWords.includes(LIFECYCLE_WORD.project)) await fail(`stage 9: the column shows no Project row: ${JSON.stringify(tableWords)}`)
-  if (!tableWords.includes(LIFECYCLE_WORD.ephemeral)) await fail(`stage 9: the column shows no Ephemeral row: ${JSON.stringify(tableWords)}`)
+  // M58 R22: the People tab is one row per SLAVE now, not one per project seat. A released
+  // specialist is still marked and still greyed; the row's testid is `person-row-<personId>` and
+  // the word comes from `USER_PERSON_LABEL` rather than a lifecycle column on the seat.
+  await waitVisible(page.getByTestId('people-rows'), 'the People table')
   const releasedRows = await page
-    .locator('[data-testid="slave-row"][data-released="true"]')
+    .locator('[data-testid^="person-row-"][data-released="true"]')
     .evaluateAll((nodes) => nodes.map((node) => (node.textContent ?? '').trim().slice(0, 120)))
-  console.log(`stage 9 -- the released rows in the Slaves table: ${JSON.stringify(releasedRows)}`)
+  console.log(`stage 9 -- the released rows in the People table: ${JSON.stringify(releasedRows)}`)
   if (!releasedRows.some((text) => text.includes(`${SECURITY_PERSONA} 2`))) {
-    await fail(`stage 9: the released specialist is not marked in the Slaves table: ${JSON.stringify(releasedRows)}`)
+    await fail(`stage 9: the released specialist is not marked in the People table: ${JSON.stringify(releasedRows)}`)
   }
+  const stateWords = await page
+    .locator('[data-testid^="person-row-"]')
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-person-state')))
+  console.log(`stage 9 -- the People table's states: ${JSON.stringify(stateWords)}`)
+  if (!stateWords.includes('released')) await fail(`stage 9: no released row: ${JSON.stringify(stateWords)}`)
+  if (!stateWords.includes('assigned')) await fail(`stage 9: no assigned row: ${JSON.stringify(stateWords)}`)
 
   console.log(`gotoReliably retries this run: ${String(gotoRetries.length)}${gotoRetries.length === 0 ? '' : ` (${JSON.stringify(gotoRetries)})`}`)
   console.log(

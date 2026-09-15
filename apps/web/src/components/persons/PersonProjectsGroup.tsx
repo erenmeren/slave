@@ -6,31 +6,10 @@ import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
 import { DetailsGroup } from '../ui/DetailsGroup'
 import { SelectField } from '../ui/FormControls'
+import { type AssignableProject } from './assignableProjects'
 
-export interface AssignableProject {
-  readonly workspaceId: string
-  readonly projectName: string
-  readonly teams: readonly { readonly teamId: string; readonly name: string }[]
-}
-
-export function assignableProjectsOf(
-  teams: readonly { readonly teamId: string; readonly name: string; readonly workspaceId: string; readonly projectName: string }[],
-): readonly AssignableProject[] {
-  const byWorkspace = new Map<string, { workspaceId: string; projectName: string; teams: { teamId: string; name: string }[] }>()
-  for (const team of teams) {
-    const existing = byWorkspace.get(team.workspaceId)
-    if (existing === undefined) {
-      byWorkspace.set(team.workspaceId, {
-        workspaceId: team.workspaceId,
-        projectName: team.projectName,
-        teams: [{ teamId: team.teamId, name: team.name }],
-      })
-    } else {
-      existing.teams.push({ teamId: team.teamId, name: team.name })
-    }
-  }
-  return [...byWorkspace.values()]
-}
+export type { AssignableProject } from './assignableProjects'
+export { assignableProjectsOf } from './assignableProjects'
 
 /**
  * The person panel's Projects group (M58 R23): every seat this person holds, what they are on each

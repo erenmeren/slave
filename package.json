@@ -68,7 +68,8 @@
     "gate:m54-triggers": "tsc --build && node --env-file=.env scripts/gate-m54-triggers.mjs",
     "gate:m55-catalog": "tsc --build && node --env-file=.env scripts/gate-m55-catalog.mjs",
     "gate:m56a-provider-contract": "tsc --build && node --env-file=.env scripts/gate-m56a-provider-contract.mjs",
-    "gate:m57-ui-redesign": "tsc --build && node --env-file=.env scripts/gate-m57-ui-redesign.mjs"
+    "gate:m57-ui-redesign": "tsc --build && node --env-file=.env scripts/gate-m57-ui-redesign.mjs",
+    "gate:m58-persons": "tsc --build && node --env-file=.env scripts/gate-m58-persons.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",

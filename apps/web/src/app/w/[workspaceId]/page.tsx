@@ -2,7 +2,7 @@ import { buildOverviewSnapshot } from '../../../server/overview'
 import { listProjectTeams } from '../../../server/org'
 import { listSkillCatalogue } from '../../../server/persons'
 import { OverviewClient } from '../../../components/OverviewClient'
-import { assignableProjectsOf } from '../../../components/persons/PersonProjectsGroup'
+import { assignableProjectsOf } from '../../../components/persons/assignableProjects'
 
 export const dynamic = 'force-dynamic'
 
