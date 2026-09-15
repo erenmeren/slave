@@ -123,3 +123,22 @@ describe('refusalText for the catalog kinds (M55 R5, R8)', () => {
     expect(refusalText({ kind: 'template_not_found', templateId: 'p1' })).toBe('no template with id p1')
   })
 })
+
+describe('refusalText for the M58 person kinds (R14, plan additions)', () => {
+  it('the six M58 refusals read as sentences and never print a kind', () => {
+    const texts = [
+      refusalText({ kind: 'already_assigned', personId: 'p1', teamId: 't1' }),
+      refusalText({ kind: 'person_released', personId: 'p1', at: '2026-09-15T00:00:00.000Z' }),
+      refusalText({ kind: 'run_in_progress', personId: 'p1', runId: 'r1' }),
+      refusalText({ kind: 'person_name_taken', name: 'Atlas' }),
+      refusalText({ kind: 'person_not_found', personId: 'p1' }),
+      refusalText({ kind: 'person_not_seated', personId: 'p1', teamId: 't1' }),
+    ]
+    for (const text of texts) {
+      expect(text.length).toBeGreaterThan(10)
+      expect(text).not.toMatch(/_/)
+    }
+    expect(texts[3]).toContain('Atlas')
+    expect(texts[2]).toContain('r1')
+  })
+})

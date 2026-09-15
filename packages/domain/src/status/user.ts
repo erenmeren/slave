@@ -409,3 +409,40 @@ export function userSupervisorStatus(facts: UserSupervisorFacts): UserStatus<Use
       : USER_SUPERVISOR_LABEL[state]
   return { state, label, needsYou: state === 'halted' || state === 'decisions' }
 }
+
+// ---------------------------------------------------------------------------------------------
+// People (M58 R6, R28)
+// ---------------------------------------------------------------------------------------------
+
+/** The three things a person can be, from the operator's side. DERIVED, never a column (R6): "in
+ *  the pool" is "no open seat and never released", and a status column for it would be a second
+ *  writer for a fact the seats already carry. */
+export type UserPersonState = 'pool' | 'assigned' | 'released'
+
+/** UPPERCASE like every other table in this file -- the surfaces render these verbatim, and the
+ *  raw state goes on `data-person-state`. */
+export const USER_PERSON_LABEL: Record<UserPersonState, string> = {
+  pool: 'IN THE POOL',
+  assigned: 'ASSIGNED',
+  released: 'RELEASED',
+}
+
+export interface UserPersonFacts {
+  /** `Person.releasedAt` as an ISO string, or null. */
+  readonly releasedAt: string | null
+  /** How many `Slave` rows this person holds with `closedAt IS NULL`. */
+  readonly openSeats: number
+}
+
+/**
+ * One word for a person (R6, R28).
+ *
+ * Released FIRST: a released person may still hold seats that were never closed by hand, and
+ * calling them "assigned" would invite somebody to give them work. `needsYou` is false for all
+ * three -- a person in the pool is a resource, not a question.
+ */
+export function userPersonStatus(facts: UserPersonFacts): UserStatus<UserPersonState> {
+  const state: UserPersonState =
+    facts.releasedAt !== null ? 'released' : facts.openSeats > 0 ? 'assigned' : 'pool'
+  return { state, label: USER_PERSON_LABEL[state], needsYou: false }
+}
