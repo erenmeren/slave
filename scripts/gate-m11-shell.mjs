@@ -64,6 +64,8 @@ const TEMPLATE_NAME = 'M11 Gate Template'
 const COMPANY_NAME = 'M11 Gate Co'
 const TEAM_NAME = 'Crew'
 const MEMBER_NAME = 'Gate Worker'
+/** The second seat stage 8 makes by hand -- a PERSON since M58, so the teardown has to name them. */
+const SECOND_SLAVE_NAME = 'M11 Gate Second Slave'
 const MODEL_OVERRIDE = 'gate-model-x'
 // `claude_code`, not `cursor`: stage 1's workspaces carry no explicit `budgetUsd`, so they get the
 // schema's `@default(20)` (budgeted), and only `claude_code` reports cost (M12 Task 9's admission
@@ -117,7 +119,7 @@ async function preflightCleanup() {
   }
   const staleCompany = await prisma.company.findUnique({ where: { name: COMPANY_NAME } })
   if (staleCompany !== null) await prisma.company.delete({ where: { id: staleCompany.id } }).catch(() => {})
-  await prisma.person.deleteMany({ where: { name: MEMBER_NAME } }).catch(() => {})
+  await prisma.person.deleteMany({ where: { name: { in: [MEMBER_NAME, SECOND_SLAVE_NAME] } } }).catch(() => {})
   const staleTemplate = await prisma.slaveTemplate.findUnique({ where: { name: TEMPLATE_NAME } })
   if (staleTemplate !== null) await prisma.slaveTemplate.delete({ where: { id: staleTemplate.id } }).catch(() => {})
 }
@@ -743,7 +745,7 @@ try {
   // fixture needs no cleanup of its own.
   const officeDepartmentB = await prisma.team.findFirst({ where: { workspaceId: workspaceIdB } })
   if (officeDepartmentB === null) await fail(`"${workspaceNameB}" has no department to add the office fixture slave to`)
-  const officeFixtureSlave = await prisma.slave.create({ data: { teamId: officeDepartmentB.id, role: 'qa', runtimeRoles: ['qa'], personId: (await prisma.person.upsert({ where: { name: 'M11 Gate Second Slave' }, create: { name: 'M11 Gate Second Slave' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
+  const officeFixtureSlave = await prisma.slave.create({ data: { teamId: officeDepartmentB.id, role: 'qa', runtimeRoles: ['qa'], personId: (await prisma.person.upsert({ where: { name: SECOND_SLAVE_NAME }, create: { name: SECOND_SLAVE_NAME }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   console.log(`created a second "${workspaceNameB}" slave directly for the office floor: ${officeFixtureSlave.id}`)
 
   const officeDepartments = await prisma.team.count({ where: { workspaceId: workspaceIdB } })
@@ -848,7 +850,7 @@ try {
   if (companyId !== null) {
     await prisma.company.delete({ where: { id: companyId } }).catch(() => {})
   }
-  await prisma.person.deleteMany({ where: { name: MEMBER_NAME } }).catch(() => {})
+  await prisma.person.deleteMany({ where: { name: { in: [MEMBER_NAME, SECOND_SLAVE_NAME] } } }).catch(() => {})
   if (templateId !== null) {
     await prisma.slaveTemplate.delete({ where: { id: templateId } }).catch(() => {})
   }

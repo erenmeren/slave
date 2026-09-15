@@ -107,6 +107,9 @@ const SIM_ROSTER = [
   ['Finance', 'M44 Gate Fin'],
 ]
 
+/** Every person this gate creates, by the name it creates them under -- the teardown's list. */
+const GATE_PERSON_NAMES = [SLAVE_NAME, ...SIM_ROSTER.map(([, memberName]) => memberName)]
+
 /**
  * The Activity rail's own words. The SOURCE OF TRUTH is `apps/web/src/lib/eventLabels.ts`
  * (`EVENT_PREFIX_LABEL`), which lives inside the Next app -- `apps/web` compiles with `noEmit`, so
@@ -1211,6 +1214,11 @@ try {
   }
   if (simulationId !== null) await prisma.simulationRun.delete({ where: { id: simulationId } }).catch(() => {})
   if (companyId !== null) await prisma.company.delete({ where: { id: companyId } }).catch(() => {})
+  // M58 R1: this gate's PEOPLE. A person is not cascaded away with the workspace whose seat held
+  // them, nor with the company whose department listed them, so without this every run leaves its
+  // roster behind -- as pooled rows on the Slaves tab, and as names another gate's substring count
+  // then trips over.
+  await prisma.person.deleteMany({ where: { name: { in: GATE_PERSON_NAMES } } }).catch(() => {})
   if (templateId !== null) await prisma.slaveTemplate.delete({ where: { id: templateId } }).catch(() => {})
   // The provider cascades its Skill rows. UNLIKE `gate-m14-fidelity.mjs`, whose catalog rows
   // describe the daemon host's real disk and are kept under Decision 6, this provider is a fiction
