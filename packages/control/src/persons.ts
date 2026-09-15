@@ -122,6 +122,10 @@ export async function createPerson(
  * planning passes render it, and refusing a seating for want of a title would be a refusal about
  * nothing. `runtimeRoles` defaults to that same role, which is what makes the person dispatchable
  * the moment they sit down.
+ *
+ * Person-first lock, same order as `hireFromTemplate` / `setPersonCapabilities`: the `releasedAt`
+ * check and any seat reopen both run under it, so a concurrent `releasePerson` cannot leave an
+ * open seat on a released person.
  */
 export async function assignPerson(
   personId: string,
@@ -134,6 +138,7 @@ export async function assignPerson(
   principal?: Principal,
 ): Promise<Result<{ readonly slaveId: string; readonly reopened: boolean }, ControlRefusal>> {
   const outcome = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${personId} FOR UPDATE`
     const person = await tx.person.findUnique({
       where: { id: personId },
       include: { template: { select: { role: true } } },
@@ -306,6 +311,10 @@ export async function movePerson(
  * transaction and the two must never nest (ADR 0003).
  *
  * History is kept. Every run, message, permission and memory stays exactly where it was.
+ *
+ * Person-first lock, same order as `hireFromTemplate` / `setPersonCapabilities`: `releasedAt` is
+ * stamped under it, so a concurrent reuse cannot miss the release because the Person row was never
+ * locked. The seat is not locked first.
  */
 export async function releasePerson(
   personId: string,
@@ -317,6 +326,7 @@ export async function releasePerson(
   const recorded = (trimmed === '' ? REASON_FALLBACK : trimmed).slice(0, REASON_MAX)
 
   const plan = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${personId} FOR UPDATE`
     const person = await tx.person.findUnique({
       where: { id: personId },
       include: { seats: { where: { closedAt: null }, include: { team: { select: { workspaceId: true } } } } },
