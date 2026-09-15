@@ -24,14 +24,14 @@ async function seedTradingCompany(name = 'Demo Trading Co.'): Promise<string> {
   const company = await prisma.company.create({ data: { name } })
   for (const [department, slave] of [['Sales', 'Sonia'], ['Purchasing', 'Pete'], ['Operations', 'Olga'], ['Finance', 'Fin']] as const) {
     const team = await prisma.companyTeam.create({ data: { companyId: company.id, name: department } })
-    await prisma.companySlave.create({ data: { companyTeamId: team.id, templateId: template.id, name: slave } })
+    await prisma.person.create({ data: { templateId: template.id, name: slave, lifecycle: 'permanent', departments: { create: { companyTeamId: team.id } } } })
   }
   return company.id
 }
 
 let companyId: string
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE')
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE')
   companyId = await seedTradingCompany()
 })
 /** Every `heldDecider()` this file makes (see below), so the hook under it can let go of whatever

@@ -672,16 +672,7 @@ try {
     })
     workspaceIds.push(workspace.id)
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: TEAM_NAME } })
-    const worker = await prisma.slave.create({
-      data: {
-        teamId: team.id,
-        name: workerName,
-        role: WORKER_ROLE,
-        runtimeRoles: RUNTIME_ROLES,
-        model: 'sonnet',
-        provider: 'claude_code',
-      },
-    })
+    const worker = await prisma.slave.create({ data: { teamId: team.id, role: WORKER_ROLE, runtimeRoles: RUNTIME_ROLES, model: 'sonnet', provider: 'claude_code', personId: (await prisma.person.upsert({ where: { name: workerName }, create: { name: workerName }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
     console.log(`stage 0: project ${workspace.id} (${name}) repo=${repoPath} team=${team.id} worker=${worker.id} (${workerName})`)
     return { workspace, team, worker, repoPath }
   }

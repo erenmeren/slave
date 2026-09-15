@@ -5,6 +5,8 @@ import { WorkforceClient, type WorkforceTab } from '../src/components/workforce/
 import WorkforcePage from '../src/app/workforce/page.js'
 import type { AllSlaveRow, AllSlavesPage, CatalogRowView, WorkforceCatalogView } from '../src/server/org.js'
 import type { EvidencePage } from '../src/server/evidence.js'
+import type { PersonDetail, PersonRow } from '../src/server/persons.js'
+import type { SlaveCardData } from '../src/server/overview.js'
 import type { SkillsPage } from '../src/server/skills.js'
 
 const routerRefresh = vi.fn()
@@ -45,6 +47,11 @@ vi.mock('../src/server/org.js', () => ({
 
 vi.mock('../src/server/skills.js', () => ({ buildSkillsPage: async () => skillsPage() }))
 
+vi.mock('../src/server/persons.js', () => ({
+  listPersons: async () => [],
+  listSkillCatalogue: async () => [],
+}))
+
 // M53 R12: the sixth tab's read opens Postgres like the others, so the page's loader is a stub and
 // the read model keeps its own coverage (`test/integration/evidence-page.test.ts`).
 const buildEvidencePage = vi.fn(async (_filter?: unknown) => emptyEvidence())
@@ -55,7 +62,7 @@ vi.mock('../src/server/evidence.js', () => ({
 function slaveRow(over: Partial<AllSlaveRow> = {}): AllSlaveRow {
   return {
     slaveId: 'a1',
-    companySlaveId: null,
+    personId: 'p1',
     name: 'Alex',
     role: 'backend',
     departmentName: 'Engineering',
@@ -89,13 +96,93 @@ function page(rows: readonly AllSlaveRow[]): AllSlavesPage {
   }
 }
 
+function personRow(over: Partial<PersonRow> = {}): PersonRow {
+  return {
+    personId: 'p1',
+    name: 'Alex',
+    personaId: 't1',
+    personaName: 'Builder',
+    state: 'assigned',
+    stateLabel: 'ASSIGNED',
+    departments: [{ companyTeamId: 'ct1', name: 'Engineering' }],
+    seats: [
+      {
+        slaveId: 'a1',
+        teamId: 't1',
+        teamName: 'Engineering',
+        workspaceId: 'w1',
+        projectName: 'Checkout',
+        role: 'backend',
+        runtimeRoles: ['backend'],
+        closedAt: null,
+      },
+    ],
+    skillCount: 0,
+    capabilities: [],
+    lifecycle: 'project',
+    releasedAt: null,
+    releaseReason: null,
+    ...over,
+  }
+}
+
+function personDetail(over: Partial<PersonDetail> = {}): PersonDetail {
+  const row = personRow()
+  return {
+    ...row,
+    profile: null,
+    model: null,
+    provider: null,
+    skills: [],
+    selectionRationale: null,
+    runs: 0,
+    allSeats: row.seats,
+    ...over,
+  }
+}
+
+function workingCard(over: Partial<SlaveCardData> = {}): SlaveCardData {
+  return {
+    id: 'a1',
+    personId: 'p1',
+    name: 'Alex',
+    role: 'backend',
+    provider: 'claude_code',
+    gate: 'all-tools',
+    status: 'working',
+    taskTitle: 'Add the thing',
+    taskId: 't1',
+    taskStatus: 'running',
+    progressPct: 40,
+    stepLabel: null,
+    skill: null,
+    actionLine: null,
+    runId: 'run-1',
+    queuedMessage: null,
+    resumeRequestedAt: null,
+    recentEvents: [],
+    costUsd: 0,
+    toolCalls: 3,
+    pausedAtStep: null,
+    waitingFor: null,
+    profile: null,
+    runtimeRoles: ['backend'],
+    lifecycle: 'project',
+    released: null,
+    breakerLevel: 'none',
+    permissions: [],
+    permissionsRunKind: 'implementation',
+    ...over,
+  }
+}
+
 function skillsPage(over: Partial<SkillsPage> = {}): SkillsPage {
   return {
     providers: [
       {
         id: 'p1',
         name: 'plugin:superpowers',
-        skills: [{ id: 's1', name: 'writing-plans', description: 'plans things', runs: 18, state: 'ready', slaveIds: [] }],
+        skills: [{ id: 's1', name: 'writing-plans', description: 'plans things', runs: 18, state: 'ready', holders: [] }],
       },
     ],
     slaves: [{ id: 'a1', name: 'Alex Turner', status: 'working' }],
@@ -138,6 +225,8 @@ function templateRow(over: Partial<CatalogRowView> = {}): CatalogRowView {
     activationChangedBy: null,
     duplicate: null,
     duplicateCount: 0,
+    defaultSkillIds: [],
+    hiredCount: 0,
     ...over,
   }
 }
@@ -179,6 +268,10 @@ function TestWorkforceClient(
       taxonomy={[]}
       runbooks={[]}
       evidence={emptyEvidence()}
+      people={[personRow()]}
+      peopleDepartments={[{ companyTeamId: 'ct1', name: 'Engineering' }]}
+      skillCatalogue={[]}
+      skillHolders={{}}
       {...props}
     />
   )
@@ -190,13 +283,21 @@ afterEach(() => {
   search = ''
 })
 
+/** Opens one `DetailsGroup` by `data-group`. A closed group renders no children. */
+function openPanelGroup(group: string): void {
+  const section = document.querySelector(`[data-testid="details-group"][data-group="${group}"]`)
+  const toggle = section?.querySelector('button')
+  if (toggle === null || toggle === undefined) throw new Error(`no DetailsGroup named ${group} on screen`)
+  fireEvent.click(toggle)
+}
+
 describe('WorkforceClient tabs (M44 R1)', () => {
   // The four surfaces the M44 audit found for "a slave" -- a sidebar row, another sidebar row, a
   // section on the Projects home and a panel inside a project -- are four tabs on one page now.
-  it('renders the slaves table by default, with the other three tabs beside it', () => {
+  it('renders the people table by default, with the other three tabs beside it', () => {
     render(<TestWorkforceClient />)
-    expect(screen.getByTestId('data-table')).toBeTruthy()
-    expect(screen.getByTestId('worker-row-button').textContent).toContain('Alex')
+    expect(screen.getByTestId('people-rows')).toBeTruthy()
+    expect(screen.getByTestId('person-name').textContent).toContain('Alex')
     expect(screen.getByTestId('workforce-tab-slaves').getAttribute('aria-selected')).toBe('true')
     // FOUR since M57 R13 folded Departments into People and Runbooks into Skills & runbooks
     // (spec erratum E15) -- the two folded tabs are segments under their new parent now, not
@@ -222,8 +323,8 @@ describe('WorkforceClient tabs (M44 R1)', () => {
     render(<TestWorkforceClient initialTab="slaves" />)
     const sub = screen.getByTestId('workforce-segment-departments')
     expect(sub.getAttribute('href')).toContain('tab=departments')
-    // The Slaves table is what People opens on.
-    expect(screen.getByTestId('data-table')).toBeTruthy()
+    // The People table is what People opens on.
+    expect(screen.getByTestId('people-rows')).toBeTruthy()
     // And `workforce-tab-slaves` appears exactly ONCE -- the visible tab, not the segment too.
     expect(screen.getAllByTestId('workforce-tab-slaves')).toHaveLength(1)
   })
@@ -403,79 +504,88 @@ describe('WorkforceClient row click opens the panel', () => {
     vi.unstubAllGlobals()
   })
 
-  it("opens the panel using the clicked row's own slaveId/workspaceId, after its status has moved via the poll", async () => {
+  it("opens the person panel from the clicked row's ⋯", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/org/workers') {
+      if (url === '/api/persons/p1') {
+        return new Response(JSON.stringify(personDetail()), { status: 200 })
+      }
+      if (url === '/api/w/w1/overview') {
+        return new Response(JSON.stringify({ slaves: [] }), { status: 200 })
+      }
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<TestWorkforceClient />)
+    fireEvent.click(screen.getByTestId('person-open'))
+
+    expect(await screen.findByRole('heading', { name: 'Alex' })).toBeTruthy()
+  })
+
+  it('disables profile and runtime-roles save for a person in the pool (no seat)', async () => {
+    const pooled = personRow({ seats: [], state: 'pool', stateLabel: 'IN THE POOL' })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/persons/p1') {
         return new Response(
-          JSON.stringify({
-            workers: [
-              {
-                slaveId: 'a1',
-                name: 'Alex',
-                role: 'backend',
-                workspaceId: 'w1',
-                projectName: 'Checkout',
-                status: 'paused',
-                currentTask: null,
-                department: 'Engineering',
-                provider: null,
-                gate: null,
-                tokens: null,
-                costUsd: 0,
-                unmeasuredRuns: 0,
-                // M37 t4 fix round 1: carried by the real `GET /api/org/workers` payload
-                // (`listWorkers`), and merged into the table's rows on every tick. Stated here for
-                // the same reason `waitingFor` is stated in the overview literal below — this is a
-                // fetch RESPONSE body TypeScript never checks, and the table renders `.length`.
-                runtimeRoles: ['backend'],
-              },
-            ],
-          }),
+          JSON.stringify(personDetail({ seats: [], allSeats: [], state: 'pool', stateLabel: 'IN THE POOL' })),
           { status: 200 },
         )
+      }
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<TestWorkforceClient people={[pooled]} />)
+    fireEvent.click(screen.getByTestId('person-open'))
+    expect(await screen.findByRole('heading', { name: 'Alex' })).toBeTruthy()
+    expect(screen.queryByTestId('status-label')).toBeNull()
+    expect(screen.queryByTestId('pause-button')).toBeNull()
+    expect(screen.queryByTestId('resume-button')).toBeNull()
+    expect(screen.queryByTestId('stop-button')).toBeNull()
+
+    openPanelGroup('profile')
+    expect((screen.getByTestId('profile-save') as HTMLButtonElement).disabled).toBe(true)
+    openPanelGroup('messages')
+    expect((screen.getByTestId('runtime-roles-save') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('opens a Skills holder onto the live seat, not an idle stand-in', async () => {
+    search = 'tab=slaves&slave=p1'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/persons/p1') {
+        return new Response(JSON.stringify(personDetail()), { status: 200 })
+      }
+      if (url === '/api/w/w1/overview') {
+        return new Response(JSON.stringify({ slaves: [workingCard()] }), { status: 200 })
+      }
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<TestWorkforceClient />)
+
+    expect(await screen.findByTestId('status-label')).toBeTruthy()
+    expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/overview')
+    expect(screen.getByTestId('status-label').getAttribute('data-status')).toBe('working')
+    expect(screen.getByTestId('status-label').getAttribute('data-slave-id')).toBe('a1')
+    expect(screen.getByTestId('status-label').textContent).toBe('WORKING')
+    expect(screen.getByTestId('pause-button').getAttribute('disabled')).toBeNull()
+  })
+
+  it('disables resume and shows the halt reason when the overview snapshot is halted', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/persons/p1') {
+        return new Response(JSON.stringify(personDetail()), { status: 200 })
       }
       if (url === '/api/w/w1/overview') {
         return new Response(
           JSON.stringify({
-            slaves: [
-              {
-                id: 'a1',
-                name: 'Alex',
-                role: 'backend',
-                provider: null,
-                gate: null,
-                status: 'paused',
-                taskTitle: null,
-                taskId: null,
-                taskStatus: null,
-                progressPct: 0,
-                stepLabel: null,
-                skill: null,
-                actionLine: null,
-                runId: null,
-                queuedMessage: null,
-                resumeRequestedAt: null,
-                recentEvents: [],
-                costUsd: 0,
-                toolCalls: 0,
-                pausedAtStep: null,
-                // M36 t2 added this to `SlaveCardData`, and the server sets it on every row
-                // (`overview.ts`: a non-waiting run gets `null`). This literal is a fetch RESPONSE
-                // body, so TypeScript never checks it -- without the field `SlavePanel` reads
-                // `undefined`, which is not `null`, and crashes on `waitingFor.recipient`.
-                waitingFor: null,
-                // M37 t4 added these two; like `waitingFor` above they are stated because this
-                // literal is a fetch RESPONSE body TypeScript never checks, and `SlavePanel` reads
-                // `runtimeRoles.length` -- `undefined` there is a crash, not an empty set.
-                profile: null,
-                runtimeRoles: [],
-                // M52 R7, the same reason a third time: the panel's permissions group maps over
-                // this array, and `undefined.map` is the crash `waitingFor`'s comment describes.
-                permissions: [],
-                permissionsRunKind: 'implementation',
-              },
-            ],
+            slaves: [workingCard({ status: 'paused', runId: 'run-1' })],
+            workspace: { haltedReason: 'the pause gate failed open' },
           }),
           { status: 200 },
         )
@@ -483,19 +593,14 @@ describe('WorkforceClient row click opens the panel', () => {
       throw new Error(`unexpected fetch ${url}`)
     })
     vi.stubGlobal('fetch', fetchMock)
-    vi.useFakeTimers()
 
-    render(<TestWorkforceClient slaves={page([slaveRow({ slaveId: 'a1', workspaceId: 'w1', name: 'Alex', status: 'working' })])} />)
+    render(<TestWorkforceClient />)
+    fireEvent.click(screen.getByTestId('person-open'))
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000)
-    })
-    expect(screen.getByTestId('status-pill').getAttribute('data-tone')).toBe('paused')
-
-    vi.useRealTimers()
-    fireEvent.click(screen.getByTestId('worker-row-button'))
-
-    expect(await screen.findByRole('heading', { name: 'Alex' })).toBeTruthy()
+    expect(await screen.findByTestId('resume-button')).toBeTruthy()
+    expect(screen.getByTestId('status-label').getAttribute('data-status')).toBe('paused')
+    expect(screen.getByTestId('resume-button').getAttribute('disabled')).not.toBeNull()
+    expect(screen.getByTestId('resume-halt-reason').textContent).toContain('the pause gate failed open')
   })
 
   /**
@@ -509,8 +614,7 @@ describe('WorkforceClient row click opens the panel', () => {
     let release: ((response: Response) => void) | null = null
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
-      if (url === '/api/org/workers') return new Response(JSON.stringify({ workers: [] }), { status: 200 })
-      if (url === '/api/w/w1/overview') {
+      if (url === '/api/persons/p1') {
         return await new Promise<Response>((resolve) => {
           release = resolve
         })
@@ -519,8 +623,8 @@ describe('WorkforceClient row click opens the panel', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    render(<TestWorkforceClient slaves={page([slaveRow({ slaveId: 'a1', workspaceId: 'w1', name: 'Alex', status: 'working' })])} />)
-    fireEvent.click(screen.getByTestId('worker-row-button'))
+    render(<TestWorkforceClient />)
+    fireEvent.click(screen.getByTestId('person-open'))
 
     expect(await screen.findByTestId('workforce-panel-loading')).toBeTruthy()
     expect(screen.getByTestId('workforce-panel-loading').getAttribute('role')).toBe('status')

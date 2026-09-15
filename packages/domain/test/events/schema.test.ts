@@ -444,7 +444,22 @@ describe('parseExecutionEvent', () => {
     expect(result.ok).toBe(false)
   })
 
-  it('accepts a workspace.company_assigned event with workers', () => {
+  it('accepts a workspace.company_assigned event whose workers name the PERSON seated (M58 R5)', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.company_assigned',
+      payload: {
+        company: 'Acme Corp',
+        workers: [{ personId: 'p-1', name: 'Alex', role: 'backend' }],
+      },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.type).toBe('workspace.company_assigned')
+  })
+
+  // History still parses: a row written before M58 names the roster row the seat was copied from,
+  // and the Activity page reads every past event through this schema.
+  it('accepts a pre-M58 workspace.company_assigned event whose workers name a companySlaveId', () => {
     const result = parseExecutionEvent({
       ...BASE,
       type: 'workspace.company_assigned',
@@ -454,16 +469,15 @@ describe('parseExecutionEvent', () => {
       },
     })
     expect(result.ok).toBe(true)
-    if (result.ok) expect(result.value.type).toBe('workspace.company_assigned')
   })
 
-  it('rejects a workspace.company_assigned event whose worker is missing companySlaveId', () => {
+  it('rejects a workspace.company_assigned event whose worker has no name', () => {
     const result = parseExecutionEvent({
       ...BASE,
       type: 'workspace.company_assigned',
       payload: {
         company: 'Acme Corp',
-        workers: [{ name: 'Alex', role: 'backend' }],
+        workers: [{ personId: 'p-1', role: 'backend' }],
       },
     })
     expect(result.ok).toBe(false)

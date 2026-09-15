@@ -29,7 +29,7 @@ export const TRIGGERS_REPOSITORY = 'acme/checkout'
 export const TRIGGERS_UNMAPPED_REPOSITORY = 'acme/nobody-mapped-this'
 
 const TRUNCATE =
-  'TRUNCATE TABLE "InboundEvent", "ExternalRepository", "GoalVersion", "ExecutionEvent", "SlaveRun", "Task", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE'
+  'TRUNCATE TABLE "InboundEvent", "ExternalRepository", "GoalVersion", "ExecutionEvent", "SlaveRun", "Task", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE'
 
 export async function seedTriggersFixture(): Promise<TriggersFixture> {
   await prisma.$executeRawUnsafe(TRUNCATE)

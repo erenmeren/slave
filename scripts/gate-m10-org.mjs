@@ -143,9 +143,13 @@ try {
   companyId = createdId(cli(['create-company', '--name', `M10 Gate Company ${runTimestamp}`]))
   const companyTeamId = createdId(cli(['add-team', '--company', companyId, '--name', 'Gate Roster']))
 
-  createdId(cli(['add-slave', '--team', companyTeamId, '--template', managerTemplateId, '--name', 'Atlas']))
-  createdId(cli(['add-slave', '--team', companyTeamId, '--template', backendTemplateId, '--name', 'Nova']))
-  createdId(cli(['add-slave', '--team', companyTeamId, '--template', reviewerTemplateId, '--name', 'Rhea']))
+  // M58 R5: a department holds PEOPLE. The three are created here (Task 4 gives the CLI a `person`
+  // verb family of its own) and put in the department through the real `add-slave`, which is what
+  // that verb does now.
+  for (const [name, templateId] of [['Atlas', managerTemplateId], ['Nova', backendTemplateId], ['Rhea', reviewerTemplateId]]) {
+    const person = await prisma.person.upsert({ where: { name: `${name} ${runTimestamp}` }, create: { name: `${name} ${runTimestamp}`, templateId, lifecycle: 'permanent' }, update: { templateId, lifecycle: 'permanent', profile: null, model: null, provider: null, capabilities: [], releasedAt: null, releaseReason: null, selectionRationale: null } })
+    cli(['add-slave', '--team', companyTeamId, '--person', person.id])
+  }
 
   // 3. The same company roster, assigned to BOTH projects (spec §9: one company serving two
   // projects at once) -- additive materialization creates one project team + three project workers
@@ -153,23 +157,26 @@ try {
   cli(['assign-company', '--workspace', workspaceA.id, '--company', companyId])
   cli(['assign-company', '--workspace', workspaceB.id, '--company', companyId])
 
-  // 4. Assert the materialization, not just that `assign-company` exited 0: each workspace has
-  // exactly 3 workers, every one `companySlaveId`-linked, and the two worker sets are DISTINCT rows
-  // (different `Slave.id`) sharing the SAME roster identities (same `companySlaveId`s, same names).
-  const workersA = await prisma.slave.findMany({ where: { team: { workspaceId: workspaceA.id } } })
-  const workersB = await prisma.slave.findMany({ where: { team: { workspaceId: workspaceB.id } } })
+  // 4. Assert the seating, not just that `assign-company` exited 0: each workspace has exactly 3
+  // seats, every one naming a person, and the two seat sets are DISTINCT rows (different
+  // `Slave.id`) held by the SAME three PEOPLE (same `personId`s, same names) -- which is M58 R2
+  // said out loud: one person, two projects, two seats.
+  const workersA = await prisma.slave.findMany({ where: { team: { workspaceId: workspaceA.id } }, include: { person: true } })
+  const workersB = await prisma.slave.findMany({ where: { team: { workspaceId: workspaceB.id } }, include: { person: true } })
   {
     const dump = () =>
-      `workersA=${JSON.stringify(workersA.map((w) => ({ id: w.id, name: w.name, role: w.role, companySlaveId: w.companySlaveId })))} ` +
-      `workersB=${JSON.stringify(workersB.map((w) => ({ id: w.id, name: w.name, role: w.role, companySlaveId: w.companySlaveId })))}`
+      `workersA=${JSON.stringify(workersA.map((w) => ({ id: w.id, name: w.person.name, role: w.role, personId: w.personId })))} ` +
+      `workersB=${JSON.stringify(workersB.map((w) => ({ id: w.id, name: w.person.name, role: w.role, personId: w.personId })))}`
 
-    if (workersA.length !== 3) throw new Error(`workspace A materialized ${workersA.length} worker(s), expected 3 -- ${dump()}`)
-    if (workersB.length !== 3) throw new Error(`workspace B materialized ${workersB.length} worker(s), expected 3 -- ${dump()}`)
+    if (workersA.length !== 3) throw new Error(`workspace A seated ${workersA.length} worker(s), expected 3 -- ${dump()}`)
+    if (workersB.length !== 3) throw new Error(`workspace B seated ${workersB.length} worker(s), expected 3 -- ${dump()}`)
 
-    const unlinkedA = workersA.filter((w) => w.companySlaveId === null)
-    const unlinkedB = workersB.filter((w) => w.companySlaveId === null)
-    if (unlinkedA.length > 0 || unlinkedB.length > 0) {
-      throw new Error(`some materialized workers carry no companySlaveId -- ${dump()}`)
+    const memberIds = new Set(
+      (await prisma.companyTeamMember.findMany({ where: { companyTeam: { companyId } } })).map((row) => row.personId),
+    )
+    const unlinked = [...workersA, ...workersB].filter((w) => !memberIds.has(w.personId))
+    if (unlinked.length > 0) {
+      throw new Error(`some seats are held by somebody who is in no department of this company -- ${dump()}`)
     }
 
     const idsA = new Set(workersA.map((w) => w.id))
@@ -179,20 +186,20 @@ try {
       throw new Error(`workspace A and B share Slave row id(s) ${JSON.stringify(overlappingIds)} -- expected DISTINCT rows -- ${dump()}`)
     }
 
-    const rosterA = new Set(workersA.map((w) => w.companySlaveId))
-    const rosterB = new Set(workersB.map((w) => w.companySlaveId))
+    const rosterA = new Set(workersA.map((w) => w.personId))
+    const rosterB = new Set(workersB.map((w) => w.personId))
     const sameRoster = rosterA.size === rosterB.size && [...rosterA].every((id) => rosterB.has(id))
     if (!sameRoster) {
-      throw new Error(`workspace A and B do not share the same roster identities -- ${dump()}`)
+      throw new Error(`workspace A and B are not held by the same people -- ${dump()}`)
     }
-    const namesA = new Set(workersA.map((w) => w.name))
-    const namesB = new Set(workersB.map((w) => w.name))
+    const namesA = new Set(workersA.map((w) => w.person.name))
+    const namesB = new Set(workersB.map((w) => w.person.name))
     const sameNames = namesA.size === namesB.size && [...namesA].every((n) => namesB.has(n))
     if (!sameNames) {
       throw new Error(`workspace A and B workers do not share the same names -- ${dump()}`)
     }
   }
-  console.log('materialization asserted: 3+3 companySlaveId-linked workers, distinct rows, shared roster identities')
+  console.log('seating asserted: 3+3 seats, distinct rows, held by the same three people')
 
   // 5. Set the goal via the real CLI on BOTH projects (the human's own path, and the one that
   // emits the `workspace.goal_set` event `dispatchPlanning`'s retry cap keys on), then start TWO
@@ -274,19 +281,19 @@ try {
   const taskCountB = await prisma.task.count({ where: { workspaceId: workspaceB.id } })
 
   // 7. Assert the pipeline actually ran through the roster, not a shortcut: every implementation
-  // run in either workspace traces back to a worker with a non-null `companySlaveId`.
+  // run in either workspace traces back to a seat held by somebody in this company's departments.
   const implRuns = await prisma.slaveRun.findMany({
     where: { kind: 'implementation', slave: { team: { workspaceId: { in: [workspaceA.id, workspaceB.id] } } } },
-    include: { slave: true },
+    include: { slave: { include: { person: { include: { departments: true } } } } },
   })
   if (implRuns.length === 0) {
     throw new Error('no implementation runs were recorded in either workspace -- nothing to trace')
   }
-  const untraced = implRuns.filter((run) => run.slave.companySlaveId === null)
+  const untraced = implRuns.filter((run) => run.slave.person.departments.length === 0)
   if (untraced.length > 0) {
     throw new Error(
-      `${untraced.length} implementation run(s) trace to a worker with no companySlaveId: ` +
-        JSON.stringify(untraced.map((r) => ({ runId: r.id, slaveId: r.slaveId, slaveName: r.slave.name }))),
+      `${untraced.length} implementation run(s) trace to somebody in no company department: ` +
+        JSON.stringify(untraced.map((r) => ({ runId: r.id, slaveId: r.slaveId, slaveName: r.slave.person.name }))),
     )
   }
 
@@ -322,8 +329,9 @@ try {
   // FK-ordered cleanup: events first (no FK from ExecutionEvent to Workspace -- M2's append-only
   // log outlives entity lifecycles by design), then the workspaces (cascades
   // Team/Slave/Task/SlaveRun/Checkpoint/TaskDependency/Artifact/SlaveMessage), then the company
-  // (cascades CompanyTeam/CompanySlave -- safe only once no Slave row references a CompanySlave
-  // any more, which the workspace deletes above already guarantee), then the templates.
+  // (cascades CompanyTeam/CompanyTeamMember), then the PEOPLE this gate made -- deleting a person
+  // cascades their seats, so the order shortens rather than lengthens (M58 R13) -- then the
+  // templates, which take nobody with them (`Person.templateId` is `SetNull`).
   for (const workspaceId of [workspaceIdA, workspaceIdB]) {
     if (workspaceId !== null) {
       await prisma.executionEvent.deleteMany({ where: { workspaceId } }).catch(() => {})
@@ -336,6 +344,9 @@ try {
   }
   if (companyId !== null) {
     await prisma.company.delete({ where: { id: companyId } }).catch(() => {})
+  }
+  for (const name of ['Atlas', 'Nova', 'Rhea']) {
+    await prisma.person.deleteMany({ where: { name: `${name} ${runTimestamp}` } }).catch(() => {})
   }
   for (const templateId of templateIds) {
     await prisma.slaveTemplate.delete({ where: { id: templateId } }).catch(() => {})

@@ -32,7 +32,7 @@ describe('setGoal', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -278,7 +278,7 @@ describe('a goal change becomes a memory (M49 R2c)', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -332,7 +332,7 @@ describe('listGoalVersions', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -401,7 +401,7 @@ describe('requestChange', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -567,7 +567,7 @@ describe('requestChange with an origin (M54 R5)', () => {
   // of its own, it only calls `setGoal` first so there is a v1 for the amendment to follow.
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "GoalVersion", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
     await setGoal(fixture.workspace.id, 'Make checkout reliable.')

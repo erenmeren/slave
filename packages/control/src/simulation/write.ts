@@ -108,7 +108,17 @@ export async function createSimulation(
   }
   const company = await prisma.company.findUnique({
     where: { id: input.companyId },
-    include: { teams: { orderBy: { name: 'asc' }, include: { slaves: { orderBy: { name: 'asc' }, include: { template: { select: { role: true } } } } } } },
+    include: {
+      teams: {
+        orderBy: { name: 'asc' },
+        include: {
+          members: {
+            orderBy: { person: { name: 'asc' } },
+            select: { person: { select: { name: true, template: { select: { role: true } } } } },
+          },
+        },
+      },
+    },
   })
   if (company === null) return err({ kind: 'company_not_found', companyId: input.companyId })
   const roster = rosterOf(company.teams)

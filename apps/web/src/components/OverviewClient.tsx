@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { userWorkspaceStatus } from '@slave-of-ai/domain'
 import { publishShellFacts } from '../hooks/useShellFacts'
@@ -8,9 +8,11 @@ import { publishStreamState } from '../hooks/useStreamState'
 import { useSelectedId } from '../hooks/useSelectedId'
 import { useRightPanel } from './shell/RightPanelProvider'
 import { useOverview } from '../hooks/useOverview'
-import type { OverviewSnapshot } from '../server/overview'
+import type { OverviewSnapshot, SlaveCardData, SlaveFeedEvent } from '../server/overview'
+import type { PersonDetail } from '../server/persons'
 import { SlaveCard } from './SlaveCard'
 import { SlavePanel } from './SlavePanel'
+import type { AssignableProject } from './persons/PersonProjectsGroup'
 import { HaltBanner } from './HaltBanner'
 import { WORKSPACE_TONE } from '../lib/tones'
 import { NeedsYouCard } from './project/NeedsYouCard'
@@ -119,14 +121,21 @@ export function MergeQueuePanel({ queue }: { readonly queue: OverviewSnapshot['m
 export function OverviewClient({
   workspaceId,
   initial,
+  skillCatalogue = [],
+  projects = [],
 }: {
   readonly workspaceId: string
   readonly initial: OverviewSnapshot
+  readonly skillCatalogue?: readonly { readonly skillId: string; readonly name: string; readonly providerName: string }[]
+  readonly projects?: readonly AssignableProject[]
 }): React.JSX.Element {
   const { snapshot, liveEvents, connection, error, latencyMs } = useOverview(workspaceId, initial)
   const view = snapshot ?? initial
   const [selectedSlaveId, selectSlave] = useSelectedId('slave')
-  const selectedSlave = view.slaves.find((slave) => slave.id === selectedSlaveId) ?? null
+  const selectedSlave =
+    view.slaves.find((slave) => slave.personId === selectedSlaveId) ??
+    view.slaves.find((slave) => slave.id === selectedSlaveId) ??
+    null
 
   // Controller ruling carried from Task 3 (and fix round 1), and re-aimed by M24 §2.2: the
   // shell header and the sidebar tree are mounted by the ROOT layout, above every page, so
@@ -269,7 +278,7 @@ export function OverviewClient({
     const openedFor = selectedSlave.id
     openPanel(
       'slave',
-      <SlavePanel
+      <OverviewPersonSlot
         // Keyed on the slave id so switching `?slave=` unmounts the old instance instead of
         // reusing it with new props: a control POST still in flight for the slave just switched
         // away from must not paint its late error onto the next slave's panel (M45 fix round 2).
@@ -278,6 +287,8 @@ export function OverviewClient({
         liveEvents={liveEvents[selectedSlave.id] ?? []}
         workspaceId={workspaceId}
         haltedReason={view.workspace.haltedReason}
+        skillCatalogue={skillCatalogue}
+        projects={projects}
         onClose={() => {
           selectSlave(null)
           closePanel()
@@ -412,5 +423,55 @@ export function OverviewClient({
         </PageShell>
       </div>
     </>
+  )
+}
+
+/**
+ * Opens the PERSON panel for a Team-band seat (M58 R27). The card still names a seat; the click
+ * passes `personId`, and this slot loads that person so Projects and Skills are the person's.
+ */
+function OverviewPersonSlot({
+  slave,
+  liveEvents,
+  workspaceId,
+  haltedReason,
+  skillCatalogue,
+  projects,
+  onClose,
+}: {
+  readonly slave: SlaveCardData
+  readonly liveEvents: readonly SlaveFeedEvent[]
+  readonly workspaceId: string
+  readonly haltedReason: string | null
+  readonly skillCatalogue: readonly { readonly skillId: string; readonly name: string; readonly providerName: string }[]
+  readonly projects: readonly AssignableProject[]
+  readonly onClose: () => void
+}): React.JSX.Element {
+  const [person, setPerson] = useState<PersonDetail | null>(null)
+  const [personTick, setPersonTick] = useState(0)
+  useEffect((): void => {
+    void fetch(`/api/persons/${slave.personId}`)
+      .then(async (response) => (response.ok ? ((await response.json()) as unknown) : null))
+      .then((detail) => {
+        const loaded =
+          detail !== null && typeof detail === 'object' && 'personId' in detail && typeof (detail as { personId: unknown }).personId === 'string'
+            ? (detail as PersonDetail)
+            : null
+        setPerson(loaded)
+      })
+      .catch(() => setPerson(null))
+  }, [slave.personId, personTick])
+  return (
+    <SlavePanel
+      slave={slave}
+      person={person}
+      skillCatalogue={skillCatalogue}
+      projects={projects}
+      liveEvents={liveEvents}
+      workspaceId={workspaceId}
+      haltedReason={haltedReason}
+      onClose={onClose}
+      onPersonChanged={() => setPersonTick((tick) => tick + 1)}
+    />
   )
 }

@@ -56,6 +56,8 @@ function row(over: Partial<CatalogRowView> = {}): CatalogRowView {
     activationChangedBy: null,
     duplicate: null,
     duplicateCount: 0,
+    defaultSkillIds: [],
+    hiredCount: 0,
     ...over,
   }
 }
@@ -528,6 +530,7 @@ describe('ProfileDrawer', () => {
       'identity',
       'mission',
       'capabilities',
+      'skills',
       'expertise',
       'principles',
       'constraints',
@@ -535,7 +538,6 @@ describe('ProfileDrawer', () => {
       'deliverables',
       'success',
       'collaboration',
-      'skills',
       'source',
       // M55 R6's fourteenth, between Source and the persona's own words.
       'duplicates',

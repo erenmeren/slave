@@ -23,7 +23,7 @@ const valid = (repoPath: string) => ({ name: 'Billing', repoPath, verifyCommands
 describe('createWorkspace', () => {
   beforeEach(async () => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "ProviderConfiguration", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "ProviderConfiguration", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 

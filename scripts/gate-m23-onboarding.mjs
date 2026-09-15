@@ -381,9 +381,9 @@ try {
   let taskB
   {
     team = await prisma.team.create({ data: { workspaceId, name: 'Gate Team' } })
-    worker = await prisma.slave.create({ data: { teamId: team.id, name: 'Worker', role: 'backend', runtimeRoles: ['backend'] } })
-    reviewer = await prisma.slave.create({ data: { teamId: team.id, name: 'Reviewer', role: 'reviewer', runtimeRoles: ['reviewer'] } })
-    idle = await prisma.slave.create({ data: { teamId: team.id, name: 'Idle', role: 'analyst', runtimeRoles: ['analyst'] } })
+    worker = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.upsert({ where: { name: 'Worker' }, create: { name: 'Worker' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
+    reviewer = await prisma.slave.create({ data: { teamId: team.id, role: 'reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.upsert({ where: { name: 'Reviewer' }, create: { name: 'Reviewer' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
+    idle = await prisma.slave.create({ data: { teamId: team.id, role: 'analyst', runtimeRoles: ['analyst'], personId: (await prisma.person.upsert({ where: { name: 'Idle' }, create: { name: 'Idle' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
     const workspaceRow = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
     taskA = await prisma.task.create({
       data: {

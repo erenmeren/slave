@@ -219,7 +219,12 @@ export async function buildActivityPage(workspaceId: string): Promise<ActivityPa
 
   const [history, slaves, tasks, users, typeVolumes, shellFacts] = await Promise.all([
     buildActivityHistory(workspaceId, EMPTY_ACTIVITY_FILTERS, {}),
-    prisma.slave.findMany({ where: { team: { workspaceId } }, select: { id: true, name: true }, orderBy: { name: 'asc' } }),
+    prisma.slave.findMany({
+      // M58 R17: OPEN seats only, named by the person in each (R2).
+      where: { closedAt: null, team: { workspaceId } },
+      select: { id: true, person: { select: { name: true } } },
+      orderBy: { person: { name: 'asc' } },
+    }),
     prisma.task.findMany({ where: { workspaceId }, select: { id: true, title: true }, orderBy: { title: 'asc' } }),
     prisma.user.findMany({ select: { id: true, username: true }, orderBy: { username: 'asc' } }),
     eventTypeVolumes(workspaceId),
@@ -232,7 +237,7 @@ export async function buildActivityPage(workspaceId: string): Promise<ActivityPa
     events: history!.events,
     nextBefore: history!.nextBefore,
     sparkline: history!.sparkline,
-    slaves,
+    slaves: slaves.map((slave) => ({ id: slave.id, name: slave.person.name })),
     tasks,
     users,
     typeVolumes,

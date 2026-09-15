@@ -137,7 +137,7 @@ describe('rankCandidates: step 2, permission (R10)', () => {
 
   it('leaves a template and a company worker unaffected: they carry no permission rows at all', () => {
     const ranked = rankCandidates(
-      [candidate({ id: 'a', kind: 'template', templateId: 'a' }), candidate({ id: 'b', kind: 'company_slave' })],
+      [candidate({ id: 'a', kind: 'template', templateId: 'a' }), candidate({ id: 'b', kind: 'person' })],
       CONTEXT,
     )
     expect(ranked[0]?.decidedBy).toBe('identity')

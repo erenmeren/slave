@@ -58,12 +58,14 @@ const runTimestamp = new Date().toISOString()
 // CLI-driven names are, because these are typed into real form fields the way an operator would
 // type them. Left as exact literals means a prior run that crashed before its own `finally`
 // cleanup (killed mid-run, etc.) can collide on `SlaveTemplate.name`/`Company.name`/
-// `CompanyTeam(companyId,name)`/`CompanySlave(companyTeamId,name)`'s unique constraints --
-// `preflightCleanup` below removes any such leftovers before this run creates its own.
+// `CompanyTeam(companyId,name)`/`Person.name`'s unique constraints -- `preflightCleanup` below
+// removes any such leftovers before this run creates its own.
 const TEMPLATE_NAME = 'M11 Gate Template'
 const COMPANY_NAME = 'M11 Gate Co'
 const TEAM_NAME = 'Crew'
 const MEMBER_NAME = 'Gate Worker'
+/** The second seat stage 8 makes by hand -- a PERSON since M58, so the teardown has to name them. */
+const SECOND_SLAVE_NAME = 'M11 Gate Second Slave'
 const MODEL_OVERRIDE = 'gate-model-x'
 // `claude_code`, not `cursor`: stage 1's workspaces carry no explicit `budgetUsd`, so they get the
 // schema's `@default(20)` (budgeted), and only `claude_code` reports cost (M12 Task 9's admission
@@ -103,8 +105,9 @@ async function findFreePort() {
 
 /** Removes any "M11 Gate"-named rows a prior interrupted run left behind, in the same FK order
  *  the `finally` block below uses: workspaces first (cascades Team/Slave), then the company
- *  (cascades CompanyTeam/CompanySlave), then the template. Safe to run against an empty slate --
- *  every step is a no-op when nothing matches. */
+ *  (cascades CompanyTeam/CompanyTeamMember), then this gate's own PERSON -- who outlives every
+ *  project (M58 R1) and whose deletion cascades their seats -- then the template. Safe to run
+ *  against an empty slate -- every step is a no-op when nothing matches. */
 async function preflightCleanup() {
   const staleWorkspaces = await prisma.workspace.findMany({
     where: { name: { startsWith: 'M11 Gate Project ' } },
@@ -116,6 +119,7 @@ async function preflightCleanup() {
   }
   const staleCompany = await prisma.company.findUnique({ where: { name: COMPANY_NAME } })
   if (staleCompany !== null) await prisma.company.delete({ where: { id: staleCompany.id } }).catch(() => {})
+  await prisma.person.deleteMany({ where: { name: { in: [MEMBER_NAME, SECOND_SLAVE_NAME] } } }).catch(() => {})
   const staleTemplate = await prisma.slaveTemplate.findUnique({ where: { name: TEMPLATE_NAME } })
   if (staleTemplate !== null) await prisma.slaveTemplate.delete({ where: { id: staleTemplate.id } }).catch(() => {})
 }
@@ -138,7 +142,8 @@ async function dumpOrgRows() {
   const templates = await prisma.slaveTemplate.findMany({ where: { name: { contains: 'M11 Gate' } } })
   const companies = await prisma.company.findMany({
     where: { name: { contains: 'M11 Gate' } },
-    include: { teams: { include: { slaves: { include: { workers: true } } } } },
+    // M58 R5: a department holds MEMBERS, and a member is a person with seats.
+    include: { teams: { include: { members: { include: { person: { include: { seats: true } } } } } } },
   })
   const workspaces = await prisma.workspace.findMany({
     where: { name: { contains: 'M11 Gate' } },
@@ -146,7 +151,7 @@ async function dumpOrgRows() {
       id: true,
       name: true,
       companyId: true,
-      teams: { select: { id: true, name: true, slaves: { select: { id: true, name: true, model: true, companySlaveId: true } } } },
+      teams: { select: { id: true, name: true, slaves: { select: { id: true, model: true, personId: true, person: { select: { name: true } } } } } },
     },
   })
   return JSON.stringify({ templates, companies, workspaces })
@@ -370,33 +375,41 @@ try {
   const companyTeamId = companyTeam.id
   console.log(`team created and asserted: ${companyTeamId}`)
 
-  await selectReliably(teamBlock.getByLabel('member template'), templateId, { label: TEMPLATE_NAME }, 'the member template select')
-  await fillReliably(teamBlock.getByLabel('member name'), MEMBER_NAME, 'the member name field')
+  // M58 R5: a department holds PEOPLE, so the person exists before the department picks them.
+  // Created directly here (Task 4 gives the CLI and this page a `person` verb of their own); the
+  // BROWSER still does the joining, which is what this stage is about.
+  const memberPerson = await prisma.person.upsert({ where: { name: MEMBER_NAME }, create: { name: MEMBER_NAME, templateId, lifecycle: 'permanent' }, update: { templateId, lifecycle: 'permanent', profile: null, model: null, provider: null, capabilities: [], releasedAt: null, releaseReason: null, selectionRationale: null } })
+  await page.reload({ waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await clickUntil(companyRow.getByTestId('company-toggle'), async () => companyDetail.first().isVisible(), `re-expanding the "${COMPANY_NAME}" row`)
+  await selectReliably(teamBlock.getByLabel('member slave'), memberPerson.id, { value: memberPerson.id }, 'the member slave select')
   const memberRowInSettings = teamBlock.getByTestId('data-table-row').filter({ hasText: MEMBER_NAME })
   await clickUntil(teamBlock.getByTestId('member-submit'), async () => memberRowInSettings.first().isVisible(), `"${MEMBER_NAME}" member submit`)
   await waitVisible(memberRowInSettings, `the "${MEMBER_NAME}" member row`)
-  const companySlave = await prisma.companySlave.findFirst({ where: { companyTeamId, name: MEMBER_NAME } })
-  if (companySlave === null) await fail(`the "${MEMBER_NAME}" row appeared in the browser but is missing from the DB`)
-  const companySlaveId = companySlave.id
+  const membership = await prisma.companyTeamMember.findFirst({ where: { companyTeamId, personId: memberPerson.id } })
+  if (membership === null) await fail(`the "${MEMBER_NAME}" row appeared in the browser but is missing from the DB`)
+  const companySlaveId = memberPerson.id
   console.log(`member created and asserted: ${companySlaveId}`)
   console.log('stage 1 (/workforce?tab=catalog) complete: template, company, team and member all created and asserted through the browser')
 
-  // The member is not yet materialized into any project -- the Slaves table (M24 §5.3, the
-  // Workforce page's Slaves tab since M44 R1) shows exactly one catalog-only row for it,
-  // `slave-project` reading "—".
+  // M58 R22: People is one row per person. Before any project they are in the pool -- the
+  // word is on the chip, the raw state is on `data-person-state`.
   await page.goto(`${baseUrl}/workforce`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
-  const catalogRow = page.getByTestId('data-table-row').filter({ hasText: MEMBER_NAME })
-  await waitVisible(catalogRow, `a catalog-only "${MEMBER_NAME}" row before any project is assigned`)
+  await waitVisible(page.getByTestId('people-rows'), 'the People table')
+  const catalogRow = page.locator('[data-testid^="person-row-"]').filter({ hasText: MEMBER_NAME })
+  await waitVisible(catalogRow, `a pooled "${MEMBER_NAME}" row before any project is assigned`)
   const catalogRowCount = await catalogRow.count()
   if (catalogRowCount !== 1) {
-    await fail(`the Slaves table shows ${catalogRowCount} "${MEMBER_NAME}" row(s) before assignment, expected exactly 1 (catalog-only)`)
+    await fail(`the People table shows ${catalogRowCount} "${MEMBER_NAME}" row(s) before assignment, expected exactly 1`)
   }
-  const catalogProjectCell = catalogRow.getByTestId('slave-project')
-  const catalogProjectText = (await catalogProjectCell.first().textContent())?.trim()
-  if (catalogProjectText !== '—') {
-    await fail(`the unmaterialized "${MEMBER_NAME}" row's project cell reads ${JSON.stringify(catalogProjectText)}, expected "—"`)
+  const catalogState = await catalogRow.first().getAttribute('data-person-state')
+  if (catalogState !== 'pool') {
+    await fail(`the unassigned "${MEMBER_NAME}" row's state is ${JSON.stringify(catalogState)}, expected "pool"`)
   }
-  console.log(`"${MEMBER_NAME}" shows as one catalog-only row (project "—") before any project has it`)
+  const catalogChip = (await catalogRow.getByTestId('person-pool-chip').first().textContent())?.trim()
+  if (catalogChip !== 'in the pool') {
+    await fail(`the unassigned "${MEMBER_NAME}" row's pool chip reads ${JSON.stringify(catalogChip)}, expected "in the pool"`)
+  }
+  console.log(`"${MEMBER_NAME}" shows as one pooled row before any project has them`)
 
   // ---- Scenario stage 2: / -- both project cards start "no company"; assign M11 Gate Co to both.
   await page.goto(`${baseUrl}/`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
@@ -459,180 +472,125 @@ try {
   await waitVisible(page.getByTestId('budget'), "the header's budget figure")
   console.log(`the "${workspaceNameA}" header shows a budget figure`)
 
-  // ---- Scenario stage 3: /workforce -- the one table lists Gate Worker materialized in both
-  // projects. (`/slaves` still answers: M44 R1 made it a 307 into this page.)
+  // ---- Scenario stage 3: /workforce -- one person, two project chips.
   await page.goto(`${baseUrl}/workforce`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
 
-  // `workforce-tab-slaves` is the default tab, but the click below is kept anyway (idempotent on
-  // an already-selected tab) -- requiring its own `aria-selected="true"` is what makes this stage
-  // assert the tab rather than assume which one happened to already be selected.
   const slavesTab = page.getByTestId('workforce-tab-slaves')
-  const memberRows = page.getByTestId('data-table-row').filter({ hasText: MEMBER_NAME })
+  const memberRows = page.locator('[data-testid^="person-row-"]').filter({ hasText: MEMBER_NAME })
   await clickUntil(
     slavesTab,
     async () => (await slavesTab.getAttribute('aria-selected')) === 'true' && (await memberRows.first().isVisible()),
-    'the Slaves tab',
+    'the People tab',
   )
-  await waitVisible(memberRows, `a "${MEMBER_NAME}" row in the Slaves table`)
+  await waitVisible(memberRows, `a "${MEMBER_NAME}" row in the People table`)
   const memberRowCount = await memberRows.count()
-  if (memberRowCount !== 2) {
+  if (memberRowCount !== 1) {
     await fail(
-      `the Slaves table shows ${memberRowCount} "${MEMBER_NAME}" row(s), expected 2 (one per project) -- ` +
+      `the People table shows ${memberRowCount} "${MEMBER_NAME}" row(s), expected 1 (one person, two seats) -- ` +
         `rows=${JSON.stringify(await memberRows.allTextContents())}`,
     )
   }
-  console.log(`the Slaves table lists "${MEMBER_NAME}" twice, once per project`)
-
+  const assignedState = await memberRows.first().getAttribute('data-person-state')
+  if (assignedState !== 'assigned') {
+    await fail(`"${MEMBER_NAME}"'s state is ${JSON.stringify(assignedState)}, expected "assigned"`)
+  }
+  const seatChips = (await memberRows.getByTestId('person-seat-chip').allTextContents()).map((text) => text.trim())
+  console.log(`the People table lists "${MEMBER_NAME}" once, seats ${JSON.stringify(seatChips)}`)
   for (const workspaceName of [workspaceNameA, workspaceNameB]) {
-    const row = memberRows.filter({ hasText: workspaceName })
-    await waitVisible(row, `the "${MEMBER_NAME}" row for project "${workspaceName}"`)
-    const projectText = (await row.getByTestId('slave-project').first().textContent())?.trim()
-    if (projectText !== workspaceName) {
+    if (!seatChips.includes(workspaceName)) {
       await fail(
-        `the "${MEMBER_NAME}" row's project cell reads ${JSON.stringify(projectText)}, expected ${JSON.stringify(workspaceName)} -- ` +
-          'materialization must name the row\'s own project, not the catalog "—"',
+        `the "${MEMBER_NAME}" row has no seat chip for ${JSON.stringify(workspaceName)} -- chips=${JSON.stringify(seatChips)}`,
       )
     }
   }
-  console.log(`each "${MEMBER_NAME}" row's project cell now names its own project`)
+  console.log('stage 3 (/workforce) complete: one person row, a seat chip per project')
 
-  // `ModelSelect` renders a plain (disabled) `<select data-testid="model-select">` -- not the
-  // free-text `model-override-input` -- until a provider is chosen (M25 §5.3); reading the input
-  // here, before `ModelOverrideEditor`'s own provider select has a value, would read an element
-  // that does not exist yet.
-  const modelSelectBeforeProvider = memberRows.first().getByTestId('model-select')
-  await waitVisible(modelSelectBeforeProvider, `"${MEMBER_NAME}"'s model select before any provider is chosen`)
-  if (!(await modelSelectBeforeProvider.isDisabled())) {
-    await fail(`"${MEMBER_NAME}"'s model select is not disabled before any provider is chosen`)
-  }
-  const modelSelectValueBeforeProvider = await modelSelectBeforeProvider.inputValue()
-  if (modelSelectValueBeforeProvider !== '') {
-    await fail(`"${MEMBER_NAME}"'s model select reads ${JSON.stringify(modelSelectValueBeforeProvider)}, expected "" (no override set yet)`)
-  }
-  console.log(`"${MEMBER_NAME}" carries no model override yet -- the disabled model-select reads empty (no provider chosen)`)
-  console.log('stage 3 (/workforce) complete: the one table shows the member materialized in both projects, with no override set')
-
-  // ---- Scenario stage 4: set gate-model-x on ONE worker via the Slaves table's ModelOverrideEditor.
-  const targetWorkerRow = memberRows.filter({ hasText: workspaceNameA })
-  await waitVisible(targetWorkerRow, `the "${workspaceNameA}" row for "${MEMBER_NAME}"`)
-
-  // M12 Task 7 made a model and its provider one write; Task 13 threads the provider through this
-  // route's body and the editor's own `<select>`, so both go into this worker row together.
-  await selectReliably(
-    targetWorkerRow.getByLabel('provider'),
-    PROVIDER_OVERRIDE,
-    { value: PROVIDER_OVERRIDE },
-    `the "${workspaceNameA}" worker's provider select`,
-  )
-  // The model field only becomes the free-text `model-override-input` after picking `other…` in
-  // the provider's own `model-select` (M25 §5.3) -- mirrors `model-select.test.tsx`'s helper.
-  await waitVisible(targetWorkerRow.getByTestId('model-select'), `the "${workspaceNameA}" worker's model select after choosing a provider`)
-  await targetWorkerRow.getByTestId('model-select').selectOption('__other__')
-  await waitVisible(targetWorkerRow.getByTestId('model-override-input'), `the "${workspaceNameA}" worker's model override input after choosing "other…"`)
-  await fillReliably(targetWorkerRow.getByTestId('model-override-input'), MODEL_OVERRIDE, `the "${workspaceNameA}" worker's model override input`)
-  // The table's own row no longer carries a separate display node for the saved model (M24 Task
-  // 7, Errata: the chain-source chips left with the table) -- `clickUntil`'s predicate reads
-  // straight from Prisma instead, the same "the click actually did something" proof this gate
-  // uses everywhere else a click's visible feedback is otherwise ambiguous.
-  await clickUntil(
-    targetWorkerRow.getByTestId('model-override-set'),
-    async () => {
-      const slave = await prisma.slave.findFirst({ where: { team: { workspaceId: workspaceIdA }, companySlaveId, name: MEMBER_NAME } })
-      return slave?.model === MODEL_OVERRIDE && slave?.provider === PROVIDER_OVERRIDE
-    },
-    `setting "${MODEL_OVERRIDE}" on the "${workspaceNameA}" worker`,
-  )
-
-  const workerSlaveA = await prisma.slave.findFirst({ where: { team: { workspaceId: workspaceIdA }, companySlaveId, name: MEMBER_NAME } })
-  const workerSlaveB = await prisma.slave.findFirst({ where: { team: { workspaceId: workspaceIdB }, companySlaveId, name: MEMBER_NAME } })
+  // ---- Scenario stage 4: a SEAT-level model on project A. People has no per-seat editor;
+  // the seat route still does, and the assertion is still "A only, B untouched".
+  const workerSlaveA = await prisma.slave.findFirst({ where: { team: { workspaceId: workspaceIdA }, personId: companySlaveId, closedAt: null } })
+  const workerSlaveB = await prisma.slave.findFirst({ where: { team: { workspaceId: workspaceIdB }, personId: companySlaveId, closedAt: null } })
   if (workerSlaveA === null || workerSlaveB === null) {
     await fail(`could not find both materialized "${MEMBER_NAME}" workers in the DB -- A=${JSON.stringify(workerSlaveA)} B=${JSON.stringify(workerSlaveB)}`)
   }
-  if (workerSlaveA.model !== MODEL_OVERRIDE) {
-    await fail(`the "${workspaceNameA}" worker's DB model is ${JSON.stringify(workerSlaveA.model)}, expected ${JSON.stringify(MODEL_OVERRIDE)}`)
+  const modelResponse = await page.request.post(`${baseUrl}/api/slaves/${workerSlaveA.id}/model`, {
+    data: { model: MODEL_OVERRIDE, provider: PROVIDER_OVERRIDE },
+  })
+  if (!modelResponse.ok()) {
+    await fail(`POST /api/slaves/${workerSlaveA.id}/model answered ${String(modelResponse.status())}: ${await modelResponse.text()}`)
   }
-  if (workerSlaveA.provider !== PROVIDER_OVERRIDE) {
-    await fail(`the "${workspaceNameA}" worker's DB provider is ${JSON.stringify(workerSlaveA.provider)}, expected ${JSON.stringify(PROVIDER_OVERRIDE)}`)
+  const afterModelA = await prisma.slave.findUniqueOrThrow({ where: { id: workerSlaveA.id } })
+  const afterModelB = await prisma.slave.findUniqueOrThrow({ where: { id: workerSlaveB.id } })
+  if (afterModelA.model !== MODEL_OVERRIDE) {
+    await fail(`the "${workspaceNameA}" worker's DB model is ${JSON.stringify(afterModelA.model)}, expected ${JSON.stringify(MODEL_OVERRIDE)}`)
   }
-  if (workerSlaveB.model !== null || workerSlaveB.provider !== null) {
+  if (afterModelA.provider !== PROVIDER_OVERRIDE) {
+    await fail(`the "${workspaceNameA}" worker's DB provider is ${JSON.stringify(afterModelA.provider)}, expected ${JSON.stringify(PROVIDER_OVERRIDE)}`)
+  }
+  if (afterModelB.model !== null || afterModelB.provider !== null) {
     await fail(
-      `the "${workspaceNameB}" worker's DB model/provider is ${JSON.stringify(workerSlaveB.model)}/${JSON.stringify(workerSlaveB.provider)}, ` +
-        `expected null/null -- only the "${workspaceNameA}" worker's override was set through the editor`,
+      `the "${workspaceNameB}" worker's DB model/provider is ${JSON.stringify(afterModelB.model)}/${JSON.stringify(afterModelB.provider)}, ` +
+        `expected null/null -- only the "${workspaceNameA}" seat's override was set`,
     )
   }
   console.log(
-    `the DB confirms model ${JSON.stringify(MODEL_OVERRIDE)} and provider ${JSON.stringify(PROVIDER_OVERRIDE)} landed on exactly the "${workspaceNameA}" worker`,
+    `the DB confirms model ${JSON.stringify(MODEL_OVERRIDE)} and provider ${JSON.stringify(PROVIDER_OVERRIDE)} landed on exactly the "${workspaceNameA}" seat`,
   )
-  console.log('stage 4 complete: a worker model+provider override, set through the Slaves table editor, verified against prisma.slave')
+  console.log('stage 4 complete: a seat model+provider override, verified against prisma.slave')
 
-  // ---- Scenario stage 5: move the "workspaceNameA" worker to a second department of the same
-  // project through the Slaves table's own `slave-department` select (M25 §4.1). The second
-  // department is created directly with `prisma.team.create` (the row `POST /api/w/:id/teams`
-  // itself creates) rather than through the browser, then the page is reloaded so the row's
-  // options (server-rendered `departmentsByWorkspace`) include it.
+  // ---- Scenario stage 5: move the project-A seat to a second department of the same project.
   const otherDepartment = await prisma.team.create({ data: { workspaceId: workspaceIdA, name: 'M11 Gate Other Dept' } })
   console.log(`created a second "${workspaceNameA}" department directly: ${otherDepartment.id}`)
-  await page.reload({ waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
-  await waitVisible(memberRows, `a "${MEMBER_NAME}" row after reload`)
-  const targetDeptRow = memberRows.filter({ hasText: workspaceNameA })
-  await waitVisible(targetDeptRow, `the "${workspaceNameA}" row for "${MEMBER_NAME}" after reload`)
-  await selectReliably(
-    targetDeptRow.getByTestId('slave-department'),
-    otherDepartment.id,
-    { value: otherDepartment.id },
-    `the "${workspaceNameA}" worker's department select`,
-  )
-  const movedSlave = await prisma.slave.findFirst({ where: { team: { workspaceId: workspaceIdA }, companySlaveId, name: MEMBER_NAME } })
+  const moveResponse = await page.request.put(`${baseUrl}/api/slaves/${workerSlaveA.id}/team`, {
+    data: { teamId: otherDepartment.id },
+  })
+  if (!moveResponse.ok()) {
+    await fail(`PUT /api/slaves/${workerSlaveA.id}/team answered ${String(moveResponse.status())}: ${await moveResponse.text()}`)
+  }
+  const movedSlave = await prisma.slave.findFirst({ where: { team: { workspaceId: workspaceIdA }, personId: companySlaveId, closedAt: null } })
   if (movedSlave === null || movedSlave.teamId !== otherDepartment.id) {
     await fail(
       `"${MEMBER_NAME}"'s teamId is ${JSON.stringify(movedSlave?.teamId)}, expected ${JSON.stringify(otherDepartment.id)} ` +
-        `after moving it to "M11 Gate Other Dept" through the Slaves table`,
+        `after moving the "${workspaceNameA}" seat to "M11 Gate Other Dept"`,
     )
   }
   console.log(`stage 5 complete: "${MEMBER_NAME}" moved to a second "${workspaceNameA}" department, verified against prisma.slave`)
 
-  // ---- Scenario stage 6a: delete the moved slave through the Slaves table's `slave-delete` ->
-  // `slave-delete-confirm` (M27 §4.1). A terminal `SlaveRun` fixture is created directly (this
-  // gate never runs the orchestrator, so the worker otherwise carries no run history) so "its
-  // runs are gone" below proves the delete's cascade rather than a count that was already zero.
+  // ---- Scenario stage 6a: take them off project A. DELETE /api/slaves/:id deletes the PERSON
+  // (R13); one project is `unassign`, through the panel's seat-remove.
   const movedSlaveRun = await prisma.slaveRun.create({ data: { slaveId: movedSlave.id, status: 'succeeded' } })
   console.log(`created a terminal run fixture directly for "${MEMBER_NAME}" (${workspaceNameA}): ${movedSlaveRun.id}`)
 
-  const deleteSlaveRow = memberRows.filter({ hasText: workspaceNameA })
-  await waitVisible(deleteSlaveRow, `the "${workspaceNameA}" row for "${MEMBER_NAME}" before deleting it`)
   await clickUntil(
-    deleteSlaveRow.getByTestId('slave-delete'),
-    async () => deleteSlaveRow.getByTestId('slave-delete-confirm').isVisible(),
-    `opening the delete confirm on the "${workspaceNameA}" "${MEMBER_NAME}" row`,
+    memberRows.getByTestId('person-open'),
+    async () => page.getByTestId(`panel-seat-remove-${movedSlave.id}`).isVisible(),
+    `opening "${MEMBER_NAME}" and waiting for the "${workspaceNameA}" seat-remove`,
   )
   await clickUntil(
-    deleteSlaveRow.getByTestId('slave-delete-confirm'),
-    async () => (await prisma.slave.findUnique({ where: { id: movedSlave.id } })) === null,
-    `confirming the delete of the "${workspaceNameA}" "${MEMBER_NAME}" row`,
+    page.getByTestId(`panel-seat-remove-${movedSlave.id}`),
+    async () => {
+      const seat = await prisma.slave.findUnique({ where: { id: movedSlave.id } })
+      return seat !== null && seat.closedAt !== null
+    },
+    `unassigning "${MEMBER_NAME}" from "${workspaceNameA}"`,
   )
-  const deletedSlave = await prisma.slave.findUnique({ where: { id: movedSlave.id } })
-  if (deletedSlave !== null) await fail(`"${MEMBER_NAME}"'s slave row (${movedSlave.id}) still exists after slave-delete-confirm`)
-  const deletedSlaveRuns = await prisma.slaveRun.findMany({ where: { slaveId: movedSlave.id } })
-  if (deletedSlaveRuns.length !== 0) {
-    await fail(`"${MEMBER_NAME}"'s runs were not deleted along with its slave row -- ${JSON.stringify(deletedSlaveRuns)}`)
+  const closedSeat = await prisma.slave.findUniqueOrThrow({ where: { id: movedSlave.id } })
+  if (closedSeat.closedAt === null) await fail(`"${MEMBER_NAME}"'s "${workspaceNameA}" seat (${movedSlave.id}) is still open after seat-remove`)
+  const keptRuns = await prisma.slaveRun.findMany({ where: { slaveId: movedSlave.id } })
+  if (keptRuns.length !== 1) {
+    await fail(`unassign must keep the run history -- ${JSON.stringify(keptRuns)}`)
   }
-  // The DB delete is already committed (asserted above) by the time `router.refresh()`'s own RSC
-  // round trip lands in the DOM -- a bounded poll, not a bare count, the same hydration-race
-  // shape every `clickUntil` predicate in this file already accounts for.
-  let remainingMemberRowCount = await memberRows.count()
-  {
-    const deadline = Date.now() + ACTION_TIMEOUT_MS
-    while (remainingMemberRowCount !== 1 && Date.now() < deadline) {
-      await delay(100)
-      remainingMemberRowCount = await memberRows.count()
-    }
+  const stillOnB = await prisma.slave.findFirst({ where: { id: workerSlaveB.id, closedAt: null } })
+  if (stillOnB === null) await fail(`"${MEMBER_NAME}"'s "${workspaceNameB}" seat closed when the other project was left`)
+  await waitVisible(memberRows, `a "${MEMBER_NAME}" row after leaving "${workspaceNameA}"`)
+  if ((await memberRows.count()) !== 1) {
+    await fail(`the People table lost "${MEMBER_NAME}" after leaving one project`)
   }
-  if (remainingMemberRowCount !== 1) {
-    await fail(
-      `the Slaves table shows ${remainingMemberRowCount} "${MEMBER_NAME}" row(s) after deleting the "${workspaceNameA}" one, expected exactly 1 (the "${workspaceNameB}" row)`,
-    )
-  }
-  console.log(`deleted "${MEMBER_NAME}"'s "${workspaceNameA}" slave row and its run history through slave-delete -- verified against prisma`)
+  console.log(`unassigned "${MEMBER_NAME}" from "${workspaceNameA}"; the person and the "${workspaceNameB}" seat stay -- verified against prisma`)
+  await clickUntil(
+    page.getByLabel('Close slave detail'),
+    async () => !(await page.getByTestId('panel-projects-group').isVisible()),
+    'closing the person panel so the Departments table is clickable',
+  )
 
   // ---- Scenario stage 6b: delete the second department through the Departments tab's
   // `department-delete` -> `department-delete-confirm` (M27 §4.2). Its one slave is already gone
@@ -735,9 +693,7 @@ try {
   // fixture needs no cleanup of its own.
   const officeDepartmentB = await prisma.team.findFirst({ where: { workspaceId: workspaceIdB } })
   if (officeDepartmentB === null) await fail(`"${workspaceNameB}" has no department to add the office fixture slave to`)
-  const officeFixtureSlave = await prisma.slave.create({
-    data: { teamId: officeDepartmentB.id, name: 'M11 Gate Second Slave', role: 'qa', runtimeRoles: ['qa'] },
-  })
+  const officeFixtureSlave = await prisma.slave.create({ data: { teamId: officeDepartmentB.id, role: 'qa', runtimeRoles: ['qa'], personId: (await prisma.person.upsert({ where: { name: SECOND_SLAVE_NAME }, create: { name: SECOND_SLAVE_NAME }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   console.log(`created a second "${workspaceNameB}" slave directly for the office floor: ${officeFixtureSlave.id}`)
 
   const officeDepartments = await prisma.team.count({ where: { workspaceId: workspaceIdB } })
@@ -826,9 +782,9 @@ try {
     if (nextProc.exitCode === null) nextProc.kill('SIGKILL')
   }
   // FK-ordered cleanup, identical order to `gate-m10-org.mjs`: events, then the workspaces
-  // (cascades Team/Slave/Task/SlaveRun/...), then the company (cascades CompanyTeam/CompanySlave
-  // -- safe only once no Slave row references a CompanySlave any more, which the workspace
-  // deletes above already guarantee), then the template.
+  // (cascades Team/Slave/Task/SlaveRun/...), then the company (cascades
+  // CompanyTeam/CompanyTeamMember), then this gate's own PERSON -- who outlives every project
+  // (M58 R1) -- then the template, which takes nobody with it (`Person.templateId` is `SetNull`).
   for (const workspaceId of [workspaceIdA, workspaceIdB]) {
     if (workspaceId !== null) {
       await prisma.executionEvent.deleteMany({ where: { workspaceId } }).catch(() => {})
@@ -842,6 +798,7 @@ try {
   if (companyId !== null) {
     await prisma.company.delete({ where: { id: companyId } }).catch(() => {})
   }
+  await prisma.person.deleteMany({ where: { name: { in: [MEMBER_NAME, SECOND_SLAVE_NAME] } } }).catch(() => {})
   if (templateId !== null) {
     await prisma.slaveTemplate.delete({ where: { id: templateId } }).catch(() => {})
   }

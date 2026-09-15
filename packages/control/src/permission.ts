@@ -115,9 +115,9 @@ async function slaveForPermission(
 ): Promise<{ readonly name: string; readonly workspaceId: string } | null> {
   const row = await prisma.slave.findUnique({
     where: { id: slaveId },
-    select: { name: true, team: { select: { workspaceId: true } } },
+    select: { person: { select: { name: true } }, team: { select: { workspaceId: true } } },
   })
-  return row === null ? null : { name: row.name, workspaceId: row.team.workspaceId }
+  return row === null ? null : { name: row.person.name, workspaceId: row.team.workspaceId }
 }
 
 /**

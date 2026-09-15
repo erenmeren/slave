@@ -186,19 +186,20 @@ const describeDecision = (row) =>
 const describeTask = (row) =>
   `${row.title} [${row.status}] role=${JSON.stringify(row.requiredRole)} caps=${JSON.stringify(row.requiredCapabilities)}`
 
-/** A worker row as this gate prints it -- the four M50 columns and the two sets a release empties. */
+/** A seat row as this gate prints it -- the four M50 columns (on the PERSON since M58 R1) and the
+ *  two sets a release empties. Every caller reads the row with `include: { person: true }`. */
 const describeSlave = (row) =>
   JSON.stringify({
     id: row.id,
-    name: row.name,
-    lifecycle: row.lifecycle,
+    name: row.person.name,
+    lifecycle: row.person.lifecycle,
     engagementTaskId: row.engagementTaskId,
-    releasedAt: row.releasedAt,
-    releaseReason: row.releaseReason,
+    releasedAt: row.person.releasedAt,
+    releaseReason: row.person.releaseReason,
     runtimeRoles: row.runtimeRoles,
-    capabilities: row.capabilities,
-    hiredFromTemplateId: row.hiredFromTemplateId,
-    selectionRationale: row.selectionRationale,
+    capabilities: row.person.capabilities,
+    templateId: row.person.templateId,
+    selectionRationale: row.person.selectionRationale,
   })
 
 /** The templates this catalog owns, by `sourceId` -- never by name, which is exactly the thing an
@@ -218,7 +219,12 @@ async function deleteGateTemplates(label) {
   if (rows.length === 0) return
   console.log(`${label}: removing ${String(rows.length)} gate template(s): ${JSON.stringify(rows.map((r) => r.name))}`)
   const ids = rows.map((r) => r.id)
-  await prisma.companySlave.deleteMany({ where: { templateId: { in: ids } } }).catch(() => {})
+  // M58 R1: the roster copy this used to remove is a PERSON now, and a person is NOT cascaded away
+  // with the workspace whose seat held them -- so a hire this gate made survives its own teardown,
+  // keeps the persona's name and is offered back to the next run as somebody who already works
+  // here. Deleted BEFORE the templates, exactly as the `CompanySlave` sweep was: `Person.templateId`
+  // is SetNull, so a template that goes first takes the only handle on them with it.
+  await prisma.person.deleteMany({ where: { templateId: { in: ids } } }).catch(() => {})
   await prisma.runbookTemplate.deleteMany({ where: { sourceTemplateId: { in: ids } } }).catch(() => {})
   await prisma.slaveTemplate.deleteMany({ where: { id: { in: ids } } }).catch(() => {})
 }
@@ -603,17 +609,12 @@ try {
   // It is dispatchable as nothing else, which is what makes stage 3's two gaps facts about this
   // project rather than fixtures. Its title deliberately does not read as a role.
   const dev = await prisma.slave.create({
-    data: {
-      teamId: team.id,
-      name: WORKER_NAME,
-      role: 'Senior Engineer',
-      runtimeRoles: ['backend', 'manager', 'reviewer'],
-      capabilities: ['backend.api-design'],
-    },
+    data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend', 'manager', 'reviewer'], personId: (await prisma.person.upsert({ where: { name: WORKER_NAME }, create: { name: WORKER_NAME, capabilities: ['backend.api-design'] }, update: { capabilities: ['backend.api-design'], templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id },
+    include: { person: true },
   })
   const devId = dev.id
   console.log(`slave ${devId} (${WORKER_NAME}): ${describeSlave(dev)}`)
-  await assertEqual(dev.lifecycle, 'project', 'stage 2: a worker created by hand is a project worker')
+  await assertEqual(dev.person.lifecycle, 'project', 'stage 2: a worker created by hand is a project worker')
 
   console.log(`stage 2 -- set-goal printed: ${JSON.stringify(runCli(['set-goal', '--workspace', workspaceId, '--goal', GOAL]).trim())}`)
 
@@ -729,21 +730,21 @@ try {
   console.log(`stage 4 -- the decision after approval: ${describeDecision(approved)}`)
   if (approved.status !== 'approved') await fail(`stage 4: the approved decision is ${approved.status}, expected approved`)
 
-  const hired = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId }, hiredFromTemplateId: securityTemplate.id } })
+  const hired = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId }, person: { templateId: securityTemplate.id } }, include: { person: true } })
   const hiredId = hired.id
   console.log(`stage 4 -- the hire: ${describeSlave(hired)}`)
-  await assertEqual(hired.lifecycle, 'ephemeral', 'stage 4: the hire is a specialist brought in for one assignment')
+  await assertEqual(hired.person.lifecycle, 'ephemeral', 'stage 4: the hire is a specialist brought in for one assignment')
   await assertEqual(hired.engagementTaskId, auth.id, 'stage 4: the engagement is the one task the gap belonged to')
   if (hired.createdAt === null) await fail('stage 4: the hire has no createdAt')
-  if (hired.releasedAt !== null) await fail(`stage 4: a fresh hire is not released: ${describeSlave(hired)}`)
-  if (!hired.capabilities.includes(SECURITY_KEY)) await fail(`stage 4: the hire does not provide what it was hired for: ${describeSlave(hired)}`)
+  if (hired.person.releasedAt !== null) await fail(`stage 4: a fresh hire is not released: ${describeSlave(hired)}`)
+  if (!hired.person.capabilities.includes(SECURITY_KEY)) await fail(`stage 4: the hire does not provide what it was hired for: ${describeSlave(hired)}`)
   if (!hired.runtimeRoles.includes('security')) await fail(`stage 4: the hire is not dispatchable as security: ${describeSlave(hired)}`)
-  if (hired.hiredFromTemplateId !== securityTemplate.id) await fail(`stage 4: the hire does not name the template it came from: ${describeSlave(hired)}`)
-  if (hired.selectionRationale === null || hired.selectionRationale === '') await fail('stage 4: nothing says why this worker is here')
+  if (hired.person.templateId !== securityTemplate.id) await fail(`stage 4: the hire does not name the template it came from: ${describeSlave(hired)}`)
+  if (hired.person.selectionRationale === null || hired.person.selectionRationale === '') await fail('stage 4: nothing says why this worker is here')
   // R1: the suffix `(asked for as a temporary specialist)` is GONE. The column is the record, and a
   // sentence that repeated it would be the system saying twice what it can now say once.
-  if (hired.selectionRationale.includes('asked for as a temporary specialist')) {
-    await fail(`stage 4: the rationale still carries the pre-M50 suffix: ${JSON.stringify(hired.selectionRationale)}`)
+  if (hired.person.selectionRationale.includes('asked for as a temporary specialist')) {
+    await fail(`stage 4: the rationale still carries the pre-M50 suffix: ${JSON.stringify(hired.person.selectionRationale)}`)
   }
   await assertEqual(await prisma.slave.count({ where: { team: { workspaceId } } }), 2, 'stage 4: exactly one worker arrived')
   console.log('stage 4 complete: a person approved, and the row itself says this worker is here for one assignment')
@@ -757,7 +758,7 @@ try {
     note(row === null ? 'no run for the authentication task on the hire yet' : `run ${row.id}`)
     return row
   })
-  console.log(`stage 5 -- run ${authRun.id} started for ${AUTH_TASK_TITLE} on ${hired.name}`)
+  console.log(`stage 5 -- run ${authRun.id} started for ${AUTH_TASK_TITLE} on ${hired.person.name}`)
 
   await waitUntil(`"${AUTH_TASK_TITLE}" to be worked, verified, reviewed and done`, BOARD_TIMEOUT_MS, async (note) => {
     const rows = await board()
@@ -801,7 +802,7 @@ try {
     runs: await prisma.slaveRun.count({ where: { slaveId: hiredId } }),
     contexts: await prisma.runContext.count({ where: { run: { slaveId: hiredId } } }),
     events: await prisma.executionEvent.count({ where: { workspaceId, slaveId: hiredId, seq: { lte: eventCeiling } } }),
-    memories: await prisma.memory.count({ where: { OR: [{ slaveId: hiredId }, { runId: { in: runIdsBefore } }] } }),
+    memories: await prisma.memory.count({ where: { OR: [{ personId: hired.personId }, { runId: { in: runIdsBefore } }] } }),
   })
   const before = await evidence()
   console.log(`stage 5 -- the evidence this worker produced, before the release: ${JSON.stringify(before)}`)
@@ -839,18 +840,18 @@ try {
     await fail(`stage 6: an applied decision was never pending, so nothing resolved it: ${describeDecision(release)}`)
   }
 
-  const released = await prisma.slave.findUniqueOrThrow({ where: { id: hiredId } })
+  const released = await prisma.slave.findUniqueOrThrow({ where: { id: hiredId }, include: { person: true } })
   console.log(`stage 6 -- the worker after the release: ${describeSlave(released)}`)
-  if (released.releasedAt === null) await fail(`stage 6: the worker was not released: ${describeSlave(released)}`)
-  if (released.releaseReason === null || released.releaseReason.trim() === '') {
+  if (released.person.releasedAt === null) await fail(`stage 6: the worker was not released: ${describeSlave(released)}`)
+  if (released.person.releaseReason === null || released.person.releaseReason.trim() === '') {
     await fail(`stage 6: the release recorded no reason: ${describeSlave(released)}`)
   }
   await assertEqual(released.runtimeRoles, [], 'stage 6: nothing dispatches a released worker again')
   // The two columns a release does NOT touch (Task 3's hand-off): the record of what this worker
   // was and what it was here for outlives the engagement.
-  await assertEqual(released.lifecycle, 'ephemeral', 'stage 6: a release does not rewrite the lifecycle')
+  await assertEqual(released.person.lifecycle, 'ephemeral', 'stage 6: a release does not rewrite the lifecycle')
   await assertEqual(released.engagementTaskId, auth.id, 'stage 6: a release does not forget the assignment')
-  const releasedAtFirst = released.releasedAt.toISOString()
+  const releasedAtFirst = released.person.releasedAt.toISOString()
 
   const releaseEvents = await prisma.executionEvent.findMany({
     where: { workspaceId, type: 'slave_released', slaveId: hiredId },
@@ -942,10 +943,10 @@ try {
     runCli(['tick', '--workspace', workspaceId])
   }
   console.log('stage 7 -- ten more ticks ran')
-  const stillReleased = await prisma.slave.findUniqueOrThrow({ where: { id: hiredId } })
+  const stillReleased = await prisma.slave.findUniqueOrThrow({ where: { id: hiredId }, include: { person: true } })
   console.log(`stage 7 -- the released worker after ten more ticks: ${describeSlave(stillReleased)}`)
-  await assertEqual(stillReleased.lifecycle, 'ephemeral', 'stage 7: nothing promotes a worker automatically')
-  await assertEqual(stillReleased.releasedAt?.toISOString() ?? null, releasedAtFirst, 'stage 7: the release timestamp did not move')
+  await assertEqual(stillReleased.person.lifecycle, 'ephemeral', 'stage 7: nothing promotes a worker automatically')
+  await assertEqual(stillReleased.person.releasedAt?.toISOString() ?? null, releasedAtFirst, 'stage 7: the release timestamp did not move')
   await assertEqual(stillReleased.runtimeRoles, [], 'stage 7: ten ticks gave a released worker no role back')
   console.log('stage 7 complete: the gap was asked again and named the CATALOG; the worker who has gone was neither re-picked nor promoted')
 
@@ -974,13 +975,14 @@ try {
     await fail(`stage 8a: the line does not name the one assignment: ${JSON.stringify(hireOutput)}`)
   }
   const second = await prisma.slave.findFirstOrThrow({
-    where: { team: { workspaceId }, hiredFromTemplateId: securityTemplate.id, id: { not: hiredId } },
+    where: { team: { workspaceId }, person: { templateId: securityTemplate.id }, id: { not: hiredId } },
+    include: { person: true },
   })
   const secondId = second.id
   console.log(`stage 8a -- the second specialist: ${describeSlave(second)}`)
   // The released worker still holds the first name, because nothing deleted it.
-  await assertEqual(second.name, `${SECURITY_PERSONA} 2`, 'stage 8a: the new worker is named beside the one who has gone')
-  await assertEqual(second.lifecycle, 'ephemeral', 'stage 8a: a hand hire for one assignment is ephemeral too')
+  await assertEqual(second.person.name, `${SECURITY_PERSONA} 2`, 'stage 8a: the new worker is named beside the one who has gone')
+  await assertEqual(second.person.lifecycle, 'ephemeral', 'stage 8a: a hand hire for one assignment is ephemeral too')
   await assertEqual(second.engagementTaskId, auth.id, 'stage 8a: the assignment is the task the operator named')
 
   const releaseOutput = runCli(['release-worker', '--slave', secondId, '--reason', 'the engagement is over']).trim()
@@ -989,28 +991,29 @@ try {
   // (this worker never ran, so it left no worktree at all), and the promise R5 is named for.
   await assertEqual(
     releaseOutput,
-    `released ${SECURITY_PERSONA} 2 (${secondId}): runtime roles cleared, 0 worktrees collected; ` +
-      'every run, message and memory it produced is untouched',
+    `released ${SECURITY_PERSONA} 2 (${second.personId}): 1 seat closed, 0 worktrees collected; ` +
+      'every run, message and memory they produced is untouched',
     'stage 8a: what a person reads when they release somebody by hand',
   )
-  const secondReleased = await prisma.slave.findUniqueOrThrow({ where: { id: secondId } })
+  const secondReleased = await prisma.slave.findUniqueOrThrow({ where: { id: secondId }, include: { person: true } })
   console.log(`stage 8a -- the second specialist after its release: ${describeSlave(secondReleased)}`)
   await assertEqual(secondReleased.runtimeRoles, [], 'stage 8a: the by-hand release empties the runtime roles too')
-  if (secondReleased.releasedAt === null) await fail(`stage 8a: the by-hand release wrote no timestamp: ${describeSlave(secondReleased)}`)
+  if (secondReleased.person.releasedAt === null) await fail(`stage 8a: the by-hand release wrote no timestamp: ${describeSlave(secondReleased)}`)
 
   const lifecycleOutput = runCli(['set-lifecycle', '--slave', hiredId, '--lifecycle', 'project']).trim()
   console.log(`stage 8b -- set-lifecycle printed: ${JSON.stringify(lifecycleOutput)}`)
   await assertEqual(
     lifecycleOutput,
-    `${hiredId} moved from ${LIFECYCLE_WORD.ephemeral} to ${LIFECYCLE_WORD.project}`,
+    `a lifecycle belongs to the slave, not the seat: applied to slave ${hired.personId}, on every project they are on\n` +
+      `${hired.personId} moved from ${LIFECYCLE_WORD.ephemeral} to ${LIFECYCLE_WORD.project}`,
     'stage 8b: what a person reads when they move a lifecycle by hand',
   )
-  const promoted = await prisma.slave.findUniqueOrThrow({ where: { id: hiredId } })
+  const promoted = await prisma.slave.findUniqueOrThrow({ where: { id: hiredId }, include: { person: true } })
   console.log(`stage 8b -- the worker after the move: ${describeSlave(promoted)}`)
-  await assertEqual(promoted.lifecycle, 'project', 'stage 8b: the column moved')
+  await assertEqual(promoted.person.lifecycle, 'project', 'stage 8b: the column moved')
   await assertEqual(promoted.engagementTaskId, null, 'stage 8b: a worker that is no longer temporary has no one assignment')
-  await assertEqual(promoted.releasedAt, null, 'stage 8b: leaving ephemeral clears the release with it')
-  await assertEqual(promoted.releaseReason, null, 'stage 8b: and the sentence it was released with')
+  await assertEqual(promoted.person.releasedAt, null, 'stage 8b: leaving ephemeral clears the release with it')
+  await assertEqual(promoted.person.releaseReason, null, 'stage 8b: and the sentence it was released with')
   // R4 restores NOTHING: the roles are a person's own call through `set-runtime-roles`.
   await assertEqual(promoted.runtimeRoles, [], 'stage 8b: nothing gave the roles back')
   const changedEvents = await prisma.executionEvent.findMany({
@@ -1026,20 +1029,27 @@ try {
     'stage 8b: the log says exactly what moved',
   )
 
-  const devBefore = await prisma.slave.findUniqueOrThrow({ where: { id: devId } })
-  const refusal = runCliExpectingRefusal(['release-worker', '--slave', devId, '--reason', 'x'])
-  console.log(`stage 8c -- release-worker on a project worker: status ${String(refusal.status)}, stdout ${JSON.stringify(refusal.stdout)}, stderr ${JSON.stringify(refusal.stderr)}`)
-  if (refusal.status === 0) await fail('stage 8c: releasing a project worker was allowed')
-  if (!refusal.stderr.includes('not a specialist brought in for one assignment')) {
-    await fail(`stage 8c: the refusal does not say why: ${JSON.stringify(refusal.stderr)}`)
+  // M58 R9: a release is the end of an engagement, not a lifecycle check. A project worker
+  // may be released. Dev stays on the board -- this person is made for the proof and left.
+  const projectPerson = await prisma.person.create({
+    data: { name: 'M50 Gate Project Release', lifecycle: 'project' },
+  })
+  const projectSeat = await prisma.slave.create({
+    data: { teamId: (await prisma.slave.findUniqueOrThrow({ where: { id: devId }, select: { teamId: true } })).teamId, personId: projectPerson.id, role: 'dev' },
+  })
+  const projectRelease = runCli(['release-worker', '--slave', projectSeat.id, '--reason', 'the engagement is over']).trim()
+  console.log(`stage 8c -- release-worker on a project worker: ${JSON.stringify(projectRelease)}`)
+  if (!projectRelease.startsWith(`released M50 Gate Project Release (${projectPerson.id})`)) {
+    await fail(`stage 8c: releasing a project worker was refused: ${JSON.stringify(projectRelease)}`)
   }
-  if (refusal.stdout.trim() !== '') await fail(`stage 8c: a refusal wrote to stdout: ${JSON.stringify(refusal.stdout)}`)
-  const devAfter = await prisma.slave.findUniqueOrThrow({ where: { id: devId } })
-  await assertEqual(devAfter.runtimeRoles, devBefore.runtimeRoles, 'stage 8c: a refused release changed nothing')
-  await assertEqual(devAfter.releasedAt, null, 'stage 8c: and released nobody')
+  if (!(await prisma.person.findUniqueOrThrow({ where: { id: projectPerson.id } })).releasedAt) {
+    await fail('stage 8c: the project worker was not released')
+  }
+  const devAfter = await prisma.slave.findUniqueOrThrow({ where: { id: devId }, include: { person: true } })
+  await assertEqual(devAfter.person.releasedAt, null, 'stage 8c: releasing somebody else did not touch Dev')
   console.log(
     'stage 8 complete: a second specialist was hired beside the one who had gone, a lifecycle moved by hand cleared the ' +
-      'engagement and the release, and releasing a project worker is refused in words',
+      'engagement and the release, and a project worker can be released the same way',
   )
 
   // ============================================================================================
@@ -1165,7 +1175,7 @@ try {
 
   // Nobody approved the QA proposal, so nobody was ever hired for it: the negative that keeps the
   // page's counts honest.
-  const qaHires = await prisma.slave.count({ where: { team: { workspaceId }, hiredFromTemplateId: qaTemplate.id } })
+  const qaHires = await prisma.slave.count({ where: { team: { workspaceId }, person: { templateId: qaTemplate.id } } })
   await assertEqual(qaHires, 0, 'stage 9: the proposal nobody answered hired nobody')
 
   await gotoReliably(`${baseUrl}/w/${workspaceId}/organization`)
@@ -1248,20 +1258,23 @@ try {
   }
 
   await gotoReliably(`${baseUrl}/workforce`)
-  await waitVisible(page.getByTestId('worker-lifecycle').first(), 'the Slaves table lifecycle column')
-  const tableWords = await page
-    .locator('[data-testid="worker-lifecycle"]')
-    .evaluateAll((nodes) => nodes.map((node) => (node.textContent ?? '').trim()))
-  console.log(`stage 9 -- the Slaves table's lifecycle column: ${JSON.stringify(tableWords)}`)
-  if (!tableWords.includes(LIFECYCLE_WORD.project)) await fail(`stage 9: the column shows no Project row: ${JSON.stringify(tableWords)}`)
-  if (!tableWords.includes(LIFECYCLE_WORD.ephemeral)) await fail(`stage 9: the column shows no Ephemeral row: ${JSON.stringify(tableWords)}`)
+  // M58 R22: the People tab is one row per SLAVE now, not one per project seat. A released
+  // specialist is still marked and still greyed; the row's testid is `person-row-<personId>` and
+  // the word comes from `USER_PERSON_LABEL` rather than a lifecycle column on the seat.
+  await waitVisible(page.getByTestId('people-rows'), 'the People table')
   const releasedRows = await page
-    .locator('[data-testid="slave-row"][data-released="true"]')
+    .locator('[data-testid^="person-row-"][data-released="true"]')
     .evaluateAll((nodes) => nodes.map((node) => (node.textContent ?? '').trim().slice(0, 120)))
-  console.log(`stage 9 -- the released rows in the Slaves table: ${JSON.stringify(releasedRows)}`)
+  console.log(`stage 9 -- the released rows in the People table: ${JSON.stringify(releasedRows)}`)
   if (!releasedRows.some((text) => text.includes(`${SECURITY_PERSONA} 2`))) {
-    await fail(`stage 9: the released specialist is not marked in the Slaves table: ${JSON.stringify(releasedRows)}`)
+    await fail(`stage 9: the released specialist is not marked in the People table: ${JSON.stringify(releasedRows)}`)
   }
+  const stateWords = await page
+    .locator('[data-testid^="person-row-"]')
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-person-state')))
+  console.log(`stage 9 -- the People table's states: ${JSON.stringify(stateWords)}`)
+  if (!stateWords.includes('released')) await fail(`stage 9: no released row: ${JSON.stringify(stateWords)}`)
+  if (!stateWords.includes('assigned')) await fail(`stage 9: no assigned row: ${JSON.stringify(stateWords)}`)
 
   console.log(`gotoReliably retries this run: ${String(gotoRetries.length)}${gotoRetries.length === 0 ? '' : ` (${JSON.stringify(gotoRetries)})`}`)
   console.log(

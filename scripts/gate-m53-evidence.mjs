@@ -688,24 +688,37 @@ try {
   workspaceIds.push(workspace.id)
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: TEAM_NAME } })
 
+  // M58 R1: a worker is a PERSON in a SEAT. The person carries the name, the persona they came from
+  // and what they provide; the seat carries the role, the runtime roles and the runtime override.
+  // Upserted by NAME because a person is not cascaded away with the workspace whose seat held them
+  // any more, so a second run of this gate meets the first run's people; every scalar is restated so
+  // an adopted survivor is the worker this run asked for and not the last one's.
   const makeWorker = async ({ name, templateId, runtimeRoles, capabilities }) => {
-    const row = await prisma.slave.create({
-      data: {
-        teamId: team.id,
-        name,
-        role: WORK_ROLE,
-        runtimeRoles: [...runtimeRoles],
+    const person = await prisma.person.upsert({
+      where: { name },
+      create: { name, templateId, capabilities: [...capabilities] },
+      update: {
+        templateId,
         capabilities: [...capabilities],
-        model: PIPELINE_MODEL,
-        provider: 'claude_code',
-        ...(templateId === null ? {} : { hiredFromTemplateId: templateId }),
+        profile: null,
+        model: null,
+        provider: null,
+        lifecycle: 'project',
+        releasedAt: null,
+        releaseReason: null,
+        selectionRationale: null,
       },
+    })
+    const row = await prisma.slave.create({
+      data: { teamId: team.id, role: WORK_ROLE, runtimeRoles: [...runtimeRoles], model: PIPELINE_MODEL, provider: 'claude_code', personId: person.id },
     })
     console.log(
       `stage 0: worker ${row.id} (${name}) roles=${JSON.stringify(row.runtimeRoles)} ` +
-        `capabilities=${JSON.stringify(row.capabilities)} template=${String(templateId)}`,
+        `capabilities=${JSON.stringify(person.capabilities)} template=${String(templateId)}`,
     )
-    return row
+    // The seat, with the person's name flattened on: the stages below read `worker.id` for the seat
+    // and `worker.name` for the person, and neither should have to know which row it lives in.
+    return { ...row, name: person.name }
   }
 
   // Phase A's worker is dispatchable; phase B's holds no runtime role at all and cannot be reached.
@@ -737,9 +750,7 @@ try {
   })
   workspaceIds.push(foil.id)
   const foilTeam = await prisma.team.create({ data: { workspaceId: foil.id, name: TEAM_NAME } })
-  const foilWorker = await prisma.slave.create({
-    data: { teamId: foilTeam.id, name: 'Fen', role: WORK_ROLE, runtimeRoles: [], model: PIPELINE_MODEL, provider: 'claude_code' },
-  })
+  const foilWorker = await prisma.slave.create({ data: { teamId: foilTeam.id, role: WORK_ROLE, runtimeRoles: [], model: PIPELINE_MODEL, provider: 'claude_code', personId: (await prisma.person.upsert({ where: { name: 'Fen' }, create: { name: 'Fen' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   const foilRun = await prisma.slaveRun.create({
     data: { slaveId: foilWorker.id, status: 'working', kind: 'implementation', provider: 'claude_code', model: PIPELINE_MODEL, pid: null },
   })

@@ -188,7 +188,7 @@ async function dumpGateRows() {
   for (const workspace of workspaces) {
     const runs = await prisma.slaveRun.findMany({
       where: { slave: { team: { workspaceId: workspace.id } } },
-      include: { slave: { select: { name: true } } },
+      include: { slave: { select: { person: { select: { name: true } } } } },
       orderBy: { startedAt: 'asc' },
     })
     const events = await prisma.executionEvent.findMany({
@@ -198,7 +198,7 @@ async function dumpGateRows() {
     })
     dump.push({
       workspace,
-      runs: runs.map((run) => ({ id: run.id, slave: run.slave.name, status: run.status })),
+      runs: runs.map((run) => ({ id: run.id, slave: run.slave.person.name, status: run.status })),
       events: events.map((event) => ({ seq: event.seq, runId: event.runId, type: event.type, payload: event.payload })),
     })
   }
@@ -682,9 +682,7 @@ try {
   workspaceId = workspace.id
   const teamId = (await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })).id
   const slaveId = (
-    await prisma.slave.create({
-      data: { teamId, name: WORKER_NAME, role: 'backend', runtimeRoles: ['backend'], provider: WORKER_PROVIDER, model: WORKER_MODEL },
-    })
+    await prisma.slave.create({ data: { teamId: teamId, role: 'backend', runtimeRoles: ['backend'], provider: WORKER_PROVIDER, model: WORKER_MODEL, personId: (await prisma.person.upsert({ where: { name: WORKER_NAME }, create: { name: WORKER_NAME }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   ).id
   console.log(`workspace ${workspaceId}; team ${teamId}; slave ${slaveId}`)
 

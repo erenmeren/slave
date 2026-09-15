@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  addCompanySlave,
+  addDepartmentMember,
   addCompanyTeam,
   assignCompany,
   createCompany,
@@ -80,7 +80,7 @@ describe('the model chain reaches a dispatched run, and setSlaveModel changes th
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -106,12 +106,14 @@ describe('the model chain reaches a dispatched run, and setSlaveModel changes th
       provider: 'claude_code',
     })
     if (!template.ok) throw new Error('setup: createTemplate failed')
-    const rosterSlave = await addCompanySlave(team.value.id, template.value.id, 'Atlas')
-    if (!rosterSlave.ok) throw new Error('setup: addCompanySlave failed')
+    // M58 R5: a department holds PEOPLE. The person is created first, then bound to it.
+    const atlas = await prisma.person.create({ data: { name: 'Atlas', templateId: template.value.id, lifecycle: 'permanent' } })
+    const member = await addDepartmentMember(team.value.id, atlas.id)
+    if (!member.ok) throw new Error('setup: addDepartmentMember failed')
 
     const assigned = await assignCompany(workspace.id, company.value.id)
     if (!assigned.ok) throw new Error('setup: assignCompany failed')
-    const worker = await prisma.slave.findFirstOrThrow({ where: { name: 'Atlas' } })
+    const worker = await prisma.slave.findFirstOrThrow({ where: { person: { name: 'Atlas' } } })
     expect(worker.model).toBeNull()
 
     const firstTask = await prisma.task.create({

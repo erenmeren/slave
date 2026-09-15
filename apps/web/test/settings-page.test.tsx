@@ -88,7 +88,7 @@ function template(
 
 function member(over: Partial<RosterMemberRow> = {}): RosterMemberRow {
   return {
-    companySlaveId: 'ca1',
+    personId: 'ca1',
     name: 'Alex',
     role: 'backend',
     templateName: 'Backend Engineer',
@@ -267,28 +267,27 @@ describe('SettingsPage', () => {
 
 describe('CompanyManager', () => {
   it('shows an EmptyTile when there are no companies', () => {
-    render(<CompanyManager companies={[]} roster={[]} templates={[]} />)
+    render(<CompanyManager companies={[]} roster={[]} people={[]} />)
     expect(screen.getByTestId('empty-tile')).toBeTruthy()
     expect(screen.queryByTestId('company-row')).toBeNull()
   })
 
   it('renders a row per company, collapsed by default', () => {
-    render(<CompanyManager companies={[{ id: 'c1', name: 'Acme Robotics' }]} roster={[company()]} templates={[]} />)
+    render(<CompanyManager companies={[{ id: 'c1', name: 'Acme Robotics' }]} roster={[company()]} people={[]} />)
     expect(screen.getByText('Acme Robotics')).toBeTruthy()
     expect(screen.queryByTestId('company-detail')).toBeNull()
   })
 
   it('expanding a company shows its teams and members from the roster', () => {
-    render(<CompanyManager companies={[{ id: 'c1', name: 'Acme Robotics' }]} roster={[company()]} templates={[template()]} />)
+    render(<CompanyManager companies={[{ id: 'c1', name: 'Acme Robotics' }]} roster={[company()]} people={[{ personId: 'cs1', name: 'Sam' }]} />)
 
     fireEvent.click(screen.getByTestId('company-toggle'))
 
     const detail = screen.getByTestId('company-detail')
     expect(within(detail).getByText('Platform')).toBeTruthy()
     expect(within(detail).getByText('Alex')).toBeTruthy()
-    // "Backend Engineer" appears twice inside the detail block -- once as the member's template
-    // cell, once as the add-member form's template `<option>` -- so this asserts on the row's
-    // own table rather than a single unique text match.
+    // The member table's own cell, not a single unique text match: the add-member `<select>` also
+    // renders names inside `detail`.
     expect(within(detail).getByTestId('data-table').textContent).toContain('Backend Engineer')
 
     fireEvent.click(screen.getByTestId('company-toggle'))
@@ -303,20 +302,19 @@ describe('CompanyManager', () => {
       <CompanyManager
         companies={[{ id: 'c1', name: 'Acme Robotics' }]}
         roster={[company({ teams: [{ companyTeamId: 'ct1', teamName: 'Platform', members: [m] }] })]}
-        templates={[template()]}
+        people={[{ personId: 'cs1', name: 'Sam' }]}
       />,
     )
     fireEvent.click(screen.getByTestId('company-toggle'))
 
     const detail = screen.getByTestId('company-detail')
-    // Scoped to the member table, not the whole detail block: the add-member form's own
-    // provider `<select>` (`TeamBlock`) also renders a `cursor` `<option>` inside `detail`.
+    // Scoped to the member table, not the whole detail block.
     expect(within(detail).getByTestId('data-table').textContent).toContain('cursor')
   })
 
-  // M27 §5.1, R4: a catalog slave's row (`MemberRow`) reuses `SlaveRowActions`' `catalog` branch --
-  // the same `catalog-slave-delete` `AllSlavesTable`'s catalog row already uses, with the same
-  // fixed confirm text (no copy count -- no read provides it).
+  // M27 §5.1, R4: a member's row (`MemberRow`) reuses `SlaveRowActions`' POOL branch (M58 R16) --
+  // the same `catalog-slave-delete` the Slaves table's pooled row already uses, with the same fixed
+  // confirm text (no copy count -- no read provides it).
   describe('a catalog slave row', () => {
     let fetchMock: ReturnType<typeof vi.fn>
 
@@ -330,18 +328,18 @@ describe('CompanyManager', () => {
     })
 
     it('asks twice with the fixed confirm text, then DELETEs and refreshes', async () => {
-      const m = member({ companySlaveId: 'cs1', name: 'Sam' })
+      const m = member({ personId: 'cs1', name: 'Sam' })
       render(
         <CompanyManager
           companies={[{ id: 'c1', name: 'Acme Robotics' }]}
           roster={[company({ teams: [{ companyTeamId: 'ct1', teamName: 'Platform', members: [m] }] })]}
-          templates={[template()]}
+          people={[{ personId: 'cs1', name: 'Sam' }]}
         />,
       )
       fireEvent.click(screen.getByTestId('company-toggle'))
       fireEvent.click(screen.getByTestId('catalog-slave-delete'))
       expect(screen.getByTestId('catalog-slave-delete-confirm').textContent).toBe(
-        'deletes Sam from the catalog; project copies stay',
+        'takes Sam off every company roster; they keep working and keep every seat',
       )
       await act(async () => {
         fireEvent.click(screen.getByTestId('catalog-slave-delete-confirm'))
@@ -362,8 +360,8 @@ describe('CompanyManager', () => {
         companyName: 'Atlas Software',
         projectsUsing: 1,
         teams: [
-          { companyTeamId: 'ct1', teamName: 'Backend', members: [member(), member({ companySlaveId: 'ca2', name: 'Jess' })] },
-          { companyTeamId: 'ct2', teamName: 'Design', members: [member({ companySlaveId: 'ca3', name: 'Robin' })] },
+          { companyTeamId: 'ct1', teamName: 'Backend', members: [member(), member({ personId: 'ca2', name: 'Jess' })] },
+          { companyTeamId: 'ct2', teamName: 'Design', members: [member({ personId: 'ca3', name: 'Robin' })] },
         ],
       }),
     ]
@@ -379,7 +377,7 @@ describe('CompanyManager', () => {
     })
 
     it('asks twice naming the counts, then DELETEs and refreshes', async () => {
-      render(<CompanyManager companies={companies} roster={roster} templates={[]} />)
+      render(<CompanyManager companies={companies} roster={roster} people={[]} />)
       fireEvent.click(screen.getByTestId('company-delete'))
       expect(screen.getByTestId('company-delete-confirm').textContent).toBe(
         'deletes Atlas Software: 2 department templates, 3 catalog slaves; 1 project keeps its copies',
@@ -393,7 +391,7 @@ describe('CompanyManager', () => {
   })
 
   // M25 Task 7 (inline rename); M27 §5.1 (delete): `deleteCompanyTeam` no longer refuses a
-  // non-empty department template -- it cascades the template's catalog slaves along with it --
+  // non-empty department template -- it cascades the template's MEMBERSHIPS along with it --
   // so `department-template-delete` is always enabled, and its `DangerConfirm` names that cascade
   // instead of a disabled button naming a refusal that no longer exists.
   describe('a department template header row', () => {
@@ -401,7 +399,7 @@ describe('CompanyManager', () => {
     const roster = [
       company({
         teams: [
-          { companyTeamId: 'ct1', teamName: 'Backend', members: [member(), member({ companySlaveId: 'ca2', name: 'Jess' })] },
+          { companyTeamId: 'ct1', teamName: 'Backend', members: [member(), member({ personId: 'ca2', name: 'Jess' })] },
         ],
       }),
     ]
@@ -417,7 +415,7 @@ describe('CompanyManager', () => {
     })
 
     it('renames a department template inline and refreshes', async () => {
-      render(<CompanyManager companies={companies} roster={roster} templates={[]} />)
+      render(<CompanyManager companies={companies} roster={roster} people={[]} />)
       fireEvent.click(screen.getByTestId('company-toggle'))
       fireEvent.click(screen.getAllByTestId('department-template-rename')[0] as HTMLButtonElement)
       fireEvent.change(screen.getByTestId('department-template-rename-input'), { target: { value: 'Platform' } })
@@ -429,13 +427,13 @@ describe('CompanyManager', () => {
     })
 
     it('is enabled with members, asks twice naming the catalog-slave count, then DELETEs and refreshes', async () => {
-      render(<CompanyManager companies={companies} roster={roster} templates={[]} />)
+      render(<CompanyManager companies={companies} roster={roster} people={[]} />)
       fireEvent.click(screen.getByTestId('company-toggle'))
       const button = screen.getByTestId('department-template-delete') as HTMLButtonElement
       expect(button.disabled).toBe(false)
       fireEvent.click(button)
       expect(screen.getByTestId('department-template-delete-confirm').textContent).toBe(
-        'deletes Backend and its 2 catalog slaves; project departments stay',
+        'deletes Backend and its 2 memberships; the slaves and the project departments stay',
       )
       await act(async () => {
         fireEvent.click(screen.getByTestId('department-template-delete-confirm'))
@@ -458,7 +456,7 @@ describe('CompanyManager', () => {
     })
 
     it('posts the typed name and refreshes on 200', async () => {
-      render(<CompanyManager companies={[]} roster={[]} templates={[]} />)
+      render(<CompanyManager companies={[]} roster={[]} people={[]} />)
       fireEvent.change(screen.getByLabelText('company name'), { target: { value: 'Globex' } })
 
       await act(async () => {
@@ -476,7 +474,7 @@ describe('CompanyManager', () => {
       fetchMock.mockImplementationOnce(
         async () => new Response(JSON.stringify({ error: 'the name "Acme Robotics" is already taken' }), { status: 409 }),
       )
-      render(<CompanyManager companies={[]} roster={[]} templates={[]} />)
+      render(<CompanyManager companies={[]} roster={[]} people={[]} />)
       fireEvent.change(screen.getByLabelText('company name'), { target: { value: 'Acme Robotics' } })
 
       await act(async () => {
@@ -501,7 +499,7 @@ describe('CompanyManager', () => {
     })
 
     it('posts { companyId, name } and refreshes on 200', async () => {
-      render(<CompanyManager companies={[{ id: 'c1', name: 'Acme Robotics' }]} roster={[company({ teams: [] })]} templates={[]} />)
+      render(<CompanyManager companies={[{ id: 'c1', name: 'Acme Robotics' }]} roster={[company({ teams: [] })]} people={[]} />)
       fireEvent.click(screen.getByTestId('company-toggle'))
       fireEvent.change(screen.getByLabelText('department name'), { target: { value: 'Platform' } })
 
@@ -518,7 +516,7 @@ describe('CompanyManager', () => {
 
     it('shows a refusal inline without refreshing', async () => {
       fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: 'the name "Platform" is already taken' }), { status: 409 }))
-      render(<CompanyManager companies={[{ id: 'c1', name: 'Acme Robotics' }]} roster={[company({ teams: [] })]} templates={[]} />)
+      render(<CompanyManager companies={[{ id: 'c1', name: 'Acme Robotics' }]} roster={[company({ teams: [] })]} people={[]} />)
       fireEvent.click(screen.getByTestId('company-toggle'))
       fireEvent.change(screen.getByLabelText('department name'), { target: { value: 'Platform' } })
 
@@ -531,173 +529,79 @@ describe('CompanyManager', () => {
     })
   })
 
+  // M58 R5: a department holds PEOPLE. The form picks one the installation already has; the
+  // persona, the model and the provider left with the roster row -- they are the PERSON's now, and
+  // Task 5's own surface is where they are edited.
   describe('the add-member form', () => {
     let fetchMock: ReturnType<typeof vi.fn>
 
-    // M25 Task 5: the model field is a `ModelSelect` now -- gated on a provider being chosen
-    // first, so a caller who wants to type a free-text model must pick a provider, then
-    // `other…`, before the old `member-model-input` testid exists to type into.
-    async function typeMemberModel(value: string, providerId: ProviderKind = 'claude_code'): Promise<void> {
-      fireEvent.change(screen.getByTestId('member-provider-select'), { target: { value: providerId } })
-      await waitForModelSelect()
-      fireEvent.change(screen.getByTestId('model-select'), { target: { value: '__other__' } })
-      fireEvent.change(screen.getByTestId('member-model-input'), { target: { value } })
-    }
+    const people = [
+      { personId: 'p1', name: 'Blair' },
+      { personId: 'p2', name: 'Rae' },
+    ]
 
     beforeEach(() => {
-      clearModelSelectCache()
-      fetchMock = stubModelFetch({ ok: true })
+      fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+      vi.stubGlobal('fetch', fetchMock)
     })
 
     afterEach(() => {
       vi.unstubAllGlobals()
     })
 
-    it('posts { companyTeamId, templateId, name } (model omitted when blank) and refreshes on 200', async () => {
+    function renderForm(): void {
       render(
         <CompanyManager
           companies={[{ id: 'c1', name: 'Acme Robotics' }]}
           roster={[company({ teams: [{ companyTeamId: 'ct1', teamName: 'Platform', members: [] }] })]}
-          templates={[template({ id: 'tpl1', name: 'Backend Engineer' })]}
+          people={people}
         />,
       )
       fireEvent.click(screen.getByTestId('company-toggle'))
-      fireEvent.change(screen.getByLabelText('member template'), { target: { value: 'tpl1' } })
-      fireEvent.change(screen.getByLabelText('member name'), { target: { value: 'Blair' } })
+    }
+
+    it('offers everybody the installation has, and nothing about a persona', () => {
+      renderForm()
+
+      const select = screen.getByLabelText('member slave') as HTMLSelectElement
+      expect([...select.options].map((option) => option.textContent)).toEqual(['select a slave', 'Blair', 'Rae'])
+      expect(screen.queryByTestId('member-template-select')).toBeNull()
+      expect(screen.queryByTestId('member-provider-select')).toBeNull()
+    })
+
+    it('joins the chosen slave into the department and refreshes on 200', async () => {
+      renderForm()
+      fireEvent.change(screen.getByLabelText('member slave'), { target: { value: 'p1' } })
 
       await act(async () => {
         fireEvent.click(screen.getByTestId('member-submit'))
       })
 
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/org/slaves',
-        expect.objectContaining({ method: 'POST', body: JSON.stringify({ companyTeamId: 'ct1', templateId: 'tpl1', name: 'Blair' }) }),
+        '/api/org/slaves/p1/team',
+        expect.objectContaining({ method: 'PUT', body: JSON.stringify({ companyTeamId: 'ct1' }) }),
       )
       expect(routerRefresh).toHaveBeenCalled()
     })
 
-    it('includes model when filled in', async () => {
-      render(
-        <CompanyManager
-          companies={[{ id: 'c1', name: 'Acme Robotics' }]}
-          roster={[company({ teams: [{ companyTeamId: 'ct1', teamName: 'Platform', members: [] }] })]}
-          templates={[template({ id: 'tpl1', name: 'Backend Engineer' })]}
-        />,
-      )
-      fireEvent.click(screen.getByTestId('company-toggle'))
-      fireEvent.change(screen.getByLabelText('member template'), { target: { value: 'tpl1' } })
-      fireEvent.change(screen.getByLabelText('member name'), { target: { value: 'Blair' } })
-      await typeMemberModel('claude-opus-4')
+    it('cannot be submitted until somebody is chosen', () => {
+      renderForm()
 
-      await act(async () => {
-        fireEvent.click(screen.getByTestId('member-submit'))
-      })
-
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/org/slaves',
-        expect.objectContaining({
-          body: JSON.stringify({ companyTeamId: 'ct1', templateId: 'tpl1', name: 'Blair', model: 'claude-opus-4', provider: 'claude_code' }),
-        }),
-      )
+      expect((screen.getByTestId('member-submit') as HTMLButtonElement).disabled).toBe(true)
+      fireEvent.change(screen.getByLabelText('member slave'), { target: { value: 'p2' } })
+      expect((screen.getByTestId('member-submit') as HTMLButtonElement).disabled).toBe(false)
     })
 
     it('shows a refusal inline without refreshing', async () => {
-      fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: 'the name "Blair" is already taken' }), { status: 409 }))
-      render(
-        <CompanyManager
-          companies={[{ id: 'c1', name: 'Acme Robotics' }]}
-          roster={[company({ teams: [{ companyTeamId: 'ct1', teamName: 'Platform', members: [] }] })]}
-          templates={[template({ id: 'tpl1', name: 'Backend Engineer' })]}
-        />,
-      )
-      fireEvent.click(screen.getByTestId('company-toggle'))
-      fireEvent.change(screen.getByLabelText('member template'), { target: { value: 'tpl1' } })
-      fireEvent.change(screen.getByLabelText('member name'), { target: { value: 'Blair' } })
+      fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: 'no slave with id p1' }), { status: 404 }))
+      renderForm()
+      fireEvent.change(screen.getByLabelText('member slave'), { target: { value: 'p1' } })
 
       await act(async () => {
         fireEvent.click(screen.getByTestId('member-submit'))
       })
 
-      expect(screen.getByRole('alert').textContent).toContain('the name "Blair" is already taken')
-      expect(routerRefresh).not.toHaveBeenCalled()
-    })
-
-    // M12 Task 13, controller resolution 2: a provider select beside the model input, same idiom
-    // as `TemplateForm`'s `defaultProvider` -- never travels without the model it names.
-    it('includes the provider alongside the model when both are filled in', async () => {
-      render(
-        <CompanyManager
-          companies={[{ id: 'c1', name: 'Acme Robotics' }]}
-          roster={[company({ teams: [{ companyTeamId: 'ct1', teamName: 'Platform', members: [] }] })]}
-          templates={[template({ id: 'tpl1', name: 'Backend Engineer' })]}
-        />,
-      )
-      fireEvent.click(screen.getByTestId('company-toggle'))
-      fireEvent.change(screen.getByLabelText('member template'), { target: { value: 'tpl1' } })
-      fireEvent.change(screen.getByLabelText('member name'), { target: { value: 'Blair' } })
-      await typeMemberModel('claude-opus-4', 'cursor')
-
-      await act(async () => {
-        fireEvent.click(screen.getByTestId('member-submit'))
-      })
-
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/org/slaves',
-        expect.objectContaining({
-          body: JSON.stringify({ companyTeamId: 'ct1', templateId: 'tpl1', name: 'Blair', model: 'claude-opus-4', provider: 'cursor' }),
-        }),
-      )
-    })
-
-    it('omits the provider when no model is given, even if a provider is selected', async () => {
-      render(
-        <CompanyManager
-          companies={[{ id: 'c1', name: 'Acme Robotics' }]}
-          roster={[company({ teams: [{ companyTeamId: 'ct1', teamName: 'Platform', members: [] }] })]}
-          templates={[template({ id: 'tpl1', name: 'Backend Engineer' })]}
-        />,
-      )
-      fireEvent.click(screen.getByTestId('company-toggle'))
-      fireEvent.change(screen.getByLabelText('member template'), { target: { value: 'tpl1' } })
-      fireEvent.change(screen.getByLabelText('member name'), { target: { value: 'Blair' } })
-      fireEvent.change(screen.getByLabelText('member provider'), { target: { value: 'cursor' } })
-
-      await act(async () => {
-        fireEvent.click(screen.getByTestId('member-submit'))
-      })
-
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/org/slaves',
-        expect.objectContaining({ body: JSON.stringify({ companyTeamId: 'ct1', templateId: 'tpl1', name: 'Blair' }) }),
-      )
-    })
-
-    it('shows the model-without-provider refusal text verbatim', async () => {
-      render(
-        <CompanyManager
-          companies={[{ id: 'c1', name: 'Acme Robotics' }]}
-          roster={[company({ teams: [{ companyTeamId: 'ct1', teamName: 'Platform', members: [] }] })]}
-          templates={[template({ id: 'tpl1', name: 'Backend Engineer' })]}
-        />,
-      )
-      fireEvent.click(screen.getByTestId('company-toggle'))
-      fireEvent.change(screen.getByLabelText('member template'), { target: { value: 'tpl1' } })
-      fireEvent.change(screen.getByLabelText('member name'), { target: { value: 'Blair' } })
-      // Picking a provider is now required to reach the free-text model input at all -- typed
-      // here (consuming the provider's own listing fetch), then the provider is deselected again
-      // so the submitted body still carries a model with no provider, the scenario this refusal
-      // exists for. The 409 stub is armed only now, so it answers the POST, not that GET.
-      await typeMemberModel('claude-opus-4')
-      fireEvent.change(screen.getByTestId('member-provider-select'), { target: { value: '' } })
-      fetchMock.mockImplementationOnce(
-        async () => new Response(JSON.stringify({ error: 'a model must name the provider that runs it' }), { status: 409 }),
-      )
-
-      await act(async () => {
-        fireEvent.click(screen.getByTestId('member-submit'))
-      })
-
-      expect(screen.getByRole('alert').textContent).toContain('a model must name the provider that runs it')
+      expect(screen.getByRole('alert').textContent).toContain('no slave with id p1')
       expect(routerRefresh).not.toHaveBeenCalled()
     })
   })

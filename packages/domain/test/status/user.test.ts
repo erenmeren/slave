@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest'
 import type { RunStatus, SlaveStatus, TaskStatus } from '../../src/index.js'
 import {
   USER_CARD_LABEL,
+  USER_PERSON_LABEL,
   USER_TASK_LABEL,
   USER_TASK_STATE_FOR_STATUS,
   USER_WORKSPACE_LABEL,
   needsYou,
+  userPersonStatus,
   userRunStatus,
   userSlaveStatus,
   userSupervisorStatus,
@@ -349,5 +351,30 @@ describe('userRunStatus with breaker facts (M51 R7)', () => {
   it('gives both new states a word', () => {
     expect(USER_CARD_LABEL.steered).toBe('STEERED')
     expect(USER_CARD_LABEL.constrained).toBe('CONSTRAINED')
+  })
+})
+
+describe('userPersonStatus', () => {
+  it('a person with no open seat and no release is in the pool', () => {
+    expect(userPersonStatus({ releasedAt: null, openSeats: 0 })).toEqual({
+      state: 'pool',
+      label: USER_PERSON_LABEL.pool,
+      needsYou: false,
+    })
+  })
+
+  it('a person with a seat is assigned', () => {
+    expect(userPersonStatus({ releasedAt: null, openSeats: 1 }).state).toBe('assigned')
+  })
+
+  it('a released person is released whatever their seats say', () => {
+    expect(userPersonStatus({ releasedAt: '2026-09-15T00:00:00.000Z', openSeats: 2 }).state).toBe('released')
+  })
+
+  it('every state has a word, and no word is a bare enum member', () => {
+    for (const [state, label] of Object.entries(USER_PERSON_LABEL)) {
+      expect(label).not.toBe(state)
+      expect(label).toBe(label.toUpperCase())
+    }
   })
 })

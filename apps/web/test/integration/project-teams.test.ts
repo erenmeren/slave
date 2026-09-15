@@ -41,9 +41,9 @@ async function seed(): Promise<Fixture> {
   const engineering = await prisma.team.create({ data: { workspaceId: checkout.id, name: 'Engineering' } })
   const billingTeam = await prisma.team.create({ data: { workspaceId: billing.id, name: 'Finance' } })
 
-  await prisma.slave.create({ data: { teamId: engineering.id, name: 'Alex', role: 'backend' } })
-  await prisma.slave.create({ data: { teamId: engineering.id, name: 'Sam', role: 'frontend' } })
-  await prisma.slave.create({ data: { teamId: billingTeam.id, name: 'Riley', role: 'backend' } })
+  await prisma.slave.create({ data: { teamId: engineering.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+  await prisma.slave.create({ data: { teamId: engineering.id, role: 'frontend', personId: (await prisma.person.create({ data: { name: 'Sam' } })).id } })
+  await prisma.slave.create({ data: { teamId: billingTeam.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Riley' } })).id } })
 
   return { checkoutTeamId: engineering.id, checkoutEmptyTeamId: widgets.id, billingTeamId: billingTeam.id }
 }
@@ -53,7 +53,7 @@ describe('listProjectTeams', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })

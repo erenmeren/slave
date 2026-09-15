@@ -4,7 +4,7 @@ import { createTemplate, setTemplateActivation } from '../../src/org.js'
 import { loadSupervisorWorld } from '../../src/supervisorWorld.js'
 
 const TRUNCATE =
-  'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE'
+  'TRUNCATE TABLE "CatalogImport", "CompanyTeamMember", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE'
 
 const NOW = new Date('2026-09-13T12:00:00.000Z')
 

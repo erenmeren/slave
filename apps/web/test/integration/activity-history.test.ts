@@ -24,8 +24,8 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave1 = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  const slave2 = await prisma.slave.create({ data: { teamId: team.id, name: 'Bianca', role: 'frontend' } })
+  const slave1 = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+  const slave2 = await prisma.slave.create({ data: { teamId: team.id, role: 'frontend', personId: (await prisma.person.create({ data: { name: 'Bianca' } })).id } })
   const task1 = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -54,7 +54,7 @@ describe('buildActivityHistory', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })

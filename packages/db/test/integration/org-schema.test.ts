@@ -8,7 +8,7 @@ async function seedChain(): Promise<{
   companyName: string
   companyTeamId: string
   companyTeamName: string
-  companySlaveId: string
+  personId: string
   workerId: string
 }> {
   const template = await prisma.slaveTemplate.create({
@@ -16,16 +16,19 @@ async function seedChain(): Promise<{
   })
   const company = await prisma.company.create({ data: { name: 'Atlas Software' } })
   const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-  const companySlave = await prisma.companySlave.create({
-    data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' },
+  // M58 R5: a department holds PEOPLE. The person exists first and the membership binds them to
+  // the department; nothing is copied.
+  const person = await prisma.person.create({
+    data: { name: 'Atlas', templateId: template.id, lifecycle: 'permanent' },
   })
+  await prisma.companyTeamMember.create({ data: { companyTeamId: companyTeam.id, personId: person.id } })
 
   const workspace = await prisma.workspace.create({
     data: { name: 'Checkout Platform', repoPath: '/tmp/checkout', verifyCommands: ['npm test'], setupCommands: ['npm ci'] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const worker = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Atlas', role: 'backend', companySlaveId: companySlave.id },
+    data: { teamId: team.id, personId: person.id, role: 'backend' },
   })
 
   return {
@@ -35,14 +38,14 @@ async function seedChain(): Promise<{
     companyName: company.name,
     companyTeamId: companyTeam.id,
     companyTeamName: companyTeam.name,
-    companySlaveId: companySlave.id,
+    personId: person.id,
     workerId: worker.id,
   }
 }
 
 beforeEach(async (): Promise<void> => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "Slave", "Team", "Workspace", "CompanyTeamMember", "Person", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
 })
 
@@ -51,25 +54,25 @@ afterAll(async (): Promise<void> => {
 })
 
 describe('the organization schema', () => {
-  it('links template -> company -> team -> roster slave -> worker and reads the chain back', async () => {
+  it('links template -> person -> department -> seat and reads the chain back', async () => {
     const chain = await seedChain()
 
-    const found = await prisma.companySlave.findUniqueOrThrow({
-      where: { id: chain.companySlaveId },
+    const found = await prisma.person.findUniqueOrThrow({
+      where: { id: chain.personId },
       include: {
         template: true,
-        companyTeam: { include: { company: true } },
-        workers: true,
+        departments: { include: { companyTeam: { include: { company: true } } } },
+        seats: true,
       },
     })
 
     expect(found.name).toBe('Atlas')
-    expect(found.template.name).toBe(chain.templateName)
-    expect(found.template.role).toBe('backend')
-    expect(found.template.description).toBe('')
-    expect(found.companyTeam.name).toBe(chain.companyTeamName)
-    expect(found.companyTeam.company.name).toBe(chain.companyName)
-    expect(found.workers.map((w) => w.id)).toEqual([chain.workerId])
+    expect(found.template?.name).toBe(chain.templateName)
+    expect(found.template?.role).toBe('backend')
+    expect(found.template?.description).toBe('')
+    expect(found.departments.map((member) => member.companyTeam.name)).toEqual([chain.companyTeamName])
+    expect(found.departments.map((member) => member.companyTeam.company.name)).toEqual([chain.companyName])
+    expect(found.seats.map((seat) => seat.id)).toEqual([chain.workerId])
   })
 
   it('rejects a duplicate template name', async () => {
@@ -96,35 +99,37 @@ describe('the organization schema', () => {
     ).resolves.toMatchObject({ name: 'Engineering' })
   })
 
-  it('rejects a duplicate roster member name within one team but allows the same name in another team', async () => {
+  // M58 R1: a name is unique across the INSTALLATION now, not per department -- and the second
+  // department gets the SAME person rather than a second row with the same name.
+  it('rejects a duplicate person name anywhere, and lets one person sit in two departments', async () => {
     const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Developer', role: 'backend' } })
     const company = await prisma.company.create({ data: { name: 'Atlas Software' } })
     const team = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-    await prisma.companySlave.create({ data: { companyTeamId: team.id, templateId: template.id, name: 'Atlas' } })
+    const person = await prisma.person.create({ data: { name: 'Atlas', templateId: template.id } })
+    await prisma.companyTeamMember.create({ data: { companyTeamId: team.id, personId: person.id } })
 
-    await expect(
-      prisma.companySlave.create({ data: { companyTeamId: team.id, templateId: template.id, name: 'Atlas' } }),
-    ).rejects.toThrow()
+    await expect(prisma.person.create({ data: { name: 'Atlas', templateId: template.id } })).rejects.toThrow()
 
     const otherTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Marketing' } })
     await expect(
-      prisma.companySlave.create({ data: { companyTeamId: otherTeam.id, templateId: template.id, name: 'Atlas' } }),
-    ).resolves.toMatchObject({ name: 'Atlas' })
+      prisma.companyTeamMember.create({ data: { companyTeamId: otherTeam.id, personId: person.id } }),
+    ).resolves.toMatchObject({ personId: person.id })
   })
 
-  it('cascades company deletion to its teams and roster, leaves the template intact, and nulls the worker link', async () => {
+  it('cascades company deletion to its departments and memberships, and leaves the template, the person and the seat intact', async () => {
     const chain = await seedChain()
 
     await prisma.company.delete({ where: { id: chain.companyId } })
 
     expect(await prisma.companyTeam.count()).toBe(0)
-    expect(await prisma.companySlave.count()).toBe(0)
+    expect(await prisma.companyTeamMember.count()).toBe(0)
     expect(await prisma.slaveTemplate.findUnique({ where: { id: chain.templateId } })).not.toBeNull()
 
-    // The worker with run history must survive its roster row's deletion -- Slave.companySlave is
-    // onDelete: SetNull, never Cascade.
+    // M58 R5: losing a department is losing a MEMBERSHIP. The person keeps working, and the seat
+    // with its run history is untouched -- the rule `Slave.companySlaveId`'s SetNull used to carry.
+    expect(await prisma.person.findUnique({ where: { id: chain.personId } })).not.toBeNull()
     const survivor = await prisma.slave.findUniqueOrThrow({ where: { id: chain.workerId } })
-    expect(survivor.companySlaveId).toBeNull()
+    expect(survivor.personId).toBe(chain.personId)
   })
 
   it('adds nullable model/company columns to Slave, Workspace and Checkpoint without breaking existing rows', async () => {
@@ -134,11 +139,12 @@ describe('the organization schema', () => {
     expect(workspace.companyId).toBeNull()
 
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
+    const person = await prisma.person.create({ data: { name: 'Alex' } })
     const slave = await prisma.slave.create({
-      data: { teamId: team.id, name: 'Alex', role: 'backend', model: 'claude-opus-4' },
+      data: { teamId: team.id, personId: person.id, role: 'backend', model: 'claude-opus-4' },
     })
     expect(slave.model).toBe('claude-opus-4')
-    expect(slave.companySlaveId).toBeNull()
+    expect(slave.closedAt).toBeNull()
 
     const task = await prisma.task.create({
       data: { workspaceId: workspace.id, title: 't', description: 'd', maxAttempts: workspace.maxAttempts },

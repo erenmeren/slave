@@ -21,7 +21,7 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   return { workspaceId: workspace.id, slaveId: slave.id }
 }
 
@@ -30,7 +30,7 @@ describe('buildShellFacts', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -74,7 +74,7 @@ describe('buildShellFacts', () => {
 
   it('still counts two DIFFERENT slaves as two', async (): Promise<void> => {
     const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
-    const second = await prisma.slave.create({ data: { teamId: team.id, name: 'Bea', role: 'qa' } })
+    const second = await prisma.slave.create({ data: { teamId: team.id, role: 'qa', personId: (await prisma.person.create({ data: { name: 'Bea' } })).id } })
     await prisma.slaveRun.create({ data: { slaveId: fixture.slaveId, status: 'working' } })
     await prisma.slaveRun.create({ data: { slaveId: second.id, status: 'working' } })
 

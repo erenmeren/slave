@@ -117,6 +117,9 @@ interface Fixture {
   readonly workspaceId: string
   readonly taskId: string
   readonly slaveId: string
+  /** M58 R2: the person sitting in {@link Fixture.slaveId} -- who a lesson and a lifecycle are
+   *  about. */
+  readonly personId: string
   readonly teamId: string
   /** A second, empty team on the same workspace -- kept separate from `fixture.teamId` (which
    *  always has `slaveId` on its roster) so `delete-team` here never touches the slave other
@@ -140,7 +143,10 @@ async function seed(overrides: { readonly name?: string } = {}): Promise<Fixture
   await prisma.providerConfiguration.create({ data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} } })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
   const emptyTeam = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Design' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] } })
+  // Named after the workspace: `Person.name` is unique across the installation (M58 R1) and the
+  // workspace-scoping cases below seed a SECOND project in the same test.
+  const person = await prisma.person.create({ data: { name: `Alex of ${workspace.name}` } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: person.id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -151,7 +157,7 @@ async function seed(overrides: { readonly name?: string } = {}): Promise<Fixture
       maxAttempts: workspace.maxAttempts,
     },
   })
-  return { workspaceId: workspace.id, taskId: task.id, slaveId: slave.id, teamId: team.id, emptyTeamId: emptyTeam.id, repoPath }
+  return { workspaceId: workspace.id, taskId: task.id, slaveId: slave.id, personId: person.id, teamId: team.id, emptyTeamId: emptyTeam.id, repoPath }
 }
 
 /**
@@ -188,7 +194,7 @@ describe('the orchestrator CLI', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "SupervisorDecision", "ExecutionEvent", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate", "CatalogImport", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "SupervisorDecision", "ExecutionEvent", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate", "CatalogImport", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -810,7 +816,7 @@ describe('the orchestrator CLI', () => {
     const company = await prisma.company.create({ data: { name: 'Acme Corp' } })
     const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
     const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
-    await prisma.companySlave.create({ data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Atlas' } })
+    await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
 
     const result = await runCli(['assign-company', '--workspace', fixture.workspaceId, '--company', company.id])
 
@@ -1375,16 +1381,14 @@ describe('the orchestrator CLI', () => {
       const template = await prisma.slaveTemplate.create({ data: { name: 'Engineer', role: 'backend' } })
       const company = await prisma.company.create({ data: { name: 'Acme' } })
       const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Maya' },
-      })
+      const companySlave = await prisma.person.create({ data: { templateId: template.id, name: 'Maya', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
       const file = join(mkdtempSync(join(tmpdir(), 'slaveofai-profile-')), 'persona.md')
       writeFileSync(file, 'catalog persona')
 
       expect((await runCli(['set-profile', '--template', template.id, '--file', file])).code).toBe(0)
-      expect((await runCli(['set-profile', '--company-slave', companySlave.id, '--file', file])).code).toBe(0)
+      expect((await runCli(['set-profile', '--person', companySlave.id, '--file', file])).code).toBe(0)
       expect((await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: template.id } })).profile).toBe('catalog persona')
-      expect((await prisma.companySlave.findUniqueOrThrow({ where: { id: companySlave.id } })).profile).toBe('catalog persona')
+      expect((await prisma.person.findUniqueOrThrow({ where: { id: companySlave.id } })).profile).toBe('catalog persona')
     }, 30_000)
 
     it('exits non-zero for an unknown slave, and for neither --file nor --clear', async (): Promise<void> => {
@@ -1461,9 +1465,9 @@ describe('the orchestrator CLI', () => {
       expect(result.stdout).toContain('provides security.application')
       expect(result.stderr).toContain('"Vibes" matches no capability in the taxonomy')
 
-      const row = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })
-      expect(row.capabilities).toEqual(['security.application'])
-      // The role is ADDED to what the slave already held, never a replacement.
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })
+      expect(row.person.capabilities).toEqual(['security.application'])
+      // The role is ADDED to what the seat already held, never a replacement.
       expect(row.runtimeRoles).toEqual(['backend', 'security'])
     }, 60_000)
 
@@ -1473,21 +1477,13 @@ describe('the orchestrator CLI', () => {
       const template = await prisma.slaveTemplate.create({
         data: { name: `Backfill Reviewer ${String(Date.now())}`, role: 'security', capabilityKeys: ['security.application'] },
       })
-      const legacy = await prisma.slave.create({
-        data: {
-          teamId: fixture.teamId,
-          name: `Legacy ${String(Date.now())}`,
-          role: 'security',
-          runtimeRoles: ['backend'],
-          hiredFromTemplateId: template.id,
-        },
-      })
+      const legacy = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'security', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: `Legacy ${String(Date.now())}`, templateId: template.id } })).id } })
 
       const out = await runCli(['capabilities', 'backfill', '--workspace', fixture.workspaceId])
       expect(out.code).toBe(0)
       expect(out.stdout).toContain('capabilities backfilled')
-      const row = await prisma.slave.findUniqueOrThrow({ where: { id: legacy.id } })
-      expect(row.capabilities).toEqual(['security.application'])
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: legacy.id }, include: { person: true } })
+      expect(row.person.capabilities).toEqual(['security.application'])
       expect(row.runtimeRoles).toEqual(['backend', 'security'])
 
       // Idempotent: nothing is left with an empty set and a template to read.
@@ -1525,7 +1521,7 @@ describe('the orchestrator CLI', () => {
       ])
       expect(second.code).toBe(0)
       expect(second.stdout).toContain('reused ')
-      expect(await prisma.slave.count({ where: { hiredFromTemplateId: template.id } })).toBe(1)
+      expect(await prisma.slave.count({ where: { person: { templateId: template.id } } })).toBe(1)
     }, 60_000)
 
     it('prints a run context manifest, and its prompt after a rule with --prompt', async (): Promise<void> => {
@@ -1592,8 +1588,8 @@ describe('the orchestrator CLI', () => {
       expect(result.stdout).toContain('hired ')
       expect(result.stdout).toContain('for one assignment')
 
-      const worker = await prisma.slave.findFirstOrThrow({ where: { hiredFromTemplateId: template.id } })
-      expect(worker.lifecycle).toBe('ephemeral')
+      const worker = await prisma.slave.findFirstOrThrow({ where: { person: { templateId: template.id } }, include: { person: true } })
+      expect(worker.person.lifecycle).toBe('ephemeral')
       expect(worker.engagementTaskId).toBe(fixture.taskId)
     }, 60_000)
 
@@ -1613,48 +1609,32 @@ describe('the orchestrator CLI', () => {
       ])
       expect(result.code).not.toBe(0)
       expect(result.stderr).toContain('--for-task')
-      expect(await prisma.slave.count({ where: { hiredFromTemplateId: template.id } })).toBe(0)
+      expect(await prisma.slave.count({ where: { person: { templateId: template.id } } })).toBe(0)
     }, 60_000)
 
     it('releases a worker and says what it collected', async (): Promise<void> => {
-      const worker = await prisma.slave.create({
-        data: {
-          teamId: fixture.teamId,
-          name: 'M50 CLI Robin',
-          role: 'Security Reviewer',
-          runtimeRoles: ['security'],
-          lifecycle: 'ephemeral',
-          engagementTaskId: fixture.taskId,
-        },
-      })
+      const worker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Security Reviewer', runtimeRoles: ['security'], engagementTaskId: fixture.taskId, personId: (await prisma.person.create({ data: { name: 'M50 CLI Robin', lifecycle: 'ephemeral' } })).id } })
       const result = await runCli(['release-worker', '--slave', worker.id, '--reason', 'the engagement is over'])
       expect(result.code).toBe(0)
       expect(result.stdout).toContain('released M50 CLI Robin')
       expect(result.stdout).toContain('0 worktrees collected')
       // R5, in the sentence an operator reads: nothing was deleted.
-      expect(result.stdout).toContain('every run, message and memory it produced is untouched')
-      const after = await prisma.slave.findUniqueOrThrow({ where: { id: worker.id } })
+      expect(result.stdout).toContain('every run, message and memory they produced is untouched')
+      const after = await prisma.slave.findUniqueOrThrow({ where: { id: worker.id }, include: { person: true } })
       expect(after.runtimeRoles).toEqual([])
-      expect(after.releasedAt).not.toBeNull()
+      expect(after.person.releasedAt).not.toBeNull()
     }, 60_000)
 
-    it('refuses release-worker on a project worker, in the words the refusal wrote', async (): Promise<void> => {
+    it('releases a project worker too — a release is a fact about the person', async (): Promise<void> => {
       const result = await runCli(['release-worker', '--slave', fixture.slaveId, '--reason', 'no'])
-      expect(result.code).not.toBe(0)
-      expect(result.stderr).toContain('not a specialist brought in for one assignment')
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('released Alex of Checkout Platform')
+      const after = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })
+      expect(after.person.releasedAt).not.toBeNull()
     }, 60_000)
 
     it('moves a lifecycle by hand and prints both ends of the move', async (): Promise<void> => {
-      const worker = await prisma.slave.create({
-        data: {
-          teamId: fixture.teamId,
-          name: 'M50 CLI Sam',
-          role: 'Security Reviewer',
-          runtimeRoles: [],
-          lifecycle: 'ephemeral',
-          engagementTaskId: fixture.taskId,
-        },
-      })
+      const worker = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'Security Reviewer', runtimeRoles: [], engagementTaskId: fixture.taskId, personId: (await prisma.person.create({ data: { name: 'M50 CLI Sam', lifecycle: 'ephemeral' } })).id } })
       const result = await runCli(['set-lifecycle', '--slave', worker.id, '--lifecycle', 'project'])
       expect(result.code).toBe(0)
       // The LABELS, never the enum members (`docs/ia.md` rule 3, and the `memories` verbs'
@@ -1662,8 +1642,8 @@ describe('the orchestrator CLI', () => {
       // back is the name.
       expect(result.stdout).toContain('Ephemeral')
       expect(result.stdout).toContain('Project')
-      const after = await prisma.slave.findUniqueOrThrow({ where: { id: worker.id } })
-      expect(after.lifecycle).toBe('project')
+      const after = await prisma.slave.findUniqueOrThrow({ where: { id: worker.id }, include: { person: true } })
+      expect(after.person.lifecycle).toBe('project')
       expect(after.engagementTaskId).toBeNull()
     }, 60_000)
 
@@ -1671,7 +1651,9 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['set-lifecycle', '--slave', fixture.slaveId, '--lifecycle', 'project'])
       expect(result.code).toBe(0)
       expect(result.stdout).toContain('was already Project')
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).lifecycle).toBe('project')
+      expect(
+        (await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })).person.lifecycle,
+      ).toBe('project')
     }, 60_000)
 
     it('refuses a lifecycle that is not one of the three', async (): Promise<void> => {
@@ -1887,7 +1869,7 @@ describe('the orchestrator CLI', () => {
         data: {
           type: 'lesson',
           scope: 'worker',
-          slaveId: fixture.slaveId,
+          personId: fixture.personId,
           taskId: fixture.taskId,
           title: 'Rework on Add the thing',
           body: 'The empty-input case was not handled.',
@@ -1909,10 +1891,10 @@ describe('the orchestrator CLI', () => {
         expect(events[0]?.payload).toEqual({ memoryId: lesson.id, from: 'candidate', to: 'verified' })
         // The row still belongs to the worker: only the event was given a project to be read in.
         const row = await prisma.memory.findUniqueOrThrow({ where: { id: lesson.id } })
-        expect({ scope: row.scope, workspaceId: row.workspaceId, slaveId: row.slaveId }).toEqual({
+        expect({ scope: row.scope, workspaceId: row.workspaceId, personId: row.personId }).toEqual({
           scope: 'worker',
           workspaceId: null,
-          slaveId: fixture.slaveId,
+          personId: fixture.personId,
         })
       } finally {
         await prisma.memory.deleteMany({ where: { id: lesson.id } })
@@ -1970,7 +1952,7 @@ describe('the orchestrator CLI', () => {
       // superseded rows behind (R1 deletes nothing), and a summary counts only what is verified.
       await prisma.memorySource.deleteMany({})
       await prisma.memory.deleteMany({
-        where: { OR: [{ workspaceId: fixture.workspaceId }, { slave: { team: { workspaceId: fixture.workspaceId } } }] },
+        where: { OR: [{ workspaceId: fixture.workspaceId }, { person: { seats: { some: { team: { workspaceId: fixture.workspaceId } } } } }] },
       })
       try {
         const empty = await runCli(['memories', 'condense', '--workspace', fixture.workspaceId])
@@ -2015,7 +1997,7 @@ describe('the orchestrator CLI', () => {
           data: Array.from({ length: 20 }, (_, index) => ({
             type: 'lesson' as const,
             scope: 'worker' as const,
-            slaveId: slave.id,
+            personId: slave.personId,
             title: `Lesson ${String(index)}`,
             body: 'Do it the other way.',
             status: 'verified' as const,
@@ -2049,7 +2031,7 @@ describe('the orchestrator CLI', () => {
         expect(badWorkspace.stdout).not.toContain('nothing to summarise')
       } finally {
         await prisma.memorySource.deleteMany({})
-        await prisma.memory.deleteMany({ where: { OR: [{ workspaceId: fixture.workspaceId }, { slave: { team: { workspaceId: fixture.workspaceId } } }] } })
+        await prisma.memory.deleteMany({ where: { OR: [{ workspaceId: fixture.workspaceId }, { person: { seats: { some: { team: { workspaceId: fixture.workspaceId } } } } }] } })
       }
     }, 60_000)
   })
@@ -2114,7 +2096,9 @@ describe('the orchestrator CLI', () => {
 
       expect(result.code).toBe(0)
       expect(result.stdout).toMatch(new RegExp(`^slave ${fixture.slaveId} renamed$`, 'm'))
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).name).toBe('Jordan')
+      expect(
+        (await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, include: { person: true } })).person.name,
+      ).toBe('Jordan')
     })
 
     it("sets a slave's title, and says it is not what the slave is dispatched as (M37 t3)", async () => {
@@ -2134,16 +2118,20 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['delete-slave', '--slave', fixture.slaveId, '--yes'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toContain(`slave ${fixture.slaveId} deleted; 0 runs went with it`)
+      expect(result.stdout).toContain(`slave ${fixture.personId} deleted: 1 seat on Checkout Platform, 0 runs went with them`)
       expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).toBeNull()
+      expect(await prisma.person.findUnique({ where: { id: fixture.personId } })).toBeNull()
     })
 
     it('refuses to delete a slave without --yes, naming the footprint it would have deleted', async () => {
       const result = await runCli(['delete-slave', '--slave', fixture.slaveId])
 
       expect(result.code).toBe(1)
-      expect(result.stderr).toContain(`refusing without --yes: this would delete slave Alex (${fixture.slaveId}) and 0 runs`)
+      expect(result.stderr).toContain(
+        `refusing without --yes: this would delete Alex of Checkout Platform (${fixture.personId}) — 1 project (Checkout Platform) and 0 runs; all of it goes`,
+      )
       expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).not.toBeNull()
+      expect(await prisma.person.findUnique({ where: { id: fixture.personId } })).not.toBeNull()
     })
 
     it('deletes a slave WITH its terminal run history with --yes', async () => {
@@ -2160,9 +2148,10 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['delete-slave', '--slave', fixture.slaveId, '--yes'])
 
       expect(result.code).toBe(0)
-      expect(result.stdout).toContain(`slave ${fixture.slaveId} deleted; 1 run went with it`)
+      expect(result.stdout).toContain(`slave ${fixture.personId} deleted: 1 seat on Checkout Platform, 1 run went with them`)
       expect(await prisma.slave.findUnique({ where: { id: fixture.slaveId } })).toBeNull()
       expect(await prisma.slaveRun.count({ where: { slaveId: fixture.slaveId } })).toBe(0)
+      expect(await prisma.person.findUnique({ where: { id: fixture.personId } })).toBeNull()
     })
 
     it('renames a team', async () => {
@@ -2202,19 +2191,19 @@ describe('the orchestrator CLI', () => {
       readonly templateId: string
     }
 
-    /** One company, one department template, one catalog slave on one slave template — with the
-     *  project's own slave linked to that catalog slave, so the previews have a copy to count and
-     *  the deletes have a `SetNull` survivor to leave behind. */
+    /** One company, one department template with one MEMBER, hired from one persona -- and the
+     *  project's own seat repointed at that member, so the previews have somebody to count and the
+     *  deletes have a survivor to leave behind. */
     async function seedCatalog(): Promise<Catalog> {
       const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Developer', role: 'backend', description: '' } })
       const company = await prisma.company.create({ data: { name: 'Atlas Software' } })
       const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Backend' } })
-      const companySlave = await prisma.companySlave.create({
-        data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Sam' },
-      })
-      await prisma.slave.update({ where: { id: fixture.slaveId }, data: { companySlaveId: companySlave.id } })
+      const member = await prisma.person.create({ data: { templateId: template.id, name: 'Sam', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
+      // The fixture's own seat becomes Sam's: `Person.name` is unique, so the two cannot both be
+      // "Alex", and every preview below counts what the delete touches through this seat.
+      await prisma.slave.update({ where: { id: fixture.slaveId }, data: { personId: member.id } })
       await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { companyId: company.id } })
-      return { companyId: company.id, companyTeamId: companyTeam.id, companySlaveId: companySlave.id, templateId: template.id }
+      return { companyId: company.id, companyTeamId: companyTeam.id, companySlaveId: member.id, templateId: template.id }
     }
 
     it('archives a project, naming what stays, and status carries the date inside its JSON', async () => {
@@ -2287,45 +2276,48 @@ describe('the orchestrator CLI', () => {
       )
       expect(await prisma.company.count()).toBe(0)
       expect(await prisma.companyTeam.count()).toBe(0)
-      expect(await prisma.companySlave.count()).toBe(0)
+      expect(await prisma.companyTeamMember.count()).toBe(0)
       expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).companyId).toBeNull()
       // The project's own rows are untouched by a catalog delete — that is the whole contract.
       expect(await prisma.slave.count({ where: { id: fixture.slaveId } })).toBe(1)
     }, 30_000)
 
-    it('delete-company-slave prints how many project copies stay, then leaves them behind', async () => {
+    it('delete-company-slave removes them from the department and keeps their projects', async () => {
       const catalog = await seedCatalog()
 
-      const preview = await runCli(['delete-company-slave', '--slave', catalog.companySlaveId])
-      expect(preview.code).toBe(1)
-      expect(preview.stderr).toContain(
-        `refusing without --yes: this would delete catalog slave Sam (${catalog.companySlaveId}); 1 project copy stays`,
-      )
-      expect(await prisma.companySlave.count()).toBe(1)
+      const result = await runCli([
+        'delete-company-slave',
+        '--slave',
+        catalog.companySlaveId,
+        '--team',
+        catalog.companyTeamId,
+      ])
 
-      const result = await runCli(['delete-company-slave', '--slave', catalog.companySlaveId, '--yes'])
       expect(result.code).toBe(0)
-      expect(result.stdout).toMatch(new RegExp(`^catalog slave ${catalog.companySlaveId} deleted$`, 'm'))
-      expect(await prisma.companySlave.findUnique({ where: { id: catalog.companySlaveId } })).toBeNull()
-      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).companySlaveId).toBeNull()
+      expect(result.stdout).toContain('left department template')
+      expect(result.stdout).toContain('keep every project they are on')
+      expect(await prisma.person.findUnique({ where: { id: catalog.companySlaveId } })).not.toBeNull()
+      expect(await prisma.companyTeamMember.count({ where: { personId: catalog.companySlaveId } })).toBe(0)
+      expect(await prisma.slave.count({ where: { id: fixture.slaveId } })).toBe(1)
     }, 30_000)
 
-    it('delete-template names its catalog slaves without --yes, and takes them with it', async () => {
+    it('delete-template names who it unlinks without --yes, and takes nobody with it', async () => {
       const catalog = await seedCatalog()
 
       const preview = await runCli(['delete-template', '--template', catalog.templateId])
       expect(preview.code).toBe(1)
       expect(preview.stderr).toContain(
-        `refusing without --yes: this would delete template Backend Developer (${catalog.templateId}) and 1 catalog slave`,
+        `refusing without --yes: this would delete template Backend Developer (${catalog.templateId}) and unlink 1 slave`,
       )
       expect(await prisma.slaveTemplate.count()).toBe(1)
 
       const result = await runCli(['delete-template', '--template', catalog.templateId, '--yes'])
       expect(result.code).toBe(0)
-      expect(result.stdout).toContain(`template ${catalog.templateId} deleted; 1 catalog slave went with it`)
+      expect(result.stdout).toContain(`template ${catalog.templateId} deleted; 1 slave unlinked from it`)
       expect(await prisma.slaveTemplate.count()).toBe(0)
-      expect(await prisma.companySlave.count()).toBe(0)
-      // The project slave keeps the role the template gave it.
+      // M58 R1: `Person.templateId` is `SetNull`, so the person keeps working and simply stops
+      // naming a persona; the seat keeps the role it was opened with.
+      expect((await prisma.person.findUniqueOrThrow({ where: { id: catalog.companySlaveId } })).templateId).toBeNull()
       expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).role).toBe('backend')
     }, 30_000)
   })
@@ -2436,7 +2428,7 @@ describe('the orchestrator CLI', () => {
       const company = await prisma.company.create({ data: { name: 'Demo Trading Co.' } })
       for (const [department, slave] of [['Sales', 'Sonia'], ['Purchasing', 'Pete'], ['Operations', 'Olga'], ['Finance', 'Fin']] as const) {
         const team = await prisma.companyTeam.create({ data: { companyId: company.id, name: department } })
-        await prisma.companySlave.create({ data: { companyTeamId: team.id, templateId: template.id, name: slave } })
+        await prisma.person.create({ data: { templateId: template.id, name: slave, lifecycle: 'permanent', departments: { create: { companyTeamId: team.id } } } })
       }
       return company.id
     }
@@ -2461,7 +2453,7 @@ describe('the orchestrator CLI', () => {
           teams.set(member.department, teamId)
         }
         const template = await prisma.slaveTemplate.create({ data: { name: `Checkout ${member.role}`, role: member.role } })
-        await prisma.companySlave.create({ data: { companyTeamId: teamId, templateId: template.id, name: member.name } })
+        await prisma.person.create({ data: { templateId: template.id, name: member.name, lifecycle: 'permanent', departments: { create: { companyTeamId: teamId } } } })
       }
       return company.id
     }
@@ -2784,7 +2776,7 @@ describe('the orchestrator CLI', () => {
         const row = await prisma.workspace.findUniqueOrThrow({ where: { id: workspace.id } })
         expect(row.maxConcurrentRuns).toBe(2)
         expect(row.maxAttempts).toBe(1)
-        const lead = await prisma.companySlave.findFirst({ where: { companyTeam: { companyId }, name: 'Atlas' } })
+        const lead = await prisma.person.findFirst({ where: { departments: { some: { companyTeam: { companyId } } }, name: 'Atlas' } })
         expect(lead?.model).toBe('claude-opus-4')
         expect(lead?.provider).toBe('claude_code')
       }, 30_000)
@@ -3055,9 +3047,7 @@ describe('the orchestrator CLI', () => {
 
     it('re-addresses a question by hand to a slave who holds the role, moving the row and appending the event', async (): Promise<void> => {
       const { questionId } = await seedAWaitingRun()
-      const maya = await prisma.slave.create({
-        data: { teamId: fixture.teamId, name: 'Maya', role: 'product', runtimeRoles: ['product'] },
-      })
+      const maya = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'product', runtimeRoles: ['product'], personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
 
       const result = await runCli(['reassign-question', '--message', questionId, '--to', maya.id, '--by', 'eren'])
 
@@ -3083,7 +3073,7 @@ describe('the orchestrator CLI', () => {
       const { questionId } = await seedAWaitingRun()
       // Holds no role at all, so the question would land in front of a worker that can never be
       // dispatched it -- `reassign_not_permitted`.
-      const parked = await prisma.slave.create({ data: { teamId: fixture.teamId, name: 'Parked', role: 'design', runtimeRoles: [] } })
+      const parked = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'design', runtimeRoles: [], personId: (await prisma.person.create({ data: { name: 'Parked' } })).id } })
 
       const result = await runCli(['reassign-question', '--message', questionId, '--to', parked.id])
 

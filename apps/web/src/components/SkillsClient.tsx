@@ -1,11 +1,8 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
-import { sendControl } from '../lib/postControl'
-import { CARD_STATE_TONE, cardStateForSlave } from '../lib/tones'
+import Link from 'next/link'
 import type { SkillsPage, SkillRow } from '../server/skills'
-import { Button } from './ui/Button'
 import { EmptyState } from './ui/EmptyState'
 import { Chip } from './ui/Chip'
 import { EmptyTile } from './ui/EmptyTile'
@@ -31,19 +28,15 @@ const STATE_FILL: Record<SkillRow['state'], string> = {
 /**
  * The Skills page (M14 §5.8 / design README "3a — Skills"): the provider list on the left with
  * real run counts and usage bars, the domain-skill grid and the "add skill source" tile on the
- * right, and assign/unassign from each row.
+ * right. Assignment lives on the person, not here (M58 R26) -- each row lists who has the skill,
+ * with a link to grant or revoke it.
  *
  * Every number here is measured. A skill that was never invoked shows `0` because the tally
  * exists on every concluded run and recorded none (Decision 3) — the page never fabricates a
  * plausible-looking count, and never hides a skill whose file vanished (Decision 6).
  */
 export function SkillsClient({ page }: { readonly page: SkillsPage }): React.JSX.Element {
-  const router = useRouter()
-  const [errorText, setErrorText] = useState<string | null>(null)
-  const [pending, setPending] = useState(false)
-  /** Per-skill selection, keyed by skill id. Absent means "the first slave", which is also what
-   *  the `<select>` shows — a select whose value and whose submitted value disagree is a trap. */
-  const [choice, setChoice] = useState<Record<string, string>>({})
+  const [errorText] = useState<string | null>(null)
   const [rootsOpen, setRootsOpen] = useState(false)
 
   const skills = page.providers.flatMap((provider) => provider.skills.map((skill) => ({ provider, skill })))
@@ -51,34 +44,10 @@ export function SkillsClient({ page }: { readonly page: SkillsPage }): React.JSX
   // skills against each other, and a fixed scale would flatten a quiet catalog into a row of
   // invisible slivers. The same rule (and the same reason) as the Activity rail's volume bars.
   const maxRuns = skills.reduce((most, entry) => Math.max(most, entry.skill.runs), 0)
-  const slavesById = new Map(page.slaves.map((slave) => [slave.id, slave] as const))
-
-  /**
-   * Both writes, through one helper. `postControl` itself is not used because it only speaks POST
-   * and unassign is a DELETE (the pair IS the resource; there is no state between assigned and
-   * not) — `sendControl` carries both verbs since M18 Task 9, so this dials it directly.
-   */
-  const send = async (method: 'POST' | 'DELETE', slaveId: string, skillId: string): Promise<void> => {
-    setPending(true)
-    setErrorText(null)
-    const error = await sendControl('/api/skills/assign', { method, body: { slaveId, skillId } })
-    if (error === null) {
-      router.refresh()
-    } else {
-      setErrorText(error)
-    }
-    setPending(false)
-  }
 
   return (
     <div className="grid grid-cols-[1fr_340px] gap-4 px-5 py-[18px]">
       <div className="flex min-w-0 flex-col gap-4">
-        {page.slaves.length === 0 && (
-          // Said once, at the top, rather than beside every disabled button: the reason no row can
-          // be assigned is a fact about the org, not about any one skill.
-          <EmptyState testId="skills-no-slaves" message="no slaves yet" />
-        )}
-
         {page.providers.length === 0 && (
           <EmptyState testId="skills-empty" message="no skills found — run `orchestrator skills sync` to scan the roots below" />
         )}
@@ -98,11 +67,13 @@ export function SkillsClient({ page }: { readonly page: SkillsPage }): React.JSX
                 </span>
               }
             />
+            <p data-testid="skills-assign-note" className="text-xs text-text-3">
+              Skills are given to a slave, not the other way round — open a name to grant or revoke
+              one, or give a whole persona its defaults from Workforce → Catalog.
+            </p>
 
             <div className="flex flex-col gap-2">
-              {provider.skills.map((skill) => {
-                const chosen = choice[skill.id] ?? page.slaves[0]?.id ?? ''
-                return (
+              {provider.skills.map((skill) => (
                   <div
                     key={skill.id}
                     data-testid="skill-row"
@@ -146,61 +117,30 @@ export function SkillsClient({ page }: { readonly page: SkillsPage }): React.JSX
                     </div>
 
                     <div className="flex w-[240px] shrink-0 flex-col items-end gap-1.5">
-                      <span className="flex items-center gap-1.5">
-                        <select
-                          data-testid={`skill-slave-${skill.id}`}
-                          aria-label={`assign ${skill.name} to`}
-                          value={chosen}
-                          disabled={page.slaves.length === 0 || pending}
-                          onChange={(event) => setChoice((prev) => ({ ...prev, [skill.id]: event.target.value }))}
-                          className="max-w-[130px] rounded border border-line bg-bg-1 px-1.5 py-1 text-[11px] text-text-1"
-                        >
-                          {page.slaves.map((slave) => (
-                            <option key={slave.id} value={slave.id}>
-                              {slave.name}
-                            </option>
-                          ))}
-                        </select>
-                        <Button
-                          variant="ghost"
-                          data-testid={`skill-assign-${skill.id}`}
-                          disabled={page.slaves.length === 0 || chosen === '' || pending}
-                          onClick={() => void send('POST', chosen, skill.id)}
-                        >
-                          assign
-                        </Button>
+                      <span data-testid={`skill-holders-${skill.id}`} className="flex flex-wrap gap-1">
+                        {skill.holders.length === 0 ? (
+                          <span className="text-xs text-text-3">nobody</span>
+                        ) : (
+                          skill.holders.map((holder) => (
+                            <Link
+                              key={holder.personId}
+                              data-testid={`skill-holder-${skill.id}-${holder.personId}`}
+                              data-skill-origin={holder.origin}
+                              href={`/workforce?tab=slaves&slave=${holder.personId}`}
+                              title={holder.origin}
+                              className="text-xs underline decoration-dotted hover:text-text-1"
+                            >
+                              {holder.name}
+                              <span className="ml-1 text-[10.5px] text-text-3">
+                                {holder.origin === 'persona' ? 'from persona' : 'from slave'}
+                              </span>
+                            </Link>
+                          ))
+                        )}
                       </span>
-
-                      {skill.slaveIds.length > 0 && (
-                        <span className="flex flex-wrap justify-end gap-1">
-                          {skill.slaveIds.map((slaveId) => {
-                            const slave = slavesById.get(slaveId)
-                            const state = slave === undefined ? 'idle' : cardStateForSlave(slave.status)
-                            return (
-                              <Chip key={slaveId} tone={CARD_STATE_TONE[state].tone}>
-                                {/* The id, not a dash, when the slave is not in the list: an
-                                    assignment pointing at somebody this page cannot name is a
-                                    fact worth showing rather than blanking. */}
-                                {slave?.name ?? slaveId}
-                                <button
-                                  type="button"
-                                  data-testid={`skill-unassign-${skill.id}-${slaveId}`}
-                                  aria-label={`unassign ${skill.name} from ${slave?.name ?? slaveId}`}
-                                  disabled={pending}
-                                  onClick={() => void send('DELETE', slaveId, skill.id)}
-                                  className="ml-1 leading-none disabled:cursor-not-allowed disabled:opacity-50"
-                                >
-                                  ×
-                                </button>
-                              </Chip>
-                            )
-                          })}
-                        </span>
-                      )}
                     </div>
                   </div>
-                )
-              })}
+              ))}
             </div>
           </section>
         ))}
@@ -229,7 +169,7 @@ export function SkillsClient({ page }: { readonly page: SkillsPage }): React.JSX
                   {provider.name}
                 </span>
                 <span className="shrink-0 text-[9.5px] text-text-faint">
-                  {skill.slaveIds.length} {skill.slaveIds.length === 1 ? 'slave' : 'slaves'}
+                  {skill.holders.length} {skill.holders.length === 1 ? 'slave' : 'slaves'}
                 </span>
               </div>
             </div>

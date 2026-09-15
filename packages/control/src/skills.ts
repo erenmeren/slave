@@ -12,8 +12,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
-import { type Result, err, ok } from '@slave-of-ai/domain'
-import type { ControlRefusal } from './refusal.js'
+import { ok } from '@slave-of-ai/domain'
 
 /** Where a skill was found. `roots` defaults to the three real ones (M14 §4.3); tests pass a
  *  temp tree. */
@@ -384,32 +383,4 @@ export function describeSync(result: SyncResult): string {
   if (result.skippedRoots.length === 0) return head
   const detail = result.skippedRoots.map((skipped) => `${skipped.root} (${skipped.path}): ${skipped.code}`).join('; ')
   return `${head}skipped ${result.skippedRoots.length} unreadable root(s), nothing marked missing under them: ${detail}\n`
-}
-
-/** Gives a slave a skill. Idempotent: the composite primary key `(slaveId, skillId)` makes a
- *  second call a no-op rather than a duplicate row. */
-export async function assignSkill(slaveId: string, skillId: string): Promise<Result<void, ControlRefusal>> {
-  const skill = await prisma.skill.findUnique({ where: { id: skillId }, select: { id: true } })
-  if (skill === null) return err({ kind: 'skill_not_found', skillId })
-  const slave = await prisma.slave.findUnique({ where: { id: slaveId }, select: { id: true } })
-  if (slave === null) return err({ kind: 'slave_not_found', slaveId })
-
-  await prisma.slaveSkill.upsert({
-    where: { slaveId_skillId: { slaveId, skillId } },
-    update: {},
-    create: { slaveId, skillId },
-  })
-  return ok(undefined)
-}
-
-/** Takes it away. Idempotent for the same reason, via `deleteMany` rather than `delete` (which
- *  throws on a row that is already gone). */
-export async function unassignSkill(slaveId: string, skillId: string): Promise<Result<void, ControlRefusal>> {
-  const skill = await prisma.skill.findUnique({ where: { id: skillId }, select: { id: true } })
-  if (skill === null) return err({ kind: 'skill_not_found', skillId })
-  const slave = await prisma.slave.findUnique({ where: { id: slaveId }, select: { id: true } })
-  if (slave === null) return err({ kind: 'slave_not_found', slaveId })
-
-  await prisma.slaveSkill.deleteMany({ where: { slaveId, skillId } })
-  return ok(undefined)
 }

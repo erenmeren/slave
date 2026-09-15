@@ -186,7 +186,12 @@ async function deleteGateTemplates(label) {
   if (rows.length === 0) return
   console.log(`${label}: removing ${String(rows.length)} gate template(s): ${JSON.stringify(rows.map((r) => r.name))}`)
   const ids = rows.map((r) => r.id)
-  await prisma.companySlave.deleteMany({ where: { templateId: { in: ids } } }).catch(() => {})
+  // M58 R1: the roster copy this used to remove is a PERSON now, and a person is NOT cascaded away
+  // with the workspace whose seat held them -- so a hire this gate made survives its own teardown,
+  // keeps the persona's name and is offered back to the next run as somebody who already works
+  // here. Deleted BEFORE the templates, exactly as the `CompanySlave` sweep was: `Person.templateId`
+  // is SetNull, so a template that goes first takes the only handle on them with it.
+  await prisma.person.deleteMany({ where: { templateId: { in: ids } } }).catch(() => {})
   // M48: an import also writes a `RunbookTemplate` per persona workflow, and `sourceTemplateId` is
   // SetNull -- so a runbook whose template goes first can never be found again, and every run of
   // this gate left one more behind. Removed BEFORE the templates, in both the preflight and the
@@ -948,18 +953,50 @@ try {
   repoPath = makeRepo()
   companyId = createdId(runCli(['create-company', '--name', COMPANY_NAME]), 'create-company')
   const engineeringTeamId = createdId(runCli(['add-team', '--company', companyId, '--name', 'Engineering']), 'add-team')
-  const coreSlaveId = createdId(
-    runCli(['add-slave', '--team', engineeringTeamId, '--template', coreId, '--name', 'Core']),
-    'add-slave',
-  )
+  // M58 R5: a department holds PEOPLE, so `add-slave` takes a `--person` now -- the CLI no longer
+  // copies a template onto a roster. The person is created here (Task 4 gives the CLI a `person`
+  // verb family of its own) and upserted by name, because a person outlives the workspace whose
+  // seat held them and a second run of this gate meets the first run's.
+  const coreSlaveId = (
+    await prisma.person.upsert({
+      where: { name: 'Core' },
+      create: { name: 'Core', templateId: coreId, lifecycle: 'permanent' },
+      update: {
+        templateId: coreId,
+        lifecycle: 'permanent',
+        profile: null,
+        model: null,
+        provider: null,
+        capabilities: [],
+        releasedAt: null,
+        releaseReason: null,
+        selectionRationale: null,
+      },
+    })
+  ).id
+  runCli(['add-slave', '--team', engineeringTeamId, '--person', coreSlaveId])
   // The SECOND worker is the testing persona, not the other engineering one: two workers holding
   // the same runtime role would make "the run landed on the core builder" a coin toss rather than
   // an assertion.
   const testingTeamId = createdId(runCli(['add-team', '--company', companyId, '--name', 'Testing']), 'add-team')
-  const noteSlaveId = createdId(
-    runCli(['add-slave', '--team', testingTeamId, '--template', noteTakerId, '--name', 'Notes']),
-    'add-slave',
-  )
+  const noteSlaveId = (
+    await prisma.person.upsert({
+      where: { name: 'Notes' },
+      create: { name: 'Notes', templateId: noteTakerId, lifecycle: 'permanent' },
+      update: {
+        templateId: noteTakerId,
+        lifecycle: 'permanent',
+        profile: null,
+        model: null,
+        provider: null,
+        capabilities: [],
+        releasedAt: null,
+        releaseReason: null,
+        selectionRationale: null,
+      },
+    })
+  ).id
+  runCli(['add-slave', '--team', testingTeamId, '--person', noteSlaveId])
   console.log(`company ${companyId}: roster members ${coreSlaveId} (Core) and ${noteSlaveId} (Notes)`)
 
   workspaceId = createdId(
@@ -969,7 +1006,10 @@ try {
   console.log(`workspace ${workspaceId} (${WORKSPACE_NAME}), repo ${repoPath}`)
   console.log(`assign-company printed: ${JSON.stringify(runCli(['assign-company', '--workspace', workspaceId, '--company', companyId]).trim())}`)
 
-  const workers = await prisma.slave.findMany({ where: { team: { workspaceId } }, orderBy: { name: 'asc' } })
+  // M58 R2: the name belongs to the person, not the seat; flatten it back on so the stage below
+  // still reads `worker.name`.
+  const seats = await prisma.slave.findMany({ where: { team: { workspaceId } }, include: { person: { select: { name: true } } }, orderBy: { person: { name: 'asc' } } })
+  const workers = seats.map((seat) => ({ ...seat, name: seat.person.name }))
   for (const worker of workers) {
     console.log(`  worker ${worker.id} ${JSON.stringify(worker.name)}: role ${JSON.stringify(worker.role)}, runtimeRoles ${JSON.stringify(worker.runtimeRoles)}`)
   }

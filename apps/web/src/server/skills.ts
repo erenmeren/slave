@@ -2,7 +2,13 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { toRunState } from '@slave-of-ai/db'
-import { deriveSlaveStatus, NON_TERMINAL_RUN_STATUSES, type SlaveStatus } from '@slave-of-ai/domain'
+import {
+  deriveSlaveStatus,
+  effectiveSkills,
+  NON_TERMINAL_RUN_STATUSES,
+  type SkillOrigin,
+  type SlaveStatus,
+} from '@slave-of-ai/domain'
 
 export interface SkillRow {
   readonly id: string
@@ -14,7 +20,10 @@ export interface SkillRow {
   /** `'missing'` when `missingSince` is set — the skill is gone from disk but its history is not
    *  (Decision 6). */
   readonly state: 'ready' | 'missing'
-  readonly slaveIds: readonly string[]
+  /** M58 R26: WHO has this skill, and how. The effective set is `TemplateSkill ∪ granted − revoked`
+   *  computed on read, so a persona's default reaches every person hired from it without a row --
+   *  and `origin` is what lets the page say which of the two a holder is. */
+  readonly holders: readonly { readonly personId: string; readonly name: string; readonly origin: SkillOrigin }[]
 }
 
 export interface SkillProviderRow {
@@ -26,10 +35,11 @@ export interface SkillProviderRow {
 export interface SkillsPage {
   readonly providers: readonly SkillProviderRow[]
   /**
-   * Every slave, for the row's assign control. `status` is the domain's own `SlaveStatus` rather
-   * than a bare `string` so the client can tone the assignment chips through `lib/tones.ts`'s
-   * exhaustive `cardStateForSlave` — a widened `string` there would need a default branch, which
-   * is exactly the silent fall-through that file exists to rule out.
+   * Every PERSON, for the row's assign control (M58 R3: a skill belongs to somebody, not to a
+   * seat). `id` is a `Person.id`. `status` is the domain's own `SlaveStatus` rather than a bare
+   * `string` so the client can tone the assignment chips through `lib/tones.ts`'s exhaustive
+   * `cardStateForSlave` — a widened `string` there would need a default branch, which is exactly
+   * the silent fall-through that file exists to rule out.
    */
   readonly slaves: readonly { readonly id: string; readonly name: string; readonly status: SlaveStatus }[]
   /** The three directories `syncSkillCatalog` scans, for the "add skill source" tile. Shown, not
@@ -78,27 +88,52 @@ export async function skillCallTotals(): Promise<ReadonlyMap<string, number>> {
  * that silently trails the board is worse than one that says it does.
  */
 export async function buildSkillsPage(): Promise<SkillsPage> {
-  const [providers, totals, assignments, slaves, liveRuns] = await Promise.all([
+  const [providers, totals, personSkills, templateSkills, persons, liveRuns] = await Promise.all([
     // Alphabetical, which is also the spec's stated order — `personal` < `plugin:*` < `project`
     // sort that way on their own, so this needs no hand-written provider ranking to maintain.
     prisma.skillProvider.findMany({ orderBy: { name: 'asc' }, include: { skills: { orderBy: { name: 'asc' } } } }),
     skillCallTotals(),
-    prisma.slaveSkill.findMany({ orderBy: { slaveId: 'asc' } }),
-    prisma.slave.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
+    // M58 R3: the two join tables, whole. Both are small -- one row per (person, skill) somebody
+    // adjusted and one per (persona, skill) somebody made a default -- and `effectiveSkills` is
+    // handed both per person rather than a query per person.
+    prisma.personSkill.findMany({ orderBy: [{ personId: 'asc' }, { skillId: 'asc' }] }),
+    prisma.templateSkill.findMany({ orderBy: [{ templateId: 'asc' }, { skillId: 'asc' }] }),
+    prisma.person.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, templateId: true } }),
     // No `select`: `toRunState` maps a whole `SlaveRun` row, and narrowing the query to the four
     // columns it reads today would hand it an object the mapper's own type rejects (the same
     // reason `server/shell.ts:40` gives). The row set is bounded by the live runs, not by history.
-    prisma.slaveRun.findMany({ where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } } }),
+    prisma.slaveRun.findMany({ where: { status: { in: [...NON_TERMINAL_RUN_STATUSES] } }, include: { slave: { select: { personId: true } } } }),
   ])
 
-  const slavesBySkill = new Map<string, string[]>()
-  for (const row of assignments) {
-    const list = slavesBySkill.get(row.skillId)
-    if (list === undefined) slavesBySkill.set(row.skillId, [row.slaveId])
-    else list.push(row.slaveId)
+  const templateSkillIdsByTemplate = new Map<string, string[]>()
+  for (const row of templateSkills) {
+    const list = templateSkillIdsByTemplate.get(row.templateId)
+    if (list === undefined) templateSkillIdsByTemplate.set(row.templateId, [row.skillId])
+    else list.push(row.skillId)
   }
+  const holdersBySkill = new Map<string, { personId: string; name: string; origin: SkillOrigin }[]>()
+  for (const person of persons) {
+    const own = personSkills.filter((row) => row.personId === person.id)
+    const effective = effectiveSkills({
+      templateSkillIds: person.templateId === null ? [] : (templateSkillIdsByTemplate.get(person.templateId) ?? []),
+      granted: own.filter((row) => row.mode === 'granted').map((row) => row.skillId),
+      revoked: own.filter((row) => row.mode === 'revoked').map((row) => row.skillId),
+    })
+    for (const row of effective) {
+      const list = holdersBySkill.get(row.skillId)
+      const holder = { personId: person.id, name: person.name, origin: row.origin }
+      if (list === undefined) holdersBySkill.set(row.skillId, [holder])
+      else list.push(holder)
+    }
+  }
+  // One pass over every person, not one query per skill: `effectiveSkills` is pure and the two
+  // lists are already in memory.
+  const holdersOf = (skillId: string) =>
+    (holdersBySkill.get(skillId) ?? []).toSorted((a, b) => a.name.localeCompare(b.name))
 
-  const statusBySlave = new Map(liveRuns.map((run) => [run.slaveId, deriveSlaveStatus(toRunState(run))] as const))
+  // A person is "working" when any of their OPEN seats holds a live run: the status the chips tone
+  // is the person's, because the chip names the person (M58 R3).
+  const statusBySlave = new Map(liveRuns.map((run) => [run.slave.personId, deriveSlaveStatus(toRunState(run))] as const))
 
   return {
     providers: providers.map((provider) => ({
@@ -121,11 +156,15 @@ export async function buildSkillsPage(): Promise<SkillsPage> {
           // key.
           runs: totals.get(key) ?? 0,
           state: skill.missingSince === null ? ('ready' as const) : ('missing' as const),
-          slaveIds: slavesBySkill.get(skill.id) ?? [],
+          /** M58 R26: WHO has this skill, and whether they have it because of their persona or
+           *  because somebody gave it to them. Computed from the two join tables with
+           *  `effectiveSkills`, so this page and the person panel can never disagree about who has
+           *  what. */
+          holders: holdersOf(skill.id),
         }
       }),
     })),
-    slaves: slaves.map((slave) => ({ id: slave.id, name: slave.name, status: statusBySlave.get(slave.id) ?? 'idle' })),
+    slaves: persons.map((person) => ({ id: person.id, name: person.name, status: statusBySlave.get(person.id) ?? 'idle' })),
     // The same three roots `syncSkillCatalog` scans (`packages/control/src/skills.ts:48-54`),
     // named so the "add skill source" tile can SHOW them. Read-only, deliberately: there is no
     // write path for a fourth root, and a tile that accepted input would be one that silently

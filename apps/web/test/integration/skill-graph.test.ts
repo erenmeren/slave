@@ -22,8 +22,8 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slaveA = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  const slaveB = await prisma.slave.create({ data: { teamId: team.id, name: 'Sam', role: 'backend' } })
+  const slaveA = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+  const slaveB = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Sam' } })).id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -79,7 +79,7 @@ describe('buildSkillGraph', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -188,7 +188,7 @@ describe('buildSkillGraph', () => {
       data: { name: 'Other', repoPath: '/tmp/other-skill-graph', verifyCommands: ['true'], setupCommands: [] },
     })
     const otherTeam = await prisma.team.create({ data: { workspaceId: other.id, name: 'T' } })
-    const otherSlave = await prisma.slave.create({ data: { teamId: otherTeam.id, name: 'Zoe', role: 'backend' } })
+    const otherSlave = await prisma.slave.create({ data: { teamId: otherTeam.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Zoe' } })).id } })
     const otherRun = await prisma.slaveRun.create({ data: { slaveId: otherSlave.id, status: 'working' } })
     await skillCall({ workspaceId: other.id, slaveId: otherSlave.id, runId: otherRun.id, summary: 'Skill delta' })
 

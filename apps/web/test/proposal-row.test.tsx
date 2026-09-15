@@ -135,17 +135,17 @@ describe('actionText', () => {
     ).toBe('give Rae the "security" runtime role, for Application security')
   })
 
-  it('names the worker a materialise_company_worker brings over', () => {
+  it('names the person a materialise_company_worker seats', () => {
     expect(
       actionText({
         kind: 'materialise_company_worker',
-        companySlaveId: 'cs1',
+        personId: 'p1',
         capability: 'security.application',
         capabilityLabel: 'Application security',
         name: 'Sam',
         rationale: 'Sam is already on the company roster and provides Application security.',
       }),
-    ).toBe('bring Sam onto this project from the company roster, for Application security')
+    ).toBe('seat Sam on this project from the pool, for Application security')
   })
 
   it('says when a catalog hire is a temporary specialist, and says nothing when it is not', () => {
@@ -404,5 +404,36 @@ describe('a drafted answer', () => {
 
     expect(screen.queryByTestId('supervisor-draft-question')).toBeNull()
     expect(screen.getByTestId('supervisor-draft-body')).toBeTruthy()
+  })
+
+  // M58 R16: the middle tier is the pool, and the word an operator reads says so. The raw
+  // TeamSource stays on `data-source`.
+  it('names a pool_person proposal FROM THE POOL, with the raw source beside it', () => {
+    renderRow(
+      decision({
+        id: 'd-pool',
+        situationKind: 'capability_unstaffed',
+        subjectId: 'security.application',
+        situation: {
+          kind: 'capability_unstaffed',
+          subjectId: 'security.application',
+          summary: '1 startable task(s) need Application security and no slave can be dispatched as security.',
+          facts: { capability: 'security.application', role: 'security', readyTasks: 1, firstTaskId: 't-1' },
+        },
+        action: {
+          kind: 'materialise_company_worker',
+          personId: 'p1',
+          capability: 'security.application',
+          capabilityLabel: 'Application security',
+          name: 'Sam',
+          rationale: 'Sam is already on the company roster and provides Application security.',
+        },
+        rationale: 'Sam already works here and holds no seat on this project.',
+      }),
+    )
+
+    const row = screen.getByTestId('supervisor-proposal')
+    expect(row.getAttribute('data-source')).toBe('pool_person')
+    expect(screen.getByTestId('supervisor-proposal-source').textContent).toBe('FROM THE POOL')
   })
 })

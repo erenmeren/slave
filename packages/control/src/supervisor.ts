@@ -27,8 +27,8 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { steerRun } from './breaker.js'
-import { hireFromTemplate, materialiseCompanySlave, mergeRuntimeRoles } from './capability.js'
-import { releaseWorker } from './lifecycle.js'
+import { hireFromTemplate, seatMember, mergeRuntimeRoles } from './capability.js'
+import { releasePerson } from './persons.js'
 import { discardStaleCandidates, recordMemory } from './memory.js'
 import { answerQuestion, reassignQuestion } from './messaging.js'
 import { setRuntimeRoles } from './profile.js'
@@ -374,7 +374,7 @@ type Reach = 'applied' | 'none'
 interface CarriedDecision {
   readonly id: string
   /** The project the decision was made for (M47). Read off the row {@link applyDecision} already
-   *  fetched rather than looked up again: `hireFromTemplate` and `materialiseCompanySlave` are
+   *  fetched rather than looked up again: `hireFromTemplate` and `seatMember` are
    *  workspace-scoped verbs, and a second read would be a second chance for the two to disagree
    *  about which project a worker is joining. */
   readonly workspaceId: string
@@ -409,12 +409,18 @@ async function carryOut(
       // lock the write takes or a concurrent `setSlaveCapabilities` loses a role to it.
       return reached(await mergeRuntimeRoles(action.slaveId, [action.role], SUPERVISOR_ACTOR, origin))
     case 'materialise_company_worker':
+      // Spec erratum E9: a row stored before M58 names a `CompanySlave` that this milestone's
+      // migration DROPPED, and there is nothing left to resolve it to -- the roster row is gone and
+      // its person, if it had one, is not named here. Refused rather than guessed at, with the
+      // refusal M27 already had for a roster id nothing carries. The row still PARSES, which is the
+      // point: the Supervisor view renders it and an operator can reject it by hand.
+      if (action.personId === undefined) {
+        return { ok: false as const, error: { kind: 'company_slave_not_found', companySlaveId: action.companySlaveId ?? '' } }
+      }
       // The rationale the rules wrote, verbatim -- `formTeam`'s sentence names the capability in
       // the taxonomy's WORDS ("Application security"), and that sentence is what the Organization
       // view shows beside the worker months later (fix round 1, Minor 5).
-      return reached(
-        await materialiseCompanySlave(decision.workspaceId, action.companySlaveId, { rationale: action.rationale }),
-      )
+      return reached(await seatMember(decision.workspaceId, action.personId, { rationale: action.rationale }))
     case 'hire_from_catalog':
       // M50 R2, fix round 1 (Minor 8). `actionOf` never produces this pair, so a temporary hire
       // with no assignment is a decision recorded by an older build or edited by hand. It is
@@ -483,11 +489,15 @@ async function carryOut(
       // on: the verb withdraws whatever is stale at the moment it runs, which after a day's wait
       // is the honest set.
       return reached(ok(await discardStaleCandidates(action.workspaceId, new Date(), principal)))
-    case 'release_worker':
-      // M50 R3, the routine the milestone is named for. `tierOf` makes this `applied` on an
-      // unhalted project, so this arm runs inside a TICK -- which is exactly why `releaseWorker`
-      // skips and counts a worktree it could not remove instead of throwing.
-      return reached(await releaseWorker(action.slaveId, action.reason, principal, origin))
+    case 'release_worker': {
+      // M58 R10: a release is a fact about a PERSON and closes every seat they hold.
+      // Stored actions still name a seat (`slaveId`); resolve whoever sits there when the
+      // action has no personId of its own.
+      const seat = await prisma.slave.findUnique({ where: { id: action.slaveId }, select: { personId: true } })
+      if (seat === null) return err({ kind: 'slave_not_found', slaveId: action.slaveId })
+      const actionPersonId = 'personId' in action && typeof action.personId === 'string' ? action.personId : undefined
+      return reached(await releasePerson(actionPersonId ?? seat.personId, action.reason, principal, origin))
+    }
     case 'steer_run':
       // M51 R3. `tierOf` makes this `applied` on an unhalted project, so this arm runs inside a
       // TICK -- which is why `steerRun` returns a refusal for a run that moved under it rather than
@@ -641,11 +651,12 @@ async function addRuntimeRoles(
 ): Promise<Result<void, ControlRefusal>> {
   const slave = await prisma.slave.findUnique({
     where: { id: slaveId },
-    select: { runtimeRoles: true, releasedAt: true },
+    // M58 R1: whether the engagement is over is the PERSON's fact.
+    select: { runtimeRoles: true, person: { select: { releasedAt: true } } },
   })
   if (slave === null) return err({ kind: 'slave_not_found', slaveId })
-  if (slave.releasedAt !== null) {
-    return err({ kind: 'already_released', slaveId, at: slave.releasedAt.toISOString() })
+  if (slave.person.releasedAt !== null) {
+    return err({ kind: 'already_released', slaveId, at: slave.person.releasedAt.toISOString() })
   }
   const union = [...slave.runtimeRoles]
   for (const role of adds) if (!union.includes(role)) union.push(role)

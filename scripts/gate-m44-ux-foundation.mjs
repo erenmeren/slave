@@ -107,6 +107,9 @@ const SIM_ROSTER = [
   ['Finance', 'M44 Gate Fin'],
 ]
 
+/** Every person this gate creates, by the name it creates them under -- the teardown's list. */
+const GATE_PERSON_NAMES = [SLAVE_NAME, ...SIM_ROSTER.map(([, memberName]) => memberName)]
+
 /**
  * The Activity rail's own words. The SOURCE OF TRUTH is `apps/web/src/lib/eventLabels.ts`
  * (`EVENT_PREFIX_LABEL`), which lives inside the Next app -- `apps/web` compiles with `noEmit`, so
@@ -389,9 +392,7 @@ try {
   workspaceId = workspace.id
   const team = await prisma.team.create({ data: { workspaceId, name: TEAM_NAME } })
   teamId = team.id
-  const slave = await prisma.slave.create({
-    data: { teamId, name: SLAVE_NAME, role: 'engineer', runtimeRoles: ['engineer'], model: 'sonnet', provider: 'claude_code' },
-  })
+  const slave = await prisma.slave.create({ data: { teamId: teamId, role: 'engineer', runtimeRoles: ['engineer'], model: 'sonnet', provider: 'claude_code', personId: (await prisma.person.upsert({ where: { name: SLAVE_NAME }, create: { name: SLAVE_NAME }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   slaveId = slave.id
   const task = await prisma.task.create({
     data: { workspaceId, title: 'M44 gate task', description: 'The task the paused run belongs to.', status: 'running', maxAttempts: 3, assigneeId: slaveId },
@@ -448,7 +449,7 @@ try {
   companyId = company.id
   for (const [department, memberName] of SIM_ROSTER) {
     const companyTeam = await prisma.companyTeam.create({ data: { companyId, name: department } })
-    await prisma.companySlave.create({ data: { companyTeamId: companyTeam.id, templateId, name: memberName } })
+    await prisma.person.upsert({ where: { name: memberName }, create: { templateId, name: memberName, lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } }, update: { templateId, lifecycle: 'permanent', departments: { deleteMany: {}, create: { companyTeamId: companyTeam.id } }, profile: null, model: null, provider: null, capabilities: [], releasedAt: null, releaseReason: null, selectionRationale: null } })
   }
   // An `llm` run, and NOT because anything calls a model: nothing ever steps this row (no daemon
   // runs, and it is `paused` a line below), so no call is made and nothing is spent. It is `llm`
@@ -759,7 +760,7 @@ try {
   // ============================================================================================
   const PAGES = [
     { name: 'projects', path: `/`, testId: 'project-card', fidelity: true },
-    { name: 'workforce', path: `/workforce`, testId: 'data-table', fidelity: true },
+    { name: 'workforce', path: `/workforce`, testId: 'people-rows', fidelity: true },
     { name: 'skills', path: `/skills`, testId: 'empty-tile', fidelity: true },
     { name: 'analytics', path: `/analytics?workspace=${workspaceId}`, testId: 'kpi-tile', fidelity: true },
     { name: 'settings', path: `/settings`, testId: 'security-posture', fidelity: true },
@@ -886,14 +887,15 @@ try {
 
     // ---- Stage 4's positive counterparts, so the negative is not vacuous. ----------------------
     if (target.name === 'workforce') {
-      const row = page.getByTestId('data-table-row').filter({ hasText: SLAVE_NAME })
+      // M58 R22: People is one row per person. The fixture worker is seated, so the derived
+      // state is `assigned` -- there is no run pill on this table any more.
+      const row = page.locator('[data-testid^="person-row-"]').filter({ hasText: SLAVE_NAME })
       await waitVisible(row, `the fixture worker's row on /workforce`)
-      const pill = await row.first().getByTestId('status-pill').first()
-      const word = (await pill.textContent())?.trim() ?? ''
-      const raw = await pill.getAttribute('title')
-      console.log(`stage 4 (workforce) POSITIVE: the pausing worker's pill reads ${JSON.stringify(word)}, title=${JSON.stringify(raw)}`)
-      if (word !== 'PAUSING') await fail(`stage 4 (workforce): the pill reads ${JSON.stringify(word)}, expected "PAUSING"`)
-      if (raw !== 'pausing') await fail(`stage 4 (workforce): the pill's title is ${JSON.stringify(raw)}, expected "pausing"`)
+      const state = await row.first().getAttribute('data-person-state')
+      const released = await row.first().getAttribute('data-released')
+      console.log(`stage 4 (workforce) POSITIVE: the person's state is ${JSON.stringify(state)}, released=${JSON.stringify(released)}`)
+      if (state !== 'assigned') await fail(`stage 4 (workforce): data-person-state is ${JSON.stringify(state)}, expected "assigned"`)
+      if (released !== 'false') await fail(`stage 4 (workforce): data-released is ${JSON.stringify(released)}, expected "false"`)
       // The PageShell frame -- `/workforce` is the one page built on it (R3). Its `testId` prop is
       // `workforce`, so `page-shell` is the default nobody uses; the frame is asserted by name.
       const frame = await page.getByTestId('workforce').count()
@@ -1213,6 +1215,11 @@ try {
   }
   if (simulationId !== null) await prisma.simulationRun.delete({ where: { id: simulationId } }).catch(() => {})
   if (companyId !== null) await prisma.company.delete({ where: { id: companyId } }).catch(() => {})
+  // M58 R1: this gate's PEOPLE. A person is not cascaded away with the workspace whose seat held
+  // them, nor with the company whose department listed them, so without this every run leaves its
+  // roster behind -- as pooled rows on the Slaves tab, and as names another gate's substring count
+  // then trips over.
+  await prisma.person.deleteMany({ where: { name: { in: GATE_PERSON_NAMES } } }).catch(() => {})
   if (templateId !== null) await prisma.slaveTemplate.delete({ where: { id: templateId } }).catch(() => {})
   // The provider cascades its Skill rows. UNLIKE `gate-m14-fidelity.mjs`, whose catalog rows
   // describe the daemon host's real disk and are kept under Decision 6, this provider is a fiction

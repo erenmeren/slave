@@ -15,16 +15,16 @@ afterAll(async () => {
 let workspaceId = ''
 beforeEach(async () => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
   const ws = await prisma.workspace.create({ data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [] } })
   workspaceId = ws.id
   const product = await prisma.team.create({ data: { workspaceId, name: 'Product' } })
   const engineering = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
   await prisma.team.create({ data: { workspaceId, name: 'QA' } })
-  await prisma.slave.create({ data: { teamId: engineering.id, name: 'Maya', role: 'qa' } })
-  await prisma.slave.create({ data: { teamId: engineering.id, name: 'Alex', role: 'backend' } })
-  await prisma.slave.create({ data: { teamId: product.id, name: 'John', role: 'analyst' } })
+  await prisma.slave.create({ data: { teamId: engineering.id, role: 'qa', personId: (await prisma.person.create({ data: { name: 'Maya' } })).id } })
+  await prisma.slave.create({ data: { teamId: engineering.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+  await prisma.slave.create({ data: { teamId: product.id, role: 'analyst', personId: (await prisma.person.create({ data: { name: 'John' } })).id } })
 })
 
 describe('buildOfficeSnapshot', () => {

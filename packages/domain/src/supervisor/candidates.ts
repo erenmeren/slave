@@ -137,39 +137,36 @@ export function teamPlanOf(world: SupervisorWorld): TeamPlan {
     }
   }
   // M53 R8: everything the six steps need, gathered once from the world. `profileKeyOf` is R1's own
-  // rule applied to each candidate kind -- a roster worker keys on the template it was hired from or
-  // on itself, and a company worker or a catalog entry keys on its template, which both always have
-  // (`CompanySlave.templateId` is NOT NULL). Keyed on the CANDIDATE's id throughout, which is what
-  // `formTeam` hands the ranker; a released worker is not in the roster it builds a field from, so
-  // the rows gathered for one here are simply never read.
+  // rule applied to each candidate kind -- a seated or pooled person keys on the persona they were
+  // hired from, or on themself when nobody hired them from one, and a catalog entry keys on the
+  // template it IS. Keyed on the CANDIDATE's id throughout, which is what `formTeam` hands the
+  // ranker; a released worker is not in the roster it builds a field from, so the rows gathered for
+  // one here are simply never read.
   const templateOf = new Map<string, string | null>()
   const modelOf = new Map<string, string | null>()
   const profileKeys = new Map<string, string>()
   const deniedKinds = new Map<string, readonly PermissionKind[]>()
   for (const slave of world.slaves) {
-    templateOf.set(slave.id, slave.hiredFromTemplateId)
+    templateOf.set(slave.id, slave.templateId)
     modelOf.set(slave.id, slave.model)
-    profileKeys.set(slave.id, profileKeyOf({ slaveId: slave.id, hiredFromTemplateId: slave.hiredFromTemplateId }))
+    profileKeys.set(slave.id, profileKeyOf({ slaveId: slave.id, templateId: slave.templateId }))
     // Only when there IS one: an empty list and an absent entry mean the same thing to the ranker,
     // and a map with a row per worker would say "we looked" where nothing was refused.
     if (slave.deniedKinds.length > 0) deniedKinds.set(slave.id, slave.deniedKinds)
   }
   // `profileKeyOf` and never a `template:` literal written out here (final wave): R1's key has one
   // spelling, in `evidence/derive.ts`, and a second one beside it is how the world's keys and the
-  // record's keys eventually stop matching for a reason nobody can see. Both kinds always carry a
-  // template (`CompanySlave.templateId` is NOT NULL, and a catalog entry IS one), so both resolve
-  // to `template:<id>`; the `slaveId` half is what the helper falls back to and neither needs.
-  for (const worker of world.company) {
-    templateOf.set(worker.companySlaveId, worker.templateId)
-    profileKeys.set(
-      worker.companySlaveId,
-      profileKeyOf({ slaveId: worker.companySlaveId, hiredFromTemplateId: worker.templateId }),
-    )
+  // record's keys eventually stop matching for a reason nobody can see. A catalog entry IS a
+  // template, so it always resolves to `template:<id>`; a pooled person resolves to theirs, or --
+  // since M58 R1 made `Person.templateId` nullable -- to `slave:<personId>`, their own profile.
+  for (const person of world.pool) {
+    templateOf.set(person.personId, person.templateId)
+    profileKeys.set(person.personId, profileKeyOf({ slaveId: person.personId, templateId: person.templateId }))
   }
   for (const entry of world.catalog) {
     templateOf.set(entry.templateId, entry.templateId)
     modelOf.set(entry.templateId, entry.defaultModel)
-    profileKeys.set(entry.templateId, profileKeyOf({ slaveId: entry.templateId, hiredFromTemplateId: entry.templateId }))
+    profileKeys.set(entry.templateId, profileKeyOf({ slaveId: entry.templateId, templateId: entry.templateId }))
   }
 
   const ranking: TeamRanking = {
@@ -204,10 +201,10 @@ export function teamPlanOf(world: SupervisorWorld): TeamPlan {
         runtimeRoles: slave.runtimeRoles,
         busy: slave.busy,
       })),
-    company: world.company.map((worker) => ({
-      companySlaveId: worker.companySlaveId,
-      name: worker.name,
-      capabilities: worker.capabilities,
+    pool: world.pool.map((person) => ({
+      personId: person.personId,
+      name: person.name,
+      capabilities: person.capabilities,
     })),
     catalog: world.catalog.map((entry) => ({
       templateId: entry.templateId,
@@ -238,10 +235,10 @@ function actionOf(proposal: TeamProposal, capability: string, world: SupervisorW
         capabilityLabel,
         role: projectRoles([capability], world.taxonomy)[0] ?? '',
       }
-    case 'company_worker':
+    case 'pool_person':
       return {
         kind: 'materialise_company_worker',
-        companySlaveId: proposal.pick.id,
+        personId: proposal.pick.id,
         capability,
         capabilityLabel,
         name: proposal.pick.name,
@@ -386,7 +383,7 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
 
     case 'capability_unstaffed': {
       // `subjectId` IS the capability key (spec §2 as M47 extends it). `formTeam` has already made
-      // the choice R4 fixes -- an existing capable worker, else the company roster, else the
+      // the choice R4 fixes -- an existing capable worker, else somebody in the pool, else the
       // catalog -- and it covers each missing capability with exactly ONE pick, so this filter
       // yields ONE offer (fix round 1, Minor 4: it is not a ranked list of three). The loop stands
       // because zero is the other real answer: a capability nobody anywhere provides is

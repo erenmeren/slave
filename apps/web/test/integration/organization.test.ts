@@ -70,16 +70,15 @@ describe('buildOrganization', () => {
     // the roster row it was materialised from and the company it belongs to.
     const company = await prisma.company.create({ data: { name: 'M47 Co' } })
     const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Platform' } })
-    const rosterRow = await prisma.companySlave.create({
-      data: { companyTeamId: companyTeam.id, templateId: platform.id, name: 'Alex' },
-    })
+    const rosterRow = await prisma.person.create({ data: { templateId: platform.id, name: 'Alex of Platform', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
     await prisma.workspace.update({ where: { id: workspaceId }, data: { companyId: company.id } })
-    // `lifecycle: 'permanent'` beside the roster link (M50 R1): a worker materialised from a
-    // company roster IS somebody the organisation has, which is exactly what the migration's one
-    // data statement writes for every pre-M50 roster-linked worker.
-    await prisma.slave.update({
-      where: { id: fixture.slaveId },
-      data: { companySlaveId: rosterRow.id, lifecycle: 'permanent' },
+    // M58 R5: the fixture's seat is that member's. `lifecycle: 'permanent'` on the PERSON (M50 R1,
+    // moved by M58 R1): somebody in a company department IS somebody the organisation has, which is
+    // exactly what the migration writes for every pre-M50 roster-linked worker.
+    const seated = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId }, select: { personId: true } })
+    await prisma.person.delete({ where: { id: seated.personId } })
+    await prisma.slave.create({
+      data: { id: fixture.slaveId, teamId: fixture.teamId, role: 'backend', runtimeRoles: ['backend'], personId: rosterRow.id },
     })
 
     // Rae predates all of this: no rationale, no roster row, and the `backend` role that makes
@@ -87,13 +86,16 @@ describe('buildOrganization', () => {
     await prisma.slave.create({
       data: {
         teamId: fixture.teamId,
-        name: 'Rae',
         role: 'backend',
         // `data` and `qa` are here so the settled tasks below ask for something Rae genuinely
         // provides AND may be dispatched for -- the case is about the task's STATUS, not about a
         // gap dressed up as one.
         runtimeRoles: ['backend', 'data', 'qa'],
-        capabilities: ['backend.api-design', 'data.pipelines', 'qa.test-automation'],
+        personId: (
+          await prisma.person.create({
+            data: { name: 'Rae', capabilities: ['backend.api-design', 'data.pipelines', 'qa.test-automation'] },
+          })
+        ).id,
       },
     })
     // Hired for this project, and PROVIDES the missing capability without holding its role -- the
@@ -101,12 +103,18 @@ describe('buildOrganization', () => {
     await prisma.slave.create({
       data: {
         teamId: fixture.teamId,
-        name: 'Security Reviewer',
         role: 'security',
         runtimeRoles: ['reviewer'],
-        capabilities: ['security.application'],
-        hiredFromTemplateId: security.id,
-        selectionRationale: 'Hired for security.application because the board needs it',
+        personId: (
+          await prisma.person.create({
+            data: {
+              name: 'Security Reviewer',
+              capabilities: ['security.application'],
+              templateId: security.id,
+              selectionRationale: 'Hired for security.application because the board needs it',
+            },
+          })
+        ).id,
       },
     })
     // A temporary specialist whose engagement is over (M50 R3/D7). The name sorts FIRST of the
@@ -114,16 +122,22 @@ describe('buildOrganization', () => {
     await prisma.slave.create({
       data: {
         teamId: fixture.teamId,
-        name: 'Aaron',
         role: 'security',
         // Nothing to dispatch and nothing to cover: this row is about the SORT and the released
         // marker, and a capability on it would quietly move the coverage the cases below pin.
         runtimeRoles: [],
-        capabilities: [],
-        lifecycle: 'ephemeral',
-        releasedAt: new Date('2026-09-12T10:00:00.000Z'),
-        releaseReason: 'the engagement is over',
-        selectionRationale: 'Brought in for the security pass',
+        personId: (
+          await prisma.person.create({
+            data: {
+              name: 'Aaron',
+              capabilities: [],
+              lifecycle: 'ephemeral',
+              releasedAt: new Date('2026-09-12T10:00:00.000Z'),
+              releaseReason: 'the engagement is over',
+              selectionRationale: 'Brought in for the security pass',
+            },
+          })
+        ).id,
       },
     })
 
@@ -193,7 +207,7 @@ describe('buildOrganization', () => {
     expect(view).not.toBeNull()
     if (view === null) return
     expect(view.workers.map((worker) => [worker.name, worker.lifecycle, worker.why])).toEqual([
-      ['Alex', 'permanent', 'Assigned from M47 Co'],
+      ['Alex of Platform', 'permanent', 'Assigned from M47 Co'],
       ['Rae', 'project', 'Seeded'],
       ['Security Reviewer', 'project', 'Hired for security.application because the board needs it'],
       // Released LAST, though 'Aaron' sorts first by name (M50 D7): the roster is partitioned, and
@@ -331,11 +345,11 @@ describe('buildOrganization', () => {
    * act on; and a ready task whose dependency was not integrated was counted here and not there.
    */
   it('is not a staffing need while the work is blocked, and counts only what the situation counted', async () => {
-    const reviewer = await prisma.slave.findFirstOrThrow({ where: { name: 'Security Reviewer', team: { workspaceId } } })
-    // A second capability the same worker provides and nobody holds the role for: under the old
+    const reviewer = await prisma.slave.findFirstOrThrow({ where: { person: { name: 'Security Reviewer' }, team: { workspaceId } }, include: { person: true } })
+    // A second capability the same person provides and nobody holds the role for: under the old
     // `ready || blocked` reading the blocked task below made it a gap on this page.
-    await prisma.slave.update({
-      where: { id: reviewer.id },
+    await prisma.person.update({
+      where: { id: reviewer.personId },
       data: { capabilities: ['security.application', 'docs.technical-writing'] },
     })
     const blocked = await prisma.task.create({
@@ -447,7 +461,7 @@ describe('buildOrganization', () => {
     })
     expect(answer.status).toBe(200)
     const body = (await answer.json()) as OrganizationView
-    expect(body.workers.map((worker) => worker.name)).toEqual(['Alex', 'Rae', 'Security Reviewer', 'Aaron'])
+    expect(body.workers.map((worker) => worker.name)).toEqual(['Alex of Platform', 'Rae', 'Security Reviewer', 'Aaron'])
     expect(body.needs.map((need) => need.capability)).toEqual(['security.application'])
 
     const missing = await organizationGET(new Request('http://test/organization'), {

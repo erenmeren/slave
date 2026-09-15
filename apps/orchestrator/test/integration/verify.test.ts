@@ -35,6 +35,8 @@ interface Fixture {
   readonly taskId: string
   readonly runId: string
   readonly slaveId: string
+  /** M58 R4: what the run's worker LEARNT belongs to the person, not to the seat. */
+  readonly personId: string
 }
 
 const repos: string[] = []
@@ -52,7 +54,8 @@ async function seed(): Promise<Fixture> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] } })
+  const person = await prisma.person.create({ data: { name: 'Alex' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: person.id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -85,6 +88,7 @@ async function seed(): Promise<Fixture> {
     taskId: task.id,
     runId: run.id,
     slaveId: slave.id,
+    personId: person.id,
   }
 }
 
@@ -105,7 +109,7 @@ describe('verify and advance', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
     base = {
@@ -215,7 +219,7 @@ describe('verify and advance', () => {
     })
     expect(newer?.status).toBe('verified')
     // And the run after the rework is given one of them, not two.
-    const given = await memoriesForRun({ workspaceId: fixture.workspaceId, slaveId: fixture.slaveId, taskId: fixture.taskId })
+    const given = await memoriesForRun({ workspaceId: fixture.workspaceId, personId: fixture.personId, taskId: fixture.taskId })
     expect(given.memories.filter((one) => one.provenance.sourceKind === 'verification').map((one) => one.id)).toEqual([
       newer?.id,
     ])
@@ -516,7 +520,7 @@ async function seedFailedRun(options: {
     data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [], maxAttempts: 5 },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -547,7 +551,7 @@ async function seedFailedRun(options: {
 describe('verifyConcludedRun releases a task after a run concludes failed', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -649,7 +653,7 @@ describe('verifyConcludedRun releases a task after a run concludes failed', () =
       data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [], maxAttempts: 5 },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-    const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] } })
+    const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
     const run = await prisma.slaveRun.create({
       data: { slaveId: slave.id, kind: 'planning', status: 'failed', terminalAt: new Date(), endedAt: new Date() },
     })
@@ -690,9 +694,8 @@ describe('stage gates (M48 R6)', () => {
       },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-    const slave = await prisma.slave.create({
-      data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
-    })
+    const person = await prisma.person.create({ data: { name: 'Alex' } })
+    const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: person.id } })
     const worktree = await provisionWorktree({
       repoPath,
       baseBranch: 'main',
@@ -766,7 +769,7 @@ describe('stage gates (M48 R6)', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -890,6 +893,8 @@ describe('what the pipeline remembers (M49 R2)', () => {
     readonly workspaceId: string
     readonly taskId: string
     readonly slaveId: string
+    /** M58 R4: the PERSON in the seat -- who a lesson is actually about. */
+    readonly personId: string
     readonly runId: string
   }
 
@@ -919,9 +924,8 @@ describe('what the pipeline remembers (M49 R2)', () => {
       },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-    const slave = await prisma.slave.create({
-      data: { teamId: team.id, name: 'Alex', role: 'backend', runtimeRoles: ['backend'] },
-    })
+    const person = await prisma.person.create({ data: { name: 'Alex' } })
+    const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: person.id } })
     const worktree = await provisionWorktree({
       repoPath,
       baseBranch: 'main',
@@ -973,12 +977,12 @@ describe('what the pipeline remembers (M49 R2)', () => {
         payload: { text },
       })
     }
-    return { workspaceId: workspace.id, taskId: task.id, slaveId: slave.id, runId: run.id }
+    return { workspaceId: workspace.id, taskId: task.id, slaveId: slave.id, personId: person.id, runId: run.id }
   }
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -1080,7 +1084,7 @@ describe('what the pipeline remembers (M49 R2)', () => {
 
     const lesson = await prisma.memory.findFirst({ where: { taskId: fixture.taskId, type: 'lesson' } })
     expect(lesson?.scope).toBe('worker')
-    expect(lesson?.slaveId).toBe(fixture.slaveId)
+    expect(lesson?.personId).toBe(fixture.personId)
     expect(lesson?.workspaceId).toBeNull()
     expect(lesson?.status).toBe('verified')
     expect(lesson?.verifiedBy).toBe('verification')
@@ -1137,7 +1141,7 @@ describe('what the pipeline remembers (M49 R2)', () => {
           workspaceId: fixture.workspaceId,
           taskId: 'no-task-has-this-id',
           taskTitle: 'Add the thing',
-          slaveId: fixture.slaveId,
+          personId: fixture.personId,
           runId: null,
           reason: 'two tests fail',
           by: 'verification',
@@ -1151,7 +1155,7 @@ describe('what the pipeline remembers (M49 R2)', () => {
       warn.mockRestore()
     }
 
-    expect(await prisma.memory.count({ where: { slaveId: fixture.slaveId } })).toBe(0)
+    expect(await prisma.memory.count({ where: { personId: fixture.personId } })).toBe(0)
     expect(warned.some((message) => message.includes('[memory] promotion failed'))).toBe(true)
   }, 30_000)
 })
@@ -1175,7 +1179,7 @@ describe('the verify verdict settles the first-pass column (M53 R4)', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
     base = {

@@ -51,15 +51,17 @@ async function reachable(workspaceId: string, memoryId: string): Promise<boolean
   const [workspace, memory] = await Promise.all([
     prisma.workspace.findUnique({
       where: { id: workspaceId },
-      select: { companyId: true, teams: { select: { slaves: { select: { id: true } } } } },
+      // M58 R4: a worker-scoped memory belongs to a PERSON, so what this project can see of one is
+      // decided by who holds an open seat here.
+      select: { companyId: true, teams: { select: { slaves: { where: { closedAt: null }, select: { personId: true } } } } },
     }),
     prisma.memory.findUnique({
       where: { id: memoryId },
-      select: { workspaceId: true, companyId: true, slaveId: true },
+      select: { workspaceId: true, companyId: true, personId: true },
     }),
   ])
   if (workspace === null || memory === null) return false
   if (memory.workspaceId === workspaceId) return true
   if (memory.companyId !== null && memory.companyId === workspace.companyId) return true
-  return memory.slaveId !== null && workspace.teams.some((team) => team.slaves.some((slave) => slave.id === memory.slaveId))
+  return memory.personId !== null && workspace.teams.some((team) => team.slaves.some((seat) => seat.personId === memory.personId))
 }

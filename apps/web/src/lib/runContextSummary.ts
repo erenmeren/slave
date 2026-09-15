@@ -15,10 +15,14 @@ export interface SectionLine {
   readonly missing: readonly string[]
 }
 
-/** Which level of the profile override chain, in the panel's words rather than the column's. */
-const PROFILE_ORIGIN_WORD: Record<'slave' | 'company' | 'template', string> = {
+/** Which level of the profile override chain, in the panel's words rather than the column's. Five
+ *  members, not three: `slave` and `company` are what a run recorded before M58 says, and this map
+ *  is read against rows a debugger opens years later. */
+const PROFILE_ORIGIN_WORD: Record<'slave' | 'company' | 'seat' | 'person' | 'template', string> = {
   slave: "the worker's own",
   company: 'its roster row',
+  seat: "this seat's own",
+  person: "the person's own",
   template: 'its template',
 }
 

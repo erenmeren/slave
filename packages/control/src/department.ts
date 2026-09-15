@@ -29,10 +29,11 @@ export class AssignmentRefused extends Error {
  * The project department a company team materialises into: FOUND, else ADOPTED, else created
  * (M47 t2 fix round 1, minor 4).
  *
- * One helper because there are two ways a roster worker reaches a project -- a whole company through
- * `assignCompanyTx`, and one worker at a time through `materialiseCompanySlave` -- and a project
- * staffed either way must end up with the same shape. The single-worker verb used to create
- * `Security 2` beside a hand-made `Security`, which is the one outcome this step exists to prevent.
+ * One helper because there are two ways a person reaches a project -- a whole company through
+ * `assignCompanyTx`, and one person at a time through `seatMember` (M58 R5, the verb that replaced
+ * `materialiseCompanySlave`) -- and a project staffed either way must end up with the same shape.
+ * The single-person verb used to create `Security 2` beside a hand-made `Security`, which is the
+ * one outcome this step exists to prevent.
  *
  * The three cases, in order:
  *

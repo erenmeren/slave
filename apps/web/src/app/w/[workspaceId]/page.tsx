@@ -1,5 +1,8 @@
 import { buildOverviewSnapshot } from '../../../server/overview'
+import { listProjectTeams } from '../../../server/org'
+import { listSkillCatalogue } from '../../../server/persons'
 import { OverviewClient } from '../../../components/OverviewClient'
+import { assignableProjectsOf } from '../../../components/persons/assignableProjects'
 
 export const dynamic = 'force-dynamic'
 
@@ -9,11 +12,23 @@ export default async function OverviewPage({
   params: Promise<{ workspaceId: string }>
 }): Promise<React.JSX.Element> {
   const { workspaceId } = await params
-  const snapshot = await buildOverviewSnapshot(workspaceId)
+  const [snapshot, skillCatalogue, teams] = await Promise.all([
+    buildOverviewSnapshot(workspaceId),
+    listSkillCatalogue(),
+    listProjectTeams(),
+  ])
   if (snapshot === null) {
     return <div className="p-6 text-tone-blocked">no project with id {workspaceId}</div>
   }
   // Keyed so a client-side workspace-to-workspace navigation remounts the client instead of
   // rendering the old workspace's state under the new URL.
-  return <OverviewClient key={workspaceId} workspaceId={workspaceId} initial={snapshot} />
+  return (
+    <OverviewClient
+      key={workspaceId}
+      workspaceId={workspaceId}
+      initial={snapshot}
+      skillCatalogue={skillCatalogue}
+      projects={assignableProjectsOf(teams)}
+    />
+  )
 }

@@ -20,8 +20,8 @@ import {
 /** The catalog's "Checkout Platform" crew, exactly as `packages/db/src/seed.ts` seeds the demo
  *  roster (its `TEAMS`/`SLAVES`): a Management slave, a Product slave, a dedicated reviewer and
  *  four more Engineering slaves whose catalog ROLE is where the software sector reads expertise
- *  from. The role lives on the template (`SlaveTemplate.role`), not on `CompanySlave`, so each
- *  member here is instantiated from a template carrying its own role. */
+ *  from. The role lives on the persona (`SlaveTemplate.role`), not on the person, so each member
+ *  here is hired from a template carrying its own role. */
 const CHECKOUT: readonly { readonly name: string; readonly department: string; readonly role: string }[] = [
   { name: 'Atlas', department: 'Management', role: 'manager' },
   { name: 'Alex', department: 'Engineering', role: 'Backend' },
@@ -46,7 +46,7 @@ async function seedCompany(name: string, roster: readonly { readonly name: strin
     }
     const templateName = `${name} ${member.role}`
     const template = await prisma.slaveTemplate.upsert({ where: { name: templateName }, create: { name: templateName, role: member.role }, update: {} })
-    await prisma.companySlave.create({ data: { companyTeamId: teamId, templateId: template.id, name: member.name } })
+    await prisma.person.create({ data: { templateId: template.id, name: member.name, lifecycle: 'permanent', departments: { create: { companyTeamId: teamId } } } })
   }
   return company.id
 }
@@ -64,7 +64,7 @@ const TRADING: readonly { readonly name: string; readonly department: string; re
 let companyId: string
 let tradingId: string
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE')
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE')
   companyId = await seedCompany('Checkout Platform', CHECKOUT)
   tradingId = await seedCompany('Demo Trading Co.', TRADING)
 })
@@ -111,12 +111,14 @@ describe('createSimulation for the software sector', () => {
   })
 
   it('refuses a roster the software sector cannot staff, with the plugin\'s own requirement text', async () => {
+    // Five DIFFERENT people from the Checkout crew above: M58 R1 makes `Person.name` unique across
+    // the installation, so a second company is a second set of people and not a second copy.
     const noProduct = await seedCompany('No Product Co.', [
-      { name: 'Atlas', department: 'Management', role: 'manager' },
-      { name: 'Alex', department: 'Engineering', role: 'Backend' },
-      { name: 'Emma', department: 'Engineering', role: 'Frontend' },
-      { name: 'Riley', department: 'Engineering', role: 'reviewer' },
-      { name: 'Oliver', department: 'Marketing', role: 'SEO' },
+      { name: 'Nadia', department: 'Management', role: 'manager' },
+      { name: 'Noah', department: 'Engineering', role: 'Backend' },
+      { name: 'Nora', department: 'Engineering', role: 'Frontend' },
+      { name: 'Nils', department: 'Engineering', role: 'reviewer' },
+      { name: 'Nina', department: 'Marketing', role: 'SEO' },
     ])
     const result = await createSimulation({ companyId: noProduct, name: 'x', sector: 'software', policy: 'A' })
     expect(result.ok === false && result.error).toEqual({ kind: 'invalid_simulation_input', detail: sectors.software.rosterRequirement })

@@ -19,7 +19,7 @@ const input = (overrides: Partial<TeamInput> = {}): TeamInput => ({
   // project worker, which is exactly what every case written before this milestone meant.
   requiredBy: new Map(),
   roster: [],
-  company: [],
+  pool: [],
   catalog: [],
   taxonomy: TAXONOMY,
   ...overrides,
@@ -46,7 +46,7 @@ describe('formTeam', () => {
           { slaveId: 's2', name: 'Rae', capabilities: ['security.application'], runtimeRoles: ['backend'], busy: false },
           { slaveId: 's1', name: 'Alex', capabilities: [], runtimeRoles: ['backend'], busy: false },
         ],
-        company: [{ companySlaveId: 'cs1', name: 'Sam', capabilities: ['security.application'] }],
+        pool: [{ personId: 'p1', name: 'Sam', capabilities: ['security.application'] }],
         catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security' }],
       }),
     )
@@ -56,16 +56,16 @@ describe('formTeam', () => {
     expect(plan.proposals[0]?.rationale).toContain('Application security')
   })
 
-  it('prefers a company worker over the catalog', () => {
+  it('prefers somebody already in the pool over the catalog', () => {
     const plan = formTeam(
       input({
         required: ['security.application'],
-        company: [{ companySlaveId: 'cs1', name: 'Sam', capabilities: ['security.application'] }],
+        pool: [{ personId: 'p1', name: 'Sam', capabilities: ['security.application'] }],
         catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security' }],
       }),
     )
-    expect(plan.proposals.map((p) => p.source)).toEqual(['company_worker'])
-    expect(plan.proposals[0]?.pick.id).toBe('cs1')
+    expect(plan.proposals.map((p) => p.source)).toEqual(['pool_person'])
+    expect(plan.proposals[0]?.pick.id).toBe('p1')
   })
 
   // THE minimality rule the milestone is named for.
@@ -195,16 +195,16 @@ describe('formTeam', () => {
     expect(plan.proposals[0]?.engagementTaskId).toBeNull()
   })
 
-  it('never makes a company worker or an existing worker temporary, however few tasks need them', () => {
+  it('never makes a pooled person or an existing worker temporary, however few tasks need them', () => {
     const plan = formTeam(
       input({
         required: ['security.application'],
         requiredBy: new Map([['security.application', ['t1']]]),
-        company: [{ companySlaveId: 'cs1', name: 'Sam', capabilities: ['security.application'] }],
+        pool: [{ personId: 'p1', name: 'Sam', capabilities: ['security.application'] }],
         catalog: [{ templateId: 'tpl1', name: 'Security Reviewer', capabilities: ['security.application'], division: 'security' }],
       }),
     )
-    expect(plan.proposals.map((p) => p.source)).toEqual(['company_worker'])
+    expect(plan.proposals.map((p) => p.source)).toEqual(['pool_person'])
     expect(plan.proposals[0]?.temporary).toBe(false)
     expect(plan.proposals[0]?.engagementTaskId).toBeNull()
   })
@@ -259,7 +259,7 @@ describe('formTeam ranks WITHIN a tier (M53 R8)', () => {
   const base = {
     required: ['backend.services'],
     requiredBy: new Map<string, readonly string[]>(),
-    company: [],
+    pool: [],
     catalog: [],
     taxonomy: TAXONOMY,
   }
@@ -337,11 +337,11 @@ describe('formTeam ranks WITHIN a tier (M53 R8)', () => {
     }
   }
 
-  it('keeps the TIER order untouched: an existing worker still beats a company worker', () => {
+  it('keeps the TIER order untouched: an existing worker still beats somebody in the pool', () => {
     const plan = formTeam({
       ...base,
       roster: [provider('a')],
-      company: [{ companySlaveId: 'c', name: 'C', capabilities: ['backend.services'] }],
+      pool: [{ personId: 'c', name: 'C', capabilities: ['backend.services'] }],
     })
     expect(plan.proposals[0]?.source).toBe('existing_worker')
   })

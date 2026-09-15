@@ -172,7 +172,10 @@ export type ControlRefusal =
   | { readonly kind: 'unknown_profile_field'; readonly field: string }
   | { readonly kind: 'company_not_found'; readonly companyId: string }
   | { readonly kind: 'company_team_not_found'; readonly companyTeamId: string }
-  /** `deleteCompanySlave` on a `companySlaveId` no `CompanySlave` row carries (M27 §5). */
+  /** M27 §5 raised this for a `companySlaveId` no `CompanySlave` row carried. M58 dropped that
+   *  table, and this is what `carryOut` refuses a stored `materialise_company_worker` with when the
+   *  action names its subject by the pre-M58 field (spec erratum E9): the roster row it names is
+   *  gone and there is nothing left to resolve it to. */
   | { readonly kind: 'company_slave_not_found'; readonly companySlaveId: string }
   /** A name that is blank, or -- with `detail` -- one that has a SHAPE to meet and does not
    *  (M52 R3: a credential's `envVar` is an environment variable name, not free text). The default
@@ -207,10 +210,30 @@ export type ControlRefusal =
   /** `releaseWorker` (M50 R3): this engagement is already over. Nothing is released twice -- the row
    *  keeps the timestamp and the sentence the first release wrote. */
   | { readonly kind: 'already_released'; readonly slaveId: string; readonly at: string }
-  /** `setLifecycle` (M50 R4): `permanent` MEANS "exists in the company roster", and this worker has
-   *  no roster row to exist in. A label a person could apply anyway would make the word a
+  /** `setLifecycle` (M50 R4): `permanent` MEANS "is in a department of a company" (M58 R5), and
+   *  this person belongs to none. A label a person could apply anyway would make the word a
    *  decoration. */
-  | { readonly kind: 'not_in_roster'; readonly slaveId: string }
+  | { readonly kind: 'not_in_roster'; readonly personId: string }
+  /** M58 R14: `assignPerson` was asked to open a seat this person already holds on this team. Not
+   *  an error a caller must avoid -- a re-assign is an ordinary double click -- but a refusal
+   *  rather than a silent no-op, because the caller asked for a seat and none was opened. */
+  | { readonly kind: 'already_assigned'; readonly personId: string; readonly teamId: string }
+  /** M58 R14: a released person takes no new seat. Their engagement is over; un-retiring somebody
+   *  is `set-lifecycle`, deliberately a separate act. */
+  | { readonly kind: 'person_released'; readonly personId: string; readonly at: string }
+  /** M58 R14: the ONE refusal `deletePerson` and `unassignPerson` have -- a run is going. Distinct
+   *  from `live_runs`, which counts runs against one workspace/team/slave: this one names the
+   *  PERSON and the run, because the person may be running on a project the caller is not looking
+   *  at, and that is exactly the surprise the sentence has to prevent. */
+  | { readonly kind: 'run_in_progress'; readonly personId: string; readonly runId: string }
+  /** M58 R14: `Person.name` is unique across the installation -- it is the name every project sees,
+   *  so two people cannot share it the way two workers on two projects once could. */
+  | { readonly kind: 'person_name_taken'; readonly name: string }
+  /** M58 (plan addition, see the pre-flight notes): every person verb takes a `personId` and needs
+   *  a not-found of its own. `slave_not_found` names a SEAT and cannot stand in. */
+  | { readonly kind: 'person_not_found'; readonly personId: string }
+  /** M58 (plan addition): `unassignPerson`/`movePerson` were asked about a seat that is not open. */
+  | { readonly kind: 'person_not_seated'; readonly personId: string; readonly teamId: string }
   /** A role was set (or re-set) to blank text (M23 D1). */
   | { readonly kind: 'invalid_role' }
   /**
@@ -556,7 +579,19 @@ export function refusalText(refusal: ControlRefusal): string {
     case 'already_released':
       return `slave ${refusal.slaveId} was already released at ${refusal.at}`
     case 'not_in_roster':
-      return `slave ${refusal.slaveId} is on no company roster, so it cannot be made permanent; assign it from a company first`
+      return `slave ${refusal.personId} is in no company department, so they cannot be made permanent; put them in one first`
+    case 'already_assigned':
+      return `that slave already has a seat on this project; there is nothing to open`
+    case 'person_released':
+      return `that slave was released on ${refusal.at} and takes no new seat; put them back on a lifecycle first with: set-lifecycle --person ${refusal.personId} --lifecycle project`
+    case 'run_in_progress':
+      return `that slave has a run in progress (${refusal.runId}) on one of their projects; wait for it to finish or stop it first`
+    case 'person_name_taken':
+      return `the name "${refusal.name}" belongs to another slave; a slave's name is theirs across every project`
+    case 'person_not_found':
+      return `no slave with id ${refusal.personId}`
+    case 'person_not_seated':
+      return `that slave holds no open seat on this project`
     case 'invalid_role':
       return 'a role must be a non-empty text'
     case 'slave_run_active':

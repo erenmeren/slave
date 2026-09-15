@@ -7,6 +7,7 @@ import {
   PERMISSION_PROVIDERS,
   TOOLS_BY_KIND,
   userSlaveStatus,
+  type OverrideOrigin,
   type PermissionKind,
   type PermissionRunKind,
 } from '@slave-of-ai/domain'
@@ -14,7 +15,11 @@ import type { SlaveFeedEvent } from '../lib/feedSummary'
 import { formatUsd } from '../lib/realMoney'
 import { providerLabel } from '../lib/providerLabel'
 import type { SlaveCardData, SlaveGrant } from '../server/overview'
+import type { PersonDetail } from '../server/persons'
 import { sendControl } from '../lib/postControl'
+import { DeletePersonButton } from './persons/DeletePersonButton'
+import { PersonProjectsGroup, type AssignableProject } from './persons/PersonProjectsGroup'
+import { PersonSkillsGroup } from './persons/PersonSkillsGroup'
 import { RuntimeRoleChips } from './RuntimeRoleChips'
 import { DOT } from './SlaveCard'
 import { ShellOnlyMark } from './ShellOnlyMark'
@@ -28,15 +33,15 @@ type ControlAction = 'pause' | 'resume' | 'stop' | 'message' | 'answer' | 'profi
  * What the Profile block says about where the text in its box came from, and what saving over it
  * will do (M37 §6).
  *
- * The origin is the whole point of showing it: only a `slave` text is this worker's OWN, and
- * saving over an inherited one writes a worker-level override rather than editing the roster row
- * or the template -- which is what those two routes would need, and this panel is not addressed at
- * them (spec erratum E3: the catalog levels have no workspace to be scoped by).
+ * The origin is the whole point of showing it (M58 R7): only a `seat` text is this seat's OWN, and
+ * saving over an inherited one writes a SEAT-level override rather than editing the person or the
+ * persona -- which is what those two routes would need, and this panel is not addressed at them
+ * (spec erratum E3: neither level has a workspace to be scoped by).
  */
-const PROFILE_ORIGIN_TEXT: Record<'slave' | 'company' | 'template', string> = {
-  slave: "this worker's own profile",
-  company: 'inherited from its roster row — saving writes an override on this worker',
-  template: 'inherited from its template — saving writes an override on this worker',
+const PROFILE_ORIGIN_TEXT: Record<OverrideOrigin, string> = {
+  seat: "this worker's own profile",
+  person: 'inherited from the slave themself — saving writes an override on this seat',
+  template: 'inherited from its persona — saving writes an override on this seat',
 }
 
 /**
@@ -169,24 +174,41 @@ export function SlavePanel({
   workspaceId,
   haltedReason,
   onClose,
+  person = null,
+  projects = [],
+  skillCatalogue = [],
+  onPersonChanged,
+  openedGlobally = false,
 }: {
-  readonly slave: SlaveCardData
+  /** The live Team-band seat. `null` when this is a person with no seat on this workspace -- do
+   *  not invent an idle card; run controls stay hidden and seat writes stay disabled. */
+  readonly slave: SlaveCardData | null
   readonly liveEvents: readonly SlaveFeedEvent[]
   readonly workspaceId: string
   /** The workspace's current halt reason, if any — drives the "resume disabled + halt reason"
    *  cell of the enable/disable matrix (spec §6). */
   readonly haltedReason: string | null
   readonly onClose: () => void
+  /** When set, this is the PERSON's panel (M58 R23): Projects, the effective skill set, and Delete
+   *  with the count. Seat-level controls above stay exactly where they are. */
+  readonly person?: PersonDetail | null
+  readonly projects?: readonly AssignableProject[]
+  readonly skillCatalogue?: readonly { readonly skillId: string; readonly name: string; readonly providerName: string }[]
+  readonly onPersonChanged?: () => void
+  /** Workforce (and any other non-project surface): the confirmation counts every open project,
+   *  because there is no "this" project to subtract. */
+  readonly openedGlobally?: boolean
 }): React.JSX.Element {
   const [pending, setPending] = useState<ReadonlySet<ControlAction>>(new Set())
   const [errorText, setErrorText] = useState<string | null>(null)
-  const [draft, setDraft] = useState(slave.queuedMessage ?? '')
+  const [draft, setDraft] = useState(slave?.queuedMessage ?? '')
   // The effective text, so the box shows what the next dispatch will actually send -- inherited or
   // not. `profileText`/`rolesText` are strings rather than the objects they come from, so the
   // resync effects below fire on a CHANGED value instead of on every snapshot's fresh object
   // identity, which would wipe what an operator is halfway through typing.
-  const profileText = slave.profile?.text ?? ''
-  const rolesText = slave.runtimeRoles.join(', ')
+  const profile = slave?.profile ?? person?.profile ?? null
+  const profileText = profile?.text ?? ''
+  const rolesText = (slave?.runtimeRoles ?? []).join(', ')
   const [profileDraft, setProfileDraft] = useState(profileText)
   const [rolesDraft, setRolesDraft] = useState(rolesText)
 
@@ -198,8 +220,8 @@ export function SlavePanel({
   // it with a new `slave` prop — every render of a given instance is the same slave throughout
   // its lifetime, by construction.
   useEffect((): void => {
-    setDraft(slave.queuedMessage ?? '')
-  }, [slave.queuedMessage])
+    setDraft(slave?.queuedMessage ?? '')
+  }, [slave?.queuedMessage])
 
   // The same resync rule as the message box above, for the same reason: what the snapshot carried
   // in is the truth, and a write from the CLI or another client must reach this box.
@@ -211,23 +233,23 @@ export function SlavePanel({
     setRolesDraft(rolesText)
   }, [rolesText])
 
-  const runId = slave.runId
-  const status = slave.status
+  const runId = slave?.runId ?? null
+  const status = slave?.status ?? null
   const pauseEnabled = runId !== null && (status === 'starting' || status === 'working' || status === 'resuming')
-  const stopEnabled = runId !== null && status !== 'idle'
+  const stopEnabled = runId !== null && status !== null && status !== 'idle'
   const workspaceHalted = haltedReason !== null
   // While a recorded intent is still waiting for the daemon/CLI to claim it, another click would
   // just record a second intent on top of the first (`requestResume` has no idempotency beyond
   // the single `resumeRequestedAt` column) — disabled here keeps that double-click a no-op.
-  const resumeRequestedWhilePaused = status === 'paused' && slave.resumeRequestedAt !== null
+  const resumeRequestedWhilePaused = status === 'paused' && slave?.resumeRequestedAt !== null
   const resumeEnabled = runId !== null && status === 'paused' && !workspaceHalted && !resumeRequestedWhilePaused
-  const showMessageBox = status !== 'idle'
+  const showMessageBox = status !== null && status !== 'idle'
   const messageWritable = status === 'paused'
   // M36 t2: `paused` with `waiting_for_answer` -- the slave asked another slave and stopped, and
   // nobody asked it to pause. The controls stay reachable (typing here and pressing the button IS
   // how a human answers), but they are not labelled as continuing an operator's pause, and the
   // "paused at step N" detail gives way to what the slave is actually waiting on.
-  const waitingFor = slave.waitingFor
+  const waitingFor = slave?.waitingFor ?? null
   // Fix round 1, finding 1: the button used to POST the run's `resume` route, which wrote NO
   // message -- the asker resumed, but the question stayed unanswered forever, was re-injected into
   // the recipient's every later run under "cannot continue until you reply", and never reached the
@@ -241,7 +263,36 @@ export function SlavePanel({
   // click: an intent is already recorded, and a second answer would only be superseded.
   const answerEnabled = !workspaceHalted && !resumeRequestedWhilePaused && draft.trim() !== ''
 
-  const feed = useMemo(() => mergeFeed(slave.recentEvents, liveEvents), [slave.recentEvents, liveEvents])
+  const feed = useMemo(() => mergeFeed(slave?.recentEvents ?? [], liveEvents), [slave?.recentEvents, liveEvents])
+  const inPerson = person !== null
+  // A live seat, or seat-only mode (Overview before the person lands). Profile and runtime-roles
+  // PATCH seat routes, so a missing card / pool row with `workspaceId === ''` must not look writable.
+  const canPatchSeat = slave !== null && (
+    person === null
+    || (workspaceId !== '' && person.seats.some((seat) => seat.slaveId === slave.id))
+  )
+  const name = slave?.name ?? person?.name ?? ''
+  const role = slave?.role ?? person?.personaName ?? ''
+  const provider = slave?.provider ?? person?.provider?.value ?? null
+  const gate = slave?.gate ?? null
+  const permissions = slave?.permissions ?? []
+  const permissionsRunKind = slave?.permissionsRunKind ?? 'implementation'
+  const projectSeats = person === null
+    ? []
+    : workspaceId === ''
+      ? [...person.allSeats]
+      : [
+          ...person.allSeats.filter((seat) => seat.workspaceId === workspaceId),
+          ...person.allSeats.filter((seat) => seat.workspaceId !== workspaceId),
+        ]
+  const otherProjects = person === null
+    ? []
+    : [...new Set(
+        person.seats
+          .filter((seat) => openedGlobally || workspaceId === '' || seat.workspaceId !== workspaceId)
+          .map((seat) => seat.projectName),
+      )]
+  const refreshPerson = onPersonChanged ?? ((): void => {})
 
   /** The one place this panel writes: mark the control busy, clear the last refusal, dial the
    *  shared `sendControl`, and show whatever it refused with. Every button below goes through it,
@@ -294,40 +345,48 @@ export function SlavePanel({
     >
       <header className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2">
-          <span
-            data-testid="status-dot"
-            className={`inline-block h-2 w-2 shrink-0 rounded-full ${DOT[slave.status]} ${slave.status === 'working' ? 'animate-pulse' : ''}`}
-          />
+          {slave !== null && (
+            <span
+              data-testid="status-dot"
+              className={`inline-block h-2 w-2 shrink-0 rounded-full ${DOT[slave.status]} ${slave.status === 'working' ? 'animate-pulse' : ''}`}
+            />
+          )}
           <div>
-            <h2 className="text-sm font-medium text-text-1">{slave.name}</h2>
-            <span className="text-xs text-text-3">{slave.role}</span>
+            <h2 className="text-sm font-medium text-text-1">{name}</h2>
+            <span className="text-xs text-text-3">{role}</span>
           </div>
           {/* R5 leak 2: this printed the raw `SlaveStatus`. The projected word is what a person
-            * reads; `data-status` and `title` keep the raw value on the node. */}
-          <span
-            data-testid="status-label"
-            data-status={slave.status}
-            title={slave.status}
-            className="ml-1 text-xs text-text-2"
-          >
-            {userSlaveStatus(slave.status).label}
-          </span>
+            * reads; `data-status` and `title` keep the raw value on the node. No live seat means
+            * no status word -- Idle would be a lie about a seat this panel does not have. */}
+          {slave !== null && (
+            <span
+              data-testid="status-label"
+              data-status={slave.status}
+              data-slave-id={slave.id}
+              title={slave.status}
+              className="ml-1 text-xs text-text-2"
+            >
+              {userSlaveStatus(slave.status).label}
+            </span>
+          )}
           {/* The runtime's WORD (M44 R4, final review item I3), `—` when no run has resolved
             *  one (M12 Task 9, ruling R10), raw kind in `title`. The shell-only gate mark (spec
             *  §8) is `ShellOnlyMark` (M12 Task 13 fix round 1, finding 4a). */}
           <Chip>
-            <span data-testid="provider-chip" title={slave.provider ?? undefined}>
-              {providerLabel(slave.provider)}
+            <span data-testid="provider-chip" title={provider ?? undefined}>
+              {providerLabel(provider)}
             </span>
           </Chip>
-          <ShellOnlyMark gate={slave.gate} />
+          <ShellOnlyMark gate={gate} />
         </div>
         <Button variant="ghost" onClick={onClose} aria-label="Close slave detail">
           close
         </Button>
       </header>
 
-      <div className="text-sm text-text-1">{slave.taskTitle ?? <span className="text-text-3">idle</span>}</div>
+      {slave !== null && (
+        <div className="text-sm text-text-1">{slave.taskTitle ?? <span className="text-text-3">idle</span>}</div>
+      )}
 
       {errorText !== null && (
         <div role="alert" data-testid="panel-error" className="rounded border border-tone-blocked/40 bg-tone-blocked/10 px-2 py-1.5 text-xs text-tone-blocked">
@@ -335,6 +394,7 @@ export function SlavePanel({
         </div>
       )}
 
+      {slave !== null && (
       <section className="flex gap-2">
         <Button variant="ghost" data-testid="pause-button" disabled={!pauseEnabled || pending.has('pause')} onClick={() => void run('pause', 'pause')}>
           pause
@@ -360,6 +420,7 @@ export function SlavePanel({
           stop
         </Button>
       </section>
+      )}
 
       {waitingFor !== null && (
         <section data-testid="waiting-for" className="flex flex-col gap-1 rounded border border-tone-waiting/40 bg-tone-waiting/10 px-2 py-1.5">
@@ -395,8 +456,18 @@ export function SlavePanel({
         * `pause` needs it rendered.
         * ======================================================================================= */}
 
+      {inPerson && person !== null && (
+        <PersonProjectsGroup
+          personId={person.personId}
+          seats={projectSeats}
+          projects={projects}
+          onChanged={refreshPerson}
+        />
+      )}
+
       {/* The one group this panel leads with: what the current run is doing right now. The money
         * moved one group down, to Cost, so this line answers one question rather than two. */}
+      {!inPerson && slave !== null && (
       <DetailsGroup group="run" title="Run" defaultOpen>
         <div className="flex items-center gap-3 font-mono text-xs text-text-2">
           <span data-testid="run-tool-calls">{slave.toolCalls} calls</span>
@@ -406,6 +477,7 @@ export function SlavePanel({
           {waitingFor !== null && <span data-testid="run-waiting-step">waiting at step {slave.pausedAtStep ?? 0}</span>}
         </div>
       </DetailsGroup>
+      )}
 
       {/* The provider chip in the header, expanded: the runtime's WORD, its raw kind in `title`,
         * and what its gate actually permits (spec §8 / Decision 8) with the raw gate in `title`.
@@ -415,12 +487,12 @@ export function SlavePanel({
       <DetailsGroup group="model" title="Model">
         <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
           <dt className="text-text-3">runtime</dt>
-          <dd data-testid="model-provider" title={slave.provider ?? undefined} className="text-text-2">
-            {providerLabel(slave.provider)}
+          <dd data-testid="model-provider" title={provider ?? undefined} className="text-text-2">
+            {providerLabel(provider)}
           </dd>
           <dt className="text-text-3">tools</dt>
-          <dd data-testid="model-gate" title={slave.gate ?? undefined} className="text-text-2">
-            {slave.gate === null ? '—' : GATE_TEXT[slave.gate]}
+          <dd data-testid="model-gate" title={gate ?? undefined} className="text-text-2">
+            {gate === null ? '—' : GATE_TEXT[gate]}
           </dd>
         </dl>
       </DetailsGroup>
@@ -430,7 +502,7 @@ export function SlavePanel({
       <DetailsGroup group="profile" title="Profile">
         <section data-testid="profile-block" className="flex flex-col gap-1">
           <p data-testid="profile-origin" className="text-[10.5px] text-text-3">
-            {slave.profile === null ? 'no profile — this worker is sent no persona' : PROFILE_ORIGIN_TEXT[slave.profile.origin]}
+            {profile === null ? 'no profile — this worker is sent no persona' : PROFILE_ORIGIN_TEXT[profile.origin]}
           </p>
           {/* A textarea, so another party's Markdown is characters in a form control and never
             * elements (spec §1: another party's text is data). */}
@@ -444,15 +516,16 @@ export function SlavePanel({
           <Button
             variant="ghost"
             data-testid="profile-save"
-            disabled={pending.has('profile')}
+            disabled={!canPatchSeat || pending.has('profile')}
             // A blank box means "clear my override", which only an explicit `null` expresses: an
             // empty string would win the `??` chain and render nothing, leaving the roster row and
             // the template unable to show through again.
-            onClick={() =>
+            onClick={() => {
+              if (!canPatchSeat || slave === null) return
               void patch('profile', `/api/w/${workspaceId}/slaves/${slave.id}/profile`, {
                 profile: profileDraft.trim() === '' ? null : profileDraft,
               })
-            }
+            }}
             className="self-end"
           >
             save
@@ -460,12 +533,17 @@ export function SlavePanel({
         </section>
       </DetailsGroup>
 
-      {/* The card's own latest-skill chip, said in full. This is a LIVE fact about this run -- the
-        * `summary` of its most recent `Skill` tool call (`server/overview.ts`) -- and not a list of
-        * what this worker may use; that catalog is its own page. */}
+      {inPerson && person !== null ? (
+        <PersonSkillsGroup
+          personId={person.personId}
+          skills={person.skills}
+          catalogue={skillCatalogue}
+          onChanged={refreshPerson}
+        />
+      ) : (
       <DetailsGroup group="skills" title="Skills">
         <p className="text-xs text-text-2">
-          <span data-testid="panel-skill" className="font-mono">{slave.skill ?? '—'}</span>
+          <span data-testid="panel-skill" className="font-mono">{slave?.skill ?? '—'}</span>
         </p>
         <p className="text-[10.5px] text-text-3">
           the latest skill this run used; the catalog is on{' '}
@@ -474,6 +552,7 @@ export function SlavePanel({
           </Link>
         </p>
       </DetailsGroup>
+      )}
 
       {/* M52 R7. The list is what a person needs at a glance; WHO decided and WHEN is a raw value,
         * so it lives under Advanced -- `docs/ia.md` rule 5, and this panel's own rule that
@@ -485,7 +564,7 @@ export function SlavePanel({
         * does not honour, because it is not deciding anything. */}
       <DetailsGroup group="permissions" title="Permissions">
         <ul className="flex flex-col gap-1">
-          {slave.permissions.map((grant) => (
+          {permissions.map((grant) => (
             <li
               key={grant.kind}
               data-testid={`panel-permission-${grant.kind}`}
@@ -511,7 +590,7 @@ export function SlavePanel({
         </ul>
         <DetailsGroup group="advanced" title="Advanced">
           <ul className="flex flex-col gap-1">
-            {slave.permissions.map((grant) => (
+            {permissions.map((grant) => (
               <li key={grant.kind} className="flex flex-col text-[10.5px] text-text-3">
                 <span className="text-text-2">{PERMISSION_LABEL[grant.kind]}</span>
                 {/* The granter's `User.id` in `title`, never in the sentence (`docs/ia.md` rule 3
@@ -521,7 +600,7 @@ export function SlavePanel({
                   data-source={grant.source}
                   title={grant.by ?? undefined}
                 >
-                  {sourceSentence(grant, slave.permissionsRunKind)}
+                  {sourceSentence(grant, permissionsRunKind)}
                 </span>
               </li>
             ))}
@@ -573,7 +652,7 @@ export function SlavePanel({
             * means this worker is never a scheduler candidate, never staffed onto a review or a
             * plan, and never a role-addressed message's recipient (spec §7). */}
           <div className="flex flex-wrap items-center gap-[5px]">
-            <RuntimeRoleChips roles={slave.runtimeRoles} />
+            <RuntimeRoleChips roles={slave?.runtimeRoles ?? []} />
           </div>
           <input
             data-testid="runtime-roles-input"
@@ -586,12 +665,13 @@ export function SlavePanel({
           <Button
             variant="ghost"
             data-testid="runtime-roles-save"
-            disabled={pending.has('runtime-roles')}
-            onClick={() =>
+            disabled={!canPatchSeat || pending.has('runtime-roles')}
+            onClick={() => {
+              if (!canPatchSeat || slave === null) return
               void patch('runtime-roles', `/api/w/${workspaceId}/slaves/${slave.id}/runtime-roles`, {
                 roles: parseRoles(rolesDraft),
               })
-            }
+            }}
             className="self-end"
           >
             save
@@ -603,7 +683,7 @@ export function SlavePanel({
         * measurement this run never made (spec Decision 6; M12 Task 9, ruling R3). */}
       <DetailsGroup group="cost" title="Cost">
         <span data-testid="run-cost" className="font-mono text-xs text-text-2">
-          {formatUsd(slave.costUsd)}
+          {formatUsd(slave === null ? null : slave.costUsd)}
         </span>
       </DetailsGroup>
 
@@ -624,6 +704,14 @@ export function SlavePanel({
           )}
         </section>
       </DetailsGroup>
+      {inPerson && person !== null && (
+        <DeletePersonButton
+          personId={person.personId}
+          name={person.name}
+          projects={otherProjects}
+          onDeleted={onClose}
+        />
+      )}
     </aside>
   )
 }

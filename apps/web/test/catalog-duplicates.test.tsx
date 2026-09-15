@@ -42,6 +42,8 @@ function row(over: Partial<CatalogRowView> = {}): CatalogRowView {
     activationChangedBy: null,
     duplicate: null,
     duplicateCount: 0,
+    defaultSkillIds: [],
+    hiredCount: 0,
     ...over,
   }
 }
@@ -384,6 +386,7 @@ describe('the profile drawer Duplicates group (M55 R6)', () => {
       'identity',
       'mission',
       'capabilities',
+      'skills',
       'expertise',
       'principles',
       'constraints',
@@ -391,7 +394,6 @@ describe('the profile drawer Duplicates group (M55 R6)', () => {
       'deliverables',
       'success',
       'collaboration',
-      'skills',
       'source',
       'duplicates',
       'body',

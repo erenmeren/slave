@@ -1,14 +1,16 @@
 /**
- * WHY a worker exists (M50 R1), as data.
+ * WHY a PERSON exists (M50 R1, moved to `Person.lifecycle` by M58 R1), as data.
  *
- * `permanent` is somebody who exists in the COMPANY ROSTER and was materialised onto this project;
- * `project` is somebody hired for this project; `ephemeral` is a specialist brought in for exactly
- * ONE assignment, who is released when that assignment is over.
+ * `permanent` is somebody who belongs to a department of a company; `project` is somebody hired for
+ * one project; `ephemeral` is a specialist brought in for exactly ONE assignment, who is released
+ * when that assignment is over.
  *
- * A COLUMN, never a derivation. Until this milestone three surfaces derived `company | project`
- * from `Slave.companySlaveId` being null (`packages/control/src/capability.ts`,
- * `apps/web/src/server/organization.ts`, `apps/web/src/server/brief.ts`) -- three readings of one
- * question, none of which could say "this one is temporary" because the schema held no such fact.
+ * A COLUMN, never a derivation, and a fact about the PERSON rather than about any one seat: the
+ * same person may sit on three projects and is not three different kinds of hire.
+ *
+ * M58 keeps all THREE members (spec erratum E2). `permanent` outlived the roster COPY it was named
+ * for -- a person in a department is exactly what it now means -- and `enum-parity.test.ts` pins
+ * this list member-for-member against the `SlaveLifecycle` enum in the schema.
  *
  * The order is the one a person reads them in: most permanent first.
  */

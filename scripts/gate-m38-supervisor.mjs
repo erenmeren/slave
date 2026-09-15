@@ -238,9 +238,7 @@ try {
   // the word "reviewer" either: `staffingCandidates` orders its offers by whether the title reads
   // as the role, and a gate whose only candidate matched on the title would be proving the
   // ordering rather than the decision.
-  const slave = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Dev', role: 'Senior Engineer', runtimeRoles: ['backend'] },
-  })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.upsert({ where: { name: 'Dev' }, create: { name: 'Dev' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   console.log(`slave ${slave.id} "Dev": role ${JSON.stringify(slave.role)}, runtimeRoles ${JSON.stringify(slave.runtimeRoles)}`)
 
   const task = await prisma.task.create({

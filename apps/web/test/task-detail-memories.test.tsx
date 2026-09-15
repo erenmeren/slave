@@ -35,7 +35,7 @@ function memory(over: Partial<KnowledgeRow['memory']>): KnowledgeRow['memory'] {
     scope: 'workspace',
     companyId: null,
     workspaceId: 'w1',
-    slaveId: null,
+    personId: null,
     title: 'Every orders route requires a signed session',
     body: 'The gateway rejects an anonymous request.',
     status: 'verified',

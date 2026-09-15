@@ -1,3 +1,4 @@
+import { syncCapabilityTaxonomy } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildEvidencePage } from '../../src/server/evidence'
@@ -89,6 +90,9 @@ describe('buildEvidencePage (M53 R11, R12)', () => {
 
   beforeEach(async (): Promise<void> => {
     await truncateAll()
+    // Neighbouring suites truncate `Capability`; the chips are the taxonomy, so QA has to be
+    // there for the label assertion rather than whatever the last file left.
+    await syncCapabilityTaxonomy()
     fixture = await seedWorkspace()
   })
 

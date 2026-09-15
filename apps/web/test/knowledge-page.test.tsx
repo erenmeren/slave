@@ -37,7 +37,7 @@ function memory(over: Partial<KnowledgeRow['memory']> = {}): KnowledgeRow['memor
     scope: 'workspace',
     companyId: null,
     workspaceId: 'w1',
-    slaveId: null,
+    personId: null,
     title: 'Task: Ship the checkout API',
     body: 'Every orders route requires a signed session.',
     status: 'verified',

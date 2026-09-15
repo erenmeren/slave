@@ -10,6 +10,7 @@ import {
   listWorkforceCatalogPage,
   listWorkspaceNames,
 } from '../../server/org'
+import { listPersons, listSkillCatalogue } from '../../server/persons'
 import { buildEvidencePage } from '../../server/evidence'
 import { buildSkillsPage } from '../../server/skills'
 import { parseCatalogFilters } from '../../lib/catalogFilters'
@@ -72,7 +73,7 @@ export default async function WorkforcePage({
   const query = queryOf(params)
   const filters = parseCatalogFilters(query)
   const initialTab = TAB_IDS.find((id) => id === tab) ?? 'slaves'
-  const [slaves, teams, workspaces, companies, roster, catalog, templates, catalogImports, skills, taxonomy, runbooks, evidence] =
+  const [slaves, teams, workspaces, companies, roster, catalog, templates, catalogImports, skills, taxonomy, runbooks, evidence, people, skillCatalogue] =
     await Promise.all([
       listAllSlaves(),
       listProjectTeams(),
@@ -105,7 +106,18 @@ export default async function WorkforcePage({
       // asks for it by URL, and `WorkforceClient` asks the server again when somebody selects the
       // tab from another one.
       initialTab === 'evidence' ? buildEvidencePage({ domain: query.get('domain') }) : Promise.resolve(null),
+      listPersons(),
+      listSkillCatalogue(),
     ])
+  const peopleDepartments = roster.flatMap((company) =>
+    company.teams.map((team) => ({ companyTeamId: team.companyTeamId, name: team.teamName })),
+  )
+  const skillHolders: Record<string, readonly string[]> = {}
+  for (const provider of skills.providers) {
+    for (const skill of provider.skills) {
+      skillHolders[skill.id] = skill.holders.map((holder) => holder.personId)
+    }
+  }
   return (
     <WorkforceClient
       initialTab={initialTab}
@@ -121,6 +133,10 @@ export default async function WorkforcePage({
       taxonomy={taxonomy}
       runbooks={runbooks}
       evidence={evidence}
+      people={people}
+      peopleDepartments={peopleDepartments}
+      skillCatalogue={skillCatalogue}
+      skillHolders={skillHolders}
     />
   )
 }

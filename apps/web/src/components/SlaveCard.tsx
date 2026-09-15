@@ -161,7 +161,7 @@ export function SlaveCard({
       {/* 2. Name and role. */}
       <button
         type="button"
-        onClick={() => onOpen(slave.id)}
+        onClick={() => onOpen(slave.personId)}
         aria-label={`Open ${slave.name}'s detail panel`}
         className="min-w-0 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
@@ -211,11 +211,11 @@ export function SlaveCard({
         * compile. The README's Unblock is about a blocked TASK, which is the field `cardStateFor`
         * already reads above. */}
       {waitingFor !== null ? (
-        <RowButton testId="card-answer" accent onClick={() => onOpen(slave.id)}>
+        <RowButton testId="card-answer" accent onClick={() => onOpen(slave.personId)}>
           Answer
         </RowButton>
       ) : slave.taskStatus === 'blocked' ? (
-        <RowButton testId="card-unblock" accent onClick={() => onOpen(slave.id)}>
+        <RowButton testId="card-unblock" accent onClick={() => onOpen(slave.personId)}>
           Unblock
         </RowButton>
       ) : showResume ? (
@@ -234,7 +234,7 @@ export function SlaveCard({
         type="button"
         data-testid="card-more"
         aria-label={`More actions for ${slave.name}`}
-        onClick={() => onOpen(slave.id)}
+        onClick={() => onOpen(slave.personId)}
         className="rounded-card border-0 bg-transparent text-center text-[14px] text-t3 transition-colors hover:text-t1 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
       >
         ⋯

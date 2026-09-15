@@ -52,7 +52,7 @@ function viewOf(row: MemoryRow): MemoryView {
     scope: row.scope,
     companyId: row.companyId,
     workspaceId: row.workspaceId,
-    slaveId: row.slaveId,
+    personId: row.personId,
     title: row.title,
     body: row.body,
     status: row.status,
@@ -105,7 +105,6 @@ async function announceRecorded(row: MemoryRow, workspaceId: string | null, prin
     // Plan erratum E13: the task travels on the ENVELOPE, where it is indexed and where the
     // Activity filter and the task drawer both read it.
     ...(row.taskId === null ? {} : { taskId: row.taskId }),
-    ...(row.slaveId === null ? {} : { slaveId: row.slaveId }),
     ...(row.runId === null ? {} : { runId: row.runId }),
     actor: row.createdBy,
     payload: {
@@ -114,6 +113,10 @@ async function announceRecorded(row: MemoryRow, workspaceId: string | null, prin
       scope: row.scope,
       status: row.status,
       sourceKind: row.sourceKind,
+      // M58 R3 (fix round 1, Minor 8): the subject a worker-scoped memory is ABOUT. The envelope's
+      // `slaveId` used to carry it and named a seat; the memory belongs to the person, who outlives
+      // any one seat, and the envelope has no slot for a person.
+      ...(row.personId === null ? {} : { personId: row.personId }),
     },
     userId: principal?.userId ?? row.createdByUserId ?? null,
   })
@@ -145,7 +148,7 @@ const dataOf = (draft: MemoryDraft): Prisma.MemoryUncheckedCreateInput => ({
   scope: draft.scope,
   companyId: draft.companyId,
   workspaceId: draft.workspaceId,
-  slaveId: draft.slaveId,
+  personId: draft.personId,
   title: draft.title,
   body: draft.body,
   status: draft.status,
@@ -250,7 +253,7 @@ export async function addMemory(input: unknown, principal?: Principal): Promise<
   const shape = input as {
     workspaceId?: unknown
     companyId?: unknown
-    slaveId?: unknown
+    personId?: unknown
     scope?: unknown
     type?: unknown
     title?: unknown
@@ -265,7 +268,7 @@ export async function addMemory(input: unknown, principal?: Principal): Promise<
     scope: shape.scope,
     companyId: shape.scope === 'company' ? (shape.companyId ?? null) : null,
     workspaceId: shape.scope === 'workspace' ? (shape.workspaceId ?? null) : null,
-    slaveId: shape.scope === 'worker' ? (shape.slaveId ?? null) : null,
+    personId: shape.scope === 'worker' ? (shape.personId ?? null) : null,
     title: typeof shape.title === 'string' ? capCodePoints(shape.title.trim(), MEMORY_TITLE_MAX) : shape.title,
     body: typeof shape.body === 'string' ? capCodePoints(shape.body.trim(), MEMORY_BODY_MAX) : shape.body,
     status: 'verified',
@@ -376,7 +379,7 @@ export async function supersedeMemory(
     scope: old.scope,
     companyId: old.companyId,
     workspaceId: old.workspaceId,
-    slaveId: old.slaveId,
+    personId: old.personId,
     title: capCodePoints(next.title.trim(), MEMORY_TITLE_MAX),
     body: capCodePoints(next.body.trim(), MEMORY_BODY_MAX),
     status: 'verified',
@@ -494,7 +497,7 @@ export interface MemoryFilter {
  *  narrow the same list rather than a second `where` being built for it. */
 function scopeOf(clause: Prisma.MemoryWhereInput): MemoryScope {
   if ('companyId' in clause) return 'company'
-  if ('slaveId' in clause) return 'worker'
+  if ('personId' in clause) return 'worker'
   return 'workspace'
 }
 
@@ -507,13 +510,15 @@ function scopeOf(clause: Prisma.MemoryWhereInput): MemoryScope {
 export async function listMemories(filter: MemoryFilter): Promise<readonly MemoryView[]> {
   const workspace = await prisma.workspace.findUnique({
     where: { id: filter.workspaceId },
-    select: { companyId: true, teams: { select: { slaves: { select: { id: true } } } } },
+    // M58 R4/R19: what a project can see of a person is what that PERSON knows, so the worker
+    // scope is the people holding an OPEN seat here rather than the seats themselves.
+    select: { companyId: true, teams: { select: { slaves: { where: { closedAt: null }, select: { personId: true } } } } },
   })
   if (workspace === null) return []
-  const slaveIds = workspace.teams.flatMap((team) => team.slaves.map((slave) => slave.id))
+  const personIds = [...new Set(workspace.teams.flatMap((team) => team.slaves.map((seat) => seat.personId)))]
   const scopes: Prisma.MemoryWhereInput[] = [{ workspaceId: filter.workspaceId }]
   if (workspace.companyId !== null) scopes.push({ companyId: workspace.companyId })
-  if (slaveIds.length > 0) scopes.push({ slaveId: { in: slaveIds } })
+  if (personIds.length > 0) scopes.push({ personId: { in: personIds } })
 
   const rows = await prisma.memory.findMany({
     where: {
@@ -605,8 +610,9 @@ export async function readMemory(id: string): Promise<Result<MemoryChain, Contro
 
 export interface MemoriesForRunInput {
   readonly workspaceId: string
-  /** Null only for the re-plan preview, which picks no persona (plan erratum E14). */
-  readonly slaveId: string | null
+  /** The PERSON the run is for (M58 R19). Null only for the re-plan preview, which picks no persona
+   *  (plan erratum E14). */
+  readonly personId: string | null
   readonly taskId: string | null
 }
 
@@ -627,6 +633,9 @@ export interface MemoriesForRun {
 
 /**
  * The knowledge one run is given (M49 R3).
+ *
+ * M58 R19: the third scope is the PERSON, so what they learnt on project A is recalled on project
+ * B.
  *
  * ONE bounded query for all three scopes, then the pure ranking. Bounded at
  * `MEMORIES_LOADED_MAX` and ordered `createdAt desc, id asc` so the set handed to the ranking is
@@ -652,7 +661,7 @@ export async function memoriesForRun(input: MemoriesForRunInput): Promise<Memori
 
   const scopes: Prisma.MemoryWhereInput[] = [{ workspaceId: input.workspaceId }]
   if (workspace.companyId !== null) scopes.push({ companyId: workspace.companyId })
-  if (input.slaveId !== null) scopes.push({ slaveId: input.slaveId })
+  if (input.personId !== null) scopes.push({ personId: input.personId })
 
   const rows = await prisma.memory.findMany({
     where: { status: 'verified', OR: scopes },
@@ -663,7 +672,7 @@ export async function memoriesForRun(input: MemoriesForRunInput): Promise<Memori
 
   const ranked = retrieveMemories({
     memories: rows.map(viewOf),
-    scopes: { companyId: workspace.companyId, workspaceId: input.workspaceId, slaveId: input.slaveId },
+    scopes: { companyId: workspace.companyId, workspaceId: input.workspaceId, personId: input.personId },
     refs: { taskId: input.taskId, requiredCapabilities: task?.requiredCapabilities ?? [] },
     limit: MEMORIES_LOADED_MAX,
   })
@@ -782,12 +791,12 @@ export async function condenseWorkspaceMemories(
 ): Promise<Result<readonly { readonly type: MemoryType; readonly memoryId: string; readonly sources: number }[], ControlRefusal>> {
   const workspace = await prisma.workspace.findUnique({
     where: { id: workspaceId },
-    select: { teams: { select: { slaves: { select: { id: true } } } } },
+    select: { teams: { select: { slaves: { where: { closedAt: null }, select: { personId: true } } } } },
   })
   // An id nobody answers to is a typo, and "nothing to summarise" would read as an answer about a
   // project that does not exist (fix round 1, minor 6).
   if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
-  const slaveIds = workspace.teams.flatMap((team) => team.slaves.map((slave) => slave.id))
+  const personIds = [...new Set(workspace.teams.flatMap((team) => team.slaves.map((seat) => seat.personId)))]
   const asked = type === undefined ? MEMORY_TYPES : [type]
 
   const targets: { readonly scope: MemoryScope; readonly targetId: string; readonly types: readonly MemoryType[] }[] = [
@@ -797,7 +806,7 @@ export async function condenseWorkspaceMemories(
     { scope: 'workspace', targetId: workspaceId, types: asked.filter((one) => one !== 'lesson') },
     // In sorted id order, so a run over one project writes the same summaries in the same order
     // twice.
-    ...slaveIds
+    ...personIds
       .toSorted((a, b) => a.localeCompare(b))
       .map((id) => ({ scope: 'worker' as const, targetId: id, types: asked })),
   ]
@@ -806,7 +815,7 @@ export async function condenseWorkspaceMemories(
   for (const target of targets) {
     if (target.types.length === 0) continue
     const where: Prisma.MemoryWhereInput =
-      target.scope === 'workspace' ? { workspaceId: target.targetId } : { slaveId: target.targetId }
+      target.scope === 'workspace' ? { workspaceId: target.targetId } : { personId: target.targetId }
 
     /*
      * The candidate SOURCES: verified rows of the types asked about, and nothing else (fix round 1,

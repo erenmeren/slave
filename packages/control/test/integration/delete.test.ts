@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { readEventsSince } from '@slave-of-ai/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { deleteCompany, deleteCompanySlave, deleteCompanyTeam, deleteSlave, deleteSlaveTemplate, deleteTeam } from '../../src/org.js'
+import { deleteCompany, deleteCompanyTeam, deleteSlave, deleteSlaveTemplate, deleteTeam } from '../../src/org.js'
 
 const repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-control-delete-'))
 afterAll(() => rmSync(repoPath, { recursive: true, force: true }))
@@ -18,23 +18,23 @@ interface Fixture {
   readonly companyId: string
   readonly templateId: string
   readonly companyTeamId: string
-  readonly companySlaveId: string
+  readonly memberPersonId: string
 }
 
-/** A company with one template, one department template, one catalog slave; a project that has
- *  the company assigned, whose department copies the template and whose two slaves (one linked to
- *  the catalog slave, one hand-made) share a task with three finished runs. */
+/** A company with one template and one department template holding one member; a project that has
+ *  the company assigned, whose department copies the template and whose two seats (one held by that
+ *  member, one by somebody in no department) share a task with three finished runs. */
 async function seed(): Promise<Fixture> {
   const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Developer', role: 'backend', description: '' } })
   const company = await prisma.company.create({ data: { name: 'Atlas Software' } })
   const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Backend' } })
-  const companySlave = await prisma.companySlave.create({ data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Sam' } })
+  const member = await prisma.person.create({ data: { templateId: template.id, name: 'Sam', lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } } })
   const workspace = await prisma.workspace.create({
     data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [], companyId: company.id },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Backend', companyTeamId: companyTeam.id } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Sam', role: 'backend', companySlaveId: companySlave.id } })
-  const other = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: member.id } })
+  const other = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
   const task = await prisma.task.create({
     data: { workspaceId: workspace.id, title: 'Add the thing', description: 'make it work', maxAttempts: 3 },
   })
@@ -43,7 +43,7 @@ async function seed(): Promise<Fixture> {
   await prisma.slaveRun.create({ data: { taskId: task.id, slaveId: other.id, status: 'succeeded' } })
   return {
     workspaceId: workspace.id, teamId: team.id, slaveId: slave.id, otherSlaveId: other.id, taskId: task.id,
-    companyId: company.id, templateId: template.id, companyTeamId: companyTeam.id, companySlaveId: companySlave.id,
+    companyId: company.id, templateId: template.id, companyTeamId: companyTeam.id, memberPersonId: member.id,
   }
 }
 
@@ -56,7 +56,7 @@ let f: Fixture
 
 beforeEach(async () => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
   f = await seed()
 })
@@ -67,7 +67,7 @@ describe('deleteSlave', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value).toEqual({ runs: 2 })
-    expect(await prisma.slave.findUnique({ where: { id: f.slaveId } })).toBeNull()
+    expect(await prisma.slave.findUnique({ where: { id: f.slaveId }, include: { person: true } })).toBeNull()
     expect(await prisma.slaveRun.count({ where: { slaveId: f.slaveId } })).toBe(0)
     expect(await prisma.slaveRun.count()).toBe(1)
     const events = await orgChanged(f.workspaceId)
@@ -80,7 +80,7 @@ describe('deleteSlave', () => {
     const result = await deleteSlave(f.slaveId)
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'live_runs', entity: 'slave', id: f.slaveId, runs: 1 })
-    expect(await prisma.slave.findUnique({ where: { id: f.slaveId } })).not.toBeNull()
+    expect(await prisma.slave.findUnique({ where: { id: f.slaveId }, include: { person: true } })).not.toBeNull()
   })
 })
 
@@ -129,30 +129,16 @@ describe('the org.changed counts through the parsed reader', () => {
   })
 })
 
-describe('deleteCompanySlave', () => {
-  it('deletes the catalog slave; the project copy survives with companySlaveId null; no event', async () => {
-    const result = await deleteCompanySlave(f.companySlaveId)
-    expect(result.ok).toBe(true)
-    expect(await prisma.companySlave.findUnique({ where: { id: f.companySlaveId } })).toBeNull()
-    const copy = await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId } })
-    expect(copy.companySlaveId).toBeNull()
-    expect(await prisma.executionEvent.count()).toBe(0)
-  })
-
-  it('refuses an unknown catalog slave', async () => {
-    const result = await deleteCompanySlave('00000000-0000-4000-8000-000000000000')
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.error).toEqual({ kind: 'company_slave_not_found', companySlaveId: '00000000-0000-4000-8000-000000000000' })
-  })
-})
-
 describe('deleteCompanyTeam', () => {
-  it('deletes a template WITH its catalog slaves; the project department survives unlinked', async () => {
+  // M58 R5: what a department template holds is MEMBERSHIPS. They go with it; the people do not,
+  // and neither does the project department copied from it.
+  it('deletes a template WITH its memberships; the people and the project department survive', async () => {
     const result = await deleteCompanyTeam(f.companyTeamId)
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value).toEqual({ catalogSlaves: 1 })
-    expect(await prisma.companySlave.count()).toBe(0)
+    expect(await prisma.companyTeamMember.count()).toBe(0)
+    expect(await prisma.person.count()).toBe(2)
     const dept = await prisma.team.findUniqueOrThrow({ where: { id: f.teamId } })
     expect(dept.companyTeamId).toBeNull()
     expect(await prisma.slave.count()).toBe(2)
@@ -160,14 +146,17 @@ describe('deleteCompanyTeam', () => {
 })
 
 describe('deleteSlaveTemplate', () => {
-  it('deletes the template and its catalog slaves explicitly; project slaves keep their role', async () => {
+  // M58 R1: `Person.templateId` is `SetNull`, so a persona's deletion takes nobody with it -- what
+  // the verb reports is how many people stopped naming it.
+  it('deletes the persona and unlinks everybody hired from it; their seats keep their role', async () => {
     const result = await deleteSlaveTemplate(f.templateId)
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.value).toEqual({ catalogSlaves: 1 })
+    expect(result.value).toEqual({ personsUnlinked: 1 })
     expect(await prisma.slaveTemplate.findUnique({ where: { id: f.templateId } })).toBeNull()
-    expect(await prisma.companySlave.count()).toBe(0)
-    const copy = await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId } })
+    expect(await prisma.person.count()).toBe(2)
+    expect((await prisma.person.findUniqueOrThrow({ where: { id: f.memberPersonId } })).templateId).toBeNull()
+    const copy = await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId }, include: { person: true } })
     expect(copy.role).toBe('backend')
   })
 
@@ -179,14 +168,15 @@ describe('deleteSlaveTemplate', () => {
 })
 
 describe('deleteCompany', () => {
-  it('deletes the company, its templates and catalog slaves; detaches the project; project rows survive', async () => {
+  it('deletes the company, its templates and their memberships; detaches the project; people and project rows survive', async () => {
     const result = await deleteCompany(f.companyId)
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.value).toEqual({ templates: 1, catalogSlaves: 1, projectsDetached: 1 })
     expect(await prisma.company.count()).toBe(0)
     expect(await prisma.companyTeam.count()).toBe(0)
-    expect(await prisma.companySlave.count()).toBe(0)
+    expect(await prisma.companyTeamMember.count()).toBe(0)
+    expect(await prisma.person.count()).toBe(2)
     const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })
     expect(ws.companyId).toBeNull()
     expect(await prisma.team.count()).toBe(1)

@@ -1254,9 +1254,11 @@ export async function listWorkforceCatalog(
 
   const ids = templates.map((template) => template.id)
   const [catalogSlaveGroups, rawOverrides, duplicates] = await Promise.all([
+    // M58 R1: how many PEOPLE were hired from each persona on this page. `CompanySlave` was a copy
+    // of a template onto a roster; a person hired from one is the same count with the copy gone.
     ids.length === 0
       ? Promise.resolve([])
-      : prisma.companySlave.groupBy({ by: ['templateId'], where: { templateId: { in: ids } }, _count: { _all: true } }),
+      : prisma.person.groupBy({ by: ['templateId'], where: { templateId: { in: ids } }, _count: { _all: true } }),
     // The raw-override predicate, computed in POSTGRES so the profile text stays there, and scoped
     // to the PAGE's ids rather than to the whole table: it is the only reason a catalog listing
     // would touch a sixteen-kilobyte column it never displays, and it should touch at most a
@@ -1275,7 +1277,9 @@ export async function listWorkforceCatalog(
     rowDuplicatesFor(ids),
   ])
 
-  const countByTemplate = new Map(catalogSlaveGroups.map((group) => [group.templateId, group._count._all] as const))
+  const countByTemplate = new Map(
+    catalogSlaveGroups.flatMap((group) => (group.templateId === null ? [] : [[group.templateId, group._count._all] as const])),
+  )
   const rawByTemplate = new Map(rawOverrides.map((row) => [row.id, row.rawOverride] as const))
   const rows = templates.map((template) =>
     catalogRowOf(

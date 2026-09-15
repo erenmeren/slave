@@ -3,7 +3,7 @@ import { prisma } from '../../src/client.js'
 
 describe('workspace persistence', () => {
   beforeEach(async (): Promise<void> => {
-    await prisma.$executeRawUnsafe('TRUNCATE TABLE "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE')
+    await prisma.$executeRawUnsafe('TRUNCATE TABLE "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE')
   })
 
   afterAll(async (): Promise<void> => {
@@ -39,7 +39,8 @@ describe('workspace persistence', () => {
       },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-    await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
+    const person = await prisma.person.create({ data: { name: 'Alex' } })
+    await prisma.slave.create({ data: { teamId: team.id, personId: person.id, role: 'Backend' } })
 
     await prisma.workspace.delete({ where: { id: workspace.id } })
 

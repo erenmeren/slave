@@ -41,7 +41,7 @@ async function brokerEvent(type: 'broker_executed' | 'broker_refused'): Promise<
 
 beforeEach(async (): Promise<void> => {
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "BrokerBinding", "Credential", "SlavePermission", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "BrokerBinding", "Credential", "SlavePermission", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
   )
   executed = []
   process.env['FAKE_DEPLOY_TOKEN'] = 'tok'
@@ -56,7 +56,7 @@ beforeEach(async (): Promise<void> => {
     })
   ).id
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
-  slaveId = (await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })).id
+  slaveId = (await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })).id
   const task = await prisma.task.create({
     data: { workspaceId, title: 'Ship it', description: 'ship', status: 'running', maxAttempts: 3 },
   })

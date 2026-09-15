@@ -52,8 +52,9 @@ async function makeBlockedTask(
 /** A team and one worker, for the cases that need real `SlaveRun` rows to reason about: since M42
  *  t1 `unblockTask` reads the task's runs to decide WHERE an unblock sends it. */
 async function makeSlave(workspaceId: string): Promise<{ readonly id: string }> {
+  const person = await prisma.person.create({ data: { name: 'Alex' } })
   return prisma.slave.create({
-    data: { team: { create: { workspaceId, name: 'Engineering' } }, name: 'Alex', role: 'backend' },
+    data: { team: { create: { workspaceId, name: 'Engineering' } }, role: 'backend', person: { connect: { id: person.id } } },
   })
 }
 
@@ -83,7 +84,7 @@ describe('unblockTask', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     ;({ workspaceId } = await seed())
   })
@@ -136,9 +137,7 @@ describe('unblockTask', () => {
   })
 
   it('moves a task actually parked by stop.ts (operator cancel via requestStop, no attempt charged) to rework and makes it schedulable', async (): Promise<void> => {
-    const slave = await prisma.slave.create({
-      data: { team: { create: { workspaceId, name: 'Engineering' } }, name: 'Alex', role: 'backend' },
-    })
+    const slave = await makeSlave(workspaceId)
     const task = await prisma.task.create({
       data: {
         workspaceId,
@@ -234,9 +233,7 @@ describe('unblockTask', () => {
     // None of the four real parks leaves this behind -- all four clear `activeRunId` in the same
     // write that sets `blocked` -- so this state can only be reached by hand here, standing in for
     // whatever future bug or manual edit would otherwise produce it.
-    const slave = await prisma.slave.create({
-      data: { team: { create: { workspaceId, name: 'Engineering' } }, name: 'Alex', role: 'backend' },
-    })
+    const slave = await makeSlave(workspaceId)
     const task = await prisma.task.create({
       data: { workspaceId, title: 'Add the thing', description: 'make it work', status: 'blocked', maxAttempts: 3 },
     })

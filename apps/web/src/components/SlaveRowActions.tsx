@@ -11,20 +11,20 @@ type Editing = 'name' | 'role' | null
 
 /**
  * The per-worker roster-editing controls (M23 D2): rename, re-role, delete -- mounted beside
- * `ModelOverrideEditor` in `AllSlavesTable.tsx`'s actions cell (M24 Task 7). A project row
- * (`ProjectRowProps`) renders all three; a catalog row (`CatalogRowProps`, `AllSlaveRow.slaveId
- * === null`) renders only the delete -- rename/re-role act on a project `Slave`, which a catalog
- * member is not.
+ * `ModelOverrideEditor` in `AllSlavesTable.tsx`'s actions cell (M24 Task 7). A seated row
+ * (`ProjectRowProps`) renders all three; a POOL row (`PoolRowProps`, `AllSlaveRow.slaveId ===
+ * null`) renders only the roster removal -- rename/re-role act on a seat, which somebody in the
+ * pool does not hold (M58 R16).
  *
  * Name and role edit the same way: a plain button showing the current value swaps to a
  * `TextField` on click, committing on Enter or blur -- no separate save button, no Escape
  * handling or focus trap, the same "a plain inline input row does not need a focus trap" call
  * `ModelOverrideEditor` already made.
  *
- * Delete is `DangerConfirm` (M27 spec §6): `deleteSlave`/`deleteCompanySlave` no longer refuse on
- * run history, so there is no disabled-with-title treatment to keep -- the confirm just names
- * what goes (`runCount` for a project row's history, "project copies stay" for a catalog row,
- * since `assignCompany` re-materializes from the template) and a live run is the only refusal left.
+ * Delete is `DangerConfirm` (M27 spec §6): the verbs no longer refuse on run history, so there is
+ * no disabled-with-title treatment to keep -- the confirm just names what goes (`runCount` for a
+ * seated row's history; for a pool row, that only the memberships go and the person stays, M58 R5)
+ * and a live run is the only refusal left.
  */
 /** A project row acts on a project `Slave` (rename, re-role, delete with its run history). */
 interface ProjectRowProps {
@@ -32,17 +32,17 @@ interface ProjectRowProps {
   readonly name: string
   readonly role: string
   readonly runCount: number
-  readonly catalog?: undefined
+  readonly pool?: undefined
 }
-/** A catalog row has no project `Slave` -- only the delete, addressed by `companySlaveId`. Callers
+/** A pool row holds no seat -- only the roster removal, addressed by `personId` (M58 R16). Callers
  *  used to pass the catalog id as a dummy `slaveId` and `runCount: 0` to satisfy one flat shape
  *  (M27 final review, parked); the union says which fields each row really has. */
-interface CatalogRowProps {
+interface PoolRowProps {
   readonly name: string
   readonly role: string
-  readonly catalog: { readonly companySlaveId: string }
+  readonly pool: { readonly personId: string }
 }
-export type SlaveRowActionsProps = ProjectRowProps | CatalogRowProps
+export type SlaveRowActionsProps = ProjectRowProps | PoolRowProps
 
 export function SlaveRowActions(props: SlaveRowActionsProps): React.JSX.Element {
   const { name, role } = props
@@ -65,7 +65,7 @@ export function SlaveRowActions(props: SlaveRowActionsProps): React.JSX.Element 
     if (pending) return
     setPending(true)
     setErrorText(null)
-    if (props.catalog !== undefined) return
+    if (props.pool !== undefined) return
     const path = `/api/slaves/${props.slaveId}/${field}`
     const error = await sendControl(path, { method: 'PUT', body: { [field]: draft } })
     setPending(false)
@@ -77,16 +77,16 @@ export function SlaveRowActions(props: SlaveRowActionsProps): React.JSX.Element 
     }
   }
 
-  if (props.catalog !== undefined) {
-    const { companySlaveId } = props.catalog
+  if (props.pool !== undefined) {
+    const { personId } = props.pool
     return (
       <div data-testid="slave-row-actions" className="flex flex-wrap items-center gap-1">
         <DangerConfirm
           label="delete"
           testId="catalog-slave-delete"
-          confirmText={`deletes ${name} from the catalog; project copies stay`}
+          confirmText={`takes ${name} off every company roster; they keep working and keep every seat`}
           onConfirm={async () => {
-            const error = await sendControl(`/api/org/slaves/${companySlaveId}`, { method: 'DELETE' })
+            const error = await sendControl(`/api/org/slaves/${personId}`, { method: 'DELETE' })
             if (error === null) router.refresh()
             return error
           }}

@@ -1015,7 +1015,7 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m42-catalog-import`, `gate:m44-ux-foundation`, `gate:m45-project-experience`,
 `gate:m46-workforce-catalog`, `gate:m47-team-formation`, `gate:m48-runbooks`, `gate:m49-memory`,
 `gate:m50-ephemeral`, `gate:m51-breaker`, `gate:m52-broker`, `gate:m53-evidence`,
-`gate:m54-triggers`, `gate:m55-catalog`, `gate:m56a-provider-contract` and `gate:m57-ui-redesign` on every push — `m36` stops the orchestrator and starts it again
+`gate:m54-triggers`, `gate:m55-catalog`, `gate:m56a-provider-contract`, `gate:m57-ui-redesign` and `gate:m58-persons` on every push — `m36` stops the orchestrator and starts it again
 mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was
 given the persona and the skills it was assigned, `m38` drives a real daemon until the Supervisor
 proposes the staffing a reviewer-less project needs, waits for a human to approve it, unblocks a
@@ -1121,8 +1121,12 @@ to the pending decisions actually in the database, five columns tally against a 
 same tasks and the List view's own row count, two goal requests on two different days become two
 Supervisor conversations word for word, eleven numbers come off a real browser's
 `getComputedStyle`, no raw enum token is ever visible text, and all twenty-five routes `docs/ia.md`
-names still answer 200. That is
-32 gates. Tests and gates share one Postgres --
+names still answer 200, and `m58` makes a slave with no project at all, seats them on two, proves that what they
+learnt on the first is in the second's prompt, gives their persona a skill and takes it back on
+the slave alone, removes them from one project and finds them still on the other, deletes them
+after a confirmation that had to say "2 projects", and drives `add-slave`, `assign-company` and
+`hire --temporary` to prove the verbs an operator already types still work. That is
+33 gates. Tests and gates share one Postgres --
 run one at a time.
 
 ## Learn more

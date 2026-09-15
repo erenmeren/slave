@@ -59,6 +59,9 @@ export type DetailsGroupName =
   // for two things, because a taxonomy key and a permission kind are different objects and the one
   // surface where a person meets both must not call them one.
   | 'permissions'
+  // M58 R23: the person panel's Projects group -- the seats somebody holds. Named `projects` and
+  // not `seats`, because the word on the panel is the word a person reads.
+  | 'projects'
 
 /**
  * One `Details ▾` group (M45 R4).

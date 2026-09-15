@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { CATALOG_PAGE_SIZE, listWorkforceCatalog } from '../../src/catalog.js'
 
 const TRUNCATE =
-  'TRUNCATE TABLE "CatalogImport", "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE'
+  'TRUNCATE TABLE "CatalogImport", "CompanyTeamMember", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE'
 
 const specOf = (over: Partial<ProfileSpec> = {}): ProfileSpec => ({
   ...emptyProfileSpec(),

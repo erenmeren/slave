@@ -169,7 +169,10 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     ...envelope,
     type: z.literal('slave.profile_changed'),
     payload: z.object({
-      target: z.enum(['slave', 'template', 'company_slave']),
+      // M58 R7: the middle rung is the PERSON. `company_slave` stays a member -- and only a member:
+      // nothing writes it any more. A `slave.profile_changed` row written before this milestone
+      // names it, and `parseExecutionEvent` is what the Activity page reads history through.
+      target: z.enum(['slave', 'template', 'company_slave', 'person']),
       targetId: z.string().min(1),
       sha256: z.string().min(1).nullable(),
       /** WHO, by name -- `answerQuestion`'s `answeredBy` precedent, not the envelope's `actor`,
@@ -187,6 +190,8 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('slave.runtime_roles_changed'),
     payload: z.object({
       slaveId: z.string().min(1),
+      /** M58 R9: the person in the seat whose roles changed. */
+      personId: z.string().min(1).optional(),
       roles: z.array(z.string().min(1)),
       /** WHO, by name -- see `slave.profile_changed`'s own field. */
       actor: z.string().min(1),
@@ -358,9 +363,19 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('workspace.company_assigned'),
     payload: z.object({
       company: z.string().min(1),
-      // Deliberately NO .min(1): a pure re-sync that added nobody still emits with an empty array.
+      // Deliberately NO .min(1): a pure re-sync that seated nobody still emits with an empty array.
+      //
+      // M58 R5: each entry names the PERSON who was seated. `companySlaveId` stays declared and
+      // optional -- nothing writes it any more, and a row written before this milestone carries it
+      // where `personId` now is. Both are optional so the two shapes parse, which is what a log
+      // read a year later needs.
       workers: z.array(
-        z.object({ companySlaveId: z.string().min(1), name: z.string().min(1), role: z.string().min(1) }),
+        z.object({
+          personId: z.string().min(1).optional(),
+          companySlaveId: z.string().min(1).optional(),
+          name: z.string().min(1),
+          role: z.string().min(1),
+        }),
       ),
     }),
   }),
@@ -431,7 +446,7 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     ...envelope,
     type: z.literal('org.changed'),
     payload: z.object({
-      entity: z.enum(['slave', 'team']),
+      entity: z.enum(['slave', 'team', 'person']),
       id: z.string().min(1),
       /** `capabilities` is M47 t2's: `hireFromTemplate` REUSED a worker and merged new capability
        *  keys into it without its runtime role set moving. `from`/`to` are the key lists, comma
@@ -441,6 +456,10 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       field: z.enum(['name', 'role', 'model', 'deleted', 'created', 'team', 'capabilities', 'lifecycle']),
       from: z.string().nullable(),
       to: z.string().nullable(),
+      /** M58 R9: WHO this row is about, when the row is a seat. The catalogue is still 61 types --
+       *  a person's creation and seating are recorded with the `slave.*` types that already carry a
+       *  `slaveId`, and this is the person behind that seat. */
+      personId: z.string().min(1).optional(),
       /** `deleteSlave`/`deleteTeam` only (M27): runs the cascade took with the row. */
       runs: z.number().int().nonnegative().optional(),
       /** `deleteTeam` only (M27): slaves the cascade took with the department. */
@@ -575,6 +594,12 @@ export const executionEventSchema = z.discriminatedUnion('type', [
         scope: z.enum(MEMORY_SCOPES),
         status: z.enum(MEMORY_STATUSES),
         sourceKind: z.enum(MEMORY_SOURCE_KINDS),
+        /** M58 R3 (fix round 1, Minor 8): WHO a worker-scoped memory belongs to. It used to travel
+         *  on the envelope's `slaveId`, which named the seat; a memory outlives the seat and
+         *  follows the person, so the subject moved into the payload rather than being dropped.
+         *  Optional: a workspace- or company-scoped memory belongs to nobody in particular, and a
+         *  row written before this milestone carries the seat on the envelope instead. */
+        personId: z.string().min(1).optional(),
       })
       .strict(),
   }),
@@ -604,6 +629,8 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('slave.released'),
     payload: z.object({
       slaveId: z.string().min(1),
+      /** M58 R9: the person released, behind the seat this row names. */
+      personId: z.string().min(1).optional(),
       name: z.string().min(1),
       reason: z.string().min(1),
       worktreesCollected: z.number().int().nonnegative(),

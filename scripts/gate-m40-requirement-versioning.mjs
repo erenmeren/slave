@@ -268,9 +268,7 @@ try {
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
   // The ONLY slave. It can be staffed as a manager (planning) and as nothing else, and the fake
   // plan's tasks are all `backend`, so the board this gate measures never moves under it.
-  const atlas = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Atlas', role: 'Engineering Manager', runtimeRoles: ['manager'] },
-  })
+  const atlas = await prisma.slave.create({ data: { teamId: team.id, role: 'Engineering Manager', runtimeRoles: ['manager'], personId: (await prisma.person.upsert({ where: { name: 'Atlas' }, create: { name: 'Atlas' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   console.log(`slaves: Atlas ${atlas.id} runtimeRoles ${JSON.stringify(atlas.runtimeRoles)} -- nobody holds "backend"`)
 
   /**

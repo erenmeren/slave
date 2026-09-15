@@ -30,6 +30,9 @@ const HEADER = ['Slave', 'Role', 'Department', 'Project', 'Lifecycle', 'Status',
  *  rest seed a brand-new row for a worker this table has never rendered before. */
 interface PolledWorker {
   readonly slaveId: string
+  /** M58 R2: the person in this seat -- what a person-scoped action on a merged row is addressed
+   *  by, and what a row this table has never rendered has to carry to be actionable at all. */
+  readonly personId: string
   readonly name: string
   readonly role: string
   readonly workspaceId: string
@@ -111,7 +114,7 @@ export function AllSlavesTable({
         const data = (await response.json()) as { readonly workers: readonly PolledWorker[] }
         const byId = new Map(data.workers.map((w) => [w.slaveId, w] as const))
         setRows((prev) => {
-          // Catalog rows pass through untouched; a known project row survives only if its
+          // Pool rows pass through untouched; a known seat row survives only if its
           // `slaveId` is still in the payload (dropped otherwise), merging in the live fields.
           const kept: AllSlaveRow[] = []
           const seenSlaveIds = new Set<string>()
@@ -140,14 +143,14 @@ export function AllSlavesTable({
             })
           }
           // A payload worker this table has never rendered becomes a new project row.
-          // `companySlaveId`/`companyId`/`companyTeamId`/`model` are `null` -- none is knowable
-          // from this payload; a roster link and a hand-made override both stay unknown until the
-          // next full reload.
+          // `companyId`/`companyTeamId`/`model` are `null` -- none is knowable from this payload;
+          // a department membership and a hand-made override both stay unknown until the next full
+          // reload.
           for (const w of data.workers) {
             if (seenSlaveIds.has(w.slaveId)) continue
             kept.push({
               slaveId: w.slaveId,
-              companySlaveId: null,
+              personId: w.personId,
               name: w.name,
               role: w.role,
               departmentName: w.department,
@@ -211,7 +214,7 @@ export function AllSlavesTable({
           // idiom). Wrapping is also why `last` has to be passed: `Row`'s own `:last-child` rule
           // cannot see position once every row is the only child of its own wrapper.
           <div
-            key={slaveId ?? `catalog-${row.companySlaveId ?? row.name}`}
+            key={slaveId ?? `pool-${row.personId}`}
             data-testid="slave-row"
             data-released={row.released === null ? undefined : 'true'}
             className={row.released === null ? undefined : 'opacity-60'}
@@ -282,7 +285,7 @@ export function AllSlavesTable({
               <span data-testid="worker-cost" className="font-mono text-[11px] text-text-1">
                 {formatUsd(row.costUsd)}
                 {row.unmeasuredRuns > 0 && (
-                  <span data-testid={`worker-unmeasured-${slaveId ?? row.companySlaveId ?? ''}`} className="text-text-3">
+                  <span data-testid={`worker-unmeasured-${slaveId ?? row.personId}`} className="text-text-3">
                     {' '}
                     · {row.unmeasuredRuns} unmeasured
                   </span>
@@ -295,9 +298,7 @@ export function AllSlavesTable({
                     <SlaveRowActions slaveId={slaveId} name={row.name} role={row.role} runCount={row.runCount} />
                   </>
                 ) : (
-                  row.companySlaveId !== null && (
-                    <SlaveRowActions name={row.name} role={row.role} catalog={{ companySlaveId: row.companySlaveId }} />
-                  )
+                  <SlaveRowActions name={row.name} role={row.role} pool={{ personId: row.personId }} />
                 )}
               </div>
             </Row>
@@ -342,7 +343,7 @@ function DepartmentCell({ row, page }: { readonly row: AllSlaveRow; readonly pag
     const error =
       isProject && row.slaveId !== null
         ? await sendControl(`/api/slaves/${row.slaveId}/team`, { method: 'PUT', body: { teamId: next } })
-        : await sendControl(`/api/org/slaves/${row.companySlaveId ?? ''}/team`, { method: 'PUT', body: { companyTeamId: next } })
+        : await sendControl(`/api/org/slaves/${row.personId}/team`, { method: 'PUT', body: { companyTeamId: next } })
     setPending(false)
     if (error === null) router.refresh()
     else setErrorText(error)

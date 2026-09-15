@@ -227,7 +227,9 @@ async function deleteWorkspaceDeeply(id) {
       where: {
         OR: [
           { workspaceId: id },
-          { slave: { team: { workspaceId: id } } },
+          // M58 R3: a memory belongs to the PERSON now; the ones this project taught are the ones
+          // held by somebody who has a seat here.
+          { person: { seats: { some: { team: { workspaceId: id } } } } },
           { task: { workspaceId: id } },
           { run: { task: { workspaceId: id } } },
         ],
@@ -247,12 +249,31 @@ async function deleteWorkspaceDeeply(id) {
     await prisma.memory.deleteMany({ where: { id: { in: memoryIds } } }).catch(() => {})
     console.log(`teardown: removed ${String(memoryIds.length)} memory row(s) of ${id}`)
   }
+  // M58 R1: the PEOPLE seated here, captured before the workspace goes -- a person is not cascaded
+  // away with the seat that held them any more, and this gate names them by a fixed literal, so the
+  // next run's `person.upsert` adopts the survivor and inherits every lesson the last run taught
+  // them. Pre-M58 the worker row died with the workspace; deleting the person restores that, and
+  // takes their worker-scoped memories with it.
+  const seated = await prisma.slave.findMany({ where: { team: { workspaceId: id } }, select: { personId: true } }).catch(() => [])
+  const personIds = [...new Set(seated.map((seat) => seat.personId))]
   // `ExecutionEvent` has no FK to `Workspace` (M2's append-only log outlives entity lifecycles by
   // design), so it goes explicitly; the workspace delete then cascades Team/Slave/Task/SlaveRun/
   // RunContext/SupervisorDecision/Artifact.
   await prisma.executionEvent.deleteMany({ where: { workspaceId: id } }).catch(() => {})
   await prisma.slaveMessage.deleteMany({ where: { workspaceId: id } }).catch(() => {})
   await prisma.workspace.delete({ where: { id } }).catch(() => {})
+  if (personIds.length > 0) {
+    const workerMemories = await prisma.memory.findMany({ where: { personId: { in: personIds } }, select: { id: true } }).catch(() => [])
+    const workerMemoryIds = workerMemories.map((row) => row.id)
+    if (workerMemoryIds.length > 0) {
+      await prisma.memorySource
+        .deleteMany({ where: { OR: [{ memoryId: { in: workerMemoryIds } }, { sourceMemoryId: { in: workerMemoryIds } }] } })
+        .catch(() => {})
+      await prisma.memory.updateMany({ where: { id: { in: workerMemoryIds } }, data: { supersededById: null } }).catch(() => {})
+    }
+    const removed = await prisma.person.deleteMany({ where: { id: { in: personIds } } }).catch(() => ({ count: 0 }))
+    console.log(`teardown: removed ${String(removed.count)} person row(s) seated in ${id}`)
+  }
 }
 
 let exitCode = 1
@@ -543,19 +564,9 @@ try {
   await prisma.providerConfiguration.create({ data: { workspaceId, kind: 'claude_code', settings: {} } })
 
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
-  const dev = await prisma.slave.create({
-    data: {
-      teamId: team.id,
-      name: WORKER_NAME,
-      role: 'Senior Engineer',
-      runtimeRoles: ['backend', 'manager'],
-      capabilities: ['backend.api-design'],
-    },
-  })
+  const dev = await prisma.slave.create({ data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend', 'manager'], personId: (await prisma.person.upsert({ where: { name: WORKER_NAME }, create: { name: WORKER_NAME, capabilities: ['backend.api-design'] }, update: { capabilities: ['backend.api-design'], templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   const devId = dev.id
-  const reader = await prisma.slave.create({
-    data: { teamId: team.id, name: REVIEWER_NAME, role: 'Reviewer', runtimeRoles: ['reviewer'], capabilities: [] },
-  })
+  const reader = await prisma.slave.create({ data: { teamId: team.id, role: 'Reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.upsert({ where: { name: REVIEWER_NAME }, create: { name: REVIEWER_NAME, capabilities: [] }, update: { capabilities: [], templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   console.log(`slave ${devId} (${WORKER_NAME}) and slave ${reader.id} (${REVIEWER_NAME})`)
 
   console.log(`setup -- set-goal printed: ${JSON.stringify(runCli(['set-goal', '--workspace', workspaceId, '--goal', GOAL]).trim())}`)
@@ -760,10 +771,12 @@ try {
   await prisma.providerConfiguration.create({ data: { workspaceId: workspaceId2, kind: 'claude_code', settings: {} } })
   const team2 = await prisma.team.create({ data: { workspaceId: workspaceId2, name: 'Engineering' } })
   const hand = await prisma.slave.create({
-    data: { teamId: team2.id, name: WORKER_NAME_2, role: 'Engineer', runtimeRoles: ['backend'], capabilities: [] },
+    data: { teamId: team2.id, role: 'Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.upsert({ where: { name: WORKER_NAME_2 }, create: { name: WORKER_NAME_2, capabilities: [] }, update: { capabilities: [], templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id },
+    include: { person: true },
   })
   const eyes = await prisma.slave.create({
-    data: { teamId: team2.id, name: REVIEWER_NAME_2, role: 'Reviewer', runtimeRoles: ['reviewer'], capabilities: [] },
+    data: { teamId: team2.id, role: 'Reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.upsert({ where: { name: REVIEWER_NAME_2 }, create: { name: REVIEWER_NAME_2, capabilities: [] }, update: { capabilities: [], templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id },
+    include: { person: true },
   })
   console.log(`slave ${hand.id} (${WORKER_NAME_2}) writes the diff; slave ${eyes.id} (${REVIEWER_NAME_2}) reads it`)
   const rejectedTask = await prisma.task.create({
@@ -800,7 +813,7 @@ try {
     {
       type: lesson[0].type,
       scope: lesson[0].scope,
-      slaveId: lesson[0].slaveId,
+      personId: lesson[0].personId,
       workspaceId: lesson[0].workspaceId,
       verifiedBy: lesson[0].verifiedBy,
       body: lesson[0].body,
@@ -808,7 +821,7 @@ try {
     {
       type: 'lesson',
       scope: 'worker',
-      slaveId: hand.id,
+      personId: hand.personId,
       workspaceId: null,
       verifiedBy: 'review',
       body: REJECT_REASON,
@@ -816,10 +829,10 @@ try {
     "stage 2: the lesson belongs to the worker that WROTE the diff, in the reviewer's own words",
   )
   // The negative beside the positive (plan erratum E2): the slave that CAUGHT it learns nothing.
-  const reviewerLessons = await prisma.memory.count({ where: { slaveId: eyes.id } })
+  const reviewerLessons = await prisma.memory.count({ where: { personId: eyes.personId } })
   console.log(`stage 2 -- memories belonging to ${REVIEWER_NAME_2}, who caught it: ${String(reviewerLessons)}`)
   if (reviewerLessons !== 0) await fail(`stage 2: the reviewer was taught ${String(reviewerLessons)} lesson(s), expected none`)
-  if (lesson[0].slaveId === eyes.id) await fail('stage 2: the lesson was filed against the reviewer')
+  if (lesson[0].personId === eyes.personId) await fail('stage 2: the lesson was filed against the reviewer')
   const lessonId = lesson[0].id
   await stopDaemon(daemon2)
 
@@ -1570,7 +1583,7 @@ try {
   const liveCount = await prisma.memory.count({
     where: {
       status: { in: ['verified', 'candidate'] },
-      OR: [{ workspaceId }, { slave: { team: { workspaceId } } }],
+      OR: [{ workspaceId }, { person: { seats: { some: { team: { workspaceId } } } } }],
     },
   })
   await assertEqual(defaultRows.length, liveCount, "stage 7: one row per piece of this project's live knowledge")

@@ -124,6 +124,9 @@ const SIM_ROSTER = [
   ['Finance', 'M57 Gate Fin'],
 ]
 
+/** Every person this gate creates, by the name it creates them under -- the teardown's list. */
+const GATE_PERSON_NAMES = [SLAVE_NAME, ...SIM_ROSTER.map(([, memberName]) => memberName)]
+
 /** The operator's own words, on the `request` member M45 R3 put on `workspace.goal_set`'s payload.
  *  Stage 7 reads the older one back off the older thread's operator bubble -- which is the whole
  *  claim R9 makes: the conversation is those rows, not a table this milestone refused to add. */
@@ -358,9 +361,7 @@ try {
   otherWorkspaceId = other.id
   const team = await prisma.team.create({ data: { workspaceId, name: TEAM_NAME } })
   teamId = team.id
-  const slave = await prisma.slave.create({
-    data: { teamId, name: SLAVE_NAME, role: 'engineer', runtimeRoles: ['engineer'], model: 'sonnet', provider: 'claude_code' },
-  })
+  const slave = await prisma.slave.create({ data: { teamId: teamId, role: 'engineer', runtimeRoles: ['engineer'], model: 'sonnet', provider: 'claude_code', personId: (await prisma.person.upsert({ where: { name: SLAVE_NAME }, create: { name: SLAVE_NAME }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   slaveId = slave.id
 
   // ONE TASK PER COLUMN, named by the column it belongs in so a failure in stage 6 reads itself.
@@ -449,7 +450,7 @@ try {
   companyId = company.id
   for (const [department, memberName] of SIM_ROSTER) {
     const companyTeam = await prisma.companyTeam.create({ data: { companyId, name: department } })
-    await prisma.companySlave.create({ data: { companyTeamId: companyTeam.id, templateId, name: memberName } })
+    await prisma.person.upsert({ where: { name: memberName }, create: { templateId, name: memberName, lifecycle: 'permanent', departments: { create: { companyTeamId: companyTeam.id } } }, update: { templateId, lifecycle: 'permanent', departments: { deleteMany: {}, create: { companyTeamId: companyTeam.id } }, profile: null, model: null, provider: null, capabilities: [], releasedAt: null, releaseReason: null, selectionRationale: null } })
   }
   for (const [name, policy] of [[SIMULATION_A_NAME, 'A'], [SIMULATION_B_NAME, 'B']]) {
     const created = await createSimulation({ companyId, name, sector: 'trade', policy, seed: 5 })
@@ -1110,6 +1111,11 @@ try {
     if (id !== null) await prisma.simulationRun.delete({ where: { id } }).catch(() => {})
   }
   if (companyId !== null) await prisma.company.delete({ where: { id: companyId } }).catch(() => {})
+  // M58 R1: this gate's PEOPLE. A person is not cascaded away with the workspace whose seat held
+  // them, nor with the company whose department listed them, so without this every run leaves its
+  // roster behind -- as pooled rows on the Slaves tab, and as names another gate's substring count
+  // then trips over.
+  await prisma.person.deleteMany({ where: { name: { in: GATE_PERSON_NAMES } } }).catch(() => {})
   if (templateId !== null) await prisma.slaveTemplate.delete({ where: { id: templateId } }).catch(() => {})
   if (diagDir !== null && exitCode === 0) rmSync(diagDir, { recursive: true, force: true })
   await prisma.$disconnect().catch(() => {})

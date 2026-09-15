@@ -12,7 +12,7 @@ function fact(index: number, overrides: Partial<MemoryView> = {}): MemoryView {
     scope: 'workspace',
     companyId: null,
     workspaceId: 'w1',
-    slaveId: null,
+    personId: null,
     title: `Fact number ${String(index)}`,
     body: `body ${String(index)}`,
     status: 'verified',
@@ -100,7 +100,7 @@ describe('condenseMemories', () => {
     ).toBeNull()
     expect(
       condenseMemories({
-        memories: [...twenty.slice(0, 19), fact(19, { type: 'lesson', scope: 'worker', workspaceId: null, slaveId: 'ag-1' })],
+        memories: [...twenty.slice(0, 19), fact(19, { type: 'lesson', scope: 'worker', workspaceId: null, personId: 'ag-1' })],
         scope: 'workspace',
         targetId: 'w1',
         type: 'fact',
@@ -222,12 +222,12 @@ describe('condenseMemories', () => {
   // R5's one special case.
   it('turns a worker’s twenty lessons into a PROCEDURE -- what this worker has learned to do', () => {
     const lessons = twenty.map((one, index) =>
-      fact(index, { id: one.id, type: 'lesson', scope: 'worker', workspaceId: null, slaveId: 'ag-1' }),
+      fact(index, { id: one.id, type: 'lesson', scope: 'worker', workspaceId: null, personId: 'ag-1' }),
     )
     const got = condenseMemories({ memories: lessons, scope: 'worker', targetId: 'ag-1', type: 'lesson' })
     expect(got?.draft.type).toBe('procedure')
     expect(got?.draft.scope).toBe('worker')
-    expect(got?.draft.slaveId).toBe('ag-1')
+    expect(got?.draft.personId).toBe('ag-1')
     expect(got?.draft.title).toBe('What this worker has learned to do (20 sources, 2026-09-01 to 2026-09-20)')
   })
 
@@ -250,7 +250,7 @@ describe('condenseMemories', () => {
     }
     const given = retrieveMemories({
       memories: [...twenty, summary],
-      scopes: { companyId: null, workspaceId: 'w1', slaveId: 'ag-1' },
+      scopes: { companyId: null, workspaceId: 'w1', personId: 'ag-1' },
       refs: { taskId: null, requiredCapabilities: [] },
     })
     expect(given.map((one) => one.id)).toEqual(['summary'])

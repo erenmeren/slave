@@ -1,41 +1,29 @@
-import { assignSkill, unassignSkill } from '@slave-of-ai/control'
+import { setPersonSkills } from '@slave-of-ai/control'
 import { orgControlResponse } from '../../../../server/orgControlRoute'
 import { requirePrincipal } from '../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
 
-/** The one malformed-body sentence both verbs answer with, so a POST and a DELETE that got the
- *  same bad body can never disagree about what a good one looks like. */
-const SHAPE = 'the body must be { "slaveId": string, "skillId": string }'
-
-async function pair(request: Request): Promise<{ slaveId: string; skillId: string } | null> {
-  const body: unknown = await request.json().catch(() => null)
-  if (body === null || typeof body !== 'object') return null
-  const { slaveId, skillId } = body as { slaveId?: unknown; skillId?: unknown }
-  if (typeof slaveId !== 'string' || typeof skillId !== 'string') return null
-  return { slaveId, skillId }
-}
-
-/**
- * Assign (POST) / unassign (DELETE) a skill to a slave — the Skills page's only write.
- *
- * DELETE rather than a second POST with a flag: the pair IS the resource, and `SlaveSkill` has no
- * state between present and absent for a body to carry. `orgControlResponse` (not the workspace
- * shell) because neither a slave nor a skill is owned by a workspace — the catalog is a fact
- * about the daemon host's disk.
- */
+/** M58 R26: the Skills page no longer assigns -- the person panel does. This route stays as the
+ *  pair-shaped write the older clients call, bound to `setPersonSkills` so there is ONE writer. */
 export async function POST(request: Request): Promise<Response> {
-  const gate = await requirePrincipal()
-  if ('response' in gate) return gate.response
-  const parsed = await pair(request)
-  if (parsed === null) return Response.json({ error: SHAPE }, { status: 400 })
-  return orgControlResponse(() => assignSkill(parsed.slaveId, parsed.skillId))
+  return write(request, 'grant')
 }
 
 export async function DELETE(request: Request): Promise<Response> {
+  return write(request, 'clear')
+}
+
+async function write(request: Request, mode: 'grant' | 'clear'): Promise<Response> {
   const gate = await requirePrincipal()
   if ('response' in gate) return gate.response
-  const parsed = await pair(request)
-  if (parsed === null) return Response.json({ error: SHAPE }, { status: 400 })
-  return orgControlResponse(() => unassignSkill(parsed.slaveId, parsed.skillId))
+  const body: unknown = await request.json().catch(() => null)
+  if (body === null || typeof body !== 'object') {
+    return Response.json({ error: 'the body must be { "personId": string, "skillId": string }' }, { status: 400 })
+  }
+  const { personId, skillId } = body as { personId?: unknown; skillId?: unknown }
+  if (typeof personId !== 'string' || typeof skillId !== 'string') {
+    return Response.json({ error: 'the body must be { "personId": string, "skillId": string }' }, { status: 400 })
+  }
+  return orgControlResponse(() => setPersonSkills(personId, { [mode]: [skillId] }))
 }

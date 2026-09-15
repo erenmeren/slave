@@ -698,11 +698,11 @@ function TaskCancelledCard(props: ActivityCardProps): ReactElement {
 function WorkspaceCompanyAssignedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
     company: string
-    // `companySlaveId` is optional here even though the write path (schema.ts) always emits it:
+    // `personId` is optional here even though the write path (schema.ts) always emits it:
     // pre-M11 rows already stored in the DB have workers without it, and this read path does not
     // schema-validate stored payloads, so the fallback below keeps those legacy rows rendering
     // without duplicate-key warnings.
-    workers: ReadonlyArray<{ companySlaveId?: string; name: string; role: string }>
+    workers: ReadonlyArray<{ personId?: string; companySlaveId?: string; name: string; role: string }>
   }
   return (
     <ActivityCard {...props}>
@@ -712,7 +712,7 @@ function WorkspaceCompanyAssignedCard(props: ActivityCardProps): ReactElement {
       {payload.workers.length > 0 ? (
         <ul className="mt-1 space-y-0.5 text-text-3">
           {payload.workers.map((worker, index) => (
-            <li key={worker.companySlaveId ?? `${worker.name}-${index}`} data-testid="company-worker-item">
+            <li key={worker.personId ?? worker.companySlaveId ?? `${worker.name}-${index}`} data-testid="company-worker-item">
               {worker.name} <span className="text-text-3">({worker.role})</span>
             </li>
           ))}
@@ -872,16 +872,19 @@ function OrgChangedCard(props: ActivityCardProps): ReactElement {
 // in the `workspace` filter chip and share its `idle` tone -- a change to how a worker is
 // configured, never a run outcome (spec §1 forbids model output from writing either).
 
-/** Which level of the profile override chain was written, in the words the panel uses. */
-const PROFILE_TARGET_LABEL: Record<'slave' | 'template' | 'company_slave', string> = {
-  slave: 'this worker',
-  template: 'its template',
+/** Which level of the profile override chain was written, in the words the panel uses. Four
+ *  members, not three (M58 R7): `person` is the middle rung now, and `company_slave` is what a row
+ *  written before this milestone says -- this page renders history and may not stop naming it. */
+const PROFILE_TARGET_LABEL: Record<'slave' | 'template' | 'company_slave' | 'person', string> = {
+  slave: 'this seat',
+  person: 'the slave themself',
+  template: 'its persona',
   company_slave: 'its roster row',
 }
 
 function SlaveProfileChangedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as {
-    target: 'slave' | 'template' | 'company_slave'
+    target: 'slave' | 'template' | 'company_slave' | 'person'
     targetId: string
     // `null` is a CLEARED profile -- the level below the written one shows through again.
     sha256: string | null

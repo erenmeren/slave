@@ -8,7 +8,7 @@ function memory(overrides: Partial<MemoryView> & { readonly id: string }): Memor
     scope: 'workspace',
     companyId: null,
     workspaceId: 'w1',
-    slaveId: null,
+    personId: null,
     title: `title ${overrides.id}`,
     body: `body ${overrides.id}`,
     status: 'verified',
@@ -34,7 +34,7 @@ function memory(overrides: Partial<MemoryView> & { readonly id: string }): Memor
   }
 }
 
-const SCOPES = { companyId: 'c1', workspaceId: 'w1', slaveId: 'ag-1' }
+const SCOPES = { companyId: 'c1', workspaceId: 'w1', personId: 'ag-1' }
 const REFS = { taskId: 't1', requiredCapabilities: ['backend.api-design'] }
 const ids = (memories: readonly MemoryView[]): readonly string[] => memories.map((one) => one.id)
 
@@ -60,8 +60,8 @@ describe('retrieveMemories', () => {
         memory({ id: 'other-project', workspaceId: 'w2' }),
         memory({ id: 'my-company', scope: 'company', workspaceId: null, companyId: 'c1' }),
         memory({ id: 'other-company', scope: 'company', workspaceId: null, companyId: 'c2' }),
-        memory({ id: 'mine-worker', scope: 'worker', workspaceId: null, slaveId: 'ag-1' }),
-        memory({ id: 'other-worker', scope: 'worker', workspaceId: null, slaveId: 'ag-2' }),
+        memory({ id: 'mine-worker', scope: 'worker', workspaceId: null, personId: 'ag-1' }),
+        memory({ id: 'other-worker', scope: 'worker', workspaceId: null, personId: 'ag-2' }),
       ],
       scopes: SCOPES,
       refs: REFS,
@@ -71,12 +71,12 @@ describe('retrieveMemories', () => {
 
   it('keeps a LESSON only for the worker whose lesson it is -- including when scopes name nobody', () => {
     const lessons = [
-      memory({ id: 'mine', type: 'lesson', scope: 'worker', workspaceId: null, slaveId: 'ag-1' }),
-      memory({ id: 'theirs', type: 'lesson', scope: 'worker', workspaceId: null, slaveId: 'ag-2' }),
+      memory({ id: 'mine', type: 'lesson', scope: 'worker', workspaceId: null, personId: 'ag-1' }),
+      memory({ id: 'theirs', type: 'lesson', scope: 'worker', workspaceId: null, personId: 'ag-2' }),
     ]
     expect(ids(retrieveMemories({ memories: lessons, scopes: SCOPES, refs: REFS }))).toEqual(['mine'])
     expect(
-      retrieveMemories({ memories: lessons, scopes: { ...SCOPES, slaveId: null }, refs: REFS }),
+      retrieveMemories({ memories: lessons, scopes: { ...SCOPES, personId: null }, refs: REFS }),
     ).toEqual([])
   })
 
@@ -89,7 +89,7 @@ describe('retrieveMemories', () => {
         memory({ id: 'project-fact-capable', capabilities: ['backend.api-design'] }),
         memory({ id: 'project-fact-task', provenance: { ...memory({ id: 'x' }).provenance, taskId: 't1' } }),
         memory({ id: 'project-fact' }),
-        memory({ id: 'worker-procedure', type: 'procedure', scope: 'worker', workspaceId: null, slaveId: 'ag-1' }),
+        memory({ id: 'worker-procedure', type: 'procedure', scope: 'worker', workspaceId: null, personId: 'ag-1' }),
       ],
       scopes: SCOPES,
       refs: REFS,
@@ -136,7 +136,7 @@ describe('retrieveMemories', () => {
   // ranked remainder once every type has had its four.
   it('gives no one type more than its quota before every other type has had a turn', () => {
     const lessons = Array.from({ length: 14 }, (_, index) =>
-      memory({ id: `l${String(index + 1).padStart(2, '0')}`, type: 'lesson', scope: 'worker', workspaceId: null, slaveId: 'ag-1' }),
+      memory({ id: `l${String(index + 1).padStart(2, '0')}`, type: 'lesson', scope: 'worker', workspaceId: null, personId: 'ag-1' }),
     )
     const decisions = ['d1', 'd2'].map((id) => memory({ id, type: 'decision' }))
     const facts = ['f1', 'f2', 'f3'].map((id) => memory({ id }))
@@ -166,7 +166,7 @@ describe('retrieveMemories', () => {
   it('is deterministic through the quota too: a shuffled input gives the same twelve in the same order', () => {
     const rows = [
       ...Array.from({ length: 14 }, (_, index) =>
-        memory({ id: `l${String(index + 1).padStart(2, '0')}`, type: 'lesson', scope: 'worker', workspaceId: null, slaveId: 'ag-1' }),
+        memory({ id: `l${String(index + 1).padStart(2, '0')}`, type: 'lesson', scope: 'worker', workspaceId: null, personId: 'ag-1' }),
       ),
       ...['d1', 'd2'].map((id) => memory({ id, type: 'decision' })),
       ...['f1', 'f2', 'f3'].map((id) => memory({ id })),

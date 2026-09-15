@@ -187,7 +187,8 @@ export async function buildPermissionMatrix(workspaceId?: string): Promise<reado
       select: {
         id: true,
         name: true,
-        teams: { select: { slaves: { select: { id: true, name: true, role: true } } } },
+        // M58 R17: OPEN seats only, named by the person in each (R2).
+        teams: { select: { slaves: { where: { closedAt: null }, select: { id: true, role: true, person: { select: { name: true } } } } } },
       },
     }),
     prisma.slavePermission.findMany(),
@@ -208,10 +209,10 @@ export async function buildPermissionMatrix(workspaceId?: string): Promise<reado
     // concatenated rather than one roster in name order.
     rows: workspace.teams
       .flatMap((team) => team.slaves)
-      .sort((a, b) => a.name.localeCompare(b.name))
+      .sort((a, b) => a.person.name.localeCompare(b.person.name))
       .map((slave) => ({
         slaveId: slave.id,
-        name: slave.name,
+        name: slave.person.name,
         role: slave.role,
         // `null` is UNSET, and the cell says so: a slave nobody has decided about is not the
         // same as one explicitly denied, and collapsing them would make the matrix claim a

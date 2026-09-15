@@ -81,9 +81,9 @@ try {
     data: { workspaceId: workspace.id, kind: 'claude_code', settings: {} },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Gate Team' } })
-  await prisma.slave.create({ data: { teamId: team.id, name: 'Manager', role: 'manager', runtimeRoles: ['manager'] } })
-  await prisma.slave.create({ data: { teamId: team.id, name: 'Worker', role: 'backend', runtimeRoles: ['backend'] } })
-  await prisma.slave.create({ data: { teamId: team.id, name: 'Reviewer', role: 'reviewer', runtimeRoles: ['reviewer'] } })
+  await prisma.slave.create({ data: { teamId: team.id, role: 'manager', runtimeRoles: ['manager'], personId: (await prisma.person.upsert({ where: { name: 'Manager' }, create: { name: 'Manager' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
+  await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.upsert({ where: { name: 'Worker' }, create: { name: 'Worker' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
+  await prisma.slave.create({ data: { teamId: team.id, role: 'reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.upsert({ where: { name: 'Reviewer' }, create: { name: 'Reviewer' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   console.log(`workspace: ${workspace.id}`)
 
   // 2. Set the goal via the real CLI, the human's own path -- and the one that emits the

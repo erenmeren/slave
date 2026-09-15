@@ -154,7 +154,9 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
   // per-project query: every workspace's team roster comes back in this same round trip.
   const workspaces = await prisma.workspace.findMany({
     where: notArchived(options?.includeArchived),
-    include: { company: true, teams: { include: { slaves: true } } },
+    // M58 R17: OPEN seats only -- the avatar row shows who is on this project now, and a closed
+    // seat is somebody who was.
+    include: { company: true, teams: { include: { slaves: { where: { closedAt: null }, include: { person: { select: { name: true } } } } } } },
     orderBy: { name: 'asc' },
   })
 
@@ -347,7 +349,7 @@ export async function listProjects(options?: { readonly includeArchived?: boolea
     // unbounded in practice.
     team: workspace.teams
       .flatMap((team) => team.slaves)
-      .map((slave) => ({ slaveId: slave.id, name: slave.name, status: teamSlaveLiveInfo.get(slave.id)?.status ?? 'idle' })),
+      .map((slave) => ({ slaveId: slave.id, name: slave.person.name, status: teamSlaveLiveInfo.get(slave.id)?.status ?? 'idle' })),
     needsYou: needsYouOf(workspace.id, workspace.autoMerge),
     // A workspace with no runs and no decisions at all has spent nothing and has nothing
     // unmeasured -- `sumSpendFromGroups([])` and an absent Supervisor entry both say exactly that.
@@ -426,7 +428,8 @@ async function loadSlaveLiveInfo(
 }
 
 export interface RosterMemberRow {
-  readonly companySlaveId: string
+  /** M58 R5: a department holds PEOPLE, so this is the person -- there is no roster row to name. */
+  readonly personId: string
   readonly name: string
   readonly role: string
   readonly templateName: string
@@ -443,10 +446,9 @@ export interface RosterMemberRow {
   readonly providerSource: ChainSource
   readonly workers: ReadonlyArray<{
     readonly slaveId: string
-    /** The worker's OWN `Slave.name`/`Slave.role` (M23 D2) -- distinct from this roster member's
-     *  `name`/`role` above, which are the CATALOG identity a worker starts from at materialization
-     *  and can since have drifted from via `renameSlave`/`setSlaveRole`. `SlaveRowActions` edits
-     *  these two, not the roster row. */
+    /** M58 R2: the seat's own `role` beside the person's name. The name is now the SAME string as
+     *  the member's above -- one person, one name across every project -- and `role` is the seat
+     *  fact that can differ from the persona's, which is what `SlaveRowActions` edits. */
     readonly name: string
     readonly role: string
     readonly workspaceId: string
@@ -490,11 +492,17 @@ export async function listRoster(): Promise<readonly RosterCompany[]> {
       teams: {
         orderBy: { name: 'asc' },
         include: {
-          slaves: {
-            orderBy: { name: 'asc' },
+          members: {
+            orderBy: { person: { name: 'asc' } },
             include: {
-              template: true,
-              workers: { include: { team: { include: { workspace: true } } } },
+              person: {
+                include: {
+                  template: true,
+                  // M58 R17: the OPEN seats this person holds. A closed one is history and belongs
+                  // on no roster.
+                  seats: { where: { closedAt: null }, include: { team: { include: { workspace: true } } } },
+                },
+              },
             },
           },
         },
@@ -502,7 +510,7 @@ export async function listRoster(): Promise<readonly RosterCompany[]> {
     },
   })
 
-  const allWorkers = companies.flatMap((c) => c.teams.flatMap((t) => t.slaves.flatMap((a) => a.workers)))
+  const allWorkers = companies.flatMap((c) => c.teams.flatMap((t) => t.members.flatMap((m) => m.person.seats)))
   const workspaceIdBySlave = new Map(allWorkers.map((w) => [w.id, w.team.workspaceId] as const))
   const maxToolCallsByWorkspace = new Map(allWorkers.map((w) => [w.team.workspaceId, w.team.workspace.maxToolCallsPerRun] as const))
   const liveInfo = await loadSlaveLiveInfo(
@@ -525,12 +533,12 @@ export async function listRoster(): Promise<readonly RosterCompany[]> {
     teams: company.teams.map((team) => ({
       companyTeamId: team.id,
       teamName: team.name,
-      members: team.slaves.map((member) => {
-        const workers = member.workers.map((worker) => {
+      members: team.members.map(({ person: member }) => {
+        const workers = member.seats.map((worker) => {
           const info = liveInfo.get(worker.id)
           return {
             slaveId: worker.id,
-            name: worker.name,
+            name: member.name,
             role: worker.role,
             workspaceId: worker.team.workspaceId,
             projectName: worker.team.workspace.name,
@@ -544,26 +552,26 @@ export async function listRoster(): Promise<readonly RosterCompany[]> {
         const modelSource = chainSource(
           workers.some((w) => w.model !== null),
           member.model,
-          member.template.defaultModel,
+          member.template?.defaultModel ?? null,
         )
         const providerSource = chainSource(
           workers.some((w) => w.provider !== null),
           member.provider,
-          member.template.provider,
+          member.template?.provider ?? null,
         )
 
         return {
-          companySlaveId: member.id,
+          personId: member.id,
           name: member.name,
-          role: member.template.role,
-          templateName: member.template.name,
+          role: member.template?.role ?? '',
+          templateName: member.template?.name ?? '',
           // The chain result IGNORING worker overrides -- each worker's own value shows in its
           // sub-row above instead.
-          effectiveModel: member.model ?? member.template.defaultModel ?? null,
+          effectiveModel: member.model ?? member.template?.defaultModel ?? null,
           modelSource,
           rosterModel: member.model,
-          templateDefaultModel: member.template.defaultModel,
-          effectiveProvider: member.provider ?? member.template.provider ?? null,
+          templateDefaultModel: member.template?.defaultModel ?? null,
+          effectiveProvider: member.provider ?? member.template?.provider ?? null,
           providerSource,
           workers,
         }
@@ -574,6 +582,11 @@ export async function listRoster(): Promise<readonly RosterCompany[]> {
 
 export interface WorkerRow {
   readonly slaveId: string
+  /** M58 R2: the person sitting in this seat -- what every person-scoped verb is addressed by. */
+  readonly personId: string
+  /** M58 R22: the OTHER projects this person is on, so a project surface can say "also on Beta"
+   *  without a second query per row. Never includes this row's own project. */
+  readonly otherProjects: readonly string[]
   readonly name: string
   readonly role: string
   /**
@@ -604,7 +617,8 @@ export interface WorkerRow {
    */
   readonly provider: ProviderKind | null
   readonly gate: WorkerGate | null
-  /** M50 R1: WHY this worker is here, off `Slave.lifecycle`. A column, never a derivation. */
+  /** M50 R1: WHY this worker is here, off `Person.lifecycle` (M58 R1). A column, never a
+   *  derivation. */
   readonly lifecycle: SlaveLifecycle
   /** M50 R3: the engagement is over. `at` is an ISO string -- this row is serialised straight into
    *  `GET /api/org/workers`' poll payload -- and `reason` is the sentence it ended with. */
@@ -618,25 +632,26 @@ export interface WorkerRow {
 }
 
 /**
- * Every slave, across every workspace, as the Slaves page's seven-column table (design README
+ * Every OPEN SEAT, across every workspace, as the Slaves page's seven-column table (design README
  * §3a.2).
  *
- * NO `companySlaveId` filter (M14 fix wave, ruling on review I4): a slave is any `Slave` row on
- * a workspace's team, and being staffed from a company roster is optional. The old
- * `where: { companySlaveId: { not: null } }` made "worker" mean "roster-linked", which rendered
- * the table as a bare header on any development database whose slaves were created by hand --
- * and disagreed with `listProjects`'s avatar row about how many slaves a project has.
- * `department` is the slave's TEAM name, which every slave has; `companyName` may be null, and
- * that is not a reason to hide a slave from the page that lists slaves.
+ * NO department filter (M14 fix wave, ruling on review I4): a row here is any open seat on a
+ * workspace's team, and belonging to a company department is optional. Filtering on the roster link
+ * made "worker" mean "roster-linked", which rendered the table as a bare header on any development
+ * database whose slaves were created by hand -- and disagreed with `listProjects`'s avatar row about
+ * how many slaves a project has. `department` is the seat's TEAM name, which every seat has;
+ * `companyName` may be null, and that is not a reason to hide somebody from the page that lists
+ * slaves.
  *
  * Hides an archived project's slaves by default (M27 §3.3) -- `options?.includeArchived` is
  * threaded through from `listAllSlaves`, which is the Slaves page's own read.
  */
 export async function listWorkers(options?: { readonly includeArchived?: boolean }): Promise<readonly WorkerRow[]> {
   const slaves = await prisma.slave.findMany({
-    where: { team: { workspace: notArchived(options?.includeArchived) } },
-    orderBy: { name: 'asc' },
-    include: { team: { include: { workspace: true } } },
+    // M58 R17: OPEN seats only. A closed seat keeps its history and is nobody's row on this page.
+    where: { closedAt: null, team: { workspace: notArchived(options?.includeArchived) } },
+    orderBy: { person: { name: 'asc' } },
+    include: { person: true, team: { include: { workspace: true } } },
   })
   const slaveIds = slaves.map((a) => a.id)
 
@@ -703,6 +718,23 @@ export async function listWorkers(options?: { readonly includeArchived?: boolean
     if (!liveProviderBySlave.has(run.slaveId)) liveProviderBySlave.set(run.slaveId, run.provider)
   }
 
+  // M58 R15: every OPEN seat of every person on this page, in one query -- so "also on Beta" costs
+  // one read for the page rather than one per row.
+  const personIds = [...new Set(slaves.map((slave) => slave.personId))]
+  const allSeats =
+    personIds.length === 0
+      ? []
+      : await prisma.slave.findMany({
+          where: { personId: { in: personIds }, closedAt: null },
+          select: { personId: true, team: { select: { workspace: { select: { name: true } } } } },
+        })
+  const projectsByPerson = new Map<string, string[]>()
+  for (const seat of allSeats) {
+    const list = projectsByPerson.get(seat.personId)
+    if (list === undefined) projectsByPerson.set(seat.personId, [seat.team.workspace.name])
+    else list.push(seat.team.workspace.name)
+  }
+
   return slaves.map((slave) => {
     const info = liveInfo.get(slave.id)
     const liveProvider = liveProviderBySlave.get(slave.id) ?? null
@@ -710,14 +742,16 @@ export async function listWorkers(options?: { readonly includeArchived?: boolean
     const tokenTotals = tokenTotalsBySlave.get(slave.id)
     return {
       slaveId: slave.id,
-      name: slave.name,
+      personId: slave.personId,
+      otherProjects: (projectsByPerson.get(slave.personId) ?? []).filter((name) => name !== slave.team.workspace.name),
+      name: slave.person.name,
       role: slave.role,
       runtimeRoles: slave.runtimeRoles,
-      lifecycle: slave.lifecycle,
+      lifecycle: slave.person.lifecycle,
       released:
-        slave.releasedAt === null
+        slave.person.releasedAt === null
           ? null
-          : { at: slave.releasedAt.toISOString(), reason: slave.releaseReason ?? 'released' },
+          : { at: slave.person.releasedAt.toISOString(), reason: slave.person.releaseReason ?? 'released' },
       workspaceId: slave.team.workspaceId,
       projectName: slave.team.workspace.name,
       status: info?.status ?? 'idle',
@@ -734,57 +768,50 @@ export async function listWorkers(options?: { readonly includeArchived?: boolean
   })
 }
 
-/** `AllSlaveRow` (M24 §5.3): one row for every slave, whether a project has materialized it or
- *  not. `slaveId`/`companySlaveId` are the two identities `listWorkers`/`listRoster` each carry
- *  half of -- `null` for `slaveId` marks a catalog member no project has materialized yet, and
- *  `null` for `companySlaveId` marks a slave with no roster link at all (a hand-made worker, or
- *  a worker whose roster row has since been deleted -- the same `Slave.companySlaveId` nullable
- *  column `listWorkers`'s own docstring explains). */
+/** `AllSlaveRow` (M24 §5.3): one row for every slave -- whether or not a project has a seat for
+ *  them. M58 R2 splits the two identities cleanly: `personId` is always there, because a row is a
+ *  PERSON, and `slaveId` is `null` for somebody in the POOL, who holds no open seat anywhere. */
 export interface AllSlaveRow {
-  /** `null` for a catalog member no project has materialized yet. */
+  /** `null` for somebody in the pool -- they work here and hold no open seat (M58 R16). */
   readonly slaveId: string | null
-  readonly companySlaveId: string | null
+  readonly personId: string
   readonly name: string
   readonly role: string
   /**
    * `WorkerRow.runtimeRoles` for a project row (M37 t4 fix round 1).
    *
-   * ALWAYS empty on a catalog row, and it means something different there: a catalog member has no
-   * `Slave` row at all, so it has no dispatch set to be parked out of -- which is why
-   * `AllSlavesTable` renders the parked warning only for a row that has a `slaveId`. The field is
-   * not nullable, because "no worker yet" is already said by `slaveId === null` and a second way
-   * of saying it is a second thing to keep in step.
+   * ALWAYS empty on a POOL row, and it means something different there: somebody with no open seat
+   * has no dispatch set to be parked out of -- which is why `AllSlavesTable` renders the parked
+   * warning only for a row that has a `slaveId`. The field is not nullable, because "no seat" is
+   * already said by `slaveId === null` and a second way of saying it is a second thing to keep in
+   * step.
    */
   readonly runtimeRoles: readonly string[]
-  /** M50 R1: WHY this row is here -- the Slaves table's own Lifecycle column. A project row
-   *  carries its worker's own `Slave.lifecycle`; a catalog row is always `permanent`, because a
-   *  roster member IS somebody the organisation has, and that is the one honest value for a row
-   *  with no `Slave` to read a column off. Merged on every poll tick like `status`, not fixed at
+  /** M50 R1: WHY this row is here -- the Slaves table's own Lifecycle column, off
+   *  `Person.lifecycle` (M58 R1). One column for a seated row and a pooled one alike, which is
+   *  what moving it to the person bought. Merged on every poll tick like `status`, not fixed at
    *  load (plan decision D6): an approved hire lands between reloads. */
   readonly lifecycle: SlaveLifecycle
   /** M50 R3: the engagement is over -- `at` is an ISO string (this row is serialised into the
    *  poll payload) and `reason` is the sentence the release was recorded with. `null` for
-   *  everybody still here, and ALWAYS `null` on a catalog row: a member no project has
-   *  materialised has no engagement that could end. The table greys such a row rather than
-   *  dropping it (D7). */
+   *  everybody still here. The table greys a released row rather than dropping it (D7). */
   readonly released: { readonly at: string; readonly reason: string } | null
-  /** The row's department name -- a project row's `Team.name`, or a catalog row's
-   *  `CompanyTeam.name` (M25 Task 6: was `teamName`, renamed once the Slaves table's department
-   *  column became a `<select>` that reads/writes the department, not just names it). */
+  /** The row's department name -- a seated row's `Team.name`, or a pooled row's `CompanyTeam.name`
+   *  (M25 Task 6: was `teamName`, renamed once the Slaves table's department column became a
+   *  `<select>` that reads/writes the department, not just names it). */
   readonly departmentName: string
   readonly projectName: string | null
   readonly workspaceId: string | null
-  /** A project row's own `Team.id` -- the department select's current value, and the id
-   *  `PUT /api/slaves/:id/team` moves it away from. `null` for a catalog row, which has no
+  /** A seated row's own `Team.id` -- the department select's current value, and the id
+   *  `PUT /api/slaves/:id/team` moves it away from. `null` for a pooled row, which sits on no
    *  project team at all. */
   readonly teamId: string | null
-  /** The company this slave is roster-linked to, whether the row is a project row (roster-linked
-   *  via `companySlaveId`) or a catalog row (every catalog row lives on a company). `null` for a
-   *  hand-made project slave with no roster link at all. Keys `AllSlavesPage.templatesByCompany`. */
+  /** The company whose department this person belongs to (M58 R5), whether they hold a seat or
+   *  not. `null` for somebody in no department at all. Keys `AllSlavesPage.templatesByCompany`. */
   readonly companyId: string | null
-  /** A catalog row's own `CompanyTeam.id` -- the department select's current value on a catalog
-   *  row, and the id `PUT /api/org/slaves/:id/team` moves it away from. `null` for a project row
-   *  (materialized or not): a project row's department select reads/writes `teamId` instead. */
+  /** A pooled row's own `CompanyTeam.id` -- the department select's current value there, and the
+   *  id `PUT /api/org/slaves/:id/team` moves it away from. `null` for a seated row, whose
+   *  department select reads/writes `teamId` instead. */
   readonly companyTeamId: string | null
   readonly status: string
   /** M51 R7: the rung the breaker has this row's live run on; `'none'` for an idle worker AND for
@@ -830,10 +857,10 @@ export interface AllSlavesPage {
 
 /**
  * The Slaves page's one table (M24 §5.3; widened to a page object in M25 Task 6, spec §4.1):
- * every project slave (`listWorkers`) plus every catalog member no project has materialized yet
- * (`listRoster`'s members with no workers), plus the department select's two option lists. The
- * two row-source lists are the inputs on purpose -- one place derives a worker's live status, one
- * place walks the model/provider chain -- and this only lines their rows up.
+ * every OPEN SEAT (`listWorkers`) plus everybody in the POOL -- who works here and holds no open
+ * seat anywhere (M58 R16) -- plus the department select's two option lists. The row sources are the
+ * inputs on purpose -- one place derives a worker's live status, one place walks the model/provider
+ * chain -- and this only lines their rows up.
  *
  * `model` on a project row is read directly off `Slave.model` (fix round 1, Important finding 2)
  * rather than through the roster loop below -- the roster loop only reaches a worker that is
@@ -874,7 +901,7 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
 
   const workerRows: AllSlaveRow[] = workers.map((w) => ({
     slaveId: w.slaveId,
-    companySlaveId: null, // filled below from the roster when the worker is roster-linked
+    personId: w.personId,
     name: w.name,
     role: w.role,
     runtimeRoles: w.runtimeRoles,
@@ -897,55 +924,82 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
     runCount: runCountBySlaveId.get(w.slaveId) ?? 0,
   }))
   const bySlaveId = new Map(workerRows.map((r) => [r.slaveId, r] as const))
-  // A catalog member's row (fix round 1, Important finding 1): built once, used both when the
-  // member has never been materialized at all AND when every worker it WAS materialized into
-  // belongs to a project this read is currently hiding (an archived project, unless
-  // `includeArchived` was passed). Without the second case, a slave whose only project went
-  // archived produced neither a project row (filtered by `listWorkers`) nor a catalog row (its
-  // `member.workers.length` is not `0`), vanishing from the table entirely -- including its
-  // `catalog-slave-delete` action, which this table is the only place that offers it.
-  const catalogRowFor = (
-    company: (typeof roster)[number],
-    team: (typeof roster)[number]['teams'][number],
-    member: (typeof roster)[number]['teams'][number]['members'][number],
-  ): AllSlaveRow => ({
-    slaveId: null, companySlaveId: member.companySlaveId, name: member.name, role: member.role,
-    // A catalog member is not a worker yet, so it has no dispatch set of its own -- see the field's
-    // own docstring for why that is `[]` rather than `null`.
-    runtimeRoles: [],
-    // A roster member IS somebody the organisation has (M50 R1), which is exactly what `permanent`
-    // means -- and the only honest value for a row that has no `Slave` row to read a column off.
-    lifecycle: 'permanent', released: null,
-    departmentName: team.teamName, projectName: null, workspaceId: null,
-    teamId: null, companyId: company.companyId, companyTeamId: team.companyTeamId,
-    // A catalog member has no run at all, so no breaker can have spoken to it (M51 R7).
-    status: 'idle', breakerLevel: 'none', currentTask: null,
-    provider: member.effectiveProvider,
-    gate: member.effectiveProvider === null ? null : capabilitiesOf(member.effectiveProvider).gate,
-    model: member.effectiveModel, costUsd: 0, unmeasuredRuns: 0, runCount: 0,
-  })
-  const catalogRows: AllSlaveRow[] = []
+  // A seated row learns which company's department its person belongs to, so the table can offer
+  // the department select the same options `templatesByCompany` keys.
+  const departmentOfPerson = new Map<string, { readonly companyId: string; readonly companyTeamId: string }>()
   for (const company of roster) {
     for (const team of company.teams) {
       for (const member of team.members) {
-        if (member.workers.length === 0) {
-          catalogRows.push(catalogRowFor(company, team, member))
-          continue
+        if (!departmentOfPerson.has(member.personId)) {
+          departmentOfPerson.set(member.personId, { companyId: company.companyId, companyTeamId: team.companyTeamId })
         }
-        let anyResolved = false
-        for (const worker of member.workers) {
-          const row = bySlaveId.get(worker.slaveId)
-          if (row === undefined) continue
-          anyResolved = true
-          bySlaveId.set(worker.slaveId, { ...row, companySlaveId: member.companySlaveId, companyId: company.companyId })
-        }
-        if (!anyResolved) catalogRows.push(catalogRowFor(company, team, member))
       }
     }
   }
+  for (const [slaveId, row] of bySlaveId) {
+    const department = departmentOfPerson.get(row.personId)
+    if (department !== undefined) bySlaveId.set(slaveId, { ...row, companyId: department.companyId })
+  }
+
+  // M58 R16: the POOL -- everybody who works here and holds no OPEN seat anywhere. It replaces the
+  // "a catalog member no project has materialised" row, and it is strictly wider: somebody hired
+  // for a project that has since been archived, or removed from every seat they held, is a person
+  // this installation still has and used to vanish from the page that lists them.
+  const pooled = await prisma.person.findMany({
+    // Two clauses, and the second is fix round 1's Important finding 1 restated for people.
+    //
+    // The first is the pool itself under this page's own `notArchived` gate: nobody with an open
+    // seat on a project this read shows. The second keeps the row that finding was about -- a
+    // member of a company department whose only project has since been archived -- while leaving
+    // somebody who belongs to no department hidden along with the project they sit on, which is
+    // what the page did before there was a `Person` row to show instead.
+    where: {
+      seats: { none: { closedAt: null, team: { workspace: notArchived(options?.includeArchived) } } },
+      OR: [{ seats: { none: { closedAt: null } } }, { departments: { some: {} } }],
+    },
+    orderBy: { name: 'asc' },
+    include: {
+      template: { select: { role: true, defaultModel: true, provider: true } },
+      departments: { include: { companyTeam: { include: { company: { select: { id: true, name: true } } } } }, orderBy: { companyTeamId: 'asc' }, take: 1 },
+    },
+  })
+  const poolRows: AllSlaveRow[] = pooled.map((person) => {
+    const department = person.departments[0]
+    const provider = person.provider ?? person.template?.provider ?? null
+    return {
+      slaveId: null,
+      personId: person.id,
+      name: person.name,
+      role: person.template?.role ?? '',
+      // Nobody in the pool has a seat, so nobody has a dispatch set of their own -- see the field's
+      // own docstring for why that is `[]` rather than `null`.
+      runtimeRoles: [],
+      lifecycle: person.lifecycle,
+      released:
+        person.releasedAt === null
+          ? null
+          : { at: person.releasedAt.toISOString(), reason: person.releaseReason ?? 'released' },
+      departmentName: department?.companyTeam.name ?? '',
+      projectName: null,
+      workspaceId: null,
+      teamId: null,
+      companyId: department?.companyTeam.company.id ?? null,
+      companyTeamId: department?.companyTeam.id ?? null,
+      // Nobody in the pool holds a run, so no breaker can have spoken to them (M51 R7).
+      status: 'idle',
+      breakerLevel: 'none',
+      currentTask: null,
+      provider,
+      gate: provider === null ? null : capabilitiesOf(provider).gate,
+      model: person.model ?? person.template?.defaultModel ?? null,
+      costUsd: 0,
+      unmeasuredRuns: 0,
+      runCount: 0,
+    }
+  })
+
   const projectRows = [...bySlaveId.values()].sort((a, b) => (a.projectName ?? '').localeCompare(b.projectName ?? '') || a.name.localeCompare(b.name))
-  catalogRows.sort((a, b) => a.name.localeCompare(b.name))
-  return { rows: [...projectRows, ...catalogRows], departmentsByWorkspace, templatesByCompany }
+  return { rows: [...projectRows, ...poolRows], departmentsByWorkspace, templatesByCompany }
 }
 
 /** One catalog row as a `'use client'` component receives it: `WorkforceCatalogRow` with its TWO
@@ -954,6 +1008,10 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
 export type CatalogRowView = Omit<WorkforceCatalogRow, 'importedAt' | 'activationChangedAt'> & {
   readonly importedAt: string | null
   readonly activationChangedAt: string | null
+  /** M58 R25: this persona's DEFAULT skills. Changing the list changes every person hired from it. */
+  readonly defaultSkillIds: readonly string[]
+  /** How many people were hired from this persona -- the blast radius the Default skills note names. */
+  readonly hiredCount: number
 }
 
 export interface WorkforceCatalogView {
@@ -984,7 +1042,7 @@ export async function listWorkforceCatalogPage(
 ): Promise<WorkforceCatalogView> {
   const page = await listWorkforceCatalog(filters, options)
   return {
-    rows: page.rows.map(catalogRowViewOf),
+    rows: await withPersonaSkills(page.rows.map(catalogRowViewOf)),
     facets: page.facets,
     total: page.total,
     nextCursor: page.nextCursor,
@@ -999,7 +1057,38 @@ function catalogRowViewOf(row: WorkforceCatalogRow): CatalogRowView {
     ...row,
     importedAt: row.importedAt === null ? null : row.importedAt.toISOString(),
     activationChangedAt: row.activationChangedAt === null ? null : row.activationChangedAt.toISOString(),
+    defaultSkillIds: [],
+    hiredCount: 0,
   }
+}
+
+/** M58 R25: two grouped reads for the whole page, never one per row -- the persona's default skill
+ *  ids and how many people were hired from it. */
+async function withPersonaSkills(rows: readonly CatalogRowView[]): Promise<readonly CatalogRowView[]> {
+  const ids = rows.map((row) => row.id)
+  if (ids.length === 0) return rows
+  const [skills, hired] = await Promise.all([
+    prisma.templateSkill.findMany({
+      where: { templateId: { in: ids } },
+      select: { templateId: true, skillId: true },
+      orderBy: [{ templateId: 'asc' }, { skillId: 'asc' }],
+    }),
+    prisma.person.groupBy({ by: ['templateId'], where: { templateId: { in: ids } }, _count: { _all: true } }),
+  ])
+  const skillsBy = new Map<string, string[]>()
+  for (const row of skills) {
+    const list = skillsBy.get(row.templateId)
+    if (list === undefined) skillsBy.set(row.templateId, [row.skillId])
+    else list.push(row.skillId)
+  }
+  const hiredBy = new Map(
+    hired.flatMap((group) => (group.templateId === null ? [] : [[group.templateId, group._count._all] as const])),
+  )
+  return rows.map((row) => ({
+    ...row,
+    defaultSkillIds: skillsBy.get(row.id) ?? [],
+    hiredCount: hiredBy.get(row.id) ?? 0,
+  }))
 }
 
 /** Every slave template, UNPAGED and unfiltered -- the shape `CompanyManager`'s member `<select>`,
@@ -1018,7 +1107,7 @@ function catalogRowViewOf(row: WorkforceCatalogRow): CatalogRowView {
  *  were running twice for one render of `/workforce`. */
 export async function listTemplates(): Promise<readonly CatalogRowView[]> {
   const page = await listWorkforceCatalog({}, { pageSize: TEMPLATE_PICKER_MAX, facets: false })
-  return page.rows.map(catalogRowViewOf)
+  return withPersonaSkills(page.rows.map(catalogRowViewOf))
 }
 
 /** One runbook as the Workforce tab reads it (M48 R7): the whole runbook, plus the NAME of the

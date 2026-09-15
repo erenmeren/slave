@@ -22,7 +22,7 @@ const FACT: MemoryView = {
   scope: 'workspace',
   companyId: null,
   workspaceId: 'w1',
-  slaveId: null,
+  personId: null,
   title: 'Task: Ship the checkout API',
   body: 'Every orders route requires a signed session.',
   status: 'verified',
@@ -91,7 +91,7 @@ describe('parseMemoryDraft', () => {
     scope: 'workspace',
     companyId: null,
     workspaceId: 'w1',
-    slaveId: null,
+    personId: null,
     title: 'A thing that is true',
     body: 'It is true because the commands said so.',
     status: 'verified',
@@ -131,7 +131,7 @@ describe('parseMemoryDraft', () => {
   // invariant. A draft with two targets or none is refused before anything is written.
   it('refuses a draft that names no target, or more than one', () => {
     expect(parseMemoryDraft({ ...draft, workspaceId: null }).ok).toBe(false)
-    expect(parseMemoryDraft({ ...draft, slaveId: 'ag-1' }).ok).toBe(false)
+    expect(parseMemoryDraft({ ...draft, personId: 'ag-1' }).ok).toBe(false)
   })
 
   it('refuses a target that does not match the scope', () => {

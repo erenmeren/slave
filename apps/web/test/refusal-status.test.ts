@@ -138,6 +138,16 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   // `template_duplicate_not_found` answers 404, and joins the not-found list below.
   license_unknown: true,
   template_duplicate_not_found: true,
+  // M58 R14 (plan additions): the six person kinds. `person_not_found` joins the not-found list
+  // below; the other five are ordinary 409s -- the person exists and the request does not make
+  // sense against them (a seat that is already open, a release, a run, a taken name, a seat that
+  // is not open).
+  already_assigned: true,
+  person_released: true,
+  run_in_progress: true,
+  person_name_taken: true,
+  person_not_found: true,
+  person_not_seated: true,
 }
 
 const ALL = Object.keys(ALL_KINDS) as ControlRefusal['kind'][]
@@ -171,13 +181,14 @@ const TODAYS_NOT_FOUND_KINDS = [
   'credential_not_found',
   'external_repository_not_found',
   'template_duplicate_not_found',
+  'person_not_found',
 ] as const satisfies readonly ControlRefusal['kind'][]
 
 describe('refusalStatus', () => {
-  it('is 404 for exactly the twenty-three kinds ending in _not_found today', () => {
+  it('is 404 for exactly the twenty-four kinds ending in _not_found today', () => {
     const bySuffix = ALL.filter((kind) => kind.endsWith('_not_found')).sort()
     expect(bySuffix).toEqual([...TODAYS_NOT_FOUND_KINDS].sort())
-    expect(bySuffix).toHaveLength(23)
+    expect(bySuffix).toHaveLength(24)
   })
 
   it('maps every kind in the taxonomy to 404 iff it ends in _not_found, 409 otherwise', () => {

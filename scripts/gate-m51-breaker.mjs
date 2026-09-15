@@ -594,16 +594,7 @@ try {
     })
     workspaceIds.push(workspace.id)
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: TEAM_NAME } })
-    const worker = await prisma.slave.create({
-      data: {
-        teamId: team.id,
-        name: WORKER_NAME,
-        role: WORKER_ROLE,
-        runtimeRoles: [WORKER_ROLE],
-        model: 'sonnet',
-        provider: 'claude_code',
-      },
-    })
+    const worker = await prisma.slave.create({ data: { teamId: team.id, role: WORKER_ROLE, runtimeRoles: [WORKER_ROLE], model: 'sonnet', provider: 'claude_code', personId: (await prisma.person.upsert({ where: { name: WORKER_NAME }, create: { name: WORKER_NAME }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
     const task =
       taskTitle === null
         ? null
@@ -637,7 +628,7 @@ try {
   const spareWorker = await prisma.slave.create({
     data: {
       teamId: loop.team.id,
-      name: SPARE_WORKER_NAME,
+      personId: (await prisma.person.upsert({ where: { name: SPARE_WORKER_NAME }, create: { name: SPARE_WORKER_NAME }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id,
       // A role nothing dispatches on: this worker exists to HOLD the two hand-seeded rows of stages
       // 2b and 9, and a runtime role would let the daemon give it real work.
       role: 'observer',

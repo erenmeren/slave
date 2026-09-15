@@ -15,6 +15,7 @@ const SNAPSHOT: OverviewSnapshot = {
   slaves: [
     {
       id: 'a1',
+      personId: 'p1',
       name: 'Alex',
       role: 'backend',
       breakerLevel: 'none',

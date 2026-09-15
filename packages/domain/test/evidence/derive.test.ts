@@ -23,11 +23,11 @@ const TAXONOMY: readonly CapabilityRecord[] = [
 
 describe('profileKeyOf (R1)', () => {
   it('keys a hired worker on the TEMPLATE it came from, so one persona has one record', () => {
-    expect(profileKeyOf({ slaveId: 's1', hiredFromTemplateId: 't7' })).toBe('template:t7')
+    expect(profileKeyOf({ slaveId: 's1', templateId: 't7' })).toBe('template:t7')
   })
 
   it('keys a hand-made worker on ITSELF -- there is always a profile and the tuple is never null', () => {
-    expect(profileKeyOf({ slaveId: 's1', hiredFromTemplateId: null })).toBe('slave:s1')
+    expect(profileKeyOf({ slaveId: 's1', templateId: null })).toBe('slave:s1')
   })
 
   it('tells the two apart, which is what the Bespoke chip renders from', () => {

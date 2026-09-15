@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
-import { addCompanySlave, addCompanyTeam, assignCompany, assignCompanyTx, createCompany, createTemplate, setSlaveModel } from '../../src/org.js'
+import { addCompanyTeam, addDepartmentMember, assignCompany, assignCompanyTx, createCompany, createTemplate, setSlaveModel } from '../../src/org.js'
+import { releasePerson, unassignPerson } from '../../src/persons.js'
 import { refusalText } from '../../src/refusal.js'
 
 // A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
@@ -17,7 +18,7 @@ describe('catalog and company CRUD', () => {
     // through it `Workspace` (`runbookId`) and everything below it. Both are NAMED rather than left
     // to the cascade, so the reach is documented rather than accidental (M48 final review, I2).
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "CompanySlave", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "CompanyTeamMember", "CompanyTeam", "Company", "RunbookTemplate", "Workspace", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -194,129 +195,72 @@ describe('catalog and company CRUD', () => {
     })
   })
 
-  describe('addCompanySlave', () => {
-    async function seedTeamAndTemplate(): Promise<{ companyTeamId: string; templateId: string }> {
+  describe('addDepartmentMember (M58 R5)', () => {
+    async function seedTeamAndPerson(): Promise<{ companyTeamId: string; personId: string }> {
       const company = await prisma.company.create({ data: { name: 'Acme Corp' } })
       const team = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
       const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
-      return { companyTeamId: team.id, templateId: template.id }
+      const person = await prisma.person.create({ data: { name: 'Atlas', templateId: template.id } })
+      return { companyTeamId: team.id, personId: person.id }
     }
 
-    it('creates the row under the given team and template, with an optional model+provider override', async (): Promise<void> => {
-      const { companyTeamId, templateId } = await seedTeamAndTemplate()
+    it('puts an existing person in the department, and says nothing about their persona', async (): Promise<void> => {
+      const { companyTeamId, personId } = await seedTeamAndPerson()
 
-      const result = await addCompanySlave(companyTeamId, templateId, 'Atlas', {
-        model: 'claude-haiku',
-        provider: 'claude_code',
-      })
+      const result = await addDepartmentMember(companyTeamId, personId)
 
       expect(result.ok).toBe(true)
-      if (!result.ok) return
-      const row = await prisma.companySlave.findUniqueOrThrow({ where: { id: result.value.id } })
-      expect(row.companyTeamId).toBe(companyTeamId)
-      expect(row.templateId).toBe(templateId)
-      expect(row.name).toBe('Atlas')
-      expect(row.model).toBe('claude-haiku')
-      expect(row.provider).toBe('claude_code')
-    })
-
-    it('defaults model and provider to null when omitted', async (): Promise<void> => {
-      const { companyTeamId, templateId } = await seedTeamAndTemplate()
-
-      const result = await addCompanySlave(companyTeamId, templateId, 'Atlas')
-
-      expect(result.ok).toBe(true)
-      if (!result.ok) return
-      const row = await prisma.companySlave.findUniqueOrThrow({ where: { id: result.value.id } })
-      expect(row.model).toBeNull()
-      expect(row.provider).toBeNull()
-    })
-
-    it('refuses a model with no provider, creating nothing', async (): Promise<void> => {
-      const { companyTeamId, templateId } = await seedTeamAndTemplate()
-
-      const result = await addCompanySlave(companyTeamId, templateId, 'Atlas', { model: 'claude-haiku' })
-
-      expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'model_without_provider' })
-      expect(await prisma.companySlave.count()).toBe(0)
-    })
-
-    it('refuses a provider kind nothing is configured for, creating nothing', async (): Promise<void> => {
-      const { companyTeamId, templateId } = await seedTeamAndTemplate()
-
-      const result = await addCompanySlave(companyTeamId, templateId, 'Atlas', {
-        model: 'claude-haiku',
-        provider: 'nope' as never,
+      const row = await prisma.companyTeamMember.findUniqueOrThrow({
+        where: { companyTeamId_personId: { companyTeamId, personId } },
+        include: { person: true },
       })
-
-      expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_provider', provider: 'nope' })
-      expect(await prisma.companySlave.count()).toBe(0)
+      expect(row.person.name).toBe('Atlas')
+      // The membership carries no model, no provider and no profile: those are the PERSON's, one
+      // rung of the override chain down, and a department is not a place to override anything.
+      expect(await prisma.companyTeamMember.count()).toBe(1)
     })
 
-    it('refuses an unknown company team', async (): Promise<void> => {
-      const { templateId } = await seedTeamAndTemplate()
+    it('is idempotent: a second call adds no second row', async (): Promise<void> => {
+      const { companyTeamId, personId } = await seedTeamAndPerson()
+
+      expect((await addDepartmentMember(companyTeamId, personId)).ok).toBe(true)
+      expect((await addDepartmentMember(companyTeamId, personId)).ok).toBe(true)
+
+      expect(await prisma.companyTeamMember.count()).toBe(1)
+    })
+
+    it('puts one person in two departments -- they are the same person in both', async (): Promise<void> => {
+      const { companyTeamId, personId } = await seedTeamAndPerson()
+      const company = await prisma.companyTeam.findUniqueOrThrow({ where: { id: companyTeamId }, select: { companyId: true } })
+      const design = await prisma.companyTeam.create({ data: { companyId: company.companyId, name: 'Design' } })
+
+      expect((await addDepartmentMember(companyTeamId, personId)).ok).toBe(true)
+      expect((await addDepartmentMember(design.id, personId)).ok).toBe(true)
+
+      expect(await prisma.companyTeamMember.count({ where: { personId } })).toBe(2)
+      expect(await prisma.person.count()).toBe(1)
+    })
+
+    it('refuses an unknown department template', async (): Promise<void> => {
+      const { personId } = await seedTeamAndPerson()
       const unknown = '00000000-0000-4000-8000-000000000000'
 
-      const result = await addCompanySlave(unknown, templateId, 'Atlas')
+      const result = await addDepartmentMember(unknown, personId)
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'company_team_not_found', companyTeamId: unknown })
+      expect(await prisma.companyTeamMember.count()).toBe(0)
     })
 
-    it('refuses an unknown template', async (): Promise<void> => {
-      const { companyTeamId } = await seedTeamAndTemplate()
+    it('refuses an unknown person', async (): Promise<void> => {
+      const { companyTeamId } = await seedTeamAndPerson()
       const unknown = '00000000-0000-4000-8000-000000000000'
 
-      const result = await addCompanySlave(companyTeamId, unknown, 'Atlas')
+      const result = await addDepartmentMember(companyTeamId, unknown)
 
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'template_not_found', templateId: unknown })
-    })
-
-    it('refuses a duplicate slave name within the same team', async (): Promise<void> => {
-      const { companyTeamId, templateId } = await seedTeamAndTemplate()
-      await addCompanySlave(companyTeamId, templateId, 'Atlas')
-
-      const result = await addCompanySlave(companyTeamId, templateId, 'Atlas')
-
-      expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'duplicate_name', name: 'Atlas' })
-      expect(await prisma.companySlave.count()).toBe(1)
-    })
-
-    it('allows the same slave name in two different teams', async (): Promise<void> => {
-      const company = await prisma.company.create({ data: { name: 'Acme Corp' } })
-      const teamA = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
-      const teamB = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Design' } })
-      const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Engineer', role: 'backend' } })
-
-      const first = await addCompanySlave(teamA.id, template.id, 'Atlas')
-      const second = await addCompanySlave(teamB.id, template.id, 'Atlas')
-
-      expect(first.ok).toBe(true)
-      expect(second.ok).toBe(true)
-    })
-
-    it('refuses a whitespace name, creating nothing', async (): Promise<void> => {
-      const { companyTeamId, templateId } = await seedTeamAndTemplate()
-
-      const result = await addCompanySlave(companyTeamId, templateId, '  ')
-
-      expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_name' })
-      expect(await prisma.companySlave.count()).toBe(0)
-    })
-
-    it('refuses a whitespace-only model, creating nothing', async (): Promise<void> => {
-      const { companyTeamId, templateId } = await seedTeamAndTemplate()
-
-      const result = await addCompanySlave(companyTeamId, templateId, 'Atlas', { model: '  ' })
-
-      expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_model' })
-      expect(await prisma.companySlave.count()).toBe(0)
+      if (!result.ok) expect(result.error).toEqual({ kind: 'person_not_found', personId: unknown })
+      expect(await prisma.companyTeamMember.count()).toBe(0)
     })
   })
 })
@@ -324,7 +268,7 @@ describe('catalog and company CRUD', () => {
 describe('assignCompany', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -340,7 +284,8 @@ describe('assignCompany', () => {
     return { id: workspace.id }
   }
 
-  /** Template names are made unique across calls via the company id, since they are unique globally. */
+  /** Template AND person names are made unique across calls via the company id: both are unique
+   *  globally (`Person.name` since M58 R1). */
   async function seedCompanyWithRoster(
     slaveCount: number,
     companyName = 'Acme Corp',
@@ -351,14 +296,19 @@ describe('assignCompany', () => {
       const template = await prisma.slaveTemplate.create({
         data: { name: `Role ${i}-${company.id}`, role: `role-${i}` },
       })
-      await prisma.companySlave.create({
-        data: { companyTeamId: team.id, templateId: template.id, name: `Worker ${i}` },
+      await prisma.person.create({
+        data: {
+          templateId: template.id,
+          name: companyName === 'Acme Corp' ? `Worker ${i}` : `Worker ${i} ${companyName}`,
+          lifecycle: 'permanent',
+          departments: { create: { companyTeamId: team.id } },
+        },
       })
     }
     return { companyId: company.id, companyName: company.name, teamName: team.name }
   }
 
-  it('materializes a team and workers from the roster, linking companySlaveId and emitting one event', async (): Promise<void> => {
+  it('opens a team and a seat per member, naming the person on each, and emits one event', async (): Promise<void> => {
     const workspace = await seedWorkspace()
     const { companyId, companyName, teamName } = await seedCompanyWithRoster(3)
 
@@ -376,23 +326,25 @@ describe('assignCompany', () => {
     const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: workspace.id } })
     expect(team.name).toBe(teamName)
 
-    const slaves = await prisma.slave.findMany({ where: { teamId: team.id } })
+    const slaves = await prisma.slave.findMany({ where: { teamId: team.id }, include: { person: true } })
     expect(slaves).toHaveLength(3)
     for (const slave of slaves) {
-      expect(slave.companySlaveId).not.toBeNull()
+      // M58 R5: every seat names the PERSON who sits in it, and that person is a member of the
+      // department this project's team was made from -- bound, never copied.
+      expect(await prisma.companyTeamMember.count({ where: { personId: slave.personId } })).toBe(1)
       expect(slave.role).toMatch(/^role-\d$/)
     }
 
     for (const worker of result.value.createdWorkers) {
-      expect(worker.companySlaveId).not.toBe('')
-      const slave = slaves.find((a) => a.name === worker.name)
-      expect(slave?.companySlaveId).toBe(worker.companySlaveId)
+      expect(worker.personId).not.toBe('')
+      const slave = slaves.find((a) => a.person.name === worker.name)
+      expect(slave?.personId).toBe(worker.personId)
     }
 
-    // M50 R1: a whole roster materialises as PERMANENT workers -- they exist in the organisation,
-    // which is what the word means. The column default would call every one of them a project hire.
+    // M50 R1: a whole roster is seated as PERMANENT people -- they exist in the organisation, which
+    // is what the word means. The column default would call every one of them a project hire.
     expect(slaves.length).toBeGreaterThan(0)
-    expect(slaves.every((slave) => slave.lifecycle === 'permanent')).toBe(true)
+    expect(slaves.every((slave) => slave.person.lifecycle === 'permanent')).toBe(true)
 
     const events = await prisma.executionEvent.findMany({
       where: { workspaceId: workspace.id, type: 'workspace_company_assigned' },
@@ -401,13 +353,13 @@ describe('assignCompany', () => {
     expect(events[0]?.actor).toBe('human')
     const payload = events[0]?.payload as unknown as {
       company: string
-      workers: readonly { companySlaveId: string; name: string; role: string }[]
+      workers: readonly { personId: string; name: string; role: string }[]
     }
     expect(payload.company).toBe(companyName)
     expect(payload.workers).toHaveLength(3)
     for (const worker of payload.workers) {
-      const slave = slaves.find((a) => a.name === worker.name)
-      expect(slave?.companySlaveId).toBe(worker.companySlaveId)
+      const slave = slaves.find((a) => a.person.name === worker.name)
+      expect(slave?.personId).toBe(worker.personId)
     }
   })
 
@@ -420,15 +372,23 @@ describe('assignCompany', () => {
     const template = await prisma.slaveTemplate.create({
       data: { name: `Capable ${company.id}`, role: 'backend', capabilityKeys: ['security.application'] },
     })
-    await prisma.companySlave.create({
-      data: { companyTeamId: companyTeam.id, templateId: template.id, name: 'Sam' },
+    // M58 R1: what a specialist provides is on the PERSON, written when they were created from the
+    // persona -- `assignCompanyTx` seats them and projects that set into the seat's runtime roles.
+    await prisma.person.create({
+      data: {
+        templateId: template.id,
+        name: 'Sam',
+        capabilities: template.capabilityKeys,
+        lifecycle: 'permanent',
+        departments: { create: { companyTeamId: companyTeam.id } },
+      },
     })
 
     const result = await assignCompany(workspace.id, company.id)
     expect(result.ok).toBe(true)
 
-    const slave = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: workspace.id } } })
-    expect(slave.capabilities).toEqual(['security.application'])
+    const slave = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: workspace.id } }, include: { person: true } })
+    expect(slave.person.capabilities).toEqual(['security.application'])
     expect([...slave.runtimeRoles].toSorted()).toEqual(['backend', 'security'])
   })
 
@@ -458,13 +418,11 @@ describe('assignCompany', () => {
     const workspace = await seedWorkspace()
     const { companyId } = await seedCompanyWithRoster(3)
     await assignCompany(workspace.id, companyId)
-    const before = await prisma.slave.findMany({ orderBy: { name: 'asc' } })
+    const before = await prisma.slave.findMany({ orderBy: { person: { name: 'asc' } } })
 
     const team = await prisma.companyTeam.findFirstOrThrow({ where: { companyId } })
     const template = await prisma.slaveTemplate.create({ data: { name: `Role extra-${companyId}`, role: 'role-extra' } })
-    await prisma.companySlave.create({
-      data: { companyTeamId: team.id, templateId: template.id, name: 'Worker extra' },
-    })
+    await prisma.person.create({ data: { templateId: template.id, name: 'Worker extra', lifecycle: 'permanent', departments: { create: { companyTeamId: team.id } } } })
 
     const result = await assignCompany(workspace.id, companyId)
 
@@ -473,11 +431,82 @@ describe('assignCompany', () => {
     expect(result.value.createdWorkers).toHaveLength(1)
     expect(result.value.createdWorkers[0]?.name).toBe('Worker extra')
 
-    const after = await prisma.slave.findMany({ orderBy: { name: 'asc' } })
+    const after = await prisma.slave.findMany({ orderBy: { person: { name: 'asc' } } })
     expect(after).toHaveLength(4)
     for (const row of before) {
       expect(after.find((a) => a.id === row.id)).toEqual(row)
     }
+  })
+
+  // M58 R2: a seat somebody was removed from is REOPENED by the next assign, not replaced -- which
+  // is what keeps their runs, messages and permissions on this project as history.
+  it('reopens a closed seat rather than opening a second one for the same person', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const { companyId } = await seedCompanyWithRoster(1)
+    expect((await assignCompany(workspace.id, companyId)).ok).toBe(true)
+    const seat = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: workspace.id } } })
+    const run = await prisma.slaveRun.create({ data: { slaveId: seat.id, status: 'succeeded' } })
+    await prisma.slave.update({ where: { id: seat.id }, data: { closedAt: new Date() } })
+
+    const again = await assignCompany(workspace.id, companyId)
+
+    expect(again.ok).toBe(true)
+    if (!again.ok) return
+    expect(again.value.createdWorkers.map((worker) => worker.personId)).toEqual([seat.personId])
+    const rows = await prisma.slave.findMany({ where: { personId: seat.personId } })
+    expect(rows.map((row) => row.id)).toEqual([seat.id])
+    expect(rows[0]?.closedAt).toBeNull()
+    expect(await prisma.slaveRun.findUnique({ where: { id: run.id } })).not.toBeNull()
+  })
+
+  // Whole-branch review: unassign empties runtimeRoles, and assignCompany used to reopen with none.
+  it('restores default runtimeRoles when reopening a seat emptied by unassign', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const company = await prisma.company.create({ data: { name: 'Restore Corp' } })
+    const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
+    const template = await prisma.slaveTemplate.create({
+      data: { name: `Restore ${company.id}`, role: 'backend', capabilityKeys: ['security.application'] },
+    })
+    const person = await prisma.person.create({
+      data: {
+        templateId: template.id,
+        name: 'Restored Worker',
+        capabilities: template.capabilityKeys,
+        lifecycle: 'permanent',
+        departments: { create: { companyTeamId: companyTeam.id } },
+      },
+    })
+    expect((await assignCompany(workspace.id, company.id)).ok).toBe(true)
+    const seat = await prisma.slave.findFirstOrThrow({ where: { personId: person.id } })
+    expect([...seat.runtimeRoles].toSorted()).toEqual(['backend', 'security'])
+
+    const removed = await unassignPerson(person.id, seat.teamId, { reason: 'done here' })
+    expect(removed.ok).toBe(true)
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: seat.id } })).runtimeRoles).toEqual([])
+
+    const again = await assignCompany(workspace.id, company.id)
+    expect(again.ok).toBe(true)
+    const reopened = await prisma.slave.findUniqueOrThrow({ where: { id: seat.id } })
+    expect(reopened.closedAt).toBeNull()
+    expect([...reopened.runtimeRoles].toSorted()).toEqual(['backend', 'security'])
+  })
+
+  it('does not reopen a seat for a released person', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const { companyId } = await seedCompanyWithRoster(1)
+    expect((await assignCompany(workspace.id, companyId)).ok).toBe(true)
+    const seat = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: workspace.id } } })
+    const released = await releasePerson(seat.personId, 'the engagement is over')
+    expect(released.ok).toBe(true)
+
+    const again = await assignCompany(workspace.id, companyId)
+
+    if (!again.ok) {
+      expect(again.error.kind).toBe('person_released')
+    } else {
+      expect(again.value.createdWorkers).toEqual([])
+    }
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: seat.id } })).closedAt).not.toBeNull()
   })
 
   it('refuses when the workspace is already assigned to a different company, changing nothing', async (): Promise<void> => {
@@ -551,7 +580,7 @@ describe('assignCompany', () => {
     })
     expect(result.ok).toBe(true)
 
-    const slaves = await prisma.slave.findMany({ where: { team: { workspaceId: workspace.id } }, orderBy: { name: 'asc' } })
+    const slaves = await prisma.slave.findMany({ where: { team: { workspaceId: workspace.id } }, orderBy: { person: { name: 'asc' } } })
     expect(slaves.map((slave) => slave.role)).toEqual(['manager', 'role-1'])
     expect(slaves[0]?.runtimeRoles).toEqual(['manager', 'role-0'])
     // Deduplicated, not doubled, when the override says what the catalog already said.
@@ -564,22 +593,22 @@ describe('assignCompany', () => {
 
     await assignCompany(workspace.id, companyId)
 
-    const slave = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: workspace.id } } })
+    const slave = await prisma.slave.findFirstOrThrow({ where: { team: { workspaceId: workspace.id } }, include: { person: true } })
     expect(slave.runtimeRoles).toEqual([slave.role])
   })
 
   it('keeps a pre-existing hand-made team and slave, materializing alongside them', async (): Promise<void> => {
     const workspace = await seedWorkspace()
     const legacyTeam = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Legacy Ops' } })
-    const legacySlave = await prisma.slave.create({ data: { teamId: legacyTeam.id, name: 'OldHand', role: 'legacy' } })
+    const legacySlave = await prisma.slave.create({ data: { teamId: legacyTeam.id, role: 'legacy', personId: (await prisma.person.create({ data: { name: 'OldHand' } })).id } })
     const { companyId, teamName } = await seedCompanyWithRoster(2)
 
     const result = await assignCompany(workspace.id, companyId)
 
     expect(result.ok).toBe(true)
 
-    const stillThere = await prisma.slave.findUniqueOrThrow({ where: { id: legacySlave.id } })
-    expect(stillThere.name).toBe('OldHand')
+    const stillThere = await prisma.slave.findUniqueOrThrow({ where: { id: legacySlave.id }, include: { person: true } })
+    expect(stillThere.person.name).toBe('OldHand')
     expect(stillThere.role).toBe('legacy')
 
     const teams = await prisma.team.findMany({ where: { workspaceId: workspace.id } })
@@ -706,10 +735,10 @@ describe('assignCompany', () => {
     const company = await prisma.company.create({ data: { name: 'Acme Corp' } })
     const engineeringTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
     const engineeringTemplate = await prisma.slaveTemplate.create({ data: { name: `Engineer-${company.id}`, role: 'engineer' } })
-    await prisma.companySlave.create({ data: { companyTeamId: engineeringTeam.id, templateId: engineeringTemplate.id, name: 'Atlas' } })
+    await prisma.person.create({ data: { templateId: engineeringTemplate.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: engineeringTeam.id } } } })
     const supportTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Support' } })
     const supportTemplate = await prisma.slaveTemplate.create({ data: { name: `Support-${company.id}`, role: 'support' } })
-    await prisma.companySlave.create({ data: { companyTeamId: supportTeam.id, templateId: supportTemplate.id, name: 'Robin' } })
+    await prisma.person.create({ data: { templateId: supportTemplate.id, name: 'Robin', lifecycle: 'permanent', departments: { create: { companyTeamId: supportTeam.id } } } })
 
     const otherCompany = await prisma.company.create({ data: { name: 'Globex Corp' } })
     const otherCompanyTeam = await prisma.companyTeam.create({ data: { companyId: otherCompany.id, name: 'Unrelated' } })
@@ -753,18 +782,22 @@ describe('assignCompany', () => {
     })
   })
 
-  it('rolls back the whole assignment when a roster template has gone dangling mid-transaction', async (): Promise<void> => {
+  it('rolls back the whole assignment when a member has gone dangling mid-transaction', async (): Promise<void> => {
     const workspace = await seedWorkspace()
     const { companyId } = await seedCompanyWithRoster(1)
-    const companySlave = await prisma.companySlave.findFirstOrThrow({ where: { companyTeam: { companyId } } })
 
-    // Force the FK target to go missing out from under the seeded CompanySlave -- a state a plain
-    // RESTRICT-backed delete can never produce, so the trigger-based FK check is disabled for the
-    // width of one transaction (`SET LOCAL` unwinds automatically at commit; nothing else in the
-    // process is affected) and the template is deleted while still referenced.
+    // Force the FK target to go missing out from under the seeded membership -- a state a plain
+    // cascade can never produce, so the trigger-based FK check is disabled for the width of one
+    // transaction (`SET LOCAL` unwinds automatically at commit; nothing else in the process is
+    // affected) and the PERSON is deleted while a membership still references them. The seat write
+    // inside `assignCompanyTx` then fails its own `personId` foreign key, AFTER the `companyId`
+    // this transaction has already written.
     await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(`SET LOCAL session_replication_role = 'replica'`)
-      await tx.$executeRawUnsafe('DELETE FROM "SlaveTemplate" WHERE id = $1', companySlave.templateId)
+      await tx.$executeRawUnsafe(
+        'DELETE FROM "Person" WHERE id IN (SELECT m."personId" FROM "CompanyTeamMember" m JOIN "CompanyTeam" t ON t.id = m."companyTeamId" WHERE t."companyId" = $1)',
+        companyId,
+      )
     })
 
     await expect(assignCompany(workspace.id, companyId)).rejects.toThrow()
@@ -779,7 +812,7 @@ describe('assignCompany', () => {
 describe('setSlaveModel', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -788,7 +821,7 @@ describe('setSlaveModel', () => {
       data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [] },
     })
     const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-    const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+    const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
     return { id: slave.id }
   }
 
@@ -798,7 +831,7 @@ describe('setSlaveModel', () => {
     const result = await setSlaveModel(id, 'claude-opus', 'claude_code')
 
     expect(result.ok).toBe(true)
-    const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id }, include: { person: true } })
     expect(row.model).toBe('claude-opus')
     expect(row.provider).toBe('claude_code')
 
@@ -831,7 +864,7 @@ describe('setSlaveModel', () => {
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_model' })
-    const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id }, include: { person: true } })
     expect(row.model).toBe('claude-opus')
     expect(row.provider).toBe('claude_code')
   })
@@ -843,7 +876,7 @@ describe('setSlaveModel', () => {
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'model_without_provider' })
-    const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id }, include: { person: true } })
     expect(row.model).toBeNull()
     expect(row.provider).toBeNull()
   })
@@ -855,7 +888,7 @@ describe('setSlaveModel', () => {
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'model_without_provider' })
-    const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id }, include: { person: true } })
     expect(row.model).toBeNull()
     expect(row.provider).toBeNull()
   })
@@ -867,7 +900,7 @@ describe('setSlaveModel', () => {
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_provider', provider: 'nope' })
-    const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id }, include: { person: true } })
     expect(row.model).toBeNull()
     expect(row.provider).toBeNull()
   })
@@ -879,7 +912,7 @@ describe('setSlaveModel', () => {
     const result = await setSlaveModel(id, null, null)
 
     expect(result.ok).toBe(true)
-    const slave = await prisma.slave.findUniqueOrThrow({ where: { id } })
+    const slave = await prisma.slave.findUniqueOrThrow({ where: { id }, include: { person: true } })
     expect(slave.model).toBeNull()
     expect(slave.provider).toBeNull()
   })
@@ -900,7 +933,7 @@ describe('setSlaveModel', () => {
 describe('write-time budget admission', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -928,7 +961,7 @@ describe('write-time budget admission', () => {
         ...(provider === null ? {} : { defaultModel: 'some-model', provider }),
       },
     })
-    await prisma.companySlave.create({ data: { companyTeamId: team.id, templateId: template.id, name: 'Atlas' } })
+    await prisma.person.create({ data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: team.id } } } })
     return { companyId: company.id }
   }
 
@@ -1011,7 +1044,7 @@ describe('write-time budget admission', () => {
     async function slaveIn(budgetUsd: number | null): Promise<{ id: string }> {
       const workspace = await workspaceWithBudget(budgetUsd)
       const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-      const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
+      const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
       return { id: slave.id }
     }
 
@@ -1025,7 +1058,7 @@ describe('write-time budget admission', () => {
         expect(result.error).toMatchObject({ kind: 'unmeasurable_budget', provider: 'cursor' })
         expect(refusalText(result.error)).toBe('a budget needs a provider that reports cost')
       }
-      const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id }, include: { person: true } })
       expect(row.model).toBeNull()
       expect(row.provider).toBeNull()
     })
@@ -1036,7 +1069,7 @@ describe('write-time budget admission', () => {
       const result = await setSlaveModel(id, 'some-model', 'cursor')
 
       expect(result.ok).toBe(true)
-      const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id }, include: { person: true } })
       expect(row.model).toBe('some-model')
       expect(row.provider).toBe('cursor')
     })
@@ -1047,7 +1080,7 @@ describe('write-time budget admission', () => {
       const result = await setSlaveModel(id, 'claude-opus', 'claude_code')
 
       expect(result.ok).toBe(true)
-      const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id }, include: { person: true } })
       expect(row.provider).toBe('claude_code')
     })
 
@@ -1058,7 +1091,7 @@ describe('write-time budget admission', () => {
       const result = await setSlaveModel(id, null, null)
 
       expect(result.ok).toBe(true)
-      const row = await prisma.slave.findUniqueOrThrow({ where: { id } })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id }, include: { person: true } })
       expect(row.model).toBeNull()
       expect(row.provider).toBeNull()
     })

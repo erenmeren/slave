@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '../../src/client.js'
 
-async function seedSlave(): Promise<{ workspaceId: string; slaveId: string }> {
+async function seedSlave(): Promise<{ workspaceId: string; slaveId: string; personId: string }> {
   const workspace = await prisma.workspace.create({
     data: {
       name: 'Checkout Platform',
@@ -11,14 +11,15 @@ async function seedSlave(): Promise<{ workspaceId: string; slaveId: string }> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'Backend' } })
-  return { workspaceId: workspace.id, slaveId: slave.id }
+  const person = await prisma.person.create({ data: { name: 'Alex' } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, personId: person.id, role: 'Backend' } })
+  return { workspaceId: workspace.id, slaveId: slave.id, personId: person.id }
 }
 
 describe('slave capabilities', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "SlaveSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "PersonSkill", "TemplateSkill", "Skill", "SkillProvider", "SlavePermission", "ProviderConfiguration", "Slave", "Team", "Person", "Workspace" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -37,20 +38,35 @@ describe('slave capabilities', () => {
     ).rejects.toThrow()
   })
 
-  it('links a slave to skills through the join table', async () => {
-    const { slaveId } = await seedSlave()
+  // M58 R3: a skill belongs to the PERSON, as a grant or a revoke over the persona's defaults --
+  // and the same pair can never be both, which is what the composite primary key buys.
+  it('links a person to skills through the grant table, and a persona to its defaults', async () => {
+    const { personId } = await seedSlave()
     const provider = await prisma.skillProvider.create({ data: { name: 'superpowers' } })
     const skill = await prisma.skill.create({
       data: { providerId: provider.id, name: 'test-driven-development', description: 'TDD' },
     })
-    await prisma.slaveSkill.create({ data: { slaveId, skillId: skill.id } })
+    const template = await prisma.slaveTemplate.create({ data: { name: 'Backend Developer', role: 'backend' } })
+    await prisma.personSkill.create({ data: { personId, skillId: skill.id, mode: 'granted' } })
+    await prisma.templateSkill.create({ data: { templateId: template.id, skillId: skill.id } })
 
-    const found = await prisma.slave.findUniqueOrThrow({
-      where: { id: slaveId },
+    const found = await prisma.person.findUniqueOrThrow({
+      where: { id: personId },
       include: { skills: { include: { skill: true } } },
     })
+    expect(found.skills.map((link) => ({ name: link.skill.name, mode: link.mode }))).toEqual([
+      { name: 'test-driven-development', mode: 'granted' },
+    ])
 
-    expect(found.skills.map((link) => link.skill.name)).toEqual(['test-driven-development'])
+    await expect(
+      prisma.personSkill.create({ data: { personId, skillId: skill.id, mode: 'revoked' } }),
+    ).rejects.toThrow()
+
+    const persona = await prisma.slaveTemplate.findUniqueOrThrow({
+      where: { id: template.id },
+      include: { defaultSkills: { include: { skill: true } } },
+    })
+    expect(persona.defaultSkills.map((link) => link.skill.name)).toEqual(['test-driven-development'])
   })
 
   it('allows one configuration per provider kind per workspace', async () => {

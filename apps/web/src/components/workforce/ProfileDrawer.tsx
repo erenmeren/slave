@@ -27,6 +27,7 @@ import { EmptyState } from '../ui/EmptyState'
 import { LoadingState } from '../ui/LoadingState'
 import { INPUT_SHELL } from '../ui/FormControls'
 import { CapabilityChips } from '../organization/CapabilityChips'
+import { TemplateSkillsEditor } from './TemplateSkillsEditor'
 
 /** Which `DetailsGroup` each profile field renders inside. `runtimeRole` joins `identity` -- it is
  *  the one field the renderer never puts in a prompt (plan erratum E3), and it belongs beside who
@@ -57,6 +58,7 @@ const GROUPS: readonly { readonly group: DetailsGroupName; readonly title: strin
   { group: 'identity', title: 'Identity' },
   { group: 'mission', title: 'Mission' },
   { group: 'capabilities', title: 'Capabilities' },
+  { group: 'skills', title: 'Default skills' },
   { group: 'expertise', title: 'Expertise' },
   { group: 'principles', title: 'Principles' },
   { group: 'constraints', title: 'Constraints' },
@@ -64,7 +66,6 @@ const GROUPS: readonly { readonly group: DetailsGroupName; readonly title: strin
   { group: 'deliverables', title: 'Deliverables' },
   { group: 'success', title: 'Success criteria' },
   { group: 'collaboration', title: 'Collaboration' },
-  { group: 'skills', title: 'Skills' },
   { group: 'source', title: 'Source' },
   // M55 R6: who ELSE this row looks like. After Source, because provenance answers "where did this
   // come from" and this answers "who else is this" -- two questions, two next actions.
@@ -119,6 +120,9 @@ export function ProfileDrawer({
   name,
   capabilityKeys,
   taxonomy,
+  defaultSkillIds = [],
+  hiredCount = 0,
+  skillCatalogue = [],
   onClose,
   onChanged,
   onOpenTemplate,
@@ -129,6 +133,9 @@ export function ProfileDrawer({
    *  which are not the same thing as the persona's free-text `capabilities` bullets below them. */
   readonly capabilityKeys: readonly string[]
   readonly taxonomy: readonly CapabilityRecord[]
+  readonly defaultSkillIds?: readonly string[]
+  readonly hiredCount?: number
+  readonly skillCatalogue?: readonly { readonly skillId: string; readonly name: string; readonly providerName: string }[]
   readonly onClose: () => void
   readonly onChanged: () => void
   /** M55 R6: open another template's drawer from a pair. Optional, so a caller that has no second
@@ -372,6 +379,15 @@ export function ProfileDrawer({
                   </span>
                 )}
               </div>
+            )}
+            {group === 'skills' && (
+              <TemplateSkillsEditor
+                templateId={templateId}
+                skillIds={defaultSkillIds}
+                catalogue={skillCatalogue}
+                hiredCount={hiredCount}
+                onChanged={onChanged}
+              />
             )}
             {group === 'duplicates' ? (
               duplicates === null ? (

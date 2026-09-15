@@ -32,8 +32,14 @@ async function seed(): Promise<Fixture> {
     data: { name: 'Checkout Platform', repoPath, verifyCommands: ['true'], setupCommands: [] },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slaveWithRunRow = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'backend' } })
-  const slaveNoRunsRow = await prisma.slave.create({ data: { teamId: team.id, name: 'Sam', role: 'frontend' } })
+  const slaveWithRunRow = await prisma.slave.create({
+    data: { teamId: team.id, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Alex' } })).id },
+    include: { person: true },
+  })
+  const slaveNoRunsRow = await prisma.slave.create({
+    data: { teamId: team.id, role: 'frontend', personId: (await prisma.person.create({ data: { name: 'Sam' } })).id },
+    include: { person: true },
+  })
   const task = await prisma.task.create({
     data: {
       workspaceId: workspace.id,
@@ -48,8 +54,8 @@ async function seed(): Promise<Fixture> {
   return {
     workspaceId: workspace.id,
     teamId: team.id,
-    slaveWithRun: { id: slaveWithRunRow.id, name: slaveWithRunRow.name, role: slaveWithRunRow.role },
-    slaveNoRuns: { id: slaveNoRunsRow.id, name: slaveNoRunsRow.name, role: slaveNoRunsRow.role },
+    slaveWithRun: { id: slaveWithRunRow.id, name: slaveWithRunRow.person.name, role: slaveWithRunRow.role },
+    slaveNoRuns: { id: slaveNoRunsRow.id, name: slaveNoRunsRow.person.name, role: slaveNoRunsRow.role },
     runId: run.id,
     taskId: task.id,
   }
@@ -70,7 +76,7 @@ describe('org-edit verbs', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "SlaveRun", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "SlaveRun", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -82,8 +88,8 @@ describe('org-edit verbs', () => {
       const result = await renameSlave(slaveNoRuns.id, 'Samantha')
 
       expect(result.ok).toBe(true)
-      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slaveNoRuns.id } })
-      expect(row.name).toBe('Samantha')
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slaveNoRuns.id }, include: { person: true } })
+      expect(row.person.name).toBe('Samantha')
 
       const events = await orgChangedEvents(workspaceId)
       expect(events).toHaveLength(1)
@@ -92,15 +98,17 @@ describe('org-edit verbs', () => {
       expect(events[0]?.payload).toEqual({ entity: 'slave', id: slaveNoRuns.id, field: 'name', from: 'Sam', to: 'Samantha' })
     })
 
-    it('refuses a name already taken by a sibling in the same team, changing nothing', async () => {
+    it('refuses a name another slave already holds anywhere, changing nothing', async () => {
       const { slaveNoRuns, slaveWithRun, workspaceId } = fixture
 
       const result = await renameSlave(slaveNoRuns.id, slaveWithRun.name)
 
       expect(result.ok).toBe(false)
-      if (!result.ok) expect(result.error).toEqual({ kind: 'duplicate_name', name: slaveWithRun.name })
-      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slaveNoRuns.id } })
-      expect(row.name).toBe('Sam')
+      // M58 R1: the name belongs to the PERSON and is unique across the installation, so the
+      // refusal names that fact rather than a sibling of one team.
+      if (!result.ok) expect(result.error).toEqual({ kind: 'person_name_taken', name: slaveWithRun.name })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slaveNoRuns.id }, include: { person: true } })
+      expect(row.person.name).toBe('Sam')
       expect(await orgChangedEvents(workspaceId)).toHaveLength(0)
     })
 
@@ -111,8 +119,8 @@ describe('org-edit verbs', () => {
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_name' })
-      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slaveNoRuns.id } })
-      expect(row.name).toBe('Sam')
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slaveNoRuns.id }, include: { person: true } })
+      expect(row.person.name).toBe('Sam')
     })
 
     it('refuses an unknown slave', async () => {
@@ -130,7 +138,7 @@ describe('org-edit verbs', () => {
       const result = await setSlaveRole(slaveNoRuns.id, 'qa')
 
       expect(result.ok).toBe(true)
-      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slaveNoRuns.id } })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slaveNoRuns.id }, include: { person: true } })
       expect(row.role).toBe('qa')
 
       const events = await orgChangedEvents(workspaceId)
@@ -145,20 +153,20 @@ describe('org-edit verbs', () => {
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'invalid_role' })
-      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slaveNoRuns.id } })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slaveNoRuns.id }, include: { person: true } })
       expect(row.role).toBe('frontend')
     })
 
     it('refuses while the slave has a live run, changing nothing', async () => {
       const { teamId } = fixture
-      const slave = await prisma.slave.create({ data: { teamId, name: 'Wendy', role: 'backend' } })
+      const slave = await prisma.slave.create({ data: { teamId: teamId, role: 'backend', personId: (await prisma.person.create({ data: { name: 'Wendy' } })).id } })
       const run = await prisma.slaveRun.create({ data: { slaveId: slave.id, status: 'working' } })
 
       const result = await setSlaveRole(slave.id, 'qa')
 
       expect(result.ok).toBe(false)
       if (!result.ok) expect(result.error).toEqual({ kind: 'slave_run_active', slaveId: slave.id, runId: run.id })
-      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slave.id } })
+      const row = await prisma.slave.findUniqueOrThrow({ where: { id: slave.id }, include: { person: true } })
       expect(row.role).toBe('backend')
     })
 
@@ -185,7 +193,7 @@ describe('org-edit verbs', () => {
       const result = await deleteSlave(slaveNoRuns.id)
 
       expect(result.ok).toBe(true)
-      expect(await prisma.slave.findUnique({ where: { id: slaveNoRuns.id } })).toBeNull()
+      expect(await prisma.slave.findUnique({ where: { id: slaveNoRuns.id }, include: { person: true } })).toBeNull()
 
       const events = await orgChangedEvents(workspaceId)
       expect(events).toHaveLength(1)
@@ -201,7 +209,7 @@ describe('org-edit verbs', () => {
       expect(result.ok).toBe(true)
       if (!result.ok) return
       expect(result.value).toEqual({ runs: 1 })
-      expect(await prisma.slave.findUnique({ where: { id: slaveWithRun.id } })).toBeNull()
+      expect(await prisma.slave.findUnique({ where: { id: slaveWithRun.id }, include: { person: true } })).toBeNull()
       expect(await prisma.slaveRun.findUnique({ where: { id: runId } })).toBeNull()
 
       const events = await orgChangedEvents(workspaceId)

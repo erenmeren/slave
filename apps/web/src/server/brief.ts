@@ -222,17 +222,15 @@ export async function buildProjectBrief(
         select: { id: true, title: true, status: true, integratedAt: true },
       }),
       prisma.slave.findMany({
-        where: { team: { workspaceId } },
+        // M58 R17: OPEN seats only -- the brief's team band is who is on this project now.
+        where: { closedAt: null, team: { workspaceId } },
         select: {
           id: true,
-          name: true,
           role: true,
-          // `companySlaveId` is gone from this select (M50 R1): it was here to compute
-          // `company: boolean`, and the column below answers the question that flag was
-          // approximating. Nothing else in this builder read the roster link.
-          lifecycle: true,
-          releasedAt: true,
-          releaseReason: true,
+          // M58 R1: the name and the three lifecycle facts are the PERSON's, joined here so the
+          // band below keeps reading one flat row. The roster link this select once carried went
+          // with `CompanySlave` and was already unread.
+          person: { select: { name: true, lifecycle: true, releasedAt: true, releaseReason: true } },
           // The LIVE run, the same predicate AND the same ordering `server/overview.ts` uses for
           // its slave cards: a worker's task is the one its run is on, because nothing in the
           // pipeline writes `Task.assigneeId`. Newest first, so a worker that somehow holds two
@@ -245,7 +243,7 @@ export async function buildProjectBrief(
             take: 1,
           },
         },
-        orderBy: { name: 'asc' },
+        orderBy: { person: { name: 'asc' } },
       }),
       shared.spend ?? workspaceSpend(workspaceId),
       shared.spendRows ??
@@ -315,17 +313,17 @@ export async function buildProjectBrief(
       const run = slave.runs[0] ?? null
       return {
         slaveId: slave.id,
-        name: slave.name,
+        name: slave.person.name,
         roleLabel: slave.role,
         // The projected WORD, never `deriveSlaveStatus`'s member -- `docs/ia.md` rule 3. The raw
         // value reaches the page on the `SlaveCard` below, which keeps it in `title`.
         status: userSlaveStatus(deriveSlaveStatus(run === null ? null : toRunState(run))).label,
         taskTitle: run?.taskId === null || run === null ? null : (titleById.get(run.taskId) ?? null),
-        lifecycle: slave.lifecycle,
+        lifecycle: slave.person.lifecycle,
         released:
-          slave.releasedAt === null
+          slave.person.releasedAt === null
             ? null
-            : { at: slave.releasedAt.toISOString(), reason: slave.releaseReason ?? 'released' },
+            : { at: slave.person.releasedAt.toISOString(), reason: slave.person.releaseReason ?? 'released' },
       }
     }),
     needsYou: needsYouItems,

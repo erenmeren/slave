@@ -180,9 +180,11 @@ const WORKSPACE_COLUMNS = [
   'verifyCommands',
 ]
 const ACTOR_MEMBERS = ['human', 'slave', 'system']
+// M58 R14: `company` -- the roster copies a project could materialise -- became `pool`, the people
+// this installation has who hold no seat here. Same slot in the world, a different thing in it.
 const SUPERVISOR_WORLD_KEYS = [
-  'budgetExhausted', 'catalog', 'company', 'decisions', 'denials', 'evidence', 'goal', 'goalVersion',
-  'halted', 'now', 'questions', 'runbook', 'runbooks', 'runs', 'slaves', 'staffingPreferences',
+  'budgetExhausted', 'catalog', 'decisions', 'denials', 'evidence', 'goal', 'goalVersion',
+  'halted', 'now', 'pool', 'questions', 'runbook', 'runbooks', 'runs', 'slaves', 'staffingPreferences',
   'staleMemoryCandidates', 'tasks', 'taxonomy', 'workspaceId',
 ]
 
@@ -616,9 +618,7 @@ try {
   // The ONLY worker. It can be staffed as a manager (planning, and therefore a delta re-plan) and as
   // nothing else, and every task on this board asks for `backend` -- so the board sits still for the
   // whole gate, which is what makes every count in it a measurement rather than a race.
-  const atlas = await prisma.slave.create({
-    data: { teamId: team.id, name: 'Atlas', role: 'Engineering Manager', runtimeRoles: ['manager'] },
-  })
+  const atlas = await prisma.slave.create({ data: { teamId: team.id, role: 'Engineering Manager', runtimeRoles: ['manager'], personId: (await prisma.person.upsert({ where: { name: 'Atlas' }, create: { name: 'Atlas' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   console.log(`stage 0: workspace ${workspaceId} (${WORKSPACE_NAME}); worker Atlas ${atlas.id} holds only 'manager'`)
 
   // The requirement a PERSON set, through the real CLI: v1, `origin: null`, actor `human`. Stage 11

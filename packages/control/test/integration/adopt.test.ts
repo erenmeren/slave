@@ -40,7 +40,7 @@ async function seedCompany(name: string, roster: readonly { readonly name: strin
     }
     const templateName = `${name} ${member.role}`
     const template = await prisma.slaveTemplate.upsert({ where: { name: templateName }, create: { name: templateName, role: member.role }, update: {} })
-    await prisma.companySlave.create({ data: { companyTeamId: teamId, templateId: template.id, name: member.name } })
+    await prisma.person.create({ data: { templateId: template.id, name: member.name, lifecycle: 'permanent', departments: { create: { companyTeamId: teamId } } } })
   }
   return company.id
 }
@@ -66,7 +66,7 @@ let beta: { id: string; name: string }
 let archived: { id: string; name: string }
 
 beforeEach(async () => {
-  await prisma.$executeRawUnsafe('TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Team", "Workspace", "CompanySlave", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE')
+  await prisma.$executeRawUnsafe('TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "ExecutionEvent", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE')
   companyId = await seedCompany('Checkout Platform', CHECKOUT)
   tradingId = await seedCompany('Demo Trading Co.', TRADING)
   alpha = await seedWorkspace('Alpha Project')
@@ -193,15 +193,19 @@ describe('adoptSimulation', () => {
     expect([...result.value.assigned.createdTeams].sort()).toEqual(['Engineering', 'Management', 'Marketing', 'Product', 'Security'])
     expect(result.value.assigned.createdWorkers).toHaveLength(9)
 
-    const slaves = await prisma.slave.findMany({ where: { team: { workspaceId: alpha.id } }, orderBy: { name: 'asc' } })
-    const byName = new Map(slaves.map((s) => [s.name, s]))
+    const slaves = await prisma.slave.findMany({
+      where: { team: { workspaceId: alpha.id } },
+      orderBy: { person: { name: 'asc' } },
+      include: { person: true },
+    })
+    const byName = new Map(slaves.map((s) => [s.person.name, s]))
     expect(slaves).toHaveLength(9)
     // Ruling R2, as M37 t3 leaves it: the run's decision roles are TRANSLATED, not copied -- its
     // lead becomes the manager `planning.ts` can find, its reviewer the reviewer `review.ts` can
     // find -- and `role` carries that translation as the worker's TITLE, exactly as it did before
     // M37.
-    expect(slaves.filter((s) => s.role === 'manager').map((s) => s.name)).toEqual(['Atlas'])
-    expect(slaves.filter((s) => s.role === 'reviewer').map((s) => s.name)).toEqual(['Riley'])
+    expect(slaves.filter((s) => s.role === 'manager').map((s) => s.person.name)).toEqual(['Atlas'])
+    expect(slaves.filter((s) => s.role === 'reviewer').map((s) => s.person.name)).toEqual(['Riley'])
     expect(byName.get('John')?.role).toBe('Business Analyst')
     expect(byName.get('Alex')?.role).toBe('Backend')
     expect(byName.get('Emma')?.role).toBe('Frontend')
@@ -257,16 +261,20 @@ describe('adoptSimulation', () => {
   // specialist adopted from a simulation was undispatchable for the work it was adopted to do.
   it('projects each template\'s capabilities into the runtime roles it materialises', async () => {
     await syncCapabilityTaxonomy()
+    // M58 R1: what a specialist provides is the PERSON's column -- written when they were hired
+    // from the persona, and what `assignCompanyTx` projects into the seat's runtime roles. The
+    // persona is updated too, so the two agree the way a real hire leaves them.
     await prisma.slaveTemplate.update({
       where: { name: 'Checkout Platform Security' },
       data: { capabilityKeys: ['security.application'] },
     })
+    await prisma.person.update({ where: { name: 'Sarah' }, data: { capabilities: ['security.application'] } })
     const id = await softwareRun()
 
     expect((await adoptSimulation(id, { workspaceId: alpha.id })).ok).toBe(true)
 
-    const sarah = await prisma.slave.findFirstOrThrow({ where: { name: 'Sarah', team: { workspaceId: alpha.id } } })
-    expect(sarah.capabilities).toEqual(['security.application'])
+    const sarah = await prisma.slave.findFirstOrThrow({ where: { person: { name: 'Sarah' }, team: { workspaceId: alpha.id } }, include: { person: true } })
+    expect(sarah.person.capabilities).toEqual(['security.application'])
     // The catalog role it always had, PLUS the one the capability projects to.
     expect(sarah.runtimeRoles).toEqual(['Security', 'security'])
   })
@@ -349,13 +357,13 @@ describe('adoptSimulation', () => {
 
     expect((await adoptSimulation(id, { workspaceId: alpha.id })).ok).toBe(true)
 
-    const untouched = await prisma.companySlave.findMany({ where: { companyTeam: { companyId } } })
+    const untouched = await prisma.person.findMany({ where: { departments: { some: { companyTeam: { companyId } } } } })
     expect(untouched.every((s) => s.model === null && s.provider === null)).toBe(true)
 
     const second = await llmRun('another model run')
     expect((await adoptSimulation(second, { workspaceId: beta.id, applyModel: true })).ok).toBe(true)
 
-    const rows = await prisma.companySlave.findMany({ where: { companyTeam: { companyId } } })
+    const rows = await prisma.person.findMany({ where: { departments: { some: { companyTeam: { companyId } } } } })
     for (const row of rows) {
       if (row.name === 'Atlas') {
         expect(row.model).toBe('claude-opus-4')
@@ -375,41 +383,43 @@ describe('adoptSimulation', () => {
     const result = await adoptSimulation(id, { workspaceId: alpha.id, applyModel: true })
 
     expect(result.ok).toBe(true)
-    const rows = await prisma.companySlave.findMany({ where: { companyTeam: { companyId } } })
+    const rows = await prisma.person.findMany({ where: { departments: { some: { companyTeam: { companyId } } } } })
     expect(rows.every((s) => s.model === null && s.provider === null)).toBe(true)
   })
 
-  it('refuses when a role the run assigned names more than one roster slave, before writing anything', async () => {
+  // M58 R1 retires the case this used to cover from the other end: a roster CANNOT hold two slaves
+  // of one name any more, because the name is the person's across the whole installation. The
+  // ambiguity guard in `assignCompanyTx` stays (an override keyed by name must address exactly one
+  // person), and what is proved here is why it can no longer fire.
+  it('cannot hold two roster slaves of one name at all -- the name is theirs across every project', async () => {
     const id = await softwareRun()
-    // A second "Atlas", in a department the software sector never reads: the frozen definition
-    // still names Management's Atlas as its lead, but the roster now has two rows that name
-    // answers to, and adoption must not guess which one becomes the manager.
     const security = await prisma.companyTeam.findFirstOrThrow({ where: { companyId, name: 'Security' } })
     const template = await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'Checkout Platform manager' } })
-    await prisma.companySlave.create({ data: { companyTeamId: security.id, templateId: template.id, name: 'Atlas' } })
 
-    const result = await adoptSimulation(id, { workspaceId: alpha.id })
+    await expect(
+      prisma.person.create({
+        data: { templateId: template.id, name: 'Atlas', lifecycle: 'permanent', departments: { create: { companyTeamId: security.id } } },
+      }),
+    ).rejects.toThrow()
 
-    expect(result.ok === false && result.error).toEqual({
-      kind: 'invalid_simulation_input', detail: 'the roster has more than one slave named Atlas; adoption cannot tell which one the run means',
-    })
-    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: alpha.id } })).companyId).toBeNull()
-    expect(await prisma.team.count()).toBe(0)
-    expect(await prisma.simulationJournalEntry.count({ where: { simulationId: id, kind: 'control' } })).toBe(1)
+    // And the adoption the second "Atlas" would have blocked goes through unchanged.
+    expect((await adoptSimulation(id, { workspaceId: alpha.id })).ok).toBe(true)
+    expect(await prisma.person.count({ where: { name: 'Atlas' } })).toBe(1)
   })
 
-  it('refuses applyModel when the lead\'s name is ambiguous, and writes no model', async () => {
+  // The frozen definition still names "Atlas" as its lead; the roster no longer has anybody by that
+  // name, so the read answers zero rows -- the other half of the `!== 1` this guard is written as,
+  // and the half M58 R1 leaves reachable.
+  it('refuses applyModel when the lead\'s name answers to nobody in the roster, and writes no model', async () => {
     const id = await llmRun()
-    const security = await prisma.companyTeam.findFirstOrThrow({ where: { companyId, name: 'Security' } })
-    const template = await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'Checkout Platform manager' } })
-    await prisma.companySlave.create({ data: { companyTeamId: security.id, templateId: template.id, name: 'Atlas' } })
+    await prisma.person.update({ where: { name: 'Atlas' }, data: { name: 'Atlas Moved On' } })
 
     const result = await adoptSimulation(id, { workspaceId: alpha.id, applyModel: true })
 
     expect(result.ok === false && result.error).toEqual({
       kind: 'invalid_simulation_input', detail: "the lead's name is ambiguous in the roster; set the model by hand",
     })
-    const rows = await prisma.companySlave.findMany({ where: { companyTeam: { companyId } } })
+    const rows = await prisma.person.findMany({ where: { departments: { some: { companyTeam: { companyId } } } } })
     expect(rows.every((row) => row.model === null && row.provider === null)).toBe(true)
     expect((await prisma.workspace.findUniqueOrThrow({ where: { id: alpha.id } })).companyId).toBeNull()
   })

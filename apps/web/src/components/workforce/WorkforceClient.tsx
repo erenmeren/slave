@@ -1,18 +1,21 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import type { CapabilityRecord } from '@slave-of-ai/domain'
 import type { AllSlavesPage, CatalogRowView, ProjectTeamRow, RosterCompany, RunbookRowView, WorkforceCatalogView } from '../../server/org'
-import type { OverviewSnapshot, SlaveCardData } from '../../server/overview'
+import type { SlaveCardData } from '../../server/overview'
+import type { PersonDetail, PersonRow } from '../../server/persons'
 import type { EvidencePage } from '../../server/evidence'
 import type { SkillsPage } from '../../server/skills'
-import { AllSlavesTable } from '../AllSlavesTable'
 import { CatalogImports, type CatalogImportRow } from '../CatalogImports'
 import { CompanyManager, type CompanyRow } from '../CompanyManager'
 import { DepartmentsTable } from '../DepartmentsTable'
 import { SkillsClient } from '../SkillsClient'
 import { SlavePanel } from '../SlavePanel'
+import { PeopleTable } from '../persons/PeopleTable'
+import { assignableProjectsOf } from '../persons/PersonProjectsGroup'
+import { cardsOf, haltedReasonOf, liveSeatOf, personOf } from '../persons/liveSeat'
 import { NewSlaveDrawer } from '../slaves/NewSlaveDrawer'
 import { EvidenceTab } from './EvidenceTab'
 import { RunbooksTab } from './RunbooksTab'
@@ -89,7 +92,6 @@ function visibleTabFor(tab: WorkforceTab): WorkforceTab {
  */
 export function WorkforceClient({
   initialTab,
-  slaves,
   teams,
   workspaces,
   companies,
@@ -101,6 +103,10 @@ export function WorkforceClient({
   taxonomy,
   runbooks,
   evidence,
+  people,
+  peopleDepartments,
+  skillCatalogue,
+  skillHolders,
 }: {
   readonly initialTab: WorkforceTab
   readonly slaves: AllSlavesPage
@@ -126,6 +132,10 @@ export function WorkforceClient({
    *  only for `?tab=evidence`. Selecting the tab from another one asks the server again --
    *  {@link select} below -- which is the `EvidenceTab`'s own domain-chip idiom. */
   readonly evidence: EvidencePage | null
+  readonly people: readonly PersonRow[]
+  readonly peopleDepartments: readonly { readonly companyTeamId: string; readonly name: string }[]
+  readonly skillCatalogue: readonly { readonly skillId: string; readonly name: string; readonly providerName: string }[]
+  readonly skillHolders: Readonly<Record<string, readonly string[]>>
 }): React.JSX.Element {
   const searchParams = useSearchParams()
   const router = useRouter()
@@ -142,48 +152,55 @@ export function WorkforceClient({
     setTab(initialTab)
   }, [initialTab])
   const [newOpen, setNewOpen] = useState(false)
-  /**
-   * MOVED verbatim from `SlavesClient` (deleted this task), including its fix-round-1 rule: the
-   * CLICKED slave's own `slaveId`/`workspaceId`, captured at click time from `AllSlavesTable`'s
-   * `onOpen(row)` -- never re-derived by looking the id back up in `slaves`, this page's one-time
-   * server snapshot. `AllSlavesTable` polls `/api/org/workers` every 5s into its own state, which
-   * never flows back into that prop, so a row an operator can see and click may have no entry in
-   * `slaves` at all.
-   */
-  const [selected, setSelected] = useState<{ readonly slaveId: string; readonly workspaceId: string } | null>(null)
-  /**
-   * THREE outcomes, not two (M44 final review, minor b). This was a single
-   * `SlaveCardData | null`, which rendered the panel or rendered nothing -- and "nothing" was
-   * both "the request is in flight" and "the request failed". An operator clicked a row and the
-   * page did not move, and could not tell which of those had happened. `LoadingState` and `Alert`
-   * are the two primitives R3 minted for exactly this pair of states.
-   *
-   * `error` also covers a 200 whose snapshot does not contain the slave: the row came from
-   * `AllSlavesTable`'s own five-second poll, so a worker an operator can see and click may have
-   * left its workspace's overview by the time this fetch answers. That is a failure to open the
-   * panel, and it now says so instead of silently doing nothing.
-   */
+  const catalogPeople = useMemo(
+    () => people.map((row) => ({ personId: row.personId, name: row.name })),
+    [people],
+  )
+  const assignableProjects = useMemo(() => assignableProjectsOf(teams), [teams])
+  const [selectedPerson, setSelectedPerson] = useState<string | null>(null)
+  const namedPerson = searchParams.get('slave')
+  useEffect((): void => {
+    if (namedPerson !== null && namedPerson !== '') setSelectedPerson(namedPerson)
+  }, [namedPerson])
+  const [personTick, setPersonTick] = useState(0)
   const [panel, setPanel] = useState<
-    { readonly kind: 'idle' } | { readonly kind: 'loading' } | { readonly kind: 'error' } | { readonly kind: 'ready'; readonly slave: SlaveCardData }
+    | { readonly kind: 'idle' }
+    | { readonly kind: 'loading' }
+    | { readonly kind: 'error' }
+    | { readonly kind: 'ready'; readonly person: PersonDetail; readonly slave: SlaveCardData | null; readonly haltedReason: string | null }
   >({ kind: 'idle' })
 
   useEffect((): void => {
-    if (selected === null) {
+    if (selectedPerson === null) {
       setPanel({ kind: 'idle' })
       return
     }
     setPanel({ kind: 'loading' })
-    // The panel renders from the OVERVIEW snapshot of the slave's own workspace -- the one place
-    // a `SlaveCardData` is built. Fetching it here rather than widening `AllSlaveRow` into an
-    // `SlaveCardData` keeps one builder for that shape.
-    void fetch(`/api/w/${selected.workspaceId}/overview`)
-      .then(async (response) => (response.ok ? ((await response.json()) as OverviewSnapshot) : null))
-      .then((snapshot) => {
-        const slave = snapshot?.slaves.find((a) => a.id === selected.slaveId) ?? null
-        setPanel(slave === null ? { kind: 'error' } : { kind: 'ready', slave })
+    void fetch(`/api/persons/${selectedPerson}`)
+      .then(async (response) => (response.ok ? ((await response.json()) as unknown) : null))
+      .then(async (detail) => {
+        const person = personOf(detail)
+        if (person === null) {
+          setPanel({ kind: 'error' })
+          return
+        }
+        const seat = person.seats[0]
+        if (seat === undefined) {
+          setPanel({ kind: 'ready', person, slave: null, haltedReason: null })
+          return
+        }
+        const snapshot = await fetch(`/api/w/${seat.workspaceId}/overview`)
+          .then(async (response) => (response.ok ? ((await response.json()) as unknown) : null))
+          .catch(() => null)
+        setPanel({
+          kind: 'ready',
+          person,
+          slave: liveSeatOf(cardsOf(snapshot), seat.slaveId, person.personId),
+          haltedReason: haltedReasonOf(snapshot),
+        })
       })
       .catch(() => setPanel({ kind: 'error' }))
-  }, [selected])
+  }, [selectedPerson, personTick])
 
   const select = (next: WorkforceTab): void => {
     setTab(next)
@@ -246,15 +263,28 @@ export function WorkforceClient({
         </div>
       }
     >
-      {tab === 'slaves' && <AllSlavesTable initial={slaves} onOpen={(row) => setSelected(row)} />}
+      {tab === 'slaves' && (
+        <PeopleTable
+          initial={people}
+          departments={peopleDepartments}
+          skills={skillCatalogue}
+          skillHolders={skillHolders}
+          onOpen={(personId) => setSelectedPerson(personId)}
+        />
+      )}
       {tab === 'departments' && <DepartmentsTable teams={teams} workspaces={workspaces} />}
       {tab === 'catalog' && (
         <div className="flex flex-col gap-4">
           <Panel title="Workforce catalog">
-            <WorkforceCatalog initial={catalog} taxonomy={taxonomy} />
+            <WorkforceCatalog initial={catalog} taxonomy={taxonomy} skillCatalogue={skillCatalogue} />
           </Panel>
           <Panel title="Companies">
-            <CompanyManager companies={companies} roster={roster} templates={templates} />
+            {/* M58 R5: a department holds PEOPLE, so the add-member form picks from everybody this
+                installation has -- which is exactly what the Slaves tab's own rows already are.
+                One row per SEAT, though (fix round 1, Minor 3), so a person sitting on two projects
+                appears twice; the list is deduplicated by person or the select renders one React
+                key twice and offers the same person as two choices. */}
+            <CompanyManager companies={companies} roster={roster} people={catalogPeople} />
           </Panel>
           {/* M46 plan erratum E7: the import log is per-import-RUN, not per template, so it stays
               one panel on the tab instead of being repeated inside every profile drawer. It is
@@ -284,30 +314,34 @@ export function WorkforceClient({
       <NewSlaveDrawer
         open={newOpen}
         onClose={() => setNewOpen(false)}
-        companies={companies}
         roster={roster}
         templates={templates}
-        workspaces={workspaces}
+        teams={teams}
       />
       {panel.kind === 'loading' && <LoadingState testId="workforce-panel-loading" message="opening this slave…" />}
       {panel.kind === 'error' && (
         <Alert variant="error" testId="workforce-panel-error">
-          could not open this slave — its project may have moved on. Try clicking the row again.
+          could not open this slave — they may have been deleted. Try clicking the row again.
         </Alert>
       )}
-      {panel.kind === 'ready' && selected !== null && (
-        // M57 R8 / erratum E4: `/workforce` is a GLOBAL route -- no project, no third column -- so
-        // this panel stays in the page frame. `SlavePanel` gave up its own `fixed` geometry when it
-        // moved into the shell's slot on project routes, and this wrapper is where that geometry
-        // now lives, for the one call site that still needs it.
+      {panel.kind === 'ready' && (
         <div className="fixed inset-y-0 right-0 z-10 w-96 border-l border-line bg-panel shadow-resting motion-safe:animate-[panel-in_160ms_ease-out]">
           <SlavePanel
-            key={panel.slave.id}
+            key={panel.slave?.id ?? panel.person.personId}
             slave={panel.slave}
+            person={panel.person}
+            projects={assignableProjects}
+            skillCatalogue={skillCatalogue}
             liveEvents={[]}
-            workspaceId={selected.workspaceId}
-            haltedReason={null}
-            onClose={() => setSelected(null)}
+            workspaceId={
+              panel.person.seats.find((seat) => seat.slaveId === panel.slave?.id)?.workspaceId
+              ?? panel.person.seats[0]?.workspaceId
+              ?? ''
+            }
+            openedGlobally
+            haltedReason={panel.haltedReason}
+            onClose={() => setSelectedPerson(null)}
+            onPersonChanged={() => setPersonTick((tick) => tick + 1)}
           />
         </div>
       )}

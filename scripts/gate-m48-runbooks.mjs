@@ -274,7 +274,12 @@ async function deleteGateTemplates(label) {
   if (rows.length === 0) return
   console.log(`${label}: removing ${String(rows.length)} gate template(s): ${JSON.stringify(rows.map((r) => r.name))}`)
   const ids = rows.map((r) => r.id)
-  await prisma.companySlave.deleteMany({ where: { templateId: { in: ids } } }).catch(() => {})
+  // M58 R1: the roster copy this used to remove is a PERSON now, and a person is NOT cascaded away
+  // with the workspace whose seat held them -- so a hire this gate made survives its own teardown,
+  // keeps the persona's name and is offered back to the next run as somebody who already works
+  // here. Deleted BEFORE the templates, exactly as the `CompanySlave` sweep was: `Person.templateId`
+  // is SetNull, so a template that goes first takes the only handle on them with it.
+  await prisma.person.deleteMany({ where: { templateId: { in: ids } } }).catch(() => {})
   await prisma.slaveTemplate.deleteMany({ where: { id: { in: ids } } }).catch(() => {})
 }
 
@@ -788,17 +793,29 @@ try {
   // The ONLY worker at this point: it PROVIDES `backend.api-design` and is dispatchable as backend
   // and manager. One worker is what makes stage 7's covered/uncovered capability chips a fact about
   // this project rather than a fixture.
-  const dev = await prisma.slave.create({
-    data: {
-      teamId: team.id,
-      name: WORKER_NAME,
-      role: 'Senior Engineer',
-      runtimeRoles: ['backend', 'manager'],
+  // M58 R1: what somebody provides is the PERSON's, so the person is created first and the
+  // diagnostic below reads the capability set off the row the database actually returned -- not off
+  // the seat, where the column no longer is, and not off the literal that was asked for.
+  const devPerson = await prisma.person.upsert({
+    where: { name: WORKER_NAME },
+    create: { name: WORKER_NAME, capabilities: ['backend.api-design'] },
+    update: {
       capabilities: ['backend.api-design'],
+      templateId: null,
+      profile: null,
+      model: null,
+      provider: null,
+      lifecycle: 'project',
+      releasedAt: null,
+      releaseReason: null,
+      selectionRationale: null,
     },
   })
+  const dev = await prisma.slave.create({
+    data: { teamId: team.id, role: 'Senior Engineer', runtimeRoles: ['backend', 'manager'], personId: devPerson.id },
+  })
   const devId = dev.id
-  console.log(`slave ${devId} (${WORKER_NAME}): runtimeRoles ${JSON.stringify(dev.runtimeRoles)}, capabilities ${JSON.stringify(dev.capabilities)}`)
+  console.log(`slave ${devId} (${WORKER_NAME}): runtimeRoles ${JSON.stringify(dev.runtimeRoles)}, capabilities ${JSON.stringify(devPerson.capabilities)}`)
 
   console.log(`stage 3 -- set-goal printed: ${JSON.stringify(runCli(['set-goal', '--workspace', workspaceId, '--goal', GOAL]).trim())}`)
 
@@ -945,9 +962,7 @@ try {
   )
   // Somebody who did not write the code has to read it. No capabilities: a reviewer that provided
   // one would change what stage 7 measures.
-  const reader = await prisma.slave.create({
-    data: { teamId: team.id, name: REVIEWER_NAME, role: 'Reviewer', runtimeRoles: ['reviewer'], capabilities: [] },
-  })
+  const reader = await prisma.slave.create({ data: { teamId: team.id, role: 'Reviewer', runtimeRoles: ['reviewer'], personId: (await prisma.person.upsert({ where: { name: REVIEWER_NAME }, create: { name: REVIEWER_NAME, capabilities: [] }, update: { capabilities: [], templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   console.log(`slave ${reader.id} (${REVIEWER_NAME}): runtimeRoles ${JSON.stringify(reader.runtimeRoles)}`)
 
   // ============================================================================================
@@ -1088,9 +1103,7 @@ try {
   console.log(`workspace ${workspaceId2} (${GATE_WORKSPACE_2}), repo ${repoPath2}`)
   await prisma.providerConfiguration.create({ data: { workspaceId: workspaceId2, kind: 'claude_code', settings: {} } })
   const team2 = await prisma.team.create({ data: { workspaceId: workspaceId2, name: 'Engineering' } })
-  await prisma.slave.create({
-    data: { teamId: team2.id, name: 'Hand', role: 'Engineer', runtimeRoles: ['backend'], capabilities: [] },
-  })
+  await prisma.slave.create({ data: { teamId: team2.id, role: 'Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.upsert({ where: { name: 'Hand' }, create: { name: 'Hand', capabilities: [] }, update: { capabilities: [], templateId: null, profile: null, model: null, provider: null, lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
   console.log(
     `stage 6 -- adopt-runbook printed: ` +
       JSON.stringify(runCli(['adopt-runbook', '--workspace', workspaceId2, '--runbook', HUMAN_RUNBOOK.key]).trim()),

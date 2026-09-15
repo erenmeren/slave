@@ -19,7 +19,11 @@ async function seed(): Promise<{ workspaceId: string; slaveId: string }> {
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, name: 'Alex', role: 'dev', runtimeRoles: ['dev'] } })
+  // M58 R1: `Person.name` is unique across the installation, and this helper seeds one project per
+  // call -- the counter its workspace name already carries keeps the people apart too.
+  const slave = await prisma.slave.create({
+    data: { teamId: team.id, role: 'dev', runtimeRoles: ['dev'], personId: (await prisma.person.create({ data: { name: `Alex ${String(seedCount)}` } })).id },
+  })
   return { workspaceId: workspace.id, slaveId: slave.id }
 }
 

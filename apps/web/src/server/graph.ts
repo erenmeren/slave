@@ -183,8 +183,10 @@ export async function buildGraphSnapshot(workspaceId: string): Promise<GraphSnap
   const teams = await prisma.team.findMany({ where: { workspaceId }, orderBy: { name: 'asc' } })
 
   const slaves = await prisma.slave.findMany({
-    where: { team: { workspaceId } },
-    orderBy: { name: 'asc' },
+    // M58 R17: OPEN seats only -- the graph draws who is on this project now.
+    where: { closedAt: null, team: { workspaceId } },
+    orderBy: { person: { name: 'asc' } },
+    include: { person: { select: { name: true } } },
   })
   const slaveIds = slaves.map((slave) => slave.id)
 
@@ -267,7 +269,7 @@ export async function buildGraphSnapshot(workspaceId: string): Promise<GraphSnap
       const run = liveRunBySlave.get(slave.id) ?? null
       return {
         id: slave.id,
-        name: slave.name,
+        name: slave.person.name,
         role: slave.role,
         runtimeRoles: slave.runtimeRoles,
         teamId: slave.teamId,

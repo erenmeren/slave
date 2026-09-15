@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SkillsClient } from '../src/components/SkillsClient.js'
 import type { SkillsPage } from '../src/server/skills.js'
@@ -15,9 +15,9 @@ function page(over: Partial<SkillsPage> = {}): SkillsPage {
         id: 'p1',
         name: 'plugin:superpowers',
         skills: [
-          { id: 's1', name: 'writing-plans', description: 'plans things', runs: 18, state: 'ready', slaveIds: [] },
-          { id: 's2', name: 'brainstorming', description: 'explores intent', runs: 24, state: 'ready', slaveIds: ['a1'] },
-          { id: 's3', name: 'gone', description: 'was here once', runs: 2, state: 'missing', slaveIds: [] },
+          { id: 's1', name: 'writing-plans', description: 'plans things', runs: 18, state: 'ready', holders: [] },
+          { id: 's2', name: 'brainstorming', description: 'explores intent', runs: 24, state: 'ready', holders: [{ personId: 'a1', name: 'Alex Turner', origin: 'person' }] },
+          { id: 's3', name: 'gone', description: 'was here once', runs: 2, state: 'missing', holders: [] },
         ],
       },
     ],
@@ -57,7 +57,7 @@ describe('SkillsClient', () => {
             {
               id: 'p1',
               name: 'personal',
-              skills: [{ id: 's1', name: 'quiet', description: 'never called', runs: 0, state: 'ready', slaveIds: [] }],
+              skills: [{ id: 's1', name: 'quiet', description: 'never called', runs: 0, state: 'ready', holders: [] }],
             },
           ],
         })}
@@ -91,44 +91,50 @@ describe('SkillsClient', () => {
     expect(screen.queryByRole('textbox')).toBeNull()
   })
 
-  it('assigns a skill to the chosen slave and unassigns it again', async (): Promise<void> => {
+  it('lists who has a skill as a link, with whether it is from the persona or from the slave', () => {
     render(<SkillsClient page={page()} />)
-    await act(async () => {
-      fireEvent.change(screen.getByTestId('skill-slave-s1'), { target: { value: 'a1' } })
-      fireEvent.click(screen.getByTestId('skill-assign-s1'))
-    })
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/skills/assign',
-      expect.objectContaining({ method: 'POST', body: JSON.stringify({ slaveId: 'a1', skillId: 's1' }) }),
-    )
-
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('skill-unassign-s2-a1'))
-    })
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/skills/assign',
-      expect.objectContaining({ method: 'DELETE', body: JSON.stringify({ slaveId: 'a1', skillId: 's2' }) }),
-    )
-    // The refetch loop owns truth: nothing is written into local state from a 200.
-    expect(routerRefresh).toHaveBeenCalledTimes(2)
+    expect(screen.getByTestId('skill-holders-s1').textContent).toBe('nobody')
+    const holder = screen.getByTestId('skill-holder-s2-a1')
+    expect(holder.textContent).toContain('Alex Turner')
+    expect(holder.textContent).toContain('from slave')
+    expect(holder.getAttribute('data-skill-origin')).toBe('person')
+    expect(holder.getAttribute('title')).toBe('person')
+    expect(holder.getAttribute('href')).toBe('/workforce?tab=slaves&slave=a1')
+    expect(screen.queryByTestId('skill-assign-s1')).toBeNull()
+    expect(screen.queryByTestId('skill-unassign-s2-a1')).toBeNull()
   })
 
-  it('shows a refusal verbatim', async (): Promise<void> => {
-    fetchMock.mockImplementationOnce(async () => new Response(JSON.stringify({ error: 'no skill with id s1' }), { status: 404 }))
+  it('points the operator at the person panel and the catalog instead of assigning here', () => {
     render(<SkillsClient page={page()} />)
-    await act(async () => {
-      fireEvent.change(screen.getByTestId('skill-slave-s1'), { target: { value: 'a1' } })
-      fireEvent.click(screen.getByTestId('skill-assign-s1'))
-    })
-    expect(screen.getByTestId('skills-error').textContent).toBe('no skill with id s1')
+    expect(screen.getByTestId('skills-assign-note').textContent).toContain('Skills are given to a slave, not the other way round')
   })
 
-  it('refuses to assign when there is no slave to assign to, and says why', () => {
-    render(<SkillsClient page={page({ slaves: [] })} />)
-    // `getAttribute` rather than jest-dom's `toBeDisabled` -- this repo carries no jest-dom
-    // matchers (`runtime-card.test.tsx:84`).
-    expect(screen.getByTestId('skill-assign-s1').getAttribute('disabled')).not.toBeNull()
-    expect(screen.getByTestId('skills-no-slaves').textContent).toBe('no slaves yet')
+  it('labels a persona default as from persona', () => {
+    render(
+      <SkillsClient
+        page={page({
+          providers: [
+            {
+              id: 'p1',
+              name: 'personal',
+              skills: [
+                {
+                  id: 's1',
+                  name: 'pdf',
+                  description: 'reads pdfs',
+                  runs: 0,
+                  state: 'ready',
+                  holders: [{ personId: 'a1', name: 'Alex Turner', origin: 'persona' }],
+                },
+              ],
+            },
+          ],
+        })}
+      />,
+    )
+    const holder = screen.getByTestId('skill-holder-s1-a1')
+    expect(holder.textContent).toContain('from persona')
+    expect(holder.getAttribute('data-skill-origin')).toBe('persona')
   })
 
   it('says the catalog is empty rather than drawing an empty frame', () => {
