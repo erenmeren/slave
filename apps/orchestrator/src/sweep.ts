@@ -148,7 +148,7 @@ export function strandedClaimGraceMs(
 }
 
 /**
- * Whether a tick has run in this process.
+ * The workspaces a tick has run for in this process.
  *
  * `reconcileOrphans` treats a non-terminal run with no pid as an orphan, because nothing will ever
  * conclude it -- but that same shape exists legitimately for a few milliseconds inside every
@@ -158,17 +158,26 @@ export function strandedClaimGraceMs(
  * thing Task 13's atomic claim exists to prevent.
  *
  * Documented, that constraint was silent when broken. This makes it loud.
+ *
+ * PER WORKSPACE, and a bare boolean until M59 (erratum E11, amending R15). The daemon now holds one
+ * loop per project in one process, and each loop reconciles before its own first tick -- so a
+ * process-wide flag meant the second loop at startup, and EVERY loop started by a discovery pass
+ * afterwards, was refused: a project created while the daemon runs could never be served. The
+ * narrowing is sound because the hazard is confined the same way the pass is: a run mid-spawn
+ * belongs to the workspace whose tick is spawning it, and the query below is scoped to
+ * `deps.workspaceId`, so one project's tick can never make another project's reconcile unsafe.
  */
-let ticksHaveRun = false
+const tickedWorkspaces = new Set<string>()
 
-/** Called by `tick` on entry. Not for callers other than the tick itself. */
-export function noteTickRan(): void {
-  ticksHaveRun = true
+/** Called by `tick` on entry, with the workspace it is about to tick. Not for callers other than
+ *  the tick itself. */
+export function noteTickRan(workspaceId: WorkspaceId): void {
+  tickedWorkspaces.add(workspaceId)
 }
 
 /** For tests, which run many independent daemon lifetimes inside one process. */
 export function resetTickObservation(): void {
-  ticksHaveRun = false
+  tickedWorkspaces.clear()
 }
 
 /**
@@ -179,16 +188,17 @@ export function resetTickObservation(): void {
  * legitimately for a few milliseconds inside every `startRun`, between creating the `SlaveRun` row
  * and recording the pid the adapter returns. Running this concurrently with a tick would fail runs
  * that are moments from spawning. §3.4 places it before the first tick; a caller that puts it on a
- * timer instead has to close that window some other way.
+ * timer instead has to close that window some other way. "The first tick" means THIS workspace's
+ * (erratum E11): the daemon starts a loop per project and each one reconciles before its own.
  *
  * The worktree is preserved (§7.4): it is the inspection surface, and an orphan is the case where
  * an operator most needs to see how far the run got.
  */
 export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
-  if (ticksHaveRun) {
+  if (tickedWorkspaces.has(deps.workspaceId)) {
     throw new Error(
-      'reconcileOrphans is startup-only: a tick has already run in this process, so a run that is ' +
-        'mid-spawn is indistinguishable from one this pass should fail',
+      `reconcileOrphans is startup-only: a tick has already run for workspace ${deps.workspaceId} in ` +
+        'this process, so a run that is mid-spawn is indistinguishable from one this pass should fail',
     )
   }
 

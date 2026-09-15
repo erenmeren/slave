@@ -273,7 +273,7 @@ describe('a slave that asks, and waits', () => {
     const deps = { workspaceId: ids.workspaceId, registry }
     // The startup pass first -- a waiting run has no process, which is exactly the orphan shape.
     expect(await reconcileOrphans(deps)).toBe(0)
-    noteTickRan()
+    noteTickRan(deps.workspaceId)
     const report = await sweep(deps)
     expect(report.deadPids).toEqual([])
     expect(report.timedOut).toEqual([])

@@ -216,7 +216,9 @@ const USAGE = `usage: orchestrator <command> [options]
 
   tick [--workspace <id>]              run exactly one tick and print the report
   daemon [--workspace <id>] [--period <ms>]
-                                       the periodic + notification-driven loop
+                                       the periodic + notification-driven loop. With no
+                                       --workspace it serves EVERY active project and picks up
+                                       ones created while it runs, within ten seconds.
   status [--workspace <id>]            active runs with their pids, worktrees and states,
                                        and any workspace halt with the reason it happened
   pause --run <id> [--by <name>]       ask a run to stop at its next tool call
@@ -1475,8 +1477,14 @@ export async function main(argv: readonly string[]): Promise<number> {
 
     case 'daemon': {
       const period = Number(flagText(flags, 'period') ?? '1000')
+      const named = flagText(flags, 'workspace')
       await runDaemon({
-        workspaceId: await resolveWorkspace(flags),
+        // M59 R15: `resolveWorkspace` is no longer consulted here. With no `--workspace` the
+        // daemon serves EVERY active project and picks up new ones -- which is what makes
+        // `docker/entrypoint.sh`'s bare `daemon` correct on an installation with two projects,
+        // and what stops a project created from a conversation being one nothing is watching.
+        // Every other verb still resolves, and still refuses to guess.
+        workspaceIds: named === undefined ? 'all' : brandWorkspaceId(named),
         registry: buildAdapterRegistry(),
         periodMs: Number.isFinite(period) && period > 0 ? period : 1000,
         // M31a §4: only the daemon carries a decider. The one-shot `tick` above deliberately does

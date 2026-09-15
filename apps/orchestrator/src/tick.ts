@@ -219,10 +219,12 @@ async function acquireWorktree(input: {
  * not ask for even by accident.
  */
 export async function tick(deps: TickDeps): Promise<TickReport> {
-  // Tells `reconcileOrphans` that its startup-only window has closed. A run that is mid-spawn --
-  // row created, pid not yet recorded -- is indistinguishable from one the orphan pass should fail,
-  // so a reconcile racing a tick fails a live run and hands its task to a second slave.
-  noteTickRan()
+  // Tells `reconcileOrphans` that its startup-only window has closed FOR THIS WORKSPACE. A run that
+  // is mid-spawn -- row created, pid not yet recorded -- is indistinguishable from one the orphan
+  // pass should fail, so a reconcile racing a tick fails a live run and hands its task to a second
+  // slave. The workspace is what closes the window rather than the process (erratum E11): this tick
+  // can only spawn here, and the orphan pass only ever looks here.
+  noteTickRan(deps.workspaceId)
 
   // M27 §3.3: an archived project is invisible to the scheduler -- decided from one cheap read,
   // before the world is loaded, so nothing under it can be dispatched.

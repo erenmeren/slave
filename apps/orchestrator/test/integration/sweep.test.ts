@@ -194,7 +194,7 @@ describe('sweep and reconcileOrphans', () => {
 
     it('records a dead-pid run the same way, and nothing distinguishes them from the reason text', async (): Promise<void> => {
       const run = await givenRun({ status: 'working' })
-      noteTickRan()
+      noteTickRan(deps.workspaceId)
 
       await sweep(deps)
 
@@ -660,14 +660,27 @@ describe('sweep and reconcileOrphans', () => {
     expect(task.status).toBe('running')
   })
 
-  it('refuses to reconcile once a tick has run in this process', async (): Promise<void> => {
-    noteTickRan()
+  it('refuses to reconcile once a tick has run for this workspace in this process', async (): Promise<void> => {
+    noteTickRan(deps.workspaceId)
 
     // The startup-only constraint is not a style preference: a null-pid run is legitimately
     // transient inside every startRun, so a reconcile racing a tick fails a run that is seconds
     // from spawning, releases its task to `rework`, and the next tick adopts the live run's
     // worktree with a second slave. Documented-only, that failure is silent.
     await expect(reconcileOrphans(deps)).rejects.toThrow(/startup/i)
+  })
+
+  it("lets another workspace still reconcile: one project's tick says nothing about another's", async (): Promise<void> => {
+    // M59 erratum E11. The daemon holds one loop per project in ONE process and each loop
+    // reconciles before its own first tick, so a process-wide flag refused every loop but the
+    // first -- a project created while the daemon runs could never be served. The narrowing is
+    // sound because the hazard is confined the same way the pass is: a run mid-spawn belongs to the
+    // workspace whose tick is spawning it, and the pass only ever looks at its own workspace.
+    const other = await seed({ name: 'Never Ticked' })
+    noteTickRan(deps.workspaceId)
+
+    await expect(reconcileOrphans(deps)).rejects.toThrow(/startup/i)
+    expect(await reconcileOrphans({ ...deps, workspaceId: brandWorkspaceId(other.workspaceId) })).toBe(0)
   })
 
   it('recovers a task whose merge was interrupted by a crash mid-claim', async (): Promise<void> => {
