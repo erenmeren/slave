@@ -575,6 +575,34 @@ describe('WorkforceClient row click opens the panel', () => {
     expect(screen.getByTestId('pause-button').getAttribute('disabled')).toBeNull()
   })
 
+  it('disables resume and shows the halt reason when the overview snapshot is halted', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/persons/p1') {
+        return new Response(JSON.stringify(personDetail()), { status: 200 })
+      }
+      if (url === '/api/w/w1/overview') {
+        return new Response(
+          JSON.stringify({
+            slaves: [workingCard({ status: 'paused', runId: 'run-1' })],
+            workspace: { haltedReason: 'the pause gate failed open' },
+          }),
+          { status: 200 },
+        )
+      }
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<TestWorkforceClient />)
+    fireEvent.click(screen.getByTestId('person-open'))
+
+    expect(await screen.findByTestId('resume-button')).toBeTruthy()
+    expect(screen.getByTestId('status-label').getAttribute('data-status')).toBe('paused')
+    expect(screen.getByTestId('resume-button').getAttribute('disabled')).not.toBeNull()
+    expect(screen.getByTestId('resume-halt-reason').textContent).toContain('the pause gate failed open')
+  })
+
   /**
    * M44 final review, minor b. The panel's fetch had exactly one rendered outcome: the panel, or
    * nothing at all. A click on a row therefore looked identical while the request was in flight

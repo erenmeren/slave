@@ -15,7 +15,7 @@ import { SkillsClient } from '../SkillsClient'
 import { SlavePanel } from '../SlavePanel'
 import { PeopleTable } from '../persons/PeopleTable'
 import { assignableProjectsOf } from '../persons/PersonProjectsGroup'
-import { cardsOf, liveSeatOf, personOf } from '../persons/liveSeat'
+import { cardsOf, haltedReasonOf, liveSeatOf, personOf } from '../persons/liveSeat'
 import { NewSlaveDrawer } from '../slaves/NewSlaveDrawer'
 import { EvidenceTab } from './EvidenceTab'
 import { RunbooksTab } from './RunbooksTab'
@@ -167,7 +167,7 @@ export function WorkforceClient({
     | { readonly kind: 'idle' }
     | { readonly kind: 'loading' }
     | { readonly kind: 'error' }
-    | { readonly kind: 'ready'; readonly person: PersonDetail; readonly slave: SlaveCardData | null }
+    | { readonly kind: 'ready'; readonly person: PersonDetail; readonly slave: SlaveCardData | null; readonly haltedReason: string | null }
   >({ kind: 'idle' })
 
   useEffect((): void => {
@@ -186,13 +186,18 @@ export function WorkforceClient({
         }
         const seat = person.seats[0]
         if (seat === undefined) {
-          setPanel({ kind: 'ready', person, slave: null })
+          setPanel({ kind: 'ready', person, slave: null, haltedReason: null })
           return
         }
         const snapshot = await fetch(`/api/w/${seat.workspaceId}/overview`)
           .then(async (response) => (response.ok ? ((await response.json()) as unknown) : null))
           .catch(() => null)
-        setPanel({ kind: 'ready', person, slave: liveSeatOf(cardsOf(snapshot), seat.slaveId, person.personId) })
+        setPanel({
+          kind: 'ready',
+          person,
+          slave: liveSeatOf(cardsOf(snapshot), seat.slaveId, person.personId),
+          haltedReason: haltedReasonOf(snapshot),
+        })
       })
       .catch(() => setPanel({ kind: 'error' }))
   }, [selectedPerson, personTick])
@@ -333,7 +338,7 @@ export function WorkforceClient({
               ?? panel.person.seats[0]?.workspaceId
               ?? ''
             }
-            haltedReason={null}
+            haltedReason={panel.haltedReason}
             onClose={() => setSelectedPerson(null)}
             onPersonChanged={() => setPersonTick((tick) => tick + 1)}
           />
