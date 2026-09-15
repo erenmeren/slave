@@ -172,7 +172,10 @@ export type ControlRefusal =
   | { readonly kind: 'unknown_profile_field'; readonly field: string }
   | { readonly kind: 'company_not_found'; readonly companyId: string }
   | { readonly kind: 'company_team_not_found'; readonly companyTeamId: string }
-  /** `deleteCompanySlave` on a `companySlaveId` no `CompanySlave` row carries (M27 §5). */
+  /** M27 §5 raised this for a `companySlaveId` no `CompanySlave` row carried. M58 dropped that
+   *  table, and this is what `carryOut` refuses a stored `materialise_company_worker` with when the
+   *  action names its subject by the pre-M58 field (spec erratum E9): the roster row it names is
+   *  gone and there is nothing left to resolve it to. */
   | { readonly kind: 'company_slave_not_found'; readonly companySlaveId: string }
   /** A name that is blank, or -- with `detail` -- one that has a SHAPE to meet and does not
    *  (M52 R3: a credential's `envVar` is an environment variable name, not free text). The default
