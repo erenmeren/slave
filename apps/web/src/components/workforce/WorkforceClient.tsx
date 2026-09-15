@@ -14,7 +14,7 @@ import { DepartmentsTable } from '../DepartmentsTable'
 import { SkillsClient } from '../SkillsClient'
 import { SlavePanel } from '../SlavePanel'
 import { PeopleTable } from '../persons/PeopleTable'
-import type { AssignableProject } from '../persons/PersonProjectsGroup'
+import { assignableProjectsOf } from '../persons/PersonProjectsGroup'
 import { NewSlaveDrawer } from '../slaves/NewSlaveDrawer'
 import { EvidenceTab } from './EvidenceTab'
 import { RunbooksTab } from './RunbooksTab'
@@ -320,23 +320,6 @@ export function WorkforceClient({
       )}
     </PageShell>
   )
-}
-
-function assignableProjectsOf(teams: readonly ProjectTeamRow[]): readonly AssignableProject[] {
-  const byWorkspace = new Map<string, { workspaceId: string; projectName: string; teams: { teamId: string; name: string }[] }>()
-  for (const team of teams) {
-    const existing = byWorkspace.get(team.workspaceId)
-    if (existing === undefined) {
-      byWorkspace.set(team.workspaceId, {
-        workspaceId: team.workspaceId,
-        projectName: team.projectName,
-        teams: [{ teamId: team.teamId, name: team.name }],
-      })
-    } else {
-      existing.teams.push({ teamId: team.teamId, name: team.name })
-    }
-  }
-  return [...byWorkspace.values()]
 }
 
 function slaveCardForPerson(person: PersonDetail): SlaveCardData {

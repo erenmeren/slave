@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PERMISSION_KINDS } from '@slave-of-ai/domain'
 import { SlavePanel } from '../src/components/SlavePanel.js'
 import type { SlaveCardData, SlaveFeedEvent } from '../src/server/overview.js'
+import type { PersonDetail } from '../src/server/persons.js'
 
 const slave = (over: Partial<SlaveCardData>): SlaveCardData => ({
   id: 'a1',
@@ -1045,5 +1046,54 @@ describe('SlavePanel permissions (M52 R7)', () => {
     const section = document.querySelector('[data-testid="details-group"][data-group="permissions"]')
     expect(section?.getAttribute('data-open')).toBe('false')
     expect(screen.queryByTestId('panel-permission-read_repo')).toBeNull()
+  })
+})
+
+function personDetail(): PersonDetail {
+  return {
+    personId: 'p1',
+    name: 'Alex',
+    personaId: 't1',
+    personaName: 'Builder',
+    state: 'assigned',
+    stateLabel: 'ASSIGNED',
+    departments: [],
+    seats: [],
+    skillCount: 0,
+    capabilities: [],
+    lifecycle: 'project',
+    releasedAt: null,
+    releaseReason: null,
+    profile: null,
+    model: null,
+    provider: null,
+    skills: [],
+    selectionRationale: null,
+    runs: 0,
+    allSeats: [],
+  }
+}
+
+describe('SlavePanel without a live seat', () => {
+  it('hides pause/resume/stop and disables seat saves when the card is missing', () => {
+    render(
+      <SlavePanel
+        slave={null}
+        person={personDetail()}
+        liveEvents={[]}
+        workspaceId="w1"
+        haltedReason={null}
+        onClose={() => {}}
+      />,
+    )
+    expect(screen.getByRole('heading', { name: 'Alex' })).toBeTruthy()
+    expect(screen.queryByTestId('status-label')).toBeNull()
+    expect(screen.queryByTestId('pause-button')).toBeNull()
+    expect(screen.queryByTestId('resume-button')).toBeNull()
+    expect(screen.queryByTestId('stop-button')).toBeNull()
+    openGroup('profile')
+    expect((screen.getByTestId('profile-save') as HTMLButtonElement).disabled).toBe(true)
+    openGroup('messages')
+    expect((screen.getByTestId('runtime-roles-save') as HTMLButtonElement).disabled).toBe(true)
   })
 })

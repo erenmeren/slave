@@ -26,7 +26,7 @@ import { SectionLabel } from '../ui/SectionLabel'
 import { CapabilityChips } from './CapabilityChips'
 import { SlavePanel } from '../SlavePanel'
 import { NewSlaveDrawer } from '../slaves/NewSlaveDrawer'
-import type { AssignableProject } from '../persons/PersonProjectsGroup'
+import { assignableProjectsOf } from '../persons/PersonProjectsGroup'
 
 /** How many advisory edges stand open. Five is what fits under the roster without turning the page
  *  into a list of suggestions; past it the group is folded and says how to open it. */
@@ -75,10 +75,13 @@ export function OrganizationClient({
   const [poolPersonId, setPoolPersonId] = useState('')
   const [pending, setPending] = useState(false)
   const [newOpen, setNewOpen] = useState(false)
-  const [selectedPerson, setSelectedPerson] = useState<string | null>(null)
+  const [selected, setSelected] = useState<{ readonly personId: string; readonly slaveId: string } | null>(null)
   const [personTick, setPersonTick] = useState(0)
   const [panel, setPanel] = useState<
-    { readonly kind: 'idle' } | { readonly kind: 'loading' } | { readonly kind: 'error' } | { readonly kind: 'ready'; readonly person: PersonDetail }
+    | { readonly kind: 'idle' }
+    | { readonly kind: 'loading' }
+    | { readonly kind: 'error' }
+    | { readonly kind: 'ready'; readonly person: PersonDetail; readonly slave: SlaveCardData | null }
   >({ kind: 'idle' })
   const assignableProjects = useMemo(() => assignableProjectsOf(teams), [teams])
   const teamId = view.teamId
@@ -117,22 +120,29 @@ export function OrganizationClient({
   }
 
   useEffect((): void => {
-    if (selectedPerson === null) {
+    if (selected === null) {
       setPanel({ kind: 'idle' })
       return
     }
+    const personId = selected.personId
+    const slaveId = selected.slaveId
     setPanel({ kind: 'loading' })
-    void fetch(`/api/persons/${selectedPerson}`)
-      .then(async (response) => (response.ok ? ((await response.json()) as unknown) : null))
-      .then((detail) => {
-        const person =
-          detail !== null && typeof detail === 'object' && 'personId' in detail && typeof (detail as { personId: unknown }).personId === 'string'
-            ? (detail as PersonDetail)
-            : null
-        setPanel(person === null ? { kind: 'error' } : { kind: 'ready', person })
+    void Promise.all([
+      fetch(`/api/persons/${personId}`).then(async (response) => (response.ok ? ((await response.json()) as unknown) : null)),
+      fetch(`/api/w/${workspaceId}/overview`)
+        .then(async (response) => (response.ok ? ((await response.json()) as unknown) : null))
+        .catch(() => null),
+    ])
+      .then(([detail, snapshot]) => {
+        const person = personOf(detail)
+        if (person === null) {
+          setPanel({ kind: 'error' })
+          return
+        }
+        setPanel({ kind: 'ready', person, slave: liveSeatOf(cardsOf(snapshot), slaveId, personId) })
       })
       .catch(() => setPanel({ kind: 'error' }))
-  }, [selectedPerson, personTick])
+  }, [selected, personTick, workspaceId])
 
   const seat = async (): Promise<void> => {
     if (poolPersonId === '' || teamId === '') return
@@ -228,7 +238,7 @@ export function OrganizationClient({
                       <button
                         type="button"
                         data-testid={`organization-open-${worker.personId}`}
-                        onClick={() => setSelectedPerson(worker.personId)}
+                        onClick={() => setSelected({ personId: worker.personId, slaveId: worker.slaveId })}
                         className="truncate text-left font-semibold text-t1 hover:text-t2"
                       >
                         {worker.name}
@@ -440,15 +450,15 @@ export function OrganizationClient({
       {panel.kind === 'ready' && (
         <div className="fixed inset-y-0 right-0 z-10 w-96 border-l border-line bg-panel shadow-resting motion-safe:animate-[panel-in_160ms_ease-out]">
           <SlavePanel
-            key={panel.person.personId}
-            slave={slaveCardForPerson(panel.person, workspaceId)}
+            key={panel.slave?.id ?? panel.person.personId}
+            slave={panel.slave}
             person={panel.person}
             projects={assignableProjects}
             skillCatalogue={skillCatalogue}
             liveEvents={[]}
             workspaceId={workspaceId}
             haltedReason={null}
-            onClose={() => setSelectedPerson(null)}
+            onClose={() => setSelected(null)}
             onPersonChanged={() => setPersonTick((tick) => tick + 1)}
           />
         </div>
@@ -599,54 +609,19 @@ function nameOf(slaveId: string, view: OrganizationView): string {
   return view.workers.find((worker) => worker.slaveId === slaveId)?.name ?? slaveId
 }
 
-function assignableProjectsOf(teams: readonly ProjectTeamRow[]): readonly AssignableProject[] {
-  const byWorkspace = new Map<string, { workspaceId: string; projectName: string; teams: { teamId: string; name: string }[] }>()
-  for (const team of teams) {
-    const existing = byWorkspace.get(team.workspaceId)
-    if (existing === undefined) {
-      byWorkspace.set(team.workspaceId, {
-        workspaceId: team.workspaceId,
-        projectName: team.projectName,
-        teams: [{ teamId: team.teamId, name: team.name }],
-      })
-    } else {
-      existing.teams.push({ teamId: team.teamId, name: team.name })
-    }
-  }
-  return [...byWorkspace.values()]
+function personOf(detail: unknown): PersonDetail | null {
+  return detail !== null && typeof detail === 'object' && 'personId' in detail && typeof (detail as { personId: unknown }).personId === 'string'
+    ? (detail as PersonDetail)
+    : null
 }
 
-function slaveCardForPerson(person: PersonDetail, workspaceId: string): SlaveCardData {
-  const seat = person.seats.find((one) => one.workspaceId === workspaceId) ?? person.seats[0]
-  return {
-    id: seat?.slaveId ?? person.personId,
-    personId: person.personId,
-    name: person.name,
-    role: seat?.role ?? person.personaName ?? '',
-    provider: person.provider?.value ?? null,
-    gate: null,
-    status: 'idle',
-    taskTitle: null,
-    taskId: null,
-    taskStatus: null,
-    progressPct: 0,
-    stepLabel: null,
-    skill: null,
-    actionLine: null,
-    runId: null,
-    queuedMessage: null,
-    resumeRequestedAt: null,
-    recentEvents: [],
-    costUsd: 0,
-    toolCalls: 0,
-    pausedAtStep: null,
-    waitingFor: null,
-    profile: person.profile,
-    runtimeRoles: seat === undefined ? [] : [...seat.runtimeRoles],
-    lifecycle: person.lifecycle,
-    released: person.releasedAt === null ? null : { at: person.releasedAt, reason: person.releaseReason ?? '' },
-    breakerLevel: 'none',
-    permissions: [],
-    permissionsRunKind: 'implementation',
-  }
+/** The Team band's own cards, as `/overview` already publishes them. `id` is the seat. */
+function cardsOf(snapshot: unknown): readonly SlaveCardData[] {
+  if (snapshot === null || typeof snapshot !== 'object' || !('slaves' in snapshot)) return []
+  const slaves = (snapshot as { slaves: unknown }).slaves
+  return Array.isArray(slaves) ? (slaves as SlaveCardData[]) : []
+}
+
+function liveSeatOf(cards: readonly SlaveCardData[], slaveId: string, personId: string): SlaveCardData | null {
+  return cards.find((card) => card.id === slaveId) ?? cards.find((card) => card.personId === personId) ?? null
 }

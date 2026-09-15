@@ -3,9 +3,11 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import { fireEvent } from '@testing-library/dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DecisionView } from '@slave-of-ai/control'
-import type { OrganizationView } from '../src/server/organization'
-import { OrganizationClient } from '../src/components/organization/OrganizationClient'
-import { SECTION_LABEL_CLASS } from '../src/components/ui/SectionLabel'
+import type { OrganizationView } from '../src/server/organization.js'
+import type { PersonDetail } from '../src/server/persons.js'
+import type { SlaveCardData } from '../src/server/overview.js'
+import { OrganizationClient } from '../src/components/organization/OrganizationClient.js'
+import { SECTION_LABEL_CLASS } from '../src/components/ui/SectionLabel.js'
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: vi.fn(), replace: vi.fn() }),
@@ -168,6 +170,100 @@ const hints = (count: number): OrganizationView['hints'] =>
     capability: null,
     capabilityLabel: null,
   }))
+
+function personDetail(over: Partial<PersonDetail> = {}): PersonDetail {
+  const seats = [
+    {
+      slaveId: 's1',
+      teamId: 'team-1',
+      teamName: 'Engineering',
+      workspaceId: 'w1',
+      projectName: 'Checkout',
+      role: 'engineering',
+      runtimeRoles: ['engineering'],
+      closedAt: null,
+    },
+  ]
+  return {
+    personId: 'p1',
+    name: 'Alex',
+    personaId: 't1',
+    personaName: 'Builder',
+    state: 'assigned',
+    stateLabel: 'ASSIGNED',
+    departments: [],
+    seats,
+    skillCount: 0,
+    capabilities: [],
+    lifecycle: 'permanent',
+    releasedAt: null,
+    releaseReason: null,
+    profile: null,
+    model: null,
+    provider: null,
+    skills: [],
+    selectionRationale: null,
+    runs: 0,
+    allSeats: seats,
+    ...over,
+  }
+}
+
+function workingCard(over: Partial<SlaveCardData> = {}): SlaveCardData {
+  return {
+    id: 's1',
+    personId: 'p1',
+    name: 'Alex',
+    role: 'engineering',
+    provider: 'claude_code',
+    gate: 'all-tools',
+    status: 'working',
+    taskTitle: 'Review the checkout API',
+    taskId: 't1',
+    taskStatus: 'running',
+    progressPct: 40,
+    stepLabel: null,
+    skill: null,
+    actionLine: null,
+    runId: 'run-1',
+    queuedMessage: null,
+    resumeRequestedAt: null,
+    recentEvents: [],
+    costUsd: 0,
+    toolCalls: 3,
+    pausedAtStep: null,
+    waitingFor: null,
+    profile: null,
+    runtimeRoles: ['engineering'],
+    lifecycle: 'permanent',
+    released: null,
+    breakerLevel: 'none',
+    permissions: [],
+    permissionsRunKind: 'implementation',
+    ...over,
+  }
+}
+
+function openPanelGroup(group: string): void {
+  const section = document.querySelector(`[data-testid="details-group"][data-group="${group}"]`)
+  const toggle = section?.querySelector('button')
+  if (toggle === null || toggle === undefined) throw new Error(`no DetailsGroup named ${group} on screen`)
+  fireEvent.click(toggle)
+}
+
+function stubPanelFetch(options: { person?: PersonDetail; overviewSlaves?: readonly SlaveCardData[] } = {}): void {
+  fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url === '/api/persons/p1') {
+      return new Response(JSON.stringify(options.person ?? personDetail()), { status: 200 })
+    }
+    if (url === '/api/w/w1/overview') {
+      return new Response(JSON.stringify({ slaves: options.overviewSlaves ?? [] }), { status: 200 })
+    }
+    return new Response(JSON.stringify(view), { status: 200 })
+  })
+  vi.stubGlobal('fetch', fetchMock)
+}
 
 let fetchMock: ReturnType<typeof vi.fn>
 
@@ -378,9 +474,39 @@ describe('OrganizationClient', () => {
 
   // M58 R27: the name opens the person, and Add offers the pool first.
   it('opens the person panel from a worker name, keyed on personId', async () => {
+    stubPanelFetch({ person: personDetail() })
     render(<OrganizationClient workspaceId="w1" initial={view} />)
     fireEvent.click(screen.getByTestId('organization-open-p1'))
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/persons/p1'))
+    expect(await screen.findByRole('heading', { name: 'Alex' })).toBeTruthy()
+    expect(fetchMock).toHaveBeenCalledWith('/api/persons/p1')
+    expect(screen.getByRole('heading', { name: 'Alex' }).textContent).toBe('Alex')
+  })
+
+  it('opens the live seat for a working worker, not an idle stand-in', async () => {
+    stubPanelFetch({ person: personDetail(), overviewSlaves: [workingCard()] })
+    render(<OrganizationClient workspaceId="w1" initial={view} />)
+    fireEvent.click(screen.getByTestId('organization-open-p1'))
+    expect(await screen.findByTestId('status-label')).toBeTruthy()
+    expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/overview')
+    expect(screen.getByTestId('status-label').getAttribute('data-status')).toBe('working')
+    expect(screen.getByTestId('status-label').getAttribute('data-slave-id')).toBe('s1')
+    expect(screen.getByTestId('status-label').textContent).toBe('WORKING')
+    expect(screen.getByTestId('pause-button').getAttribute('disabled')).toBeNull()
+  })
+
+  it('hides run controls and disables seat saves when the live card is missing', async () => {
+    stubPanelFetch({ person: personDetail(), overviewSlaves: [] })
+    render(<OrganizationClient workspaceId="w1" initial={view} />)
+    fireEvent.click(screen.getByTestId('organization-open-p1'))
+    expect(await screen.findByRole('heading', { name: 'Alex' })).toBeTruthy()
+    expect(screen.queryByTestId('status-label')).toBeNull()
+    expect(screen.queryByTestId('pause-button')).toBeNull()
+    expect(screen.queryByTestId('resume-button')).toBeNull()
+    expect(screen.queryByTestId('stop-button')).toBeNull()
+    openPanelGroup('profile')
+    expect((screen.getByTestId('profile-save') as HTMLButtonElement).disabled).toBe(true)
+    openPanelGroup('messages')
+    expect((screen.getByTestId('runtime-roles-save') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('seats somebody from the pool onto this project', async () => {
