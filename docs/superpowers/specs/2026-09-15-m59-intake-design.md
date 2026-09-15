@@ -153,4 +153,15 @@ Never a real model call in a test or a gate (`SLAVEOFAI_REQUIRE_FAKE_CLI=1`; the
 
 ## 10. Errata — where execution corrects this spec
 
-*(appended during execution; each entry `**Ei (amends Rn)**`)*
+*(plan-time entries E1–E10 were read out of the code while the plan was written; the full argument for each is in the plan's own errata list, `docs/superpowers/plans/2026-09-15-m59-intake.md`; execution-time entries follow the same form)*
+
+- **E1 (amends §7)** — the `"intakeAnswer"` arm lives in `packages/providers/test/fake-claude.mjs` beside `supervisorArm`, keyed on prompt content; the shell fake never reads its prompt and answers with tool calls a decision call would report as an isolation breach.
+- **E2 (amends R12)** — the Analytics page has shown no money since M53 R6; the intake term joins `workspaceSpend` and `listProjects`'s `spendOf`, the two places a project's spend is computed.
+- **E3 (amends R11)** — `claimIntakes` is raw SQL (`UPDATE … FOR UPDATE SKIP LOCKED … RETURNING`), the package's row-lock idiom; Prisma's `updateMany` has no `RETURNING`.
+- **E4 (amends R4)** — `workspace.created.intakeId` is optional because `packages/events/src/read.ts` throws on a row the schema cannot parse; a required field would make every older `workspace.created` unreadable.
+- **E5 (amends R10 step 3, R13)** — there is no `createTeam`; the verb is `createProjectTeam(workspaceId, name, principal?)` (`packages/control/src/org.ts`).
+- **E6 (amends R6)** — `listBranches` and `defaultBranch` are required members of `GitProbe`; `realGitProbe` is its only implementation and the docstring warning about breaking fakes is corrected in the same edit.
+- **E7 (amends §7)** — `detect.ts` and `initRepository` tests are unit tests under `packages/control/test/` (no Postgres); only what writes an `Intake` row is an integration test.
+- **E8 (amends R6)** — a `SlaveTemplate` has no `runtimeRoles`; the facts' catalogue entry is `{ templateId, name, division, role }`, active templates only; runtime roles come from the draft and `ensureStaffRoles`.
+- **E9 (amends R15)** — an `EventNotification` carries no event type; a notification naming a workspace with no loop arms a discovery pass, an archived project's loop is stopped by the ten-second timer.
+- **E10 (amends R14)** — no `INTAKE_DEFAULT_MODEL`; `tickIntakes` takes the model as a parameter and the daemon passes `deps.supervisorModel`, which `cli.ts` already defaults.
