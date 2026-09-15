@@ -234,6 +234,59 @@ describe('the intake conversation', () => {
     expect(refused.error.kind).toBe('intake_not_abandonable')
   })
 
+  it('refuses a reply once the claim was abandoned out from under it, and charges nothing (fix round 1)', async (): Promise<void> => {
+    const id = await open()
+    await sendIntakeMessage(id, 'hello')
+    await claimIntakes({ by: 'daemon', limit: 1 })
+    // The conversation is `replying` -- still abandonable -- and the person closes the drawer
+    // before the daemon's answer comes back.
+    expect((await abandonIntake(id)).ok).toBe(true)
+
+    const recorded = await recordIntakeReply(id, {
+      kind: 'answer',
+      answer: { kind: 'ask', text: 'too late' },
+      downgraded: null,
+      costUsd: 0.02,
+    })
+    expect(recorded.ok).toBe(false)
+    if (recorded.ok) throw new Error('unreachable')
+    expect(recorded.error.kind).toBe('intake_not_open')
+
+    const row = await prisma.intake.findUniqueOrThrow({ where: { id } })
+    expect(row.status).toBe('abandoned')
+    expect(row.modelCalls).toBe(0)
+    expect(await prisma.intakeMessage.count({ where: { intakeId: id, role: 'assistant' } })).toBe(0)
+  })
+
+  it('answers one claim exactly once, even when recordIntakeReply is called twice for it (fix round 1)', async (): Promise<void> => {
+    const id = await open()
+    await sendIntakeMessage(id, 'hello')
+    await claimIntakes({ by: 'daemon', limit: 1 })
+
+    const first = await recordIntakeReply(id, {
+      kind: 'answer',
+      answer: { kind: 'ask', text: 'first' },
+      downgraded: null,
+      costUsd: 0.01,
+    })
+    expect(first.ok).toBe(true)
+
+    // The SAME claim, answered a second time -- exactly what a TTL-reclaimed row lets happen
+    // without the status guard: the first reply already moved the row off `replying`.
+    const second = await recordIntakeReply(id, {
+      kind: 'answer',
+      answer: { kind: 'ask', text: 'second' },
+      downgraded: null,
+      costUsd: 0.01,
+    })
+    expect(second.ok).toBe(false)
+    if (second.ok) throw new Error('unreachable')
+    expect(second.error.kind).toBe('intake_not_open')
+
+    expect(await prisma.intakeMessage.count({ where: { intakeId: id, role: 'assistant' } })).toBe(1)
+    expect((await prisma.intake.findUniqueOrThrow({ where: { id } })).modelCalls).toBe(1)
+  })
+
   it('pins the draft seat cap to the verb that will enforce it', (): void => {
     // The domain cannot import `packages/control`; this file can import both, and it is the only
     // place the two numbers can be compared at all (M59 Task 1, INTAKE_MAX_RUNTIME_ROLES).

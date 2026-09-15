@@ -331,6 +331,14 @@ const UNUSABLE_TEXT = 'Sorry — I did not follow that. Could you say a little m
  * a conversation whose status says `drafted` and whose draft is not there yet.
  *
  * The call is charged whatever the answer turned out to be. An unusable answer cost money.
+ *
+ * ONLY THE DAEMON THAT STILL HOLDS THE CLAIM MAY WRITE (fix round 1): the row is re-read for its
+ * STATUS under the same `FOR UPDATE` lock `sendIntakeMessage` takes, and a status other than
+ * `replying` refuses `intake_not_open` before anything is written. Without this, an abandon that
+ * landed while a reply was in flight would be silently undone by the reply that lands after it, an
+ * accept that claimed `creating` would be overwritten back to `open`/`drafted`, and a claim
+ * reclaimed after its TTL could be answered twice -- two `assistant` rows and two charges for one
+ * turn. Nothing has been written yet at that point, so a plain `return` (not a `throw`) is correct.
  */
 export async function recordIntakeReply(
   intakeId: string,
@@ -340,10 +348,13 @@ export async function recordIntakeReply(
   const draft = outcome.kind === 'answer' && outcome.answer.kind === 'draft' ? outcome.answer.draft : null
   const note = outcome.kind === 'answer' ? outcome.downgraded : outcome.reason
 
-  const written = await prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Intake" WHERE id = ${intakeId} FOR UPDATE`
-    const row = await tx.intake.findUnique({ where: { id: intakeId }, select: { id: true } })
-    if (row === null) return false
+    const row = await tx.intake.findUnique({ where: { id: intakeId }, select: { status: true } })
+    if (row === null) return { ok: false as const, error: { kind: 'intake_not_found', intakeId } as ControlRefusal }
+    if (row.status !== 'replying') {
+      return { ok: false as const, error: { kind: 'intake_not_open', intakeId, status: row.status } as ControlRefusal }
+    }
     const seq = await nextSeq(tx, intakeId)
     await tx.intakeMessage.create({ data: { intakeId, seq, role: 'assistant', text: answerText } })
     if (note !== null && note !== '') {
@@ -364,9 +375,9 @@ export async function recordIntakeReply(
           : { modelCostUsd: { increment: outcome.costUsd } }),
       },
     })
-    return true
+    return { ok: true as const }
   })
-  return written ? ok(undefined) : err({ kind: 'intake_not_found', intakeId })
+  return result.ok ? ok(undefined) : err(result.error)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -557,66 +568,83 @@ export async function acceptIntake(
     return err(refusal)
   }
 
-  // 1. init_repository -- only when there is no repository yet.
-  let repoPath = draft.repo.path
-  if (draft.repo.mode === 'new') {
-    const already = done.get('init_repository')
-    if (already !== undefined && already.detail !== null) {
-      repoPath = already.detail
-    } else {
-      const root = await resolveReposRoot()
-      const target = draft.repo.path ?? join(root.root, slugify(draft.name))
-      const created = await initRepository({ path: target, name: draft.name, goal: draft.goal })
-      if (!created.ok) return fail('init_repository', created.error)
-      repoPath = created.value.path
-      await appendStep(intakeId, { step: 'init_repository', status: 'done', at: now(), detail: created.value.path })
+  // THE CLAIM IS TAKEN: from here on an exception that escapes a step must not leave the intake
+  // stranded in `creating` forever (fix round 1) -- `intake_busy` for every later accept,
+  // `intake_not_abandonable` for `abandonIntake`, `intake_not_open` for `sendIntakeMessage`, none
+  // of them a way out. `currentStep` names which step was running when a step's own dependency
+  // THREW instead of returning a `Result` -- a dropped connection, anything its type does not
+  // carry -- so an unexpected throw still reaches `fail()` and lands the intake in `failed`,
+  // exactly where a step that returned a refusal would have put it: resumable, abandonable.
+  let currentStep: IntakeStep = 'init_repository'
+  try {
+    // 1. init_repository -- only when there is no repository yet.
+    let repoPath = draft.repo.path
+    if (draft.repo.mode === 'new') {
+      const already = done.get('init_repository')
+      if (already !== undefined && already.detail !== null) {
+        repoPath = already.detail
+      } else {
+        const root = await resolveReposRoot()
+        const target = draft.repo.path ?? join(root.root, slugify(draft.name))
+        const created = await initRepository({ path: target, name: draft.name, goal: draft.goal })
+        if (!created.ok) return fail('init_repository', created.error)
+        repoPath = created.value.path
+        await appendStep(intakeId, { step: 'init_repository', status: 'done', at: now(), detail: created.value.path })
+      }
     }
-  }
-  if (repoPath === null) {
-    return fail('create_workspace', { kind: 'invalid_draft', detail: 'this project has no repository path' })
-  }
+    if (repoPath === null) {
+      return fail('create_workspace', { kind: 'invalid_draft', detail: 'this project has no repository path' })
+    }
 
-  // 2. create_workspace.
-  let workspaceId = intake.workspaceId
-  if (done.get('create_workspace') === undefined || workspaceId === null) {
-    const created = await createWorkspace(
-      {
-        name: draft.name,
-        repoPath,
-        baseBranch: draft.baseBranch,
-        verifyCommands: draft.verifyCommands.map((entry) => entry.command),
-        setupCommands: [...draft.setupCommands],
-        budgetUsd: draft.budgetUsd,
-        provider: draft.provider,
-      },
-      principal,
-      { intakeId },
-    )
-    if (!created.ok) return fail('create_workspace', created.error)
-    workspaceId = created.value.id
-    // Written NOW, not at `mark_created`: the card links a half-created project to the project
-    // that exists, and a resume continues from it.
-    await prisma.intake.update({ where: { id: intakeId }, data: { workspaceId } })
-    await appendStep(intakeId, { step: 'create_workspace', status: 'done', at: now(), detail: workspaceId })
-  }
+    // 2. create_workspace.
+    currentStep = 'create_workspace'
+    let workspaceId = intake.workspaceId
+    if (done.get('create_workspace') === undefined || workspaceId === null) {
+      const created = await createWorkspace(
+        {
+          name: draft.name,
+          repoPath,
+          baseBranch: draft.baseBranch,
+          verifyCommands: draft.verifyCommands.map((entry) => entry.command),
+          setupCommands: [...draft.setupCommands],
+          budgetUsd: draft.budgetUsd,
+          provider: draft.provider,
+        },
+        principal,
+        { intakeId },
+      )
+      if (!created.ok) return fail('create_workspace', created.error)
+      workspaceId = created.value.id
+      // Written NOW, not at `mark_created`: the card links a half-created project to the project
+      // that exists, and a resume continues from it.
+      await prisma.intake.update({ where: { id: intakeId }, data: { workspaceId } })
+      await appendStep(intakeId, { step: 'create_workspace', status: 'done', at: now(), detail: workspaceId })
+    }
 
-  // 3. staff -- M59 R13, and M58-bound. Until M58 is on `main` this step is not implemented and
-  //    says so in the log rather than silently doing nothing.
-  if (done.get('staff') === undefined) {
-    await appendStep(intakeId, { step: 'staff', status: 'skipped', at: now(), detail: 'M58 not merged' })
-  }
+    // 3. staff -- M59 R13, and M58-bound. Until M58 is on `main` this step is not implemented and
+    //    says so in the log rather than silently doing nothing.
+    currentStep = 'staff'
+    if (done.get('staff') === undefined) {
+      await appendStep(intakeId, { step: 'staff', status: 'skipped', at: now(), detail: 'M58 not merged' })
+    }
 
-  // 4. set_goal -- with the person's own words as the request.
-  if (done.get('set_goal') === undefined) {
-    const goal = await setGoal(workspaceId, draft.goal, principal, { request: transcriptSummary(intake.messages) })
-    if (!goal.ok) return fail('set_goal', goal.error)
-    await appendStep(intakeId, { step: 'set_goal', status: 'done', at: now(), detail: `v${String(goal.value.version)}` })
-  }
+    // 4. set_goal -- with the person's own words as the request.
+    currentStep = 'set_goal'
+    if (done.get('set_goal') === undefined) {
+      const goal = await setGoal(workspaceId, draft.goal, principal, { request: transcriptSummary(intake.messages) })
+      if (!goal.ok) return fail('set_goal', goal.error)
+      await appendStep(intakeId, { step: 'set_goal', status: 'done', at: now(), detail: `v${String(goal.value.version)}` })
+    }
 
-  // 5. mark_created.
-  await appendStep(intakeId, { step: 'mark_created', status: 'done', at: now(), detail: null })
-  await prisma.intake.update({ where: { id: intakeId }, data: { status: 'created', workspaceId, failureReason: null } })
-  return ok({ workspaceId })
+    // 5. mark_created.
+    currentStep = 'mark_created'
+    await appendStep(intakeId, { step: 'mark_created', status: 'done', at: now(), detail: null })
+    await prisma.intake.update({ where: { id: intakeId }, data: { status: 'created', workspaceId, failureReason: null } })
+    return ok({ workspaceId })
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    return fail(currentStep, { kind: 'accept_step_failed', step: currentStep, reason })
+  }
 }
 
 /** The five steps, exported as data for the surfaces that render a log with the steps that have

@@ -301,6 +301,11 @@ export type ControlRefusal =
   | { readonly kind: 'inside_repository'; readonly path: string }
   /** M59 R7: `git init`, the README write or the first commit failed. The reason is git's own. */
   | { readonly kind: 'repo_init_failed'; readonly path: string; readonly reason: string }
+  /** M59 R10 (fix round 1): a step of `acceptIntake` THREW instead of returning a refusal -- a
+   *  dropped connection, any exception the step's own `Result` type does not carry. Caught so the
+   *  intake still lands in `failed` (resumable, abandonable) rather than stranded in `creating`
+   *  forever. `step` names where it happened; `reason` is the caught error's own message. */
+  | { readonly kind: 'accept_step_failed'; readonly step: string; readonly reason: string }
   /** No directory exists at `createWorkspace`'s `repoPath`. */
   | { readonly kind: 'repo_not_found'; readonly path: string }
   /** `repoPath` exists but is not a git work tree (`GitProbe.isRepository` said so). */
@@ -672,6 +677,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `${refusal.path} is inside a git repository already`
     case 'repo_init_failed':
       return `the repository at ${refusal.path} could not be created: ${refusal.reason}`
+    case 'accept_step_failed':
+      return `creating this project failed at ${refusal.step}: ${refusal.reason}`
     case 'repo_not_found':
       return `no directory at ${refusal.path}`
     case 'not_a_git_repository':

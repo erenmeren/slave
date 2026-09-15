@@ -4,9 +4,32 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import type { IntakeDraft } from '@slave-of-ai/domain'
-import { afterAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { acceptIntake, openIntake, sendIntakeMessage } from '../../src/intake.js'
 import { setInstallationSettings } from '../../src/installation.js'
+
+/**
+ * THE ONE SEAM (fix round 1): `acceptIntake`'s own steps never throw in the ordinary course of a
+ * test -- every one of them returns a `Result`. To pin "a step that THROWS still lands the intake
+ * in `failed`, not stranded in `creating`", something in the sequence has to throw for real, and
+ * `setGoal` is the module boundary `acceptIntake` calls last, after `create_workspace` has already
+ * committed -- exactly the case the fix protects (a workspace already exists; a naive retry must
+ * not make a second one). `throwOnSetGoal` is false for every other case in this file, so nothing
+ * else here is mocked in any sense that matters -- the same discipline `breaker.test.ts` documents
+ * for its own one seam.
+ */
+let throwOnSetGoal = false
+
+vi.mock('../../src/goal.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/goal.js')>()
+  return {
+    ...actual,
+    setGoal: async (...args: Parameters<typeof actual.setGoal>) => {
+      if (throwOnSetGoal) throw new Error('a connection dropped mid-write')
+      return actual.setGoal(...args)
+    },
+  }
+})
 
 function makeRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'accept-repo-'))
@@ -149,6 +172,41 @@ describe('acceptIntake', () => {
     const done = await prisma.intake.findUniqueOrThrow({ where: { id } })
     expect(done.status).toBe('created')
     expect((await prisma.workspace.findMany({ where: { name: { in: ['Taken', 'Renamed'] } } })).length).toBe(2)
+  })
+
+  it('lands in failed rather than stranded in creating when a step throws, and a second accept resumes (fix round 1)', async (): Promise<void> => {
+    const repo = makeRepo()
+    const id = await opened(`it is at ${repo}`)
+
+    throwOnSetGoal = true
+    try {
+      const failed = await acceptIntake(id, draftFor(repo, 'Throws Once'))
+      expect(failed.ok).toBe(false)
+      if (failed.ok) throw new Error('unreachable')
+      expect(failed.error.kind).toBe('accept_step_failed')
+    } finally {
+      throwOnSetGoal = false
+    }
+
+    const stopped = await prisma.intake.findUniqueOrThrow({ where: { id } })
+    expect(stopped.status).toBe('failed')
+    expect(stopped.failureReason).not.toBeNull()
+    expect((stopped.stepLog as { step: string; status: string }[]).at(-1)).toMatchObject({
+      step: 'set_goal',
+      status: 'failed',
+    })
+    // `create_workspace` already committed before `set_goal` threw, and its id is what a resumed
+    // accept must reuse rather than making a second workspace.
+    expect(stopped.workspaceId).not.toBeNull()
+    expect(await prisma.workspace.count({ where: { name: 'Throws Once' } })).toBe(1)
+
+    const resumed = await acceptIntake(id, draftFor(repo, 'Throws Once'))
+    expect(resumed.ok).toBe(true)
+    if (!resumed.ok) throw new Error('unreachable')
+    expect(resumed.value.workspaceId).toBe(stopped.workspaceId)
+    const done = await prisma.intake.findUniqueOrThrow({ where: { id } })
+    expect(done.status).toBe('created')
+    expect(await prisma.workspace.count({ where: { name: 'Throws Once' } })).toBe(1)
   })
 
   it('does not create a second project when accept is run again after it succeeded', async (): Promise<void> => {

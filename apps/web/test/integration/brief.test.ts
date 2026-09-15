@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { RUN_UNMEASURED_CAP_USD, SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-ai/domain'
+import { INTAKE_PER_CALL_CAP_USD, RUN_UNMEASURED_CAP_USD, SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { buildProjectBrief } from '../../src/server/brief.js'
@@ -225,6 +225,31 @@ describe('buildProjectBrief', () => {
     // estimate. $2.00 reported + max($1, $5) + max($1, $0) + max($0, $10).
     expect(brief.cost.upperBoundUsd).toBeCloseTo(2 + 5 + RUN_UNMEASURED_CAP_USD + 10, 10)
     // The invariant the whole fix exists for: no figure on this tile may exceed the bound beside it.
+    expect(brief.cost.upperBoundUsd).toBeGreaterThanOrEqual(brief.cost.estimatedUsd)
+  })
+
+  /**
+   * M59 R12 (fix round 1): the intake's own money belongs on this tile exactly like the runs' and
+   * the Supervisor's, or `estimatedUsd` reads BELOW `spentUsd` for a project a conversation
+   * created -- the same invariant the two cases above pin, now for the third source of spend.
+   */
+  it('folds the intake s measured cost and its capped unmeasured call into the tile, not just spentUsd', async (): Promise<void> => {
+    const { workspaceId } = await seedWorkspace({ budgetUsd: 25 })
+    await prisma.intake.create({
+      data: { workspaceId, status: 'created', modelCostUsd: 0.5, unmeasuredCalls: 1, modelCalls: 3 },
+    })
+
+    const brief = await buildProjectBrief(workspaceId)
+    expect(brief).not.toBeNull()
+    if (brief === null) return
+
+    // No runs, no Supervisor decisions -- $0.50 measured plus one unmeasured call at the cap.
+    expect(brief.cost.spentUsd).toBeCloseTo(0.5 + INTAKE_PER_CALL_CAP_USD, 10)
+    expect(brief.cost.measuredUsd).toBeCloseTo(0.5, 10)
+    expect(brief.cost.actualUsd).toBe(brief.cost.measuredUsd)
+    // Nothing else on the project is unpriced, so the estimate fills in exactly the hole
+    // `spentUsd` already charges at the cap -- the two must agree to the cent.
+    expect(brief.cost.estimatedUsd).toBeCloseTo(brief.cost.spentUsd, 10)
     expect(brief.cost.upperBoundUsd).toBeGreaterThanOrEqual(brief.cost.estimatedUsd)
   })
 

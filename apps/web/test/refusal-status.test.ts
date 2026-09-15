@@ -85,6 +85,9 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   path_not_empty: true,
   inside_repository: true,
   repo_init_failed: true,
+  // M59 Task 4 fix round 1: a step of `acceptIntake` threw rather than returning a refusal. 409 by
+  // the default rule -- the intake is there, in a state (now `failed`) the request does not fit.
+  accept_step_failed: true,
   repo_not_found: true,
   not_a_git_repository: true,
   base_branch_not_found: true,
