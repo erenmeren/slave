@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { addCompanyTeam, addDepartmentMember, assignCompany, assignCompanyTx, createCompany, createTemplate, setSlaveModel } from '../../src/org.js'
-import { releasePerson } from '../../src/persons.js'
+import { releasePerson, unassignPerson } from '../../src/persons.js'
 import { refusalText } from '../../src/refusal.js'
 
 // A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
@@ -457,6 +457,38 @@ describe('assignCompany', () => {
     expect(rows.map((row) => row.id)).toEqual([seat.id])
     expect(rows[0]?.closedAt).toBeNull()
     expect(await prisma.slaveRun.findUnique({ where: { id: run.id } })).not.toBeNull()
+  })
+
+  // Whole-branch review: unassign empties runtimeRoles, and assignCompany used to reopen with none.
+  it('restores default runtimeRoles when reopening a seat emptied by unassign', async (): Promise<void> => {
+    const workspace = await seedWorkspace()
+    const company = await prisma.company.create({ data: { name: 'Restore Corp' } })
+    const companyTeam = await prisma.companyTeam.create({ data: { companyId: company.id, name: 'Engineering' } })
+    const template = await prisma.slaveTemplate.create({
+      data: { name: `Restore ${company.id}`, role: 'backend', capabilityKeys: ['security.application'] },
+    })
+    const person = await prisma.person.create({
+      data: {
+        templateId: template.id,
+        name: 'Restored Worker',
+        capabilities: template.capabilityKeys,
+        lifecycle: 'permanent',
+        departments: { create: { companyTeamId: companyTeam.id } },
+      },
+    })
+    expect((await assignCompany(workspace.id, company.id)).ok).toBe(true)
+    const seat = await prisma.slave.findFirstOrThrow({ where: { personId: person.id } })
+    expect([...seat.runtimeRoles].toSorted()).toEqual(['backend', 'security'])
+
+    const removed = await unassignPerson(person.id, seat.teamId, { reason: 'done here' })
+    expect(removed.ok).toBe(true)
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: seat.id } })).runtimeRoles).toEqual([])
+
+    const again = await assignCompany(workspace.id, company.id)
+    expect(again.ok).toBe(true)
+    const reopened = await prisma.slave.findUniqueOrThrow({ where: { id: seat.id } })
+    expect(reopened.closedAt).toBeNull()
+    expect([...reopened.runtimeRoles].toSorted()).toEqual(['backend', 'security'])
   })
 
   it('does not reopen a seat for a released person', async (): Promise<void> => {

@@ -408,7 +408,8 @@ export async function seatMember(
     readonly rationale?: string
     /** What the seat should DISPATCH as. Omitted -- which is every caller today -- a new seat takes
      *  the person's own role plus the project roles their capabilities project to, and a REOPENED
-     *  seat keeps whatever it already had (fix round 1, Minors 4 and 5). */
+     *  seat keeps whatever it already had unless that set is empty, in which case the same default
+     *  is restored. */
     readonly runtimeRoles?: readonly string[]
   } = {},
 ): Promise<Result<{ readonly slaveId: string; readonly created: boolean }, ControlRefusal>> {
@@ -451,13 +452,16 @@ export async function seatMember(
       if (open !== null) return { id: open.id, created: false }
       const closed = await tx.slave.findFirst({ where: { personId, team: { workspaceId }, closedAt: { not: null } }, orderBy: { id: 'asc' } })
       if (closed !== null) {
-        // `closedAt` and nothing else unless the caller said otherwise (fix round 1, Minor 5):
-        // `assignCompanyTx` reopens the same way, and a seat's runtime roles are a fact an operator
-        // set on THAT seat -- recomputing them from the person's capabilities on the way back in
-        // silently undoes every `set-runtime-roles` made before it was closed.
+        // `closedAt` only when the stored roles are still there (fix round 1, Minor 5): a seat's
+        // runtime roles are a fact an operator set on THAT seat. An emptied set is the close
+        // invariant (`unassignPerson` writes `[]`), so restore the same default a new seat would
+        // take -- `[role, ...projectRoles]` -- rather than reopening as undraftable.
         await tx.slave.update({
           where: { id: closed.id },
-          data: { closedAt: null, ...(opts.runtimeRoles === undefined ? {} : { runtimeRoles }) },
+          data: {
+            closedAt: null,
+            ...(opts.runtimeRoles !== undefined || closed.runtimeRoles.length === 0 ? { runtimeRoles } : {}),
+          },
         })
         return { id: closed.id, created: true }
       }

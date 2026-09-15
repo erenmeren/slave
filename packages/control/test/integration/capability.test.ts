@@ -11,7 +11,7 @@ import {
   setPersonCapabilities,
   syncCapabilityTaxonomy,
 } from '../../src/capability.js'
-import { releasePerson } from '../../src/persons.js'
+import { releasePerson, unassignPerson } from '../../src/persons.js'
 import { setRuntimeRoles } from '../../src/profile.js'
 
 /**
@@ -883,6 +883,32 @@ describe('materialiseCompanySlave', () => {
     const asked = await seatMember(workspaceId, person.id, { runtimeRoles: ['security'] })
     expect(asked.ok).toBe(true)
     expect((await prisma.slave.findUniqueOrThrow({ where: { id: seat.id } })).runtimeRoles).toEqual(['security'])
+  })
+
+  // Whole-branch review: unassign empties runtimeRoles, and reopen used to restore none of them.
+  it('restores default runtimeRoles when reopening a seat emptied by unassign', async (): Promise<void> => {
+    const { workspaceId, teamId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Restore Backend', role: 'backend', capabilityKeys: ['security.application'] },
+    })
+    const person = await prisma.person.create({
+      data: { templateId: template.id, name: 'Restored', capabilities: template.capabilityKeys, lifecycle: 'permanent' },
+    })
+    const first = await seatMember(workspaceId, person.id, {})
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+
+    const removed = await unassignPerson(person.id, teamId, { reason: 'done here' })
+    expect(removed.ok).toBe(true)
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: first.value.slaveId } })).runtimeRoles).toEqual([])
+
+    const again = await seatMember(workspaceId, person.id, {})
+    expect(again.ok).toBe(true)
+    if (!again.ok) return
+    const reopened = await prisma.slave.findUniqueOrThrow({ where: { id: again.value.slaveId } })
+    expect(reopened.id).toBe(first.value.slaveId)
+    expect(reopened.closedAt).toBeNull()
+    expect(reopened.runtimeRoles).toEqual(['backend', 'security'])
   })
 
   it('refuses to reopen a seat for a released person', async (): Promise<void> => {

@@ -100,7 +100,13 @@ async function recipientCanAnswer(
   // shown lists `runtimeRoles`, so what it may address has to be counted the same way, or the ask
   // would be refused for a role the prompt itself offered.
   const holders = await prisma.slave.count({
-    where: { runtimeRoles: { has: role }, id: { not: senderSlaveId }, team: { workspaceId } },
+    where: {
+      runtimeRoles: { has: role },
+      id: { not: senderSlaveId },
+      team: { workspaceId },
+      closedAt: null,
+      person: { releasedAt: null },
+    },
   })
   return holders > 0 ? null : `no other slave in this workspace holds the role "${role}"`
 }

@@ -349,7 +349,12 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
   // own `startRun` for why: the resolved deny list is snapshotted at dispatch, from this run's own
   // slave row.
   const reviewers = await prisma.slave.findMany({
-    where: { runtimeRoles: { has: 'reviewer' }, team: { workspaceId: task.workspaceId } },
+    where: {
+      runtimeRoles: { has: 'reviewer' },
+      team: { workspaceId: task.workspaceId },
+      closedAt: null,
+      person: { releasedAt: null },
+    },
     orderBy: { id: 'asc' },
     include: { person: { include: { template: true } }, permissions: true },
   })

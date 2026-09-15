@@ -430,7 +430,12 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   // own `startRun` for why: the resolved deny list is snapshotted at dispatch, from this run's own
   // slave row.
   const managers = await prisma.slave.findMany({
-    where: { runtimeRoles: { has: 'manager' }, team: { workspaceId: deps.workspaceId } },
+    where: {
+      runtimeRoles: { has: 'manager' },
+      team: { workspaceId: deps.workspaceId },
+      closedAt: null,
+      person: { releasedAt: null },
+    },
     orderBy: { id: 'asc' },
     include: { person: { include: { template: true } }, permissions: true },
   })

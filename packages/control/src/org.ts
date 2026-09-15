@@ -463,7 +463,16 @@ export async function assignCompanyTx(
       })
       if (existing !== null) {
         if (existing.closedAt !== null) {
-          await tx.slave.update({ where: { id: existing.id }, data: { closedAt: null } })
+          const role = options?.roleOverrides?.[person.name] ?? person.template?.role ?? existing.role
+          await tx.slave.update({
+            where: { id: existing.id },
+            data: {
+              closedAt: null,
+              ...(existing.runtimeRoles.length === 0
+                ? { runtimeRoles: [...new Set([role, ...projectRoles(person.capabilities, options?.taxonomy ?? [])])] }
+                : {}),
+            },
+          })
           createdWorkers.push({ personId: person.id, name: person.name, role: existing.role })
         }
         continue
@@ -660,6 +669,13 @@ export async function lockSlave(tx: Prisma.TransactionClient, slaveId: string): 
   })
 }
 
+/** Person-first lock for a seat-named verb (`capability.ts` `lockedSlave`). Locks the PERSON via
+ *  the join without locking the seat yet, so `renameSlave` / `moveSlave` take the same order as
+ *  hire / `setPersonCapabilities`. A missing seat locks nobody; {@link lockSlave} then reports it. */
+async function lockPersonOfSlave(tx: Prisma.TransactionClient, slaveId: string): Promise<void> {
+  await tx.$queryRaw`SELECT p.id FROM "Person" p JOIN "Slave" s ON s."personId" = p.id WHERE s.id = ${slaveId} FOR UPDATE OF p`
+}
+
 /** The same lock-then-load shape as {@link lockSlave}, for `renameTeam`/`deleteTeam`'s own row --
  *  its slaves are what `deleteTeam` counts and cascades into. */
 async function lockTeam(tx: Prisma.TransactionClient, teamId: string) {
@@ -687,6 +703,7 @@ export async function renameSlave(
   if (name.trim() === '') return err({ kind: 'invalid_name' })
 
   const outcome = await prisma.$transaction(async (tx) => {
+    await lockPersonOfSlave(tx, slaveId)
     const slave = await lockSlave(tx, slaveId)
     if (slave === null) return { ok: false as const, error: { kind: 'slave_not_found', slaveId } as ControlRefusal }
 
@@ -954,13 +971,12 @@ export async function moveSlave(
   principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   const outcome = await prisma.$transaction(async (tx) => {
+    // Person first, then the seat: the same order hire / capability / `setPersonCapabilities`
+    // take. Locking the seat first used to invert that and deadlock against them.
+    await lockPersonOfSlave(tx, slaveId)
     const slave = await lockSlave(tx, slaveId)
     if (slave === null) return { ok: false as const, error: { kind: 'slave_not_found', slaveId } as ControlRefusal }
 
-    // Person lock AFTER the seat: this verb already holds the Slave row, and hire/capability lock
-    // Person then Slave -- inverting here would deadlock. `releasedAt` is decided before any write
-    // so a clash reopen cannot undo `releasePerson`.
-    await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${slave.personId} FOR UPDATE`
     const person = await tx.person.findUnique({ where: { id: slave.personId }, select: { releasedAt: true } })
     if (person === null) {
       return { ok: false as const, error: { kind: 'person_not_found', personId: slave.personId } as ControlRefusal }
@@ -999,7 +1015,7 @@ export async function moveSlave(
       // Closed, never deleted (R2): both seats keep their runs, messages and permissions, which is
       // exactly what repointing `teamId` used to preserve and what a delete here would destroy.
       await tx.slave.update({ where: { id: clash.id }, data: { closedAt: null, role: slave.role, runtimeRoles: slave.runtimeRoles } })
-      await tx.slave.update({ where: { id: slaveId }, data: { closedAt: new Date() } })
+      await tx.slave.update({ where: { id: slaveId }, data: { closedAt: new Date(), runtimeRoles: [] } })
     } else {
       await tx.slave.update({ where: { id: slaveId }, data: { teamId } })
     }

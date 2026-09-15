@@ -251,6 +251,26 @@ describe('moveSlave', () => {
     expect(events[0]?.payload).toMatchObject({ entity: 'slave', id: closed.id, field: 'team', to: 'QA' })
   })
 
+  // Whole-branch review: clash-close used to leave the source seat dispatchable (`runtimeRoles`
+  // still populated) even though `unassignPerson` / `movePerson` / `releasePerson` empty them.
+  it('empties runtimeRoles on the closed source seat after a clash-close', async () => {
+    const seat = await prisma.slave.findUniqueOrThrow({
+      where: { id: fixture.slaveId },
+      select: { personId: true, role: true },
+    })
+    await prisma.slave.update({ where: { id: fixture.slaveId }, data: { runtimeRoles: ['backend'] } })
+    await prisma.slave.create({
+      data: { teamId: fixture.qaId, role: 'qa', personId: seat.personId, closedAt: new Date(), runtimeRoles: [] },
+    })
+
+    const result = await moveSlave(fixture.slaveId, fixture.qaId)
+
+    expect(result.ok).toBe(true)
+    const closed = await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })
+    expect(closed.closedAt).not.toBeNull()
+    expect(closed.runtimeRoles).toEqual([])
+  })
+
   it('moving to the current department is a no-op with no event', async () => {
     const result = await moveSlave(fixture.slaveId, fixture.engineeringId)
 
