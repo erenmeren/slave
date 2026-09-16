@@ -124,6 +124,39 @@ describe('IntakeConversation', () => {
     await waitFor(() => expect(composer?.disabled).toBe(false))
   })
 
+  it.each([
+    {
+      failure: () => new Response(JSON.stringify({ error: 'intake service unavailable' }), { status: 503 }),
+      message: 'intake service unavailable',
+    },
+    {
+      failure: () => Promise.reject(new Error('network disconnected')),
+      message: 'network disconnected',
+    },
+  ])('retries a failed intake open after $message', async ({ failure, message }): Promise<void> => {
+    let openAttempts = 0
+    const fetchMock = vi.fn(async (url: string, options?: { method?: string }) => {
+      if (url === '/api/intakes' && options?.method === 'POST') {
+        openAttempts += 1
+        if (openAttempts === 1) return await failure()
+        return new Response(JSON.stringify({ ok: true, id: 'intake-1' }), { status: 201 })
+      }
+      return new Response(JSON.stringify({ intake: view() }), { status: 200 })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-error').textContent).toContain(message))
+    const composer = screen.getByTestId('intake-composer').querySelector('input')
+    expect(composer?.disabled).toBe(true)
+
+    fireEvent.click(screen.getByTestId('intake-open-retry'))
+
+    await waitFor(() => expect(composer?.disabled).toBe(false))
+    expect(screen.queryByTestId('intake-error')).toBeNull()
+    expect(openAttempts).toBe(2)
+  })
+
   it('renders the two kinds of line differently, and a fact card of chips', async (): Promise<void> => {
     stubFetch([
       view({

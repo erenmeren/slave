@@ -25,7 +25,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { accessSync, constants, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { chromium } from 'playwright-core'
@@ -38,7 +38,7 @@ const NEXT_READY_TIMEOUT_MS = 180_000
 const PROCESS_EXIT_TIMEOUT_MS = 20_000
 const DAEMON_START_TIMEOUT_MS = 60_000
 const REPLY_TIMEOUT_MS = 60_000
-const DISCOVERY_TIMEOUT_MS = 25_000
+const DISCOVERY_TIMEOUT_MS = 20_000
 const PLANNING_TIMEOUT_MS = 30_000
 const POLL_INTERVAL_MS = 100
 const DAEMON_PERIOD_MS = 500
@@ -424,8 +424,6 @@ try {
     async () => page.getByTestId('intake-conversation').isVisible(),
     'New project',
   )
-  const firstIntake = await prisma.intake.findFirst({ orderBy: { createdAt: 'desc' }, select: { id: true } })
-  if (firstIntake !== null) intakeIds.push(firstIntake.id)
   const emptyMessages = await page.getByTestId('intake-message').count()
   console.log(`stage 2: the drawer opened with ${String(emptyMessages)} message(s)`)
   if (emptyMessages !== 0) await fail('stage 2: a new conversation is not empty')
@@ -471,10 +469,12 @@ try {
   if (!checked.every((row) => row.checked)) await fail('stage 3: a detected command arrived unchecked')
   if (checked.length !== 2) await fail(`stage 3: the draft carries ${String(checked.length)} commands, expected two`)
   const teamRoles = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-testid="intake-team-chip"]')].map((chip) => chip.getAttribute('data-roles')),
+    [...document.querySelectorAll('[data-testid="intake-team-chip"]')].map(
+      (chip) => chip.getAttribute('data-roles')?.split(',').filter((role) => role !== '') ?? [],
+    ),
   )
   console.log(`stage 3: team = ${JSON.stringify(teamRoles)}`)
-  if (!teamRoles.some((roles) => String(roles).includes('manager'))) {
+  if (!teamRoles.some((roles) => roles.includes('manager'))) {
     await fail('stage 3: no proposed seat carries `manager`, and dispatchPlanning refuses without one')
   }
   console.log('stage 3 PASSED: the tree read the repository, and the model chose from what it read')
@@ -498,13 +498,18 @@ try {
     await fail(`stage 4: the project verifies with ${JSON.stringify(created.verifyCommands)}; one was unchecked`)
   }
   if (created.goalVersion !== 1) await fail(`stage 4: the project is on goal v${String(created.goalVersion)}, expected v1`)
+  const firstIntake = await prisma.intake.findUnique({ where: { workspaceId }, select: { id: true } })
+  if (firstIntake === null) await fail('stage 4: the created project is not linked to its conversation')
+  intakeIds.push(firstIntake.id)
   const goalEvent = await prisma.executionEvent.findFirst({ where: { workspaceId, type: 'workspace_goal_set' } })
   if (!String(goalEvent?.payload?.request ?? '').includes('Rate limiting for our public API')) {
     await fail(`stage 4: the goal event's request is ${JSON.stringify(goalEvent?.payload?.request)}`)
   }
   const createdEvent = await prisma.executionEvent.findFirst({ where: { workspaceId, type: 'workspace_created' } })
-  if (typeof createdEvent?.payload?.intakeId !== 'string') {
-    await fail('stage 4: the created event does not carry the conversation that made it')
+  if (createdEvent?.payload?.intakeId !== firstIntake.id) {
+    await fail(
+      `stage 4: the created event carries intake ${JSON.stringify(createdEvent?.payload?.intakeId)}, expected ${firstIntake.id}`,
+    )
   }
   console.log('stage 4 PASSED: one button, and a project whose definition of done is a command that really exists')
 
@@ -520,6 +525,7 @@ try {
   const intakeRow = await prisma.intake.findUnique({ where: { workspaceId } })
   const staffStep = (intakeRow?.stepLog ?? []).find((entry) => entry.step === 'staff')
   console.log(`stage 5: the staff step = ${JSON.stringify(staffStep)}`)
+  // Task 10 replaces this deliberately pre-M58 assertion after M58 merges.
   if (staffStep?.status !== 'skipped') {
     await fail(`stage 5: the staff step is ${JSON.stringify(staffStep)}, and before M58 it must be recorded as skipped`)
   }
@@ -530,6 +536,7 @@ try {
   )
   const tripped = await prisma.executionEvent.findFirst({ where: { workspaceId, type: 'guardrail_tripped' } })
   console.log(`stage 5: guardrail = ${JSON.stringify(tripped?.payload)}`)
+  // Task 10 replaces this deliberately pre-M58 assertion after M58 merges.
   if (String(tripped?.payload?.kind ?? tripped?.payload?.guardrail ?? '') !== 'no_planner') {
     await fail(`stage 5: the new project tripped ${JSON.stringify(tripped?.payload)}, expected no_planner`)
   }
@@ -545,8 +552,6 @@ try {
     async () => page.getByTestId('intake-conversation').isVisible(),
     'New project',
   )
-  const secondIntake = await prisma.intake.findFirst({ orderBy: { createdAt: 'desc' }, select: { id: true } })
-  if (secondIntake !== null) intakeIds.push(secondIntake.id)
   await page.getByTestId('intake-composer').getByRole('textbox').fill('I have an idea and want a NEW REPOSITORY for it')
   await page.getByTestId('intake-send').click()
   await waitVisible(page.getByTestId('intake-draft'), 'the draft card for a project with no repository')
@@ -554,8 +559,12 @@ try {
   const secondId = page.url().split('/w/')[1]?.split(/[/?#]/)[0] ?? ''
   workspaceIds.push(secondId)
   const second = await prisma.workspace.findUnique({ where: { id: secondId } })
+  if (second === null) await fail('stage 6: the browser landed on a project that is not in the database')
+  const secondIntake = await prisma.intake.findUnique({ where: { workspaceId: secondId }, select: { id: true } })
+  if (secondIntake === null) await fail('stage 6: the created project is not linked to its conversation')
+  intakeIds.push(secondIntake.id)
   console.log(`stage 6: created ${JSON.stringify(second?.repoPath)} under ${reposRoot}`)
-  if (!String(second?.repoPath).startsWith(reposRoot)) {
+  if (dirname(second.repoPath) !== reposRoot) {
     await fail(`stage 6: the repository went to ${JSON.stringify(second?.repoPath)}, and Settings said ${reposRoot}`)
   }
   const log = execFileSync('git', ['-C', second.repoPath, 'log', '--oneline'], { encoding: 'utf8' }).trim().split('\n')
@@ -596,7 +605,7 @@ try {
   // ============================================================================================
   // Stage 8: the money is not invisible.
   // ============================================================================================
-  const spendRow = await prisma.intake.findUnique({ where: { workspaceId } })
+  const spendRow = await prisma.intake.findUnique({ where: { id: firstIntake.id } })
   console.log(
     `stage 8: the conversation cost ${JSON.stringify({
       calls: spendRow?.modelCalls,
@@ -604,11 +613,19 @@ try {
       unmeasured: spendRow?.unmeasuredCalls,
     })}`,
   )
-  if ((spendRow?.modelCalls ?? 0) < 2) await fail('stage 8: the conversation records fewer than the two calls it made')
+  if (spendRow?.modelCalls !== 2) await fail(`stage 8: the conversation records ${String(spendRow?.modelCalls)} calls, expected two`)
+  if (spendRow.modelCostUsd !== 0.02) {
+    await fail(`stage 8: the conversation records ${String(spendRow.modelCostUsd)} USD, expected 0.02`)
+  }
   await gotoReliably(`${baseUrl}/`)
-  const cardSpend = await page.getByTestId('project-card').filter({ hasText: created.name }).first().textContent().catch(() => null)
+  const exactCard = page.locator(`[data-testid="project-card"][data-workspace-id="${workspaceId}"]`)
+  if ((await exactCard.count()) !== 1) await fail(`stage 8: expected exactly one card for workspace ${workspaceId}`)
+  const expectedCardSpend = '$0.03'
+  const cardSpend = await exactCard.textContent().catch(() => null)
   console.log(`stage 8: the project card reads ${JSON.stringify(cardSpend)}`)
-  if (cardSpend === null) await fail('stage 8: the created project has no card on the Projects page')
+  if ((await exactCard.getByText(expectedCardSpend, { exact: true }).count()) < 1) {
+    await fail(`stage 8: workspace ${workspaceId}'s card does not show the formatted spend ${expectedCardSpend}`)
+  }
   console.log('stage 8 PASSED: the conversation charged what it spent, and the card shows it')
 
   await stopDaemon(daemon)
@@ -633,6 +650,7 @@ try {
     while (nextServer.exitCode === null && Date.now() < deadline) await delay(POLL_INTERVAL_MS)
     if (nextServer.exitCode === null) nextServer.kill('SIGKILL')
   }
+  // Child rows first: each captured intake is the exact row linked to one created workspace.
   for (const intakeId of [...new Set(intakeIds)]) {
     await prisma.intake.delete({ where: { id: intakeId } }).catch(() => {})
   }

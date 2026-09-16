@@ -192,3 +192,70 @@ registered CI gates exited 0.
 ## Scratch Directory
 
 `/tmp/tmp.erOjJ7camf`
+
+## Fix Round 1
+
+### Findings
+
+1. **Important — failed intake opens can be retried.** Extracted the intake open request into a
+   reusable callback, added an opening-state latch, and added a visible `Retry opening
+   conversation` action when the initial open fails. Retrying clears the prior error and a
+   successful retry enables the composer. The parameterized regression covers both an HTTP 503
+   response and a rejected network request. RED evidence: the focused run exited 1 with both new
+   cases unable to find `intake-open-retry`; the other 15 tests passed. GREEN evidence: all 17
+   tests passed.
+2. **Important — the creation event carries the exact conversation id.** Stage 4 now resolves the
+   intake linked to the created workspace and compares `workspace_created.payload.intakeId` for
+   exact equality with that row's id.
+3. **Important — deterministic intake capture and cleanup.** Removed both pre-open
+   `findFirst(orderBy: createdAt)` lookups. Each browser intake is captured only after workspace
+   creation through its unique `workspaceId` linkage; the CLI intake keeps the exact id returned
+   by `intake open`. Cleanup deletes precisely those captured intake rows before their workspaces.
+4. **Important — stage 8 proves the right card and formatted spend.** Project cards now expose
+   their workspace id as data, pinned by a component test. Stage 8 selects exactly one card by the
+   created workspace id, proves the intake recorded exactly two calls and USD 0.02, and requires
+   the exact formatted `$0.03` card value.
+5. **Minor — discovery is bounded to two periods.** Reduced `DISCOVERY_TIMEOUT_MS` from 25 seconds
+   to 20 seconds.
+6. **Minor — repository parent is exact.** Stage 6 compares `dirname(repoPath)` directly with the
+   configured repositories root, so a sibling prefix cannot pass.
+7. **Minor — manager role matching is exact.** Stage 3 parses each `data-roles` value into role
+   entries and checks for the exact `manager` entry instead of a substring.
+
+The approved intake answer seam was not changed. The two deliberately pre-M58 stage-5 assertions
+remain unchanged, and each now has a comment naming Task 10 as their replacement point.
+
+### Gate stage results
+
+| Stage | Result | Strongest evidence |
+|---|---:|---|
+| 1 | PASS | A daemon started without `--workspace` and announced discovery. |
+| 2 | PASS | The empty conversation received one assistant question. |
+| 3 | PASS | Repository facts, provenance, checked commands, and exact `manager` role were present. |
+| 4 | PASS | The workspace definition and exact linked intake event id matched. |
+| 5 | PASS | Discovery completed inside the 20-second bound; approved pre-M58 assertions held. |
+| 6 | PASS | The repository's parent exactly matched the configured root; one initial commit existed. |
+| 7 | PASS | The CLI intake created the expected workspace shape. |
+| 8 | PASS | The exact workspace card showed `$0.03`; its intake recorded 2 calls and USD 0.02. |
+
+### Commands
+
+| Command | Exit | Result |
+|---|---:|---|
+| Initial sandboxed launch of `git -C /home/meren/projects/slave-of-ai-m59 log --oneline -1 && git -C /home/meren/projects/slave-of-ai-m59 status --short --branch` | 1 | The command did not start: the sandbox namespace setup returned `EINVAL`. |
+| `git -C /home/meren/projects/slave-of-ai-m59 log --oneline -1 && git -C /home/meren/projects/slave-of-ai-m59 status --short --branch` | 0 | Confirmed `9cced85b` on `feature/m59-chat-onboarding`, initially clean. |
+| `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/intake-conversation.test.tsx` (RED) | 1 | 15 passed; both new retry cases failed because the retry action did not exist. |
+| `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/intake-conversation.test.tsx` (GREEN) | 0 | 17 tests passed. |
+| `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/projects-page.test.tsx` (RED) | 1 | 42 passed; workspace-id card assertion failed with `null`. |
+| `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/projects-page.test.tsx` (GREEN) | 0 | 43 tests passed. |
+| `node --check scripts/gate-m59-intake.mjs` | 0 | Syntax check passed. |
+| `npx vitest run --root /home/meren/projects/slave-of-ai-m59 packages/domain/test/intake packages/providers/test/fake-claude.test.ts apps/web/test/projects-page.test.tsx apps/web/test/settings-page.test.tsx` | 0 | 9 files and 189 tests passed. |
+| `CHROMIUM_PATH=/usr/bin/chromium SLAVEOFAI_REQUIRE_FAKE_CLI=1 npm run gate:m59-intake` through the first `tee` logging pipeline | 0 | Eight stages printed PASS; repeated because this pipeline had not enabled `pipefail`. |
+| `set -o pipefail; CHROMIUM_PATH=/usr/bin/chromium SLAVEOFAI_REQUIRE_FAKE_CLI=1 npm run gate:m59-intake 2>&1 \| tee /tmp/slaveofai-m59-fix-round-1/gate-m59-intake-final.log` | 0 | Authoritative gate exit; all eight stage lines passed. |
+| `npm run gate:m26-vocabulary` | 0 | Vocabulary gate passed. |
+| `npx tsc --build` | 0 | Project-reference build passed. |
+| `npm run --silent typecheck` | 0 | Full typecheck passed. |
+| `npm run web:build` | 0 | Production web build passed. |
+| `git diff --check && git diff --stat && git status --short` | 0 | No whitespace errors; expected source, test, gate, and report changes only. |
+
+Final gate log: `/tmp/slaveofai-m59-fix-round-1/gate-m59-intake-final.log`.

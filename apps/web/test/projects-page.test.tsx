@@ -159,7 +159,9 @@ describe('ProjectsClient', () => {
     render(<TestProjectsClient projects={[project({ id: 'w7', companyName: 'Acme Robotics' })]} companies={companies} />)
     // M57 ruling P17: the README's card recipe is ON the surface, so `ui/Card` carries the
     // `project-card` testid rather than a wrapper drawing a second bordered box around it.
-    fireEvent.click(screen.getByTestId('project-card'))
+    const card = screen.getByTestId('project-card')
+    expect(card.getAttribute('data-workspace-id')).toBe('w7')
+    fireEvent.click(card)
     expect(routerPush).toHaveBeenCalledWith('/w/w7')
   })
 

@@ -86,6 +86,7 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
   const [view, setView] = useState<IntakeView | null>(null)
   const [text, setText] = useState('')
   const [pending, setPending] = useState(false)
+  const [opening, setOpening] = useState(true)
   const [errorText, setErrorText] = useState<string | null>(null)
   const [byHand, setByHand] = useState(false)
   const [edited, setEdited] = useState<IntakeDraft | null>(null)
@@ -103,26 +104,32 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
     setView(body.intake)
   }, [])
 
+  const open = useCallback(async (): Promise<void> => {
+    setOpening(true)
+    setErrorText(null)
+    try {
+      const response = await fetch('/api/intakes', { method: 'POST' })
+      if (response.status === 401) onUnauthorized()
+      if (!response.ok) {
+        setErrorText(errorMessage(await response.json().catch(() => null), response.status))
+        return
+      }
+      const body = (await response.json()) as { id: string }
+      setIntakeId(body.id)
+      await refresh(body.id)
+    } catch (cause) {
+      setErrorText(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setOpening(false)
+    }
+  }, [refresh])
+
   const opened = useRef(false)
   useEffect(() => {
     if (opened.current) return
     opened.current = true
-    void (async (): Promise<void> => {
-      try {
-        const response = await fetch('/api/intakes', { method: 'POST' })
-        if (response.status === 401) onUnauthorized()
-        if (!response.ok) {
-          setErrorText(errorMessage(await response.json().catch(() => null), response.status))
-          return
-        }
-        const body = (await response.json()) as { id: string }
-        setIntakeId(body.id)
-        await refresh(body.id)
-      } catch (cause) {
-        setErrorText(cause instanceof Error ? cause.message : String(cause))
-      }
-    })()
-  }, [refresh])
+    void open()
+  }, [open])
 
   const waiting = view !== null && WAITING.includes(view.status)
   useEffect(() => {
@@ -481,6 +488,12 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
             </a>
           )}
         </div>
+      )}
+
+      {intakeId === null && errorText !== null && (
+        <Button variant="primary" size="sm" type="button" data-testid="intake-open-retry" disabled={opening} onClick={() => void open()}>
+          Retry opening conversation
+        </Button>
       )}
 
       {view?.status !== 'drafted' && (
