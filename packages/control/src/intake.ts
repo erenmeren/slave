@@ -14,6 +14,7 @@ import {
   factsSummary,
   intakeDraftSchema,
   intakeFactsSchema,
+  intakeRepositoryPath,
   intakeStepLogSchema,
   ok,
   type IntakeAnswer,
@@ -599,7 +600,7 @@ export async function acceptIntake(
         repoPath = already.detail
       } else {
         const root = await resolveReposRoot()
-        const target = draft.repo.path ?? join(root.root, slugify(draft.name))
+        const target = draft.repo.path ?? intakeRepositoryPath(root.root, slugify(draft.name))
         const created = await initRepository({ path: target, name: draft.name, goal: draft.goal })
         if (!created.ok) return fail('init_repository', created.error)
         repoPath = created.value.path

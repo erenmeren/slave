@@ -6,6 +6,7 @@ import {
   INTAKE_STATUS_LABEL,
   INTAKE_STEP_LABEL,
   INTAKE_STEP_STATUS_LABEL,
+  intakeRepositoryPath,
   intakeRepositorySlug,
   VERIFY_SOURCE_LABEL,
   type IntakeDraft,
@@ -49,6 +50,12 @@ type RepoChoice = 'existing' | 'new-root' | 'new-path'
 
 const WAITING: readonly IntakeStatus[] = ['awaiting_reply', 'replying', 'creating']
 
+type InstallationRootState =
+  | { readonly status: 'idle'; readonly root: null }
+  | { readonly status: 'loading'; readonly root: null }
+  | { readonly status: 'loaded'; readonly root: string }
+  | { readonly status: 'failed'; readonly root: null }
+
 function FactCard({ facts }: { readonly facts: IntakeFacts }): React.JSX.Element {
   return (
     <div data-testid="intake-fact-card" className="flex flex-wrap gap-1 rounded-tile border border-line bg-card px-2 py-1.5">
@@ -84,7 +91,9 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
   const [edited, setEdited] = useState<IntakeDraft | null>(null)
   const [choice, setChoice] = useState<RepoChoice>('existing')
   const [addition, setAddition] = useState('')
+  const [installationRoot, setInstallationRoot] = useState<InstallationRootState>({ status: 'idle', root: null })
   const takenFrom = useRef<string | null>(null)
+  const installationRequested = useRef(false)
 
   const refresh = useCallback(async (id: string): Promise<void> => {
     const response = await fetch(`/api/intakes/${id}`)
@@ -132,6 +141,35 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
     setChoice(draft.repo.mode === 'existing' ? 'existing' : draft.repo.path === null ? 'new-root' : 'new-path')
   }, [view?.draft])
 
+  const needsInstallationRoot = view !== null && view.facts === null && edited?.repo.mode === 'new' && edited.repo.path === null
+  useEffect(() => {
+    if (!needsInstallationRoot || installationRequested.current) return
+    installationRequested.current = true
+    let cancelled = false
+    setInstallationRoot({ status: 'loading', root: null })
+    void (async (): Promise<void> => {
+      try {
+        const response = await fetch('/api/installation')
+        if (response.status === 401) onUnauthorized()
+        if (!response.ok) {
+          setErrorText(errorMessage(await response.json().catch(() => null), response.status))
+          if (!cancelled) setInstallationRoot({ status: 'failed', root: null })
+          return
+        }
+        const body = (await response.json()) as { resolved: string }
+        if (!cancelled) setInstallationRoot({ status: 'loaded', root: body.resolved })
+      } catch (cause) {
+        if (!cancelled) {
+          setErrorText(cause instanceof Error ? cause.message : String(cause))
+          setInstallationRoot({ status: 'failed', root: null })
+        }
+      }
+    })()
+    return (): void => {
+      cancelled = true
+    }
+  }, [needsInstallationRoot])
+
   const detected = useMemo(
     () => (view?.facts?.paths ?? []).flatMap((path) => path.verify.map((finding) => finding.command)),
     [view?.facts],
@@ -142,9 +180,10 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
     return [...own, ...extra.map((command) => ({ command, source: 'detected' as VerifySource }))]
   }, [edited?.verifyCommands, detected])
   const newRootPath = useMemo(() => {
-    if (view?.facts === null || view?.facts === undefined) return 'the repositories folder'
-    return `${view.facts.reposRoot}/${intakeRepositorySlug(edited?.name ?? '')}`
-  }, [edited?.name, view?.facts])
+    const root = view?.facts?.reposRoot ?? (installationRoot.status === 'loaded' ? installationRoot.root : null)
+    return root === null || root === undefined ? null : intakeRepositoryPath(root, intakeRepositorySlug(edited?.name ?? ''))
+  }, [edited?.name, installationRoot, view?.facts])
+  const newRootLabel = newRootPath ?? (installationRoot.status === 'failed' ? 'Repositories folder unavailable' : 'Loading repositories folder')
 
   const send = async (): Promise<void> => {
     if (intakeId === null || text.trim() === '') return
@@ -211,6 +250,7 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
   }
 
   const draftReady = edited !== null && edited.verifyCommands.length > 0 && edited.name.trim() !== ''
+  const newRootReady = choice !== 'new-root' || newRootPath !== null
 
   return (
     <div data-testid="intake-conversation" className="flex min-h-0 flex-1 flex-col gap-3">
@@ -274,7 +314,7 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
                 }}
                 className={`rounded-chip px-2 py-0.5 text-[12px] ${choice === option ? 'bg-hover text-text-1' : 'text-text-3'}`}
               >
-                {{ existing: 'a repository I have', 'new-root': `a new one under ${newRootPath}`, 'new-path': 'a new one at' }[option]}
+                {{ existing: 'a repository I have', 'new-root': `a new one under ${newRootLabel}`, 'new-path': 'a new one at' }[option]}
               </button>
             ))}
           </div>
@@ -410,7 +450,7 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
             </div>
           )}
 
-          <Button variant="primary" size="sm" type="button" data-testid="intake-create" disabled={pending || !draftReady} onClick={() => void create()}>
+          <Button variant="primary" size="sm" type="button" data-testid="intake-create" disabled={pending || !draftReady || !newRootReady} onClick={() => void create()}>
             Create project
           </Button>
         </div>
@@ -470,7 +510,7 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
       )}
 
       <div className="flex items-center justify-between text-[12px] text-text-3">
-        <button type="button" data-testid="intake-by-hand" className="underline" onClick={() => setByHand(true)}>
+        <button type="button" data-testid="intake-by-hand" className="underline" disabled={!newRootReady} onClick={() => setByHand(true)}>
           fill in by hand
         </button>
         <button type="button" className="underline" onClick={onClose}>

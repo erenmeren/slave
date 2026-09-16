@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { intakeDraftSchema, intakeRepositorySlug, intakeStepLogSchema, type IntakeDraft } from '../../src/index.js'
+import { intakeDraftSchema, intakeRepositoryPath, intakeRepositorySlug, intakeStepLogSchema, type IntakeDraft } from '../../src/index.js'
 
 const draft: IntakeDraft = {
   name: 'Public API',
@@ -65,6 +65,14 @@ describe('intakeRepositorySlug', () => {
     expect(intakeRepositorySlug('***')).toBe('project')
     expect(intakeRepositorySlug('../etc')).toBe('etc')
     expect(intakeRepositorySlug('x'.repeat(100))).toBe('x'.repeat(80))
+  })
+})
+
+describe('intakeRepositoryPath', () => {
+  it('joins a POSIX absolute root and slug with the same separator shape as accept-time path join', () => {
+    expect(intakeRepositoryPath('/home/me/projects', 'public-api')).toBe('/home/me/projects/public-api')
+    expect(intakeRepositoryPath('/home/me/projects/', 'public-api')).toBe('/home/me/projects/public-api')
+    expect(intakeRepositoryPath('/', 'public-api')).toBe('/public-api')
   })
 })
 

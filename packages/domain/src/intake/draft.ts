@@ -79,6 +79,12 @@ export function intakeRepositorySlug(name: string): string {
   return folded === '' ? 'project' : folded.slice(0, 80)
 }
 
+/** Client-safe POSIX root + slug join for installation repository roots. */
+export function intakeRepositoryPath(root: string, slug: string): string {
+  const normalizedRoot = root === '/' ? '/' : root.replace(/\/+$/u, '')
+  return normalizedRoot === '/' ? `/${slug}` : `${normalizedRoot}/${slug}`
+}
+
 /** One line of `Intake.stepLog` (M59 R10). `skipped` is a real outcome and not a failure: it is
  *  what the `staff` step records until M58 is on `main`. */
 export const intakeStepEntrySchema = z.object({

@@ -75,6 +75,14 @@ function stubFetch(views: Record<string, unknown>[]): ReturnType<typeof vi.fn> {
   return fetchMock
 }
 
+function deferredResponse<T>(): { readonly promise: Promise<T>; readonly resolve: (value: T) => void } {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
 describe('IntakeConversation', () => {
   beforeEach(() => {
     routerPush.mockClear()
@@ -217,6 +225,59 @@ describe('IntakeConversation', () => {
     render(<IntakeConversation onClose={vi.fn()} />)
     await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
     expect(screen.getByTestId('intake-repo-new-root').textContent).toContain('/home/x/projects/odeme-sistemi')
+  })
+
+  it('joins a trailing-slash repositories root with exactly one separator', async (): Promise<void> => {
+    stubFetch([
+      view({
+        status: 'drafted',
+        draft: { ...DRAFT, repo: { mode: 'new', path: null } },
+        facts: { ...FACTS, reposRoot: '/home/x/projects/', paths: [] },
+      }),
+    ])
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+    expect(screen.getByTestId('intake-repo-new-root').textContent).toContain('/home/x/projects/public-api')
+    fireEvent.click(screen.getByTestId('intake-by-hand'))
+    await waitFor(() => expect(screen.getByTestId('create-workspace-form')).toBeTruthy())
+    expect((screen.getByTestId('create-workspace-repo') as HTMLInputElement).value).toBe('/home/x/projects/public-api')
+  })
+
+  it('loads the installation root for drafted new repositories when facts are not present', async (): Promise<void> => {
+    const installation = deferredResponse<Response>()
+    const fetchMock = vi.fn(async (url: string, options?: { method?: string }) => {
+      if (url === '/api/intakes' && options?.method === 'POST') {
+        return new Response(JSON.stringify({ ok: true, id: 'intake-1' }), { status: 201 })
+      }
+      if (url === '/api/installation') return installation.promise
+      if (url.endsWith('/accept')) return new Response(JSON.stringify({ ok: true, workspaceId: 'w1' }), { status: 200 })
+      return new Response(
+        JSON.stringify({ intake: view({ status: 'drafted', draft: { ...DRAFT, repo: { mode: 'new', path: null } }, facts: null }) }),
+        { status: 200 },
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+    expect(screen.getByTestId('intake-repo-new-root').textContent).toContain('Loading repositories folder')
+    expect((screen.getByTestId('intake-create') as HTMLButtonElement).disabled).toBe(true)
+
+    await act(async () => {
+      installation.resolve(new Response(JSON.stringify({ reposRoot: null, resolved: '/srv/repos/', source: 'env' }), { status: 200 }))
+      await installation.promise
+    })
+
+    await waitFor(() => expect(screen.getByTestId('intake-repo-new-root').textContent).toContain('/srv/repos/public-api'))
+    expect((screen.getByTestId('intake-create') as HTMLButtonElement).disabled).toBe(false)
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('intake-create'))
+    })
+    const accept = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/accept'))
+    expect(JSON.parse(String((accept?.[1] as { body: string }).body)).draft.repo).toEqual({ mode: 'new', path: null })
+    fireEvent.click(screen.getByTestId('intake-by-hand'))
+    await waitFor(() => expect(screen.getByTestId('create-workspace-form')).toBeTruthy())
+    expect((screen.getByTestId('create-workspace-repo') as HTMLInputElement).value).toBe('/srv/repos/public-api')
   })
 
   it('swaps to the form, pre-filled, when a person would rather type it', async (): Promise<void> => {

@@ -95,3 +95,27 @@
 - `npx tsc --build` — exit 0.
 - `npm run --silent typecheck` — exit 0.
 - `npm run web:build` — exit 0.
+
+## Re-review Fix: New Repository Path Join
+
+- Added `intakeRepositoryPath(root, slug)` beside `intakeRepositorySlug` as a client-safe POSIX root join helper: trailing separators are removed except for `/`, then the slug is appended with exactly one separator.
+- `acceptIntake` now uses the same shared helper for implicit new-repository paths, so accept-time and client display share the same path construction.
+- `IntakeConversation` now reads `GET /api/installation` when a drafted new-root intake has no facts, shows a loading root hint until that response arrives, disables create/fill-in-by-hand while unresolved, and never sends/prefills prose as a path.
+- Added coverage for trailing-slash roots, facts-null installation loading, exact fill-in-by-hand prefill, and accept payload retaining `{ mode: 'new', path: null }`.
+
+## Re-review Verification
+
+- RED: `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/intake-conversation.test.tsx` — exit 1 on `//` display and facts-null placeholder.
+- RED: `npx vitest run --root /home/meren/projects/slave-of-ai-m59 packages/domain/test/intake/draft.test.ts` — exit 1 for missing `intakeRepositoryPath`.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 packages/domain/test/intake/draft.test.ts` — exit 0, 13 tests.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/intake-conversation.test.tsx` — exit 0, 13 tests.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 packages/domain/test/intake/constants.test.ts packages/domain/test/intake/draft.test.ts` — exit 0, 18 tests.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/settings-repos-root.test.tsx` — exit 0, 5 tests.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/integration/intake-routes.test.ts` — exit 0, 9 tests.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 packages/control/test/integration/intake-accept.test.ts` — exit 0, 10 tests.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/projects-page.test.tsx` — exit 0, 43 tests.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/settings-page.test.tsx` — exit 0, 33 tests.
+- `npm run gate:m26-vocabulary` — exit 0.
+- `npx tsc --build` — exit 0.
+- `npm run --silent typecheck` — exit 0.
+- `npm run web:build` — exit 0.
