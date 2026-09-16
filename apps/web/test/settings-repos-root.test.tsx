@@ -18,7 +18,12 @@ describe('the Repositories section', () => {
   })
 
   it('saves a folder and shows the new source', async (): Promise<void> => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, reposRoot: '/home/me/code' }), { status: 200 }))
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: true, reposRoot: '/home/me/code', resolved: '/home/me/code', source: 'settings' }), {
+          status: 200,
+        }),
+    )
     vi.stubGlobal('fetch', fetchMock)
     render(<ReposRootField initial={{ reposRoot: null, resolved: '/home/me/projects', source: 'default' }} />)
     fireEvent.change(screen.getByTestId('settings-repos-root'), { target: { value: '/home/me/code' } })
@@ -27,6 +32,23 @@ describe('the Repositories section', () => {
     })
     expect(fetchMock).toHaveBeenCalledWith('/api/installation', expect.objectContaining({ method: 'POST' }))
     await waitFor(() => expect(screen.getByTestId('settings-repos-root-source').textContent).toContain('Settings'))
+  })
+
+  it('clears a saved folder and shows the fallback source the route resolved', async (): Promise<void> => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ ok: true, reposRoot: null, resolved: '/srv/repos', source: 'env' }), {
+          status: 200,
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    render(<ReposRootField initial={{ reposRoot: '/home/me/code', resolved: '/home/me/code', source: 'settings' }} />)
+    fireEvent.change(screen.getByTestId('settings-repos-root'), { target: { value: '' } })
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('settings-repos-root-save'))
+    })
+    await waitFor(() => expect(screen.getByTestId('settings-repos-root-source').textContent).toContain('/srv/repos'))
+    expect(screen.getByTestId('settings-repos-root-source').textContent).toContain('SLAVEOFAI_REPOS')
   })
 
   it('shows the refusal rather than pretending it saved', async (): Promise<void> => {

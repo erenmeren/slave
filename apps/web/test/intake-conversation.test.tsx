@@ -199,8 +199,24 @@ describe('IntakeConversation', () => {
     render(<IntakeConversation onClose={vi.fn()} />)
     await waitFor(() => expect(screen.getByTestId('intake-step-log')).toBeTruthy())
     expect(screen.getByTestId('intake-step').getAttribute('data-status')).toBe('failed')
+    expect(screen.getByTestId('intake-step').getAttribute('title')).toBe('failed')
+    expect(screen.getByTestId('intake-step').textContent).toContain('Stopped')
+    expect(screen.getByTestId('intake-step').textContent).not.toContain('failed')
     expect(screen.getByTestId('intake-error').textContent).toContain('already exists')
     expect(screen.getByTestId('intake-retry')).toBeTruthy()
+  })
+
+  it('shows the same new repository path accept will use for unicode names', async (): Promise<void> => {
+    stubFetch([
+      view({
+        status: 'drafted',
+        draft: { ...DRAFT, name: 'Ödeme Sistemi', repo: { mode: 'new', path: null } },
+        facts: { ...FACTS, paths: [] },
+      }),
+    ])
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+    expect(screen.getByTestId('intake-repo-new-root').textContent).toContain('/home/x/projects/odeme-sistemi')
   })
 
   it('swaps to the form, pre-filled, when a person would rather type it', async (): Promise<void> => {
@@ -212,5 +228,20 @@ describe('IntakeConversation', () => {
     expect((screen.getByTestId('create-workspace-name') as HTMLInputElement).value).toBe('Public API')
     expect((screen.getByTestId('create-workspace-repo') as HTMLInputElement).value).toBe('/home/x/api')
     expect((screen.getByTestId('create-workspace-verify') as HTMLTextAreaElement).value).toContain('npm test')
+  })
+
+  it('prefills the manual form with the resolved new-root repository path', async (): Promise<void> => {
+    stubFetch([
+      view({
+        status: 'drafted',
+        draft: { ...DRAFT, name: '***', repo: { mode: 'new', path: null } },
+        facts: { ...FACTS, paths: [] },
+      }),
+    ])
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('intake-by-hand'))
+    await waitFor(() => expect(screen.getByTestId('create-workspace-form')).toBeTruthy())
+    expect((screen.getByTestId('create-workspace-repo') as HTMLInputElement).value).toBe('/home/x/projects/project')
   })
 })

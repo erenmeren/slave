@@ -39,12 +39,8 @@ export function ReposRootField({ initial }: { readonly initial: ReposRootState }
         setErrorText(errorMessage(await response.json().catch(() => null), response.status))
         return
       }
-      const body = (await response.json()) as { reposRoot: string | null }
-      setState(
-        body.reposRoot === null
-          ? { reposRoot: null, resolved: state.resolved, source: 'default' }
-          : { reposRoot: body.reposRoot, resolved: body.reposRoot, source: 'settings' },
-      )
+      const body = (await response.json()) as ReposRootState
+      setState(body)
     } catch (cause) {
       setErrorText(cause instanceof Error ? cause.message : String(cause))
     } finally {

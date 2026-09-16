@@ -122,10 +122,26 @@ describe('the intake routes', () => {
     expect(['env', 'default']).toContain(before.source)
 
     const root = mkdtempSync(join(tmpdir(), 'repos-root-'))
-    expect((await installationPOST(post({ reposRoot: root }))).status).toBe(200)
+    const write = await installationPOST(post({ reposRoot: root }))
+    expect(write.status).toBe(200)
+    expect(await write.json()).toEqual({ ok: true, reposRoot: root, resolved: root, source: 'settings' })
     const after = (await (await installationGET()).json()) as { resolved: string; source: string }
     expect(after).toMatchObject({ resolved: root, source: 'settings' })
 
     expect((await installationPOST(post({ reposRoot: 'relative' }))).status).toBe(409)
+  })
+
+  it('returns the resolved fallback facts after clearing a stored repositories folder', async (): Promise<void> => {
+    const original = process.env['SLAVEOFAI_REPOS']
+    process.env['SLAVEOFAI_REPOS'] = '/srv/repos'
+    try {
+      expect((await installationPOST(post({ reposRoot: mkdtempSync(join(tmpdir(), 'repos-root-')) }))).status).toBe(200)
+      const clear = await installationPOST(post({ reposRoot: null }))
+      expect(clear.status).toBe(200)
+      expect(await clear.json()).toEqual({ ok: true, reposRoot: null, resolved: '/srv/repos', source: 'env' })
+    } finally {
+      if (original === undefined) delete process.env['SLAVEOFAI_REPOS']
+      else process.env['SLAVEOFAI_REPOS'] = original
+    }
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { intakeDraftSchema, intakeStepLogSchema, type IntakeDraft } from '../../src/index.js'
+import { intakeDraftSchema, intakeRepositorySlug, intakeStepLogSchema, type IntakeDraft } from '../../src/index.js'
 
 const draft: IntakeDraft = {
   name: 'Public API',
@@ -54,6 +54,17 @@ describe('IntakeDraft', () => {
 
   it('accepts an empty team -- "I will staff it myself" is a real answer (R13)', () => {
     expect(intakeDraftSchema.safeParse({ ...draft, team: [] }).success).toBe(true)
+  })
+})
+
+describe('intakeRepositorySlug', () => {
+  it('matches the accept-time directory slug, including unicode and punctuation-only names', () => {
+    expect(intakeRepositorySlug('Public API')).toBe('public-api')
+    expect(intakeRepositorySlug('  Checkout   Platform!! ')).toBe('checkout-platform')
+    expect(intakeRepositorySlug('Ödeme Sistemi')).toBe('odeme-sistemi')
+    expect(intakeRepositorySlug('***')).toBe('project')
+    expect(intakeRepositorySlug('../etc')).toBe('etc')
+    expect(intakeRepositorySlug('x'.repeat(100))).toBe('x'.repeat(80))
   })
 })
 

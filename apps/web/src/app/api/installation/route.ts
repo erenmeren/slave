@@ -23,7 +23,7 @@ export async function POST(request: Request): Promise<Response> {
   const value = (body as { reposRoot?: unknown }).reposRoot
   if (value !== null && typeof value !== 'string') return Response.json({ error: BODY_ERROR }, { status: 400 })
   const result = await setInstallationSettings({ reposRoot: value })
-  return result.ok
-    ? Response.json({ ok: true, reposRoot: result.value.reposRoot })
-    : Response.json({ error: refusalText(result.error) }, { status: refusalStatus(result.error.kind) })
+  if (!result.ok) return Response.json({ error: refusalText(result.error) }, { status: refusalStatus(result.error.kind) })
+  const resolved = await resolveReposRoot()
+  return Response.json({ ok: true, reposRoot: result.value.reposRoot, resolved: resolved.root, source: resolved.source })
 }

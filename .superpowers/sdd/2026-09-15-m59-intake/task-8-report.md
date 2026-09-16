@@ -63,3 +63,35 @@
 
 - Full Vitest still has the ledger-known database-name failure for the private M59 test database.
 - The broker daemon shutdown test fails outside the Task 8 surface and reproduces when run alone. I did not change orchestrator code in this task.
+
+## Fix Round: Review Findings
+
+- Shared the new-repository slug behavior through `intakeRepositorySlug` in the client-safe domain package; control's `slugify` now delegates to it, and the drawer uses the same helper for displayed paths.
+- `fill in by hand` now prefills `ProjectsPanel.repoPath` with `<reposRoot>/<slug>` when the draft is `repo.mode: 'new', path: null`.
+- `POST /api/installation` now returns `{ ok, reposRoot, resolved, source }` after saving, and `ReposRootField` updates from those route facts instead of reconstructing them locally.
+- Step log entries keep raw status in `data-status` and `title`, while visible text comes from the total domain label map.
+
+## Fix Round TDD Evidence
+
+- RED: `npx vitest run --root /home/meren/projects/slave-of-ai-m59 packages/domain/test/intake/constants.test.ts packages/domain/test/intake/draft.test.ts`
+  - Exit 1: missing `INTAKE_STEP_STATUSES`, `INTAKE_STEP_STATUS_LABEL`, and `intakeRepositorySlug`.
+- RED: `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/intake-conversation.test.tsx`
+  - Exit 1: visible raw `failed`, displayed `/deme-sistemi`, and blank manual repo prefill.
+- RED: `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/settings-repos-root.test.tsx`
+  - Exit 1: clearing a saved root showed the old path/default instead of `/srv/repos` from env.
+- RED: `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/integration/intake-routes.test.ts`
+  - Exit 1: POST `/api/installation` omitted `resolved` and `source`.
+
+## Fix Round Verification
+
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 packages/domain/test/intake/constants.test.ts packages/domain/test/intake/draft.test.ts` — exit 0, 17 tests.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/intake-conversation.test.tsx` — exit 0, 11 tests.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/settings-repos-root.test.tsx` — exit 0, 5 tests.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/integration/intake-routes.test.ts` — exit 0, 9 tests.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 packages/control/test/integration/installation.test.ts` — exit 0, 7 tests.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/projects-page.test.tsx` — exit 0, 43 tests.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/settings-page.test.tsx` — exit 0, 33 tests.
+- `npm run gate:m26-vocabulary` — exit 0.
+- `npx tsc --build` — exit 0.
+- `npm run --silent typecheck` — exit 0.
+- `npm run web:build` — exit 0.

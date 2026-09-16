@@ -1,7 +1,7 @@
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
-import { err, ok, type Result } from '@slave-of-ai/domain'
+import { err, intakeRepositorySlug, ok, type Result } from '@slave-of-ai/domain'
 import type { ControlRefusal } from './refusal.js'
 
 /** The one row (M59 R3). A constant rather than a literal at three call sites: this id is the
@@ -89,11 +89,5 @@ export async function setInstallationSettings(input: {
  * `../etc` must not climb out of the root it was joined to.
  */
 export function slugify(name: string): string {
-  const folded = name
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/gu, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/gu, '-')
-    .replace(/^-+|-+$/gu, '')
-  return folded === '' ? 'project' : folded.slice(0, 80)
+  return intakeRepositorySlug(name)
 }

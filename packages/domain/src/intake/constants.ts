@@ -73,6 +73,16 @@ export const INTAKE_STEP_LABEL: Record<IntakeStep, string> = {
   mark_created: 'Finish',
 }
 
+export const INTAKE_STEP_STATUSES = ['done', 'failed', 'skipped'] as const
+
+export type IntakeStepStatus = (typeof INTAKE_STEP_STATUSES)[number]
+
+export const INTAKE_STEP_STATUS_LABEL: Record<IntakeStepStatus, string> = {
+  done: 'Done',
+  failed: 'Stopped',
+  skipped: 'Skipped',
+}
+
 /**
  * The most model calls one conversation may ever make (M59 R12).
  *

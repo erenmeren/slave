@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import {
   INTAKE_STATUS_LABEL,
   INTAKE_STEP_LABEL,
+  INTAKE_STEP_STATUS_LABEL,
+  intakeRepositorySlug,
   VERIFY_SOURCE_LABEL,
   type IntakeDraft,
   type IntakeFacts,
@@ -46,15 +48,6 @@ interface IntakeView {
 type RepoChoice = 'existing' | 'new-root' | 'new-path'
 
 const WAITING: readonly IntakeStatus[] = ['awaiting_reply', 'replying', 'creating']
-
-function slugifyName(name: string): string {
-  const slug = name
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-  return slug === '' ? 'new-project' : slug
-}
 
 function FactCard({ facts }: { readonly facts: IntakeFacts }): React.JSX.Element {
   return (
@@ -148,6 +141,10 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
     const extra = detected.filter((command) => !own.some((entry) => entry.command === command))
     return [...own, ...extra.map((command) => ({ command, source: 'detected' as VerifySource }))]
   }, [edited?.verifyCommands, detected])
+  const newRootPath = useMemo(() => {
+    if (view?.facts === null || view?.facts === undefined) return 'the repositories folder'
+    return `${view.facts.reposRoot}/${intakeRepositorySlug(edited?.name ?? '')}`
+  }, [edited?.name, view?.facts])
 
   const send = async (): Promise<void> => {
     if (intakeId === null || text.trim() === '') return
@@ -203,7 +200,7 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
       <ProjectsPanel
         initial={{
           ...(edited === null ? {} : { name: edited.name, baseBranch: edited.baseBranch }),
-          repoPath: edited?.repo.path ?? view?.facts?.paths.find((path) => path.isRepository)?.path ?? '',
+          repoPath: edited?.repo.path ?? (edited?.repo.mode === 'new' ? newRootPath : view?.facts?.paths.find((path) => path.isRepository)?.path) ?? '',
           verifyText: (edited?.verifyCommands ?? candidates).map((entry) => entry.command).join('\n'),
           ...(edited?.setupCommands === undefined ? {} : { setupText: edited.setupCommands.join('\n') }),
           ...(edited?.budgetUsd === undefined || edited.budgetUsd === null ? {} : { budgetText: String(edited.budgetUsd) }),
@@ -214,7 +211,6 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
   }
 
   const draftReady = edited !== null && edited.verifyCommands.length > 0 && edited.name.trim() !== ''
-  const newRootPath = `${view?.facts?.reposRoot ?? 'the repositories folder'}/${slugifyName(edited?.name ?? '')}`
 
   return (
     <div data-testid="intake-conversation" className="flex min-h-0 flex-1 flex-col gap-3">
@@ -423,8 +419,15 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
       {view !== null && view.stepLog.length > 0 && (
         <ol data-testid="intake-step-log" className="flex flex-col gap-0.5 rounded-tile border border-line bg-card px-2 py-1.5 text-[12px]">
           {view.stepLog.map((entry) => (
-            <li key={`${entry.step}-${entry.at}`} data-testid="intake-step" data-step={entry.step} data-status={entry.status} title={entry.detail ?? ''}>
-              {INTAKE_STEP_LABEL[entry.step as IntakeStep]} - {entry.status}
+            <li
+              key={`${entry.step}-${entry.at}`}
+              data-testid="intake-step"
+              data-step={entry.step}
+              data-status={entry.status}
+              data-detail={entry.detail ?? undefined}
+              title={entry.status}
+            >
+              {INTAKE_STEP_LABEL[entry.step as IntakeStep]} - {INTAKE_STEP_STATUS_LABEL[entry.status]}
             </li>
           ))}
         </ol>

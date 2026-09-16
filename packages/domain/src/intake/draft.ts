@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { PROVIDER_KINDS } from '../provider/kind.js'
-import { INTAKE_MAX_RUNTIME_ROLES, INTAKE_STEPS } from './constants.js'
+import { INTAKE_MAX_RUNTIME_ROLES, INTAKE_STEPS, INTAKE_STEP_STATUSES } from './constants.js'
 
 /**
  * Where a verify command came from (M59 R8), and the difference is enforced rather than decorative:
@@ -64,11 +64,26 @@ export const intakeDraftSchema = z.object({
 
 export type IntakeDraft = z.infer<typeof intakeDraftSchema>
 
+/**
+ * A project name as the directory name used when `repo.mode: 'new'` has no explicit path.
+ * Client surfaces and accept-time creation share this exact pure helper so displayed promises
+ * cannot drift from the path that will be created.
+ */
+export function intakeRepositorySlug(name: string): string {
+  const folded = name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+  return folded === '' ? 'project' : folded.slice(0, 80)
+}
+
 /** One line of `Intake.stepLog` (M59 R10). `skipped` is a real outcome and not a failure: it is
  *  what the `staff` step records until M58 is on `main`. */
 export const intakeStepEntrySchema = z.object({
   step: z.enum(INTAKE_STEPS),
-  status: z.enum(['done', 'failed', 'skipped']),
+  status: z.enum(INTAKE_STEP_STATUSES),
   at: z.string().datetime(),
   detail: z.string().max(2_000).nullable(),
 })

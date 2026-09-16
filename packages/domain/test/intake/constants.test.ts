@@ -6,6 +6,8 @@ import {
   INTAKE_ROLE_LABEL,
   INTAKE_STATUSES,
   INTAKE_STATUS_LABEL,
+  INTAKE_STEP_STATUSES,
+  INTAKE_STEP_STATUS_LABEL,
   INTAKE_STEPS,
   INTAKE_STEP_LABEL,
   SUPERVISOR_PER_CALL_CAP_USD,
@@ -47,6 +49,16 @@ describe('the intake vocabulary', () => {
       'mark_created',
     ])
     for (const step of INTAKE_STEPS) expect(INTAKE_STEP_LABEL[step], step).not.toBe(step)
+  })
+
+  it('has a word for every accept step outcome, never the stored member', () => {
+    expect([...INTAKE_STEP_STATUSES]).toEqual(['done', 'failed', 'skipped'])
+    for (const status of INTAKE_STEP_STATUSES) {
+      const label = INTAKE_STEP_STATUS_LABEL[status]
+      expect(label, status).toBeTypeOf('string')
+      expect(label.length, status).toBeGreaterThan(0)
+      expect(label, status).not.toBe(status)
+    }
   })
 
   it('caps one conversation at twelve calls and one call at the Supervisor own ceiling (R12)', () => {
