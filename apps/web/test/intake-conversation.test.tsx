@@ -205,6 +205,42 @@ describe('IntakeConversation', () => {
     expect(screen.getByTestId('intake-team-chip').getAttribute('data-roles')).toContain('manager')
   })
 
+  it('offers detected commands and branches only from the selected repository', async (): Promise<void> => {
+    const facts = {
+      ...FACTS,
+      paths: [
+        ...FACTS.paths,
+        {
+          path: '/home/x/other',
+          exists: true,
+          isRepository: true,
+          isEmptyDir: false,
+          branches: ['foreign-branch'],
+          defaultBranch: 'foreign-branch',
+          verify: [{ command: 'npm run foreign', source: 'package.json scripts.foreign' }],
+        },
+      ],
+    }
+    stubFetch([
+      view({
+        status: 'drafted',
+        draft: { ...DRAFT, verifyCommands: [{ command: 'npm test', source: 'detected' }] },
+        facts,
+      }),
+    ])
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+
+    const commands = (screen.getAllByTestId('intake-verify') as HTMLInputElement[]).map((box) =>
+      box.getAttribute('data-command'),
+    )
+    expect(commands).toEqual(['npm test', 'npm run typecheck'])
+    const branches = Array.from((screen.getByTestId('intake-base-branch') as HTMLSelectElement).options).map(
+      (option) => option.value,
+    )
+    expect(branches).toEqual(['main', 'develop'])
+  })
+
   it('marks a command the person adds as theirs, never as detected', async (): Promise<void> => {
     stubFetch([view({ status: 'drafted', draft: DRAFT, facts: FACTS })])
     render(<IntakeConversation onClose={vi.fn()} />)

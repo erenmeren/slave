@@ -155,3 +155,49 @@ All gates were run one at a time with the required fake CLI. M12, M13, and M14 w
 - M21 and M23 need a clean rerun when the other worktree's development server is no longer
   running. The M23 person-id correction itself has not received a successful gate run in this
   worktree because of that environmental refusal.
+
+## Whole-branch fix round
+
+### Dispositions
+
+- R15 archive/restore discovery: `startWorkspaceLoop` now skips startup reconciliation only when
+  this process has already ticked that workspace. Direct reconciliation still throws after a tick,
+  preserving the first-start race guard. The daemon regression observed the original discovery
+  failure and then passed with the restored project named in a second serving line.
+- R10 resumable staffing: a duplicate team name resumes against the existing same-name team in the
+  workspace, and an open seat already hired from a requested template is reused before another
+  person can be created. The regression stops after one seat, retries, and finishes with exactly
+  the two requested template ids and two people.
+- R8 card scoping: detected command extras and branch options now come only from the selected
+  existing repository's fact row, and from no fact row for a new repository. A two-repository
+  regression excludes the foreign command and branch.
+- R8/T2 path priority: `findPaths` inserts the caller's extra paths before message paths, so the
+  four-path cap cannot discard the already selected repository.
+- R12 disclosure: the brief's `unmeasuredCalls` now adds Supervisor and intake unmeasured calls,
+  matching the capped dollars already included in `spentUsd`.
+
+### RED/GREEN evidence
+
+| Command | RED | GREEN |
+|---|---:|---:|
+| `npx vitest --root /home/meren/projects/slave-of-ai-m59 run apps/orchestrator/test/integration/daemon.test.ts` | 1 — restore repeatedly hit the startup-only reconcile refusal and timed out | 0 — 11 passed |
+| `npx vitest --root /home/meren/projects/slave-of-ai-m59 run packages/control/test/integration/intake-accept.test.ts -t "resumes staffing"` | 1 — retry returned the duplicate-team refusal | 0 — covered by the full 13-test file |
+| `npx vitest --root /home/meren/projects/slave-of-ai-m59 run packages/control/test/detect.test.ts` | 1 — the chosen extra path was dropped | 0 — 18 passed |
+| `npx vitest --root /home/meren/projects/slave-of-ai-m59 run apps/web/test/intake-conversation.test.tsx` | 1 — the foreign repository command was offered | 0 — 18 passed |
+| `npx vitest --root /home/meren/projects/slave-of-ai-m59 run apps/web/test/integration/brief.test.ts -t "folds the intake"` | 1 — disclosed 0 instead of 1 intake unmeasured call | 0 — covered by the full 9-test file |
+
+### Final commands
+
+| Command | Exit | Result |
+|---|---:|---|
+| `npx vitest --root /home/meren/projects/slave-of-ai-m59 run apps/orchestrator/test/integration/daemon.test.ts apps/orchestrator/test/integration/sweep.test.ts` | 0 | 79 passed |
+| `npx vitest --root /home/meren/projects/slave-of-ai-m59 run packages/control/test/integration/intake-accept.test.ts` | 0 | 13 passed |
+| `npx vitest --root /home/meren/projects/slave-of-ai-m59 run packages/control/test/detect.test.ts` | 0 | 18 passed |
+| `npx vitest --root /home/meren/projects/slave-of-ai-m59 run apps/web/test/intake-conversation.test.tsx` | 0 | 18 passed |
+| `npx vitest --root /home/meren/projects/slave-of-ai-m59 run apps/web/test/integration/brief.test.ts` | 0 | 9 passed |
+| One `npx vitest --root /home/meren/projects/slave-of-ai-m59 run` over all six focused files above | 0 | 6 files, 137 tests passed |
+| `npm run gate:m26-vocabulary` | 0 | Vocabulary passed |
+| `npx tsc --build` | 0 | Project-reference build passed |
+
+No full CI sweep or `gate:m59-intake` was run; the requested focused tests prove each changed
+behavior. The known M50/M58 roster collision and database-name assertion were not changed.

@@ -174,9 +174,16 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
     })()
   }, [needsInstallationRoot])
 
+  const selectedPathFact = useMemo(
+    () =>
+      edited?.repo.mode === 'existing'
+        ? view?.facts?.paths.find((path) => path.path === edited.repo.path)
+        : undefined,
+    [edited?.repo, view?.facts],
+  )
   const detected = useMemo(
-    () => (view?.facts?.paths ?? []).flatMap((path) => path.verify.map((finding) => finding.command)),
-    [view?.facts],
+    () => selectedPathFact?.verify.map((finding) => finding.command) ?? [],
+    [selectedPathFact],
   )
   const candidates = useMemo(() => {
     const own = edited?.verifyCommands ?? []
@@ -347,7 +354,7 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
               onChange={(event) => setEdited({ ...edited, baseBranch: event.target.value })}
               className={INPUT_SHELL}
             >
-              {[...new Set([edited.baseBranch, ...(view.facts?.paths.flatMap((path) => path.branches) ?? [])])].map((branch) => (
+              {[...new Set([edited.baseBranch, ...(selectedPathFact?.branches ?? [])])].map((branch) => (
                 <option key={branch} value={branch}>
                   {branch}
                 </option>

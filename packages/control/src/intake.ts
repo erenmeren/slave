@@ -662,14 +662,30 @@ export async function acceptIntake(
           detail: 'the draft asked for nobody',
         })
       } else {
-        const team = await createProjectTeam(workspaceId, draft.name, principal)
-        if (!team.ok) return fail('staff', team.error)
+        const createdTeam = await createProjectTeam(workspaceId, draft.name, principal)
+        let teamId: string
+        if (createdTeam.ok) {
+          teamId = createdTeam.value.id
+        } else {
+          if (createdTeam.error.kind !== 'duplicate_name') return fail('staff', createdTeam.error)
+          const existing = await prisma.team.findFirst({
+            where: { workspaceId, name: draft.name },
+            select: { id: true },
+          })
+          if (existing === null) return fail('staff', createdTeam.error)
+          teamId = existing.id
+        }
         for (const seat of seats) {
+          const alreadyOpen = await prisma.slave.findFirst({
+            where: { teamId, closedAt: null, person: { templateId: seat.templateId } },
+            select: { id: true },
+          })
+          if (alreadyOpen !== null) continue
           const person = await createPerson({ templateId: seat.templateId }, principal)
           if (!person.ok) return fail('staff', person.error)
           const assigned = await assignPerson(
             person.value.personId,
-            team.value.id,
+            teamId,
             { runtimeRoles: [...seat.runtimeRoles] },
             principal,
           )

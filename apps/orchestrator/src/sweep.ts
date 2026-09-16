@@ -175,6 +175,13 @@ export function noteTickRan(workspaceId: WorkspaceId): void {
   tickedWorkspaces.add(workspaceId)
 }
 
+/** Whether this process has already ticked a workspace. A daemon loop that is restarted after an
+ * archive/restore uses this to skip startup reconciliation; direct reconciliation still throws,
+ * preserving the guard against a first-start race with a tick. */
+export function hasTickRun(workspaceId: WorkspaceId): boolean {
+  return tickedWorkspaces.has(workspaceId)
+}
+
 /** For tests, which run many independent daemon lifetimes inside one process. */
 export function resetTickObservation(): void {
   tickedWorkspaces.clear()

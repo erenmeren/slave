@@ -34,6 +34,16 @@ describe('findPaths', () => {
     ])
   })
 
+  it('puts the caller path first so the cap cannot discard the chosen repository', () => {
+    const messagePaths = Array.from({ length: DETECT_MAX_PATHS }, (_, index) => `/home/me/message-${String(index)}`).join(' ')
+    expect(findPaths(messagePaths, ['/home/me/chosen'])).toEqual([
+      '/home/me/chosen',
+      '/home/me/message-0',
+      '/home/me/message-1',
+      '/home/me/message-2',
+    ])
+  })
+
   it('never returns more than DETECT_MAX_PATHS, so one message cannot run twenty probes', () => {
     const many = Array.from({ length: 12 }, (_, index) => `/home/me/p${String(index)}`).join(' ')
     expect(findPaths(many)).toHaveLength(DETECT_MAX_PATHS)

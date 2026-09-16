@@ -44,11 +44,11 @@ export function findPaths(text: string, extra: readonly string[] = []): readonly
     const path = normalize(expanded).replace(/\/+$/u, '')
     if (path !== '' && path !== '/' && !found.includes(path)) found.push(path)
   }
+  for (const path of extra) push(path)
   for (const match of text.matchAll(PATH_RE)) {
     const raw = match[1]
     if (raw !== undefined) push(raw)
   }
-  for (const path of extra) push(path)
   return found.slice(0, DETECT_MAX_PATHS)
 }
 

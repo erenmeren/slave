@@ -247,6 +247,7 @@ describe('buildProjectBrief', () => {
     expect(brief.cost.spentUsd).toBeCloseTo(0.5 + INTAKE_PER_CALL_CAP_USD, 10)
     expect(brief.cost.measuredUsd).toBeCloseTo(0.5, 10)
     expect(brief.cost.actualUsd).toBe(brief.cost.measuredUsd)
+    expect(brief.cost.unmeasuredCalls).toBe(1)
     // Nothing else on the project is unpriced, so the estimate fills in exactly the hole
     // `spentUsd` already charges at the cap -- the two must agree to the cent.
     expect(brief.cost.estimatedUsd).toBeCloseTo(brief.cost.spentUsd, 10)

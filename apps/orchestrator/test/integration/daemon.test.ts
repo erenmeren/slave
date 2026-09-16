@@ -3,6 +3,7 @@ import { workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import type { AdapterRegistry } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DAEMON_DISCOVERY_MS, runDaemon, servingLine } from '../../src/daemon.js'
+import { resetTickObservation } from '../../src/sweep.js'
 
 /** Nothing in this file dispatches. A registry that throws is the assertion. */
 const registry: AdapterRegistry = {
@@ -37,6 +38,7 @@ describe('runDaemon serving every project', () => {
   let output: ReturnType<typeof captureStdout> | null = null
 
   beforeEach(async (): Promise<void> => {
+    resetTickObservation()
     await prisma.$executeRawUnsafe(
       'TRUNCATE TABLE "ExecutionEvent", "IntakeMessage", "Intake", "GoalVersion", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
     )
@@ -103,6 +105,19 @@ describe('runDaemon serving every project', () => {
     expect(text()).toContain('serving 1 project')
     await prisma.workspace.update({ where: { id }, data: { archivedAt: new Date() } })
     await until(() => text().includes('serving 0 projects'))
+  })
+
+  it('starts serving a project again after it is archived and restored', async (): Promise<void> => {
+    const id = await seed('Coming Back')
+    const text = await start('all')
+    await prisma.workspace.update({ where: { id }, data: { archivedAt: new Date() } })
+    await until(() => text().includes('serving 0 projects'))
+
+    await prisma.workspace.update({ where: { id }, data: { archivedAt: null } })
+    await until(
+      () => text().split('serving 1 project (Coming Back)').length === 3,
+      2_000,
+    )
   })
 
   it('serves exactly the one it was told to, and follows nothing', async (): Promise<void> => {

@@ -117,11 +117,11 @@ export interface ProjectBrief {
   /**
    * ONE total, and the two DIFFERENT holes beside it -- never one figure that adds them up.
    *
-   * - `spentUsd` is `workspaceSpend()`'s total: measured run cost + measured Supervisor cost +
-   *   `unmeasuredCalls` charged at `SUPERVISOR_PER_CALL_CAP_USD`.
+   * - `spentUsd` is `workspaceSpend()`'s total: measured run, Supervisor and intake cost, plus
+   *   unmeasured Supervisor/intake calls charged at their respective caps.
    * - `measuredUsd` is the part of that total somebody actually reported.
-   * - `unmeasuredCalls` are Supervisor model calls whose cost never came back. They ARE in
-   *   `spentUsd`, at the cap -- an upper bound, shown as an estimate (M32).
+   * - `unmeasuredCalls` are Supervisor and intake model calls whose cost never came back. They ARE
+   *   in `spentUsd`, at their respective caps -- an upper bound, shown as an estimate (M32/M59).
    * - `unmeasuredRuns` are runs that spawned, finished, and left no figure behind. They are in NO
    *   total: nobody can name what they cost, and the guardrail does not charge for them. The same
    *   field, with the same meaning, as `OverviewSnapshot.workspace.unmeasuredRuns`.
@@ -363,9 +363,9 @@ export async function buildProjectBrief(
       // and a LIVE run's estimate was in no bound at all, because `unknownRuns` counts concluded
       // runs only. The invariant `upperBoundUsd >= estimatedUsd` is pinned in `brief.test.ts`.
       upperBoundUsd: spend.spentUsd + spendRows.reduce((total, row) => total + boundOf(row), 0),
-      // Two different facts, kept apart: a CALL is charged at the cap and is inside `spentUsd`; a
-      // RUN nobody measured is in no total at all (`sumSpend`'s own reading).
-      unmeasuredCalls: spend.supervisorUnmeasuredCalls,
+      // Two different facts, kept apart: a Supervisor or intake CALL is charged at its cap and is
+      // inside `spentUsd`; a RUN nobody measured is in no total at all (`sumSpend`'s own reading).
+      unmeasuredCalls: spend.supervisorUnmeasuredCalls + spend.intakeUnmeasuredCalls,
       unmeasuredRuns: runSpend.unknownRuns,
       budgetUsd: workspace.budgetUsd,
     },

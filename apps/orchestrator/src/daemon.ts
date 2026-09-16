@@ -6,7 +6,7 @@ import { subscribeEvents, type EventSubscription } from '@slave-of-ai/events'
 import type { AdapterRegistry } from '@slave-of-ai/providers'
 import { serveBrokerRequests } from './broker.js'
 import { collectWorktrees } from './collect.js'
-import { reconcileOrphans, sweep } from './sweep.js'
+import { hasTickRun, reconcileOrphans, sweep } from './sweep.js'
 import { activePumpRunIds, drainPumps, tick, type TickDeps } from './tick.js'
 
 /**
@@ -145,7 +145,13 @@ export async function startWorkspaceLoop(deps: WorkspaceLoopDeps): Promise<Works
   // while nothing is spawning here, which for a project no loop is serving yet is true. `tick()`
   // closes that window itself (`noteTickRan`), per workspace since erratum E11, and
   // `reconcileOrphans` refuses for this project afterwards.
-  const reconciled = await reconcileOrphans({ workspaceId: deps.workspaceId, registry: deps.registry })
+  // A loop can return in this SAME process after archive/restore. Its previous stop drained the
+  // tick, so there is no startup orphan pass to run; calling it would hit the guard below and abort
+  // the discovery pass before later projects can start. A first loop still calls reconcile and
+  // therefore still throws if it races a tick.
+  const reconciled = hasTickRun(deps.workspaceId)
+    ? 0
+    : await reconcileOrphans({ workspaceId: deps.workspaceId, registry: deps.registry })
   if (reconciled > 0) {
     process.stdout.write(`reconciled ${reconciled} run(s) left behind by a previous process\n`)
   }

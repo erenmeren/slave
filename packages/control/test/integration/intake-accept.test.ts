@@ -139,6 +139,48 @@ describe('acceptIntake', () => {
     expect(staff?.detail).toContain('1')
   })
 
+  it('resumes staffing without duplicating seats or people after a seat fails', async (): Promise<void> => {
+    const repo = makeRepo()
+    const backendId = await seedTemplate('Backend Developer', 'engineering')
+    const reviewerId = await seedTemplate('Review Specialist', 'engineering')
+    const id = await opened(`it is at ${repo}`)
+    // The draft saw both templates; one disappears only after the facts and draft are established,
+    // so staffing commits its first seat before the second refuses.
+    await prisma.slaveTemplate.delete({ where: { id: reviewerId } })
+    const draft: IntakeDraft = {
+      ...draftFor(repo, 'Resumable Staff'),
+      team: [
+        { templateId: backendId, runtimeRoles: ['backend'] },
+        { templateId: reviewerId, runtimeRoles: ['reviewer'] },
+      ],
+    }
+
+    const failed = await acceptIntake(id, draft)
+    expect(failed.ok).toBe(false)
+    expect(await prisma.team.count({ where: { name: 'Resumable Staff' } })).toBe(1)
+    expect(await prisma.slave.count({ where: { team: { name: 'Resumable Staff' }, closedAt: null } })).toBe(1)
+
+    await prisma.slaveTemplate.create({
+      data: {
+        id: reviewerId,
+        name: 'Review Specialist',
+        role: 'backend',
+        description: '',
+        active: true,
+        sourceDivision: 'engineering',
+      },
+    })
+    const resumed = await acceptIntake(id, draft)
+    expect(resumed.ok).toBe(true)
+    const team = await prisma.team.findFirstOrThrow({
+      where: { name: 'Resumable Staff' },
+      include: { slaves: { where: { closedAt: null }, include: { person: true } } },
+    })
+    expect(team.slaves.map((seat) => seat.person.templateId).sort()).toEqual([backendId, reviewerId].sort())
+    expect(await prisma.person.count()).toBe(2)
+    expect((await prisma.intake.findUniqueOrThrow({ where: { id } })).status).toBe('created')
+  })
+
   it('creates nobody for an empty team, and says skipped rather than done', async (): Promise<void> => {
     const repo = makeRepo()
     const id = await opened(`it is at ${repo}`)
