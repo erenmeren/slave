@@ -503,12 +503,44 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
   let discoveryTimer: NodeJS.Timeout | null = null
   let onSignal: (() => void) | null = null
 
+  // The handlers are installed BEFORE the first loop starts, not after the setup below finishes.
+  // A loop serves its first collect and broker pass the moment it is created, so a brokered
+  // operation can already be in flight -- with a claim file written and no reply -- while this
+  // function is still opening the subscription. A signal arriving in that window used to fall
+  // through to Node's default disposition, which kills the process mid-operation and abandons the
+  // worker waiting on the reply. Installed here, that same signal resolves `stopped` and the
+  // `finally` below drains the operation exactly as it does for a signal at any later moment.
+  let resolveStopped = (): void => {}
+  const stopped = new Promise<void>((resolve) => {
+    resolveStopped = resolve
+  })
+  let shuttingDown = false
+  const shutdown = (): void => {
+    if (shuttingDown) {
+      // The second signal is the universal "I mean it". Forcing is then a decision rather than
+      // an accident -- and the first signal said what it was waiting for.
+      process.stderr.write('forced: exiting without finishing the shutdown\n')
+      process.exit(130)
+    }
+    shuttingDown = true
+    process.stderr.write('stopping: finishing the tick in flight, then draining. Signal again to force.\n')
+    resolveStopped()
+  }
+  onSignal = shutdown
+  // `on`, not `once`: with `once` the second signal falls through to Node's default
+  // disposition, which kills the process mid-drain and loses the rest of a run's events.
+  process.on('SIGINT', shutdown)
+  process.on('SIGTERM', shutdown)
+  // The test seam, through the SAME resolve: a test that shuts the daemon down exercises the
+  // path a signal takes rather than a second one written for it.
+  if (deps.until !== undefined) void deps.until.then(shutdown)
+
   try {
     // The FIRST line the daemon prints about what it serves, before any timer starts, so an
     // operator reading a log knows what this process is for even if it never ticks. Every loop is
     // in `loops` before anything below can fail, which is what the old "the subscription is opened
     // before the timer starts" ordering was protecting: a failure here must not leave an interval
-    // running with no signal handler installed, and the `finally` stops every loop this map holds.
+    // running with nothing to stop it, and the `finally` stops every loop this map holds.
     const initial = await wanted()
     for (const project of initial) {
       loops.set(project.id, await startWorkspaceLoop(loopDeps(brandWorkspaceId(project.id))))
@@ -530,28 +562,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
     if (following) discoveryTimer = setInterval((): void => discovery.wake(), deps.discoveryMs ?? DAEMON_DISCOVERY_MS)
     globalPass.wake()
 
-    await new Promise<void>((resolve) => {
-      let shuttingDown = false
-      const shutdown = (): void => {
-        if (shuttingDown) {
-          // The second signal is the universal "I mean it". Forcing is then a decision rather than
-          // an accident -- and the first signal said what it was waiting for.
-          process.stderr.write('forced: exiting without finishing the shutdown\n')
-          process.exit(130)
-        }
-        shuttingDown = true
-        process.stderr.write('stopping: finishing the tick in flight, then draining. Signal again to force.\n')
-        resolve()
-      }
-      onSignal = shutdown
-      // `on`, not `once`: with `once` the second signal falls through to Node's default
-      // disposition, which kills the process mid-drain and loses the rest of a run's events.
-      process.on('SIGINT', shutdown)
-      process.on('SIGTERM', shutdown)
-      // The test seam, through the SAME resolve: a test that shuts the daemon down exercises the
-      // path a signal takes rather than a second one written for it.
-      if (deps.until !== undefined) void deps.until.then(shutdown)
-    })
+    await stopped
   } finally {
     shuttingDownNow = true
     if (globalTimer !== null) clearInterval(globalTimer)
