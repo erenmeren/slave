@@ -119,3 +119,24 @@
 - `npx tsc --build` — exit 0.
 - `npm run --silent typecheck` — exit 0.
 - `npm run web:build` — exit 0.
+
+## Fix Round 3: Installation Root Refetch
+
+- The `needsInstallationRoot` effect in `IntakeConversation` no longer cancels its own load. The `installationRequested` ref latches the GET to once per mount, so the previous `cancelled` cleanup — which fired whenever the repository choice moved off the new-root option — could throw away an in-flight answer that no later run would ever ask for again. The operator switching to "a repository I have" (or "a new one at") and back while `GET /api/installation` was in flight left `installationRoot` stuck at `loading` and `newRootPath` null, so `Create project` and `fill in by hand` stayed disabled forever.
+- The GET is idempotent and its answer is only read while the new-root choice is the live one, so keeping the resolved root (and the `failed` state) regardless of the effect's lifecycle is the smallest correct fix. A comment records why there is deliberately no cleanup.
+- Behaviour already accepted in review is unchanged: while the root is unresolved and the choice is the new-root one, `Create project` and `fill in by hand` are disabled; the accept payload stays `{ mode: 'new', path: null }`; the loading/failed copy is never sent or prefilled as a path; and the resolved path still comes from `intakeRepositoryPath` / `intakeRepositorySlug` in `packages/domain`.
+
+### Fix Round 3 RED Evidence
+
+- New test: `keeps the repositories folder answer when the choice left and came back mid-flight` — a drafted intake with `facts === null` and `repo: { mode: 'new', path: null }`, a deferred `/api/installation`, a click on `intake-repo-existing` and then back on `intake-repo-new-root` before that response settles, then resolution.
+- RED: `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/intake-conversation.test.tsx` — exit 1, 1 failed / 13 passed. Expected `/srv/repos/public-api`, received `a new one under Loading repositories folder`, with `intake-create` and `intake-by-hand` both rendered `disabled`.
+
+### Fix Round 3 Verification
+
+- GREEN: `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/intake-conversation.test.tsx` — exit 0, 14 tests.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 apps/web/test/settings-repos-root.test.tsx apps/web/test/projects-page.test.tsx apps/web/test/settings-page.test.tsx` — exit 0, 81 tests.
+- `npx vitest run --root /home/meren/projects/slave-of-ai-m59 packages/domain/test/intake` — exit 0, 50 tests.
+- `npm run gate:m26-vocabulary` — exit 0.
+- `npx tsc --build` — exit 0.
+- `npm run --silent typecheck` — exit 0.
+- `npm run web:build` — exit 0.

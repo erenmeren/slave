@@ -142,10 +142,12 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
   }, [view?.draft])
 
   const needsInstallationRoot = view !== null && view.facts === null && edited?.repo.mode === 'new' && edited.repo.path === null
+  // The load is kept, not cancelled, when the choice moves off the new-root one: the GET is
+  // idempotent and the latch is per mount, so discarding an answer in flight would leave a
+  // choice that comes back with no root and no way to ask for one again.
   useEffect(() => {
     if (!needsInstallationRoot || installationRequested.current) return
     installationRequested.current = true
-    let cancelled = false
     setInstallationRoot({ status: 'loading', root: null })
     void (async (): Promise<void> => {
       try {
@@ -153,21 +155,16 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
         if (response.status === 401) onUnauthorized()
         if (!response.ok) {
           setErrorText(errorMessage(await response.json().catch(() => null), response.status))
-          if (!cancelled) setInstallationRoot({ status: 'failed', root: null })
+          setInstallationRoot({ status: 'failed', root: null })
           return
         }
         const body = (await response.json()) as { resolved: string }
-        if (!cancelled) setInstallationRoot({ status: 'loaded', root: body.resolved })
+        setInstallationRoot({ status: 'loaded', root: body.resolved })
       } catch (cause) {
-        if (!cancelled) {
-          setErrorText(cause instanceof Error ? cause.message : String(cause))
-          setInstallationRoot({ status: 'failed', root: null })
-        }
+        setErrorText(cause instanceof Error ? cause.message : String(cause))
+        setInstallationRoot({ status: 'failed', root: null })
       }
     })()
-    return (): void => {
-      cancelled = true
-    }
   }, [needsInstallationRoot])
 
   const detected = useMemo(

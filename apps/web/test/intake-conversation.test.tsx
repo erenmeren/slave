@@ -280,6 +280,38 @@ describe('IntakeConversation', () => {
     expect((screen.getByTestId('create-workspace-repo') as HTMLInputElement).value).toBe('/srv/repos/public-api')
   })
 
+  it('keeps the repositories folder answer when the choice left and came back mid-flight', async (): Promise<void> => {
+    const installation = deferredResponse<Response>()
+    const fetchMock = vi.fn(async (url: string, options?: { method?: string }) => {
+      if (url === '/api/intakes' && options?.method === 'POST') {
+        return new Response(JSON.stringify({ ok: true, id: 'intake-1' }), { status: 201 })
+      }
+      if (url === '/api/installation') return installation.promise
+      if (url.endsWith('/accept')) return new Response(JSON.stringify({ ok: true, workspaceId: 'w1' }), { status: 200 })
+      return new Response(
+        JSON.stringify({ intake: view({ status: 'drafted', draft: { ...DRAFT, repo: { mode: 'new', path: null } }, facts: null }) }),
+        { status: 200 },
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+    expect(screen.getByTestId('intake-repo-new-root').textContent).toContain('Loading repositories folder')
+
+    fireEvent.click(screen.getByTestId('intake-repo-existing'))
+    fireEvent.click(screen.getByTestId('intake-repo-new-root'))
+
+    await act(async () => {
+      installation.resolve(new Response(JSON.stringify({ reposRoot: null, resolved: '/srv/repos', source: 'env' }), { status: 200 }))
+      await installation.promise
+    })
+
+    await waitFor(() => expect(screen.getByTestId('intake-repo-new-root').textContent).toContain('/srv/repos/public-api'))
+    expect((screen.getByTestId('intake-create') as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByTestId('intake-by-hand') as HTMLButtonElement).disabled).toBe(false)
+  })
+
   it('swaps to the form, pre-filled, when a person would rather type it', async (): Promise<void> => {
     stubFetch([view({ status: 'drafted', draft: DRAFT, facts: FACTS })])
     render(<IntakeConversation onClose={vi.fn()} />)
