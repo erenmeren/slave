@@ -103,9 +103,8 @@ describe('tickIntakes', () => {
   it('charges a failed call and tells the person something they can act on', async (): Promise<void> => {
     const id = await waiting()
     const failing: ModelDecider = async () => ({ kind: 'failed', reason: 'the CLI died', costUsd: null, tokens: null })
-    // The transcript stays clean -- the person reads one sentence, not this reason -- but the
-    // reason must not simply vanish: an operator watching stderr needs to be able to tell a dead
-    // CLI from an isolation breach, which a shared UNUSABLE_TEXT sentence cannot say on its own.
+    // The reason must not simply vanish: an operator watching stderr needs to be able to tell a
+    // dead CLI from an isolation breach, which one shared sentence cannot say on its own.
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
     try {
       await tickIntakes({ now: new Date(), by: 'test', model: 'm', modelDecider: failing })
@@ -115,9 +114,16 @@ describe('tickIntakes', () => {
       expect(row.status).toBe('open')
       expect(row.modelCalls).toBe(1)
       expect(row.unmeasuredCalls).toBe(1)
-      const last = await prisma.intakeMessage.findFirstOrThrow({ where: { intakeId: id }, orderBy: { seq: 'desc' } })
-      expect(last.role).toBe('assistant')
-      expect(last.text).not.toContain('JSON')
+      const messages = await prisma.intakeMessage.findMany({ where: { intakeId: id }, orderBy: { seq: 'asc' } })
+      const answer = messages.at(-2)
+      expect(answer?.role).toBe('assistant')
+      expect(answer?.text).not.toContain('JSON')
+      // A call that never came back did not read the message, so the sentence must not ask the
+      // person to rephrase one the model never saw: rephrasing cannot fix a dead CLI, and the
+      // invitation to try spends another of the twelve calls the conversation is allowed.
+      expect(answer?.text).not.toContain('did not follow that')
+      // And the cause reaches the drawer rather than stopping at stderr the person never reads.
+      expect(messages.at(-1)).toMatchObject({ role: 'fact', text: expect.stringContaining('the CLI died') })
 
       const logged = stderr.mock.calls.map((call) => String(call[0]))
       expect(logged).toHaveLength(1)
@@ -126,6 +132,17 @@ describe('tickIntakes', () => {
     } finally {
       stderr.mockRestore()
     }
+  })
+
+  it('still asks the person to rephrase when the model DID answer and the answer was unreadable', async (): Promise<void> => {
+    const id = await waiting()
+    // Not the same failure: this call came back, so the transcript keeps the one sentence a person
+    // can act on, and there is no cause to name beyond the answer itself.
+    const babbling: ModelDecider = async () => ({ kind: 'answer', text: 'no marker here', costUsd: 0.01, tokens: null, numTurns: 1 })
+    await tickIntakes({ now: new Date(), by: 'test', model: 'm', modelDecider: babbling })
+    await drainIntakeCalls()
+    const messages = await prisma.intakeMessage.findMany({ where: { intakeId: id }, orderBy: { seq: 'asc' } })
+    expect(messages.at(-1)).toMatchObject({ role: 'assistant', text: expect.stringContaining('did not follow that') })
   })
 
   it('treats an isolation breach as an unusable answer rather than a draft', async (): Promise<void> => {

@@ -59,17 +59,24 @@ function startIntakeCall(intake: ClaimedIntake, decider: ModelDecider, model: st
       })
       const outcome = await decider({ model, prompt, maxBudgetUsd: INTAKE_PER_CALL_CAP_USD })
       if (outcome.kind !== 'answer') {
-        // A failed call and an isolation breach are the same thing from here: no answer. The
-        // breach is not silently absorbed -- the reason names it, and it reaches the conversation
-        // as a sentence rather than as a card built from a call that reached for a tool.
-        const reason = outcome.kind === 'failed' ? outcome.reason : `isolation breach: ${outcome.tools.join(', ')}`
-        // The transcript stays clean (the person reads `UNUSABLE_TEXT`, one sentence, not this
-        // string), but the reason must not simply vanish: this is the sink `IntakeReplyOutcome`'s
-        // `unusable.reason` docstring promises, the same convention `ask.ts`/`answer.ts` use for a
-        // decider's own failure reason. Without it an operator watching a conversation stall on the
-        // generic sentence could not tell a dead CLI from an isolation breach.
+        // A failed call and an isolation breach both leave the turn with no answer, but they are
+        // NOT the same thing to the person waiting: a failed call never read the message, while a
+        // breach came back from a model that did. They take the two outcomes accordingly, which is
+        // what decides the sentence the conversation ends up carrying.
+        const unreachable = outcome.kind === 'failed'
+        const reason = unreachable ? outcome.reason : `isolation breach: ${outcome.tools.join(', ')}`
+        // The reason must not simply vanish: this is the sink `IntakeReplyOutcome`'s docstrings
+        // promise, the same convention `ask.ts`/`answer.ts` use for a decider's own failure reason.
+        // Logged on BOTH paths, including the one that also writes the reason to the transcript --
+        // an operator reading a daemon's output should not have to open a drawer to see why a
+        // conversation stalled.
         process.stderr.write(`[intake] ${intake.id}: model answer unusable — ${reason}\n`)
-        const recorded = await recordIntakeReply(intake.id, { kind: 'unusable', reason, costUsd: outcome.costUsd })
+        const recorded = await recordIntakeReply(
+          intake.id,
+          unreachable
+            ? { kind: 'unreachable', reason, costUsd: outcome.costUsd }
+            : { kind: 'unusable', reason, costUsd: outcome.costUsd },
+        )
         if (!recorded.ok) process.stderr.write(`[intake] ${intake.id}: ${refusalText(recorded.error)}\n`)
         return
       }
@@ -85,8 +92,11 @@ function startIntakeCall(intake: ClaimedIntake, decider: ModelDecider, model: st
             })
       if (!recorded.ok) process.stderr.write(`[intake] ${intake.id}: ${refusalText(recorded.error)}\n`)
     } catch (error) {
+      // `unreachable`, not `unusable`: a throw from the decider (a spawn that never started, a
+      // rejected promise) is a call that came back with nothing, so the person is told the model
+      // was not reached rather than asked to rewrite a message it never read.
       await recordIntakeReply(intake.id, {
-        kind: 'unusable',
+        kind: 'unreachable',
         reason: error instanceof Error ? error.message : String(error),
         // A throw before the call returned is a call whose cost nobody measured, and the cap is
         // what an unmeasured call is charged at -- never zero.

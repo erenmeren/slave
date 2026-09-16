@@ -325,12 +325,28 @@ export type IntakeReplyOutcome =
     }
   | {
       readonly kind: 'unusable'
-      /** Why the call produced no answer (a spawn failure, an isolation breach, an unparseable
-       *  reply). Diagnostic only -- the caller's own log line, per R11's "writes the `assistant`
-       *  row" -- and never written to the transcript: the person sees `UNUSABLE_TEXT`, one sentence
-       *  they can act on, not this string. `downgraded` above is the transcript's own note
-       *  mechanism, and it exists for the opposite reason -- a draft that WAS produced but broke a
-       *  source rule, which is something an operator watching the card should be able to see. */
+      /** Why the answer could not be used (an unparseable reply, an isolation breach). Diagnostic
+       *  only -- the caller's own log line, per R11's "writes the `assistant` row" -- and never
+       *  written to the transcript: the person sees `UNUSABLE_TEXT`, one sentence they can act on,
+       *  not this string. `downgraded` above is the transcript's own note mechanism, and it exists
+       *  for the opposite reason -- a draft that WAS produced but broke a source rule, which is
+       *  something an operator watching the card should be able to see. */
+      readonly reason: string
+      readonly costUsd: number | null
+    }
+  | {
+      /**
+       * The call never came back with an answer at all: a spawn failure, a timeout, an API that
+       * refused. Separate from `unusable` because the two need OPPOSITE sentences. An unusable
+       * answer was read and could not be understood, so asking the person to say more is the useful
+       * next step; an unreachable model never read the message, so the same invitation is false --
+       * it blames the person for a sentence nobody saw, and every rephrasing spends another of the
+       * twelve calls the conversation is allowed on a condition rephrasing cannot fix.
+       */
+      readonly kind: 'unreachable'
+      /** Why the call produced nothing. UNLIKE `unusable`'s reason this one DOES reach the
+       *  transcript, as a `fact` row: a person watching a drawer go quiet has no other way to learn
+       *  that the failure was not theirs, and stderr is not somewhere they can look. */
       readonly reason: string
       readonly costUsd: number | null
     }
@@ -338,6 +354,11 @@ export type IntakeReplyOutcome =
 /** What the conversation says when the model's answer could not be read at all. The person is not
  *  told about JSON: they are asked to say a little more, which is the only useful next step. */
 const UNUSABLE_TEXT = 'Sorry — I did not follow that. Could you say a little more about what you want to build?'
+
+/** What the conversation says when the model could not be reached. It says the message was not
+ *  read, because it was not, and it does not ask for a rewrite of something nobody saw. */
+const UNREACHABLE_TEXT =
+  'Sorry — I could not reach the model, so your message has not been read yet. Nothing you wrote was the problem.'
 
 /**
  * Writes what one model call produced (M59 R11): the assistant's line, the new status, the draft
@@ -358,13 +379,28 @@ export async function recordIntakeReply(
   intakeId: string,
   outcome: IntakeReplyOutcome,
 ): Promise<Result<void, ControlRefusal>> {
-  const answerText = outcome.kind === 'answer' ? outcome.answer.text : UNUSABLE_TEXT
+  const answerText =
+    outcome.kind === 'answer' ? outcome.answer.text : outcome.kind === 'unreachable' ? UNREACHABLE_TEXT : UNUSABLE_TEXT
   const draft = outcome.kind === 'answer' && outcome.answer.kind === 'draft' ? outcome.answer.draft : null
   // `unusable`'s `reason` is not a note (see the field's own docstring): the transcript's last row
-  // for a call nobody could use is the sentence the person reads, not a fact row that would sit
-  // after it and say something like "A proposal was discarded: the CLI died" -- there was no
-  // proposal to discard.
-  const note = outcome.kind === 'answer' ? outcome.downgraded : null
+  // for an answer nobody could use is the sentence the person reads, not a fact row that would sit
+  // after it and say something like "A proposal was discarded: the answer could not be read" --
+  // there was no proposal to discard.
+  //
+  // `unreachable`'s reason IS a note, and for the note mechanism's own reason: the sentence above
+  // says the model could not be reached without saying why, and "why" is the difference between a
+  // person waiting out a passing outage and one waiting out an exhausted account forever.
+  // Whole sentences rather than a fragment and a prefix chosen at the write site: the two notes
+  // describe different things, and one shared `A proposal was discarded:` would be a lie on the
+  // unreachable path, where no proposal was ever made.
+  const note =
+    outcome.kind === 'answer'
+      ? outcome.downgraded === null || outcome.downgraded === ''
+        ? null
+        : `A proposal was discarded: ${outcome.downgraded}`
+      : outcome.kind === 'unreachable'
+        ? `The model could not be reached: ${outcome.reason}`
+        : null
 
   const result = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Intake" WHERE id = ${intakeId} FOR UPDATE`
@@ -375,10 +411,8 @@ export async function recordIntakeReply(
     }
     const seq = await nextSeq(tx, intakeId)
     await tx.intakeMessage.create({ data: { intakeId, seq, role: 'assistant', text: answerText } })
-    if (note !== null && note !== '') {
-      await tx.intakeMessage.create({
-        data: { intakeId, seq: seq + 1, role: 'fact', text: `A proposal was discarded: ${note}` },
-      })
+    if (note !== null) {
+      await tx.intakeMessage.create({ data: { intakeId, seq: seq + 1, role: 'fact', text: note } })
     }
     await tx.intake.update({
       where: { id: intakeId },
