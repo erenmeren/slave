@@ -149,6 +149,9 @@ model Workspace {
   /// M54 R6: the external repositories mapped to this project. `InboundEvent` has no relation -- a
   /// delivery's record outlives its mapping (R4).
   externalRepositories ExternalRepository[]
+  /// M59 R1: the conversation this project was created from, if it was. At most one -- the unique
+  /// on `Intake.workspaceId`.
+  intake Intake?
 
   @@index([adoptedFromSimulationId])
 }
@@ -1647,6 +1650,112 @@ enum SupervisorDecider {
   rules
 }
 
+/// M59 R1: a project that has not been created yet.
+///
+/// Its own table rather than a `SupervisorDecision` (M59 D4): a decision's `workspaceId` is
+/// required, its `situationKind` is a closed enum and its `action` a closed union -- and an intake
+/// exists BEFORE a workspace does, which is also why nothing here is an `ExecutionEvent`
+/// (`ExecutionEvent.workspaceId` is NOT NULL and the log is per project by design, ADR 0003).
+/// The link back to the project this conversation produced is `workspaceId` here and one optional
+/// `intakeId` on the `workspace.created` payload.
+model Intake {
+  id     String       @id @default(uuid())
+  status IntakeStatus @default(open)
+  /// The last `IntakeDraft` (M59 R8) the model produced, or null while the conversation is still
+  /// a conversation. Validated at read by `intakeDraftSchema`, the way `SupervisorDecision.action`
+  /// is validated by `actionSchema`.
+  draft  Json?
+
+  /// How many model calls this conversation has made, against `INTAKE_MAX_MODEL_CALLS` (12).
+  modelCalls      Int   @default(0)
+  /// What the measured ones cost.
+  modelCostUsd    Float @default(0)
+  /// Calls that were MADE and whose cost never came back. Charged at `INTAKE_PER_CALL_CAP_USD`
+  /// when spend is summed -- the same rule `SupervisorDecision.modelCalled` carries one table over,
+  /// and the reason a cost-blind provider cannot make this money invisible.
+  unmeasuredCalls Int   @default(0)
+
+  /// The daemon claim (M59 R11). A `replying` row whose `claimedAt` is older than
+  /// `INTAKE_CLAIM_TTL_MS` is reclaimable: the process that held it is gone.
+  claimedAt DateTime?
+  claimedBy String?
+
+  /// The project this conversation created, once it has. UNIQUE: one intake creates at most one
+  /// project and a project is created by at most one intake, which is what makes the spend term
+  /// on `workspaceSpend` a single indexed read. SetNull rather than Cascade -- deleting a project
+  /// must not destroy the record of how it was asked for.
+  workspaceId String? @unique
+  /// `{ step, status, at, detail }[]` (M59 R10), appended to before each step moves on, so a
+  /// half-created project is visible as exactly that.
+  stepLog       Json    @default("[]")
+  failureReason String?
+  /// Who opened it (M59 §8: `userId` records who, and nothing more). SetNull, as
+  /// `ExecutionEvent.userId` -- the record outlives the account.
+  userId        String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspace Workspace?      @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  user      User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  messages  IntakeMessage[]
+
+  /// What `claimIntakes` scans: the due rows, oldest first.
+  @@index([status, updatedAt])
+}
+
+/// One line of the conversation (M59 R2). A conversation is these rows in `seq` order -- there is
+/// no JSON transcript column, so a forty-message intake never rewrites a growing blob.
+model IntakeMessage {
+  id       String     @id @default(uuid())
+  intakeId String
+  seq      Int
+  role     IntakeRole
+  /// What is SHOWN. For a `fact` row this is the human-readable summary ("/home/x/api is a git
+  /// repository on main; found npm test"); the structured findings are in `facts`.
+  text     String
+  /// The `IntakeFacts` (M59 R6) a `fact` row carries, and null on every other row.
+  facts    Json?
+
+  createdAt DateTime @default(now())
+
+  intake Intake @relation(fields: [intakeId], references: [id], onDelete: Cascade)
+
+  @@unique([intakeId, seq])
+}
+
+/// M59 R3: installation-level settings. One row, `id = "installation"`, and one field -- the
+/// folder a repository created from a conversation goes under. The first installation-level row in
+/// this product: until M59 the only installation-level fact was an environment variable.
+/// `resolveReposRoot` (`packages/control/src/installation.ts`) is the one reader.
+model InstallationSettings {
+  id        String   @id @default("installation")
+  reposRoot String?
+  updatedAt DateTime @updatedAt
+}
+
+/// The life of one intake (M59 R1). `open` waits for the person, `awaiting_reply` for the daemon,
+/// `replying` is a daemon holding the claim, `drafted` has a draft that may be accepted, `creating`
+/// is accept running, and the last three are terminal.
+enum IntakeStatus {
+  open
+  awaiting_reply
+  replying
+  drafted
+  creating
+  created
+  failed
+  abandoned
+}
+
+/// Who said one line (M59 R2). `fact` is this system's own reading of the filesystem, which is
+/// neither the person nor the model and must not be mistaken for either.
+enum IntakeRole {
+  human
+  assistant
+  fact
+}
+
 model Artifact {
   id        String   @id @default(uuid())
   taskId    String
@@ -1928,6 +2037,7 @@ model User {
   createdTasks      Task[]
   goalSetWorkspaces Workspace[]
   simulations       SimulationRun[]
+  intakes           Intake[]
 }
 
 /// M29: a company simulation run (spec §3). Bound to the CATALOG company, never to a workspace:

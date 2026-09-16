@@ -30,7 +30,7 @@ git config core.hooksPath .githooks  # pre-push runs typecheck + tests
 Then, in two terminals:
 
 ```bash
-npm run orchestrator -- daemon       # the scheduler: picks up ready tasks, runs slaves
+npm run orchestrator -- daemon       # the scheduler: serves every project, picks up new ones
 npm run web                          # the UI at http://127.0.0.1:3000
 ```
 
@@ -64,8 +64,14 @@ the container at once: two schedulers on one database pick up the same tasks.
 
 ## Attach your repository
 
-A workspace is a local git clone you already have. Attach it from the CLI or from the **Projects**
-page's **New project** button in the UI:
+The quickest way is to talk to it. **Projects → New project** opens a conversation: say what you
+want to build, name your repository when it asks, and it reads that repository — its branches, and
+the verify commands its `package.json`, `Makefile`, `pyproject.toml`, `Cargo.toml` or `go.mod`
+really carries — and proposes the whole project, every field editable, with one button to create it.
+If you have no repository yet, say so: it will make one, with a first commit and a README carrying
+your goal, under the folder named in **Settings → Repositories folder** (`SLAVEOFAI_REPOS`, else
+`~/projects`). The form below is still there, one link away inside the same drawer, and so is the
+CLI:
 
 ```bash
 npm run orchestrator -- create-workspace --name <name> --repo /abs/path/to/repo \
@@ -228,6 +234,13 @@ npm run orchestrator -- confirm-integration --task <id>     # after a hand merge
 npm run orchestrator -- unblock-task --task <id> [--allow-another-attempt]  # move a blocked task back to rework
 npm run orchestrator -- emergency-stop --workspace <id> --by <name>
 npm run orchestrator -- clear-halt --workspace <id>         # lift a workspace halt (starts nothing)
+npm run orchestrator -- intake open
+npm run orchestrator -- intake say --intake <id> --text "what I want to build"
+npm run orchestrator -- intake show --intake <id>
+npm run orchestrator -- intake accept --intake <id> [--draft <file.json>]
+npm run orchestrator -- intake abandon --intake <id>
+npm run orchestrator -- init-repository --path <abs/path> --name <name> [--goal <text>]
+npm run orchestrator -- settings repos-root [--set <abs/path>]
 npm run orchestrator -- archive-workspace --workspace <id>  # nothing runs until restored; refused while a run is live
 npm run orchestrator -- restore-workspace --workspace <id>
 npm run orchestrator -- list-workspaces                     # every project, archived ones marked
@@ -264,7 +277,9 @@ department's slaves, a company's roster, a template's catalog slaves) and is ref
 live run is in the way. Omit `--yes` on any of them to preview the footprint it would delete
 without deleting it.
 
-`--workspace <id>` can be left out while there is exactly one workspace.
+`--workspace <id>` can be left out while there is exactly one workspace. `daemon` is the exception
+and has been since M59: with no `--workspace` it serves EVERY active project and picks up ones
+created while it runs.
 
 ## What a slave is told
 
@@ -1015,7 +1030,8 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m42-catalog-import`, `gate:m44-ux-foundation`, `gate:m45-project-experience`,
 `gate:m46-workforce-catalog`, `gate:m47-team-formation`, `gate:m48-runbooks`, `gate:m49-memory`,
 `gate:m50-ephemeral`, `gate:m51-breaker`, `gate:m52-broker`, `gate:m53-evidence`,
-`gate:m54-triggers`, `gate:m55-catalog`, `gate:m56a-provider-contract`, `gate:m57-ui-redesign` and `gate:m58-persons` on every push — `m36` stops the orchestrator and starts it again
+`gate:m54-triggers`, `gate:m55-catalog`, `gate:m56a-provider-contract`, `gate:m57-ui-redesign` and
+`gate:m58-persons` and `gate:m59-intake` on every push — `m36` stops the orchestrator and starts it again
 mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was
 given the persona and the skills it was assigned, `m38` drives a real daemon until the Supervisor
 proposes the staffing a reviewer-less project needs, waits for a human to approve it, unblocks a
@@ -1125,8 +1141,18 @@ names still answer 200, and `m58` makes a slave with no project at all, seats th
 learnt on the first is in the second's prompt, gives their persona a skill and takes it back on
 the slave alone, removes them from one project and finds them still on the other, deletes them
 after a confirmation that had to say "2 projects", and drives `add-slave`, `assign-company` and
-`hire --temporary` to prove the verbs an operator already types still work. That is
-33 gates. Tests and gates share one Postgres --
+`hire --temporary` to prove the verbs an operator already types still work,
+and `m59` starts a daemon with no `--workspace` at all and drives a real browser through a project
+that begins as a sentence: one line of English gets a question back from a real daemon and a fake
+CLI, an absolute path gets a card of chips naming every verify command that repository really has
+and the file each came from, a draft arrives with both of them checked and a suggested team
+carrying `manager`, unchecking one and renaming the project produces exactly that project — goal
+v1 in the words that were typed, one verify command, and the conversation's own id on its created
+event — the daemon says it serves one more project within two discovery periods, a second
+conversation with no repository at all produces one with a single commit and a README carrying the
+goal under the folder Settings names, and the whole flow runs again through the CLI with no browser
+anywhere. That is
+34 gates. Tests and gates share one Postgres --
 run one at a time.
 
 ## Learn more

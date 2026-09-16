@@ -225,4 +225,18 @@ describe('listProjects counts the Supervisor spend', () => {
     expect(project?.spend).toBeCloseTo(EXPECTED_SPEND)
     expect((await workspaceSpend(fixture.workspaceId)).spentUsd).toBeCloseTo(EXPECTED_SPEND)
   })
+
+  it('counts an intake s model calls exactly as workspaceSpend does (M59 R12)', async (): Promise<void> => {
+    const { workspaceId } = await seed('Spend Groups Intake Project')
+    await prisma.intake.create({
+      data: { workspaceId, status: 'created', modelCostUsd: 0.25, unmeasuredCalls: 2, modelCalls: 5 },
+    })
+    const [card] = (await listProjects()).filter((project) => project.id === workspaceId)
+    const spend = await workspaceSpend(workspaceId)
+    expect(card?.spend).toBeCloseTo(spend.spentUsd)
+    expect(spend.intakeMeasuredUsd).toBeCloseTo(0.25)
+    expect(spend.intakeUnmeasuredCalls).toBe(2)
+    // 0.25 + 2 x $1: an unmeasured call is charged, never counted as free.
+    expect(spend.spentUsd).toBeCloseTo(2.25)
+  })
 })

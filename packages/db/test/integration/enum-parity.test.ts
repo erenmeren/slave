@@ -8,6 +8,8 @@ import {
   EVIDENCE_OUTCOMES,
   EXTERNAL_EVENT_KINDS,
   EXTERNAL_SOURCES,
+  INTAKE_ROLES,
+  INTAKE_STATUSES,
   MEMORY_SCOPES,
   MEMORY_SOURCE_KINDS,
   MEMORY_STATUSES,
@@ -204,5 +206,17 @@ describe('database enums match the domain unions', () => {
 
   it('DuplicateBasis matches DUPLICATE_BASES, member for member', async () => {
     expect(await enumValues('DuplicateBasis')).toEqual([...DUPLICATE_BASES].sort())
+  })
+
+  // M59 R1/R2: the two intake enums. Pinned against the DOMAIN's arrays rather than literals,
+  // because `INTAKE_STATUS_LABEL` is a total `Record` over the first of them and a member that
+  // reached Postgres without reaching the domain would render as a blank word on the drawer --
+  // and one that reached the domain without reaching Postgres would throw on the first insert.
+  it('IntakeStatus matches INTAKE_STATUSES, member for member', async () => {
+    expect(await enumValues('IntakeStatus')).toEqual([...INTAKE_STATUSES].sort())
+  })
+
+  it('IntakeRole matches INTAKE_ROLES, member for member', async () => {
+    expect(await enumValues('IntakeRole')).toEqual([...INTAKE_ROLES].sort())
   })
 })

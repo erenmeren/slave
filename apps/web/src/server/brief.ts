@@ -7,6 +7,7 @@ import {
 } from '@slave-of-ai/db'
 import { workspaceSpend, type WorkspaceSpend } from '@slave-of-ai/control'
 import {
+  INTAKE_PER_CALL_CAP_USD,
   NON_TERMINAL_RUN_STATUSES,
   RUN_UNMEASURED_CAP_USD,
   SUPERVISOR_PER_CALL_CAP_USD,
@@ -116,11 +117,11 @@ export interface ProjectBrief {
   /**
    * ONE total, and the two DIFFERENT holes beside it -- never one figure that adds them up.
    *
-   * - `spentUsd` is `workspaceSpend()`'s total: measured run cost + measured Supervisor cost +
-   *   `unmeasuredCalls` charged at `SUPERVISOR_PER_CALL_CAP_USD`.
+   * - `spentUsd` is `workspaceSpend()`'s total: measured run, Supervisor and intake cost, plus
+   *   unmeasured Supervisor/intake calls charged at their respective caps.
    * - `measuredUsd` is the part of that total somebody actually reported.
-   * - `unmeasuredCalls` are Supervisor model calls whose cost never came back. They ARE in
-   *   `spentUsd`, at the cap -- an upper bound, shown as an estimate (M32).
+   * - `unmeasuredCalls` are Supervisor and intake model calls whose cost never came back. They ARE
+   *   in `spentUsd`, at their respective caps -- an upper bound, shown as an estimate (M32/M59).
    * - `unmeasuredRuns` are runs that spawned, finished, and left no figure behind. They are in NO
    *   total: nobody can name what they cost, and the guardrail does not charge for them. The same
    *   field, with the same meaning, as `OverviewSnapshot.workspace.unmeasuredRuns`.
@@ -330,13 +331,18 @@ export async function buildProjectBrief(
     latestVerified: pickVerified(verified, titleById),
     cost: {
       spentUsd: spend.spentUsd,
-      measuredUsd: spend.runsMeasuredUsd + spend.supervisorMeasuredUsd,
+      // M59 R12 (fix round 1): the intake's own measured cost is workspace spend exactly like the
+      // Supervisor's, so it belongs beside it here too -- without it, `measuredUsd`/`actualUsd`
+      // could read below the runs and Supervisor money actually reported for a project a
+      // conversation created, which is not what "measured" means.
+      measuredUsd: spend.runsMeasuredUsd + spend.supervisorMeasuredUsd + spend.intakeMeasuredUsd,
       // The SAME sum under its own name (M51 R5, erratum E13): the tile's `actual` line replaces
       // its `measured` line, and the field is duplicated rather than renamed so nothing that reads
       // `measuredUsd` today has to move.
-      actualUsd: spend.runsMeasuredUsd + spend.supervisorMeasuredUsd,
+      actualUsd: spend.runsMeasuredUsd + spend.supervisorMeasuredUsd + spend.intakeMeasuredUsd,
       // Σ over runs of (reported ?? estimated ?? 0), plus the Supervisor's own measured spend and
-      // its capped unmeasured calls -- i.e. `spentUsd` with the holes filled in wherever they can
+      // its capped unmeasured calls, plus the intake's own measured spend and its capped unmeasured
+      // calls (M59 R12, fix round 1) -- i.e. `spentUsd` with the holes filled in wherever they can
       // be. A run that reported nothing and cannot be priced contributes 0 here and shows up in
       // `unmeasuredRuns` instead, which is the honest split. A REPORTED figure is never replaced
       // by its estimate: the `??` chain checks `costUsd` first, the one rule `costProvenanceOf`
@@ -344,7 +350,9 @@ export async function buildProjectBrief(
       estimatedUsd:
         spendRows.reduce((total, row) => total + (row.costUsd ?? estimateCostUsd(row.model, tokensOf(row)) ?? 0), 0) +
         spend.supervisorMeasuredUsd +
-        spend.supervisorUnmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD,
+        spend.supervisorUnmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD +
+        spend.intakeMeasuredUsd +
+        spend.intakeUnmeasuredCalls * INTAKE_PER_CALL_CAP_USD,
       // A DISPLAY figure, computed HERE and never inside `workspaceSpend` (spec R5): charging an
       // unmeasured run would let a budget halt fire on spending nobody measured.
       //
@@ -355,9 +363,9 @@ export async function buildProjectBrief(
       // and a LIVE run's estimate was in no bound at all, because `unknownRuns` counts concluded
       // runs only. The invariant `upperBoundUsd >= estimatedUsd` is pinned in `brief.test.ts`.
       upperBoundUsd: spend.spentUsd + spendRows.reduce((total, row) => total + boundOf(row), 0),
-      // Two different facts, kept apart: a CALL is charged at the cap and is inside `spentUsd`; a
-      // RUN nobody measured is in no total at all (`sumSpend`'s own reading).
-      unmeasuredCalls: spend.supervisorUnmeasuredCalls,
+      // Two different facts, kept apart: a Supervisor or intake CALL is charged at its cap and is
+      // inside `spentUsd`; a RUN nobody measured is in no total at all (`sumSpend`'s own reading).
+      unmeasuredCalls: spend.supervisorUnmeasuredCalls + spend.intakeUnmeasuredCalls,
       unmeasuredRuns: runSpend.unknownRuns,
       budgetUsd: workspace.budgetUsd,
     },

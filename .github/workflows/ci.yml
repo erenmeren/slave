@@ -88,3 +88,4 @@ jobs:
       - run: npm run gate:m56a-provider-contract
       - run: npm run gate:m57-ui-redesign
       - run: npm run gate:m58-persons
+      - run: npm run gate:m59-intake

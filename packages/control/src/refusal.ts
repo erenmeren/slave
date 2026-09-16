@@ -265,6 +265,47 @@ export type ControlRefusal =
   | { readonly kind: 'invalid_permission_mode'; readonly mode: string }
   /** `createWorkspace`'s `repoPath` was not an absolute path (M23 A1, spec §2 A1). */
   | { readonly kind: 'repo_path_not_absolute'; readonly path: string }
+  /** M59 R3: `setInstallationSettings` was handed a relative repositories folder. Distinct from
+   *  `repo_path_not_absolute`, which is about ONE project's repository -- this is the folder every
+   *  future one is created under, and naming the wrong thing would send a person to the wrong
+   *  field. */
+  | { readonly kind: 'invalid_repos_root'; readonly path: string }
+  /** M59 R5: no `Intake` row with this id. Its `_not_found` suffix is what `refusalStatus` maps to
+   *  404 -- derived from the name, never from a list (`apps/web/src/server/refusalStatus.ts`). */
+  | { readonly kind: 'intake_not_found'; readonly intakeId: string }
+  /** M59 R6: a message arrived for a conversation that is not waiting for one -- most often a
+   *  second message sent while the first is still unanswered. */
+  | { readonly kind: 'intake_not_open'; readonly intakeId: string; readonly status: string }
+  /** M59 R5: `abandonIntake` on a conversation that is creating a project or has created one.
+   *  Distinct from `intake_not_open` because the answer is different: one says wait, the other
+   *  says there is a project now and abandoning the conversation would not remove it. */
+  | { readonly kind: 'intake_not_abandonable'; readonly intakeId: string; readonly status: string }
+  /** M59 R10: a second accept while the first is still running. */
+  | { readonly kind: 'intake_busy'; readonly intakeId: string }
+  /** M59 R10: accept on a conversation that already created its project. */
+  | { readonly kind: 'intake_already_created'; readonly intakeId: string; readonly workspaceId: string }
+  /** M59 R12: the conversation has used its `INTAKE_MAX_MODEL_CALLS` turns. Not an error about the
+   *  person and the sentence says so -- the form is still there, pre-filled. */
+  | { readonly kind: 'intake_budget_exhausted'; readonly intakeId: string; readonly calls: number }
+  /** M59 R6: a blank message, or one past `INTAKE_MESSAGE_MAX_CHARS`. */
+  | { readonly kind: 'invalid_message'; readonly reason: string }
+  /** M59 R8/R10: the edited draft does not parse, or claims something the facts do not support. */
+  | { readonly kind: 'invalid_draft'; readonly detail: string }
+  /** M59 R7: `initRepository`'s parent directory does not exist. It creates ONE directory, never a
+   *  tree of them: a typo in a path should not silently build the typo. */
+  | { readonly kind: 'parent_not_found'; readonly path: string }
+  /** M59 R7: the path exists and is not an empty directory. */
+  | { readonly kind: 'path_not_empty'; readonly path: string }
+  /** M59 R7: the path is inside another git work tree. A repository inside a repository is a
+   *  mistake, and one this system would then provision worktrees in. */
+  | { readonly kind: 'inside_repository'; readonly path: string }
+  /** M59 R7: `git init`, the README write or the first commit failed. The reason is git's own. */
+  | { readonly kind: 'repo_init_failed'; readonly path: string; readonly reason: string }
+  /** M59 R10 (fix round 1): a step of `acceptIntake` THREW instead of returning a refusal -- a
+   *  dropped connection, any exception the step's own `Result` type does not carry. Caught so the
+   *  intake still lands in `failed` (resumable, abandonable) rather than stranded in `creating`
+   *  forever. `step` names where it happened; `reason` is the caught error's own message. */
+  | { readonly kind: 'accept_step_failed'; readonly step: string; readonly reason: string }
   /** No directory exists at `createWorkspace`'s `repoPath`. */
   | { readonly kind: 'repo_not_found'; readonly path: string }
   /** `repoPath` exists but is not a git work tree (`GitProbe.isRepository` said so). */
@@ -610,6 +651,34 @@ export function refusalText(refusal: ControlRefusal): string {
       return 'a permission must be allow or deny'
     case 'repo_path_not_absolute':
       return `the repository path must be absolute: ${refusal.path}`
+    case 'invalid_repos_root':
+      return `the repositories folder must be an absolute path: ${refusal.path}`
+    case 'intake_not_found':
+      return `no conversation with id ${refusal.intakeId}`
+    case 'intake_not_open':
+      return `this conversation is ${refusal.status}; wait for the reply before sending another message`
+    case 'intake_not_abandonable':
+      return `this conversation is ${refusal.status} and cannot be abandoned; the project it created stays either way`
+    case 'intake_busy':
+      return 'this conversation is already creating its project; wait for it to finish'
+    case 'intake_already_created':
+      return `this conversation already created project ${refusal.workspaceId}`
+    case 'intake_budget_exhausted':
+      return `this conversation has used its ${plural(refusal.calls, 'model call')}; finish it on the form instead`
+    case 'invalid_message':
+      return refusal.reason
+    case 'invalid_draft':
+      return `these project details cannot be used: ${refusal.detail}`
+    case 'parent_not_found':
+      return `${refusal.path}'s parent folder does not exist; create it first or name a different path`
+    case 'path_not_empty':
+      return `${refusal.path} already has something in it`
+    case 'inside_repository':
+      return `${refusal.path} is inside a git repository already`
+    case 'repo_init_failed':
+      return `the repository at ${refusal.path} could not be created: ${refusal.reason}`
+    case 'accept_step_failed':
+      return `creating this project failed at ${refusal.step}: ${refusal.reason}`
     case 'repo_not_found':
       return `no directory at ${refusal.path}`
     case 'not_a_git_repository':

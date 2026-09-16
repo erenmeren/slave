@@ -1,11 +1,12 @@
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
-import { SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-ai/domain'
+import { INTAKE_PER_CALL_CAP_USD, SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-ai/domain'
 
-/** What a workspace has spent, and the three parts it is made of. The parts are kept because the
+/** What a workspace has spent, and the parts it is made of. The parts are kept because the
  *  total alone cannot say whether a figure is measured -- which is the difference between "this
  *  project spent $4" and "this project spent at least $4 and we stopped being able to tell". */
 export interface WorkspaceSpend {
-  /** `runsMeasuredUsd + supervisorMeasuredUsd + supervisorUnmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD`. */
+  /** `runsMeasuredUsd + supervisorMeasuredUsd + supervisorUnmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD
+   *  + intakeMeasuredUsd + intakeUnmeasuredCalls * INTAKE_PER_CALL_CAP_USD`. */
   readonly spentUsd: number
   /** Σ `SlaveRun.costUsd` over every run of the workspace, whatever its status. Postgres' `sum()`
    *  skips NULLs, so an unmeasured RUN contributes nothing here -- deliberately, and unchanged
@@ -19,6 +20,13 @@ export interface WorkspaceSpend {
   /** Supervisor model calls that were MADE and whose cost never came back (`modelCalled &&
    *  modelCostUsd === null`). Each is charged at `SUPERVISOR_PER_CALL_CAP_USD`. */
   readonly supervisorUnmeasuredCalls: number
+  /** Σ `Intake.modelCostUsd` for the ONE intake that created this project, or 0 when no
+   *  conversation did (M59 R12). */
+  readonly intakeMeasuredUsd: number
+  /** That intake's calls whose cost never came back, charged at `INTAKE_PER_CALL_CAP_USD` -- the
+   *  same rule as the Supervisor's above, for the same reason: a provider that reports no cost
+   *  must not be able to make money disappear. */
+  readonly intakeUnmeasuredCalls: number
 }
 
 /**
@@ -45,6 +53,13 @@ export interface WorkspaceSpend {
  * ONE `groupBy`, not an aggregate plus a count: this runs inside `loadWorld`'s transaction on the
  * tick's hot path, and `_count._all` minus `_count.modelCostUsd` (Prisma counts NON-NULL values
  * for a named field) is the unmeasured tally without a second round trip.
+ *
+ * THE INTAKE'S MONEY (M59 R12). A project made from a conversation spent money before it existed:
+ * the model calls that produced its draft. `Intake.workspaceId` is unique, so at most one row
+ * carries a project's conversation, and its cost is added here on the same terms as the
+ * Supervisor's -- measured cost summed, and a call whose cost never came back charged at
+ * `INTAKE_PER_CALL_CAP_USD` rather than counted as free. Every reader of `workspaceSpend` sees
+ * this money without asking about intakes at all.
  *
  * `client` exists so the caller can run this INSIDE its own snapshot: `loadWorld` reads the world
  * in one `RepeatableRead` transaction, and a spend figure fetched on the shared client afterwards
@@ -75,10 +90,28 @@ export async function workspaceSpend(
   // one somehow does, money that was spent belongs in the total rather than filtered out of it.
   const supervisorMeasuredUsd = supervisor.reduce((total, group) => total + (group._sum.modelCostUsd ?? 0), 0)
   const supervisorUnmeasuredCalls = called === undefined ? 0 : called._count._all - called._count.modelCostUsd
+
+  // M59 R12. `Intake.workspaceId` is UNIQUE, so this is one indexed row and not an aggregate --
+  // cheap enough for `loadWorld`'s transaction, which is where this function runs on the tick's
+  // hot path. A project created from the form has no intake at all and the term is zero.
+  const intake = await client.intake.findUnique({
+    where: { workspaceId },
+    select: { modelCostUsd: true, unmeasuredCalls: true },
+  })
+  const intakeMeasuredUsd = intake?.modelCostUsd ?? 0
+  const intakeUnmeasuredCalls = intake?.unmeasuredCalls ?? 0
+
   return {
     runsMeasuredUsd,
     supervisorMeasuredUsd,
     supervisorUnmeasuredCalls,
-    spentUsd: runsMeasuredUsd + supervisorMeasuredUsd + supervisorUnmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD,
+    intakeMeasuredUsd,
+    intakeUnmeasuredCalls,
+    spentUsd:
+      runsMeasuredUsd +
+      supervisorMeasuredUsd +
+      supervisorUnmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD +
+      intakeMeasuredUsd +
+      intakeUnmeasuredCalls * INTAKE_PER_CALL_CAP_USD,
   }
 }

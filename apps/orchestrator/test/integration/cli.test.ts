@@ -108,6 +108,7 @@ function makeRepo(): string {
   git(['config', 'user.name', 'Fixture'])
   git(['config', 'user.email', 'fixture@example.com'])
   writeFileSync(join(dir, 'README.md'), '# fixture\n')
+  writeFileSync(join(dir, 'package.json'), '{"scripts":{"test":"vitest run"}}')
   git(['add', '-A'])
   git(['commit', '-q', '-m', 'initial'])
   return dir
@@ -194,7 +195,7 @@ describe('the orchestrator CLI', () => {
 
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "SupervisorDecision", "ExecutionEvent", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate", "CatalogImport", "User" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "SimulationModelUsage", "SimulationJournalEntry", "SimulationRun", "SupervisorDecision", "ExecutionEvent", "IntakeMessage", "Intake", "GoalVersion", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "InstallationSettings", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate", "CatalogImport", "User" RESTART IDENTITY CASCADE',
     )
     fixture = await seed()
   })
@@ -307,6 +308,68 @@ describe('the orchestrator CLI', () => {
     const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
     expect(ws.haltedReason).not.toBeNull()
   }, 30_000)
+
+  it('drives a whole conversation from the CLI (M59 R19)', async (): Promise<void> => {
+    const repo = makeRepo()
+    const opened = JSON.parse((await runCli(['intake', 'open'])).stdout) as { id: string }
+    expect(opened.id).toMatch(/^[0-9a-f-]{36}$/u)
+
+    const said = await runCli(['intake', 'say', '--intake', opened.id, '--text', `the repository is at ${repo}`])
+    expect(said.code).toBe(0)
+    const shown = JSON.parse((await runCli(['intake', 'show', '--intake', opened.id])).stdout) as {
+      status: string
+      messages: { role: string; text: string }[]
+    }
+    expect(shown.status).toBe('awaiting_reply')
+    expect(shown.messages.map((message) => message.role)).toEqual(['human', 'fact'])
+    expect(shown.messages[1]?.text).toContain('npm test')
+
+    const abandoned = await runCli(['intake', 'abandon', '--intake', opened.id])
+    expect(abandoned.code).toBe(0)
+    expect((await prisma.intake.findUniqueOrThrow({ where: { id: opened.id } })).status).toBe('abandoned')
+  })
+
+  it('accepts a draft from a file and prints the project it created', async (): Promise<void> => {
+    const repo = makeRepo()
+    const opened = JSON.parse((await runCli(['intake', 'open'])).stdout) as { id: string }
+    await runCli(['intake', 'say', '--intake', opened.id, '--text', `it is at ${repo}`])
+    const draftPath = join(mkdtempSync(join(tmpdir(), 'cli-draft-')), 'draft.json')
+    writeFileSync(
+      draftPath,
+      JSON.stringify({
+        name: 'From The CLI',
+        goal: 'Add rate limiting',
+        repo: { mode: 'existing', path: repo },
+        baseBranch: 'main',
+        verifyCommands: [{ command: 'npm test', source: 'detected' }],
+        setupCommands: [],
+        budgetUsd: null,
+        provider: null,
+        team: [],
+      }),
+    )
+    const accepted = JSON.parse((await runCli(['intake', 'accept', '--intake', opened.id, '--draft', draftPath])).stdout) as {
+      workspaceId: string
+    }
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: accepted.workspaceId } })).name).toBe('From The CLI')
+  })
+
+  it('creates a repository from the CLI', async (): Promise<void> => {
+    const path = join(mkdtempSync(join(tmpdir(), 'cli-init-')), 'new-project')
+    const created = JSON.parse((await runCli(['init-repository', '--path', path, '--name', 'New Project', '--goal', 'do a thing'])).stdout) as {
+      path: string
+      baseBranch: string
+    }
+    expect(created).toEqual({ path, baseBranch: 'main' })
+    expect(readFileSync(join(path, 'README.md'), 'utf8')).toContain('do a thing')
+  })
+
+  it('reads and writes the repositories folder from the CLI', async (): Promise<void> => {
+    const root = mkdtempSync(join(tmpdir(), 'cli-root-'))
+    expect((await runCli(['settings', 'repos-root', '--set', root])).code).toBe(0)
+    expect((await runCli(['settings', 'repos-root'])).stdout).toContain(root)
+    expect((await runCli(['settings', 'repos-root'])).stdout).toContain('from Settings')
+  })
 
   it('refuses emergency-stop with no --workspace given, even with exactly one workspace', async (): Promise<void> => {
     // Unlike `resolveWorkspace` alone, `emergency-stop` follows `clear-halt`'s mandatory-flag idiom:

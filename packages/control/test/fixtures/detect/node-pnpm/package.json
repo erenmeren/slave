@@ -1,0 +1,8 @@
+{
+  "name": "detect-fixture-pnpm",
+  "private": true,
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  }
+}

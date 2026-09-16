@@ -13,7 +13,9 @@ import {
   addMemory,
   addRunbook,
   adoptRunbook,
+  abandonIntake,
   archiveWorkspace,
+  acceptIntake,
   backfillSlaveCapabilities,
   cancelTask,
   clearHalt,
@@ -55,6 +57,7 @@ import {
   hireFromTemplate,
   importCatalog,
   INBOUND_EVENT_STATUS_LABEL,
+  initRepository,
   injectExternalEvent,
   isProviderKind,
   LIST_INBOUND_LIMIT,
@@ -77,8 +80,10 @@ import {
   loadSimulation,
   loadSupervisorWorld,
   mapExternalRepository,
+  openIntake,
   pauseSimulation,
   reassignQuestion,
+  readIntake,
   readMemory,
   readRunbook,
   readTemplateProfile,
@@ -95,8 +100,11 @@ import {
   requestStop,
   restoreWorkspace,
   resumeSimulation,
+  resolveReposRoot,
   runbookStatus,
+  sendIntakeMessage,
   setProfile,
+  setInstallationSettings,
   setRuntimeRoles,
   setSlavePermission,
   setStaffingPreference,
@@ -216,7 +224,9 @@ const USAGE = `usage: orchestrator <command> [options]
 
   tick [--workspace <id>]              run exactly one tick and print the report
   daemon [--workspace <id>] [--period <ms>]
-                                       the periodic + notification-driven loop
+                                       the periodic + notification-driven loop. With no
+                                       --workspace it serves EVERY active project and picks up
+                                       ones created while it runs, within ten seconds.
   status [--workspace <id>]            active runs with their pids, worktrees and states,
                                        and any workspace halt with the reason it happened
   pause --run <id> [--by <name>]       ask a run to stop at its next tool call
@@ -259,6 +269,18 @@ const USAGE = `usage: orchestrator <command> [options]
                                        answered. Nothing is answered and nobody is resumed: the
                                        asker keeps waiting until the new recipient replies.
   clear-halt --workspace <id>          retract a WORKSPACE-WIDE safety halt
+  intake open                          start a conversation that becomes a project
+  intake say --intake <id> --text "<t>"
+                                       send a message; paths in it are probed and what was found
+                                       is added to the conversation. The daemon answers.
+  intake show --intake <id>            the conversation, its draft and its step log, as JSON
+  intake accept --intake <id> [--draft <file.json>]
+                                       create the project from the draft (the stored one by
+                                       default). Resumes at the first step that is not done.
+  intake abandon --intake <id>         stop the conversation; its rows stay
+  init-repository --path <p> --name <n> [--goal "<text>"]
+                                       make an empty git repository with one commit and a README
+  settings repos-root [--set <path>]   where a repository created from a conversation goes
   emergency-stop --workspace <id> [--by <name>]
                                        halt scheduling on the WHOLE workspace AND pause every
                                        active run in it -- the operator's stop-everything button
@@ -1475,8 +1497,14 @@ export async function main(argv: readonly string[]): Promise<number> {
 
     case 'daemon': {
       const period = Number(flagText(flags, 'period') ?? '1000')
+      const named = flagText(flags, 'workspace')
       await runDaemon({
-        workspaceId: await resolveWorkspace(flags),
+        // M59 R15: `resolveWorkspace` is no longer consulted here. With no `--workspace` the
+        // daemon serves EVERY active project and picks up new ones -- which is what makes
+        // `docker/entrypoint.sh`'s bare `daemon` correct on an installation with two projects,
+        // and what stops a project created from a conversation being one nothing is watching.
+        // Every other verb still resolves, and still refuses to guess.
+        workspaceIds: named === undefined ? 'all' : brandWorkspaceId(named),
         registry: buildAdapterRegistry(),
         periodMs: Number.isFinite(period) && period > 0 ? period : 1000,
         // M31a §4: only the daemon carries a decider. The one-shot `tick` above deliberately does
@@ -1765,6 +1793,92 @@ export async function main(argv: readonly string[]): Promise<number> {
         `cleared the safety halt on ${workspaceId}. This starts nothing by itself: it removes the ` +
           `reason nothing was starting.\n`,
       )
+      return 0
+    }
+
+    case 'intake': {
+      // `intake open | say | show | accept | abandon` -- the same five verbs the drawer uses, so a
+      // gate can drive the whole flow without a browser and an operator over SSH is not
+      // second-class (`docs/ia.md` rule 2).
+      const sub = argv[1] ?? 'show'
+
+      if (sub === 'open') {
+        const opened = await openIntake()
+        if (!opened.ok) throw new Error(refusalText(opened.error))
+        process.stdout.write(`${JSON.stringify(opened.value, null, 2)}\n`)
+        return 0
+      }
+
+      const intakeId = requireFlag(flags, 'intake')
+
+      if (sub === 'say') {
+        const sent = await sendIntakeMessage(intakeId, requireFlag(flags, 'text'))
+        if (!sent.ok) throw new Error(refusalText(sent.error))
+        // The conversation as it stands after the message, so one command shows what detection
+        // found rather than making the operator run `show` to find out.
+        const view = await readIntake(intakeId)
+        if (!view.ok) throw new Error(refusalText(view.error))
+        process.stdout.write(`${JSON.stringify(view.value, null, 2)}\n`)
+        return 0
+      }
+
+      if (sub === 'show') {
+        const view = await readIntake(intakeId)
+        if (!view.ok) throw new Error(refusalText(view.error))
+        process.stdout.write(`${JSON.stringify(view.value, null, 2)}\n`)
+        return 0
+      }
+
+      if (sub === 'accept') {
+        const file = flagText(flags, 'draft')
+        // No `--draft`: accept whatever the model last proposed, which is what the button does.
+        const stored = await readIntake(intakeId)
+        if (!stored.ok) throw new Error(refusalText(stored.error))
+        const draft: unknown = file === undefined ? stored.value.draft : JSON.parse(readFileSync(resolve(file), 'utf8'))
+        if (draft === null) {
+          throw new Error('this conversation has no draft yet: pass --draft <file.json>, or wait for the daemon to propose one')
+        }
+        const accepted = await acceptIntake(intakeId, draft)
+        if (!accepted.ok) throw new Error(refusalText(accepted.error))
+        process.stdout.write(`${JSON.stringify(accepted.value, null, 2)}\n`)
+        return 0
+      }
+
+      if (sub === 'abandon') {
+        const abandoned = await abandonIntake(intakeId)
+        if (!abandoned.ok) throw new Error(refusalText(abandoned.error))
+        process.stdout.write('abandoned\n')
+        return 0
+      }
+
+      throw new Error(`unknown intake verb "${sub}": one of open, say, show, accept, abandon`)
+    }
+
+    case 'init-repository': {
+      const created = await initRepository({
+        path: resolve(requireFlag(flags, 'path')),
+        name: requireFlag(flags, 'name'),
+        goal: flagText(flags, 'goal') ?? '',
+      })
+      if (!created.ok) throw new Error(refusalText(created.error))
+      process.stdout.write(`${JSON.stringify(created.value, null, 2)}\n`)
+      return 0
+    }
+
+    case 'settings': {
+      // `settings repos-root [--set <path>]`. One sub-verb today and the noun is plural because
+      // this is the installation's settings page in CLI form, not one setting.
+      const sub = argv[1] ?? 'repos-root'
+      if (sub !== 'repos-root') throw new Error(`unknown settings verb "${sub}": only repos-root`)
+      const set = flagText(flags, 'set')
+      if (set !== undefined) {
+        const saved = await setInstallationSettings({ reposRoot: set === '' ? null : resolve(set) })
+        if (!saved.ok) throw new Error(refusalText(saved.error))
+      }
+      const resolved = await resolveReposRoot()
+      // `docs/ia.md` rule 3: the word, and the raw member beside it in parentheses.
+      const source = { settings: 'from Settings', env: 'from SLAVEOFAI_REPOS', default: 'default' }[resolved.source]
+      process.stdout.write(`${resolved.root}  (${source})\n`)
       return 0
     }
 

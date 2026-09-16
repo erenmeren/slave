@@ -530,6 +530,9 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
       runsMeasuredUsd: 2,
       supervisorMeasuredUsd: 0.25,
       supervisorUnmeasuredCalls: 2,
+      // M59 R12: no intake made this project, so its two terms are zero.
+      intakeMeasuredUsd: 0,
+      intakeUnmeasuredCalls: 0,
       spentUsd: 2 + 0.25 + 2 * SUPERVISOR_PER_CALL_CAP_USD,
     })
   })

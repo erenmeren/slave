@@ -29,16 +29,29 @@ function splitCommands(text: string): string[] {
  * dials `fetch` directly and reads the refusal text with the same `errorMessage` helper
  * `sendControl` uses internally.
  */
-export function ProjectsPanel(): React.JSX.Element {
+/** What the form opens with, when something already knows some of it (M59 R16). Every field is
+ *  optional and every default is the literal this form has always used, so a caller that passes
+ *  nothing renders exactly what it rendered before. */
+export interface ProjectsPanelInitial {
+  readonly name?: string
+  readonly repoPath?: string
+  readonly baseBranch?: string
+  readonly verifyText?: string
+  readonly setupText?: string
+  readonly budgetText?: string
+  readonly provider?: ProviderKind | ''
+}
+
+export function ProjectsPanel({ initial }: { readonly initial?: ProjectsPanelInitial } = {}): React.JSX.Element {
   const router = useRouter()
-  const [name, setName] = useState('')
-  const [repoPath, setRepoPath] = useState('')
-  const [baseBranch, setBaseBranch] = useState('main')
-  const [verifyText, setVerifyText] = useState('')
-  const [setupText, setSetupText] = useState('')
-  const [budgetText, setBudgetText] = useState('20')
+  const [name, setName] = useState(initial?.name ?? '')
+  const [repoPath, setRepoPath] = useState(initial?.repoPath ?? '')
+  const [baseBranch, setBaseBranch] = useState(initial?.baseBranch ?? 'main')
+  const [verifyText, setVerifyText] = useState(initial?.verifyText ?? '')
+  const [setupText, setSetupText] = useState(initial?.setupText ?? '')
+  const [budgetText, setBudgetText] = useState(initial?.budgetText ?? '20')
   const [unbudgeted, setUnbudgeted] = useState(false)
-  const [provider, setProvider] = useState<ProviderKind | ''>('')
+  const [provider, setProvider] = useState<ProviderKind | ''>(initial?.provider ?? '')
   const [pending, setPending] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
 

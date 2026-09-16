@@ -6,11 +6,21 @@ const execFileAsync = promisify(execFile)
 /** A probe that hangs (a network-mounted repo, a stuck lock) must fail the verb, not the CLI. */
 const PROBE_TIMEOUT_MS = 5_000
 
-/** The two questions `createWorkspace` asks a path (spec §2 A1). Injectable so the verb's own
- *  tests never spawn git; `realGitProbe` is what production and the integration test use. */
+/** The questions `createWorkspace` and the intake's detection (M59 R6) ask a path. Injectable so
+ *  the verbs' own tests never spawn git; `realGitProbe` is what production, the integration tests
+ *  and the gates use, and it is the only implementation in this repository --
+ *  `grep -rn useGitProbe` finds the seam (`./workspace.ts`) and no caller. */
 export interface GitProbe {
   isRepository(path: string): Promise<boolean>
   branchExists(path: string, branch: string): Promise<boolean>
+  /** Every local branch, in `git`'s own order. Empty for a path that is not a repository and for
+   *  one whose only branch is unborn (a fresh `git init` with no commit yet). */
+  listBranches(path: string): Promise<readonly string[]>
+  /** What `HEAD` points at -- including an UNBORN branch, which is exactly the state a repository
+   *  `initRepository` (M59 R7) just created is in, and the reason this is `symbolic-ref` rather
+   *  than a read of `listBranches`. Falls back to `main` when it is among the branches, then to
+   *  the first branch, then to null (a detached HEAD in a repository with no branches at all). */
+  defaultBranch(path: string): Promise<string | null>
 }
 
 async function git(cwd: string, ...args: readonly string[]): Promise<string | null> {
@@ -32,6 +42,21 @@ export const realGitProbe: GitProbe = {
   async branchExists(path, branch) {
     return (await git(path, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`)) !== null
   },
+  async listBranches(path) {
+    const out = await git(path, 'for-each-ref', '--format=%(refname:short)', 'refs/heads')
+    if (out === null || out === '') return []
+    return out
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line !== '')
+  },
+  async defaultBranch(path) {
+    const head = await git(path, 'symbolic-ref', '--short', 'HEAD')
+    if (head !== null && head !== '') return head
+    const branches = await this.listBranches(path)
+    if (branches.includes('main')) return 'main'
+    return branches[0] ?? null
+  },
 }
 
 /** How much of the sha-256 a fingerprint keeps. Thirty-two hex characters is 128 bits, which is far
@@ -41,9 +66,13 @@ const FINGERPRINT_CHARS = 32
 /**
  * "Has anything changed in this worktree since last time?" (M51 R1), as an injectable probe.
  *
- * Deliberately NOT a third method on {@link GitProbe} (plan erratum E7): that interface answers the
- * two questions `createWorkspace` asks a path, it has a live injection seam (`useGitProbe` in
- * `./workspace.ts`), and a third REQUIRED method would break every fake that implements it. Two
+ * Deliberately NOT a method on {@link GitProbe} (plan erratum E7): that interface answers what a
+ * path IS as a git repository, it has a live injection seam (`useGitProbe` in `./workspace.ts`),
+ * and this probe answers a different question -- has anything CHANGED since last time -- that
+ * `createWorkspace` and the intake's detection have no use for. `realGitProbe` is `GitProbe`'s
+ * only implementation in this repository, so growing that interface breaks no fake (M59 plan
+ * erratum E6 corrects the earlier claim that it would); the split here is about which question
+ * belongs to which caller, not about protecting an implementation that does not exist. Two
  * interfaces in one file, sharing the same `git()` helper and the same {@link PROBE_TIMEOUT_MS}, is
  * the honest shape -- and the sweep, which is the only caller, injects this one on `SweepDeps`
  * rather than reaching for the module-level singleton the other has.

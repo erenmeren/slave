@@ -1,3 +1,4 @@
+import { readInstallationSettings, resolveReposRoot } from '@slave-of-ai/control'
 import { buildProviderAdapters } from '../../server/settings'
 import { SettingsClient } from '../../components/SettingsClient'
 import { boundaryMode } from '../../lib/authEnv'
@@ -11,13 +12,17 @@ export const dynamic = 'force-dynamic'
  *  and the per-project surfaces (the permission matrix, the emergency stop) live elsewhere now --
  *  see `SettingsClient`'s docstring for where. */
 export default async function SettingsPage(): Promise<React.JSX.Element> {
-  const [adapters, principal] = await Promise.all([
+  const [adapters, principal, root] = await Promise.all([
     buildProviderAdapters(),
     // The one page that asks WHO is reading it. `null` in accounts mode is the revoked-user case
     // (spec §7 F4): the middleware honoured a still-valid signature, and the posture line is where
     // the operator finds out the account behind it is gone.
     currentPrincipal(),
+    // M59 R17. On the SERVER, through the one resolver every reader goes through, so the page and
+    // the intake's facts cannot disagree about where a repository will be created.
+    resolveReposRoot(),
   ])
+  const stored = await readInstallationSettings()
   const mode = boundaryMode()
   return (
     <SettingsClient
@@ -27,6 +32,7 @@ export default async function SettingsPage(): Promise<React.JSX.Element> {
       showReseed={process.env['NODE_ENV'] !== 'production'}
       mode={mode}
       posture={postureFor(mode, principal?.username ?? null)}
+      reposRoot={{ reposRoot: stored.reposRoot, resolved: root.root, source: root.source }}
     />
   )
 }

@@ -74,4 +74,30 @@ describe('createWorkspace', () => {
     expect(again.ok).toBe(false)
     if (!again.ok) expect(again.error).toEqual({ kind: 'duplicate_name', name: 'Billing' })
   })
+
+  it('puts the intake id on the created event when a conversation asked for it (M59 R4)', async (): Promise<void> => {
+    const repoPath = repo()
+    const created = await createWorkspace(
+      { name: 'From a conversation', repoPath, verifyCommands: ['npm test'] },
+      undefined,
+      { intakeId: 'intake-1234' },
+    )
+    expect(created.ok).toBe(true)
+    if (!created.ok) throw new Error('unreachable')
+    const event = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: created.value.id, type: 'workspace_created' },
+    })
+    expect((event.payload as { intakeId?: string }).intakeId).toBe('intake-1234')
+  })
+
+  it('leaves the key off entirely when no conversation did', async (): Promise<void> => {
+    const repoPath = repo()
+    const created = await createWorkspace({ name: 'From the form', repoPath, verifyCommands: ['npm test'] })
+    expect(created.ok).toBe(true)
+    if (!created.ok) throw new Error('unreachable')
+    const event = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: created.value.id, type: 'workspace_created' },
+    })
+    expect(Object.keys(event.payload as object)).not.toContain('intakeId')
+  })
 })

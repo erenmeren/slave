@@ -137,10 +137,17 @@ function cleanCommands(commands: readonly string[] | undefined): string[] {
   return (commands ?? []).map((command) => command.trim()).filter((command) => command.length > 0)
 }
 
-/** Spec §2 A1. Refusals in the spec's table order; nothing is written until every check passed. */
+/** Spec §2 A1. Refusals in the spec's table order; nothing is written until every check passed.
+ *
+ *  `options.intakeId` (M59 R4) is the ONLY link between a project and the conversation that asked
+ *  for it, and it rides on the `workspace.created` payload rather than in a column: the event log
+ *  is where "why does this project exist" belongs, `Intake.workspaceId` is the other half of the
+ *  pair, and neither needs a schema change on `Workspace`. Absent for every project created from
+ *  the form or the CLI, which is every project before this milestone. */
 export async function createWorkspace(
   input: CreateWorkspaceInput,
   principal?: Principal,
+  options: { readonly intakeId?: string } = {},
 ): Promise<Result<{ id: string }, ControlRefusal>> {
   const name = input.name.trim()
   if (name.length === 0) return err({ kind: 'invalid_name' })
@@ -187,7 +194,17 @@ export async function createWorkspace(
     type: 'workspace.created',
     workspaceId: id,
     actor: 'human',
-    payload: { name, repoPath: input.repoPath, baseBranch, verifyCommands, provider },
+    // Spread, not `intakeId: options.intakeId ?? undefined`: a project created from the form must
+    // carry NO `intakeId` key at all, so a reader can tell "no conversation made this" from "one
+    // did and its id will not parse" -- the rule `goal.ts:202-204` already states for `request`.
+    payload: {
+      name,
+      repoPath: input.repoPath,
+      baseBranch,
+      verifyCommands,
+      provider,
+      ...(options.intakeId === undefined ? {} : { intakeId: options.intakeId }),
+    },
     userId: principal?.userId ?? null,
   })
   return ok({ id })

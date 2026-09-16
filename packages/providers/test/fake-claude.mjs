@@ -91,6 +91,12 @@
 //   prompt can never be mistaken for a review or a planning run, and it is
 //   in every mode because a gate picks its mode for the RUNS it wants and
 //   the Supervisor's call arrives on whatever mode that turned out to be.
+//   M59's INTAKE arm sits immediately before the Supervisor arm in every
+//   prompt-sniffing mode. A prompt containing `"intakeAnswer"` gets a
+//   synthetic decision response keyed on its content: the repository path
+//   named by `--intake-repo`, the literal `NEW REPOSITORY`, or the first
+//   question. Content rather than shared state keeps several conversations
+//   deterministic even when their calls interleave.
 //   Right behind it sits M39's ANSWER arm: a prompt containing the literal
 //   `"sources"` (which `buildAnswerPrompt` always emits) replays the fixture
 //   named by `--answer-fixture <name>` in ARGV, or by
@@ -266,6 +272,93 @@ async function promptText() {
   let text = ''
   for await (const chunk of process.stdin) text += chunk
   return text
+}
+
+/**
+ * M59: the intake's model call, recognised by the one literal `buildIntakePrompt` guarantees.
+ *
+ * KEYED ON THE PROMPT, not on a counter file (M59 plan erratum E1): the arm has to be able to
+ * answer several conversations in one gate run, in any order, and a counter in the state directory
+ * would make the answer depend on which stage ran first. So:
+ *   - a prompt carrying the path `--intake-repo` names -> a DRAFT for that repository, with the
+ *     two commands the gate's fixture really has;
+ *   - a prompt carrying the literal `NEW REPOSITORY` -> a DRAFT with `repo.mode: "new"` and no
+ *     path, which `acceptIntake` resolves under the repositories folder;
+ *   - anything else -> the question, which is what the first message in any conversation gets.
+ *
+ * SYNTHETIC rather than a fixture replay, for `env-echo`'s reason: no real capture can carry a
+ * path this process was told about on argv a moment ago. The three lines are the shapes a decision
+ * call reads -- a `system`/`init`, one `assistant` text block, and a terminal `result` carrying a
+ * cost -- so `decideWithModel` parses it exactly as it parses a recording.
+ */
+async function intakeArm(prompt) {
+  if (!prompt.includes('"intakeAnswer"')) return false
+  const repo = flagValue('--intake-repo')
+  const sessionId = 'fake-session-intake'
+  let answer = { kind: 'ask', text: 'Where is the repository?' }
+  if (repo !== undefined && prompt.includes(repo)) {
+    answer = {
+      kind: 'draft',
+      text: 'Here is the project I would create.',
+      draft: {
+        name: 'Rate Limiting',
+        goal: 'Rate limiting for our public API',
+        repo: { mode: 'existing', path: repo },
+        baseBranch: 'main',
+        verifyCommands: [
+          { command: 'npm test', source: 'detected' },
+          { command: 'npm run typecheck', source: 'detected' },
+        ],
+        setupCommands: [],
+        budgetUsd: 0.03,
+        provider: 'claude_code',
+        team: [{ templateId: flagValue('--intake-template') ?? 'unknown', runtimeRoles: ['backend'] }],
+      },
+    }
+  } else if (prompt.includes('NEW REPOSITORY')) {
+    answer = {
+      kind: 'draft',
+      text: 'I will create the repository for you.',
+      draft: {
+        name: 'Brand New Service',
+        goal: 'A brand new service, from nothing',
+        repo: { mode: 'new', path: null },
+        baseBranch: 'main',
+        verifyCommands: [{ command: 'npm test', source: 'draft' }],
+        setupCommands: [],
+        budgetUsd: null,
+        provider: null,
+        team: [],
+      },
+    }
+  }
+  await writeLines([
+    JSON.stringify({ type: 'system', subtype: 'init', cwd: process.cwd(), session_id: sessionId, model: 'fake-claude', permissionMode: 'bypassPermissions' }),
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        model: 'fake-claude',
+        id: 'msg_fake_intake',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: JSON.stringify({ intakeAnswer: answer }) }],
+      },
+      session_id: sessionId,
+    }),
+    JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      terminal_reason: 'completed',
+      stop_reason: 'end_turn',
+      num_turns: 1,
+      total_cost_usd: 0.01,
+      permission_denials: [],
+      session_id: sessionId,
+      result: JSON.stringify({ intakeAnswer: answer }),
+    }),
+  ])
+  process.exit(0)
 }
 
 /** M38: the Supervisor's decision call, recognised by the one literal `buildDecisionPrompt`
@@ -792,6 +885,7 @@ async function main() {
 
   if (fixtureName === 'm36-flow') {
     const prompt = await promptText()
+    if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
     if (await answerArm(prompt)) return
     if (prompt.includes('"verdict"')) {
@@ -841,6 +935,7 @@ async function main() {
 
   if (fixtureName === 'm8-flow') {
     const prompt = await promptText()
+    if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
     if (await answerArm(prompt)) return
     if (await replanArm(prompt)) return
@@ -866,6 +961,7 @@ async function main() {
 
   if (fixtureName === 'm41-flow') {
     const prompt = await promptText()
+    if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
     if (await answerArm(prompt)) return
     if (await replanArm(prompt)) return
@@ -924,6 +1020,7 @@ async function main() {
 
   if (fixtureName === 'm8a-flow') {
     const prompt = await promptText()
+    if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
     if (await answerArm(prompt)) return
     if (prompt.includes('"verdict"')) {

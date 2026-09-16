@@ -66,6 +66,7 @@ function ProjectCard({
     <div className="flex flex-col gap-2">
       <Card
         testId="project-card"
+        data={{ 'data-workspace-id': project.id }}
         onClick={() => router.push(`/w/${project.id}`)}
         className={`gap-3 rounded-page-card p-4 px-[18px] shadow-card ${
           project.needsYou > 0 ? 'border-[color-mix(in_oklab,var(--s-waiting)_45%,var(--line))]' : ''

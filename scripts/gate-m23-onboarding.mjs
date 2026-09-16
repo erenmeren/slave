@@ -577,11 +577,11 @@ try {
 
     const deleteIdle = runCli(['delete-slave', '--slave', idle.id, '--yes'])
     assert(deleteIdle.status === 0, `delete-slave (idle): expected exit 0, got ${String(deleteIdle.status)} -- stderr: ${deleteIdle.stderr}`)
-    assert(deleteIdle.stdout.includes(`slave ${idle.id} deleted`), `delete-slave (idle): unexpected stdout ${deleteIdle.stdout}`)
+    assert(deleteIdle.stdout.includes(`slave ${idle.personId} deleted`), `delete-slave (idle): unexpected stdout ${deleteIdle.stdout}`)
 
     const deleteWorker = runCli(['delete-slave', '--slave', worker.id, '--yes'])
     assert(deleteWorker.status === 0, `delete-slave (worker, terminal run history): expected exit 0, got ${String(deleteWorker.status)} -- stderr: ${deleteWorker.stderr}`)
-    assert(deleteWorker.stdout.includes(`slave ${worker.id} deleted`), `delete-slave (worker): unexpected stdout ${deleteWorker.stdout}`)
+    assert(deleteWorker.stdout.includes(`slave ${worker.personId} deleted`), `delete-slave (worker): unexpected stdout ${deleteWorker.stdout}`)
     assert(
       (await prisma.slaveRun.count({ where: { slaveId: worker.id } })) === 0,
       'delete-slave (worker): its runs should be gone along with the row',
