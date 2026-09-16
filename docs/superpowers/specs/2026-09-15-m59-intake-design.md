@@ -165,3 +165,4 @@ Never a real model call in a test or a gate (`SLAVEOFAI_REQUIRE_FAKE_CLI=1`; the
 - **E8 (amends R6)** — a `SlaveTemplate` has no `runtimeRoles`; the facts' catalogue entry is `{ templateId, name, division, role }`, active templates only; runtime roles come from the draft and `ensureStaffRoles`.
 - **E9 (amends R15)** — an `EventNotification` carries no event type; a notification naming a workspace with no loop arms a discovery pass, an archived project's loop is stopped by the ten-second timer.
 - **E10 (amends R14)** — no `INTAKE_DEFAULT_MODEL`; `tickIntakes` takes the model as a parameter and the daemon passes `deps.supervisorModel`, which `cli.ts` already defaults.
+- **E11 (amends R15)** — the orphan-safety `ticksHaveRun` state is per workspace: `noteTickRan(workspaceId)` records into a `Set<WorkspaceId>`, and `reconcileOrphans` refuses only after that same workspace has ticked, because every orphan query and run it protects is already workspace-scoped.

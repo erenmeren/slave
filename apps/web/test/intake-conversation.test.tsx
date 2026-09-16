@@ -106,6 +106,24 @@ describe('IntakeConversation', () => {
     expect(screen.getByTestId('intake-composer')).toBeTruthy()
   })
 
+  it('does not lose a first message while the conversation is still opening', async (): Promise<void> => {
+    const opening = deferredResponse<Response>()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, options?: { method?: string }) => {
+        if (url === '/api/intakes' && options?.method === 'POST') return opening.promise
+        return new Response(JSON.stringify({ intake: view() }), { status: 200 })
+      }),
+    )
+    render(<IntakeConversation onClose={vi.fn()} />)
+    const composer = screen.getByTestId('intake-composer').querySelector('input')
+    expect(composer?.disabled).toBe(true)
+    expect((screen.getByTestId('intake-send') as HTMLButtonElement).disabled).toBe(true)
+
+    opening.resolve(new Response(JSON.stringify({ ok: true, id: 'intake-1' }), { status: 201 }))
+    await waitFor(() => expect(composer?.disabled).toBe(false))
+  })
+
   it('renders the two kinds of line differently, and a fact card of chips', async (): Promise<void> => {
     stubFetch([
       view({

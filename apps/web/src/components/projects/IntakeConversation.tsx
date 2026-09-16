@@ -497,10 +497,16 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
             placeholder="what do you want to build?"
             value={text}
             onChange={(event) => setText(event.target.value)}
-            disabled={pending || waiting}
+            disabled={intakeId === null || pending || waiting}
             className={`${INPUT_SHELL} flex-1`}
           />
-          <Button variant="primary" size="sm" type="submit" data-testid="intake-send" disabled={pending || waiting || text.trim() === ''}>
+          <Button
+            variant="primary"
+            size="sm"
+            type="submit"
+            data-testid="intake-send"
+            disabled={intakeId === null || pending || waiting || text.trim() === ''}
+          >
             send
           </Button>
         </form>

@@ -44,6 +44,23 @@ describe('parseIntakeAnswer', () => {
     expect(parsed?.downgraded).toBeNull()
   })
 
+  it('completes a proposed non-empty team with the roles planning and review require', () => {
+    const staffedFacts = {
+      ...facts,
+      catalogue: [{ templateId: 'backend', name: 'Backend Engineer', division: 'engineering', role: 'engineer' }],
+    }
+    const staffedDraft = { ...draft, team: [{ templateId: 'backend', runtimeRoles: ['backend'] }] }
+    const parsed = parseIntakeAnswer(
+      wrap({ kind: 'draft', text: 'Here is what I would create.', draft: staffedDraft }),
+      staffedFacts,
+    )
+    expect(parsed?.answer.kind === 'draft' ? parsed.answer.draft.team[0]?.runtimeRoles : []).toEqual([
+      'backend',
+      'manager',
+      'reviewer',
+    ])
+  })
+
   it('reads only the FIRST object, so a bad answer gets no second go', () => {
     const two = `${JSON.stringify({ intakeAnswer: { kind: 'ask', text: 'first' } })} ${JSON.stringify({ intakeAnswer: { kind: 'ask', text: 'second' } })}`
     expect(parseIntakeAnswer(two, facts)?.answer).toEqual({ kind: 'ask', text: 'first' })

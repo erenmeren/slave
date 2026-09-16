@@ -3,6 +3,7 @@ import { firstJsonObject } from '../supervisor/prompt.js'
 import { INTAKE_TEXT_MAX_CHARS } from './constants.js'
 import { intakeDraftSchema, type IntakeDraft } from './draft.js'
 import type { IntakeFacts } from './facts.js'
+import { ensureStaffRoles } from './team.js'
 
 /**
  * The model's answer (M59 R9): a question, or a question with a draft attached.
@@ -96,6 +97,20 @@ export function parseIntakeAnswer(text: string, facts: IntakeFacts | null): Pars
   if (answer.kind === 'ask') return { answer, downgraded: null }
 
   const breach = draftBreach(answer.draft, facts)
-  if (breach === null) return { answer, downgraded: null }
+  if (breach === null) {
+    return {
+      answer: {
+        ...answer,
+        draft: {
+          ...answer.draft,
+          team: ensureStaffRoles(answer.draft.team, facts?.catalogue ?? []).map((seat) => ({
+            templateId: seat.templateId,
+            runtimeRoles: [...seat.runtimeRoles],
+          })),
+        },
+      },
+      downgraded: null,
+    }
+  }
   return { answer: { kind: 'ask', text: answer.text }, downgraded: breach }
 }

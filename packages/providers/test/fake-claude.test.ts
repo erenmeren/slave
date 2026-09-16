@@ -646,6 +646,45 @@ describe('fake-claude', () => {
       expect(execFileSync('git', ['log', '--oneline'], { cwd: repoDir }).toString().trim().split('\n')).toHaveLength(1)
     })
 
+    it('answers an intake prompt with a question when no path is in it (M59)', (): void => {
+      const stdout = execFileSync(
+        'node',
+        [FAKE, '--fixture', 'm8-flow', '-p', '--restricted', '--no-session-persistence', '--tools', ''],
+        { cwd: repoDir, input: 'Reply with {"intakeAnswer": ...}', encoding: 'utf8' },
+      )
+      const result = parseLines(stdout).find((line) => line.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"kind":"ask"')
+    })
+
+    it('answers with a draft naming the repository it was told about', (): void => {
+      const stdout = execFileSync(
+        'node',
+        [FAKE, '--fixture', 'm8-flow', '--intake-repo', '/tmp/fixture-repo', '-p', '--restricted', '--no-session-persistence', '--tools', ''],
+        {
+          cwd: repoDir,
+          input: 'Reply with {"intakeAnswer": ...}\nFOUND: /tmp/fixture-repo is a git repository on main',
+          encoding: 'utf8',
+        },
+      )
+      const result = parseLines(stdout).find((line) => line.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"mode":"existing"')
+      expect(result?.result).toContain('/tmp/fixture-repo')
+    })
+
+    it('answers with a NEW repository draft when the conversation asked for one', (): void => {
+      const stdout = execFileSync(
+        'node',
+        [FAKE, '--fixture', 'm8-flow', '-p', '--restricted', '--no-session-persistence', '--tools', ''],
+        {
+          cwd: repoDir,
+          input: 'Reply with {"intakeAnswer": ...}\nPERSON: I want a NEW REPOSITORY for this',
+          encoding: 'utf8',
+        },
+      )
+      const result = parseLines(stdout).find((line) => line.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"mode":"new"')
+    })
+
     it('is armed in every prompt-sniffing mode, ahead of the verdict and task-graph checks', async (): Promise<void> => {
       for (const mode of ['m8-flow', 'm8a-flow', 'm36-flow', 'm41-flow']) {
         const { stdout } = await run('node', [FAKE, '--fixture', mode, '-p', `${PROMPT} "verdict" "task graph"`], {
