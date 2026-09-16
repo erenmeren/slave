@@ -45,6 +45,13 @@ function makeRepo(): string {
   return dir
 }
 
+async function seedTemplate(name: string, division: string): Promise<string> {
+  const template = await prisma.slaveTemplate.create({
+    data: { name, role: 'backend', description: '', active: true, sourceDivision: division },
+  })
+  return template.id
+}
+
 const draftFor = (repo: string, name: string): IntakeDraft => ({
   name,
   goal: 'Add rate limiting to the public API',
@@ -60,7 +67,7 @@ const draftFor = (repo: string, name: string): IntakeDraft => ({
 describe('acceptIntake', () => {
   beforeEach(async (): Promise<void> => {
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "IntakeMessage", "Intake", "GoalVersion", "Task", "Slave", "Team", "Workspace", "InstallationSettings" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "IntakeMessage", "Intake", "GoalVersion", "Task", "Slave", "Person", "Team", "Workspace", "InstallationSettings", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -99,6 +106,53 @@ describe('acceptIntake', () => {
       'set_goal:done',
       'mark_created:done',
     ])
+  })
+
+  it('hires the team the draft named, onto one department named after the project (M59 R13)', async (): Promise<void> => {
+    const repo = makeRepo()
+    const templateId = await seedTemplate('Backend Developer', 'engineering')
+    const id = await opened(`it is at ${repo}`)
+    const accepted = await acceptIntake(id, {
+      ...draftFor(repo, 'Staffed'),
+      team: [{ templateId, runtimeRoles: ['backend'] }],
+    })
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+
+    const teams = await prisma.team.findMany({
+      where: { workspaceId: accepted.value.workspaceId },
+      include: { slaves: true },
+    })
+    expect(teams).toHaveLength(1)
+    expect(teams[0]?.name).toBe('Staffed')
+    expect(teams[0]?.slaves).toHaveLength(1)
+    // `ensureStaffRoles` put both on the one seat: `dispatchPlanning` refuses without a manager
+    // and a review needs a reviewer, so a suggested team without them is a project that looks
+    // staffed and does nothing.
+    expect(teams[0]?.slaves[0]?.runtimeRoles).toEqual(['backend', 'manager', 'reviewer'])
+
+    const row = await prisma.intake.findUniqueOrThrow({ where: { id } })
+    const staff = (row.stepLog as { step: string; status: string; detail: string | null }[]).find(
+      (entry) => entry.step === 'staff',
+    )
+    expect(staff).toMatchObject({ status: 'done' })
+    expect(staff?.detail).toContain('1')
+  })
+
+  it('creates nobody for an empty team, and says skipped rather than done', async (): Promise<void> => {
+    const repo = makeRepo()
+    const id = await opened(`it is at ${repo}`)
+    const accepted = await acceptIntake(id, { ...draftFor(repo, 'Unstaffed'), team: [] })
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+    expect(await prisma.team.count({ where: { workspaceId: accepted.value.workspaceId } })).toBe(0)
+    const row = await prisma.intake.findUniqueOrThrow({ where: { id } })
+    const staff = (row.stepLog as { step: string; status: string; detail: string | null }[]).find(
+      (entry) => entry.step === 'staff',
+    )
+    // "I will staff it myself" is a real answer (R13): the project then shows M38's `no_planner`
+    // situation exactly as an unstaffed project does today.
+    expect(staff).toMatchObject({ status: 'skipped', detail: 'the draft asked for nobody' })
   })
 
   it('puts the person s own words on the goal event, so the Supervisor conversation opens with them', async (): Promise<void> => {

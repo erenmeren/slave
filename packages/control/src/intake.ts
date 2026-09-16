@@ -12,6 +12,7 @@ import {
   INTAKE_TRANSCRIPT_MAX_CHARS,
   err,
   factsSummary,
+  ensureStaffRoles,
   intakeDraftSchema,
   intakeFactsSchema,
   intakeRepositoryPath,
@@ -29,6 +30,8 @@ import {
 import { findPaths, inspectPath } from './detect.js'
 import { setGoal } from './goal.js'
 import { resolveReposRoot, slugify } from './installation.js'
+import { createProjectTeam } from './org.js'
+import { assignPerson, createPerson } from './persons.js'
 import type { Principal } from './principal.js'
 import { refusalText, type ControlRefusal } from './refusal.js'
 import { createWorkspace } from './workspace.js'
@@ -636,11 +639,49 @@ export async function acceptIntake(
       await appendStep(intakeId, { step: 'create_workspace', status: 'done', at: now(), detail: workspaceId })
     }
 
-    // 3. staff -- M59 R13, and M58-bound. Until M58 is on `main` this step is not implemented and
-    //    says so in the log rather than silently doing nothing.
+    // 3. staff -- M59 R13. The seats the draft named, with `manager` and `reviewer` guaranteed among
+    //    them, on ONE department named after the project.
+    //
+    //    A workspace starts with no `Team` at all (`createWorkspace` writes one row and at most one
+    //    `ProviderConfiguration`), so the department is created here, with the verb that already
+    //    exists for it -- `createProjectTeam`, which emits the `org.changed` every other project-level
+    //    org verb emits.
+    //
+    //    A seat that cannot be opened FAILS the step rather than being skipped: a project staffed
+    //    with half the team the person approved is worse than one that says it stopped, and the
+    //    resume path re-runs `staff` from the beginning. `createPerson` and `assignPerson` are M58's
+    //    (R10); the roles are what `ensureStaffRoles` settled.
     currentStep = 'staff'
     if (done.get('staff') === undefined) {
-      await appendStep(intakeId, { step: 'staff', status: 'skipped', at: now(), detail: 'M58 not merged' })
+      const seats = ensureStaffRoles(draft.team, intake.facts?.catalogue ?? [])
+      if (seats.length === 0) {
+        await appendStep(intakeId, {
+          step: 'staff',
+          status: 'skipped',
+          at: now(),
+          detail: 'the draft asked for nobody',
+        })
+      } else {
+        const team = await createProjectTeam(workspaceId, draft.name, principal)
+        if (!team.ok) return fail('staff', team.error)
+        for (const seat of seats) {
+          const person = await createPerson({ templateId: seat.templateId }, principal)
+          if (!person.ok) return fail('staff', person.error)
+          const assigned = await assignPerson(
+            person.value.personId,
+            team.value.id,
+            { runtimeRoles: [...seat.runtimeRoles] },
+            principal,
+          )
+          if (!assigned.ok) return fail('staff', assigned.error)
+        }
+        await appendStep(intakeId, {
+          step: 'staff',
+          status: 'done',
+          at: now(),
+          detail: `${String(seats.length)} seat(s) on ${draft.name}`,
+        })
+      }
     }
 
     // 4. set_goal -- with the person's own words as the request.

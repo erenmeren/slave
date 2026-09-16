@@ -6,7 +6,7 @@
 //   2. New project opens an empty conversation; one sentence gets one question from the daemon.
 //   3. A repository path produces facts with provenance and a draft with a usable team.
 //   4. Editing that draft creates exactly the project the person approved.
-//   5. The daemon discovers it and honestly reports the pre-M58 no-planner guardrail.
+//   5. The daemon discovers it, staffs it, and completes a planning run.
 //   6. An idea with no repository creates one under the configured root, with one first commit.
 //   7. The same intake shape works through the CLI with no browser.
 //   8. The intake's model spend is recorded and its project remains visible.
@@ -41,7 +41,7 @@ const REPLY_TIMEOUT_MS = 60_000
 const DISCOVERY_TIMEOUT_MS = 20_000
 const PLANNING_TIMEOUT_MS = 30_000
 const POLL_INTERVAL_MS = 100
-const DAEMON_PERIOD_MS = 500
+const DAEMON_PERIOD_MS = 2_000
 const MANIFEST_RACE_SIGNATURE = 'Unexpected end of JSON input'
 const VIEWPORT = { width: 1440, height: 900 }
 
@@ -202,6 +202,8 @@ try {
       name: `${TEMPLATE_PREFIX} ${STAMP}`,
       role: 'Backend engineer',
       description: 'A deterministic active catalogue entry for the M59 intake gate.',
+      defaultModel: 'sonnet',
+      provider: 'claude_code',
       active: true,
     },
   })
@@ -514,7 +516,7 @@ try {
   console.log('stage 4 PASSED: one button, and a project whose definition of done is a command that really exists')
 
   // ============================================================================================
-  // Stage 5: the daemon follows -- and, until M58, says honestly that nobody was hired.
+  // Stage 5: the daemon follows, staffs, and plans the project.
   // ============================================================================================
   await waitUntil(
     () => new RegExp(`serving ${String(projectsAtStart + 1)} projects?`).test(daemon.output),
@@ -525,22 +527,50 @@ try {
   const intakeRow = await prisma.intake.findUnique({ where: { workspaceId } })
   const staffStep = (intakeRow?.stepLog ?? []).find((entry) => entry.step === 'staff')
   console.log(`stage 5: the staff step = ${JSON.stringify(staffStep)}`)
-  // Task 10 replaces this deliberately pre-M58 assertion after M58 merges.
-  if (staffStep?.status !== 'skipped') {
-    await fail(`stage 5: the staff step is ${JSON.stringify(staffStep)}, and before M58 it must be recorded as skipped`)
+  if (staffStep?.status !== 'done') {
+    await fail(`stage 5: the staff step is ${JSON.stringify(staffStep)}, and M58 has landed -- it must hire`)
+  }
+  const seats = await prisma.slave.findMany({
+    where: { team: { workspaceId } },
+    select: { person: { select: { name: true } }, runtimeRoles: true },
+  })
+  console.log(`stage 5: the team = ${JSON.stringify(seats)}`)
+  if (!seats.some((seat) => seat.runtimeRoles.includes('manager'))) {
+    await fail('stage 5: nobody on the new project holds `manager`, so nothing can ever be planned')
   }
   await waitUntil(
-    async () => (await prisma.executionEvent.count({ where: { workspaceId, type: 'guardrail_tripped' } })) > 0,
+    async () => (await prisma.slaveRun.count({ where: { kind: 'planning', slave: { team: { workspaceId } } } })) > 0,
     PLANNING_TIMEOUT_MS,
-    'the new project to raise a guardrail for having nobody to plan with',
+    'a planning run on the project the conversation created',
   )
-  const tripped = await prisma.executionEvent.findFirst({ where: { workspaceId, type: 'guardrail_tripped' } })
-  console.log(`stage 5: guardrail = ${JSON.stringify(tripped?.payload)}`)
-  // Task 10 replaces this deliberately pre-M58 assertion after M58 merges.
-  if (String(tripped?.payload?.kind ?? tripped?.payload?.guardrail ?? '') !== 'no_planner') {
-    await fail(`stage 5: the new project tripped ${JSON.stringify(tripped?.payload)}, expected no_planner`)
+  const planning = await prisma.slaveRun.findFirstOrThrow({
+    where: { kind: 'planning', slave: { team: { workspaceId } } },
+  })
+  const planningTerminal = await waitUntil(
+    async () => {
+      const run = await prisma.slaveRun.findUnique({ where: { id: planning.id } })
+      return run?.status === 'succeeded' || run?.status === 'failed' ? run : false
+    },
+    PLANNING_TIMEOUT_MS,
+    `planning run ${planning.id} to finish`,
+  )
+  console.log(`stage 5: planning run ${planningTerminal.id} is ${planningTerminal.status}`)
+  if (planningTerminal.status !== 'succeeded') {
+    const failed = await prisma.executionEvent.findFirst({
+      where: { runId: planningTerminal.id, type: 'run_failed' },
+      orderBy: { seq: 'desc' },
+      select: { payload: true },
+    })
+    await fail(
+      `stage 5: planning run ${planningTerminal.id} is ${planningTerminal.status}: ${JSON.stringify(failed?.payload ?? null)}`,
+    )
   }
-  console.log('stage 5 PASSED: the daemon picked up a project nobody told it about, and said what it could not do')
+  if (planningTerminal.costUsd !== 0.20933900000000003) {
+    await fail(
+      `stage 5: planning run ${planningTerminal.id} cost ${String(planningTerminal.costUsd)}, expected the fake fixture's measured 0.20933900000000003`,
+    )
+  }
+  console.log('stage 5 PASSED: a project created by a conversation, staffed by it, and planned by a daemon nobody told about it')
 
   // ============================================================================================
   // Stage 6: a project with no repository at all.
@@ -620,7 +650,8 @@ try {
   await gotoReliably(`${baseUrl}/`)
   const exactCard = page.locator(`[data-testid="project-card"][data-workspace-id="${workspaceId}"]`)
   if ((await exactCard.count()) !== 1) await fail(`stage 8: expected exactly one card for workspace ${workspaceId}`)
-  const expectedCardSpend = '$0.03'
+  // $0.02 intake + the plan-graph fixture's measured $0.209339 = $0.23 at card precision.
+  const expectedCardSpend = '$0.23'
   const cardSpend = await exactCard.textContent().catch(() => null)
   console.log(`stage 8: the project card reads ${JSON.stringify(cardSpend)}`)
   if ((await exactCard.getByText(expectedCardSpend, { exact: true }).count()) < 1) {

@@ -310,8 +310,8 @@ async function intakeArm(prompt) {
           { command: 'npm run typecheck', source: 'detected' },
         ],
         setupCommands: [],
-        budgetUsd: 20,
-        provider: null,
+        budgetUsd: 0.03,
+        provider: 'claude_code',
         team: [{ templateId: flagValue('--intake-template') ?? 'unknown', runtimeRoles: ['backend'] }],
       },
     }

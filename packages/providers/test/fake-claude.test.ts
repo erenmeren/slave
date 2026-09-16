@@ -669,6 +669,8 @@ describe('fake-claude', () => {
       const result = parseLines(stdout).find((line) => line.type === 'result') as { result?: string } | undefined
       expect(result?.result).toContain('"mode":"existing"')
       expect(result?.result).toContain('/tmp/fixture-repo')
+      expect(result?.result).toContain('"budgetUsd":0.03')
+      expect(result?.result).toContain('"provider":"claude_code"')
     })
 
     it('answers with a NEW repository draft when the conversation asked for one', (): void => {
@@ -683,6 +685,7 @@ describe('fake-claude', () => {
       )
       const result = parseLines(stdout).find((line) => line.type === 'result') as { result?: string } | undefined
       expect(result?.result).toContain('"mode":"new"')
+      expect(result?.result).toContain('"provider":null')
     })
 
     it('is armed in every prompt-sniffing mode, ahead of the verdict and task-graph checks', async (): Promise<void> => {
