@@ -1,7 +1,10 @@
 'use client'
 
+import { useState, type InputHTMLAttributes } from 'react'
 import type { AdapterCard } from '../server/settings'
 import type { BoundaryMode } from '../lib/authEnv'
+import { errorMessage } from '../lib/postControl'
+import { onUnauthorized } from '../lib/onUnauthorized'
 import { THEME_LABEL, useTheme } from './theme/ThemeProvider'
 import { DangerZone } from './DangerZone'
 import { LogoutButton } from './LogoutButton'
@@ -9,6 +12,84 @@ import { ProviderAdapterCards } from './ProviderAdapterCards'
 import { PageShell } from './ui/PageShell'
 import { Panel } from './ui/Panel'
 import { Segmented } from './ui/Segmented'
+import { Button } from './ui/Button'
+import { TextField } from './ui/FormControls'
+
+type ReposRootState = { readonly reposRoot: string | null; readonly resolved: string; readonly source: 'settings' | 'env' | 'default' }
+
+/** M59 R17: the one installation-level setting there is. Its own component keeps the page as
+ *  layout while the field owns its `pending` and `errorText` state. */
+export function ReposRootField({ initial }: { readonly initial: ReposRootState }): React.JSX.Element {
+  const [value, setValue] = useState(initial.reposRoot ?? '')
+  const [state, setState] = useState(initial)
+  const [pending, setPending] = useState(false)
+  const [errorText, setErrorText] = useState<string | null>(null)
+
+  const save = async (): Promise<void> => {
+    setPending(true)
+    setErrorText(null)
+    try {
+      const response = await fetch('/api/installation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reposRoot: value.trim() === '' ? null : value.trim() }),
+      })
+      if (response.status === 401) onUnauthorized()
+      if (!response.ok) {
+        setErrorText(errorMessage(await response.json().catch(() => null), response.status))
+        return
+      }
+      const body = (await response.json()) as { reposRoot: string | null }
+      setState(
+        body.reposRoot === null
+          ? { reposRoot: null, resolved: state.resolved, source: 'default' }
+          : { reposRoot: body.reposRoot, resolved: body.reposRoot, source: 'settings' },
+      )
+    } catch (cause) {
+      setErrorText(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const sourceLabel: Record<ReposRootState['source'], string> = {
+    settings: 'from Settings',
+    env: 'from SLAVEOFAI_REPOS',
+    default: 'default (~/projects)',
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-end gap-2">
+        <TextField
+          label="Repositories folder"
+          inputProps={
+            {
+              'data-testid': 'settings-repos-root',
+              'aria-label': 'repositories folder',
+              placeholder: state.resolved,
+              value,
+              onChange: (event) => setValue(event.target.value),
+              disabled: pending,
+              className: 'w-96 font-mono',
+            } as InputHTMLAttributes<HTMLInputElement>
+          }
+        />
+        <Button variant="primary" size="sm" type="button" data-testid="settings-repos-root-save" disabled={pending} onClick={() => void save()}>
+          save
+        </Button>
+      </div>
+      <p data-testid="settings-repos-root-source" data-source={state.source} className="text-[12px] text-text-3">
+        {state.resolved} — {sourceLabel[state.source]}
+      </p>
+      {errorText !== null && (
+        <span role="alert" data-testid="settings-repos-root-error" className="text-xs text-tone-blocked">
+          {errorText}
+        </span>
+      )}
+    </div>
+  )
+}
 
 /** The GLOBAL Settings page's root (M24 §4): three panels, none of them scoped to a project --
  *  provider adapters, security, and the danger zone's reseed. Everything that used to live here
@@ -21,6 +102,7 @@ export function SettingsClient({
   showReseed,
   mode,
   posture,
+  reposRoot,
 }: {
   readonly adapters: readonly AdapterCard[]
   /** Computed on the SERVER from `NODE_ENV`, never guessed at here. */
@@ -29,6 +111,7 @@ export function SettingsClient({
   readonly mode: BoundaryMode
   /** `postureFor(mode, username)` — the single source for the security line (M23 spec §7 F5). */
   readonly posture: string
+  readonly reposRoot: ReposRootState
 }): React.JSX.Element {
   const { theme, setTheme } = useTheme()
   return (
@@ -67,6 +150,13 @@ export function SettingsClient({
               data={{ 'data-theme-mode': theme }}
             />
           </div>
+        </section>
+        <section data-testid="settings-repositories" className="flex flex-col gap-3 rounded-page-card border border-line bg-card p-[18px_20px]">
+          <h2 className="m-0 text-[15px] font-semibold text-t1">Repositories</h2>
+          <p className="m-0 text-[12.5px] text-text-3">
+            Where a repository created from a conversation goes. A path named in the conversation wins over this.
+          </p>
+          <ReposRootField initial={reposRoot} />
         </section>
         <Panel title="security">
           <p data-testid="security-posture" className="font-mono text-[10px] text-text-3">

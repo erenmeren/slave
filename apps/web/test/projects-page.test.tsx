@@ -358,18 +358,18 @@ describe('ProjectsClient', () => {
   })
 
   describe('the New project drawer and team catalog (M24 T6)', () => {
-    it('has a New project button that opens the attach-a-repo drawer', () => {
+    it('has a New project button that opens the intake drawer', () => {
       render(<TestProjectsClient projects={projects} companies={companies} />)
-      expect(screen.queryByTestId('create-workspace-form')).toBeNull()
+      expect(screen.queryByTestId('intake-conversation')).toBeNull()
       fireEvent.click(screen.getByTestId('new-project'))
       expect(screen.getByRole('dialog', { name: /new project/i })).toBeTruthy()
-      expect(screen.getByTestId('create-workspace-form')).toBeTruthy()
+      expect(screen.getByTestId('intake-conversation')).toBeTruthy()
     })
 
     it('opens the drawer on load when ?new=1 is in the URL', () => {
       search = 'new=1'
       render(<TestProjectsClient projects={projects} companies={companies} />)
-      expect(screen.getByTestId('create-workspace-form')).toBeTruthy()
+      expect(screen.getByTestId('intake-conversation')).toBeTruthy()
     })
 
     // Ruled minor (M24 final review): a reload after closing the drawer must not reopen it.

@@ -22,12 +22,17 @@ function installMatchMedia(): void {
   }))
 }
 
+type SettingsClientProps = React.ComponentProps<typeof SettingsClient>
+const reposRoot = { reposRoot: null, resolved: '/home/me/projects', source: 'default' as const }
+
 /** Every `<SettingsClient>` render in this file now needs `ThemeProvider` above it -- the
  *  Appearance section calls `useTheme()`, which throws outside one. */
-function renderSettings(props: React.ComponentProps<typeof SettingsClient>): ReturnType<typeof render> {
+function renderSettings(
+  props: Omit<SettingsClientProps, 'reposRoot'> & Partial<Pick<SettingsClientProps, 'reposRoot'>>,
+): ReturnType<typeof render> {
   return render(
     <ThemeProvider>
-      <SettingsClient {...props} />
+      <SettingsClient reposRoot={reposRoot} {...props} />
     </ThemeProvider>,
   )
 }
@@ -218,6 +223,10 @@ describe('SettingsPage', () => {
     vi.doMock('../src/server/principal.js', () => ({ currentPrincipal }))
     vi.doMock('../src/server/settings.js', () => ({
       buildProviderAdapters: async () => [],
+    }))
+    vi.doMock('@slave-of-ai/control', () => ({
+      readInstallationSettings: async () => ({ reposRoot: null }),
+      resolveReposRoot: async () => ({ root: '/home/me/projects', source: 'default' }),
     }))
     vi.doMock('../src/components/SettingsClient.js', () => ({
       SettingsClient: ({ mode, posture }: { readonly mode: string; readonly posture: string }) => (

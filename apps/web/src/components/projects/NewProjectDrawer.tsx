@@ -1,16 +1,15 @@
 'use client'
 
 import { Drawer } from '../ui/Drawer'
-import { ProjectsPanel } from '../ProjectsPanel'
+import { IntakeConversation } from './IntakeConversation'
 
 /**
- * "New project" (M24 §5.2): today's attach-a-repo form in a right-hand drawer. M26 replaces the
- * body with the intake chat — the trigger, the `?new=1` opener and this frame are the seam it
- * lands in.
+ * "New project" (M24 §5.2), and since M59 R16 the body is the seam M24 reserved: a conversation,
+ * not a form. The trigger, the `?new=1` opener and this frame are unchanged, and so are Escape,
+ * the scrim, the Tab trap and focus restore (M44 R3's `ui/Drawer`).
  *
- * M44 R3: the frame is `ui/Drawer` now, so Escape, the scrim, the Tab trap and focus restore are
- * the ONE implementation every modal in this app shares rather than this file's own `useEffect`.
- * The scrim's testid moved with it (`new-project-drawer-scrim`, the primitive's `${testId}-scrim`).
+ * The form is not gone: `IntakeConversation`'s fill in by hand link swaps this body for
+ * `ProjectsPanel`, pre-filled with whatever the conversation reached.
  */
 export function NewProjectDrawer({ open, onClose }: { readonly open: boolean; readonly onClose: () => void }): React.JSX.Element | null {
   return (
@@ -21,8 +20,8 @@ export function NewProjectDrawer({ open, onClose }: { readonly open: boolean; re
           ✕
         </button>
       </div>
-      <p className="text-xs text-text-3">attach a local git repository as a project — its verify commands decide when a task is done</p>
-      <ProjectsPanel />
+      <p className="text-xs text-text-3">tell it what you want to build — it will read the repository and suggest the rest</p>
+      <IntakeConversation onClose={onClose} />
     </Drawer>
   )
 }
