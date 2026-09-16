@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto'
 import { SUPERVISOR_PER_CALL_CAP_USD, decide, slaveId, taskId, workspaceId } from '@slave-of-ai/domain'
-import { workspaceStats } from '@slave-of-ai/control'
+import { clearHalt, workspaceStats } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { loadWorld } from '../../src/world.js'
@@ -291,14 +292,22 @@ async function seedRuns(specs: readonly RunSpec[]): Promise<string> {
       setupCommands: ['npm ci'],
     },
   })
-  const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
-  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Dana' } })).id } })
+  await seedRunsOn(workspace.id, specs)
+  return workspace.id
+}
+
+/** More runs on a workspace that already has some -- for a streak that continues after something
+ *  happened to it, which one call taking the whole history cannot express. */
+async function seedRunsOn(workspaceId: string, specs: readonly RunSpec[]): Promise<void> {
+  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
+  const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: `Engineering ${randomUUID()}` } })
+  const slave = await prisma.slave.create({ data: { teamId: team.id, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: `Dana ${randomUUID()}` } })).id } })
 
   for (const [index, spec] of specs.entries()) {
     const task = await prisma.task.create({
       data: {
         workspaceId: workspace.id,
-        title: `streak-${index}`,
+        title: `streak-${randomUUID()}-${index}`,
         description: `hosts run ${index}`,
         status: 'done',
         requiredRole: 'backend',
@@ -316,8 +325,6 @@ async function seedRuns(specs: readonly RunSpec[]): Promise<string> {
       },
     })
   }
-
-  return workspace.id
 }
 
 const at = (iso: string): Date => new Date(iso)
@@ -373,6 +380,40 @@ describe('loadWorld stats.consecutiveFailures', () => {
     const { world } = await loadWorld(workspaceId(id))
     // An operator stopping a run is not the run failing, so it adds nothing -- and it must not
     // launder a real streak away either, so the two failures either side of it still join up.
+    expect(world.stats.consecutiveFailures).toBe(2)
+  })
+
+  it('forgets failures the operator has already cleared the halt over', async (): Promise<void> => {
+    // The reset lever this docstring anticipated. Without it the breaker is a one-way door: three
+    // failures halt scheduling, the halt prevents the run that would break the streak, and
+    // `clear-halt` -- whose whole promise is "it removes the reason nothing was starting" -- is
+    // undone by the next tick recomputing the same streak from the same three rows. A project
+    // whose failure cause has been FIXED could never be started again.
+    const id = await seedRuns([
+      { status: 'failed', startedAt: at('2026-01-01T00:00:00Z'), terminalAt: at('2026-01-01T01:00:00Z') },
+      { status: 'failed', startedAt: at('2026-01-02T00:00:00Z'), terminalAt: at('2026-01-02T01:00:00Z') },
+      { status: 'failed', startedAt: at('2026-01-03T00:00:00Z'), terminalAt: at('2026-01-03T01:00:00Z') },
+    ])
+    await clearHalt(id)
+
+    const { world } = await loadWorld(workspaceId(id))
+    expect(world.stats.consecutiveFailures).toBe(0)
+  })
+
+  it('counts failures that happened AFTER the clear, so one clear is not a permanent exemption', async (): Promise<void> => {
+    // The other half, and the reason this is a lever rather than a switch: an operator says "I
+    // have dealt with the cause", not "stop watching". Whatever fails next is a new streak.
+    const id = await seedRuns([
+      { status: 'failed', startedAt: at('2026-01-01T00:00:00Z'), terminalAt: at('2026-01-01T01:00:00Z') },
+      { status: 'failed', startedAt: at('2026-01-02T00:00:00Z'), terminalAt: at('2026-01-02T01:00:00Z') },
+    ])
+    await clearHalt(id)
+    await seedRunsOn(id, [
+      { status: 'failed', startedAt: new Date(), terminalAt: new Date() },
+      { status: 'failed', startedAt: new Date(), terminalAt: new Date() },
+    ])
+
+    const { world } = await loadWorld(workspaceId(id))
     expect(world.stats.consecutiveFailures).toBe(2)
   })
 

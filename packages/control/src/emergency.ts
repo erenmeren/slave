@@ -69,10 +69,23 @@ export async function emergencyStop(
  *
  * It STARTS NOTHING: it removes the reason nothing was starting. A paused run resumes when the
  * sweep next reaches it, or when somebody presses Resume.
+ *
+ * "Removes the reason" is the promise, and for a DERIVED halt it takes `haltClearedAt` to keep it.
+ * `emergency_stop` is a stored reason and clearing the column is the whole of it, but the circuit
+ * breaker is recomputed from the most recent runs on every tick: without the stamp, clearing a
+ * breaker halt lasts until the next tick reads the same three failures and halts again, and since
+ * the halt is what prevents the run that would break the streak, the project can never start
+ * anything again. The stamp is where the breaker counts from, so failures the operator has
+ * already answered for stop counting and anything that fails after it starts a new streak.
  */
 export async function clearHalt(workspaceId: string): Promise<Result<{ readonly cleared: boolean }, ControlRefusal>> {
   const workspace = await prisma.workspace.findUnique({ where: { id: workspaceId }, select: { haltedReason: true } })
   if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
+  // Stamped unconditionally, unlike the two columns below: an operator who clears a workspace that
+  // is not halted yet -- having just fixed what was failing, before the third failure trips it --
+  // means the same thing by it, and the idempotence this function promises should not depend on
+  // winning a race with the tick.
+  await prisma.workspace.update({ where: { id: workspaceId }, data: { haltClearedAt: new Date() } })
   // `updateMany` with the condition in the WHERE, not a read-then-write: two operators clearing at
   // once must not both claim to have been the one who did it.
   const cleared = await prisma.workspace.updateMany({

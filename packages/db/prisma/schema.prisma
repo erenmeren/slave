@@ -63,6 +63,16 @@ model Workspace {
   autoMerge               Boolean   @default(false)
   haltedReason            String?
   haltedAt                DateTime?
+  /// When an operator last retracted a safety halt, and the point the circuit breaker counts its
+  /// failure streak from.
+  ///
+  /// The breaker is derived from the most recent concluded runs, so without this it is a one-way
+  /// door: three failures halt scheduling, the halt prevents the very run that would break the
+  /// streak, and `clearHalt` is undone by the next tick recomputing the same streak from the same
+  /// rows. A project whose failure cause has been FIXED could never be started again. Failures
+  /// before this moment are ones the operator has said they dealt with; whatever fails after it
+  /// is a new streak, so clearing is a lever and not a permanent exemption.
+  haltClearedAt           DateTime?
   /// M27: an archived project keeps every row but leaves every list and the scheduler (spec §3).
   archivedAt              DateTime?
   /// The operator's standing instruction for what this workspace's slaves are working toward

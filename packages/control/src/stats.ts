@@ -153,6 +153,16 @@ export async function workspaceStats(
   //
   // The `::int` on the LIMIT parameter: a bare Prisma placeholder arrives untyped and Postgres
   // will not take a double there.
+  // Only runs that concluded AFTER the operator last cleared a halt (`clearHalt`). The breaker is
+  // recomputed every tick and the halt it raises prevents the very run that would break the
+  // streak, so without this filter it is a one-way door: a project whose failure cause has been
+  // fixed stays halted forever, because the three rows that halted it never stop being the three
+  // most recent. The stamp does not disable the breaker -- it moves where it counts from, and the
+  // next failure starts a new streak.
+  //
+  // The same `COALESCE` sort key the ORDER BY uses, for the same reason: a run's position in the
+  // streak is when it CONCLUDED, and `startedAt` stands in for rows written before the pump
+  // populated `terminalAt`.
   const concludedRuns = await client.$queryRaw<{ readonly status: RunStatus }[]>`
     SELECT r.status::text AS status
     FROM "SlaveRun" r
@@ -160,6 +170,10 @@ export async function workspaceStats(
     JOIN "Team" tm ON tm.id = a."teamId"
     WHERE tm."workspaceId" = ${workspaceId}
       AND r.status::text = ANY(${[...CONCLUDED_RUN_STATUSES]}::text[])
+      AND (
+        ${workspace.haltClearedAt}::timestamp IS NULL
+        OR COALESCE(r."terminalAt", r."startedAt") > ${workspace.haltClearedAt}::timestamp
+      )
     ORDER BY COALESCE(r."terminalAt", r."startedAt") DESC, r."startedAt" DESC
     LIMIT ${workspace.consecutiveFailureLimit + 1}::int
   `
