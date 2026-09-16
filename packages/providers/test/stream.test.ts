@@ -83,6 +83,7 @@ describe('parseStreamLine', () => {
       outcome: {
         isError: false,
         terminalReason: 'completed',
+        errorText: null,
         stopReason: 'end_turn',
         numTurns: 4,
         costUsd: 0.12,
@@ -396,6 +397,7 @@ describe('parseStreamLine', () => {
       outcome: {
         isError: true,
         terminalReason: 'max_turns_exceeded',
+        errorText: null,
         stopReason: null,
         numTurns: 40,
         costUsd: 1.5,
@@ -418,6 +420,7 @@ describe('parseStreamLine', () => {
       outcome: {
         isError: true,
         terminalReason: 'error_during_execution',
+        errorText: null,
         stopReason: null,
         numTurns: 2,
         costUsd: 0.01,
@@ -425,6 +428,37 @@ describe('parseStreamLine', () => {
         tokens: null,
       },
     })
+  })
+
+  it("carries the runtime's OWN explanation of an error result, which `terminal_reason` does not hold", () => {
+    // `terminal_reason: 'api_error'` is a category, not an explanation: it reads the same for a
+    // transient upstream fault as for an account that has no budget left, and only one of those is
+    // something the person waiting can act on. The CLI puts the difference in `result`, and this is
+    // the only place it can be picked up.
+    const line = JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: true,
+      terminal_reason: 'api_error',
+      num_turns: 1,
+      total_cost_usd: 0,
+      result: "You've hit your monthly spend limit",
+    })
+    const event = parseStreamLine(line)
+    expect(event).toMatchObject({ kind: 'terminated', outcome: { isError: true, errorText: "You've hit your monthly spend limit" } })
+  })
+
+  it('reports NO errorText for a successful result line, whose `result` is the answer and not an error', () => {
+    const line = JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      terminal_reason: 'end_turn',
+      num_turns: 1,
+      total_cost_usd: 0.01,
+      result: 'the whole answer the model produced',
+    })
+    expect(parseStreamLine(line)).toMatchObject({ kind: 'terminated', outcome: { isError: false, errorText: null } })
   })
 
   it('still produces terminated for a result line carrying only subtype', () => {
@@ -441,6 +475,7 @@ describe('parseStreamLine', () => {
       outcome: {
         isError: true,
         terminalReason: 'error_max_turns (degraded result line, missing: is_error, num_turns, total_cost_usd)',
+        errorText: null,
         stopReason: null,
         numTurns: 0,
         // `null`, not `0` (M12 Task 9, controller ruling R5): a result line that never reported
@@ -474,6 +509,7 @@ describe('parseStreamLine', () => {
       outcome: {
         isError: true,
         terminalReason: 'completed (degraded result line, missing: is_error)',
+        errorText: null,
         stopReason: 'end_turn',
         numTurns: 4,
         costUsd: 0.12,

@@ -72,6 +72,16 @@ describe('decideWithModel (fake CLI)', () => {
     const hung = await decideWithModel({ ...base, extraArgs: [FAKE, '--fixture', 'hang'], timeoutMs: 500 })
     expect(hung).toMatchObject({ kind: 'failed', reason: expect.stringMatching(/timeout/), costUsd: null })
   })
+  it("names the runtime's own explanation in the reason, not just the error category", async () => {
+    // The failure a real account hits most often (an exhausted spend limit) reaches this function
+    // as `terminal_reason: 'api_error'` -- a category that reads identically to a passing upstream
+    // fault. The reason carries BOTH: the category, for anything matching on it, and the sentence
+    // the CLI wrote, which is the only part that tells a person whether waiting will help.
+    const outcome = await decideWithModel({ ...base, extraArgs: [FAKE, '--fixture', 'decision-api-error'] })
+    expect(outcome).toMatchObject({ kind: 'failed', reason: expect.stringContaining('api_error') })
+    if (outcome.kind !== 'failed') return
+    expect(outcome.reason).toContain('monthly spend limit')
+  })
   it('fails with a reason on a stream that ends with no result line and no tool call', async () => {
     const outcome = await decideWithModel({ ...base, extraArgs: [FAKE, '--fixture', 'decision-noresult'] })
     expect(outcome).toMatchObject({ kind: 'failed', reason: expect.stringMatching(/without a result line/), costUsd: null })

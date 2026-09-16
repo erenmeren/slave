@@ -566,6 +566,9 @@ function zeroLineOutcome(state: CursorRunState, exitCode: number | null): RunOut
       '1 in silence and print "Workspace Trust Required" to stderr only. This adapter always passes ' +
       '--trust, so if that is the message below, the flag did not reach the process. ' +
       `Captured stderr: ${stderr === '' ? '(the process wrote nothing to stderr either)' : stderr}`,
+    // No result line was written at all, so there is no runtime sentence to carry: everything
+    // known about this failure -- including the captured stderr -- is in the reason above.
+    errorText: null,
     stopReason: null,
     numTurns: state.assistantLines,
     // Unknown is not zero (spec Decision 6): zero is a figure the budget guardrail believes.

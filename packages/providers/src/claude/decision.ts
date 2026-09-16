@@ -10,6 +10,16 @@ import type { RunOutcome } from '../types.js'
 
 export const DEFAULT_MODEL_TIMEOUT_MS = 120_000
 
+/**
+ * How much of a runtime's own error sentence a failure reason carries.
+ *
+ * 300 characters: the messages worth reading are one or two sentences ("You've hit your monthly
+ * spend limit ... your weekly limit resets ..." is 130), and this reason is written into an intake
+ * transcript a person reads. A runtime is free to put a stack trace or a whole HTTP body in that
+ * field, and a reason that long stops being an explanation.
+ */
+const DECISION_ERROR_TEXT_MAX_CHARS = 300
+
 export interface ModelDecisionInput {
   readonly command: string
   readonly extraArgs?: readonly string[]
@@ -201,7 +211,14 @@ export async function decideWithModel(input: ModelDecisionInput): Promise<ModelD
     if (tools.length > 0) return { kind: 'isolation_breach', tools, costUsd, tokens }
     if (timedOut) return { kind: 'failed', reason: 'timeout', costUsd, tokens }
     if (outcome === null) return { kind: 'failed', reason: 'the model process ended without a result line', costUsd, tokens }
-    if (outcome.isError) return { kind: 'failed', reason: `result is_error: ${outcome.terminalReason}`, costUsd, tokens }
+    if (outcome.isError) {
+      // BOTH halves: the category, which anything matching on this reason already reads, and the
+      // runtime's own sentence, which is the only part that says whether the failure is worth
+      // waiting out. Bounded, because this reason travels into a transcript a person reads and a
+      // runtime is free to put a wall of text in that field.
+      const said = outcome.errorText === null ? '' : ` — ${outcome.errorText.slice(0, DECISION_ERROR_TEXT_MAX_CHARS)}`
+      return { kind: 'failed', reason: `result is_error: ${outcome.terminalReason}${said}`, costUsd, tokens }
+    }
     return { kind: 'answer', text, costUsd, tokens, numTurns: outcome.numTurns }
   } finally {
     await rm(dir, { recursive: true, force: true })

@@ -274,6 +274,10 @@ const resultSchema = z.object({
   // cannot on its own tell a blocking crash from a genuine deny -- it is
   // read here only to carry the denied tool_use_ids into `RunOutcome`.
   permission_denials: z.array(z.object({ tool_use_id: z.string() })).optional(),
+  // The runtime's own sentence about how the run ended. On a SUCCESSFUL run this is the model's
+  // whole answer, which is why `RunOutcome.errorText` takes it only when `is_error` is set: see
+  // that field's docstring for what it is for and what it must not become.
+  result: z.string().optional(),
   // Every recorded `result` line carries this; it is `.optional()` for the same reason every
   // other field here is -- a degraded error result is where the CLI is plausibly silent, and a
   // missing `usage` must degrade to `null`, not fail the parse of a line that must always
@@ -336,6 +340,9 @@ function parseResultLine(raw: unknown, line: string): RuntimeEvent {
     outcome: {
       isError: data.is_error ?? true,
       terminalReason,
+      // Only on an error, and `?? null` rather than `?? ''`: a runtime that said nothing about the
+      // failure is not the same as one that said nothing was wrong.
+      errorText: (data.is_error ?? true) ? (data.result ?? null) : null,
       stopReason: data.stop_reason ?? null,
       numTurns: data.num_turns ?? 0,
       // `null`, never `0` (spec Decision 6, applied at the parse site by M12 Task 9 / ruling R5).

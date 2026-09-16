@@ -419,11 +419,14 @@ const resultSchema = z.object({
   // 4's `Cursor -> null` provider rule). It is `z.unknown()`, deliberately NOT a `z.object` of
   // numbers: a wrongly-typed `usage` must degrade `tokens` to `null`, never make the whole
   // result line unparsable and leave the orchestrator waiting on a process that already exited.
-  // Everything else on the real line -- `duration_ms`, `duration_api_ms`, `result`,
-  // `session_id`, `request_id` -- stays unread: `RunOutcome` has no field for a duration, and
-  // the final text has already been emitted as `text` events. Notably ABSENT from the real
-  // line: `num_turns`, `total_cost_usd`, `stop_reason`, `permission_denials`.
+  // Everything else on the real line -- `duration_ms`, `duration_api_ms`, `session_id`,
+  // `request_id` -- stays unread: `RunOutcome` has no field for a duration. Notably ABSENT from
+  // the real line: `num_turns`, `total_cost_usd`, `stop_reason`, `permission_denials`.
   usage: z.unknown().optional(),
+  // `result` IS read, and only for `RunOutcome.errorText` (see that field). On a healthy run it is
+  // the final text, which has already been emitted as `text` events and is not wanted twice; on a
+  // failed one it is the only sentence this runtime writes about what went wrong.
+  result: z.string().optional(),
 })
 
 /**
@@ -484,6 +487,9 @@ function parseResultLine(raw: unknown, line: string): RuntimeEvent {
     outcome: {
       isError: data.is_error ?? true,
       terminalReason,
+      // Claude's rule, for Claude's reason: only on an error, because on a success this field is
+      // the answer rather than an explanation.
+      errorText: (data.is_error ?? true) ? (data.result ?? null) : null,
       // Cursor reports no stop reason. `null`, never a default string.
       stopReason: null,
       // FIDELITY GAP, not a measurement -- see the docstring's R3 note.

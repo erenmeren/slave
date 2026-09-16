@@ -21,6 +21,19 @@ export { PROVIDER_KINDS, type ProviderKind } from '@slave-of-ai/domain'
 export interface RunOutcome {
   readonly isError: boolean
   readonly terminalReason: string
+  /**
+   * What the runtime SAID went wrong, verbatim from the `result` line's own `result` field, or
+   * `null`.
+   *
+   * `terminalReason` is a CATEGORY and often not enough on its own: `api_error` reads identically
+   * for a passing upstream fault and for an account with no budget left, and only one of those is
+   * worth waiting out. The sentence that separates them is here.
+   *
+   * Populated ONLY on an error result. On a successful one that same field carries the model's
+   * entire answer, which explains nothing and must not end up in a failure reason, a log line or
+   * an event payload.
+   */
+  readonly errorText: string | null
   readonly stopReason: string | null
   readonly numTurns: number
   /**

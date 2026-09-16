@@ -159,6 +159,9 @@ describe('parseCursorLine, against the recorded fixture', () => {
       outcome: {
         isError: false,
         terminalReason: 'success',
+        // The recorded line DOES carry `result` -- it is the run's final text -- and a healthy run
+        // reports no error text, which is what keeps that text out of failure reasons and logs.
+        errorText: null,
         stopReason: null,
         // Cursor reports NO turn count on its result line (verified: the line
         // carries subtype, duration_ms, duration_api_ms, is_error, result,
@@ -463,6 +466,7 @@ describe('parseCursorLine, the result line', () => {
       outcome: {
         isError: true,
         terminalReason: 'error (degraded result line, missing: is_error)',
+        errorText: null,
         stopReason: null,
         numTurns: 0,
         costUsd: null,
@@ -481,6 +485,7 @@ describe('parseCursorLine, the result line', () => {
       outcome: {
         isError: true,
         terminalReason: 'unknown (degraded result line, missing: subtype, is_error)',
+        errorText: null,
         stopReason: null,
         numTurns: 0,
         costUsd: null,

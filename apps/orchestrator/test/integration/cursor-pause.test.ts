@@ -156,6 +156,7 @@ describe('pumpRun, when a paused Cursor run ends', () => {
           outcome: {
             isError: true,
             terminalReason: 'stream ended',
+            errorText: null,
             stopReason: null,
             numTurns: 2,
             costUsd: null,
@@ -190,6 +191,7 @@ describe('pumpRun, when a paused Cursor run ends', () => {
           outcome: {
             isError: false,
             terminalReason: 'success',
+            errorText: null,
             stopReason: null,
             numTurns: 3,
             costUsd: null,
@@ -239,6 +241,7 @@ describe('pumpRun, when a paused Cursor run ends', () => {
           outcome: {
             isError: false,
             terminalReason: 'success',
+            errorText: null,
             stopReason: null,
             numTurns: 3,
             costUsd: null,
@@ -288,6 +291,7 @@ describe('pumpRun, when a paused Cursor run ends', () => {
           outcome: {
             isError: false,
             terminalReason: 'success',
+            errorText: null,
             stopReason: null,
             numTurns: 3,
             costUsd: null,

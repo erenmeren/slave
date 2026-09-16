@@ -62,6 +62,7 @@ async function* fromArray(events: readonly RuntimeEvent[]): AsyncIterable<Runtim
 const okOutcome: RunOutcome = {
   isError: false,
   terminalReason: 'completed',
+  errorText: null,
   stopReason: null,
   numTurns: 3,
   costUsd: 0.05,
