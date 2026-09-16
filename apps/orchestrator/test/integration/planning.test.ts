@@ -17,6 +17,7 @@ import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-
 import { ClaudeCodeAdapter, type AdapterRegistry } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { concludePlanning, dispatchPlanning } from '../../src/planning.js'
+import { OUTPUT_CAP, splitRunOutput } from '../../src/runOutput.js'
 import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
 /**
@@ -491,6 +492,61 @@ describe('concludePlanning', () => {
     )
 
     expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+  })
+
+  it('builds the board from a plan LONGER than one output row, which every real plan is', async (): Promise<void> => {
+    // The failure this pins: a plan graph is one message of many thousand characters, `run.output`
+    // rows are capped, and the cap used to drop the remainder -- so `parsePlanGraph` was handed
+    // half an object and refused it with "no JSON object with { "tasks": [...] } found" while the
+    // model had produced a perfectly good graph. Three real planning runs on one project failed
+    // that way in a row. The rows here are written exactly as the pump now writes them.
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    const managerId = await addManager(fixture.teamId)
+
+    const now = new Date()
+    const run = await prisma.slaveRun.create({
+      data: { slaveId: managerId, kind: 'planning', status: 'succeeded', startedAt: now, terminalAt: now, endedAt: now },
+    })
+    // Long enough to span rows, and long because of a DESCRIPTION -- the field a real planner
+    // fills with a brief -- so the boundary lands inside a JSON string literal, where a newline
+    // welded between two rows would be an illegal control character.
+    const graph = JSON.stringify({
+      tasks: [
+        {
+          key: 'core',
+          title: 'Write the feature core',
+          description: `Implement the core module. ${'Context that a real planner writes at length. '.repeat(120)}`,
+          role: 'backend',
+          dependsOn: [],
+        },
+      ],
+    })
+    expect(graph.length).toBeGreaterThan(OUTPUT_CAP)
+    let seq = 0
+    for (const payload of splitRunOutput(graph)) {
+      seq += 1
+      await prisma.executionEvent.create({
+        data: {
+          type: 'run_output',
+          workspaceId: fixture.workspaceId,
+          slaveId: managerId,
+          runId: run.id,
+          actor: 'slave',
+          payload: { ...payload },
+        },
+      })
+    }
+    expect(seq).toBeGreaterThan(1)
+
+    await concludePlanning(brandRunId(run.id))
+
+    const tasks = await prisma.task.findMany({ where: { workspaceId: fixture.workspaceId } })
+    expect(tasks).toHaveLength(1)
+    expect(tasks[0]?.title).toBe('Write the feature core')
+    // And the whole brief survived, not just the part that fitted the first row.
+    expect(tasks[0]?.description).toContain('Context that a real planner writes at length.')
+    expect(await prisma.executionEvent.count({ where: { runId: run.id, type: 'run_failed' } })).toBe(0)
   })
 
   it('(d) warns and creates no NEW tasks when the board grew a task before conclusion', async (): Promise<void> => {

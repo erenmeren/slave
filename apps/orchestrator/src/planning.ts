@@ -29,6 +29,7 @@ import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
 import { concludeReplan, replanIntent, replanSectionOf, runbookSectionOf, type ReplanIntent } from './replan.js'
 import { buildRunContext } from './runContext.js'
+import { joinRunOutput } from './runOutput.js'
 import { createRunUnlessArchived } from './runs.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { verifyConcludedRun } from './verify.js'
@@ -73,7 +74,11 @@ export async function concludePlanning(runId: RunId): Promise<void> {
     where: { runId, type: 'run_output' },
     orderBy: { seq: 'asc' },
   })
-  const text = rows.map((row) => (row.payload as { text: string }).text).join('\n')
+  // `joinRunOutput`, never a plain `join('\n')`: a plan graph is one message longer than
+  // `OUTPUT_CAP`, so it arrives as continuation rows that must be welded with nothing between
+  // them. A newline between two halves of a JSON string literal is a control character, and
+  // `parsePlanGraph` below would refuse the model's own correct answer.
+  const text = joinRunOutput(rows.map((row) => row.payload))
 
   // R2, read off THE RUN'S OWN MANIFEST and not off the workspace (M48 final review, Important 3).
   //

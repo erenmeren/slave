@@ -28,6 +28,7 @@ import { appendEvent } from '@slave-of-ai/events'
 // `planning.ts` -- the same shape `planning.ts` and `tick.ts` already have, and safe for the same
 // reason: both are hoisted function declarations, called long after either module is evaluated.
 import { adherenceOf, normaliseCapabilitiesStrict, roleOfFirst } from './planning.js'
+import { joinRunOutput } from './runOutput.js'
 
 /** The `replan` entry of a run's recorded manifest -- the only thing that tells a re-plan run from
  *  a first-plan run, since both are `kind: 'planning'` (spec erratum E2/E4). */
@@ -570,7 +571,8 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
       where: { runId, type: 'run_output' },
       orderBy: { seq: 'asc' },
     })
-    const text = rows.map((row) => (row.payload as { text: string }).text).join('\n')
+    // `joinRunOutput`, for `concludePlanning`'s reason: a delta is one message and a long one.
+    const text = joinRunOutput(rows.map((row) => row.payload))
 
     // EVERY task, not only the non-terminal ones the prompt showed. The prompt's board is what the
     // manager may name; this is what the names are RESOLVED against, and the two are deliberately

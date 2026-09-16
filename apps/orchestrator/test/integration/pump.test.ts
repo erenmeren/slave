@@ -8,7 +8,8 @@ import { slaveId, runId, taskId, workspaceId } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { PERMISSION_DENY_REASON_PREFIX, parseStreamLine, type RunOutcome, type RuntimeEvent } from '@slave-of-ai/providers'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { OUTPUT_CAP, pumpRun } from '../../src/pump.js'
+import { pumpRun } from '../../src/pump.js'
+import { OUTPUT_CAP, joinRunOutput } from '../../src/runOutput.js'
 
 /**
  * A stand-in `argsHash` for a hand-built `tool_call` event (M51 R1).
@@ -370,7 +371,7 @@ describe('pumpRun', () => {
     expect(payload.summary).not.toBe('toolu_01UCoRZm85rNxfupNQPToZXL')
   })
 
-  it('carries the slave text through to run.output, truncated rather than dropped', async (): Promise<void> => {
+  it('carries the slave text through to run.output, split across rows rather than cut short', async (): Promise<void> => {
     const long = 'x'.repeat(OUTPUT_CAP + 100)
 
     await pumpRun({
@@ -382,12 +383,16 @@ describe('pumpRun', () => {
       ]),
     })
 
-    const output = await prisma.executionEvent.findFirstOrThrow({
+    const rows = await prisma.executionEvent.findMany({
       where: { runId: ids.runId, type: 'run_output' },
+      orderBy: { seq: 'asc' },
     })
-    const { text } = output.payload as { text: string }
-    expect(text.length).toBeLessThanOrEqual(OUTPUT_CAP)
-    expect(text.startsWith('x')).toBe(true)
+    // Every row within the cap -- that is what the cap is for -- and the message still whole
+    // between them, because these rows are the only text `concludePlanning` can ever read.
+    for (const row of rows) {
+      expect((row.payload as { text: string }).text.length).toBeLessThanOrEqual(OUTPUT_CAP)
+    }
+    expect(joinRunOutput(rows.map((row) => row.payload))).toBe(long)
   })
 
   it('concludes the run row itself: terminal status, cost, and terminalAt', async (): Promise<void> => {
@@ -1001,7 +1006,7 @@ describe('pumpRun', () => {
     expect(types.filter((t) => t === 'run.output')).toHaveLength(0)
   })
 
-  it('truncates run.output from the end, keeping the beginning the reader wants', async (): Promise<void> => {
+  it('writes run.output in ORDER, so the rows rejoin into the message the slave sent', async (): Promise<void> => {
     await pumpRun({
       ...ids,
       events: fromArray([
@@ -1011,18 +1016,20 @@ describe('pumpRun', () => {
       ]),
     })
 
-    const output = await prisma.executionEvent.findFirstOrThrow({
+    const rows = await prisma.executionEvent.findMany({
       where: { runId: ids.runId, type: 'run_output' },
+      orderBy: { seq: 'asc' },
     })
-    const { text } = output.payload as { text: string }
 
-    // A string of nothing but `x` cannot tell "keep the head" from "keep the tail", nor pin the
-    // boundary -- both `slice(-CAP)` and `slice(0, CAP - 1000)` satisfy it.
-    expect(text.startsWith('HEAD')).toBe(true)
-    expect(text).not.toContain('TAIL')
-    expect(text.length).toBe(OUTPUT_CAP)
-    // And the reader is told the sentence was cut rather than left to think it just stopped.
-    expect(text.endsWith('…')).toBe(true)
+    // Head and tail markers, because a string of nothing but `x` cannot tell a faithful log from
+    // one that kept the beginning and dropped the rest -- which is what it used to do, and what
+    // made every plan longer than the cap arrive as unparsable JSON.
+    const first = rows.at(0)?.payload as { text: string; continues?: boolean }
+    expect(first.text.startsWith('HEAD')).toBe(true)
+    expect(first.continues).toBe(true)
+    expect(joinRunOutput(rows.map((row) => row.payload))).toBe(`HEAD${'x'.repeat(OUTPUT_CAP * 2)}TAIL`)
+    // The last row ends the message, and says so by NOT claiming a continuation that never comes.
+    expect((rows.at(-1)?.payload as { continues?: boolean }).continues).toBeUndefined()
   })
 
   it('leaves output that exactly fits the cap alone', async (): Promise<void> => {

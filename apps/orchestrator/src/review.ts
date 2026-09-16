@@ -24,6 +24,7 @@ import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
 import { buildRunContext } from './runContext.js'
+import { joinRunOutput } from './runOutput.js'
 import { createRunUnlessArchived } from './runs.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { promote } from './memory.js'
@@ -66,7 +67,9 @@ export async function concludeReview(runId: RunId): Promise<void> {
     where: { runId, type: 'run_output' },
     orderBy: { seq: 'asc' },
   })
-  const text = rows.map((row) => (row.payload as { text: string }).text).join('\n')
+  // `joinRunOutput`, for `concludePlanning`'s reason: a verdict that follows a long explanation is
+  // one message split across rows, and welding it with a newline would break the object.
+  const text = joinRunOutput(rows.map((row) => row.payload))
   const parsed = parseReviewVerdict(text)
 
   if (!parsed.ok) {

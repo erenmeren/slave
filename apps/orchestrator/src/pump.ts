@@ -26,28 +26,22 @@ import {
 } from '@slave-of-ai/providers'
 import { concludeWithAnswers } from './answer.js'
 import { concludeWithQuestion } from './ask.js'
+import { splitRunOutput } from './runOutput.js'
 import { releaseTaskAfterFailure } from './taskRelease.js'
 
-/**
- * The cap on a single `run.output` payload (spec §9: the slave's text output "with a truncation
- * cap"). It protects an append-only log first and, from M4, a screen -- one runaway paste from a
- * model that decided to echo a file back is otherwise a row nobody can read and nobody can delete.
- */
 const execFileAsync = promisify(execFile)
-
-export const OUTPUT_CAP = 4_000
 
 /**
  * How much of the run's OWN text this pump keeps in memory to look for M36's ask block in.
  *
- * Read from a rolling tail of the raw stream text rather than back from the `run.output` events,
- * because `OUTPUT_CAP` above truncates each of those at 4 000 characters (with an ellipsis) -- a
- * final message longer than that would have its ask block cut in half before it was ever
- * persisted, so the log is not a faithful source for a parser. Bounded, and bounded at the END,
- * because that is where the block is: the oldest text is what gets dropped. A block that starts
- * more than `ASK_TAIL_CAP` characters before the stream's last byte is therefore not seen, and
- * that run concludes the ordinary way -- an unusable ask is an ordinary run outcome, never a
- * rescue path.
+ * A rolling tail of the raw stream text, bounded at the END because that is where the block is:
+ * the oldest text is what gets dropped. A block that starts more than `ASK_TAIL_CAP` characters
+ * before the stream's last byte is therefore not seen, and that run concludes the ordinary way --
+ * an unusable ask is an ordinary run outcome, never a rescue path.
+ *
+ * Kept in memory rather than read back from the log for the cheaper reason now that
+ * `splitRunOutput` makes the log faithful: this tail is needed inside the same pump pass that
+ * writes it, before `verifyConcludedRun` runs at all.
  */
 export const ASK_TAIL_CAP = 16_000
 
@@ -834,14 +828,16 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
       }
 
       case 'text': {
-        // Kept whole here, and only here: the persisted event below is capped, and M36 t2's ask
-        // block has to be read from what the slave actually said, not from the truncation of it.
         outputTail = (outputTail + event.text).slice(-ASK_TAIL_CAP)
-        // Truncated from the end, and *said* to be truncated: the beginning is what a reader
-        // wants, and a sentence that simply stops reads as the slave having stopped.
-        const text =
-          event.text.length > OUTPUT_CAP ? `${event.text.slice(0, OUTPUT_CAP - 1)}…` : event.text
-        await emit('run.output', 'slave', { text })
+        // Split across rows rather than cut off at one. The cap belongs to the ROW -- it keeps the
+        // log readable -- and these rows are also the only text `concludePlanning`,
+        // `concludeReview` and `concludeReplan` can ever read, so dropping the remainder handed
+        // every one of them half an answer. A plan graph is one message of many thousand
+        // characters: cut at the cap it is not a shorter plan, it is unparsable JSON, and that is
+        // exactly how every real first plan failed.
+        for (const payload of splitRunOutput(event.text)) {
+          await emit('run.output', 'slave', { ...payload })
+        }
         break
       }
 
