@@ -157,8 +157,8 @@ export async function abandonIntake(intakeId: string, _principal?: Principal): P
  *  `active: true` on the catalogue (plan erratum E8): `loadCatalogEntries` already gates the
  *  Supervisor's hiring on that column, and proposing a persona nobody has made hirable would produce
  *  a team `acceptIntake` cannot staff. Name, division and role only -- never a profile body. */
-async function buildFacts(paths: readonly string[]): Promise<IntakeFacts> {
-  const [root, companies, templates, inspected] = await Promise.all([
+async function installationFacts(): Promise<Omit<IntakeFacts, 'paths'>> {
+  const [root, companies, templates] = await Promise.all([
     resolveReposRoot(),
     prisma.company.findMany({ select: { id: true, name: true }, orderBy: { name: 'asc' }, take: 100 }),
     prisma.slaveTemplate.findMany({
@@ -167,10 +167,8 @@ async function buildFacts(paths: readonly string[]): Promise<IntakeFacts> {
       orderBy: { name: 'asc' },
       take: INTAKE_CATALOGUE_MAX,
     }),
-    Promise.all(paths.map(async (path) => inspectPath(path))),
   ])
   return {
-    paths: inspected,
     reposRoot: root.root,
     existingCompanies: companies,
     catalogue: templates.map((template) => ({
@@ -180,6 +178,26 @@ async function buildFacts(paths: readonly string[]): Promise<IntakeFacts> {
       role: template.role,
     })),
   }
+}
+
+/**
+ * Everything the model may be told, gathered once per message: what this installation IS, plus what
+ * the filesystem says about each path the conversation has named.
+ *
+ * The split above is load-bearing. The repositories root, the companies and the hirable personas
+ * are not discoveries about a folder somebody named -- they are the same whatever the person types
+ * -- and gathering them only ALONGSIDE path detection left a brand-new project looking at an empty
+ * catalogue while the prompt asked it for a team "from the catalogue below". The only honest answer
+ * to that is nobody, which `acceptIntake` records as "the draft asked for nobody": every project
+ * not started from an existing local repository arrived unstaffed. `claimIntakes` is where the
+ * installation half is now guaranteed, for a conversation that wrote no `fact` row at all.
+ */
+async function buildFacts(paths: readonly string[]): Promise<IntakeFacts> {
+  const [installation, inspected] = await Promise.all([
+    installationFacts(),
+    Promise.all(paths.map(async (path) => inspectPath(path))),
+  ])
+  return { paths: inspected, ...installation }
 }
 
 async function nextSeq(tx: Prisma.TransactionClient, intakeId: string): Promise<number> {
@@ -301,13 +319,19 @@ export async function claimIntakes(input: {
     RETURNING "id"`
 
   const out: ClaimedIntake[] = []
+  // Once for the batch, and read HERE rather than taken from the newest `fact` row: the catalogue
+  // the model is offered is the one that is hirable now, not the one that happened to be recorded
+  // when somebody last named a path -- and a conversation that named no path recorded nothing at
+  // all, which is the case that left every new project unstaffed. `paths` stay the conversation's
+  // own measurements; nothing here invents one.
+  const installation = claimed.length === 0 ? null : await installationFacts()
   for (const { id } of claimed) {
     const view = await readIntake(id)
     if (!view.ok) continue
     out.push({
       id,
       transcript: view.value.messages.map((message) => ({ role: message.role, text: message.text })),
-      facts: view.value.facts,
+      facts: installation === null ? view.value.facts : { paths: view.value.facts?.paths ?? [], ...installation },
       callsLeft: view.value.callsLeft,
     })
   }
@@ -687,7 +711,10 @@ export async function acceptIntake(
     //    (R10); the roles are what `ensureStaffRoles` settled.
     currentStep = 'staff'
     if (done.get('staff') === undefined) {
-      const seats = ensureStaffRoles(draft.team, intake.facts?.catalogue ?? [])
+      // The live catalogue, for `claimIntakes`' reason: the division heuristic that decides WHICH
+      // seat carries manager and reviewer reads it, and a conversation that never named a path has
+      // no `fact` row to take it from.
+      const seats = ensureStaffRoles(draft.team, (await installationFacts()).catalogue)
       if (seats.length === 0) {
         await appendStep(intakeId, {
           step: 'staff',

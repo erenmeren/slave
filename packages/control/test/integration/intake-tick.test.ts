@@ -56,6 +56,28 @@ describe('tickIntakes', () => {
     expect(call?.model).toBe('claude-sonnet-5')
   })
 
+  it('shows the model the persona catalogue even when the conversation never named a path', async (): Promise<void> => {
+    // The catalogue is INSTALLATION state, not a measurement of anything the person said, and the
+    // prompt asks for a team "from the catalogue below". A conversation that starts a project from
+    // scratch names no path, so gathering the catalogue only alongside path detection left the
+    // model with an empty list and one valid answer -- nobody -- which `acceptIntake` then records
+    // as "the draft asked for nobody". That is every new project arriving unstaffed.
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Catalogue Probe', role: 'backend', description: '', active: true, sourceDivision: 'engineering' },
+    })
+    try {
+      await waiting('start me something brand new')
+      const decider = answering({ kind: 'ask', text: 'what should it do?' })
+      await tickIntakes({ now: new Date(), by: 'test', model: 'm', modelDecider: decider })
+      await drainIntakeCalls()
+      const call = (decider as unknown as { calls: { prompt: string }[] }).calls[0]
+      expect(call?.prompt).toContain(template.id)
+      expect(call?.prompt).toContain('Catalogue Probe')
+    } finally {
+      await prisma.slaveTemplate.delete({ where: { id: template.id } })
+    }
+  })
+
   it('claims NOTHING without a decider, and says so', async (): Promise<void> => {
     const id = await waiting()
     const report = await tickIntakes({ now: new Date(), by: 'test', model: 'claude-sonnet-5' })

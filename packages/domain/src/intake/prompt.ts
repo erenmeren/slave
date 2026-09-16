@@ -106,6 +106,17 @@ export function buildIntakePrompt(input: {
 
   blocks.push(
     '',
+    // An empty team is a legitimate answer (`ensureStaffRoles` keeps it empty on purpose) but it is
+    // not a neutral one: this system dispatches every unit of work to a seat, so a project with no
+    // seats is refused by `dispatchPlanning` with `no_planner` and sits there doing nothing until a
+    // person staffs it by hand. Said out loud here, because a model reading "optional team" above
+    // and nothing else will leave it out, and an inert project is the worst default this
+    // conversation can produce.
+    'A project with nobody on it cannot be planned or reviewed: work is dispatched to the team, so',
+    'an empty team leaves the project idle until a person staffs it by hand. Propose the smallest',
+    'team that can actually do the work, and leave it empty only when the person has said they will',
+    'staff it themselves.',
+    '',
     `You have ${String(callsLeft)} turn(s) left in this conversation. When you have enough to`,
     'propose a project, propose it -- do not keep asking.',
     '',

@@ -64,6 +64,15 @@ describe('buildIntakePrompt', () => {
     expect(prompt.split(EXTERNAL_FENCE_CLOSE)).toHaveLength(2)
   })
 
+  it('says what an EMPTY team costs, so proposing nobody is a choice rather than the lazy default', () => {
+    // `ensureStaffRoles` leaves an empty team empty on purpose -- "I will staff it myself" is a
+    // real answer -- and `dispatchPlanning` then refuses the project with `no_planner`. Both are
+    // right, and together they make "nobody" the answer that quietly produces a project which
+    // never does anything. The prompt has to say so, or the default outcome is an inert project.
+    const prompt = buildIntakePrompt({ transcript: [{ role: 'human', text: 'hi' }], facts, callsLeft: 9 })
+    expect(prompt).toContain('cannot be planned or reviewed')
+  })
+
   it('tells the model how many turns are left, so it can stop asking and draft', () => {
     expect(buildIntakePrompt({ transcript: [{ role: 'human', text: 'hi' }], facts, callsLeft: 1 })).toContain('1')
   })
