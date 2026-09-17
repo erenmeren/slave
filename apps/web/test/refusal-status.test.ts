@@ -170,6 +170,15 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   person_name_taken: true,
   person_not_found: true,
   person_not_seated: true,
+  // Catalog Person Pool Task 2: `selectPoolPerson`'s own kind, for a missing/inactive template
+  // OR an exhausted pool -- one `kind` for all three, the `broker_refused` precedent
+  // (`packages/control/src/refusal.ts`'s own docstring on it). It does not end in `_not_found`
+  // even though a missing template is one of the three facts it can mean: the OTHER two (every
+  // managed person released, or every one already seated on this workspace) are not "missing"
+  // at all, and `refusalStatus` has exactly one kind per REQUEST OUTCOME, not per underlying
+  // cause. 409 answers all three alike -- the id in hand (`templateId`) names something the
+  // caller can act on (`template activate`, `person sync-pool`), never a stranger.
+  pool_unavailable: true,
 }
 
 const ALL = Object.keys(ALL_KINDS) as ControlRefusal['kind'][]
@@ -231,5 +240,16 @@ describe('refusalStatus', () => {
       expect(refusalStatus(kind)).toBe(409)
     }
     expect(refusalStatus('template_not_found')).toBe(404)
+  })
+
+  // Catalog Person Pool Task 2: `pool_unavailable` answers 409 like `broker_refused` -- the
+  // precedent its own docstring names -- and NOT 404, even though a missing template is one of
+  // the three facts it can carry. Spelled out rather than left to the generic suffix loop above,
+  // the same way the profile-override trio above is: a reviewer should not have to re-derive
+  // "does this one deserve 404" from the suffix rule alone for a kind whose name could plausibly
+  // read either way.
+  it('answers 409 for pool_unavailable, the same as broker_refused, never 404', () => {
+    expect(refusalStatus('pool_unavailable')).toBe(409)
+    expect(refusalStatus('pool_unavailable')).toBe(refusalStatus('broker_refused'))
   })
 })
