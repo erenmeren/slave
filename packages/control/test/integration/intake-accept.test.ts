@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
-import type { IntakeDraft } from '@slave-of-ai/domain'
+import { INTAKE_MAX_SEATS_PER_TEMPLATE, type IntakeDraft } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { acceptIntake, openIntake, sendIntakeMessage } from '../../src/intake.js'
 import { setInstallationSettings } from '../../src/installation.js'
@@ -157,6 +157,75 @@ describe('acceptIntake', () => {
     expect(staff).toMatchObject({ status: 'done' })
     expect(staff?.detail).toContain('Design')
     expect(staff?.detail).toContain('Engineering')
+  })
+
+  /**
+   * FINAL REVIEW, IMPORTANT 8, at the boundary that matters. `intakeDraftSchema` is where the rule
+   * lives and `packages/domain/test/intake/draft.test.ts` is where it is specified; this is the
+   * proof that an impossible draft cannot get past ACCEPTANCE -- the schema is re-parsed here, so a
+   * draft stored before the rule existed, or one an edited card produced, is refused at the door
+   * rather than half-staffed behind it.
+   */
+  it('refuses a draft asking for a fourth seat from one persona, and creates no project at all', async (): Promise<void> => {
+    const repo = makeRepo()
+    const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+    const id = await opened(`it is at ${repo}`)
+
+    const accepted = await acceptIntake(id, {
+      ...draftFor(repo, 'Over Staffed'),
+      team: [1, 2, 3, 4].map(() => ({ templateId: backendId, runtimeRoles: ['backend'] })),
+    })
+
+    expect(accepted.ok).toBe(false)
+    if (accepted.ok) throw new Error('unreachable')
+    expect(accepted.error.kind).toBe('invalid_draft')
+    // The refusal names the persona and the limit, because `invalid_draft` carries the issue text
+    // straight through to whatever renders it.
+    expect(accepted.error).toMatchObject({ detail: expect.stringContaining('three') })
+    expect(await prisma.workspace.count()).toBe(0)
+    // Still the conversation it was, neither `creating` nor `created`: a refused accept leaves the
+    // intake where the person can edit the card and press the button again.
+    const row = await prisma.intake.findUniqueOrThrow({ where: { id } })
+    expect(row.status).toBe('awaiting_reply')
+    expect(row.workspaceId).toBeNull()
+  })
+
+  // Three is not one too many: a persona HAS three, and a project that genuinely needs three
+  // backend specialists gets three managed people rather than a refusal.
+  it('accepts three seats from one persona and seats three managed people on them', async (): Promise<void> => {
+    const repo = makeRepo()
+    const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+    const id = await opened(`it is at ${repo}`)
+
+    const accepted = await acceptIntake(id, {
+      ...draftFor(repo, 'Three Deep'),
+      team: [1, 2, 3].map(() => ({ templateId: backendId, runtimeRoles: ['backend'] })),
+    })
+
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+    const seats = await prisma.slave.findMany({
+      where: { team: { workspaceId: accepted.value.workspaceId } },
+      include: { person: true },
+    })
+    expect(seats).toHaveLength(3)
+    // All three managed, and all three DIFFERENT people -- the whole pool, with nobody seated twice
+    // and nobody invented.
+    expect(seats.every((seat) => seat.person.poolSlot !== null)).toBe(true)
+    expect(new Set(seats.map((seat) => seat.personId)).size).toBe(3)
+  })
+
+  // The domain constant and the pool's own slot count are two numbers that mean one thing, in two
+  // packages that cannot import each other (`INTAKE_MAX_SEATS_PER_TEMPLATE`'s own note). This file
+  // can import both, so it is where they are pinned together: raise the pool to four slots without
+  // raising the draft limit and this fails rather than quietly capping every intake at three.
+  it('pins the per-persona seat limit to the number of managed slots a persona actually has', async (): Promise<void> => {
+    const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+    await syncPersonPool()
+
+    expect(await prisma.person.count({ where: { templateId: backendId, poolSlot: { not: null } } })).toBe(
+      INTAKE_MAX_SEATS_PER_TEMPLATE,
+    )
   })
 
   it('seats each of several approved seats for one template with a distinct managed person, on the same department (Task 4)', async (): Promise<void> => {

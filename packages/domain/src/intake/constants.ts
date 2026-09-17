@@ -128,6 +128,23 @@ export const INTAKE_CATALOGUE_MAX = 300
  *  which is the only place both can be imported at once. */
 export const INTAKE_MAX_RUNTIME_ROLES = 20
 
+/**
+ * How many seats one draft may propose from a SINGLE persona (final review, Important 8).
+ *
+ * Three because a persona HAS three people: the Catalog Person Pool keeps `poolSlot` 1, 2 and 3 for
+ * every active template and no more (`packages/control/src/personPool.ts`). A fourth seat from one
+ * persona is a seat naming somebody who does not exist, and it was not refused anywhere -- the
+ * total team cap of twelve let a draft ask for twelve copies of one specialist. `staffIntakeTeam`
+ * then ran out of managed candidates partway down the list and quietly gave the surplus seats an
+ * unmanaged person or nothing at all, so the team an operator approved and the team they got were
+ * different teams, and the difference was never reported to them.
+ *
+ * This package may not import `POOL_SLOTS` from `packages/control` (the dependency runs the other
+ * way, `INTAKE_MAX_RUNTIME_ROLES`' own note above), so the two are pinned together by a case in
+ * `packages/control/test/integration/intake-accept.test.ts`, which can import both at once.
+ */
+export const INTAKE_MAX_SEATS_PER_TEMPLATE = 3
+
 /** How many transcript lines one prompt carries, newest last. Forty: a conversation this long has
  *  already hit `INTAKE_MAX_MODEL_CALLS`, so this is a bound on a pathological paste rather than on
  *  an ordinary intake -- `THREAD_MESSAGES_MAX`' own number and its own reason. */

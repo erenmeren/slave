@@ -55,6 +55,80 @@ describe('IntakeDraft', () => {
   it('accepts an empty team -- "I will staff it myself" is a real answer (R13)', () => {
     expect(intakeDraftSchema.safeParse({ ...draft, team: [] }).success).toBe(true)
   })
+
+  /**
+   * FINAL REVIEW, IMPORTANT 8. A persona has exactly three managed people (`poolSlot` 1, 2, 3), so
+   * a draft asking for four seats from one persona is asking for somebody who does not exist. The
+   * fourth seat was never filled: `staffIntakeTeam` ran out of candidates and either skipped the
+   * seat or minted an unmanaged person, so the draft the operator APPROVED and the team they got
+   * were different teams -- and nothing told them which.
+   *
+   * Rejected at the schema, which is the boundary every path crosses: the model's own answer, an
+   * operator's edit in the card, and `acceptIntake`'s re-parse of the stored draft.
+   */
+  it('refuses a fourth seat from one persona: only three of anybody exist', () => {
+    const team = [
+      { templateId: 'backend', runtimeRoles: ['backend'] },
+      { templateId: 'backend', runtimeRoles: ['backend'] },
+      { templateId: 'backend', runtimeRoles: ['backend'] },
+      { templateId: 'backend', runtimeRoles: ['backend'] },
+    ]
+    const parsed = intakeDraftSchema.safeParse({ ...draft, team })
+
+    expect(parsed.success).toBe(false)
+    if (parsed.success) return
+    const issue = parsed.error.issues.find((candidate) => candidate.path[0] === 'team')
+    // The PATH names the offending seat, so a form can mark the row the person has to remove, and
+    // the message names the persona and the limit rather than saying "invalid".
+    expect(issue?.path).toEqual(['team', 3, 'templateId'])
+    expect(issue?.message).toContain('backend')
+    expect(issue?.message).toContain('three')
+  })
+
+  it('accepts exactly three seats from one persona -- three is the whole pool, not one too many', () => {
+    const team = [
+      { templateId: 'backend', runtimeRoles: ['backend'] },
+      { templateId: 'backend', runtimeRoles: ['backend'] },
+      { templateId: 'backend', runtimeRoles: ['backend'] },
+      { templateId: 'reviewer', runtimeRoles: ['reviewer'] },
+    ]
+    expect(intakeDraftSchema.safeParse({ ...draft, team }).success).toBe(true)
+  })
+
+  it('counts per persona, not across the team: three each of four personas is twelve legal seats', () => {
+    const team = ['a', 'b', 'c', 'd'].flatMap((templateId) =>
+      [1, 2, 3].map(() => ({ templateId, runtimeRoles: ['backend'] })),
+    )
+    expect(team).toHaveLength(12)
+    expect(intakeDraftSchema.safeParse({ ...draft, team }).success).toBe(true)
+  })
+
+  it('reports EVERY persona that is over the limit, and the first seat past three for each', () => {
+    const team = [
+      ...[1, 2, 3, 4].map(() => ({ templateId: 'backend', runtimeRoles: ['backend'] })),
+      ...[1, 2, 3, 4, 5].map(() => ({ templateId: 'qa', runtimeRoles: ['qa'] })),
+    ]
+    const parsed = intakeDraftSchema.safeParse({ ...draft, team })
+
+    expect(parsed.success).toBe(false)
+    if (parsed.success) return
+    // One issue per offending persona, at its FOURTH seat -- not one per surplus seat, which would
+    // put two identical complaints on one persona and read as two separate problems.
+    expect(parsed.error.issues.map((issue) => issue.path)).toEqual([
+      ['team', 3, 'templateId'],
+      ['team', 7, 'templateId'],
+    ])
+  })
+
+  // The total cap is unchanged and still enforced on its own: thirteen seats is too many however
+  // they are spread, and a team of thirteen distinct personas breaks no per-persona limit at all.
+  it('keeps the twelve-seat team cap beside the per-persona one', () => {
+    const team = Array.from({ length: 13 }, (_unused, index) => ({
+      templateId: `persona-${String(index)}`,
+      runtimeRoles: ['backend'],
+    }))
+    expect(intakeDraftSchema.safeParse({ ...draft, team }).success).toBe(false)
+  })
 })
 
 describe('intakeRepositorySlug', () => {

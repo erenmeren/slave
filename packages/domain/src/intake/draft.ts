@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { PROVIDER_KINDS } from '../provider/kind.js'
-import { INTAKE_MAX_RUNTIME_ROLES, INTAKE_STEPS, INTAKE_STEP_STATUSES } from './constants.js'
+import { INTAKE_MAX_RUNTIME_ROLES, INTAKE_MAX_SEATS_PER_TEMPLATE, INTAKE_STEPS, INTAKE_STEP_STATUSES } from './constants.js'
 
 /**
  * Where a verify command came from (M59 R8), and the difference is enforced rather than decorative:
@@ -21,7 +21,8 @@ export const VERIFY_SOURCE_LABEL: Record<VerifySource, string> = {
 }
 
 /** One proposed seat: a persona from the Agency persona catalogue, and what it may be dispatched
- *  as. `ensureStaffRoles` (`./team.js`) is what guarantees a manager and a reviewer among them. */
+ *  as. `ensureStaffRoles` (`./team.js`) is what guarantees a manager and a reviewer among them, and
+ *  {@link INTAKE_MAX_SEATS_PER_TEMPLATE} is how many of these one persona may fill. */
 export const intakeSeatSchema = z.object({
   templateId: z.string().min(1).max(200),
   runtimeRoles: z.array(z.string().trim().min(1).max(100)).max(INTAKE_MAX_RUNTIME_ROLES),
@@ -61,6 +62,38 @@ export const intakeDraftSchema = z.object({
   provider: z.enum(PROVIDER_KINDS).nullable(),
   team: z.array(intakeSeatSchema).max(12),
 })
+  /**
+   * Final review, Important 8: at most {@link INTAKE_MAX_SEATS_PER_TEMPLATE} seats from any one
+   * persona, because a persona has exactly that many people. A draft asking for a fourth is asking
+   * for somebody who does not exist, and it used to be accepted -- the twelve-seat cap on the array
+   * counts seats, not who they name, so twelve copies of one specialist parsed cleanly, reached the
+   * card, and were approved. `staffIntakeTeam` then filled three of them and had nothing for the
+   * rest, so the operator got a team their approval never described.
+   *
+   * Reported at the FOURTH seat of each offending persona, on `templateId`: the path names a row a
+   * form can mark and the message names the persona, so "remove this one" is actionable without
+   * reading the whole team. One issue per persona rather than one per surplus seat -- five seats
+   * from one persona is ONE thing wrong, and five copies of one complaint reads as five.
+   *
+   * A `superRefine` rather than a check inside the array, because it is a fact about the WHOLE
+   * team: no single seat is wrong on its own, and the array's element schema cannot see its
+   * siblings.
+   */
+  .superRefine((draft, ctx) => {
+    const seen = new Map<string, number>()
+    draft.team.forEach((seat, index) => {
+      const count = (seen.get(seat.templateId) ?? 0) + 1
+      seen.set(seat.templateId, count)
+      if (count !== INTAKE_MAX_SEATS_PER_TEMPLATE + 1) return
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['team', index, 'templateId'],
+        message:
+          `${seat.templateId} appears ${String(draft.team.filter((other) => other.templateId === seat.templateId).length)} ` +
+          'times, and only three people exist for any one persona -- ask for at most three seats from it',
+      })
+    })
+  })
 
 export type IntakeDraft = z.infer<typeof intakeDraftSchema>
 

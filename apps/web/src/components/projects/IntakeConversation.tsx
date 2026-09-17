@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from 'react'
 import { useRouter } from 'next/navigation'
 import {
+  INTAKE_MAX_SEATS_PER_TEMPLATE,
   INTAKE_STATUS_LABEL,
   INTAKE_STEP_LABEL,
   INTAKE_STEP_STATUS_LABEL,
@@ -260,7 +261,26 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
     )
   }
 
-  const draftReady = edited !== null && edited.verifyCommands.length > 0 && edited.name.trim() !== ''
+  // Final review, Important 8: a persona has three people, so a fourth seat from one names somebody
+  // who is not there. `intakeDraftSchema` refuses it and `acceptIntake` re-parses, so pressing the
+  // button on such a draft is a round trip whose only outcome is a refusal; the card says which
+  // persona instead, and the button stays off until the draft is one that can actually be staffed.
+  const overStaffed =
+    edited === null
+      ? []
+      : [
+          ...new Set(
+            edited.team
+              .filter(
+                (seat) =>
+                  edited.team.filter((other) => other.templateId === seat.templateId).length >
+                  INTAKE_MAX_SEATS_PER_TEMPLATE,
+              )
+              .map((seat) => seat.templateId),
+          ),
+        ]
+  const draftReady =
+    edited !== null && edited.verifyCommands.length > 0 && edited.name.trim() !== '' && overStaffed.length === 0
   const newRootReady = choice !== 'new-root' || newRootPath !== null
 
   return (
@@ -444,9 +464,12 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
 
           {edited.team.length > 0 && (
             <div className="flex flex-wrap gap-1">
-              {edited.team.map((seat) => (
+              {edited.team.map((seat, index) => (
                 <span
-                  key={seat.templateId}
+                  // The INDEX, not the template (final review, Important 8): three seats from one
+                  // persona is a legal team, and three chips keyed by one `templateId` are three
+                  // duplicate keys -- which React reconciles as one element and warns about.
+                  key={`${seat.templateId}-${String(index)}`}
                   data-testid="intake-team-chip"
                   data-template-id={seat.templateId}
                   data-roles={seat.runtimeRoles.join(',')}
@@ -459,6 +482,16 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
                 </span>
               ))}
             </div>
+          )}
+
+          {overStaffed.length > 0 && (
+            <p data-testid="intake-team-over-limit" className="text-[12px] text-danger">
+              {overStaffed
+                .map((templateId) => view.facts?.catalogue.find((entry) => entry.templateId === templateId)?.name ?? templateId)
+                .join(', ')}
+              {overStaffed.length === 1 ? ' is asked for' : ' are asked for'} more than three times. Only three people
+              exist for any one persona -- ask for at most three seats from it.
+            </p>
           )}
 
           <Button variant="primary" size="sm" type="button" data-testid="intake-create" disabled={pending || !draftReady || !newRootReady} onClick={() => void create()}>
