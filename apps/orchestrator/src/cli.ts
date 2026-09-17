@@ -136,6 +136,7 @@ import {
   unmapExternalRepository,
   verifyMemory,
   type CapabilityReconcileReport,
+  type PersonPoolSyncReport,
   type ControlRefusal,
   type CredentialKind,
   type ImportReport,
@@ -425,7 +426,7 @@ const USAGE = `usage: orchestrator <command> [options]
                                        the list says, and never touches a row an operator added.
                                        Then reconciles every template's capabilities against the
                                        taxonomy it just wrote, and the managed pool against that.
-  capabilities reconcile                re-derive every template's capabilities/unresolved text
+  capabilities reconcile               re-derive every template's capabilities/unresolved text
                                        from its own profileSpec against the taxonomy as it stands
                                        right now, and refresh the managed pool from the result.
                                        The operator-recovery verb for a synonym added after a
@@ -1424,7 +1425,22 @@ function describeReconcile(report: CapabilityReconcileReport): string {
       : `; ${plural(report.malformed.length, 'template')} had a malformed profileSpec and were left alone (${report.malformed.join(', ')})`
   return (
     `capabilities reconciled: ${plural(report.templates, 'template')} scanned, ${String(report.updated)} updated -- ` +
-    `${String(report.resolved)} capability value(s) resolved, ${String(report.unresolved)} unresolved${malformedNote}\n`
+    `${String(report.resolved)} capability value(s) resolved, ${String(report.unresolved)} unresolved${malformedNote}\n` +
+    // The pool line belongs to this report now (final review, Important 4). That pass ends by
+    // syncing the pool off the keys it just wrote, and every caller here wants to say what that
+    // did; printing it from the nested report is what let the second, redundant `syncPersonPool()`
+    // this line used to be followed by go away.
+    describePoolSync(report.pool)
+  )
+}
+
+/** One `syncPersonPool` pass, in the one line three verbs print it in (`import-catalog`,
+ *  `capabilities sync|reconcile` through {@link describeReconcile}, `template activate` and
+ *  `person sync-pool`). Shared so they cannot drift into three wordings of one fact. */
+function describePoolSync(report: PersonPoolSyncReport): string {
+  return (
+    `pool synced: ${plural(report.templates, 'active template')} -- ` +
+    `${String(report.created)} created, ${String(report.updated)} updated, ${String(report.unchanged)} unchanged\n`
   )
 }
 
@@ -2135,21 +2151,17 @@ export async function main(argv: readonly string[]): Promise<number> {
       // rather than leave the operator believing the import finished cleanly with a partial
       // pool -- or a stale capability match -- underneath it.
       //
-      // Task 3's reconciliation runs FIRST, and over EVERY template, not only the rows this run
-      // touched: `syncCapabilityTaxonomy` (inside `importCatalog`, before a single persona is
-      // read) can bring a synonym back that repairs a template this run's own file walk never
-      // looked at, and only a whole-table pass can catch that. It ends by refreshing the managed
-      // pool itself, which is why the EXISTING `syncPersonPool()` line below it now finds nothing
-      // left to do except for a template this run's row loop actually created or activated.
-      if (!dryRun) {
-        process.stdout.write(describeReconcile(await reconcileTemplateCapabilities()))
-        const poolReport = await syncPersonPool()
-        process.stdout.write(
-          `pool synced: ${plural(poolReport.templates, 'active template')} -- ` +
-            `${String(poolReport.created)} created, ${String(poolReport.updated)} updated, ` +
-            `${String(poolReport.unchanged)} unchanged\n`,
-        )
-      }
+      // Task 3's reconciliation is the ONE pass, and it runs over EVERY template, not only the
+      // rows this run touched: `syncCapabilityTaxonomy` (inside `importCatalog`, before a single
+      // persona is read) can bring a synonym back that repairs a template this run's own file walk
+      // never looked at, and only a whole-table pass can catch that. It ends by syncing the managed
+      // pool off the keys it just wrote, and `describeReconcile` prints that nested report.
+      //
+      // The second `syncPersonPool()` that used to follow it is gone (final review, Important 4).
+      // It re-scanned every active template to report the three people the pass before it had just
+      // created as `3 unchanged` -- an operator reading "0 created" after an import that staffed
+      // three slots.
+      if (!dryRun) process.stdout.write(describeReconcile(await reconcileTemplateCapabilities()))
       return 0
     }
 
@@ -2595,14 +2607,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         // nobody is deleted or released. Run even on the already-active no-op: cheap (an idle sync
         // reports every slot unchanged) and it repairs a pool a prior sync failure left partial.
         // Not caught: a failed sync must fail this command loudly.
-        if (active) {
-          const poolReport = await syncPersonPool()
-          process.stdout.write(
-            `pool synced: ${plural(poolReport.templates, 'active template')} -- ` +
-              `${String(poolReport.created)} created, ${String(poolReport.updated)} updated, ` +
-              `${String(poolReport.unchanged)} unchanged\n`,
-          )
-        }
+        if (active) process.stdout.write(describePoolSync(await syncPersonPool()))
         return 0
       }
 
@@ -3131,14 +3136,9 @@ export async function main(argv: readonly string[]): Promise<number> {
           return 0
         }
 
-        case 'sync-pool': {
-          const report = await syncPersonPool()
-          process.stdout.write(
-            `pool synced: ${plural(report.templates, 'active template')} -- ` +
-              `${String(report.created)} created, ${String(report.updated)} updated, ${String(report.unchanged)} unchanged\n`,
-          )
+        case 'sync-pool':
+          process.stdout.write(describePoolSync(await syncPersonPool()))
           return 0
-        }
 
         default:
           process.stderr.write(`unknown person subcommand: ${String(sub)}\n\n${USAGE}`)

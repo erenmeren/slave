@@ -3645,19 +3645,24 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['import-catalog', '--dir', catalogDir(), '--activate'])
 
       expect(result.code).toBe(0)
-      // Task 3: `reconcileTemplateCapabilities()` runs FIRST and already calls `syncPersonPool()`
-      // itself, so the three managed people exist by the time the line below's own EXISTING
-      // `syncPersonPool()` call runs -- which is why that line now reports `unchanged`, not
-      // `created`. The reconcile line, printed first, is what actually created them.
+      // Final review, Important 4: ONE sync, the one `reconcileTemplateCapabilities()` runs at the
+      // end of itself, and this line is its report. It used to say `0 created, 0 updated, 3
+      // unchanged` -- because a SECOND `syncPersonPool()` ran right afterwards and found the three
+      // people the first had just made -- which read to an operator as if an import that staffed
+      // three managed slots had staffed none.
       expect(result.stdout).toContain('capabilities reconciled: 1 template scanned')
       expect(result.stdout).toContain('pool synced: 1 active template')
-      expect(result.stdout).toContain('0 created, 0 updated, 3 unchanged')
+      expect(result.stdout).toContain('3 created, 0 updated, 0 unchanged')
       const row = await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'CLI Core Builder' } })
       const managed = await prisma.person.findMany({ where: { templateId: row.id, poolSlot: { not: null } } })
       expect(managed).toHaveLength(3)
     })
 
-    it('does not run the sync for an import that leaves the row inactive: nothing to reconcile', async (): Promise<void> => {
+    // Final review, minor: the title used to say the sync "does not run", which was never true --
+    // it runs on every non-dry-run import and prints a report. What is true is that an import
+    // leaving the row INACTIVE gives it nothing to do, because `syncPersonPool` only ever looks at
+    // active templates. The assertions below were always the right ones; only the name lied.
+    it('runs the sync on an import that leaves the row inactive, and it has no active template to staff', async (): Promise<void> => {
       const result = await runCli(['import-catalog', '--dir', catalogDir()])
 
       expect(result.code).toBe(0)

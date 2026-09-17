@@ -1,5 +1,5 @@
 import { hostname } from 'node:os'
-import { describeSync, drainIntakeCalls, drainModelCalls, reconcileTemplateCapabilities, syncPersonPool, syncSkillCatalog, tickIntakes, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
+import { describeSync, drainIntakeCalls, drainModelCalls, reconcileTemplateCapabilities, syncSkillCatalog, tickIntakes, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { BROKER_TIMEOUT_MS, SUPERVISOR_DEFAULT_MODEL, workspaceId as brandWorkspaceId, type WorkspaceId } from '@slave-of-ai/domain'
 import { subscribeEvents, type EventSubscription } from '@slave-of-ai/events'
@@ -405,14 +405,18 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
   // fail daemon startup loudly rather than silently continue with a partial pool, so neither throw
   // is caught and both are left to propagate out of `runDaemon` exactly as they arrive.
   //
-  // Task 3's reconciliation runs FIRST: a synonym the taxonomy learned since this template was
-  // last imported must repair its `capabilityKeys` before the pool sync below reads them, or a
+  // Task 3's reconciliation is the ONE call: a synonym the taxonomy learned since this template
+  // was last imported must repair its `capabilityKeys` before the pool sync reads them, or a
   // stale, still-unresolved capability set would be the one every managed person starts this
-  // process holding. `reconcileTemplateCapabilities` ends by calling `syncPersonPool` itself, so
-  // the explicit call after it finds nothing left to do for a template Task 3 already repaired --
-  // and still runs, unconditionally, for the ordinary case where nothing needed reconciling at all.
+  // process holding -- and `reconcileTemplateCapabilities` ends by calling `syncPersonPool` itself,
+  // over every active template, whether or not anything needed reconciling.
+  //
+  // The second, explicit `syncPersonPool()` that used to follow it is gone (final review,
+  // Important 4). It was never conditional and never had anything to do: the pass before it had
+  // just synced the same templates from the same rows, so on every startup it re-read the whole
+  // catalogue to report "nothing changed". Startup still fails loudly on a pool it cannot
+  // reconcile, because this call is still outside any try/catch.
   await reconcileTemplateCapabilities()
-  await syncPersonPool()
 
   const following = deps.workspaceIds === 'all'
   const loops = new Map<string, WorkspaceLoop>()
