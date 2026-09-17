@@ -7,10 +7,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
  * M58 R29: the migration, proved on a POPULATED pre-M58 database.
  *
  * The test database has already had every migration applied by `db:migrate:test`, so this cannot
- * "run the migration" against it. It builds a SHADOW SCHEMA instead: every migration in order
- * EXCEPT M58's, a fixture written with raw SQL into that shape, then M58's own file, then the
- * assertions. `pg`'s simple query protocol runs a whole migration file in one call, which is why
- * this uses a `Client` directly rather than Prisma's parameterised `$executeRaw`.
+ * "run the migration" against it. It builds a SHADOW SCHEMA instead: every migration that PRECEDES
+ * M58 in ordered history, a fixture written with raw SQL into that shape, then M58's own file, then
+ * the assertions. Migrations that come AFTER M58 assume the schema M58 introduces (e.g. M60 adds
+ * `Person."poolSlot"`), so replaying them onto a pre-M58 fixture would fail; they are no part of
+ * proving M58 and are excluded. `pg`'s simple query protocol runs a whole migration file in one
+ * call, which is why this uses a `Client` directly rather than Prisma's parameterised `$executeRaw`.
  *
  * Each case builds a shadow schema of its OWN, because M58 is irreversible and a second case
  * cannot re-run it over the first's result. They are dropped in `afterAll` whatever happens; they
@@ -28,7 +30,7 @@ async function run(sql: string): Promise<void> {
   await client.query(sql)
 }
 
-/** Every migration in order EXCEPT M58's, into a schema of this case's own. */
+/** Every migration that PRECEDES M58 in ordered history, into a schema of this case's own. */
 async function buildShadow(schema: string): Promise<void> {
   await run(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`)
   await run(`CREATE SCHEMA "${schema}"`)
@@ -37,8 +39,12 @@ async function buildShadow(schema: string): Promise<void> {
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
     .toSorted()
-  const before = dirs.filter((name) => name !== M58)
-  expect(before.length).toBe(dirs.length - 1)
+  // Reconstruct the database as it stood immediately before M58. Migrations AFTER M58 depend on
+  // the schema M58 introduces (e.g. M60's `Person."poolSlot"`) and cannot apply to a pre-M58
+  // fixture, so the prefix stops at -- and excludes -- M58 itself.
+  const m58Index = dirs.indexOf(M58)
+  expect(m58Index).toBeGreaterThan(0)
+  const before = dirs.slice(0, m58Index)
   for (const name of before) {
     await run(readFileSync(join(MIGRATIONS_DIR, name, 'migration.sql'), 'utf8'))
   }
