@@ -21,7 +21,8 @@ ALTER TABLE "Person"
   ADD CONSTRAINT "Person_poolSlot_requires_templateId"
   CHECK ("poolSlot" IS NULL OR "templateId" IS NOT NULL);
 
--- Unique slot per template (the index must cover NULLs correctly: Postgres partial unique index
--- excludes NULL-NULL rows, but the @@unique directive in Prisma generates the plain unique
--- constraint which ignores rows where either column is NULL -- correct for our invariant).
+-- Unique slot per template. Postgres standard unique indexes treat every NULL as distinct from
+-- every other NULL (ISO SQL behaviour), so rows where either column is NULL are never compared
+-- equal and never violate the index. No WHERE clause is needed or used: this is a standard
+-- unique index, not a partial index.
 CREATE UNIQUE INDEX "Person_templateId_poolSlot_key" ON "Person"("templateId", "poolSlot");

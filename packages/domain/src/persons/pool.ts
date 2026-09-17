@@ -126,13 +126,37 @@ export const LAST_NAMES: readonly string[] = [
   'Young',
 ] as const
 
-/** Cryptographic random index, used as the production default. */
+/**
+ * Unbiased index via rejection sampling.
+ *
+ * Modulo reduction (`v % n`) is biased when `2^32` is not divisible by `n`: the
+ * first `(2^32 % n)` remainders are drawn one extra time. Rejection sampling
+ * eliminates the bias by discarding any Uint32 that falls in the "tail"
+ * `[limit, 2^32)` where `limit = 2^32 − (2^32 % n)`, then reducing the accepted
+ * value. The expected number of draws is less than 2 for all `n ≤ 2^31`.
+ *
+ * Exported as a pure seam so tests can verify retry behaviour by injecting a
+ * controlled `getUint32` sequence — no mock of `crypto` needed, and no
+ * test-only production API.
+ */
+export function unbiasedIndex(getUint32: () => number, upperExclusive: number): number {
+  // 4294967296 = 2^32, safely representable as a JS number (< 2^53 − 1).
+  const limit = 4294967296 - (4294967296 % upperExclusive)
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const v = getUint32()
+    if (v < limit) return v % upperExclusive
+  }
+}
+
+/** Cryptographic random index using rejection sampling, used as the production default. */
 function cryptoRandomIndex(upperExclusive: number): number {
-  // Use crypto.getRandomValues for uniform distribution
   const array = new Uint32Array(1)
-  crypto.getRandomValues(array)
-  // biome-ignore lint/style/noNonNullAssertion: array always has one element
-  return array[0]! % upperExclusive
+  return unbiasedIndex(() => {
+    crypto.getRandomValues(array)
+    // biome-ignore lint/style/noNonNullAssertion: array always has one element
+    return array[0]!
+  }, upperExclusive)
 }
 
 /**

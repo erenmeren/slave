@@ -1,5 +1,45 @@
 import { describe, expect, it } from 'vitest'
-import { FIRST_NAMES, LAST_NAMES, isGeneratedEnglishName, randomEnglishName } from '../../src/persons/pool.js'
+import { FIRST_NAMES, LAST_NAMES, isGeneratedEnglishName, randomEnglishName, unbiasedIndex } from '../../src/persons/pool.js'
+
+describe('unbiasedIndex', () => {
+  it('retries when the first Uint32 falls in the biased tail', () => {
+    // bound = 3: 2^32 = 4294967296; 4294967296 % 3 = 1; limit = 4294967295.
+    // The single biased value is 4294967295 (0xFFFFFFFF). Sequence: biased first,
+    // then unbiased 0 — so getUint32 must be called exactly twice.
+    const bound = 3
+    const calls: number[] = []
+    const values = [4294967295, 0]
+    const getUint32 = (): number => {
+      const v = values.shift()!
+      calls.push(v)
+      return v
+    }
+    const result = unbiasedIndex(getUint32, bound)
+    expect(calls).toHaveLength(2)
+    expect(result).toBe(0) // 0 % 3 = 0
+  })
+
+  it('accepts the first value when it is below the limit', () => {
+    const calls: number[] = []
+    const getUint32 = (): number => { calls.push(6); return 6 }
+    const result = unbiasedIndex(getUint32, 5)
+    expect(calls).toHaveLength(1) // no retry needed
+    expect(result).toBe(1) // 6 % 5 = 1
+  })
+
+  it('result is always in [0, upperExclusive)', () => {
+    for (let bound = 1; bound <= 10; bound++) {
+      // Feed a sequence that exercises multiple accepts at different remainders
+      let counter = 0
+      const getUint32 = (): number => counter++
+      for (let i = 0; i < 20; i++) {
+        const r = unbiasedIndex(getUint32, bound)
+        expect(r).toBeGreaterThanOrEqual(0)
+        expect(r).toBeLessThan(bound)
+      }
+    }
+  })
+})
 
 describe('randomEnglishName', () => {
   it('returns a string of two words separated by one space', () => {
