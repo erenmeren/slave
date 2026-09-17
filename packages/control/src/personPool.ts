@@ -2,11 +2,24 @@
  * Catalog Person Pool (Task 2): keeps exactly three MANAGED people per active `SlaveTemplate` --
  * `poolSlot` 1, 2 and 3 -- and picks one of them for a seat.
  *
- * `syncPersonPool` is the ONLY writer of a managed `Person` row after it is first created: it
- * creates a missing slot, and it keeps an existing slot's `capabilities` in step with its
- * template's current `capabilityKeys`. It never touches a row's `name` or `id` once written (Task
- * 2 brief: "existing managed rows keep names and ids forever"), and it never touches a person whose
- * `poolSlot` is `null` -- a manual hire, entirely outside this module's business.
+ * `syncPersonPool` creates a missing slot and keeps an existing slot's stored `capabilities` in
+ * step with the template's current `capabilityKeys`. It is NOT the only writer of a managed row --
+ * it never was, and the module docstring used to claim it was (corrected, final review minor):
+ * `hireFromTemplate` writes `selectionRationale` and merges capabilities when it seats a pool
+ * person, `setPersonCapabilities` writes grants, `releasePerson` stamps `releasedAt` and clears
+ * the slot, and `deleteSlaveTemplate` clears the slot too. What IS true, and is the invariant that
+ * matters: this pass never touches a row's `name` or `id` once written (Task 2 brief: "existing
+ * managed rows keep names and ids forever"), and it never touches a person whose `poolSlot` is
+ * `null` -- a manual hire, entirely outside this module's business.
+ *
+ * Nor does it overwrite an explicit grant (final review, Important 2). A managed person's
+ * capability set has TWO sources -- their template's baseline and whatever somebody granted them
+ * on top of it -- and they are stored apart, in `capabilities` (the effective union, what every
+ * reader reads) and `capabilityGrants` (the explicit half only). This pass recomputes the union,
+ * so a template ADDITION arrives, a template REMOVAL disappears, and a grant survives both. The
+ * recompute happens under a `FOR UPDATE` on the Person row, because otherwise a
+ * `setPersonCapabilities` committing a grant between this pass's read and its write would have
+ * that grant silently erased.
  *
  * `selectPoolPerson` is a pure READ over that same table: it never creates, mutates or reserves
  * anybody (Task 2 brief). Choosing AMONG eligible candidates is `rankPoolCandidates`
@@ -14,7 +27,17 @@
  * only part of "select" that belongs here.
  */
 import { prisma } from '@slave-of-ai/db/client'
-import { err, ok, rankPoolCandidates, randomEnglishName, type PoolCandidate, type Result } from '@slave-of-ai/domain'
+import {
+  FIRST_NAMES,
+  LAST_NAMES,
+  effectiveCapabilities,
+  err,
+  ok,
+  rankPoolCandidates,
+  randomEnglishName,
+  type PoolCandidate,
+  type Result,
+} from '@slave-of-ai/domain'
 import { isUniqueConstraintViolation, uniqueConstraintTarget } from './prisma-errors.js'
 import type { ControlRefusal } from './refusal.js'
 
@@ -35,11 +58,11 @@ const POOL_SLOTS = [1, 2, 3] as const
 
 /**
  * How many different names one slot's create will try before giving up (Task 2 brief: "retry a
- * name collision with a bounded attempt count"). `FIRST_NAMES.length * LAST_NAMES.length` is 2,900
- * (`pool.ts`'s own docstring) -- twenty draws is far more than bad luck costs and far short of
- * exhausting a dictionary that size, so hitting the cap means something is actually wrong (a test
- * pinning `crypto.getRandomValues`, or a name space that has genuinely run out) rather than an
- * ordinary collision.
+ * name collision with a bounded attempt count"). The dictionaries offer over seven hundred
+ * thousand combinations (`pool.ts`, final review Important 6), so twenty draws is far more than
+ * bad luck costs and far short of exhausting a name space that size: hitting the cap means
+ * something is actually wrong -- a test pinning `crypto.getRandomValues`, or a name space that has
+ * genuinely run out -- rather than an ordinary collision.
  */
 export const NAME_COLLISION_MAX_ATTEMPTS = 20
 
@@ -76,35 +99,58 @@ export function classifyPersonCreateError(error: unknown): PersonCreateErrorClas
   return 'rethrow'
 }
 
-/** Whether a managed row's stored capabilities already match the template's, as SETS -- order
- *  never mattered to anything that reads `Person.capabilities`, and comparing it positionally
- *  would report a write every time an import re-orders `capabilityKeys` without changing it. */
+/** Whether a managed row's stored capabilities already match the set this pass computed, as SETS
+ *  -- order never mattered to anything that reads `Person.capabilities`, and comparing it
+ *  positionally would report a write every time an import re-orders `capabilityKeys` without
+ *  changing it. */
 function sameCapabilitySet(current: readonly string[], desired: readonly string[]): boolean {
   if (current.length !== desired.length) return false
   const want = new Set(desired)
   return current.every((key) => want.has(key))
 }
 
-/** Writes `capabilities` onto an existing managed row iff it drifted from the template's current
- *  set. Never touches `name`, `poolSlot` or anything else -- the one column this pass may ever
- *  move on a row that already exists (Task 2 brief). */
-async function refreshManagedCapabilities(
-  person: { readonly id: string; readonly capabilities: readonly string[] },
-  capabilityKeys: readonly string[],
-): Promise<'updated' | 'unchanged'> {
-  if (sameCapabilitySet(person.capabilities, capabilityKeys)) return 'unchanged'
-  await prisma.person.update({ where: { id: person.id }, data: { capabilities: [...capabilityKeys] } })
-  return 'updated'
+/**
+ * Recomputes ONE existing managed row's effective capability set and writes it iff it drifted.
+ *
+ * `FOR UPDATE` on the Person row, and the grants re-read UNDER that lock (final review, Important
+ * 2). The prefetched row this pass started from is only a work list; the grant column it would
+ * union against is the one thing another writer can change while this pass runs, and computing the
+ * union off a stale read is precisely how a concurrent `set-capabilities` gets erased. One
+ * transaction per PERSON rather than one for the whole pass: a lock held across 834 rows would
+ * block every other writer of the table for as long as the pass ran, and a partial pass is a
+ * correct pass -- the next one finishes it.
+ *
+ * Never touches `name`, `poolSlot` or anything else. `capabilities` is the one column this pass
+ * may ever move on a row that already exists (Task 2 brief).
+ */
+async function refreshManagedCapabilities(personId: string, capabilityKeys: readonly string[]): Promise<'updated' | 'unchanged'> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${personId} FOR UPDATE`
+    const person = await tx.person.findUnique({
+      where: { id: personId },
+      select: { capabilities: true, capabilityGrants: true },
+    })
+    // Deleted between the prefetch and this lock. Nothing to refresh, and nothing wrong: the next
+    // pass finds the slot vacant and creates it.
+    if (person === null) return 'unchanged'
+    const desired = effectiveCapabilities(capabilityKeys, person.capabilityGrants)
+    if (sameCapabilitySet(person.capabilities, desired)) return 'unchanged'
+    await tx.person.update({ where: { id: personId }, data: { capabilities: desired } })
+    return 'updated'
+  })
 }
 
 /**
- * Ensures ONE slot of ONE template holds a managed person, and that person's capabilities match.
+ * Creates the managed person for ONE vacant slot of ONE template.
  *
- * Read-then-write, not `upsert`: `@@unique([templateId, poolSlot])` (Task 1) is the concurrency
- * boundary, not a pre-check that closes it. Two processes racing this same slot both read `null`
- * and both attempt `create`; the database picks one, and the loser's `catch` re-reads exactly what
- * the winner wrote and syncs ITS capabilities instead of ever considering a second person for the
- * slot (Task 2 brief: "re-read a slot won by another process").
+ * `@@unique([templateId, poolSlot])` (Task 1) is the concurrency boundary, not a pre-check that
+ * closes it. Two processes racing this same slot both see it vacant and both attempt `create`; the
+ * database picks one, and the loser's `catch` re-reads exactly what the winner wrote and syncs ITS
+ * capabilities instead of ever considering a second person for the slot (Task 2 brief: "re-read a
+ * slot won by another process"). That create/catch/re-read is deliberately retained as the
+ * serialisation point for a missing slot even though the pass now PREFETCHES its work list (final
+ * review, Important 4): the prefetch is an optimisation over N queries, not a promise about what
+ * the table holds by the time the create runs.
  *
  * `Person.name` is unique across the WHOLE installation (M58 R14), so a name collision is a
  * different race than the slot one and gets a different answer: retry with another name, up to
@@ -114,22 +160,17 @@ async function refreshManagedCapabilities(
  * other Prisma error -- a dropped connection, a check constraint this module did not anticipate --
  * is rethrown exactly as it arrived (Task 2 brief: "never swallow unrelated Prisma errors").
  */
-async function syncSlot(
+async function createSlot(
   templateId: string,
   capabilityKeys: readonly string[],
   poolSlot: (typeof POOL_SLOTS)[number],
 ): Promise<SlotOutcome> {
-  const existing = await prisma.person.findUnique({
-    where: { templateId_poolSlot: { templateId, poolSlot } },
-    select: { id: true, capabilities: true },
-  })
-  if (existing !== null) return refreshManagedCapabilities(existing, capabilityKeys)
-
   for (let attempt = 0; attempt < NAME_COLLISION_MAX_ATTEMPTS; attempt += 1) {
     const name = randomEnglishName()
     try {
+      // A brand-new managed person has no grants, so the effective set IS the template baseline.
       await prisma.person.create({
-        data: { name, templateId, poolSlot, capabilities: [...capabilityKeys] },
+        data: { name, templateId, poolSlot, capabilities: effectiveCapabilities(capabilityKeys, []) },
       })
       return 'created'
     } catch (error) {
@@ -138,26 +179,41 @@ async function syncSlot(
       if (classification === 'slot_race') {
         const won = await prisma.person.findUniqueOrThrow({
           where: { templateId_poolSlot: { templateId, poolSlot } },
-          select: { id: true, capabilities: true },
+          select: { id: true },
         })
-        return refreshManagedCapabilities(won, capabilityKeys)
+        return refreshManagedCapabilities(won.id, capabilityKeys)
       }
       // classification === 'name_race': try another name, same slot, same attempt budget.
     }
   }
+  // Says WHAT ran out, and how hard it tried (final review, Important 6). The old sentence --
+  // "could not find a free name" -- read as a bug in this function; the honest fact is that the
+  // name space is a finite curated dictionary, every draw in this budget landed on a name the
+  // installation already holds, and nothing was silently degraded to get past it.
   throw new Error(
-    `syncPersonPool: could not find a free name for template ${templateId} slot ${String(poolSlot)} ` +
-      `after ${String(NAME_COLLISION_MAX_ATTEMPTS)} attempts`,
+    `syncPersonPool: the finite English-name pool could not find a unique unused name for template ` +
+      `${templateId} slot ${String(poolSlot)} after ${String(NAME_COLLISION_MAX_ATTEMPTS)} attempts ` +
+      `(${String(FIRST_NAMES.length * LAST_NAMES.length)} combinations exist; every draw collided with a ` +
+      `name already taken). No name was reused and no slot was left half-created.`,
   )
 }
 
 /**
  * Ensures every ACTIVE template holds exactly three managed people, and that every existing one's
- * capabilities match its template's current set (Task 2 brief, global constraints).
+ * effective capabilities match its template's current set unioned with its own grants (Task 2
+ * brief, global constraints; final review Important 2).
  *
  * Inactive templates are never read here at all -- not "created for" and then left alone, simply
  * never considered -- which is the whole of "inactive templates create nothing" and "deactivation
  * deletes/releases nobody" (the row this pass would have synced is just not in its query).
+ *
+ * ONE query for the work list (final review, Important 4). This pass used to run a
+ * `findUnique` per (template, slot) pair: 834 round trips on the installation it was measured
+ * against, every one of them a no-op on the ordinary run. The managed rows for every active
+ * template come back in a single query instead, and the per-slot work is decided in memory. The
+ * database's own unique constraint is still the serialisation point for a slot this list says is
+ * vacant (see {@link createSlot}) -- the prefetch narrows what has to be attempted, it does not
+ * replace what makes the attempt safe.
  *
  * Idempotent: a second call with nothing changed underneath reports every slot `unchanged` and
  * writes nothing at all (Task 2 brief: "running sync twice is a no-op report on the second run").
@@ -167,13 +223,26 @@ export async function syncPersonPool(): Promise<PersonPoolSyncReport> {
     where: { active: true },
     select: { id: true, capabilityKeys: true },
   })
+  if (templates.length === 0) return { templates: 0, created: 0, updated: 0, unchanged: 0 }
+
+  const existing = await prisma.person.findMany({
+    where: { templateId: { in: templates.map((template) => template.id) }, poolSlot: { not: null } },
+    select: { id: true, templateId: true, poolSlot: true },
+  })
+  // `${templateId}:${poolSlot}` -- the pair the unique constraint is on, which is what makes this
+  // map a faithful stand-in for the `findUnique` it replaces.
+  const occupied = new Map(existing.map((person) => [`${String(person.templateId)}:${String(person.poolSlot)}`, person.id] as const))
 
   let created = 0
   let updated = 0
   let unchanged = 0
   for (const template of templates) {
     for (const poolSlot of POOL_SLOTS) {
-      const outcome = await syncSlot(template.id, template.capabilityKeys, poolSlot)
+      const held = occupied.get(`${template.id}:${String(poolSlot)}`)
+      const outcome =
+        held === undefined
+          ? await createSlot(template.id, template.capabilityKeys, poolSlot)
+          : await refreshManagedCapabilities(held, template.capabilityKeys)
       if (outcome === 'created') created += 1
       else if (outcome === 'updated') updated += 1
       else unchanged += 1

@@ -1,7 +1,9 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { isGeneratedEnglishName } from '@slave-of-ai/domain'
+import { FIRST_NAMES, LAST_NAMES, isGeneratedEnglishName } from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { deleteSlaveTemplate } from '../../src/org.js'
 import { NAME_COLLISION_MAX_ATTEMPTS, selectPoolPerson, syncPersonPool } from '../../src/personPool.js'
+import { releasePerson } from '../../src/persons.js'
 
 const TRUNCATE = 'TRUNCATE TABLE "Slave", "Team", "Workspace", "Person", "SlaveTemplate" RESTART IDENTITY CASCADE'
 
@@ -180,8 +182,11 @@ describe('syncPersonPool (Catalog Person Pool Task 2)', () => {
       return array
     })
     try {
-      const [firstName, lastName] = ['Alice', 'Adams'] // FIRST_NAMES[0], LAST_NAMES[0] (pool.ts)
-      await prisma.person.create({ data: { name: `${firstName} ${lastName}`, capabilities: [] } })
+      // Read off the dictionaries rather than spelled out: the lists are curated data and were
+      // rewritten wholesale for final-review Important 6, so a hard-coded pair is a test that
+      // breaks for a reason that has nothing to do with what it is proving.
+      const [firstName, lastName] = [FIRST_NAMES[0], LAST_NAMES[0]]
+      await prisma.person.create({ data: { name: `${String(firstName)} ${String(lastName)}`, capabilities: [] } })
       const templateId = await template('Collision Persona', true)
 
       const report = await syncPersonPool()
@@ -189,7 +194,7 @@ describe('syncPersonPool (Catalog Person Pool Task 2)', () => {
       expect(report.created).toBe(3)
       const people = await managedPeople(templateId)
       // None of the three managed names collides with the pre-seeded name: the retry moved past it.
-      expect(people.every((person) => person.name !== `${firstName} ${lastName}`)).toBe(true)
+      expect(people.every((person) => person.name !== `${String(firstName)} ${String(lastName)}`)).toBe(true)
     } finally {
       spy.mockRestore()
     }
@@ -206,10 +211,32 @@ describe('syncPersonPool (Catalog Person Pool Task 2)', () => {
       return array
     })
     try {
-      await prisma.person.create({ data: { name: 'Alice Adams', capabilities: [] } })
+      await prisma.person.create({ data: { name: `${String(FIRST_NAMES[0])} ${String(LAST_NAMES[0])}`, capabilities: [] } })
       await template('Exhausted Persona', true)
 
       await expect(syncPersonPool()).rejects.toThrow(new RegExp(String(NAME_COLLISION_MAX_ATTEMPTS)))
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
+  // Final review, Important 6: the old sentence ("could not find a free name") read as a bug in
+  // this function. What is actually true is that the name space is a finite curated dictionary and
+  // every draw in the budget landed on a name already taken -- and that nothing was quietly
+  // degraded to get past it.
+  it('names the finite English-name pool and the attempt count when it gives up', async (): Promise<void> => {
+    // biome-ignore lint/suspicious/noExplicitAny: matching `Crypto.getRandomValues`'s own generic
+    // `TypedArray` signature exactly is not worth it for a test-only stub of one call site.
+    const spy = vi.spyOn(globalThis.crypto, 'getRandomValues').mockImplementation((array: any) => {
+      array[0] = 0
+      return array
+    })
+    try {
+      await prisma.person.create({ data: { name: `${String(FIRST_NAMES[0])} ${String(LAST_NAMES[0])}`, capabilities: [] } })
+      await template('Says Why It Gave Up', true)
+
+      await expect(syncPersonPool()).rejects.toThrow(/finite English-name pool could not find a unique unused name/u)
+      await expect(syncPersonPool()).rejects.toThrow(new RegExp(`${String(NAME_COLLISION_MAX_ATTEMPTS)} attempts`, 'u'))
     } finally {
       spy.mockRestore()
     }
@@ -237,6 +264,230 @@ describe('syncPersonPool (Catalog Person Pool Task 2)', () => {
     expect(report).toEqual({ templates: 1, created: 3, updated: 0, unchanged: 0 })
     const people = await managedPeople(templateId)
     for (const person of people) expect(person.capabilities).toEqual([])
+  })
+
+  it('creates a managed person with no grants at all: a fresh slot is pure template baseline', async (): Promise<void> => {
+    const templateId = await template('Fresh Has No Grants', true, ['backend.services'])
+
+    await syncPersonPool()
+
+    for (const person of await managedPeople(templateId)) {
+      expect(person.capabilityGrants).toEqual([])
+      expect(person.capabilities).toEqual(['backend.services'])
+    }
+  })
+
+  /**
+   * Final review, Important 2. This pass writes the template baseline over `capabilities`, so
+   * before the split an explicit grant lived exactly until the next sync -- and on a daemon that
+   * syncs at startup and on every reconcile, that is "until the next restart". Storing the union in
+   * `capabilities` alone would have failed the other way: a key the template has since dropped
+   * could never disappear, because one column cannot tell "the template used to say this" from "a
+   * person said this".
+   */
+  it('keeps an explicit grant across a sync, while a template ADDITION arrives and a REMOVAL goes', async (): Promise<void> => {
+    const templateId = await template('Granted And Drifting', true, ['backend.services', 'backend.legacy'])
+    await syncPersonPool()
+    const [granted] = await managedPeople(templateId)
+    // What `setPersonCapabilities` writes for a grant: the explicit half on its own column, and
+    // the effective union on `capabilities`.
+    await prisma.person.update({
+      where: { id: granted?.id ?? '' },
+      data: {
+        capabilityGrants: ['design.visual'],
+        capabilities: ['backend.services', 'backend.legacy', 'design.visual'],
+      },
+    })
+
+    // The template gains one key and drops another.
+    await prisma.slaveTemplate.update({
+      where: { id: templateId },
+      data: { capabilityKeys: ['backend.services', 'backend.api-design'] },
+    })
+    const report = await syncPersonPool()
+
+    expect(report).toEqual({ templates: 1, created: 0, updated: 3, unchanged: 0 })
+    const after = await prisma.person.findUniqueOrThrow({ where: { id: granted?.id ?? '' } })
+    // The grant is still there, the addition arrived, the removal is gone -- all three at once,
+    // which is the only combination a single column could not express.
+    expect(after.capabilityGrants).toEqual(['design.visual'])
+    expect([...after.capabilities].toSorted()).toEqual(['backend.api-design', 'backend.services', 'design.visual'])
+    // And the two ungranted slots hold exactly the new baseline.
+    const [, second] = await managedPeople(templateId)
+    expect([...(second?.capabilities ?? [])].toSorted()).toEqual(['backend.api-design', 'backend.services'])
+  })
+
+  it('reports unchanged when the effective union already matches, grant included', async (): Promise<void> => {
+    const templateId = await template('Grant Already Applied', true, ['backend.services'])
+    await syncPersonPool()
+    const [granted] = await managedPeople(templateId)
+    await prisma.person.update({
+      where: { id: granted?.id ?? '' },
+      data: { capabilityGrants: ['qa.automation'], capabilities: ['backend.services', 'qa.automation'] },
+    })
+
+    const report = await syncPersonPool()
+
+    expect(report).toEqual({ templates: 1, created: 0, updated: 0, unchanged: 3 })
+  })
+
+  it('leaves an UNMANAGED person\'s grants and capabilities completely alone', async (): Promise<void> => {
+    const templateId = await template('Manual Person Untouched', true, ['backend.services'])
+    const manual = await prisma.person.create({
+      data: { name: 'Manual Grant Holder', templateId, capabilities: ['design.visual'], capabilityGrants: ['design.visual'] },
+    })
+
+    await syncPersonPool()
+
+    const after = await prisma.person.findUniqueOrThrow({ where: { id: manual.id } })
+    expect(after.capabilities).toEqual(['design.visual'])
+    expect(after.capabilityGrants).toEqual(['design.visual'])
+    expect(after.poolSlot).toBeNull()
+  })
+})
+
+/**
+ * Final review, Important 3. `releasePerson` closed every seat and stamped `releasedAt` but left
+ * `poolSlot` where it was, so the slot stayed OCCUPIED by somebody `selectPoolPerson` filters out
+ * -- a template whose three managed people had all been released was permanently unstaffable, and
+ * every sync reported all three slots `unchanged` while the pool it was reconciling was empty in
+ * every sense that matters.
+ */
+describe('releasePerson and the managed pool (final review, Important 3)', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Slave", "Team", "Workspace", "Person", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  it('clears the slot of a released managed person, keeping their identity and history', async (): Promise<void> => {
+    const templateId = await template('One Gets Released', true)
+    await syncPersonPool()
+    const [first] = await managedPeople(templateId)
+
+    const released = await releasePerson(first?.id ?? '', 'moved on')
+
+    expect(released.ok).toBe(true)
+    const after = await prisma.person.findUniqueOrThrow({ where: { id: first?.id ?? '' } })
+    expect(after.poolSlot).toBeNull()
+    expect(after.releasedAt).not.toBeNull()
+    expect(after.releaseReason).toBe('moved on')
+    // Identity survives: same row, same name, same capabilities.
+    expect(after.name).toBe(first?.name)
+    expect(after.capabilities).toEqual(first?.capabilities)
+  })
+
+  it('release-all-three then sync gives the template three NEW selectable managed people', async (): Promise<void> => {
+    const templateId = await template('Whole Pool Released', true)
+    await syncPersonPool()
+    const original = await managedPeople(templateId)
+    for (const person of original) {
+      const released = await releasePerson(person.id, 'engagement over')
+      expect(released.ok).toBe(true)
+    }
+    // Nobody holds a slot in between: the pool is genuinely vacant, not merely ineligible.
+    expect(await managedPeople(templateId)).toHaveLength(0)
+
+    const report = await syncPersonPool()
+
+    expect(report).toEqual({ templates: 1, created: 3, updated: 0, unchanged: 0 })
+    const replacements = await managedPeople(templateId)
+    expect(replacements).toHaveLength(3)
+    expect(replacements.map((person) => person.poolSlot)).toEqual([1, 2, 3])
+    // NEW identities -- a release is permanent, so nobody was un-released to fill a slot.
+    const originalIds = new Set(original.map((person) => person.id))
+    expect(replacements.every((person) => !originalIds.has(person.id))).toBe(true)
+    // And the released three are still there, still released, still without slots.
+    for (const person of original) {
+      const after = await prisma.person.findUniqueOrThrow({ where: { id: person.id } })
+      expect(after.poolSlot).toBeNull()
+      expect(after.releasedAt).not.toBeNull()
+    }
+
+    // Selectable, which is the fact the bug actually cost: the template is staffable again.
+    const { workspaceId } = await workspaceWithTeam('Needs Staffing')
+    const selection = await selectPoolPerson(templateId, workspaceId)
+    expect(selection.ok).toBe(true)
+    if (selection.ok) expect(replacements.map((person) => person.id)).toContain(selection.value.personId)
+  })
+
+  it('an INACTIVE template gets no replacement: a vacant slot is not a reason to create one', async (): Promise<void> => {
+    const templateId = await template('Released Then Deactivated', true)
+    await syncPersonPool()
+    for (const person of await managedPeople(templateId)) {
+      expect((await releasePerson(person.id, 'engagement over')).ok).toBe(true)
+    }
+    await prisma.slaveTemplate.update({ where: { id: templateId }, data: { active: false } })
+
+    const report = await syncPersonPool()
+
+    expect(report).toEqual({ templates: 0, created: 0, updated: 0, unchanged: 0 })
+    expect(await managedPeople(templateId)).toHaveLength(0)
+  })
+
+  it('keeps the closed seat and its history on the released person, slot or no slot', async (): Promise<void> => {
+    const templateId = await template('Released While Seated', true)
+    await syncPersonPool()
+    const [first] = await managedPeople(templateId)
+    const { teamId } = await workspaceWithTeam('Had A Seat')
+    const seat = await prisma.slave.create({ data: { teamId, personId: first?.id ?? '', role: 'backend' } })
+
+    expect((await releasePerson(first?.id ?? '', 'engagement over')).ok).toBe(true)
+
+    const after = await prisma.slave.findUniqueOrThrow({ where: { id: seat.id } })
+    expect(after.closedAt).not.toBeNull()
+    expect(after.runtimeRoles).toEqual([])
+    expect((await prisma.person.findUniqueOrThrow({ where: { id: first?.id ?? '' } })).poolSlot).toBeNull()
+  })
+})
+
+/**
+ * Final review, Critical, proved end to end through the SUPPORTED verb: `syncPersonPool` creates
+ * the three managed rows, `deleteSlaveTemplate` removes the persona they name, and the FK's
+ * `SET NULL` and the pool's `poolSlot IS NULL OR templateId IS NOT NULL` CHECK no longer
+ * contradict each other.
+ */
+describe('deleteSlaveTemplate over a synced pool (final review, Critical)', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(TRUNCATE)
+  })
+
+  it('deletes a template whose pool is synced, and the three managed people become ordinary people', async (): Promise<void> => {
+    const templateId = await template('Synced Then Deleted', true, ['backend.services', 'backend.api-design'])
+    await syncPersonPool()
+    const managed = await managedPeople(templateId)
+    expect(managed).toHaveLength(3)
+
+    const result = await deleteSlaveTemplate(templateId)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value).toEqual({ personsUnlinked: 3 })
+    expect(await prisma.slaveTemplate.findUnique({ where: { id: templateId } })).toBeNull()
+    for (const person of managed) {
+      const after = await prisma.person.findUniqueOrThrow({ where: { id: person.id } })
+      expect(after.templateId).toBeNull()
+      expect(after.poolSlot).toBeNull()
+      expect(after.name).toBe(person.name)
+      expect([...after.capabilities].toSorted()).toEqual(['backend.api-design', 'backend.services'])
+      expect(isGeneratedEnglishName(after.name)).toBe(true)
+    }
+    // Three ordinary unmanaged people, and a later sync has no template to create anything for.
+    expect(await prisma.person.count()).toBe(3)
+    expect(await syncPersonPool()).toEqual({ templates: 0, created: 0, updated: 0, unchanged: 0 })
+  })
+
+  it('deleting one template leaves ANOTHER template\'s pool exactly where it was', async (): Promise<void> => {
+    const doomed = await template('Doomed Persona', true)
+    const survivor = await template('Surviving Persona', true)
+    await syncPersonPool()
+    const before = await managedPeople(survivor)
+
+    expect((await deleteSlaveTemplate(doomed)).ok).toBe(true)
+
+    const after = await managedPeople(survivor)
+    expect(after.map((person) => ({ id: person.id, poolSlot: person.poolSlot }))).toEqual(
+      before.map((person) => ({ id: person.id, poolSlot: person.poolSlot })),
+    )
   })
 })
 

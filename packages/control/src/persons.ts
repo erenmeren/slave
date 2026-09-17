@@ -324,6 +324,16 @@ export async function movePerson(
  * Person-first lock, same order as `hireFromTemplate` / `setPersonCapabilities`: `releasedAt` is
  * stamped under it, so a concurrent reuse cannot miss the release because the Person row was never
  * locked. The seat is not locked first.
+ *
+ * **The managed pool slot is VACATED in the same update** (final review, Important 3). A release
+ * makes somebody permanently ineligible -- `selectPoolPerson` filters on `releasedAt: null` -- but
+ * leaving `poolSlot` set left the slot OCCUPIED by somebody nothing can ever pick, so
+ * `syncPersonPool` reported all three slots `unchanged` over a pool that was empty in every sense
+ * that matters and the template became permanently unstaffable. Clearing it in the same locked
+ * write is what makes the slot available: a later sync creates a NEW managed identity for it if
+ * the template is still active, and creates nothing if it is not. Nobody is un-released to fill a
+ * slot, and this person keeps everything else -- their name, their capabilities, their grants,
+ * every closed seat and every run.
  */
 export async function releasePerson(
   personId: string,
@@ -348,7 +358,10 @@ export async function releasePerson(
     if (live !== null) return { refusal: { kind: 'run_in_progress', personId, runId: live.runId } as ControlRefusal }
 
     const now = new Date()
-    await tx.person.update({ where: { id: personId }, data: { releasedAt: now, releaseReason: recorded } })
+    await tx.person.update({
+      where: { id: personId },
+      data: { releasedAt: now, releaseReason: recorded, poolSlot: null },
+    })
     const closed = await tx.slave.updateMany({
       where: { personId, closedAt: null },
       data: { closedAt: now, runtimeRoles: [] },

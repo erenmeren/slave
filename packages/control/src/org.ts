@@ -1096,6 +1096,18 @@ export async function deleteCompanyTeam(
  * relation, so this verb deletes NOTHING before the template row: every person hired from it keeps
  * working, keeps their name and their capabilities, and simply stops naming a persona. What the
  * caller is told is how many of them that was. No event.
+ *
+ * The managed pool SLOTS are cleared first (final review, Critical). `SetNull` and the pool's own
+ * `Person_poolSlot_requires_templateId` CHECK are each correct and together they are a
+ * contradiction: the FK action wants to write `templateId = NULL` onto a row still holding
+ * `poolSlot = 2`, and the CHECK refuses precisely that row. So deleting an imported persona threw
+ * a raw `23514` out of a `Promise<Result<…>>` -- an ordinary operator act failing in a way no
+ * caller could report. Clearing `poolSlot` inside THIS transaction, under the template lock the
+ * verb already takes, is what makes `SetNull` legal: `syncPersonPool` cannot see a template that
+ * no longer exists, so nobody recreates a slot behind this, and the three people become ordinary
+ * unmanaged people with every other fact about them -- name, capabilities, grants, seats, runs,
+ * departments -- untouched. That is what M58 R1 already promises, extended to the one column the
+ * pool added.
  */
 export async function deleteSlaveTemplate(
   templateId: string,
@@ -1106,6 +1118,7 @@ export async function deleteSlaveTemplate(
     const row = await tx.slaveTemplate.findUnique({ where: { id: templateId }, select: { id: true } })
     if (row === null) return { ok: false as const, error: { kind: 'template_not_found', templateId } as ControlRefusal }
     const personsUnlinked = await tx.person.count({ where: { templateId } })
+    await tx.person.updateMany({ where: { templateId, poolSlot: { not: null } }, data: { poolSlot: null } })
     await tx.slaveTemplate.delete({ where: { id: templateId } })
     return { ok: true as const, value: { personsUnlinked } }
   })
