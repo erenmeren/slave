@@ -211,6 +211,37 @@ describe('reconcileTemplateCapabilities (Catalog Person Pool Task 3)', () => {
     expect(await prisma.person.count({ where: { templateId: id } })).toBe(0)
   })
 
+  /**
+   * Final review, Important 4. This pass has always ended with `syncPersonPool()` and has always
+   * thrown that pass's report away, so every caller that wanted to tell an operator what the pool
+   * did ran a SECOND, redundant `syncPersonPool()` -- an extra full scan of every active template,
+   * whose only honest answer was "nothing changed", printed as if it were the news. The report is
+   * nested here instead: one pass, and the numbers come back.
+   */
+  it('returns the pool pass it already ran, so no caller has to run a second one to see it', async (): Promise<void> => {
+    const id = await structuredTemplate('Task 3 Nested Pool Report', ['production monitoring'], {
+      active: true,
+      capabilityKeys: [],
+      unresolvedCapabilities: ['production monitoring'],
+    })
+
+    const report = await reconcileTemplateCapabilities()
+
+    // Three slots created for the one active template, by the sync this pass ran itself.
+    expect(report.pool).toEqual({ templates: 1, created: 3, updated: 0, unchanged: 0 })
+    expect(await prisma.person.count({ where: { templateId: id, poolSlot: { not: null } } })).toBe(3)
+
+    // And a second pass reports a pool that needed nothing -- the number the redundant follow-up
+    // sync used to print, now available without running it.
+    expect((await reconcileTemplateCapabilities()).pool).toEqual({ templates: 1, created: 0, updated: 0, unchanged: 3 })
+  })
+
+  it('reports an inactive-only installation as a pool with no templates in it', async (): Promise<void> => {
+    await structuredTemplate('Task 3 Nested Pool Inactive', ['Code review'], { active: false })
+
+    expect((await reconcileTemplateCapabilities()).pool).toEqual({ templates: 0, created: 0, updated: 0, unchanged: 0 })
+  })
+
   it('a capability set that only reorders reports no write: comparison is by SET, not by array order', async (): Promise<void> => {
     const id = await structuredTemplate('Task 3 Reordered Persona', ['Code review', 'backend.api-design'], {
       capabilityKeys: ['backend.api-design', 'review.code-review'], // same set, opposite order

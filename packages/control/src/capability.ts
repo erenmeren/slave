@@ -3,8 +3,11 @@ import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import {
   CAPABILITY_KEY_PATTERN,
   NON_TERMINAL_RUN_STATUSES,
+  capabilityGrantDelta,
   capabilityLabel,
+  effectiveCapabilities,
   err,
+  functionalDepartmentFor,
   normaliseCapabilities,
   normaliseCapabilityText,
   ok,
@@ -16,7 +19,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { AssignmentRefused, departmentFor } from './department.js'
-import { selectPoolPerson, syncPersonPool } from './personPool.js'
+import { selectPoolPerson, syncPersonPool, type PersonPoolSyncReport } from './personPool.js'
 import { MAX_RUNTIME_ROLES } from './profile.js'
 import type { ControlRefusal } from './refusal.js'
 
@@ -115,6 +118,11 @@ export interface CapabilityReconcileReport {
    *  an operator can act on, and the count of the array is the number a caller would otherwise
    *  have to log separately. */
   readonly malformed: readonly string[]
+  /** What the `syncPersonPool()` pass this call ran at the end of itself did (final review,
+   *  Important 4). Nested rather than discarded: this pass has ALWAYS ended with that sync, and a
+   *  caller that wanted its numbers used to run a second one to get them -- a full extra scan of
+   *  every active template whose only honest answer was "nothing changed". */
+  readonly pool: PersonPoolSyncReport
 }
 
 /**
@@ -139,7 +147,9 @@ export interface CapabilityReconcileReport {
  * `syncPersonPool()` runs LAST, off the capabilities this pass just wrote -- every active
  * template's managed people pick up a repaired key on the same call that repaired it, and a manual
  * person (`poolSlot: null`) is outside `syncPersonPool`'s own query and is never touched here
- * either.
+ * either. Its report comes back in {@link CapabilityReconcileReport.pool} (final review, Important
+ * 4), so the callers that used to run their own `syncPersonPool()` immediately afterwards purely
+ * to have numbers to print can stop: the sync happened, and these are its numbers.
  */
 export async function reconcileTemplateCapabilities(): Promise<CapabilityReconcileReport> {
   const taxonomy = await listCapabilities()
@@ -184,9 +194,9 @@ export async function reconcileTemplateCapabilities(): Promise<CapabilityReconci
   // LAST, and off what THIS pass just wrote (Task 3 brief, R7): an active template whose keys this
   // pass repaired must have its managed people's capabilities repaired on the same call, never on
   // the next unrelated hook to run.
-  await syncPersonPool()
+  const pool = await syncPersonPool()
 
-  return { templates, updated, resolved: resolvedValues.size, unresolved: unresolvedValues.size, malformed }
+  return { templates, updated, resolved: resolvedValues.size, unresolved: unresolvedValues.size, malformed, pool }
 }
 
 /** An operator's own capability (R1). `domain` is not a parameter: it IS the key's prefix, and a
@@ -238,6 +248,23 @@ export async function addCapability(input: {
  * The cap is checked BEFORE the write and returned as a value (Minor 7): the union can carry a
  * worker past `MAX_RUNTIME_ROLES`, and a set this verb wrote is one `setRuntimeRoles` would refuse
  * to.
+ *
+ * **A MANAGED person's request is the desired EFFECTIVE set** (final review, Important 2). Somebody
+ * holding a `poolSlot` provides two things: their template's baseline, which `syncPersonPool`
+ * rewrites on every pass, and whatever was granted them on top of it. A plain replacement here
+ * would therefore last exactly until the next sync. So for a managed person the request is read as
+ * "this is what they should provide": the part of it BEYOND the baseline is stored as
+ * `capabilityGrants`, the baseline is restored in full, and the effective union is what lands in
+ * `capabilities` and what the caller reads back. Baseline keys cannot be removed from one
+ * person -- taking a capability off the persona is a template edit, and pretending otherwise would
+ * produce a set the next sync silently undoes.
+ *
+ * An unmanaged person is untouched by any of that: no baseline, no grants written, and the plain
+ * replacement this verb has always done.
+ *
+ * The runtime roles are projected from the EFFECTIVE set, not from the request, which is why the
+ * projection moved inside the transaction: the effective set is only known once the person has been
+ * read, and a role set computed off the narrower request would silently skip a baseline key's role.
  */
 export async function setPersonCapabilities(
   personId: string,
@@ -250,8 +277,7 @@ export async function setPersonCapabilities(
   >
 > {
   const taxonomy = await listCapabilities()
-  const { keys, unresolved } = normaliseCapabilities(values, taxonomy)
-  const projected = projectRoles(keys, taxonomy)
+  const { keys: requested, unresolved } = normaliseCapabilities(values, taxonomy)
   const outcome = await prisma.$transaction(async (tx) => {
     // The person AND every seat this write will touch, under `FOR UPDATE` before either is read
     // (final review's Important 1, restated for the split): the runtime-role union below is
@@ -264,12 +290,26 @@ export async function setPersonCapabilities(
       select: {
         id: true,
         capabilities: true,
+        // Final review, Important 2: which of the two shapes this person is, and the grant half
+        // of their set -- both read under the lock the write takes, so a concurrent pool sync
+        // cannot have moved the baseline underneath the union computed below.
+        poolSlot: true,
+        capabilityGrants: true,
+        template: { select: { capabilityKeys: true } },
         // M58 R1: what a specialist provides is the PERSON's; the runtime roles it projects to are
         // each SEAT's, so the union below is written once per open seat and never to a closed one.
         seats: { where: { closedAt: null }, select: { id: true, runtimeRoles: true, team: { select: { workspaceId: true } } } },
       },
     })
     if (person === null) return { refusal: { kind: 'person_not_found', personId } as ControlRefusal }
+
+    // MANAGED means holding a pool slot, which the schema's own CHECK guarantees comes with a
+    // template: the `template === null` half of this test is unreachable through the database and
+    // is written anyway so this expression is total rather than asserted.
+    const baseline = person.poolSlot === null || person.template === null ? null : person.template.capabilityKeys
+    const grants = baseline === null ? null : capabilityGrantDelta(requested, baseline)
+    const keys = baseline === null || grants === null ? requested : effectiveCapabilities(baseline, grants)
+    const projected = projectRoles(keys, taxonomy)
 
     const seats = person.seats.map((seat) => {
       const runtimeRoles = [...seat.runtimeRoles]
@@ -283,19 +323,26 @@ export async function setPersonCapabilities(
       if (refusal !== null) return { refusal }
     }
     const before = [...person.capabilities]
-    await tx.person.update({ where: { id: personId }, data: { capabilities: [...keys] } })
+    await tx.person.update({
+      where: { id: personId },
+      // `capabilityGrants` only for a managed person: an unmanaged one has no baseline to
+      // subtract, so writing the request there would invent a distinction the row does not have.
+      data: { capabilities: [...keys], ...(grants === null ? {} : { capabilityGrants: grants }) },
+    })
     for (const seat of seats) {
       if (seat.changed) await tx.slave.update({ where: { id: seat.id }, data: { runtimeRoles: seat.next } })
     }
     return {
       seats,
       before,
+      keys,
       // A REPLACEMENT, so "changed" is a set comparison and not a length one: naming the same two
       // capabilities in the other order is not a change, and swapping one for another is.
       capabilitiesChanged: before.length !== keys.length || before.some((key) => !keys.includes(key)),
     }
   })
   if ('refusal' in outcome) return err(outcome.refusal)
+  const keys = outcome.keys
   for (const seat of outcome.seats) {
     if (!seat.changed) continue
     await appendEvent({
@@ -442,6 +489,11 @@ async function lockedSlave(
   readonly personId: string
   readonly runtimeRoles: readonly string[]
   readonly capabilities: readonly string[]
+  /** Final review, Important 2: the explicit half of this person's capability set, and whether
+   *  they are managed at all. The reuse merge below writes both halves for a managed person, and
+   *  both have to be read under this same lock for the same reason `capabilities` is. */
+  readonly capabilityGrants: readonly string[]
+  readonly poolSlot: number | null
   readonly releasedAt: Date | null
   readonly workspaceId: string
 } | null> {
@@ -453,7 +505,7 @@ async function lockedSlave(
     select: {
       personId: true,
       runtimeRoles: true,
-      person: { select: { capabilities: true, releasedAt: true } },
+      person: { select: { capabilities: true, capabilityGrants: true, poolSlot: true, releasedAt: true } },
       team: { select: { workspaceId: true } },
     },
   })
@@ -463,6 +515,8 @@ async function lockedSlave(
         personId: row.personId,
         runtimeRoles: row.runtimeRoles,
         capabilities: row.person.capabilities,
+        capabilityGrants: row.person.capabilityGrants,
+        poolSlot: row.person.poolSlot,
         releasedAt: row.person.releasedAt,
         workspaceId: row.team.workspaceId,
       }
@@ -643,6 +697,28 @@ export async function seatMember(
  * that hire with the same `pool_unavailable` refusal rather than quietly growing the roster by one
  * unmanaged person nobody chose to add; the CLI's explicit `hire` leaves it unset and keeps the
  * old on-demand-creation compatibility.
+ *
+ * **The sync happens only after the transaction has ruled reuse out** (final review, Important 5).
+ * The pool CANDIDATE is still read before the transaction opens -- it names no row this
+ * transaction has a reason to lock until it decides to seat them, and moving `existing`'s read out
+ * from behind the workspace lock would reopen the double-hire race fix round 1 closed. But the
+ * `syncPersonPool()` that followed a `pool_unavailable` candidate read used to run BEFORE any of
+ * that: every repeat hire on the reuse path -- which E10 says one supervised pass can produce --
+ * walked every active template in the catalogue and wrote three people for each that was short, to
+ * answer a question it then discarded. So this is at most TWO attempts: candidate read plus
+ * transaction, where an existing seat wins with no sync at all; and only if that transaction
+ * reports it found no reusable seat AND no usable candidate, ONE sync outside the transaction, one
+ * reselect, and one retry. `requirePool`'s refusal and the manual fallback are decided on that
+ * second attempt.
+ *
+ * **The department is the role's** (final review, Important 1). This used to seat into
+ * `teams[0]` -- the project's first department by name -- which is alphabetical chance on any
+ * project with more than one. `intake.ts`'s staff step files seats by
+ * `functionalDepartmentFor(role, runtimeRoles)`, so a project staffed from the catalogue had real
+ * functional departments and the first supervisor hire after it landed in whichever one sorted
+ * first. Same function, same arguments, so the two staffing paths cannot disagree about where a
+ * backend specialist belongs. `Specialists` is still the fallback -- it is what that function
+ * returns for a role the table does not recognise.
  */
 export async function hireFromTemplate(
   workspaceId: string,
@@ -709,162 +785,236 @@ export async function hireFromTemplate(
   // Task 4: a managed candidate for this workspace, looked up BEFORE the transaction below --
   // `selectPoolPerson` is a plain read, exactly like `intake.ts`'s own staff step -- so the
   // transaction only ever re-validates one specific personId under lock rather than running the
-  // whole ranked query while holding the workspace row. `pool_unavailable` is synced once and
-  // retried once. This runs unconditionally, even on the well-worn "already hired from this
-  // template" path below that never ends up using it: the alternative -- deciding whether to look
-  // AFTER the workspace lock decides "nothing existing" -- would move `existing`'s own read out
-  // from behind that lock too, and two concurrent hires for a template with nothing on the
-  // project yet would both compute "nothing existing" before either took the lock and both create
-  // a worker (exactly the race fix round 1 minor 2 closed). `existing` stays inside the lock,
-  // unchanged; only the pool lookup moves out, because it names no row this transaction has any
-  // reason to lock until it has decided the candidate is actually going to be seated.
-  let poolCandidateId: string | null = null
-  let poolRefusal: ControlRefusal | null = null
-  {
-    let selection = await selectPoolPerson(templateId, workspaceId)
-    if (!selection.ok && selection.error.kind === 'pool_unavailable') {
-      await syncPersonPool()
-      selection = await selectPoolPerson(templateId, workspaceId)
-    }
-    if (selection.ok) poolCandidateId = selection.value.personId
-    else poolRefusal = selection.error
-  }
+  // whole ranked query while holding the workspace row. This read runs unconditionally, even on
+  // the well-worn "already hired from this template" path below that never ends up using it: the
+  // alternative -- deciding whether to look AFTER the workspace lock decides "nothing existing" --
+  // would move `existing`'s own read out from behind that lock too, and two concurrent hires for a
+  // template with nothing on the project yet would both compute "nothing existing" before either
+  // took the lock and both create a worker (exactly the race fix round 1 minor 2 closed).
+  // `existing` stays inside the lock, unchanged; only the pool lookup moves out, because it names
+  // no row this transaction has any reason to lock until it has decided the candidate is actually
+  // going to be seated.
+  //
+  // The SYNC is what moved (final review, Important 5): it is no longer part of this read at all.
+  // A `pool_unavailable` answer here is carried into the transaction as "no candidate", and only a
+  // transaction that reports it found no reusable seat either earns the one sync below.
+  const firstSelection = await selectPoolPerson(templateId, workspaceId)
 
-  // The reuse decision and the write it implies happen under ONE workspace row lock (fix round 1,
-  // minor 2). Nothing indexes "somebody in this workspace from this persona", so without it two
-  // approvals of the same proposal -- which is exactly what E10 says one supervised pass can
-  // produce -- would both read "nobody hired yet" and put two copies of one specialist on the
-  // project.
-  const outcome = await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
-    const existing = await tx.slave.findFirst({
-      // M58 R2: an OPEN seat held by somebody hired from this persona. `releasedAt: null` (M50
-      // R2): a released person's engagement is over and nothing re-hires them.
-      where: { person: { templateId, releasedAt: null }, team: { workspaceId }, closedAt: null },
-      orderBy: { id: 'asc' },
-    })
-    if (existing !== null) {
-      // The Slave row under `FOR UPDATE`, and the merge computed off THAT read (M47 final review,
-      // Important 1). The workspace lock above serialises this branch against another hire; it does
-      // NOT serialise it against `setRuntimeRoles`, `setPersonCapabilities` or `mergeRuntimeRoles`,
-      // every one of which locks the Slave row alone. A `set-runtime-roles` landing between the
-      // `findFirst` above and the update below was overwritten by a union computed from a row read
-      // before it -- the role the operator had just granted silently gone. Lock order is
-      // Workspace -> Slave, the order `seatMember` and `assignCompanyTx` also take,
-      // so two of these can never deadlock against each other.
-      const locked = await lockedSlave(tx, existing.id)
-      // The worker was deleted between the two reads inside this transaction. Nothing is written,
-      // so this is a returned refusal; the caller may hire again and will create one.
-      if (locked === null) return { kind: 'vanished' as const, slaveId: existing.id }
-      // Fix round 2: `existing` was read with `releasedAt: null` above, but that read takes NO lock
-      // and a concurrent `releaseWorker` can release this very person before `lockedSlave`'s own
-      // lock is granted -- `releaseWorker` now locks the person FIRST too (the shared order this
-      // docstring names), so the two transactions never deadlock, but ONE of them still runs
-      // second, and if that one is the release, this reuse's own eligibility read is stale.
-      // Re-checked under the lock this file's own docstring on `lockedSlave` promises: without it,
-      // `runtimeRoles` below -- computed from `template.role` plus every capability THIS call
-      // wants, not from what the seat currently holds -- would re-arm a person who was just
-      // released with the very roles their release just emptied. A released person names no
-      // eligible seat, which is exactly the outcome an unraced call gets from the `releasedAt: null`
-      // filter above; falling through to the create branch below gives a raced call the same one.
-      if (locked.releasedAt === null) {
-        const merged = [...new Set([...locked.capabilities, ...capabilities])].toSorted()
-        const roles = [...locked.runtimeRoles]
-        for (const role of runtimeRoles) if (!roles.includes(role)) roles.push(role)
-        // Both sets only ever grow here, so a length that did not move is a set that did not move.
-        const rolesChanged = roles.length !== locked.runtimeRoles.length
-        const capabilitiesChanged = merged.length !== locked.capabilities.length
-        // The cap, before the write and before anything else in this transaction has written either
-        // (M47 final review, Minor 7).
-        const refusal = overCap(roles)
-        if (refusal !== null) return { kind: 'refused' as const, refusal }
-        // M58 R1: the capabilities are the PERSON's and the runtime roles are the SEAT's, so the
-        // one merge lands in two rows.
-        if (capabilitiesChanged) await tx.person.update({ where: { id: locked.personId }, data: { capabilities: merged } })
-        if (rolesChanged) await tx.slave.update({ where: { id: existing.id }, data: { runtimeRoles: roles } })
-        return {
-          kind: 'reused' as const,
-          slaveId: existing.id,
-          personId: locked.personId,
-          capabilities: merged,
-          runtimeRoles: roles,
-          before: locked.capabilities,
-          rolesChanged,
-          capabilitiesChanged,
+  /**
+   * One attempt: the workspace lock, the reuse decision, and the write it implies (fix round 1,
+   * minor 2). Nothing indexes "somebody in this workspace from this persona", so without that lock
+   * two approvals of the same proposal -- which is exactly what E10 says one supervised pass can
+   * produce -- would both read "nobody hired yet" and put two copies of one specialist on the
+   * project.
+   *
+   * `last` is what makes this at most two attempts rather than a loop. On the FIRST attempt, a
+   * transaction that finds neither a reusable seat nor a usable candidate returns `needs_pool` and
+   * writes nothing: the caller syncs once, reselects, and runs this again. On the SECOND, the same
+   * situation is final, and `requirePool`'s refusal or the unmanaged fallback is applied.
+   */
+  const attempt = async (poolCandidateId: string | null, poolRefusal: ControlRefusal | null, last: boolean) =>
+    prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
+      const existing = await tx.slave.findFirst({
+        // M58 R2: an OPEN seat held by somebody hired from this persona. `releasedAt: null` (M50
+        // R2): a released person's engagement is over and nothing re-hires them.
+        where: { person: { templateId, releasedAt: null }, team: { workspaceId }, closedAt: null },
+        orderBy: { id: 'asc' },
+      })
+      if (existing !== null) {
+        // The Slave row under `FOR UPDATE`, and the merge computed off THAT read (M47 final review,
+        // Important 1). The workspace lock above serialises this branch against another hire; it does
+        // NOT serialise it against `setRuntimeRoles`, `setPersonCapabilities` or `mergeRuntimeRoles`,
+        // every one of which locks the Slave row alone. A `set-runtime-roles` landing between the
+        // `findFirst` above and the update below was overwritten by a union computed from a row read
+        // before it -- the role the operator had just granted silently gone. Lock order is
+        // Workspace -> Slave, the order `seatMember` and `assignCompanyTx` also take,
+        // so two of these can never deadlock against each other.
+        const locked = await lockedSlave(tx, existing.id)
+        // The worker was deleted between the two reads inside this transaction. Nothing is written,
+        // so this is a returned refusal; the caller may hire again and will create one.
+        if (locked === null) return { kind: 'vanished' as const, slaveId: existing.id }
+        // Fix round 2: `existing` was read with `releasedAt: null` above, but that read takes NO lock
+        // and a concurrent `releaseWorker` can release this very person before `lockedSlave`'s own
+        // lock is granted -- `releaseWorker` now locks the person FIRST too (the shared order this
+        // docstring names), so the two transactions never deadlock, but ONE of them still runs
+        // second, and if that one is the release, this reuse's own eligibility read is stale.
+        // Re-checked under the lock this file's own docstring on `lockedSlave` promises: without it,
+        // `runtimeRoles` below -- computed from `template.role` plus every capability THIS call
+        // wants, not from what the seat currently holds -- would re-arm a person who was just
+        // released with the very roles their release just emptied. A released person names no
+        // eligible seat, which is exactly the outcome an unraced call gets from the `releasedAt: null`
+        // filter above; falling through to the create branch below gives a raced call the same one.
+        if (locked.releasedAt === null) {
+          const merged = [...new Set([...locked.capabilities, ...capabilities])].toSorted()
+          const roles = [...locked.runtimeRoles]
+          for (const role of runtimeRoles) if (!roles.includes(role)) roles.push(role)
+          // Both sets only ever grow here, so a length that did not move is a set that did not move.
+          const rolesChanged = roles.length !== locked.runtimeRoles.length
+          const capabilitiesChanged = merged.length !== locked.capabilities.length
+          // The cap, before the write and before anything else in this transaction has written either
+          // (M47 final review, Minor 7).
+          const refusal = overCap(roles)
+          if (refusal !== null) return { kind: 'refused' as const, refusal }
+          // M58 R1: the capabilities are the PERSON's and the runtime roles are the SEAT's, so the
+          // one merge lands in two rows.
+          if (capabilitiesChanged) {
+            await tx.person.update({
+              where: { id: locked.personId },
+              // Final review, Important 2: what this hire asked for BEYOND the persona is an
+              // explicit grant, so the next pool sync keeps it. The baseline is subtracted first,
+              // which is what stops today's `capabilityKeys` being frozen into the grant column and
+              // deafening this person to every later template edit. Written only for a MANAGED
+              // person -- an unmanaged one has no baseline, and `capabilities` is their whole
+              // answer, exactly as before.
+              data: {
+                capabilities: merged,
+                ...(locked.poolSlot === null
+                  ? {}
+                  : {
+                      capabilityGrants: [
+                        ...new Set([...locked.capabilityGrants, ...capabilityGrantDelta(asked, template.capabilityKeys)]),
+                      ].toSorted(),
+                    }),
+              },
+            })
+          }
+          if (rolesChanged) await tx.slave.update({ where: { id: existing.id }, data: { runtimeRoles: roles } })
+          return {
+            kind: 'reused' as const,
+            slaveId: existing.id,
+            personId: locked.personId,
+            capabilities: merged,
+            runtimeRoles: roles,
+            before: locked.capabilities,
+            rolesChanged,
+            capabilitiesChanged,
+          }
         }
       }
-    }
 
-    // Nothing already seated from this template, and `selectPoolPerson` never found a candidate
-    // either (a missing pool, or every managed person released or already on this workspace).
-    // `requirePool` refuses right here rather than reaching the on-demand create below.
-    if (poolCandidateId === null && opts.requirePool === true) {
-      return { kind: 'refused' as const, refusal: poolRefusal ?? ({ kind: 'pool_unavailable', templateId } as ControlRefusal) }
-    }
+      // Nothing already seated from this template can be reused, and there is no usable candidate
+      // either (a missing pool, or every managed person released or already on this workspace).
+      //
+      // On the FIRST attempt that is not an answer yet, it is the ONE situation that earns a sync
+      // (final review, Important 5): this transaction has established, under the workspace lock,
+      // that reuse is off the table, which is precisely the thing the old unconditional pre-sync
+      // could not know. Nothing has been written, so returning here rolls nothing back.
+      if (poolCandidateId === null && !last) return { kind: 'needs_pool' as const }
 
-    const teams = await tx.team.findMany({ where: { workspaceId }, orderBy: { name: 'asc' } })
-    // A hire needs a department. The first by name is deterministic and is the one a
-    // single-department project has; a project with none gets `Specialists`, which says what it
-    // is rather than borrowing a name from a company this project may not have.
-    const team = teams[0] ?? (await tx.team.create({ data: { workspaceId, name: 'Specialists' } }))
-
-    // Task 4: seat the managed candidate `selectPoolPerson` chose before this transaction opened,
-    // instead of minting a new `Person` below. PERSON locked FIRST, directly by id -- this file's
-    // one lock order (`lockedSlave`'s own docstring above) -- since no `Slave` row names them yet
-    // for a join to lock through.
-    if (poolCandidateId !== null) {
-      await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${poolCandidateId} FOR UPDATE`
-      const pooled = await tx.person.findUnique({ where: { id: poolCandidateId } })
-      // Re-verified under the lock, exactly `lockedSlave`'s own reason: the candidate may have
-      // been released, or seated here by a concurrent hire that reached the workspace lock first,
-      // between `selectPoolPerson`'s read above and this one.
-      const busyHere =
-        pooled !== null &&
-        (await tx.slave.findFirst({
-          where: { personId: pooled.id, team: { workspaceId }, closedAt: null },
-          select: { id: true },
-        })) !== null
-      if (pooled !== null && pooled.releasedAt === null && !busyHere) {
-        const merged = [...new Set([...pooled.capabilities, ...capabilities])].toSorted()
-        // The rationale is written here exactly as it is for a brand-new hire (below): this pool
-        // person is NEW to this project, and "why they are here" is this call's own sentence, not
-        // whatever the pool held (nothing, today -- `syncPersonPool` never sets it) or whatever
-        // another project's earlier hire wrote. A worker ALREADY on this project instead goes
-        // through the `existing` reuse branch above, which never touches a rationale that is
-        // already true.
-        await tx.person.update({ where: { id: pooled.id }, data: { capabilities: merged, selectionRationale: rationale } })
-        const worker = await tx.slave.create({
-          data: { teamId: team.id, personId: pooled.id, role: template.role, runtimeRoles, engagementTaskId },
-        })
-        return { kind: 'created' as const, slaveId: worker.id, name: pooled.name, personId: pooled.id }
+      // `requirePool` refuses right here rather than reaching the on-demand create below.
+      if (poolCandidateId === null && opts.requirePool === true) {
+        return { kind: 'refused' as const, refusal: poolRefusal ?? ({ kind: 'pool_unavailable', templateId } as ControlRefusal) }
       }
-      // The chosen candidate raced away. `requirePool` refuses outright rather than falling
-      // through to the unmanaged create below it was set to prevent; the CLI's on-demand path
-      // (`requirePool` unset) takes that fallback exactly as it did before this task.
-      if (opts.requirePool === true) {
-        return { kind: 'refused' as const, refusal: { kind: 'pool_unavailable', templateId } as ControlRefusal }
-      }
-    }
 
-    // M58 R1: a hire creates a PERSON and then a seat for them. Two writes in one transaction, so
-    // a person with no seat is never left behind by a half-applied hire. The name is unique across
-    // the INSTALLATION now, which is why `uniquePersonName` reads every person and not this
-    // workspace's workers. `lifecycle`, `capabilities` and the rationale are facts about the
-    // person; `role` and `runtimeRoles` are facts about the seat.
-    const person = await tx.person.create({
-      data: {
-        name: uniquePersonName(await tx.person.findMany({ select: { name: true } }), template.name),
-        templateId,
-        capabilities,
-        selectionRationale: rationale,
-        lifecycle: temporary ? 'ephemeral' : 'project',
-      },
+      // A hire needs a department, and it is the one the ROLE belongs in (final review, Important
+      // 1) -- `functionalDepartmentFor`, the same function and the same arguments `intake.ts`'s
+      // staff step uses, so a project staffed from the catalogue and one grown a hire at a time
+      // file a backend specialist in the same place. This used to take the project's first
+      // department BY NAME, which is alphabetical chance the moment a project has two. The
+      // fallback is unchanged in effect: that function answers `Specialists` for a role its table
+      // does not recognise, which is the name this branch has always used.
+      const department = functionalDepartmentFor(template.role, runtimeRoles)
+      const team =
+        (await tx.team.findFirst({ where: { workspaceId, name: department }, select: { id: true } })) ??
+        (await tx.team.create({ data: { workspaceId, name: department }, select: { id: true } }))
+
+      // Task 4: seat the managed candidate `selectPoolPerson` chose before this transaction opened,
+      // instead of minting a new `Person` below. PERSON locked FIRST, directly by id -- this file's
+      // one lock order (`lockedSlave`'s own docstring above) -- since no `Slave` row names them yet
+      // for a join to lock through.
+      if (poolCandidateId !== null) {
+        await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${poolCandidateId} FOR UPDATE`
+        const pooled = await tx.person.findUnique({ where: { id: poolCandidateId } })
+        // Re-verified under the lock, exactly `lockedSlave`'s own reason: the candidate may have
+        // been released, or seated here by a concurrent hire that reached the workspace lock first,
+        // between `selectPoolPerson`'s read above and this one.
+        const busyHere =
+          pooled !== null &&
+          (await tx.slave.findFirst({
+            where: { personId: pooled.id, team: { workspaceId }, closedAt: null },
+            select: { id: true },
+          })) !== null
+        if (pooled !== null && pooled.releasedAt === null && !busyHere) {
+          const merged = [...new Set([...pooled.capabilities, ...capabilities])].toSorted()
+          // The rationale is written here exactly as it is for a brand-new hire (below): this pool
+          // person is NEW to this project, and "why they are here" is this call's own sentence, not
+          // whatever the pool held (nothing, today -- `syncPersonPool` never sets it) or whatever
+          // another project's earlier hire wrote. A worker ALREADY on this project instead goes
+          // through the `existing` reuse branch above, which never touches a rationale that is
+          // already true.
+          //
+          // The grant column moves with it (final review, Important 2): only what this hire asked
+          // for over and above the persona, so a supervisor hire made to close a genuine capability
+          // gap survives the next sync while the persona's own keys stay the persona's.
+          await tx.person.update({
+            where: { id: pooled.id },
+            data: {
+              capabilities: merged,
+              selectionRationale: rationale,
+              ...(pooled.poolSlot === null
+                ? {}
+                : {
+                    capabilityGrants: [
+                      ...new Set([...pooled.capabilityGrants, ...capabilityGrantDelta(asked, template.capabilityKeys)]),
+                    ].toSorted(),
+                  }),
+            },
+          })
+          const worker = await tx.slave.create({
+            data: { teamId: team.id, personId: pooled.id, role: template.role, runtimeRoles, engagementTaskId },
+          })
+          return { kind: 'created' as const, slaveId: worker.id, name: pooled.name, personId: pooled.id }
+        }
+        // The chosen candidate raced away. On the first attempt that is another "nothing usable,
+        // and reuse is ruled out" -- the sync/reselect below is bounded at one, so a raced
+        // candidate gets the same single retry a missing pool does rather than a special case.
+        if (!last) return { kind: 'needs_pool' as const }
+        // `requirePool` refuses outright rather than falling through to the unmanaged create below
+        // it was set to prevent; the CLI's on-demand path (`requirePool` unset) takes that fallback
+        // exactly as it did before this task.
+        if (opts.requirePool === true) {
+          return { kind: 'refused' as const, refusal: { kind: 'pool_unavailable', templateId } as ControlRefusal }
+        }
+      }
+
+      // M58 R1: a hire creates a PERSON and then a seat for them. Two writes in one transaction, so
+      // a person with no seat is never left behind by a half-applied hire. The name is unique across
+      // the INSTALLATION now, which is why `uniquePersonName` reads every person and not this
+      // workspace's workers. `lifecycle`, `capabilities` and the rationale are facts about the
+      // person; `role` and `runtimeRoles` are facts about the seat.
+      const person = await tx.person.create({
+        data: {
+          name: uniquePersonName(await tx.person.findMany({ select: { name: true } }), template.name),
+          templateId,
+          capabilities,
+          selectionRationale: rationale,
+          lifecycle: temporary ? 'ephemeral' : 'project',
+        },
+      })
+      const worker = await tx.slave.create({
+        data: { teamId: team.id, personId: person.id, role: template.role, runtimeRoles, engagementTaskId },
+      })
+      return { kind: 'created' as const, slaveId: worker.id, name: person.name, personId: person.id }
     })
-    const worker = await tx.slave.create({
-      data: { teamId: team.id, personId: person.id, role: template.role, runtimeRoles, engagementTaskId },
-    })
-    return { kind: 'created' as const, slaveId: worker.id, name: person.name, personId: person.id }
-  })
+
+  // Attempt one: no sync has run, and an existing seat wins here without one.
+  const first = await attempt(
+    firstSelection.ok ? firstSelection.value.personId : null,
+    firstSelection.ok ? null : firstSelection.error,
+    false,
+  )
+  // Attempt two, and there is no third: one sync, one reselect, one retry, then the refusal or the
+  // fallback. `last` is `true`, so this call cannot ask for another.
+  let outcome = first
+  if (first.kind === 'needs_pool') {
+    await syncPersonPool()
+    const again = await selectPoolPerson(templateId, workspaceId)
+    outcome = await attempt(again.ok ? again.value.personId : null, again.ok ? null : again.error, true)
+  }
+  // Unreachable: the only producer of `needs_pool` is guarded by `!last`, and the retry above
+  // passes `last: true`. Narrowed rather than asserted, so the compiler carries the proof.
+  if (outcome.kind === 'needs_pool') return err({ kind: 'pool_unavailable', templateId })
 
   if (outcome.kind === 'vanished') return err({ kind: 'slave_not_found', slaveId: outcome.slaveId })
   if (outcome.kind === 'refused') return err(outcome.refusal)
