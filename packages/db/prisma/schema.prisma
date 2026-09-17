@@ -286,6 +286,10 @@ model Person {
   releaseReason      String?
   /// M47 R6, moved from `Slave`: why this person is here, in one sentence.
   selectionRationale String?
+  /// Catalog Person Pool: which of the three managed slots (1, 2, or 3) this person occupies for
+  /// their template, or NULL for an ordinary unmanaged person. A non-null slot requires a non-null
+  /// templateId. The pair (templateId, poolSlot) is unique across all managed people.
+  poolSlot           Int?
   createdAt          DateTime       @default(now())
 
   template    SlaveTemplate?      @relation("HiredPersons", fields: [templateId], references: [id], onDelete: SetNull)
@@ -297,6 +301,7 @@ model Person {
   memories    Memory[]
 
   @@index([templateId])
+  @@unique([templateId, poolSlot])
 }
 
 /// M58 R3: whether a `PersonSkill` row ADDS a skill to the persona's default set or TAKES one out
