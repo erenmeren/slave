@@ -160,6 +160,50 @@ describe('runDaemon serving every project', () => {
     expect(text().split('daemon stopped')).toHaveLength(2)
   })
 
+  // Task 5, Important review finding: the print predicate ORed run/halt/plan/review/supervisor-
+  // decided, but never `unservedRoles` -- so a tick whose ONLY finding was a role no seat carries
+  // wrote nothing to stdout at all, on every tick, for as long as the board stayed in that state.
+  // An operator watching the daemon had no way to see a stuck board unless something ELSE
+  // happened on the same tick.
+  it('prints a JSON line naming the unserved role even when nothing else happened this tick', async (): Promise<void> => {
+    const id = await seed('Unstaffed Design Work')
+    const blocker = await prisma.task.create({
+      data: { workspaceId: id, title: 'Blocker', description: 'x', status: 'backlog', maxAttempts: 4 },
+    })
+    // `ready`, but its one dependency is not `done`+integrated, so `dependenciesDone` is false:
+    // not schedulable (`decide()` requires `dependenciesDone`) and not a Supervisor
+    // `ready_unstaffed` situation either (`isStaffableTask` requires it too) -- the one shape that
+    // reaches `LoadedWorld.unservedRoles` (which checks only `status === 'ready'`) without also
+    // tripping the `report.supervisor.decided > 0` branch this predicate already had.
+    await prisma.task.create({
+      data: {
+        workspaceId: id,
+        title: 'Needs a designer',
+        description: 'x',
+        status: 'ready',
+        requiredRole: 'design',
+        maxAttempts: 4,
+        dependencies: { create: [{ dependsOnTaskId: blocker.id }] },
+      },
+    })
+
+    const text = await start(id)
+    await until(() => text().includes('"unservedRoles"') && text().includes('"role":"design"'))
+
+    const line = text()
+      .split('\n')
+      .find((candidate) => candidate.includes('"unservedRoles"') && candidate.includes('"role":"design"'))
+    expect(line).toBeDefined()
+    const report = JSON.parse(line as string)
+    expect(report.unservedRoles).toEqual([{ role: 'design', tasks: 1 }])
+    // Nothing else on this tick: the line exists ONLY because of `unservedRoles`.
+    expect(report.started).toEqual([])
+    expect(report.halted).toBeNull()
+    expect(report.planningStarted).toBeNull()
+    expect(report.reviewsStarted).toEqual([])
+    expect(report.supervisor.decided).toBe(0)
+  })
+
   it('leaves no signal handler behind, so a second daemon in one process is not a leak', async (): Promise<void> => {
     const before = process.listenerCount('SIGTERM')
     await seed('Alpha')

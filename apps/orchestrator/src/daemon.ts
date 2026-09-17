@@ -192,7 +192,12 @@ export async function startWorkspaceLoop(deps: WorkspaceLoopDeps): Promise<Works
         report.reviewsStarted.length > 0 ||
         // A Supervisor decision is a change to the workspace nobody asked for -- an operator
         // reading the daemon's log must see the tick it happened on.
-        report.supervisor.decided > 0
+        report.supervisor.decided > 0 ||
+        // Task 5 (Important review finding): a role no seat carries is exactly the silent
+        // failure `unservedRoles` exists to surface (`world.ts`'s own doc comment) -- a board
+        // stuck on it trips none of the conditions above, tick after tick, and without this the
+        // predicate's own log would stay as silent as the scheduler it is reporting on.
+        report.unservedRoles.length > 0
       ) {
         process.stdout.write(`${JSON.stringify(report)}\n`)
       }
