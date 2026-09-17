@@ -70,6 +70,69 @@ describe('CAPABILITY_SEED', () => {
     expect(normaliseCapabilities(['critical css inlining'], CAPABILITY_SEED).keys).toEqual(['frontend.performance'])
   })
 
+  /**
+   * FINAL REVIEW, IMPORTANT 7. A reviewed alias set, added one at a time against the live
+   * catalogue's own unresolved values, for rows whose only stored spelling was a form the industry
+   * does not actually write. Every one is an EXACT alternative name for exactly one row -- a
+   * singular for a plural (`design system`), a spelling variant (`query optimisation`), or the
+   * standard term for a row whose label is a house phrasing (`secrets management` for "Secrets and
+   * credentials"). `normaliseCapabilities` itself is untouched: still exact key, exact label or
+   * exact synonym, still no substrings and no fuzzy matching.
+   *
+   * What is NOT here is the point. The live catalogue's 279 templates carry 4,003 distinct
+   * unresolved values, and only eight of them repeat at all -- `Performance Engineering`,
+   * `Performance Optimization`, `Pipeline Engineering`, `Business Integration`, `Content
+   * Operations`, `Risk Management Excellence`, `Cross-Framework Identity Federation`, `Advanced
+   * Live Commerce Operations` -- every one of which is a broad heading that could sit under three
+   * different rows or none. They stay unresolved, and the case below them says so.
+   */
+  it('resolves the reviewed final-review aliases, each to exactly one row', () => {
+    const expected: ReadonlyArray<readonly [string, string]> = [
+      // Not a synonym, and deliberately so: `database.migrations`' own KEY normalises to exactly
+      // this, so adding it would have been a dead entry. The case below this one is what said so.
+      ['database migrations', 'database.migrations'],
+      ['postgres', 'database.postgres'],
+      ['query optimisation', 'database.query-performance'],
+      ['query optimization', 'database.query-performance'],
+      ['design system', 'design.design-systems'],
+      ['user experience design', 'design.interaction'],
+      ['reference documentation', 'docs.api-reference'],
+      ['technical documentation', 'docs.technical-writing'],
+      ['developer documentation', 'docs.technical-writing'],
+      ['core web vitals', 'frontend.performance'],
+      ['unit testing', 'qa.test-automation'],
+      ['end-to-end testing', 'qa.test-automation'],
+      ['pull request review', 'review.code-review'],
+      ['dependency scanning', 'security.dependency-audit'],
+      ['secrets management', 'security.secrets'],
+    ]
+    for (const [text, key] of expected) {
+      expect(normaliseCapabilities([text], CAPABILITY_SEED).keys, text).toEqual([key])
+    }
+  })
+
+  // The aliases are for spellings that were MISSING, not for spellings already covered: a synonym
+  // normalising to its own row's key or label (or to a synonym beside it) is dead weight in a
+  // hand-maintained list, and the cross-row collision case above cannot catch it because the owner
+  // is the same row. `database.postgres` carried exactly one such entry before this pass -- the
+  // synonym `postgresql`, which is what its own LABEL already normalises to.
+  //
+  // The key and the label themselves are exempt: a key like `backend.performance` normalises to
+  // the same words as the label "Backend performance" by design, and neither is a hand-added
+  // alternative name somebody could have left behind.
+  it('carries no synonym a row already answers to through its key, its label or another synonym', () => {
+    for (const record of CAPABILITY_SEED) {
+      const covered = new Set([normaliseCapabilityText(record.key), normaliseCapabilityText(record.label)])
+      const dead: string[] = []
+      for (const synonym of record.synonyms) {
+        const text = normaliseCapabilityText(synonym)
+        if (covered.has(text)) dead.push(synonym)
+        else covered.add(text)
+      }
+      expect(dead, record.key).toEqual([])
+    }
+  })
+
   // Task 3: `normaliseCapabilities` stays exact-only. A broad or sentence-length phrase must stay
   // visibly unresolved rather than being guessed into a key an operator never reviewed.
   it('leaves broad or ambiguous phrases unresolved, never guessed into a key', () => {
@@ -79,6 +142,14 @@ describe('CAPABILITY_SEED', () => {
         'Modern Web Technologies',
         'Pipeline Engineering',
         'Business Integration',
+        // Final review, Important 7: the rest of the live catalogue's repeated unresolved values.
+        // Every one is a heading, not a capability, and the alias set above deliberately leaves
+        // them alone.
+        'Performance Engineering',
+        'Content Operations',
+        'Risk Management Excellence',
+        'Cross-Framework Identity Federation',
+        'Advanced Live Commerce Operations',
         'I have spent my career obsessing over shipping fast, reliable software for teams of every size',
       ],
       CAPABILITY_SEED,
@@ -89,6 +160,11 @@ describe('CAPABILITY_SEED', () => {
       'Modern Web Technologies',
       'Pipeline Engineering',
       'Business Integration',
+      'Performance Engineering',
+      'Content Operations',
+      'Risk Management Excellence',
+      'Cross-Framework Identity Federation',
+      'Advanced Live Commerce Operations',
       'I have spent my career obsessing over shipping fast, reliable software for teams of every size',
     ])
   })
