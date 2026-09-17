@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -383,6 +384,8 @@ describe('concludePlanning', () => {
     const fixture = await seed('Ship the checkout redesign')
     repos.push(fixture.repoPath)
     await addManager(fixture.teamId)
+    // Task 5: the plan-graph fixture writes every task with `role: 'backend'`.
+    await addBackendSlave(fixture.teamId)
 
     const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
     expect(runId).not.toBeNull()
@@ -446,6 +449,7 @@ describe('concludePlanning', () => {
     const fixture = await seed('Ship the checkout redesign', user.id)
     repos.push(fixture.repoPath)
     await addManager(fixture.teamId)
+    await addBackendSlave(fixture.teamId)
 
     const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
     expect(runId).not.toBeNull()
@@ -460,6 +464,7 @@ describe('concludePlanning', () => {
     const fixture = await seed('Ship the checkout redesign')
     repos.push(fixture.repoPath)
     await addManager(fixture.teamId)
+    await addBackendSlave(fixture.teamId)
 
     const first = await dispatchPlanning(depsFor(fixture.workspaceId))
     expect(first).not.toBeNull()
@@ -503,6 +508,7 @@ describe('concludePlanning', () => {
     const fixture = await seed('Ship the checkout redesign')
     repos.push(fixture.repoPath)
     const managerId = await addManager(fixture.teamId)
+    await addBackendSlave(fixture.teamId)
 
     const now = new Date()
     const run = await prisma.slaveRun.create({
@@ -621,9 +627,24 @@ describe('concludePlanning', () => {
   async function concludeGraph(
     fixture: Fixture,
     graph: unknown,
-    options: { readonly shownRunbook?: string } = {},
+    // Task 5: every task this file hands to `concludeGraph` names `role: 'backend'` unless it
+    // says otherwise, or derives one from a capability -- `security.application` derives
+    // `security`. `roles` stages exactly the seats conclusion-time validation now demands, so a
+    // case testing something else entirely does not have to know that staffing exists at all.
+    // `[]` opts a case OUT, for the handful that are testing the refusal itself.
+    options: { readonly shownRunbook?: string; readonly roles?: readonly string[] } = {},
   ): Promise<string> {
     const managerId = await addManager(fixture.teamId)
+    for (const role of options.roles ?? ['backend']) {
+      await prisma.slave.create({
+        data: {
+          teamId: fixture.teamId,
+          role,
+          runtimeRoles: [role],
+          personId: (await prisma.person.create({ data: { name: `Staffed-${role}-${randomUUID()}` } })).id,
+        },
+      })
+    }
     const now = new Date()
     const run = await prisma.slaveRun.create({
       data: { slaveId: managerId, kind: 'planning', status: 'succeeded', startedAt: now, terminalAt: now, endedAt: now },
@@ -664,17 +685,21 @@ describe('concludePlanning', () => {
     await syncCapabilityTaxonomy()
     const fixture = await seed('Ship the checkout redesign')
     repos.push(fixture.repoPath)
-    await concludeGraph(fixture, {
-      tasks: [
-        {
-          key: 'a',
-          title: 'Harden the login',
-          description: 'Review the authentication path.',
-          capabilities: ['security.application'],
-          dependsOn: [],
-        },
-      ],
-    })
+    await concludeGraph(
+      fixture,
+      {
+        tasks: [
+          {
+            key: 'a',
+            title: 'Harden the login',
+            description: 'Review the authentication path.',
+            capabilities: ['security.application'],
+            dependsOn: [],
+          },
+        ],
+      },
+      { roles: ['security'] },
+    )
 
     const task = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
     expect(task.requiredCapabilities).toEqual(['security.application'])
@@ -770,17 +795,21 @@ describe('concludePlanning', () => {
     await syncCapabilityTaxonomy()
     const fixture = await seed('Ship the checkout redesign')
     repos.push(fixture.repoPath)
-    await concludeGraph(fixture, {
-      tasks: [
-        {
-          key: 'a',
-          title: 'Harden the login',
-          description: 'Review the authentication path.',
-          capabilities: ['nope.nothing', 'security.application'],
-          dependsOn: [],
-        },
-      ],
-    })
+    await concludeGraph(
+      fixture,
+      {
+        tasks: [
+          {
+            key: 'a',
+            title: 'Harden the login',
+            description: 'Review the authentication path.',
+            capabilities: ['nope.nothing', 'security.application'],
+            dependsOn: [],
+          },
+        ],
+      },
+      { roles: ['security'] },
+    )
 
     const task = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
     expect(task.requiredCapabilities).toEqual(['security.application'])
@@ -789,6 +818,163 @@ describe('concludePlanning', () => {
       where: { workspaceId: fixture.workspaceId, type: 'workspace_plan_created' },
     })
     expect((event.payload as { droppedCapabilities?: string[] }).droppedCapabilities).toEqual(['nope.nothing'])
+  })
+
+  // Task 5: a board may never be created with a role nobody on the project can serve. Prompt
+  // guidance (`runContext.ts`'s `rolesSection`) is not enforcement -- a model can still ignore it
+  // and write a role no seat carries -- so conclusion re-checks LIVE staffing before a single Task
+  // row is written.
+  describe('Task 5: a role no staffed seat carries', () => {
+    it('fails the run and leaves the board empty when one task names an unstaffed role', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      // `roles: []`: only the manager is staffed -- deliberately no `backend` seat, so the task
+      // below names a role nobody on this project can serve.
+      const runId = await concludeGraph(
+        fixture,
+        { tasks: [{ key: 'a', title: 'Write the feature core', description: 'd', role: 'backend', dependsOn: [] }] },
+        { roles: [] },
+      )
+
+      expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+      expect(await prisma.taskDependency.count()).toBe(0)
+      const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+      expect(run.status).toBe('failed')
+      expect(
+        await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'workspace_plan_created' } }),
+      ).toBe(0)
+    })
+
+    it('names the first offending task and its role in the failure reason', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      const runId = await concludeGraph(
+        fixture,
+        {
+          tasks: [
+            { key: 'core', title: 'Write the feature core', description: 'd', role: 'backend', dependsOn: [] },
+            { key: 'palette', title: 'Pick a palette', description: 'd', role: 'design', dependsOn: [] },
+          ],
+        },
+        // `backend` staffed, `design` is not: the SECOND task is the first offending one, and the
+        // reason has to name IT, not the one that would have been fine.
+        { roles: ['backend'] },
+      )
+
+      const failures = await prisma.executionEvent.findMany({ where: { runId, type: 'run_failed' } })
+      expect(failures).toHaveLength(1)
+      const reason = (failures[0]?.payload as { reason: string }).reason
+      // The SECOND task's own key, title and role -- not the first one, which was fine.
+      expect(reason).toContain('"palette"')
+      expect(reason).toContain('Pick a palette')
+      expect(reason).toContain('role "design"')
+      expect(reason).not.toContain('"core"')
+    })
+
+    it('passes when the role is carried only by a BUSY seat, which is staffed and merely occupied', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      const managerId = await addManager(fixture.teamId)
+      const busy = await prisma.slave.create({
+        data: {
+          teamId: fixture.teamId,
+          role: 'backend',
+          runtimeRoles: ['backend'],
+          personId: (await prisma.person.create({ data: { name: `Busy ${randomUUID()}` } })).id,
+        },
+      })
+      // Non-terminal: this seat is mid-run, not idle -- `staffedRolesForWorkspace` does not filter
+      // on busyness, only on `closedAt`/`releasedAt`, the same distinction `world.ts`'s own
+      // `unservedRoles` makes for the tick report.
+      await prisma.slaveRun.create({ data: { slaveId: busy.id, kind: 'implementation', status: 'working' } })
+
+      const now = new Date()
+      const run = await prisma.slaveRun.create({
+        data: { slaveId: managerId, kind: 'planning', status: 'succeeded', startedAt: now, terminalAt: now, endedAt: now },
+      })
+      await prisma.executionEvent.create({
+        data: {
+          type: 'run_output',
+          workspaceId: fixture.workspaceId,
+          slaveId: managerId,
+          runId: run.id,
+          actor: 'slave',
+          payload: {
+            text: JSON.stringify({
+              tasks: [{ key: 'a', title: 'Write the feature core', description: 'd', role: 'backend', dependsOn: [] }],
+            }),
+          },
+        },
+      })
+
+      await concludePlanning(brandRunId(run.id))
+
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('succeeded')
+      expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(1)
+    })
+
+    it('fails when the only seat holding the role is CLOSED or its Person RELEASED', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      const closedPerson = await prisma.person.create({ data: { name: `Closed ${randomUUID()}` } })
+      await prisma.slave.create({
+        data: { teamId: fixture.teamId, role: 'backend', runtimeRoles: ['backend'], personId: closedPerson.id, closedAt: new Date() },
+      })
+      const releasedPerson = await prisma.person.create({ data: { name: `Released ${randomUUID()}`, releasedAt: new Date() } })
+      await prisma.slave.create({
+        data: { teamId: fixture.teamId, role: 'design', runtimeRoles: ['design'], personId: releasedPerson.id },
+      })
+
+      const runId = await concludeGraph(
+        fixture,
+        { tasks: [{ key: 'a', title: 'Write the feature core', description: 'd', role: 'backend', dependsOn: [] }] },
+        { roles: [] },
+      )
+
+      expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+      const failures = await prisma.executionEvent.findMany({ where: { runId, type: 'run_failed' } })
+      expect(failures).toHaveLength(1)
+      expect((failures[0]?.payload as { reason: string }).reason).toContain('"backend"')
+    })
+
+    // M40 erratum-style live reading (spec: "conclusion-time live staffing wins"): the prompt this
+    // run was actually sent named no roles at all -- the manifest is silent -- and by the time it
+    // concludes a seat has been hired that serves the role it wrote. Conclusion must not judge the
+    // graph by what the PROMPT said; only the database at conclusion time counts.
+    it('honors staffing as it stands at CONCLUSION, not as it stood when the prompt was built', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      const managerId = await addManager(fixture.teamId)
+
+      const now = new Date()
+      const run = await prisma.slaveRun.create({
+        data: { slaveId: managerId, kind: 'planning', status: 'succeeded', startedAt: now, terminalAt: now, endedAt: now },
+      })
+      await prisma.executionEvent.create({
+        data: {
+          type: 'run_output',
+          workspaceId: fixture.workspaceId,
+          slaveId: managerId,
+          runId: run.id,
+          actor: 'slave',
+          payload: {
+            text: JSON.stringify({
+              tasks: [{ key: 'a', title: 'Write the feature core', description: 'd', role: 'backend', dependsOn: [] }],
+            }),
+          },
+        },
+      })
+
+      // Nobody carried `backend` when this run was dispatched -- the hire below happens AFTER the
+      // run's own output was written, simulating a hire that landed while the run was thinking.
+      await addBackendSlave(fixture.teamId)
+
+      await concludePlanning(brandRunId(run.id))
+
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('succeeded')
+      const task = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+      expect(task.requiredRole).toBe('backend')
+    })
   })
 
   it('(e) the daemon-shape follow-through: a further tick starts an implementation run for the root task', async (): Promise<void> => {
@@ -1042,6 +1228,9 @@ describe('a re-plan', () => {
     const fixture = await seed(null)
     repos.push(fixture.repoPath)
     await addManager(fixture.teamId)
+    // Task 5: the real plan-graph fixture below writes every task with `role: 'backend'`, and
+    // conclusion now refuses a board naming a role nobody can serve.
+    await addBackendSlave(fixture.teamId)
     const set = await setGoal(fixture.workspaceId, V1)
     expect(set.ok).toBe(true)
 
@@ -1061,6 +1250,10 @@ describe('a re-plan', () => {
     const fixture = await seed(null)
     repos.push(fixture.repoPath)
     await addManager(fixture.teamId)
+    // Task 5: every re-plan delta below adds a `role: 'backend'` task, and conclusion now refuses
+    // a board naming a role nobody can serve -- staffed here so the tests exercising everything
+    // ELSE about a re-plan do not each have to know that staffing exists.
+    await addBackendSlave(fixture.teamId)
     expect((await setGoal(fixture.workspaceId, V1)).ok).toBe(true)
     await prisma.task.create({
       data: {
@@ -1856,6 +2049,68 @@ describe('a re-plan', () => {
     expect(
       await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' } }),
     ).toBe(0)
+  })
+
+  // Task 5, on the delta path: the same hard boundary a first plan is held to, and atomic in the
+  // same way -- a bad delta must not land its additions while dropping its cancellations, or the
+  // reverse. `applyDelta` returns the failure BEFORE its own transaction, so nothing here is a
+  // partial application.
+  it('fails the run and writes no additions, cancellations or proposals when an added task names an unstaffed role', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    // `boardAt` staffs `backend` only -- `design` is not a role anybody on this project carries.
+    const runId = await seedConcludedReplan(
+      fixture,
+      `{"add":[{"key":"palette","title":"Pick a palette","description":"d","role":"design","dependsOn":[]}],"cancel":["${existing.id}"],"keep":[]}`,
+      [existing.id],
+    )
+
+    await concludePlanning(brandRunId(runId))
+
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+    expect(run.status).toBe('failed')
+    const failures = await prisma.executionEvent.findMany({ where: { runId, type: 'run_failed' } })
+    expect(failures).toHaveLength(1)
+    const reason = (failures[0]?.payload as { reason: string }).reason
+    expect(reason).toContain('"palette"')
+    expect(reason).toContain('Pick a palette')
+    expect(reason).toContain('role "design"')
+
+    // Atomic: no addition landed, the cancellation the delta asked for was never proposed, and the
+    // task it would have cancelled is untouched.
+    expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(1)
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: existing.id } })).status).toBe('backlog')
+    expect(await prisma.supervisorDecision.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+    expect(
+      await prisma.executionEvent.count({ where: { workspaceId: fixture.workspaceId, type: 'workspace_replanned' } }),
+    ).toBe(0)
+  })
+
+  it('passes a delta addition whose role is carried only by a BUSY seat', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    const busy = await prisma.slave.create({
+      data: {
+        teamId: fixture.teamId,
+        role: 'design',
+        runtimeRoles: ['design'],
+        personId: (await prisma.person.create({ data: { name: `Busy ${randomUUID()}` } })).id,
+      },
+    })
+    await prisma.slaveRun.create({ data: { slaveId: busy.id, kind: 'implementation', status: 'working' } })
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const runId = await seedConcludedReplan(
+      fixture,
+      `{"add":[{"key":"palette","title":"Pick a palette","description":"d","role":"design","dependsOn":[]}],"cancel":[],"keep":["${existing.id}"]}`,
+      [existing.id],
+    )
+
+    await concludePlanning(brandRunId(runId))
+
+    expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })).status).toBe('succeeded')
+    const added = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId, title: 'Pick a palette' } })
+    expect(added.requiredRole).toBe('design')
   })
 
   it('fails the run and changes no board when the re-plan output carries no valid delta', async (): Promise<void> => {

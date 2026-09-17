@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
@@ -628,6 +628,7 @@ describe('buildRunContext', () => {
       expect(manifest.sections.map((section) => section.kind)).toEqual([
         'profile',
         'planning_goal',
+        'roles',
         'capabilities',
         'handoff_protocol',
       ])
@@ -663,6 +664,74 @@ describe('buildRunContext', () => {
       expect(manifest.sections).toContainEqual({ kind: 'capabilities', keys: expect.any(Array), capped: false })
       // M48 R4: the process section is the one that now sits last, between the keys and the trailer.
       expect(manifest.sections.at(-1)).toEqual({ kind: 'handoff_protocol' })
+    })
+
+    // Measured on a real project: the prompt named the keys and then said a task may carry a
+    // "role" instead, without saying what a role IS. The plan asked for `product`, `frontend` and
+    // `qa` -- read off the key prefixes -- while every seat carried a word from the persona
+    // catalogue, so thirteen of fifteen tasks matched nobody and never started.
+    it('tells a planning run which roles this team actually holds, above the keys', async () => {
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { goal: 'Ship the checkout redesign' } })
+      await prisma.slave.create({
+        data: {
+          teamId: fixture.teamId,
+          role: 'Product Lead',
+          runtimeRoles: ['product', 'reviewer'],
+          // Unique per run: `Person.name` is unique installation-wide and this file shares a test
+          // database with every other integration file, so a fixed name is a collision waiting for
+          // the one ordering that runs them together.
+          personId: (await prisma.person.create({ data: { name: `Maya ${randomUUID()}` } })).id,
+        },
+      })
+      const planningRun = await prisma.slaveRun.create({
+        data: { slaveId: fixture.slaveId, status: 'starting', kind: 'planning' },
+      })
+
+      const { prompt, manifest } = await buildRunContext({
+        runId: planningRun.id,
+        kind: 'planning',
+        slaveId: fixture.slaveId,
+        workspaceId: fixture.workspaceId,
+        taskId: null,
+        worktreePath: null,
+        provider: 'claude_code',
+        skillRoots: fixture.skillRoots,
+      })
+
+      // Every seat's roles, deduplicated and sorted -- the planner is shown the team, not one seat.
+      expect(manifest.sections).toContainEqual({ kind: 'roles', roles: ['backend', 'product', 'reviewer'] })
+      expect(prompt).toContain('ROLES YOU MAY ASSIGN')
+      for (const role of ['- backend', '- product', '- reviewer']) expect(prompt).toContain(role)
+      expect(prompt.indexOf('ROLES YOU MAY ASSIGN')).toBeLessThan(prompt.indexOf(PLANNING_GRAPH_INSTRUCTIONS))
+      // The three literals the fake CLI routes on: this section must not misroute a planning run
+      // to the review or re-plan fixture, the same constraint `capabilities` is held to.
+      const section = prompt.slice(prompt.indexOf('ROLES YOU MAY ASSIGN'), prompt.indexOf('CAPABILITIES YOU MAY ASK FOR'))
+      for (const literal of ['"verdict"', '"replan"', '"task graph"']) expect(section).not.toContain(literal)
+    })
+
+    it('leaves the section out for a project whose seats hold no roles at all', async () => {
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { goal: 'Ship the checkout redesign' } })
+      // Not a list of nothing: a project with no granted roles renders exactly what it rendered
+      // before this section existed, and `dispatchPlanning` refuses a project with no seats long
+      // before a prompt is built anyway.
+      await prisma.slave.updateMany({ where: { teamId: fixture.teamId }, data: { runtimeRoles: [] } })
+      const planningRun = await prisma.slaveRun.create({
+        data: { slaveId: fixture.slaveId, status: 'starting', kind: 'planning' },
+      })
+
+      const { prompt, manifest } = await buildRunContext({
+        runId: planningRun.id,
+        kind: 'planning',
+        slaveId: fixture.slaveId,
+        workspaceId: fixture.workspaceId,
+        taskId: null,
+        worktreePath: null,
+        provider: 'claude_code',
+        skillRoots: fixture.skillRoots,
+      })
+
+      expect(prompt).not.toContain('ROLES YOU MAY ASSIGN')
+      expect(manifest.sections.some((section) => section.kind === 'roles')).toBe(false)
     })
   })
   describe('a re-plan run', () => {
@@ -755,6 +824,9 @@ describe('buildRunContext', () => {
         'profile',
         'planning_goal',
         'replan',
+        // A delta is given the team's roles for the same reason a first plan is: it writes tasks,
+        // and a task whose role matches no seat is dispatched to nobody either way.
+        'roles',
         'capabilities',
         'handoff_protocol',
       ])

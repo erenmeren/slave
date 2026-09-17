@@ -27,6 +27,7 @@ import { checkpointRunFiles, runTokenHash, type SlaveRuntimeAdapter, type RunHan
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
+import { staffedRolesForWorkspace } from './staffing.js'
 import { concludeReplan, replanIntent, replanSectionOf, runbookSectionOf, type ReplanIntent } from './replan.js'
 import { buildRunContext } from './runContext.js'
 import { joinRunOutput } from './runOutput.js'
@@ -175,6 +176,25 @@ export async function concludePlanning(runId: RunId): Promise<void> {
     // which is the same reason `Task.maxAttempts` is a column rather than a lookup.
     const stageRetry = planTask.stage === undefined ? undefined : stageByKey.get(planTask.stage)?.retry
     derived.push({ planTask, keys, requiredRole, maxAttempts: stageRetry?.maxAttempts ?? workspace.maxAttempts })
+  }
+
+  // Task 5: a board may never be created with a role nobody on the project can serve. The prompt
+  // asked the planner to name one of the team's own roles (`runContext.ts`'s `rolesSection`), but
+  // prompt guidance is not enforcement -- a model can still ignore it -- so this is the hard
+  // boundary: read LIVE, at conclusion, through the exact same query the prompt was built from
+  // (`staffedRolesForWorkspace`), never off the manifest the prompt recorded. If staffing changed
+  // between dispatch and conclusion -- a hire, a release, a seat closed -- the live reading wins,
+  // deliberately: the board is about to be given to whoever holds a role NOW, not to whoever held
+  // it minutes ago when the prompt went out.
+  const staffedRoles = new Set(await staffedRolesForWorkspace(workspaceId))
+  const unstaffed = firstUnstaffedTask(derived, staffedRoles)
+  if (unstaffed !== null) {
+    await failPlanningRun(
+      run,
+      workspaceId,
+      `planning run produced no valid task graph: task "${unstaffed.key}" ("${unstaffed.title}") asks for role "${unstaffed.role}", which no staffed seat on this project can serve`,
+    )
+    return
   }
 
   const created = await prisma.$transaction(async (tx) => {
@@ -360,6 +380,26 @@ export function roleOfFirst(keys: readonly string[], taxonomy: readonly Capabili
   for (const key of keys) {
     const record = index.get(key)
     if (record !== undefined) return record.role
+  }
+  return null
+}
+
+/**
+ * Task 5: the first derived task (in the order the plan named them) whose role no staffed seat
+ * carries, or `null` when every one is served.
+ *
+ * Shared with `replan.ts`'s addition validation for `roleOfFirst`'s own reason: a first plan and a
+ * delta must be held to the same staffing question, or a graph the prompt was told is fine could
+ * be refused at conclusion, and the reverse. Generic only in the two fields it reads -- `key` and
+ * `title` are what a bounded failure reason names -- so it reads a first-plan's `derived` entries
+ * and a delta's `derived` entries alike without either module importing the other's plan-task type.
+ */
+export function firstUnstaffedTask<T extends { readonly key: string; readonly title: string }>(
+  derived: readonly { readonly planTask: T; readonly requiredRole: string }[],
+  staffedRoles: ReadonlySet<string>,
+): { readonly key: string; readonly title: string; readonly role: string } | null {
+  for (const { planTask, requiredRole } of derived) {
+    if (!staffedRoles.has(requiredRole)) return { key: planTask.key, title: planTask.title, role: requiredRole }
   }
   return null
 }

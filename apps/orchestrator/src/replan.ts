@@ -27,8 +27,9 @@ import { appendEvent } from '@slave-of-ai/events'
 // the same way or the board would hold two kinds of task. The import direction closes a cycle with
 // `planning.ts` -- the same shape `planning.ts` and `tick.ts` already have, and safe for the same
 // reason: both are hoisted function declarations, called long after either module is evaluated.
-import { adherenceOf, normaliseCapabilitiesStrict, roleOfFirst } from './planning.js'
+import { adherenceOf, firstUnstaffedTask, normaliseCapabilitiesStrict, roleOfFirst } from './planning.js'
 import { joinRunOutput } from './runOutput.js'
+import { staffedRolesForWorkspace } from './staffing.js'
 
 /** The `replan` entry of a run's recorded manifest -- the only thing that tells a re-plan run from
  *  a first-plan run, since both are `kind: 'planning'` (spec erratum E2/E4). */
@@ -652,6 +653,22 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
       // runbook edited later must not move the budget of work already on the board.
       const stageRetry = planTask.stage === undefined ? undefined : stageByKey.get(planTask.stage)?.retry
       derived.push({ planTask, keys, requiredRole, maxAttempts: stageRetry?.maxAttempts ?? workspace.maxAttempts })
+    }
+
+    // Task 5, on the delta path: the same hard boundary `concludePlanning` enforces on a first
+    // plan, and through the same live query -- a re-plan writes Task rows exactly as a first plan
+    // does, and a role no seat can serve is just as unschedulable whichever path created it. Before
+    // the transaction, so a bad delta is atomic failure: no additions, no cancellation proposals, no
+    // dependencies, no events.
+    const staffedRoles = new Set(await staffedRolesForWorkspace(workspaceId))
+    const unstaffed = firstUnstaffedTask(derived, staffedRoles)
+    if (unstaffed !== null) {
+      return {
+        ok: false,
+        reason:
+          `planning run produced no valid re-plan delta: added task "${unstaffed.key}" ` +
+          `("${unstaffed.title}") asks for role "${unstaffed.role}", which no staffed seat on this project can serve`,
+      }
     }
 
     const created = await prisma.$transaction(async (tx) => {

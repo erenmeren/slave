@@ -82,6 +82,10 @@ export interface TickReport {
   readonly started: readonly RunId[]
   readonly halted: string | null
   readonly skippedNoRole: number
+  /** Roles the board is waiting on that no seat carries (`LoadedWorld.unservedRoles`). Empty on a
+   *  healthy board; anything here is work that cannot be given to anybody, which is otherwise
+   *  indistinguishable in this report from a board with nothing to do. */
+  readonly unservedRoles: readonly { readonly role: string; readonly tasks: number }[]
   /** The planning run this tick started, or `null` when none did (M8b). */
   readonly planningStarted: RunId | null
   readonly reviewsStarted: readonly RunId[]
@@ -234,6 +238,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
       started: [],
       halted: null,
       skippedNoRole: 0,
+      unservedRoles: [],
       planningStarted: null,
       reviewsStarted: [],
       skipped: 'archived',
@@ -241,7 +246,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
     }
   }
 
-  const { world, skippedNoRole, statsSnapshot } = await loadWorld(deps.workspaceId)
+  const { world, skippedNoRole, unservedRoles, statsSnapshot } = await loadWorld(deps.workspaceId)
   const commands = decide(world)
 
   const halt = commands.find((command) => command.kind === 'halt')
@@ -275,6 +280,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
       started: [],
       halted: halt.reason,
       skippedNoRole,
+      unservedRoles,
       planningStarted: null,
       reviewsStarted: [],
       skipped: null,
@@ -347,7 +353,7 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   // a merge landed above all remove situations it would otherwise have decided about.
   const supervisor = await superviseQuietly(deps, statsSnapshot)
 
-  return { started, halted: null, skippedNoRole, planningStarted, reviewsStarted, skipped: null, supervisor }
+  return { started, halted: null, skippedNoRole, unservedRoles, planningStarted, reviewsStarted, skipped: null, supervisor }
 }
 
 /**
