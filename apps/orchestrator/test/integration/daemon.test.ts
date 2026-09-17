@@ -39,8 +39,11 @@ describe('runDaemon serving every project', () => {
 
   beforeEach(async (): Promise<void> => {
     resetTickObservation()
+    // `SlaveTemplate` and `Person` are added for Catalog Person Pool (Task 2): no other test in
+    // this file touches either, so truncating both here alongside everything already emptied
+    // costs nothing and gives the startup-hook tests below a clean pool to reconcile into.
     await prisma.$executeRawUnsafe(
-      'TRUNCATE TABLE "ExecutionEvent", "IntakeMessage", "Intake", "GoalVersion", "Task", "Slave", "Team", "Workspace" RESTART IDENTITY CASCADE',
+      'TRUNCATE TABLE "ExecutionEvent", "IntakeMessage", "Intake", "GoalVersion", "Task", "Slave", "Team", "Workspace", "Person", "SlaveTemplate" RESTART IDENTITY CASCADE',
     )
   })
 
@@ -90,6 +93,23 @@ describe('runDaemon serving every project', () => {
   it('starts with NO project at all -- a fresh install is not an error any more', async (): Promise<void> => {
     const text = await start('all')
     expect(text()).toContain('serving 0 projects')
+  })
+
+  // Catalog Person Pool (Task 2): the sync runs once, before the first serving line, so every
+  // active template already has its three managed people by the time any project is served.
+  it('runs the person pool sync before serving any project', async (): Promise<void> => {
+    const activeTemplate = await prisma.slaveTemplate.create({
+      data: { name: 'Daemon Startup Persona', role: 'backend', description: 'x', active: true, capabilityKeys: ['backend.services'] },
+    })
+    const inactiveTemplate = await prisma.slaveTemplate.create({
+      data: { name: 'Daemon Startup Inert', role: 'backend', description: 'x', active: false, capabilityKeys: [] },
+    })
+
+    await start('all')
+
+    const managed = await prisma.person.findMany({ where: { templateId: activeTemplate.id, poolSlot: { not: null } } })
+    expect(managed).toHaveLength(3)
+    expect(await prisma.person.count({ where: { templateId: inactiveTemplate.id } })).toBe(0)
   })
 
   it('picks up a project created after it started, within one discovery period', async (): Promise<void> => {

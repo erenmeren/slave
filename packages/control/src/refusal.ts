@@ -484,6 +484,16 @@ export type ControlRefusal =
       readonly repository: string
       readonly workspaceId: string
     }
+  /**
+   * Catalog Person Pool (Task 2): `selectPoolPerson` was asked for a template that does not exist
+   * or is not active, or found none of that template's managed people free -- every one is
+   * released, or every one already holds an open seat on the target workspace. One `kind` for all
+   * three, the `broker_refused` precedent (M52 R3 erratum E5): the caller is choosing among a
+   * template's managed pool and "there is nobody in it right now" is one fact regardless of which
+   * of those made it true, and `templateId` is what an operator acts on -- `template activate`,
+   * `person sync-pool`, or `person show` on whoever already holds the seats.
+   */
+  | { readonly kind: 'pool_unavailable'; readonly templateId: string }
 
 /**
  * The word a person reads for `live_runs`'s `entity` (M27 final review, Important finding 3).
@@ -797,6 +807,11 @@ export function refusalText(refusal: ControlRefusal): string {
       return (
         `${refusal.repository} on ${EXTERNAL_SOURCE_LABEL[refusal.source]} is already mapped to a project; ` +
         `unmap it there first with: triggers unmap --source ${refusal.source} --repository ${refusal.repository}`
+      )
+    case 'pool_unavailable':
+      return (
+        `template ${refusal.templateId} has nobody free in its pool: it may be inactive, every managed ` +
+        'person may be released, or every one may already hold a seat on this project'
       )
   }
 }

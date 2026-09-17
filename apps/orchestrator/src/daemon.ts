@@ -1,5 +1,5 @@
 import { hostname } from 'node:os'
-import { describeSync, drainIntakeCalls, drainModelCalls, syncSkillCatalog, tickIntakes, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
+import { describeSync, drainIntakeCalls, drainModelCalls, syncPersonPool, syncSkillCatalog, tickIntakes, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { BROKER_TIMEOUT_MS, SUPERVISOR_DEFAULT_MODEL, workspaceId as brandWorkspaceId, type WorkspaceId } from '@slave-of-ai/domain'
 import { subscribeEvents, type EventSubscription } from '@slave-of-ai/events'
@@ -391,6 +391,15 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
       `[daemon] skill catalog sync failed: ${error instanceof Error ? error.message : String(error)}\n`,
     )
   }
+
+  // Catalog Person Pool (Task 2): once per process, before the first project is served, and NOT
+  // wrapped in a try/catch like the skill sync above it. A skill directory the host cannot read
+  // leaves an ordinary host with an empty catalog; a person pool this daemon cannot finish
+  // reconciling leaves a template staffable with fewer than three managed people underneath it --
+  // a fact nothing else would notice or report. The brief is explicit: a hook failure here must
+  // fail daemon startup loudly rather than silently continue with a partial pool, so the throw is
+  // left to propagate out of `runDaemon` exactly as it arrives.
+  await syncPersonPool()
 
   const following = deps.workspaceIds === 'all'
   const loops = new Map<string, WorkspaceLoop>()

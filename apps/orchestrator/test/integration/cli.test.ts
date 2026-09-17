@@ -3636,6 +3636,38 @@ describe('the orchestrator CLI', () => {
       expect(text).toContain('NOTHING IMPORTED IS')
       expect(text).toContain('a WARNING on stderr')
     })
+
+    // Catalog Person Pool Task 2: a real (non-dry-run) import can leave a template active --
+    // freshly, via `--activate`, or because it re-imported one that already was -- and either way
+    // the pool sync has to run so that template's three managed people exist before anything can be
+    // staffed off it.
+    it('runs the person pool sync after a non-dry-run import and prints its report', async (): Promise<void> => {
+      const result = await runCli(['import-catalog', '--dir', catalogDir(), '--activate'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('pool synced: 1 active template')
+      expect(result.stdout).toContain('3 created, 0 updated, 0 unchanged')
+      const row = await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'CLI Core Builder' } })
+      const managed = await prisma.person.findMany({ where: { templateId: row.id, poolSlot: { not: null } } })
+      expect(managed).toHaveLength(3)
+    })
+
+    it('does not run the sync for an import that leaves the row inactive: nothing to reconcile', async (): Promise<void> => {
+      const result = await runCli(['import-catalog', '--dir', catalogDir()])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('pool synced: 0 active templates')
+      expect(await prisma.person.count()).toBe(0)
+    })
+
+    it('a dry run writes no people at all: the sync never runs', async (): Promise<void> => {
+      const result = await runCli(['import-catalog', '--dir', catalogDir(), '--activate', '--dry-run'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).not.toContain('pool synced')
+      expect(await prisma.slaveTemplate.count()).toBe(0)
+      expect(await prisma.person.count()).toBe(0)
+    })
   })
 
   // M55 R7/R10: the four verbs a person types at one table, and the three flags a person passes to
@@ -3852,6 +3884,84 @@ describe('the orchestrator CLI', () => {
 
       expect(result.code).not.toBe(0)
       expect(result.stderr).toContain('template takes list, activate, deactivate or duplicates')
+    })
+
+    // Catalog Person Pool Task 2: activating is the moment a template's three managed people need
+    // to exist, so `template activate` runs the same sync `person sync-pool` runs by hand.
+    it('`template activate` runs the person pool sync and reports it', async (): Promise<void> => {
+      const id = await template('M60 Newly Activated', false)
+
+      const result = await runCli(['template', 'activate', '--template', id])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('is now active')
+      expect(result.stdout).toContain('pool synced: 1 active template')
+      expect(result.stdout).toContain('3 created, 0 updated, 0 unchanged')
+      const managed = await prisma.person.findMany({ where: { templateId: id, poolSlot: { not: null } } })
+      expect(managed).toHaveLength(3)
+    })
+
+    it('`template deactivate` never runs the sync: deactivation only changes activation', async (): Promise<void> => {
+      const id = await template('M60 Going Inactive', true)
+      await runCli(['template', 'activate', '--template', id]) // synced once while active
+      const before = await prisma.person.count({ where: { templateId: id, poolSlot: { not: null } } })
+
+      const result = await runCli(['template', 'deactivate', '--template', id])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).not.toContain('pool synced')
+      // Nobody was deleted or released: the three managed rows from the earlier activation stand.
+      expect(await prisma.person.count({ where: { templateId: id, poolSlot: { not: null } } })).toBe(before)
+      expect(before).toBe(3)
+    })
+  })
+
+  // Catalog Person Pool Task 2: the CLI verb an operator runs by hand, and the same sync three
+  // other places in this file trigger automatically.
+  describe('person sync-pool (Catalog Person Pool Task 2)', () => {
+    beforeEach(async (): Promise<void> => {
+      await prisma.$executeRawUnsafe(
+        'TRUNCATE TABLE "Slave", "Team", "Workspace", "Person", "SlaveTemplate" RESTART IDENTITY CASCADE',
+      )
+    })
+
+    const poolTemplate = async (name: string, active: boolean): Promise<string> =>
+      (
+        await prisma.slaveTemplate.create({
+          data: { name, role: 'backend', description: `${name} does one thing.`, active, capabilityKeys: ['backend.services'] },
+        })
+      ).id
+
+    it('reconciles every active template and prints all four counters', async (): Promise<void> => {
+      await poolTemplate('M60 Active One', true)
+      await poolTemplate('M60 Inactive One', false)
+
+      const result = await runCli(['person', 'sync-pool'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('pool synced: 1 active template')
+      expect(result.stdout).toContain('3 created, 0 updated, 0 unchanged')
+      expect(await prisma.person.count({ where: { poolSlot: { not: null } } })).toBe(3)
+    })
+
+    it('is a no-op report the second time', async (): Promise<void> => {
+      await poolTemplate('M60 Idempotent', true)
+      await runCli(['person', 'sync-pool'])
+
+      const result = await runCli(['person', 'sync-pool'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('0 created, 0 updated, 3 unchanged')
+    })
+
+    it('pluralises the template count correctly at zero, one and more than one', async (): Promise<void> => {
+      const none = await runCli(['person', 'sync-pool'])
+      expect(none.stdout).toContain('pool synced: 0 active templates')
+
+      await poolTemplate('M60 One', true)
+      await poolTemplate('M60 Two', true)
+      const two = await runCli(['person', 'sync-pool'])
+      expect(two.stdout).toContain('pool synced: 2 active templates')
     })
   })
 

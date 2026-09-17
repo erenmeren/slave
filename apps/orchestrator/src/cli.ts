@@ -124,6 +124,7 @@ import {
   stopAutoRun,
   syncCapabilityTaxonomy,
   setLifecycle,
+  syncPersonPool,
   syncRunbooks,
   supersedeMemory,
   syncSkillCatalog,
@@ -377,6 +378,11 @@ const USAGE = `usage: orchestrator <command> [options]
   person release --person <id> --reason <text>
   person delete --person <id> [--yes]
   person skills --person <id> [--grant a,b] [--revoke c] [--clear d]
+  person sync-pool                     reconcile the Catalog Person Pool: every ACTIVE template
+                                       ends up with exactly three managed people, and an existing
+                                       one's capabilities are brought back to its template's
+                                       current set. Also runs after a non-dry-run import-catalog,
+                                       after \`template activate\`, and once at daemon startup.
   assign-company --workspace <id> --company <id>
                                        assign a company's roster to a workspace, seating each
                                        member on the project rather than copying them
@@ -2094,6 +2100,20 @@ export async function main(argv: readonly string[]): Promise<number> {
       )
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(describeImport(result.value, verbose))
+      // Catalog Person Pool (Task 2): a dry run writes no people (`result.value.dryRun` is `true`
+      // and `importCatalog` itself wrote nothing), so there is nothing for a sync to reconcile. A
+      // REAL import can change an ALREADY-active template's `capabilityKeys` too (an edited
+      // persona re-imported), so this runs on every non-dry-run import and not only one that
+      // passed `--activate`. Not caught: a failed sync must fail this command loudly rather than
+      // leave the operator believing the import finished cleanly with a partial pool underneath it.
+      if (!dryRun) {
+        const poolReport = await syncPersonPool()
+        process.stdout.write(
+          `pool synced: ${plural(poolReport.templates, 'active template')} -- ` +
+            `${String(poolReport.created)} created, ${String(poolReport.updated)} updated, ` +
+            `${String(poolReport.unchanged)} unchanged\n`,
+        )
+      }
       return 0
     }
 
@@ -2517,6 +2537,20 @@ export async function main(argv: readonly string[]): Promise<number> {
             ? `${name} is now ${active ? 'active' : 'inactive'}\n`
             : `${name} was already ${active ? 'active' : 'inactive'}\n`,
         )
+        // Catalog Person Pool (Task 2): activating is what makes a template a hiring candidate, so
+        // this is the moment its three managed people need to exist. Deactivation touches only
+        // `active` (brief: "deactivation only changes activation") -- nothing here runs for it, and
+        // nobody is deleted or released. Run even on the already-active no-op: cheap (an idle sync
+        // reports every slot unchanged) and it repairs a pool a prior sync failure left partial.
+        // Not caught: a failed sync must fail this command loudly.
+        if (active) {
+          const poolReport = await syncPersonPool()
+          process.stdout.write(
+            `pool synced: ${plural(poolReport.templates, 'active template')} -- ` +
+              `${String(poolReport.created)} created, ${String(poolReport.updated)} updated, ` +
+              `${String(poolReport.unchanged)} unchanged\n`,
+          )
+        }
         return 0
       }
 
@@ -3041,6 +3075,15 @@ export async function main(argv: readonly string[]): Promise<number> {
             effective.value.length === 0
               ? 'no skills\n'
               : `${effective.value.map((row) => `${row.name} (${row.origin})`).join(', ')}\n`,
+          )
+          return 0
+        }
+
+        case 'sync-pool': {
+          const report = await syncPersonPool()
+          process.stdout.write(
+            `pool synced: ${plural(report.templates, 'active template')} -- ` +
+              `${String(report.created)} created, ${String(report.updated)} updated, ${String(report.unchanged)} unchanged\n`,
           )
           return 0
         }

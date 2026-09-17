@@ -124,6 +124,18 @@ describe('refusalText for the catalog kinds (M55 R5, R8)', () => {
   })
 })
 
+/** Catalog Person Pool (Task 2): one `kind` for a missing template, an inactive one, and an active
+ *  one with nobody free in its pool -- asserted here so the sentence names the TEMPLATE and never
+ *  prints the bare `kind` string an operator cannot act on. */
+describe('refusalText for pool_unavailable (Catalog Person Pool Task 2)', () => {
+  it('names the template and never prints the kind verbatim', () => {
+    const text = refusalText({ kind: 'pool_unavailable', templateId: 't1' })
+    expect(text).toContain('t1')
+    expect(text).not.toMatch(/pool_unavailable/)
+    expect(text.length).toBeGreaterThan(10)
+  })
+})
+
 describe('refusalText for the M58 person kinds (R14, plan additions)', () => {
   it('the six M58 refusals read as sentences and never print a kind', () => {
     const texts = [
