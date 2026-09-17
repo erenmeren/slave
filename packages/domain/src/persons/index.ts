@@ -1,3 +1,4 @@
+export { capabilityGrantDelta, effectiveCapabilities } from './capabilities.js'
 export { FUNCTIONAL_DEPARTMENTS, functionalDepartmentFor, type FunctionalDepartment } from './department.js'
 export { effectiveSkillIds, effectiveSkills, type EffectiveSkill, type EffectiveSkillInput } from './effectiveSkills.js'
 export { effectiveModelFor, effectiveProfileFor, effectiveProviderFor, resolveOverride } from './overrides.js'
