@@ -45,6 +45,37 @@ export const NAME_COLLISION_MAX_ATTEMPTS = 20
 
 type SlotOutcome = 'created' | 'updated' | 'unchanged'
 
+/**
+ * What `syncSlot`'s `catch` must do about an error a `Person.create` attempt threw, for exactly
+ * one slot's one attempt: re-read the slot another process just won (`'slot_race'`), draw another
+ * name (`'name_race'`), or leave it alone (`'rethrow'`) -- a REAL Prisma error this module never
+ * anticipated (a dropped connection, a check constraint, a future third unique constraint on
+ * `Person`) must surface exactly as it arrived (Task 2 brief: "never swallow unrelated Prisma
+ * errors").
+ */
+export type PersonCreateErrorClassification = 'slot_race' | 'name_race' | 'rethrow'
+
+/**
+ * Pure classification of a `Person.create` error, extracted out of `syncSlot`'s `catch` so the
+ * "rethrow anything unrelated" branch has a unit test that needs no database and nothing to spy
+ * on (review fix round 1: `vi.spyOn` on a Prisma model method is unreliable against this
+ * project's generated client -- see `prisma-errors.test.ts`'s docstring and the Task 2 report --
+ * so this decision has to be reachable with plain object literals instead).
+ *
+ * Reads only `isUniqueConstraintViolation`/`uniqueConstraintTarget`'s answers; the two constraints
+ * it distinguishes are `Person`'s only two today (`name`, `(templateId, poolSlot)`, Task 1). Any
+ * P2002 on neither, and every non-P2002 error, classifies as `'rethrow'` -- not because this
+ * function KNOWS those are safe, but because it knows exactly two things it is allowed to resolve
+ * itself, and nothing else.
+ */
+export function classifyPersonCreateError(error: unknown): PersonCreateErrorClassification {
+  if (!isUniqueConstraintViolation(error)) return 'rethrow'
+  const target = uniqueConstraintTarget(error)
+  if (target.some((column) => column.toLowerCase().includes('poolslot'))) return 'slot_race'
+  if (target.some((column) => column.toLowerCase().includes('name'))) return 'name_race'
+  return 'rethrow'
+}
+
 /** Whether a managed row's stored capabilities already match the template's, as SETS -- order
  *  never mattered to anything that reads `Person.capabilities`, and comparing it positionally
  *  would report a write every time an import re-orders `capabilityKeys` without changing it. */
@@ -79,9 +110,9 @@ async function refreshManagedCapabilities(
  * different race than the slot one and gets a different answer: retry with another name, up to
  * {@link NAME_COLLISION_MAX_ATTEMPTS}, never touching the slot this attempt owns.
  *
- * Only these two constraints are ever caught. Any other Prisma error -- a dropped connection, a
- * check constraint this module did not anticipate -- is rethrown exactly as it arrived (Task 2
- * brief: "never swallow unrelated Prisma errors").
+ * Only these two constraints are ever caught -- decided by {@link classifyPersonCreateError}. Any
+ * other Prisma error -- a dropped connection, a check constraint this module did not anticipate --
+ * is rethrown exactly as it arrived (Task 2 brief: "never swallow unrelated Prisma errors").
  */
 async function syncSlot(
   templateId: string,
@@ -102,19 +133,16 @@ async function syncSlot(
       })
       return 'created'
     } catch (error) {
-      if (!isUniqueConstraintViolation(error)) throw error
-      const target = uniqueConstraintTarget(error)
-      if (target.some((column) => column.toLowerCase().includes('poolslot'))) {
+      const classification = classifyPersonCreateError(error)
+      if (classification === 'rethrow') throw error
+      if (classification === 'slot_race') {
         const won = await prisma.person.findUniqueOrThrow({
           where: { templateId_poolSlot: { templateId, poolSlot } },
           select: { id: true, capabilities: true },
         })
         return refreshManagedCapabilities(won, capabilityKeys)
       }
-      if (target.some((column) => column.toLowerCase().includes('name'))) continue
-      // A P2002 on neither constraint this function knows about: not a race it is this function's
-      // business to resolve.
-      throw error
+      // classification === 'name_race': try another name, same slot, same attempt budget.
     }
   }
   throw new Error(
