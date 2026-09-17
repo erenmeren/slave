@@ -16,7 +16,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { AssignmentRefused, departmentFor } from './department.js'
-import { syncPersonPool } from './personPool.js'
+import { selectPoolPerson, syncPersonPool } from './personPool.js'
 import { MAX_RUNTIME_ROLES } from './profile.js'
 import type { ControlRefusal } from './refusal.js'
 
@@ -630,6 +630,19 @@ export async function seatMember(
  * `setLifecycle` moves a lifecycle after creation, so a temporary hire landing on a worker created
  * `project` merges capabilities and roles and leaves the worker what it was. The claim stays true
  * of the decision; the worker keeps what it was created as.
+ *
+ * Catalog Person Pool (Task 4): when nobody from this persona is ALREADY on the project (the
+ * `existing` branch above found nothing), this no longer reaches straight for `createPerson`'s own
+ * shape -- it asks `selectPoolPerson` for one of the template's three managed people first, the
+ * same call `intake.ts`'s `staff` step makes, so the two staffing paths cannot diverge into two
+ * different answers for "who is free". A pool with nothing eligible is synced once
+ * (`syncPersonPool`) and selection is retried once, exactly `intake.ts`'s own rule. Only when that
+ * retry also comes up empty does this fall back to minting a brand-new, unmanaged `Person` -- and
+ * only when {@link requirePool} is not set: automatic supervisor/catalogue staffing
+ * (`carryOut`'s `hire_from_catalog`, `supervisor.ts`) sets it, so a pool that has run out FAILS
+ * that hire with the same `pool_unavailable` refusal rather than quietly growing the roster by one
+ * unmanaged person nobody chose to add; the CLI's explicit `hire` leaves it unset and keeps the
+ * old on-demand-creation compatibility.
  */
 export async function hireFromTemplate(
   workspaceId: string,
@@ -645,6 +658,10 @@ export async function hireFromTemplate(
      *  workspace's own tasks, because the column is a foreign key and a dangling one would throw a
      *  P2003 out of a `Promise<Result<…>>` with nowhere to put it. */
     readonly engagementTaskId?: string | null
+    /** Catalog Person Pool Task 4: refuses this hire with `pool_unavailable` instead of falling
+     *  back to `createPerson` when the managed pool has nothing eligible even after one sync and
+     *  retry. Unset -- the CLI's default -- keeps today's on-demand creation. */
+    readonly requirePool?: boolean
   },
 ): Promise<
   Result<
@@ -689,6 +706,30 @@ export async function hireFromTemplate(
     if (engagement === null) return err({ kind: 'task_not_found', taskId: engagementTaskId ?? '' })
   }
 
+  // Task 4: a managed candidate for this workspace, looked up BEFORE the transaction below --
+  // `selectPoolPerson` is a plain read, exactly like `intake.ts`'s own staff step -- so the
+  // transaction only ever re-validates one specific personId under lock rather than running the
+  // whole ranked query while holding the workspace row. `pool_unavailable` is synced once and
+  // retried once. This runs unconditionally, even on the well-worn "already hired from this
+  // template" path below that never ends up using it: the alternative -- deciding whether to look
+  // AFTER the workspace lock decides "nothing existing" -- would move `existing`'s own read out
+  // from behind that lock too, and two concurrent hires for a template with nothing on the
+  // project yet would both compute "nothing existing" before either took the lock and both create
+  // a worker (exactly the race fix round 1 minor 2 closed). `existing` stays inside the lock,
+  // unchanged; only the pool lookup moves out, because it names no row this transaction has any
+  // reason to lock until it has decided the candidate is actually going to be seated.
+  let poolCandidateId: string | null = null
+  let poolRefusal: ControlRefusal | null = null
+  {
+    let selection = await selectPoolPerson(templateId, workspaceId)
+    if (!selection.ok && selection.error.kind === 'pool_unavailable') {
+      await syncPersonPool()
+      selection = await selectPoolPerson(templateId, workspaceId)
+    }
+    if (selection.ok) poolCandidateId = selection.value.personId
+    else poolRefusal = selection.error
+  }
+
   // The reuse decision and the write it implies happen under ONE workspace row lock (fix round 1,
   // minor 2). Nothing indexes "somebody in this workspace from this persona", so without it two
   // approvals of the same proposal -- which is exactly what E10 says one supervised pass can
@@ -697,11 +738,10 @@ export async function hireFromTemplate(
   const outcome = await prisma.$transaction(async (tx) => {
     await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
     const existing = await tx.slave.findFirst({
-      // M58 R2: an OPEN seat held by somebody hired from this persona. `releasedAt: null` (M50 R2):
-      // a released person's engagement is over and nothing re-hires them.
+      // M58 R2: an OPEN seat held by somebody hired from this persona. `releasedAt: null` (M50
+      // R2): a released person's engagement is over and nothing re-hires them.
       where: { person: { templateId, releasedAt: null }, team: { workspaceId }, closedAt: null },
       orderBy: { id: 'asc' },
-      include: { person: true },
     })
     if (existing !== null) {
       // The Slave row under `FOR UPDATE`, and the merge computed off THAT read (M47 final review,
@@ -755,11 +795,57 @@ export async function hireFromTemplate(
       }
     }
 
+    // Nothing already seated from this template, and `selectPoolPerson` never found a candidate
+    // either (a missing pool, or every managed person released or already on this workspace).
+    // `requirePool` refuses right here rather than reaching the on-demand create below.
+    if (poolCandidateId === null && opts.requirePool === true) {
+      return { kind: 'refused' as const, refusal: poolRefusal ?? ({ kind: 'pool_unavailable', templateId } as ControlRefusal) }
+    }
+
     const teams = await tx.team.findMany({ where: { workspaceId }, orderBy: { name: 'asc' } })
     // A hire needs a department. The first by name is deterministic and is the one a
     // single-department project has; a project with none gets `Specialists`, which says what it
     // is rather than borrowing a name from a company this project may not have.
     const team = teams[0] ?? (await tx.team.create({ data: { workspaceId, name: 'Specialists' } }))
+
+    // Task 4: seat the managed candidate `selectPoolPerson` chose before this transaction opened,
+    // instead of minting a new `Person` below. PERSON locked FIRST, directly by id -- this file's
+    // one lock order (`lockedSlave`'s own docstring above) -- since no `Slave` row names them yet
+    // for a join to lock through.
+    if (poolCandidateId !== null) {
+      await tx.$queryRaw`SELECT id FROM "Person" WHERE id = ${poolCandidateId} FOR UPDATE`
+      const pooled = await tx.person.findUnique({ where: { id: poolCandidateId } })
+      // Re-verified under the lock, exactly `lockedSlave`'s own reason: the candidate may have
+      // been released, or seated here by a concurrent hire that reached the workspace lock first,
+      // between `selectPoolPerson`'s read above and this one.
+      const busyHere =
+        pooled !== null &&
+        (await tx.slave.findFirst({
+          where: { personId: pooled.id, team: { workspaceId }, closedAt: null },
+          select: { id: true },
+        })) !== null
+      if (pooled !== null && pooled.releasedAt === null && !busyHere) {
+        const merged = [...new Set([...pooled.capabilities, ...capabilities])].toSorted()
+        // The rationale is written here exactly as it is for a brand-new hire (below): this pool
+        // person is NEW to this project, and "why they are here" is this call's own sentence, not
+        // whatever the pool held (nothing, today -- `syncPersonPool` never sets it) or whatever
+        // another project's earlier hire wrote. A worker ALREADY on this project instead goes
+        // through the `existing` reuse branch above, which never touches a rationale that is
+        // already true.
+        await tx.person.update({ where: { id: pooled.id }, data: { capabilities: merged, selectionRationale: rationale } })
+        const worker = await tx.slave.create({
+          data: { teamId: team.id, personId: pooled.id, role: template.role, runtimeRoles, engagementTaskId },
+        })
+        return { kind: 'created' as const, slaveId: worker.id, name: pooled.name, personId: pooled.id }
+      }
+      // The chosen candidate raced away. `requirePool` refuses outright rather than falling
+      // through to the unmanaged create below it was set to prevent; the CLI's on-demand path
+      // (`requirePool` unset) takes that fallback exactly as it did before this task.
+      if (opts.requirePool === true) {
+        return { kind: 'refused' as const, refusal: { kind: 'pool_unavailable', templateId } as ControlRefusal }
+      }
+    }
+
     // M58 R1: a hire creates a PERSON and then a seat for them. Two writes in one transaction, so
     // a person with no seat is never left behind by a half-applied hire. The name is unique across
     // the INSTALLATION now, which is why `uniquePersonName` reads every person and not this

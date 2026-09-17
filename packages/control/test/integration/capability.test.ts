@@ -11,6 +11,7 @@ import {
   setPersonCapabilities,
   syncCapabilityTaxonomy,
 } from '../../src/capability.js'
+import { syncPersonPool } from '../../src/personPool.js'
 import { releasePerson, unassignPerson } from '../../src/persons.js'
 import { setRuntimeRoles } from '../../src/profile.js'
 
@@ -702,6 +703,133 @@ describe('hireFromTemplate', () => {
     expect(second.value.slaveId).not.toBe(first.value.slaveId)
     const secondName = (await prisma.slave.findUniqueOrThrow({ where: { id: second.value.slaveId }, include: { person: true } })).person.name
     expect(secondName).toBe(`${firstName} 2`)
+  })
+})
+
+describe('hireFromTemplate and the managed person pool (Catalog Person Pool Task 4)', () => {
+  it('seats a managed pool person instead of creating one, when the template is active', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'], active: true },
+    })
+    await syncPersonPool()
+    const pool = await prisma.person.findMany({ where: { templateId: template.id } })
+    expect(pool).toHaveLength(3)
+
+    const out = await hireFromTemplate(workspaceId, template.id, { rationale: 'authentication work needs application security' })
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(out.value.reused).toBe(false)
+    expect(pool.map((person) => person.id)).toContain(out.value.personId)
+    // No new Person row: the managed pool still holds exactly the three it started with.
+    expect(await prisma.person.count()).toBe(3)
+
+    const row = await prisma.slave.findUniqueOrThrow({ where: { id: out.value.slaveId }, include: { person: true } })
+    expect(row.person.poolSlot).not.toBeNull()
+    expect(row.runtimeRoles).toEqual(['security'])
+    // `org.changed { field: 'created' }` fires exactly as it does for an on-demand hire (event,
+    // rationale-carrying capability set, and roles are all preserved).
+    const events = await prisma.executionEvent.findMany({ where: { workspaceId, type: 'org_changed' } })
+    expect(events).toHaveLength(1)
+    expect((events[0]?.payload as { personId?: string }).personId).toBe(out.value.personId)
+  })
+
+  it('reuses an already-open seat from this template over the pool, without ever switching who is seated', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    // Inactive: this first hire is exactly today's on-demand path, and creates an unmanaged
+    // worker.
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'] },
+    })
+    const first = await hireFromTemplate(workspaceId, template.id, { rationale: 'first' })
+    expect(first.ok).toBe(true)
+    if (!first.ok) return
+    const firstPerson = await prisma.person.findUniqueOrThrow({ where: { id: first.value.personId } })
+    expect(firstPerson.poolSlot).toBeNull()
+
+    // The template turns active, and its pool comes to exist, only AFTER the first hire.
+    await prisma.slaveTemplate.update({ where: { id: template.id }, data: { active: true } })
+    await syncPersonPool()
+
+    const second = await hireFromTemplate(workspaceId, template.id, { rationale: 'second' })
+    expect(second.ok && second.value.reused).toBe(true)
+    if (!second.ok) return
+    // The SAME unmanaged worker -- reuse wins over the pool even once the pool exists.
+    expect(second.value.personId).toBe(first.value.personId)
+    expect(await prisma.slave.count({ where: { team: { workspaceId } } })).toBe(1)
+    // The pool exists and is untouched: nobody in it holds a seat here.
+    expect(await prisma.person.count({ where: { templateId: template.id, poolSlot: { not: null } } })).toBe(3)
+    expect(
+      await prisma.slave.count({ where: { team: { workspaceId }, person: { poolSlot: { not: null } } } }),
+    ).toBe(0)
+  })
+
+  it('never selects a released or an inactive template s managed person', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'], active: true },
+    })
+    await syncPersonPool()
+    await prisma.person.updateMany({
+      where: { templateId: template.id },
+      data: { releasedAt: new Date(), releaseReason: 'test' },
+    })
+
+    // Every managed slot released: the on-demand fallback below is what the CLI's unset
+    // `requirePool` keeps -- a brand-new, unmanaged Person, not a released one un-retired.
+    const out = await hireFromTemplate(workspaceId, template.id, { rationale: 'needed anyway' })
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    const person = await prisma.person.findUniqueOrThrow({ where: { id: out.value.personId } })
+    expect(person.poolSlot).toBeNull()
+    expect(person.releasedAt).toBeNull()
+  })
+
+  it('syncs a missing pool once and retries selection once before seating a fresh candidate', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'], active: true },
+    })
+    // Nothing has synced this template's pool yet -- `hireFromTemplate` itself must, on the very
+    // first hire against an active template with none.
+    expect(await prisma.person.count({ where: { templateId: template.id } })).toBe(0)
+
+    const out = await hireFromTemplate(workspaceId, template.id, { rationale: 'first ever hire' })
+    expect(out.ok).toBe(true)
+    if (!out.ok) return
+    expect(await prisma.person.count({ where: { templateId: template.id, poolSlot: { not: null } } })).toBe(3)
+    const person = await prisma.person.findUniqueOrThrow({ where: { id: out.value.personId } })
+    expect(person.poolSlot).not.toBeNull()
+  })
+
+  it('falls back to an on-demand hire when the pool is unavailable even after the sync/retry, unless requirePool refuses it', async (): Promise<void> => {
+    const { workspaceId } = await workspace()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: ['security.application'], active: true },
+    })
+    await syncPersonPool()
+    await prisma.person.updateMany({ where: { templateId: template.id }, data: { releasedAt: new Date(), releaseReason: 'test' } })
+
+    // The CLI's compatibility path: `requirePool` unset falls back exactly as it always has.
+    const manual = await hireFromTemplate(workspaceId, template.id, { rationale: 'manual hire' })
+    expect(manual.ok).toBe(true)
+    if (!manual.ok) return
+    const manualPerson = await prisma.person.findUniqueOrThrow({ where: { id: manual.value.personId } })
+    expect(manualPerson.poolSlot).toBeNull()
+
+    // The automatic path: `requirePool` refuses rather than creating an unmanaged worker.
+    const otherTemplate = await prisma.slaveTemplate.create({
+      data: { name: 'QA Specialist', role: 'qa', capabilityKeys: ['qa.test-automation'], active: true },
+    })
+    await syncPersonPool()
+    await prisma.person.updateMany({ where: { templateId: otherTemplate.id }, data: { releasedAt: new Date(), releaseReason: 'test' } })
+    const before = await prisma.person.count()
+    const automatic = await hireFromTemplate(workspaceId, otherTemplate.id, { rationale: 'automatic hire', requirePool: true })
+    expect(automatic.ok).toBe(false)
+    if (automatic.ok) return
+    expect(automatic.error).toMatchObject({ kind: 'pool_unavailable', templateId: otherTemplate.id })
+    // Nothing was created for the refused hire.
+    expect(await prisma.person.count()).toBe(before)
   })
 })
 

@@ -439,6 +439,10 @@ async function carryOut(
           ...(action.temporary && action.engagementTaskId !== null
             ? { temporary: true, engagementTaskId: action.engagementTaskId }
             : {}),
+          // Catalog Person Pool Task 4: this is the AUTOMATIC path -- a pool the sync/retry still
+          // finds nothing in fails the hire outright rather than growing the roster by an
+          // unmanaged person nobody, human or model, chose to add.
+          requirePool: true,
         }),
       )
     case 'mark_task_failed':
