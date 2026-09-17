@@ -87,6 +87,7 @@ import {
   readMemory,
   readRunbook,
   readTemplateProfile,
+  reconcileTemplateCapabilities,
   recomputeTemplateDuplicates,
   refusalText,
   rejectDecision,
@@ -134,6 +135,7 @@ import {
   unblockTask,
   unmapExternalRepository,
   verifyMemory,
+  type CapabilityReconcileReport,
   type ControlRefusal,
   type CredentialKind,
   type ImportReport,
@@ -421,6 +423,13 @@ const USAGE = `usage: orchestrator <command> [options]
   capabilities sync                    reconcile the capability taxonomy against the checked-in
                                        list: adds what is missing, brings a seed row back to what
                                        the list says, and never touches a row an operator added.
+                                       Then reconciles every template's capabilities against the
+                                       taxonomy it just wrote, and the managed pool against that.
+  capabilities reconcile                re-derive every template's capabilities/unresolved text
+                                       from its own profileSpec against the taxonomy as it stands
+                                       right now, and refresh the managed pool from the result.
+                                       The operator-recovery verb for a synonym added after a
+                                       persona was imported, or a hand-edited profileSpec.
   capabilities add --key <domain.name> --label <text> --role <r> [--synonyms a,b]
                                        add an operator's own capability. The key's prefix IS its
                                        domain, and --role is the runtime role it projects to.
@@ -1402,6 +1411,24 @@ async function mustGetRun(runId: string) {
 }
 
 /**
+ * Catalog Person Pool (Task 3): what `reconcileTemplateCapabilities()` did, in one line an
+ * operator reads after `capabilities sync`, a non-dry-run `import-catalog`, or `capabilities
+ * reconcile` run by hand. `resolved`/`unresolved` are DISTINCT source capability values across
+ * every scanned template (the verb's own docstring) -- never a per-template count, so this line
+ * never has to say "3 template(s)" twice with two different meanings.
+ */
+function describeReconcile(report: CapabilityReconcileReport): string {
+  const malformedNote =
+    report.malformed.length === 0
+      ? ''
+      : `; ${plural(report.malformed.length, 'template')} had a malformed profileSpec and were left alone (${report.malformed.join(', ')})`
+  return (
+    `capabilities reconciled: ${plural(report.templates, 'template')} scanned, ${String(report.updated)} updated -- ` +
+    `${String(report.resolved)} capability value(s) resolved, ${String(report.unresolved)} unresolved${malformedNote}\n`
+  )
+}
+
+/**
  * The import report an operator reads (M42 §2, rewritten by M55 R7).
  *
  * **Counts by default, lines only when asked.** A real catalog is three hundred files, and a
@@ -2100,13 +2127,22 @@ export async function main(argv: readonly string[]): Promise<number> {
       )
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(describeImport(result.value, verbose))
-      // Catalog Person Pool (Task 2): a dry run writes no people (`result.value.dryRun` is `true`
-      // and `importCatalog` itself wrote nothing), so there is nothing for a sync to reconcile. A
-      // REAL import can change an ALREADY-active template's `capabilityKeys` too (an edited
-      // persona re-imported), so this runs on every non-dry-run import and not only one that
-      // passed `--activate`. Not caught: a failed sync must fail this command loudly rather than
-      // leave the operator believing the import finished cleanly with a partial pool underneath it.
+      // Catalog Person Pool (Task 2/3): a dry run writes no people (`result.value.dryRun` is
+      // `true` and `importCatalog` itself wrote nothing), so there is nothing for either pass to
+      // reconcile. A REAL import can change an ALREADY-active template's `capabilityKeys` too (an
+      // edited persona re-imported), so both run on every non-dry-run import and not only one
+      // that passed `--activate`. Neither is caught: a failed pass must fail this command loudly
+      // rather than leave the operator believing the import finished cleanly with a partial
+      // pool -- or a stale capability match -- underneath it.
+      //
+      // Task 3's reconciliation runs FIRST, and over EVERY template, not only the rows this run
+      // touched: `syncCapabilityTaxonomy` (inside `importCatalog`, before a single persona is
+      // read) can bring a synonym back that repairs a template this run's own file walk never
+      // looked at, and only a whole-table pass can catch that. It ends by refreshing the managed
+      // pool itself, which is why the EXISTING `syncPersonPool()` line below it now finds nothing
+      // left to do except for a template this run's row loop actually created or activated.
       if (!dryRun) {
+        process.stdout.write(describeReconcile(await reconcileTemplateCapabilities()))
         const poolReport = await syncPersonPool()
         process.stdout.write(
           `pool synced: ${plural(poolReport.templates, 'active template')} -- ` +
@@ -2444,6 +2480,22 @@ export async function main(argv: readonly string[]): Promise<number> {
         process.stdout.write(
           `taxonomy synced: ${String(out.created)} added, ${String(out.updated)} brought back to the checked-in list\n`,
         )
+        // Catalog Person Pool (Task 3): a taxonomy sync can bring back (or, once, add) a synonym
+        // that repairs a template's `unresolvedCapabilities` -- and `syncCapabilityTaxonomy` alone
+        // never re-runs `normaliseCapabilities` over a single existing row. So every taxonomy sync
+        // reconciles every template against what it just wrote, and `reconcileTemplateCapabilities`
+        // itself refreshes the managed pool off whatever it repaired. Not caught: a failed
+        // reconciliation must fail this command loudly rather than leave the operator believing the
+        // taxonomy sync alone was the whole story.
+        process.stdout.write(describeReconcile(await reconcileTemplateCapabilities()))
+        return 0
+      }
+      if (sub === 'reconcile') {
+        // Catalog Person Pool (Task 3): the explicit operator-recovery verb -- `person sync-pool`'s
+        // sibling for the OTHER half of the pipeline. Useful on its own when a template's
+        // `profileSpec` was hand-edited, or after a `capabilities add` whose new key a persona's
+        // text already spelled exactly.
+        process.stdout.write(describeReconcile(await reconcileTemplateCapabilities()))
         return 0
       }
       if (sub === 'add') {
@@ -2476,7 +2528,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         }
         return 0
       }
-      throw new Error('capabilities takes sync, add, backfill or list')
+      throw new Error('capabilities takes sync, reconcile, add, backfill or list')
     }
 
     case 'template': {

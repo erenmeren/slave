@@ -1,5 +1,5 @@
 import { hostname } from 'node:os'
-import { describeSync, drainIntakeCalls, drainModelCalls, syncPersonPool, syncSkillCatalog, tickIntakes, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
+import { describeSync, drainIntakeCalls, drainModelCalls, reconcileTemplateCapabilities, syncPersonPool, syncSkillCatalog, tickIntakes, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { BROKER_TIMEOUT_MS, SUPERVISOR_DEFAULT_MODEL, workspaceId as brandWorkspaceId, type WorkspaceId } from '@slave-of-ai/domain'
 import { subscribeEvents, type EventSubscription } from '@slave-of-ai/events'
@@ -392,13 +392,21 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
     )
   }
 
-  // Catalog Person Pool (Task 2): once per process, before the first project is served, and NOT
+  // Catalog Person Pool (Task 2/3): once per process, before the first project is served, and NOT
   // wrapped in a try/catch like the skill sync above it. A skill directory the host cannot read
   // leaves an ordinary host with an empty catalog; a person pool this daemon cannot finish
   // reconciling leaves a template staffable with fewer than three managed people underneath it --
   // a fact nothing else would notice or report. The brief is explicit: a hook failure here must
-  // fail daemon startup loudly rather than silently continue with a partial pool, so the throw is
-  // left to propagate out of `runDaemon` exactly as it arrives.
+  // fail daemon startup loudly rather than silently continue with a partial pool, so neither throw
+  // is caught and both are left to propagate out of `runDaemon` exactly as they arrive.
+  //
+  // Task 3's reconciliation runs FIRST: a synonym the taxonomy learned since this template was
+  // last imported must repair its `capabilityKeys` before the pool sync below reads them, or a
+  // stale, still-unresolved capability set would be the one every managed person starts this
+  // process holding. `reconcileTemplateCapabilities` ends by calling `syncPersonPool` itself, so
+  // the explicit call after it finds nothing left to do for a template Task 3 already repaired --
+  // and still runs, unconditionally, for the ordinary case where nothing needed reconciling at all.
+  await reconcileTemplateCapabilities()
   await syncPersonPool()
 
   const following = deps.workspaceIds === 'all'

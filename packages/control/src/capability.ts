@@ -6,7 +6,9 @@ import {
   capabilityLabel,
   err,
   normaliseCapabilities,
+  normaliseCapabilityText,
   ok,
+  profileSpecSchema,
   projectRoles,
   type CapabilityRecord,
   type Result,
@@ -14,6 +16,7 @@ import {
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { AssignmentRefused, departmentFor } from './department.js'
+import { syncPersonPool } from './personPool.js'
 import { MAX_RUNTIME_ROLES } from './profile.js'
 import type { ControlRefusal } from './refusal.js'
 
@@ -76,6 +79,114 @@ export async function syncCapabilityTaxonomy(): Promise<{ readonly created: numb
     updated += 1
   }
   return { created, updated }
+}
+
+/** Whether two capability-key (or unresolved-text) arrays hold the same SET -- order never
+ *  mattered to anything that reads either column, and comparing positionally would report a write
+ *  every time a re-derivation happens to walk `profileSpec.capabilities` in a different order than
+ *  the row was last written with. The `syncPersonPool`/`sameCapabilitySet` idiom (`personPool.ts`),
+ *  restated here because the two columns it compares (`Person.capabilities`, one array) are not
+ *  the two this function compares (`SlaveTemplate.capabilityKeys` AND
+ *  `.unresolvedCapabilities`, two arrays; Task 3). */
+function sameStringSet(current: readonly string[], desired: readonly string[]): boolean {
+  if (current.length !== desired.length) return false
+  const want = new Set(desired)
+  return current.every((value) => want.has(value))
+}
+
+/** What one {@link reconcileTemplateCapabilities} pass did. */
+export interface CapabilityReconcileReport {
+  /** How many templates carried a PARSEABLE `profileSpec` and were actually re-derived. A
+   *  hand-made template (no `profileSpec` at all) is never in this count -- Task 3's rule that a
+   *  persona nobody structured is never guessed at. */
+  readonly templates: number
+  /** How many of those templates had their stored `capabilityKeys`/`unresolvedCapabilities`
+   *  actually written -- only when the freshly-derived SET disagreed with what was stored. */
+  readonly updated: number
+  /** Distinct SOURCE capability strings (verbatim, across every scanned template's
+   *  `profileSpec.capabilities`) that resolved to a taxonomy key after this pass -- a count of
+   *  VALUES, never of templates, so a phrase five personas share is counted once (Task 3). */
+  readonly resolved: number
+  /** The same count, for every distinct source string that matched nothing. */
+  readonly unresolved: number
+  /** The ids of every template whose `profileSpec` column is non-null but failed
+   *  {@link profileSpecSchema} -- a hand-edited or pre-migration row this pass could not read.
+   *  Skipped, never crashed on and never overwritten (Task 3): the ids are the "bounded warning"
+   *  an operator can act on, and the count of the array is the number a caller would otherwise
+   *  have to log separately. */
+  readonly malformed: readonly string[]
+}
+
+/**
+ * Re-derives every STRUCTURED template's `capabilityKeys`/`unresolvedCapabilities` from its own
+ * `profileSpec.capabilities` against the taxonomy AS IT STANDS RIGHT NOW (Task 3).
+ *
+ * The gap this closes: an import only re-runs `normaliseCapabilities` for a row whose FILE
+ * changed (`importCatalog`'s case (c), `catalog.ts`) -- so a synonym added to the taxonomy after a
+ * persona was imported never repairs that persona's `unresolvedCapabilities`, however safe the new
+ * alias is. This pass is the repair: it reads the taxonomy once, walks every template that HAS a
+ * `profileSpec` (a hand-made row has none and is never guessed at, R1's own rule extended), and
+ * writes back only the rows whose freshly-computed SET actually differs from what is stored.
+ *
+ * `normaliseCapabilities` itself is UNCHANGED -- exact key, exact label or exact synonym, still no
+ * fuzzy matching, still no substrings. This function is purely about WHEN that comparison runs,
+ * never about HOW it matches.
+ *
+ * A malformed `profileSpec` (non-null, but failing {@link profileSpecSchema}) does not stop the
+ * pass and is never overwritten: its id is collected in {@link CapabilityReconcileReport.malformed}
+ * instead, and the row this pass cannot read is left exactly as it was.
+ *
+ * `syncPersonPool()` runs LAST, off the capabilities this pass just wrote -- every active
+ * template's managed people pick up a repaired key on the same call that repaired it, and a manual
+ * person (`poolSlot: null`) is outside `syncPersonPool`'s own query and is never touched here
+ * either.
+ */
+export async function reconcileTemplateCapabilities(): Promise<CapabilityReconcileReport> {
+  const taxonomy = await listCapabilities()
+  const rows = await prisma.slaveTemplate.findMany({
+    select: { id: true, profileSpec: true, capabilityKeys: true, unresolvedCapabilities: true },
+    orderBy: { id: 'asc' },
+  })
+
+  let templates = 0
+  let updated = 0
+  const malformed: string[] = []
+  const resolvedValues = new Set<string>()
+  const unresolvedValues = new Set<string>()
+
+  for (const row of rows) {
+    // A hand-made template, or one imported before M46 and never re-imported: nothing to read,
+    // and R1's own rule ("nothing matches on a key that is not a row") extended to "nothing is
+    // derived from text that is not there" -- never guessed, never rewritten.
+    if (row.profileSpec === null) continue
+    const spec = profileSpecSchema.safeParse(row.profileSpec)
+    if (!spec.success) {
+      malformed.push(row.id)
+      continue
+    }
+    templates += 1
+
+    const { keys, unresolved } = normaliseCapabilities(spec.data.capabilities, taxonomy)
+    for (const value of spec.data.capabilities) {
+      if (normaliseCapabilityText(value) === '') continue // blank: not a capability value at all
+      if (unresolved.includes(value)) unresolvedValues.add(value)
+      else resolvedValues.add(value)
+    }
+
+    if (sameStringSet(row.capabilityKeys, keys) && sameStringSet(row.unresolvedCapabilities, unresolved)) continue
+    await prisma.slaveTemplate.update({
+      where: { id: row.id },
+      data: { capabilityKeys: [...keys], unresolvedCapabilities: [...unresolved] },
+    })
+    updated += 1
+  }
+
+  // LAST, and off what THIS pass just wrote (Task 3 brief, R7): an active template whose keys this
+  // pass repaired must have its managed people's capabilities repaired on the same call, never on
+  // the next unrelated hook to run.
+  await syncPersonPool()
+
+  return { templates, updated, resolved: resolvedValues.size, unresolved: unresolvedValues.size, malformed }
 }
 
 /** An operator's own capability (R1). `domain` is not a parameter: it IS the key's prefix, and a

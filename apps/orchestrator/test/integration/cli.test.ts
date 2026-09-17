@@ -15,7 +15,7 @@ import {
   verifyCredentials,
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { runId as brandRunId, type Candidate, type Situation } from '@slave-of-ai/domain'
+import { emptyProfileSpec, runId as brandRunId, type Candidate, type Situation } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { brokerChannelPathFor, brokerClaimPathFor, brokerReplyPathFor } from '@slave-of-ai/providers'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
@@ -3645,8 +3645,13 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['import-catalog', '--dir', catalogDir(), '--activate'])
 
       expect(result.code).toBe(0)
+      // Task 3: `reconcileTemplateCapabilities()` runs FIRST and already calls `syncPersonPool()`
+      // itself, so the three managed people exist by the time the line below's own EXISTING
+      // `syncPersonPool()` call runs -- which is why that line now reports `unchanged`, not
+      // `created`. The reconcile line, printed first, is what actually created them.
+      expect(result.stdout).toContain('capabilities reconciled: 1 template scanned')
       expect(result.stdout).toContain('pool synced: 1 active template')
-      expect(result.stdout).toContain('3 created, 0 updated, 0 unchanged')
+      expect(result.stdout).toContain('0 created, 0 updated, 3 unchanged')
       const row = await prisma.slaveTemplate.findFirstOrThrow({ where: { name: 'CLI Core Builder' } })
       const managed = await prisma.person.findMany({ where: { templateId: row.id, poolSlot: { not: null } } })
       expect(managed).toHaveLength(3)
@@ -3656,17 +3661,46 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['import-catalog', '--dir', catalogDir()])
 
       expect(result.code).toBe(0)
+      expect(result.stdout).toContain('capabilities reconciled: 1 template scanned')
       expect(result.stdout).toContain('pool synced: 0 active templates')
       expect(await prisma.person.count()).toBe(0)
     })
 
-    it('a dry run writes no people at all: the sync never runs', async (): Promise<void> => {
+    it('a dry run writes no people at all: neither the reconcile nor the pool sync ever runs', async (): Promise<void> => {
       const result = await runCli(['import-catalog', '--dir', catalogDir(), '--activate', '--dry-run'])
 
       expect(result.code).toBe(0)
+      expect(result.stdout).not.toContain('capabilities reconciled')
       expect(result.stdout).not.toContain('pool synced')
       expect(await prisma.slaveTemplate.count()).toBe(0)
       expect(await prisma.person.count()).toBe(0)
+    })
+
+    // Task 3: the whole point of a whole-table pass -- a template this run's own file walk never
+    // looked at (a persona from an EARLIER import, unrelated to this run's catalog directory) still
+    // gets its stale capabilities repaired, because `reconcileTemplateCapabilities` scans every
+    // template with a structured `profileSpec`, not only the rows this run's row loop touched.
+    it('reconciles a template the WALK never touched, proving the pass scans the whole table', async (): Promise<void> => {
+      const stale = await prisma.slaveTemplate.create({
+        data: {
+          name: 'Task 3 Untouched By This Walk',
+          role: 'operations',
+          description: 'x',
+          active: false,
+          profileSpec: { ...emptyProfileSpec(), capabilities: ['production monitoring'] } as unknown as object,
+          capabilityKeys: [],
+          unresolvedCapabilities: ['production monitoring'],
+        },
+      })
+
+      const result = await runCli(['import-catalog', '--dir', catalogDir()])
+
+      expect(result.code).toBe(0)
+      // Two templates scanned: the freshly-imported one and this pre-existing, untouched one.
+      expect(result.stdout).toContain('capabilities reconciled: 2 templates scanned, 1 updated')
+      const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: stale.id } })
+      expect(row.capabilityKeys).toEqual(['operations.observability'])
+      expect(row.unresolvedCapabilities).toEqual([])
     })
   })
 

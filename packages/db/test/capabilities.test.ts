@@ -61,4 +61,35 @@ describe('CAPABILITY_SEED', () => {
   it('resolves both spellings of CI/CD', () => {
     expect(normaliseCapabilities(['CI/CD', 'ci-cd', 'CICD'], CAPABILITY_SEED).keys).toEqual(['operations.ci-cd'])
   })
+
+  // Task 3: two unambiguous reviewed synonyms, added so `reconcileTemplateCapabilities` has
+  // something safe to repair on an already-imported row. Deliberately narrow -- see the next case
+  // for the phrases that must NOT join this list.
+  it('resolves the two Task 3 seed aliases', () => {
+    expect(normaliseCapabilities(['production monitoring'], CAPABILITY_SEED).keys).toEqual(['operations.observability'])
+    expect(normaliseCapabilities(['critical css inlining'], CAPABILITY_SEED).keys).toEqual(['frontend.performance'])
+  })
+
+  // Task 3: `normaliseCapabilities` stays exact-only. A broad or sentence-length phrase must stay
+  // visibly unresolved rather than being guessed into a key an operator never reviewed.
+  it('leaves broad or ambiguous phrases unresolved, never guessed into a key', () => {
+    const out = normaliseCapabilities(
+      [
+        'Performance Optimization',
+        'Modern Web Technologies',
+        'Pipeline Engineering',
+        'Business Integration',
+        'I have spent my career obsessing over shipping fast, reliable software for teams of every size',
+      ],
+      CAPABILITY_SEED,
+    )
+    expect(out.keys).toEqual([])
+    expect(out.unresolved).toEqual([
+      'Performance Optimization',
+      'Modern Web Technologies',
+      'Pipeline Engineering',
+      'Business Integration',
+      'I have spent my career obsessing over shipping fast, reliable software for teams of every size',
+    ])
+  })
 })
