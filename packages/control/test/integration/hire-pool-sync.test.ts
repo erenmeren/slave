@@ -133,13 +133,30 @@ describe('hireFromTemplate when the pool is genuinely missing', () => {
     expect(await prisma.person.count({ where: { templateId: template.id, poolSlot: { not: null } } })).toBe(3)
   })
 
-  it('syncs exactly once even when the sync cannot help, and then falls back', async (): Promise<void> => {
+  /**
+   * The MANUAL fallback, genuinely reached (fix round 2, gap 3).
+   *
+   * This case used to release the three managed people AND clear their `poolSlot`, which is what
+   * `releasePerson` writes today (final review, Important 3) -- so the one sync it permitted found
+   * three vacant slots, minted three new managed identities, and the second attempt seated one of
+   * them. It asserted the sync count, which was right, and its title claimed a fallback that never
+   * happened; nothing in the file reached `createPerson`'s branch at all.
+   *
+   * The state that genuinely cannot be helped is a pool whose slots are OCCUPIED by people who are
+   * all released -- which is exactly what any installation that released somebody before Important 3
+   * has on disk, because the release did not free the slot. Seeded directly here rather than through
+   * `releasePerson`, because the verb no longer produces it and the point is the rows, not the verb:
+   * `syncPersonPool` sees three occupied slots and has nothing to create, `selectPoolPerson` filters
+   * every one of them out on `releasedAt: null`, and the hire has to make somebody or refuse.
+   */
+  it('syncs exactly once, cannot be helped by it, and falls back to an UNMANAGED person', async (): Promise<void> => {
     const { workspaceId } = await project()
-    const template = await activeTemplate('Everybody Released')
+    const template = await activeTemplate('Everybody Released, Slots Still Held')
     await syncPersonPool()
+    // Released, slots UNTOUCHED -- the legacy shape. `poolSlot` deliberately not cleared.
     await prisma.person.updateMany({
       where: { templateId: template.id },
-      data: { releasedAt: new Date(), releaseReason: 'test', poolSlot: null },
+      data: { releasedAt: new Date(), releaseReason: 'released before the slot was freed' },
     })
     vi.mocked(syncPersonPool).mockClear()
 
@@ -147,9 +164,21 @@ describe('hireFromTemplate when the pool is genuinely missing', () => {
 
     expect(out.ok).toBe(true)
     if (!out.ok) return
-    // ONE retry, not a loop: the sync recreated the three vacated slots, and selection after it is
-    // the second and last attempt.
+    // ONE sync, not a loop and not none: reuse was ruled out under the workspace lock, the pool was
+    // given its single chance to help, and the second attempt is the last.
     expect(vi.mocked(syncPersonPool)).toHaveBeenCalledTimes(1)
+    // The fallback actually taken: a brand-new person of this persona holding NO slot. That is the
+    // `requirePool`-unset compatibility path, and until now nothing proved it was reachable.
+    const hired = await prisma.person.findUniqueOrThrow({ where: { id: out.value.personId } })
+    expect(hired.poolSlot).toBeNull()
+    expect(hired.templateId).toBe(template.id)
+    expect(hired.releasedAt).toBeNull()
+    expect(out.value.reused).toBe(false)
+    // And the sync created nothing, because it had nothing to create: three occupied slots, all held
+    // by people it must never touch.
+    const managed = await prisma.person.findMany({ where: { templateId: template.id, poolSlot: { not: null } } })
+    expect(managed).toHaveLength(3)
+    for (const person of managed) expect(person.releasedAt).not.toBeNull()
   })
 
   it('does not sync a second time on a hire that refuses under requirePool', async (): Promise<void> => {

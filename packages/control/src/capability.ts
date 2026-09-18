@@ -719,6 +719,16 @@ export async function seatMember(
  * first. Same function, same arguments, so the two staffing paths cannot disagree about where a
  * backend specialist belongs. `Specialists` is still the fallback -- it is what that function
  * returns for a role the table does not recognise.
+ *
+ * **A hire that seats nobody creates no department** (fix round 2, gap 5). That find-or-create used
+ * to run at the top of the create branch, before the candidate had been re-verified under its own
+ * lock -- and a value RETURNED from an interactive `$transaction` commits everything written before
+ * it. So the two branches that hire nobody, `needs_pool` for a candidate that raced away and the
+ * `requirePool` refusal after it, left an empty `Team` behind on a project that had no departments at
+ * all. The department is materialised at the last moment on each path that is about to write a seat,
+ * and a department this verb DID create is announced with the same
+ * `org.changed { entity: 'team', field: 'created' }` `createProjectTeam` writes -- once, and never
+ * for one it merely reused.
  */
 export async function hireFromTemplate(
   workspaceId: string,
@@ -914,10 +924,26 @@ export async function hireFromTemplate(
       // department BY NAME, which is alphabetical chance the moment a project has two. The
       // fallback is unchanged in effect: that function answers `Specialists` for a role its table
       // does not recognise, which is the name this branch has always used.
+      //
+      // NAMED here, WRITTEN below (fix round 2, gap 5): the find-or-create used to run at this point,
+      // before the candidate had been re-verified under its own lock, and the two branches that
+      // return without seating anybody -- `needs_pool` for a candidate that raced away, and the
+      // `requirePool` refusal after it -- COMMIT whatever this transaction wrote before them. A
+      // refused hire therefore left an empty `Engineering` on a project that had no departments at
+      // all: visible in the Organization view, in the sidebar and to `formTeam`, created by a hire
+      // that was refused and removed by nothing. So the department is materialised at the last
+      // moment, on each path that is actually about to create a seat, and `created` is carried out so
+      // the caller can put it on the timeline.
       const department = functionalDepartmentFor(template.role, runtimeRoles)
-      const team =
-        (await tx.team.findFirst({ where: { workspaceId, name: department }, select: { id: true } })) ??
-        (await tx.team.create({ data: { workspaceId, name: department }, select: { id: true } }))
+      const ensureDepartment = async (): Promise<{ readonly id: string; readonly created: boolean }> => {
+        const found = await tx.team.findFirst({ where: { workspaceId, name: department }, select: { id: true } })
+        if (found !== null) return { id: found.id, created: false }
+        // Safe to create unguarded: the `Workspace` row is held `FOR UPDATE` above and every other
+        // writer of `(workspaceId, name)` takes that same lock first (final review fix round 2,
+        // Important A, `org.ts`'s `lockWorkspaceForDepartmentName`), so nothing can be racing this.
+        const made = await tx.team.create({ data: { workspaceId, name: department }, select: { id: true } })
+        return { id: made.id, created: true }
+      }
 
       // Task 4: seat the managed candidate `selectPoolPerson` chose before this transaction opened,
       // instead of minting a new `Person` below. PERSON locked FIRST, directly by id -- this file's
@@ -936,6 +962,7 @@ export async function hireFromTemplate(
             select: { id: true },
           })) !== null
         if (pooled !== null && pooled.releasedAt === null && !busyHere) {
+          const team = await ensureDepartment()
           const merged = [...new Set([...pooled.capabilities, ...capabilities])].toSorted()
           // The rationale is written here exactly as it is for a brand-new hire (below): this pool
           // person is NEW to this project, and "why they are here" is this call's own sentence, not
@@ -964,7 +991,13 @@ export async function hireFromTemplate(
           const worker = await tx.slave.create({
             data: { teamId: team.id, personId: pooled.id, role: template.role, runtimeRoles, engagementTaskId },
           })
-          return { kind: 'created' as const, slaveId: worker.id, name: pooled.name, personId: pooled.id }
+          return {
+            kind: 'created' as const,
+            slaveId: worker.id,
+            name: pooled.name,
+            personId: pooled.id,
+            team: { id: team.id, name: department, created: team.created },
+          }
         }
         // The chosen candidate raced away. On the first attempt that is another "nothing usable,
         // and reuse is ruled out" -- the sync/reselect below is bounded at one, so a raced
@@ -983,6 +1016,11 @@ export async function hireFromTemplate(
       // the INSTALLATION now, which is why `uniquePersonName` reads every person and not this
       // workspace's workers. `lifecycle`, `capabilities` and the rationale are facts about the
       // person; `role` and `runtimeRoles` are facts about the seat.
+      //
+      // The department is materialised HERE, on the last path that can still refuse (fix round 2, gap
+      // 5): every branch above that returns without a seat has already returned, so a `Team` written
+      // from this point on always ends up with somebody in it.
+      const manualTeam = await ensureDepartment()
       const person = await tx.person.create({
         data: {
           name: uniquePersonName(await tx.person.findMany({ select: { name: true } }), template.name),
@@ -993,9 +1031,15 @@ export async function hireFromTemplate(
         },
       })
       const worker = await tx.slave.create({
-        data: { teamId: team.id, personId: person.id, role: template.role, runtimeRoles, engagementTaskId },
+        data: { teamId: manualTeam.id, personId: person.id, role: template.role, runtimeRoles, engagementTaskId },
       })
-      return { kind: 'created' as const, slaveId: worker.id, name: person.name, personId: person.id }
+      return {
+        kind: 'created' as const,
+        slaveId: worker.id,
+        name: person.name,
+        personId: person.id,
+        team: { id: manualTeam.id, name: department, created: manualTeam.created },
+      }
     })
 
   // Attempt one: no sync has run, and an existing seat wins here without one.
@@ -1019,6 +1063,21 @@ export async function hireFromTemplate(
   if (outcome.kind === 'vanished') return err({ kind: 'slave_not_found', slaveId: outcome.slaveId })
   if (outcome.kind === 'refused') return err(outcome.refusal)
   if (outcome.kind === 'created') {
+    // The DEPARTMENT first, when this hire is what made it (fix round 2, gap 5), in the order the two
+    // things happened. `createProjectTeam`'s payload verbatim -- same entity, same field, same
+    // from/to -- so the Activity card that already renders a department creation renders this one and
+    // a department that appeared because the Supervisor hired a backend specialist is on the timeline
+    // rather than out of nowhere. `actor: 'system'`, matching the seat event below it: this verb is
+    // reached from `carryOut`'s `hire_from_catalog` arm and from the CLI, never from a principal
+    // `createProjectTeam` could name. Nothing at all for a department it merely reused.
+    if (outcome.team.created) {
+      await appendEvent({
+        type: 'org.changed',
+        workspaceId,
+        actor: 'system',
+        payload: { entity: 'team', id: outcome.team.id, field: 'created', from: null, to: outcome.team.name },
+      })
+    }
     await appendEvent({
       type: 'org.changed',
       workspaceId,
