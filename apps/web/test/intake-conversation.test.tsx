@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { INTAKE_BOOTSTRAP_VERIFY_COMMAND } from '@slave-of-ai/domain'
 import { IntakeConversation } from '../src/components/projects/IntakeConversation.js'
 
 const routerPush = vi.fn()
@@ -261,6 +262,28 @@ describe('IntakeConversation', () => {
     expect((screen.getByTestId('intake-create') as HTMLButtonElement).disabled).toBe(true)
   })
 
+  // M60 §7b, measured on a real project: the card demanded a command for a repository that did not
+  // exist yet, which is a question with no honest answer, so the person typed one to get past the
+  // button. That typed command is treated as a gate they chose, so `acceptIntake` plants nothing
+  // and nothing asks the project to write the script -- the workspace ends up gated on a file that
+  // will never exist. The empty list has to be reachable from here or the server-side relaxation
+  // cannot be used at all.
+  it('creates a NEW repository with no verify command, and says which gate it will start with', async (): Promise<void> => {
+    stubFetch([
+      view({
+        status: 'drafted',
+        draft: { ...DRAFT, repo: { mode: 'new', path: null }, verifyCommands: [] },
+        facts: FACTS,
+      }),
+    ])
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+    expect((screen.getByTestId('intake-create') as HTMLButtonElement).disabled).toBe(false)
+    // Named, not merely permitted: a blank list reads as an oversight, and an operator who thinks
+    // the project has no gate at all is the one who invents the command this test exists to stop.
+    expect(screen.getByTestId('intake-verify-bootstrap').textContent).toContain(INTAKE_BOOTSTRAP_VERIFY_COMMAND)
+  })
+
   /**
    * FINAL REVIEW, IMPORTANT 8, in the card. Three seats from one persona is legal and real -- a
    * persona has three people -- and the chip list keyed every chip by `templateId`, so three
@@ -287,6 +310,13 @@ describe('IntakeConversation', () => {
     expect((screen.getByTestId('intake-create') as HTMLButtonElement).disabled).toBe(true)
     // And it says WHICH rule, in the card, rather than leaving a dead button to be puzzled over.
     expect(screen.getByTestId('intake-team-over-limit').textContent).toContain('three')
+  })
+
+  it('still demands a command for an EXISTING repository, where code is there to be proven', async (): Promise<void> => {
+    stubFetch([view({ status: 'drafted', draft: { ...DRAFT, verifyCommands: [] }, facts: FACTS })])
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+    expect((screen.getByTestId('intake-create') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('posts the EDITED draft and lands on the project', async (): Promise<void> => {

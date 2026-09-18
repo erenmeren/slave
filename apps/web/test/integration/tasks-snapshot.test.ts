@@ -236,7 +236,12 @@ describe('buildTasksSnapshot', () => {
     expect(task?.runs.map((r) => r.costUsd)).toEqual([null, 0.42])
   })
 
-  it('names the live run slave as assignee and leaves finished tasks unassigned', async (): Promise<void> => {
+  it('names the live run slave while work is in flight, and the implementer once it is finished', async (): Promise<void> => {
+    // `Task.assigneeId` is written by nothing in this product -- a run is linked to its worker
+    // through `SlaveRun.slaveId` -- so this name is derived from the runs. Deriving it from the
+    // LIVE run alone left every finished task reading `unassigned`, which is not what the board
+    // knows: somebody did that work, and the row said nobody had.
+
     const runningTask = await prisma.task.create({
       data: {
         workspaceId: fixture.workspaceId,
@@ -275,7 +280,76 @@ describe('buildTasksSnapshot', () => {
     const snapshot = await buildTasksSnapshot(fixture.workspaceId)
 
     expect(snapshot?.tasks.find((t) => t.id === runningTask.id)?.assigneeName).toBe('Alex')
-    expect(snapshot?.tasks.find((t) => t.id === doneTask.id)?.assigneeName).toBeNull()
+    expect(snapshot?.tasks.find((t) => t.id === doneTask.id)?.assigneeName).toBe('Alex')
+  })
+
+  it('leaves a task NOBODY has run unassigned, which is what unassigned should mean', async (): Promise<void> => {
+    // The word has to keep meaning something. A queued task genuinely has nobody on it -- this
+    // product dispatches on a role match when a slot frees, it does not hand tasks out in advance
+    // -- and that is the one case the board should say so.
+    const queued = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Waiting its turn',
+        description: 'x',
+        status: 'ready',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+      },
+    })
+
+    const snapshot = await buildTasksSnapshot(fixture.workspaceId)
+    expect(snapshot?.tasks.find((t) => t.id === queued.id)?.assigneeName).toBeNull()
+  })
+
+  it('credits the IMPLEMENTER of a finished task, not the reviewer who looked at it', async (): Promise<void> => {
+    // `implementerOf` (`apps/orchestrator/src/verify.ts`) draws this exact distinction for exactly
+    // this reason, and the board must not contradict it: the reviewer caught it, the implementer
+    // wrote it, and a card naming the reviewer as the person who did the work is a lie an operator
+    // would act on.
+    const reviewer = await prisma.slave.create({
+      data: {
+        teamId: (await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })).id,
+        role: 'backend',
+        personId: (await prisma.person.create({ data: { name: 'Robin' } })).id,
+      },
+    })
+    const task = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Reviewed and done',
+        description: 'x',
+        status: 'done',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+      },
+    })
+    await prisma.slaveRun.create({
+      data: {
+        taskId: task.id,
+        slaveId: fixture.slaveId,
+        kind: 'implementation',
+        status: 'succeeded',
+        startedAt: new Date('2026-01-01T10:00:00Z'),
+        terminalAt: new Date('2026-01-01T10:30:00Z'),
+        endedAt: new Date('2026-01-01T10:30:00Z'),
+      },
+    })
+    // Newer than the implementation, so "the most recent run" would pick the wrong person.
+    await prisma.slaveRun.create({
+      data: {
+        taskId: task.id,
+        slaveId: reviewer.id,
+        kind: 'review',
+        status: 'succeeded',
+        startedAt: new Date('2026-01-01T11:00:00Z'),
+        terminalAt: new Date('2026-01-01T11:10:00Z'),
+        endedAt: new Date('2026-01-01T11:10:00Z'),
+      },
+    })
+
+    const snapshot = await buildTasksSnapshot(fixture.workspaceId)
+    expect(snapshot?.tasks.find((t) => t.id === task.id)?.assigneeName).toBe('Alex')
   })
 
   it('carries the goal version each task was derived from, beside the version the project is on', async (): Promise<void> => {

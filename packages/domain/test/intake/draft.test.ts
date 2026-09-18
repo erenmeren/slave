@@ -18,8 +18,22 @@ describe('IntakeDraft', () => {
     expect(intakeDraftSchema.safeParse(draft).success).toBe(true)
   })
 
-  it('refuses a draft with no verify command at all -- createWorkspace would refuse it anyway', () => {
+  it('refuses an EXISTING repository with no verify command: there is code, so something proves it', () => {
     expect(intakeDraftSchema.safeParse({ ...draft, verifyCommands: [] }).success).toBe(false)
+  })
+
+  it('accepts a NEW repository with no verify command, which is the only truthful answer for one', () => {
+    // The refusal this replaces made idea-only projects impossible to create. There is no code in a
+    // repository that does not exist, so there is no command that could prove anything about it,
+    // and `min(1)` left the model two moves: return `[]` and have its whole answer thrown away, or
+    // INVENT a command for code nobody has written. Both were observed on 2026-09-16 -- the second
+    // is how `npx html-validate index.html` became a real project's gate with no `index.html` in
+    // it, which is the gate two runs then went into the control database to rewrite.
+    //
+    // `acceptIntake` plants the bootstrap command, so an empty list here never reaches `runVerify`
+    // as zero commands and the `verify_not_configured` halt cannot fire.
+    const parsed = intakeDraftSchema.safeParse({ ...draft, repo: { mode: 'new', path: null }, verifyCommands: [] })
+    expect(parsed.success).toBe(true)
   })
 
   it('refuses a name past 80 characters and a goal past 8000', () => {

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type InputHTMLAttributes } from 'react'
 import { useRouter } from 'next/navigation'
 import {
+  INTAKE_BOOTSTRAP_VERIFY_COMMAND,
   INTAKE_MAX_SEATS_PER_TEMPLATE,
   INTAKE_STATUS_LABEL,
   INTAKE_STEP_LABEL,
@@ -261,6 +262,13 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
     )
   }
 
+  // M60 §7b: a repository that does not exist yet has no code, so no command could prove anything
+  // about it and an empty list is the truthful answer -- `intakeDraftSchema` permits it for exactly
+  // that case, and `acceptIntake` plants the bootstrap gate over it. Demanding one here made that
+  // relaxation unreachable and pushed the person into typing a command instead, which reads as a
+  // gate they chose: nothing is planted, nothing is asked to write it, and the project is gated on
+  // a file that never arrives. An EXISTING repository is still held to it.
+  const gateOptional = edited?.repo.mode === 'new'
   // Final review, Important 8: a persona has three people, so a fourth seat from one names somebody
   // who is not there. `intakeDraftSchema` refuses it and `acceptIntake` re-parses, so pressing the
   // button on such a draft is a round trip whose only outcome is a refusal; the card says which
@@ -280,7 +288,10 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
           ),
         ]
   const draftReady =
-    edited !== null && edited.verifyCommands.length > 0 && edited.name.trim() !== '' && overStaffed.length === 0
+    edited !== null &&
+    (gateOptional || edited.verifyCommands.length > 0) &&
+    edited.name.trim() !== '' &&
+    overStaffed.length === 0
   const newRootReady = choice !== 'new-root' || newRootPath !== null
 
   return (
@@ -384,6 +395,13 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
 
           <div className="flex flex-col gap-1">
             <FieldLabel>a task is done when these pass</FieldLabel>
+            {gateOptional && edited.verifyCommands.length === 0 ? (
+              <p data-testid="intake-verify-bootstrap" className="text-[12.5px] text-text-3">
+                Nothing to run yet. This project starts with{' '}
+                <span className="font-mono text-text-1">{INTAKE_BOOTSTRAP_VERIFY_COMMAND}</span>, and its first task is
+                to write it. Leave this empty unless you already know a command that would pass.
+              </p>
+            ) : null}
             {candidates.map((entry) => (
               <label key={entry.command} className="flex items-center gap-1.5 text-[12.5px]">
                 <input

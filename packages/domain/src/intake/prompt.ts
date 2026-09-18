@@ -146,6 +146,16 @@ export function buildIntakePrompt(input: {
     'A verify command may be "source": "detected" only if FACTS carries that exact string, and',
     '"source": "draft" only when the repository does not exist yet. Never write "source":',
     '"operator" -- that means a person typed it, and you are not a person.',
+    '',
+    // M60 §7b. Said out loud because the opposite was enforced for a milestone and the cost was
+    // measured: a model that must name a command for code nobody has written can only invent one,
+    // and an invented gate becomes the project's real gate, applied to every task, passing none.
+    // "Leave it empty" has to be offered explicitly -- a model reading the shape above and nothing
+    // else will guess that the field is mandatory and fill it with something plausible.
+    'If the repository does not exist yet, leave "verifyCommands" EMPTY. There is no code in it, so',
+    'no command could prove anything about it, and a command invented now becomes the gate every',
+    'task in the project is judged by. An empty list is the right answer there, and the project is',
+    'given a starting gate of its own. Name commands only for a repository that already exists.',
   )
 
   return neutraliseMarkers(blocks.join('\n'))

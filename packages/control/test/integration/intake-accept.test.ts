@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
-import { INTAKE_MAX_SEATS_PER_TEMPLATE, type IntakeDraft } from '@slave-of-ai/domain'
+import { INTAKE_BOOTSTRAP_VERIFY_COMMAND, INTAKE_MAX_SEATS_PER_TEMPLATE, type IntakeDraft } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { acceptIntake, openIntake, sendIntakeMessage } from '../../src/intake.js'
 import { setInstallationSettings } from '../../src/installation.js'
@@ -418,6 +418,58 @@ describe('acceptIntake', () => {
     expect(workspace.repoPath).toBe(created)
     const row = await prisma.intake.findUniqueOrThrow({ where: { id } })
     expect((row.stepLog as { step: string }[])[0]?.step).toBe('init_repository')
+  })
+
+  it('plants a gate of its own when the model named none, and asks the project to write it', async (): Promise<void> => {
+    // M60 §7b. An empty list is what the model should answer for a repository that does not exist
+    // (there is no code, so no command proves anything), and it must NOT reach `createWorkspace`
+    // as one: zero verify commands is `verify_not_configured`, which blocks the task and halts the
+    // whole project on its first piece of work. So the system plants its own command -- and puts
+    // writing the script it names into the goal, because a gate nothing is asked to create is a
+    // gate the first task fails through every attempt it has.
+    const root = mkdtempSync(join(tmpdir(), 'accept-bootstrap-'))
+    await setInstallationSettings({ reposRoot: root })
+    const id = await opened('I have an idea and no repository at all')
+    const draft: IntakeDraft = {
+      name: 'Idea Only',
+      goal: 'Redesign the marketing site from scratch',
+      repo: { mode: 'new', path: null },
+      baseBranch: 'main',
+      verifyCommands: [],
+      setupCommands: [],
+      budgetUsd: null,
+      provider: null,
+      team: [],
+    }
+    const accepted = await acceptIntake(id, draft)
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: accepted.value.workspaceId } })
+    expect(workspace.verifyCommands).toEqual([INTAKE_BOOTSTRAP_VERIFY_COMMAND])
+    const goal = await prisma.goalVersion.findFirstOrThrow({
+      where: { workspaceId: accepted.value.workspaceId },
+      orderBy: { version: 'desc' },
+    })
+    // The person's own goal is still the goal; the clause is added to it rather than replacing it.
+    expect(goal.text).toContain('Redesign the marketing site from scratch')
+    expect(goal.text).toContain('scripts/verify.sh')
+  })
+
+  it('leaves a named gate exactly as the draft named it, planting nothing over it', async (): Promise<void> => {
+    const repo = makeRepo()
+    const id = await opened(`it is at ${repo}`)
+    const accepted = await acceptIntake(id, draftFor(repo, 'Named Gate'))
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: accepted.value.workspaceId } })
+    expect(workspace.verifyCommands).toEqual(['npm test'])
+    const goal = await prisma.goalVersion.findFirstOrThrow({
+      where: { workspaceId: accepted.value.workspaceId },
+      orderBy: { version: 'desc' },
+    })
+    expect(goal.text).not.toContain('scripts/verify.sh')
   })
 
   it('stops at the failed step, keeps the log, and resumes where it stopped', async (): Promise<void> => {

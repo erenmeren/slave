@@ -38,10 +38,24 @@ export type IntakeSeat = z.infer<typeof intakeSeatSchema>
  * (there is nothing to attach otherwise) and `new` allows a null one, which `acceptIntake` resolves
  * to `<reposRoot>/<slug(name)>` and the card shows before the button is pressed.
  *
- * `verifyCommands` is `min(1)` for `createWorkspace`'s own reason (`verify_commands_empty`): a
- * project with no definition of done can never reach `done` on its own. A new repository gets one
- * too -- the model proposes for the stack it was told about, the card marks it as a proposal, and
- * R7's README says under `## Goal` what the project verifies with.
+ * `verifyCommands` is required for a repository that EXISTS, for `createWorkspace`'s own reason
+ * (`verify_commands_empty`): there is code in it, so something can be run against that code, and a
+ * project with no definition of done can never reach `done` on its own.
+ *
+ * It is NOT required for a repository that does not exist yet (M60 §7a). That clause used to apply
+ * to both, and the cost was measured rather than argued: there is no code in a repository nobody
+ * has created, so there is no command that proves anything about it, and demanding one left the
+ * model two moves -- answer `[]` and have its entire draft discarded by this schema, or INVENT a
+ * command for code that does not exist. Both were observed on 2026-09-16. The first told the person
+ * "Sorry -- I did not follow that", blaming their message for a refusal their message did not
+ * cause, at roughly $0.10 a turn, every time, so an idea-only project could not be created at all.
+ * The second is how `npx html-validate index.html` became the workspace-wide gate of a project with
+ * no `index.html` anywhere in it -- the gate no task could pass, and the one two runs went into the
+ * control database to rewrite rather than accept.
+ *
+ * An empty list never reaches `runVerify` as zero commands: `acceptIntake` plants a
+ * system-authored bootstrap command in its place, so the `verify_not_configured` halt
+ * (`apps/orchestrator/src/verify.ts`) cannot fire and no gate is ever fabricated by a model.
  */
 export const intakeDraftSchema = z.object({
   name: z.string().trim().min(1).max(80),
@@ -53,7 +67,6 @@ export const intakeDraftSchema = z.object({
   baseBranch: z.string().trim().min(1).max(200),
   verifyCommands: z
     .array(z.object({ command: z.string().trim().min(1).max(500), source: z.enum(VERIFY_SOURCES) }))
-    .min(1)
     .max(20),
   setupCommands: z.array(z.string().trim().min(1).max(500)).max(20),
   // `finite()` and not a bare `nonnegative()`: `Infinity >= 0` is true, and an infinite ceiling in
@@ -62,6 +75,20 @@ export const intakeDraftSchema = z.object({
   provider: z.enum(PROVIDER_KINDS).nullable(),
   team: z.array(intakeSeatSchema).max(12),
 })
+  // The requirement the field's own `min(1)` used to carry, narrowed to the case it is true of.
+  // Object-level rather than on the array, because it depends on a SIBLING field: "does this
+  // project have code yet" is what decides whether a command could prove anything, and the array
+  // cannot see `repo` from inside itself. The issue is reported on `verifyCommands` all the same,
+  // so a caller reading the path still learns which field to fix.
+  .superRefine((draft, ctx) => {
+    if (draft.repo.mode === 'existing' && draft.verifyCommands.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['verifyCommands'],
+        message: 'a repository that already exists must say how its work is proven',
+      })
+    }
+  })
   /**
    * Final review, Important 8: at most {@link INTAKE_MAX_SEATS_PER_TEMPLATE} seats from any one
    * persona, because a persona has exactly that many people. A draft asking for a fourth is asking
@@ -75,9 +102,9 @@ export const intakeDraftSchema = z.object({
    * reading the whole team. One issue per persona rather than one per surplus seat -- five seats
    * from one persona is ONE thing wrong, and five copies of one complaint reads as five.
    *
-   * A `superRefine` rather than a check inside the array, because it is a fact about the WHOLE
-   * team: no single seat is wrong on its own, and the array's element schema cannot see its
-   * siblings.
+   * A separate `superRefine` from the `verifyCommands` clause above deliberately: they check
+   * unrelated fields for unrelated reasons, and Zod runs every refinement in the chain, so both
+   * report on a draft that breaks both rather than the first one hiding the second.
    */
   .superRefine((draft, ctx) => {
     const seen = new Map<string, number>()

@@ -117,6 +117,41 @@ export const INTAKE_TEXT_MAX_CHARS = 4_000
  *  event as its `request` (M59 R10 step 4). The same cap for the same reason. */
 export const INTAKE_TRANSCRIPT_MAX_CHARS = 4_000
 
+/**
+ * The gate a project whose repository did not exist yet is created with (M60 §7b).
+ *
+ * SYSTEM-AUTHORED, and that is the point: a model asked to name a gate for code nobody has written
+ * can only invent one, and an invented gate is what `npx html-validate index.html` was on a project
+ * with no `index.html` -- the gate no task could pass, and the one two runs rewrote the control
+ * database to escape. `intakeDraftSchema` therefore lets the model answer `[]` for a new
+ * repository, and `acceptIntake` puts THIS in its place.
+ *
+ * It names the project's own script rather than a stack's test runner because the stack is not
+ * known yet either. The script does not exist at creation: {@link INTAKE_BOOTSTRAP_GOAL_CLAUSE} is
+ * what puts writing it in the goal, so the project's first task creates it and every task after
+ * that is proven by a gate the project itself defined.
+ *
+ * Never empty, whatever the model said: zero commands is `verify_not_configured`, which blocks the
+ * task and halts the whole project on its first piece of work (`apps/orchestrator/src/verify.ts`).
+ */
+export const INTAKE_BOOTSTRAP_VERIFY_COMMAND = 'bash scripts/verify.sh'
+
+/**
+ * Appended to the goal of a project created with {@link INTAKE_BOOTSTRAP_VERIFY_COMMAND}, because
+ * the goal is what the planner reads: a gate that nothing in the project is asked to create is a
+ * gate the first task fails three times over.
+ *
+ * Spelled as a requirement on the work rather than as a note about the system. The planner turns a
+ * goal into tasks, so this has to read as something to DO.
+ */
+export const INTAKE_BOOTSTRAP_GOAL_CLAUSE = [
+  '',
+  'Before anything else, create `scripts/verify.sh`: an executable script that checks this',
+  "project's work and exits non-zero when it is not right. Every task in this project is verified",
+  'by running it, so it must exist and pass before any other work can be accepted. Start it with',
+  'whatever can honestly be checked about the first deliverable and extend it as the project grows.',
+].join('\n')
+
 /** How many Agency persona catalogue entries the facts may carry (M59 R6). Three hundred names
  *  and divisions is a few kilobytes; three hundred PROFILE BODIES would be twelve megabytes, which
  *  is why the summary carries neither a profile nor a description. */

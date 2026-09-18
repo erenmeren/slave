@@ -4,6 +4,8 @@ import { dirname, isAbsolute, join } from 'node:path'
 import { promisify } from 'node:util'
 import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
+  INTAKE_BOOTSTRAP_GOAL_CLAUSE,
+  INTAKE_BOOTSTRAP_VERIFY_COMMAND,
   INTAKE_CATALOGUE_MAX,
   INTAKE_CLAIM_TTL_MS,
   INTAKE_MAX_MODEL_CALLS,
@@ -683,7 +685,15 @@ export async function acceptIntake(
           name: draft.name,
           repoPath,
           baseBranch: draft.baseBranch,
-          verifyCommands: draft.verifyCommands.map((entry) => entry.command),
+          // M60 §7b: the bootstrap gate stands in for a list the model left empty, which
+          // `intakeDraftSchema` now permits for a repository that does not exist yet. Substituted
+          // HERE rather than in the draft, so the card shows what the model actually proposed and
+          // `createWorkspace` still never sees an empty list -- zero commands is
+          // `verify_not_configured`, which halts the project on its first task.
+          verifyCommands:
+            draft.verifyCommands.length === 0
+              ? [INTAKE_BOOTSTRAP_VERIFY_COMMAND]
+              : draft.verifyCommands.map((entry) => entry.command),
           setupCommands: [...draft.setupCommands],
           budgetUsd: draft.budgetUsd,
           provider: draft.provider,
@@ -825,7 +835,12 @@ export async function acceptIntake(
     // 4. set_goal -- with the person's own words as the request.
     currentStep = 'set_goal'
     if (done.get('set_goal') === undefined) {
-      const goal = await setGoal(workspaceId, draft.goal, principal, { request: transcriptSummary(intake.messages) })
+      // M60 §7b: when the bootstrap gate was planted, writing the script it names is part of the
+      // work -- the goal is what the planner reads, and a gate nothing is asked to create is one
+      // the first task fails its way through every attempt it has.
+      const goalText =
+        draft.verifyCommands.length === 0 ? `${draft.goal}\n${INTAKE_BOOTSTRAP_GOAL_CLAUSE}` : draft.goal
+      const goal = await setGoal(workspaceId, goalText, principal, { request: transcriptSummary(intake.messages) })
       if (!goal.ok) return fail('set_goal', goal.error)
       await appendStep(intakeId, { step: 'set_goal', status: 'done', at: now(), detail: `v${String(goal.value.version)}` })
     }

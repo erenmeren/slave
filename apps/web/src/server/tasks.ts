@@ -266,6 +266,19 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
     shellFacts,
     tasks: tasks.map((task) => {
       const liveRun = task.runs.find((run) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status))
+      // Who is on this task: whoever is running it now, and once nothing is, whoever DID the work.
+      //
+      // `Task.assigneeId` is not the answer -- nothing in this product writes that column, it is
+      // there for hand-assignment alone -- so the name is derived from the runs. The live run
+      // cannot be the whole answer either: it goes terminal the moment the work finishes, and a
+      // finished task then read as `unassigned`, which is the one thing the board did know was
+      // false.
+      //
+      // The IMPLEMENTATION run, not simply the newest one: a review run is newer and belongs to
+      // the reviewer, and naming them as the person who did the work is a claim an operator would
+      // act on. `implementerOf` (`apps/orchestrator/src/verify.ts`) settles this the same way, and
+      // two surfaces answering "who did this" differently is worse than either answer.
+      const worker = liveRun ?? task.runs.find((run) => run.kind === 'implementation')
       return {
         id: task.id,
         title: task.title,
@@ -274,7 +287,7 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         priority: task.priority,
         attempt: task.attempt,
         maxAttempts: task.maxAttempts,
-        assigneeName: liveRun?.slave.person.name ?? null,
+        assigneeName: worker?.slave.person.name ?? null,
         branch: task.branch,
         lastRejectionReason: task.lastRejectionReason,
         goalVersion: task.goalVersion,
