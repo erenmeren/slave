@@ -130,6 +130,18 @@ describe('randomEnglishName', () => {
  * than inferred from a passing sync.
  */
 describe('the English name dictionaries, as a capacity guarantee', () => {
+  it('keeps every legacy dictionary entry so persisted pool names remain valid forever', () => {
+    // These entries were accidentally dropped or moved to the wrong half when the dictionaries
+    // were expanded. Existing Person rows keep their generated name permanently, so vocabulary
+    // expansion must be append-only from the validator's point of view.
+    expect(FIRST_NAMES).toContain('Harper')
+    for (const surname of ['Garcia', 'Martinez', 'Nelson']) {
+      expect(LAST_NAMES).toContain(surname)
+    }
+    expect(isGeneratedEnglishName('Harper Garcia')).toBe(true)
+    expect(isGeneratedEnglishName('Charlotte Nelson')).toBe(true)
+  })
+
   it('offers at least 100,000 distinct First Surname combinations', () => {
     expect(FIRST_NAMES.length).toBeGreaterThanOrEqual(250)
     expect(LAST_NAMES.length).toBeGreaterThanOrEqual(400)
