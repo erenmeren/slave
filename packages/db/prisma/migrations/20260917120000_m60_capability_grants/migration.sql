@@ -1,0 +1,21 @@
+-- Catalog Person Pool, final review Important 2: the EXPLICIT half of a person's capability set.
+--
+-- `Person.capabilities` is written by `syncPersonPool` from the template's `capabilityKeys`, which
+-- means an explicit grant made with `set-capabilities` was erased by the next sync pass. Keeping
+-- the union in `capabilities` alone would have had the opposite failure: a key the template has
+-- since dropped could never disappear, because nothing distinguishes "the template used to say
+-- this" from "a person said this".
+--
+-- Two columns settle it. `capabilityGrants` holds only what was granted on top of the baseline, and
+-- the stored `capabilities` stays the UNION of the template's current keys and these grants -- so
+-- every existing reader is untouched.
+--
+-- No backfill: every existing row's `capabilities` is either a template baseline (managed, written
+-- by the pool sync) or a manual answer (unmanaged, where this column is not read). Defaulting the
+-- new column to the empty array is therefore already the correct history for both, and guessing
+-- which pre-existing key was "explicit" is exactly the inference this split exists to avoid.
+--
+-- NOT NULL with a default, like `capabilities` itself: nothing in this product distinguishes "no
+-- grants" from "grants unknown", and a nullable array would make every reader handle a third case.
+
+ALTER TABLE "Person" ADD COLUMN "capabilityGrants" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];

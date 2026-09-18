@@ -25,7 +25,11 @@ export const SECTION_ORDER: Readonly<Record<Manifest['kind'], readonly SectionKi
   // request. A section whose text is empty is dropped from prompt and manifest alike.
   // `memory` is LAST on planning (M49 R3): the prompt reads goal, what changed, the words you may
   // use, the process, what this organisation already knows, then the request.
-  planning: ['profile', 'planning_goal', 'replan', 'capabilities', 'runbook', 'handoff_protocol', 'memory'],
+  // `roles` sits directly before `capabilities`: both are the vocabulary a plan may be written in,
+  // and a task names one or the other, so the two lists read as one instruction. It is the narrower
+  // of the two -- a role that matches no seat is a task that can be dispatched to nobody -- so it
+  // comes first.
+  planning: ['profile', 'planning_goal', 'replan', 'roles', 'capabilities', 'runbook', 'handoff_protocol', 'memory'],
 }
 
 // The markers and their defusing live in `./markers.js` (M48 t1) and are re-exported here, so

@@ -676,6 +676,44 @@ async function lockPersonOfSlave(tx: Prisma.TransactionClient, slaveId: string):
   await tx.$queryRaw`SELECT p.id FROM "Person" p JOIN "Slave" s ON s."personId" = p.id WHERE s.id = ${slaveId} FOR UPDATE OF p`
 }
 
+/**
+ * The `Workspace` row a department-name write must hold FIRST (final review fix round 2, Important
+ * A).
+ *
+ * `Team` is unique on `(workspaceId, name)`, and three verbs write into that index:
+ * {@link createProjectTeam} creates a department, {@link renameTeam} moves one onto another name,
+ * and `hireFromTemplate`/`seatMember`/`assignCompanyTx` (`capability.ts`, `department.ts`)
+ * find-or-create the functional department a seat belongs in. The hire ones already held this row
+ * `FOR UPDATE` from their first statement, for their own reasons; these two held only the `Team`
+ * row, or nothing at all, and leaned on the unique index plus a `catch` to turn a race into
+ * `duplicate_name`.
+ *
+ * That was a complete answer only while both racers were verbs that could catch it. The hire cannot:
+ * its `tx.team.create` sits in the middle of the transaction whose value becomes its `Result`, so a
+ * P2002 there rolls the whole hire back and rejects a promise its own signature promises a refusal
+ * value from -- and the two lock orders (this one's insert-then-`Workspace` KEY SHARE against the
+ * hire's `Workspace` FOR UPDATE-then-insert) could deadlock outright, which is a 40P01 in a caller
+ * that has nowhere to put one.
+ *
+ * So the `Workspace` row is the ONE serialisation point for every project department-name write.
+ * Taken first, by all of them, which is also what keeps them from deadlocking against each other:
+ * whoever gets this lock does its whole find/create/rename alone.
+ *
+ * A workspace that does not exist locks nothing and is reported by the caller's own existence check
+ * -- `FOR UPDATE` on no rows is not an error, and pre-empting the refusal here would duplicate it.
+ */
+async function lockWorkspaceForDepartmentName(tx: Prisma.TransactionClient, workspaceId: string): Promise<void> {
+  await tx.$queryRaw`SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
+}
+
+/** {@link lockWorkspaceForDepartmentName} for a verb named by its TEAM rather than by its project.
+ *  Resolved and locked in ONE statement (`FOR UPDATE OF w`), because reading the workspace id first
+ *  and locking it second is the very race this is closing. A `teamId` that names nothing locks
+ *  nothing, and the caller's own `team_not_found` reports it. */
+async function lockWorkspaceOfTeamForDepartmentName(tx: Prisma.TransactionClient, teamId: string): Promise<void> {
+  await tx.$queryRaw`SELECT w.id FROM "Workspace" w JOIN "Team" t ON t."workspaceId" = w.id WHERE t.id = ${teamId} FOR UPDATE OF w`
+}
+
 /** The same lock-then-load shape as {@link lockSlave}, for `renameTeam`/`deleteTeam`'s own row --
  *  its slaves are what `deleteTeam` counts and cascades into. */
 async function lockTeam(tx: Prisma.TransactionClient, teamId: string) {
@@ -823,8 +861,13 @@ export async function deleteSlave(
 /** Renames a project team. Sibling names are unique per WORKSPACE, the same rule
  *  {@link renameSlave} enforces per team. The `findFirst` below is a friendly pre-check that names
  *  the sibling in the refusal; the `Team_workspaceId_name_key` index (M34 t2) is what actually
- *  closes the race it cannot -- a concurrent create/rename can still slip past the pre-check, and
- *  the `catch` below refuses it the same way `org.ts`'s catalog verbs already do. */
+ *  closes the race it cannot, and the `catch` below refuses it the same way `org.ts`'s catalog verbs
+ *  already do -- but the index alone was not enough once a HIRE could be the loser of that race,
+ *  which is why the `Workspace` row is taken first now
+ *  ({@link lockWorkspaceForDepartmentName}, final review fix round 2, Important A). The lock is
+ *  reached through the `Team` row because a rename is named by its team and not by its project;
+ *  `lockTeam` below then takes the team itself, so the order is Workspace -> Team, the order every
+ *  other department-name writer takes. */
 export async function renameTeam(
   teamId: string,
   name: string,
@@ -833,6 +876,7 @@ export async function renameTeam(
   if (name.trim() === '') return err({ kind: 'invalid_name' })
 
   const outcome = await prisma.$transaction(async (tx) => {
+    await lockWorkspaceOfTeamForDepartmentName(tx, teamId)
     const team = await lockTeam(tx, teamId)
     if (team === null) return { ok: false as const, error: { kind: 'team_not_found', teamId } as ControlRefusal }
 
@@ -914,7 +958,9 @@ export async function deleteTeam(
  *  unique per workspace, the rule {@link renameTeam} enforces, backed by the same
  *  `Team_workspaceId_name_key` index (M34 t2): the `findFirst` below is a friendly pre-check that
  *  names the sibling in the refusal, and the `catch` closes the race it cannot, the way `org.ts`'s
- *  catalog verbs already do. */
+ *  catalog verbs already do. The `Workspace` row is held `FOR UPDATE` first, so a hire creating the
+ *  same functional department cannot lose that race to a P2002 it has nowhere to put
+ *  ({@link lockWorkspaceForDepartmentName}, final review fix round 2, Important A). */
 export async function createProjectTeam(
   workspaceId: string,
   name: string,
@@ -923,6 +969,7 @@ export async function createProjectTeam(
   if (name.trim() === '') return err({ kind: 'invalid_name' })
 
   const outcome = await prisma.$transaction(async (tx) => {
+    await lockWorkspaceForDepartmentName(tx, workspaceId)
     const workspace = await tx.workspace.findUnique({ where: { id: workspaceId }, select: { id: true } })
     if (workspace === null) return { ok: false as const, error: { kind: 'workspace_not_found', workspaceId } as ControlRefusal }
 
@@ -1096,6 +1143,18 @@ export async function deleteCompanyTeam(
  * relation, so this verb deletes NOTHING before the template row: every person hired from it keeps
  * working, keeps their name and their capabilities, and simply stops naming a persona. What the
  * caller is told is how many of them that was. No event.
+ *
+ * The managed pool SLOTS are cleared first (final review, Critical). `SetNull` and the pool's own
+ * `Person_poolSlot_requires_templateId` CHECK are each correct and together they are a
+ * contradiction: the FK action wants to write `templateId = NULL` onto a row still holding
+ * `poolSlot = 2`, and the CHECK refuses precisely that row. So deleting an imported persona threw
+ * a raw `23514` out of a `Promise<Result<…>>` -- an ordinary operator act failing in a way no
+ * caller could report. Clearing `poolSlot` inside THIS transaction, under the template lock the
+ * verb already takes, is what makes `SetNull` legal: `syncPersonPool` cannot see a template that
+ * no longer exists, so nobody recreates a slot behind this, and the three people become ordinary
+ * unmanaged people with every other fact about them -- name, capabilities, grants, seats, runs,
+ * departments -- untouched. That is what M58 R1 already promises, extended to the one column the
+ * pool added.
  */
 export async function deleteSlaveTemplate(
   templateId: string,
@@ -1106,6 +1165,7 @@ export async function deleteSlaveTemplate(
     const row = await tx.slaveTemplate.findUnique({ where: { id: templateId }, select: { id: true } })
     if (row === null) return { ok: false as const, error: { kind: 'template_not_found', templateId } as ControlRefusal }
     const personsUnlinked = await tx.person.count({ where: { templateId } })
+    await tx.person.updateMany({ where: { templateId, poolSlot: { not: null } }, data: { poolSlot: null } })
     await tx.slaveTemplate.delete({ where: { id: templateId } })
     return { ok: true as const, value: { personsUnlinked } }
   })

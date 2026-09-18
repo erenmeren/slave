@@ -275,8 +275,20 @@ model Person {
   /// (`pairRefusal`, `packages/control/src/org.ts`).
   model              String?
   provider           ProviderKind?
-  /// M47 R2, moved from `Slave` (R1): what this specialist provides, in taxonomy keys.
+  /// M47 R2, moved from `Slave` (R1): what this specialist provides, in taxonomy keys. For a
+  /// MANAGED person this is the stored EFFECTIVE set -- the union of their template's current
+  /// `capabilityKeys` and their own `capabilityGrants` -- so every reader (the scheduler, the
+  /// Organization view, `formTeam`) keeps reading one column and needs to know nothing about the
+  /// split.
   capabilities       String[]       @default([])
+  /// Final review, Important 2: the capabilities somebody granted this person EXPLICITLY, apart
+  /// from whatever their template says today. Without the split, `syncPersonPool` -- which writes
+  /// the template baseline over `capabilities` -- erased an explicit grant on the next pass, and
+  /// storing only the union instead would have retained a key the template had since dropped,
+  /// because nothing could tell "the template used to say this" from "a person said this".
+  /// Unmanaged/manual people are unaffected: their `capabilities` is still the whole answer and
+  /// this stays empty unless `setPersonCapabilities` is given something.
+  capabilityGrants   String[]       @default([])
   /// M50 R1, moved from `Slave` (R1): WHY this person exists. Three members, not two -- see the
   /// plan's pre-flight note 3; `SlaveLifecycle` is pinned member-for-member by
   /// `packages/db/test/integration/enum-parity.test.ts` and `project` is still a real answer.
@@ -286,6 +298,10 @@ model Person {
   releaseReason      String?
   /// M47 R6, moved from `Slave`: why this person is here, in one sentence.
   selectionRationale String?
+  /// Catalog Person Pool: which of the three managed slots (1, 2, or 3) this person occupies for
+  /// their template, or NULL for an ordinary unmanaged person. A non-null slot requires a non-null
+  /// templateId. The pair (templateId, poolSlot) is unique across all managed people.
+  poolSlot           Int?
   createdAt          DateTime       @default(now())
 
   template    SlaveTemplate?      @relation("HiredPersons", fields: [templateId], references: [id], onDelete: SetNull)
@@ -297,6 +313,7 @@ model Person {
   memories    Memory[]
 
   @@index([templateId])
+  @@unique([templateId, poolSlot])
 }
 
 /// M58 R3: whether a `PersonSkill` row ADDS a skill to the persona's default set or TAKES one out

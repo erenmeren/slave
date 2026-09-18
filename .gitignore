@@ -5,3 +5,4 @@ dist/
 .env
 packages/db/src/generated/
 apps/web/.next/
+packages/db/prisma/*.db

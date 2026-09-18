@@ -1,5 +1,5 @@
 import { hostname } from 'node:os'
-import { describeSync, drainIntakeCalls, drainModelCalls, syncSkillCatalog, tickIntakes, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
+import { describeSync, drainIntakeCalls, drainModelCalls, reconcileTemplateCapabilities, syncSkillCatalog, tickIntakes, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { BROKER_TIMEOUT_MS, SUPERVISOR_DEFAULT_MODEL, workspaceId as brandWorkspaceId, type WorkspaceId } from '@slave-of-ai/domain'
 import { subscribeEvents, type EventSubscription } from '@slave-of-ai/events'
@@ -192,7 +192,12 @@ export async function startWorkspaceLoop(deps: WorkspaceLoopDeps): Promise<Works
         report.reviewsStarted.length > 0 ||
         // A Supervisor decision is a change to the workspace nobody asked for -- an operator
         // reading the daemon's log must see the tick it happened on.
-        report.supervisor.decided > 0
+        report.supervisor.decided > 0 ||
+        // Task 5 (Important review finding): a role no seat carries is exactly the silent
+        // failure `unservedRoles` exists to surface (`world.ts`'s own doc comment) -- a board
+        // stuck on it trips none of the conditions above, tick after tick, and without this the
+        // predicate's own log would stay as silent as the scheduler it is reporting on.
+        report.unservedRoles.length > 0
       ) {
         process.stdout.write(`${JSON.stringify(report)}\n`)
       }
@@ -391,6 +396,27 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
       `[daemon] skill catalog sync failed: ${error instanceof Error ? error.message : String(error)}\n`,
     )
   }
+
+  // Catalog Person Pool (Task 2/3): once per process, before the first project is served, and NOT
+  // wrapped in a try/catch like the skill sync above it. A skill directory the host cannot read
+  // leaves an ordinary host with an empty catalog; a person pool this daemon cannot finish
+  // reconciling leaves a template staffable with fewer than three managed people underneath it --
+  // a fact nothing else would notice or report. The brief is explicit: a hook failure here must
+  // fail daemon startup loudly rather than silently continue with a partial pool, so neither throw
+  // is caught and both are left to propagate out of `runDaemon` exactly as they arrive.
+  //
+  // Task 3's reconciliation is the ONE call: a synonym the taxonomy learned since this template
+  // was last imported must repair its `capabilityKeys` before the pool sync reads them, or a
+  // stale, still-unresolved capability set would be the one every managed person starts this
+  // process holding -- and `reconcileTemplateCapabilities` ends by calling `syncPersonPool` itself,
+  // over every active template, whether or not anything needed reconciling.
+  //
+  // The second, explicit `syncPersonPool()` that used to follow it is gone (final review,
+  // Important 4). It was never conditional and never had anything to do: the pass before it had
+  // just synced the same templates from the same rows, so on every startup it re-read the whole
+  // catalogue to report "nothing changed". Startup still fails loudly on a pool it cannot
+  // reconcile, because this call is still outside any try/catch.
+  await reconcileTemplateCapabilities()
 
   const following = deps.workspaceIds === 'all'
   const loops = new Map<string, WorkspaceLoop>()

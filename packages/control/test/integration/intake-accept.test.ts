@@ -3,10 +3,11 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
-import type { IntakeDraft } from '@slave-of-ai/domain'
+import { INTAKE_MAX_SEATS_PER_TEMPLATE, type IntakeDraft } from '@slave-of-ai/domain'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { acceptIntake, openIntake, sendIntakeMessage } from '../../src/intake.js'
 import { setInstallationSettings } from '../../src/installation.js'
+import { syncPersonPool } from '../../src/personPool.js'
 
 /**
  * THE ONE SEAM (fix round 1): `acceptIntake`'s own steps never throw in the ordinary course of a
@@ -45,9 +46,9 @@ function makeRepo(): string {
   return dir
 }
 
-async function seedTemplate(name: string, division: string): Promise<string> {
+async function seedTemplate(name: string, division: string, role = 'backend'): Promise<string> {
   const template = await prisma.slaveTemplate.create({
-    data: { name, role: 'backend', description: '', active: true, sourceDivision: division },
+    data: { name, role, description: '', active: true, sourceDivision: division },
   })
   return template.id
 }
@@ -108,13 +109,17 @@ describe('acceptIntake', () => {
     ])
   })
 
-  it('hires the team the draft named, onto one department named after the project (M59 R13)', async (): Promise<void> => {
+  it('stages seats onto functional departments derived from each template s primary role, not a catch-all named after the project (Task 4)', async (): Promise<void> => {
     const repo = makeRepo()
-    const templateId = await seedTemplate('Backend Developer', 'engineering')
+    const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+    const designId = await seedTemplate('Visual Designer', 'design', 'design')
     const id = await opened(`it is at ${repo}`)
     const accepted = await acceptIntake(id, {
       ...draftFor(repo, 'Staffed'),
-      team: [{ templateId, runtimeRoles: ['backend'] }],
+      team: [
+        { templateId: backendId, runtimeRoles: ['backend'] },
+        { templateId: designId, runtimeRoles: ['design'] },
+      ],
     })
     expect(accepted.ok).toBe(true)
     if (!accepted.ok) throw new Error('unreachable')
@@ -123,62 +128,236 @@ describe('acceptIntake', () => {
       where: { workspaceId: accepted.value.workspaceId },
       include: { slaves: true },
     })
-    expect(teams).toHaveLength(1)
-    expect(teams[0]?.name).toBe('Staffed')
-    expect(teams[0]?.slaves).toHaveLength(1)
-    // `ensureStaffRoles` put both on the one seat: `dispatchPlanning` refuses without a manager
-    // and a review needs a reviewer, so a suggested team without them is a project that looks
-    // staffed and does nothing.
-    expect(teams[0]?.slaves[0]?.runtimeRoles).toEqual(['backend', 'manager', 'reviewer'])
+    expect(teams.map((team) => team.name).sort()).toEqual(['Design', 'Engineering'])
+    // No project-named catch-all department exists at all, alongside the two functional ones.
+    expect(await prisma.team.count({ where: { workspaceId: accepted.value.workspaceId, name: 'Staffed' } })).toBe(0)
+
+    const engineering = teams.find((team) => team.name === 'Engineering')
+    expect(engineering?.slaves).toHaveLength(1)
+    // `ensureStaffRoles` put both on the one seat whose division looks like engineering:
+    // `dispatchPlanning` refuses without a manager and a review needs a reviewer, so a suggested
+    // team without them is a project that looks staffed and does nothing.
+    expect(engineering?.slaves[0]?.runtimeRoles).toEqual(['backend', 'manager', 'reviewer'])
+
+    const design = teams.find((team) => team.name === 'Design')
+    expect(design?.slaves).toHaveLength(1)
+    expect(design?.slaves[0]?.runtimeRoles).toEqual(['design'])
+
+    // Automatic staffing selects from the managed pool -- it creates no `Person` row of its own.
+    expect(await prisma.person.count()).toBe(6) // two templates' pools, three managed slots apiece
+    const seated = await prisma.person.findMany({
+      where: { id: { in: [...(engineering?.slaves.map((s) => s.personId) ?? []), ...(design?.slaves.map((s) => s.personId) ?? [])] } },
+    })
+    expect(seated.every((person) => person.poolSlot !== null)).toBe(true)
 
     const row = await prisma.intake.findUniqueOrThrow({ where: { id } })
     const staff = (row.stepLog as { step: string; status: string; detail: string | null }[]).find(
       (entry) => entry.step === 'staff',
     )
     expect(staff).toMatchObject({ status: 'done' })
-    expect(staff?.detail).toContain('1')
+    expect(staff?.detail).toContain('Design')
+    expect(staff?.detail).toContain('Engineering')
   })
 
-  it('resumes staffing without duplicating seats or people after a seat fails', async (): Promise<void> => {
+  /**
+   * FINAL REVIEW, IMPORTANT 8, at the boundary that matters. `intakeDraftSchema` is where the rule
+   * lives and `packages/domain/test/intake/draft.test.ts` is where it is specified; this is the
+   * proof that an impossible draft cannot get past ACCEPTANCE -- the schema is re-parsed here, so a
+   * draft stored before the rule existed, or one an edited card produced, is refused at the door
+   * rather than half-staffed behind it.
+   */
+  it('refuses a draft asking for a fourth seat from one persona, and creates no project at all', async (): Promise<void> => {
     const repo = makeRepo()
-    const backendId = await seedTemplate('Backend Developer', 'engineering')
-    const reviewerId = await seedTemplate('Review Specialist', 'engineering')
+    const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+    const id = await opened(`it is at ${repo}`)
+
+    const accepted = await acceptIntake(id, {
+      ...draftFor(repo, 'Over Staffed'),
+      team: [1, 2, 3, 4].map(() => ({ templateId: backendId, runtimeRoles: ['backend'] })),
+    })
+
+    expect(accepted.ok).toBe(false)
+    if (accepted.ok) throw new Error('unreachable')
+    expect(accepted.error.kind).toBe('invalid_draft')
+    // The refusal names the persona and the limit, because `invalid_draft` carries the issue text
+    // straight through to whatever renders it.
+    expect(accepted.error).toMatchObject({ detail: expect.stringContaining('three') })
+    expect(await prisma.workspace.count()).toBe(0)
+    // Still the conversation it was, neither `creating` nor `created`: a refused accept leaves the
+    // intake where the person can edit the card and press the button again.
+    const row = await prisma.intake.findUniqueOrThrow({ where: { id } })
+    expect(row.status).toBe('awaiting_reply')
+    expect(row.workspaceId).toBeNull()
+  })
+
+  // Three is not one too many: a persona HAS three, and a project that genuinely needs three
+  // backend specialists gets three managed people rather than a refusal.
+  it('accepts three seats from one persona and seats three managed people on them', async (): Promise<void> => {
+    const repo = makeRepo()
+    const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+    const id = await opened(`it is at ${repo}`)
+
+    const accepted = await acceptIntake(id, {
+      ...draftFor(repo, 'Three Deep'),
+      team: [1, 2, 3].map(() => ({ templateId: backendId, runtimeRoles: ['backend'] })),
+    })
+
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+    const seats = await prisma.slave.findMany({
+      where: { team: { workspaceId: accepted.value.workspaceId } },
+      include: { person: true },
+    })
+    expect(seats).toHaveLength(3)
+    // All three managed, and all three DIFFERENT people -- the whole pool, with nobody seated twice
+    // and nobody invented.
+    expect(seats.every((seat) => seat.person.poolSlot !== null)).toBe(true)
+    expect(new Set(seats.map((seat) => seat.personId)).size).toBe(3)
+  })
+
+  // The domain constant and the pool's own slot count are two numbers that mean one thing, in two
+  // packages that cannot import each other (`INTAKE_MAX_SEATS_PER_TEMPLATE`'s own note). This file
+  // can import both, so it is where they are pinned together: raise the pool to four slots without
+  // raising the draft limit and this fails rather than quietly capping every intake at three.
+  it('pins the per-persona seat limit to the number of managed slots a persona actually has', async (): Promise<void> => {
+    const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+    await syncPersonPool()
+
+    expect(await prisma.person.count({ where: { templateId: backendId, poolSlot: { not: null } } })).toBe(
+      INTAKE_MAX_SEATS_PER_TEMPLATE,
+    )
+  })
+
+  it('seats each of several approved seats for one template with a distinct managed person, on the same department (Task 4)', async (): Promise<void> => {
+    const repo = makeRepo()
+    const templateId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+    const id = await opened(`it is at ${repo}`)
+    const accepted = await acceptIntake(id, {
+      ...draftFor(repo, 'Two Backend Seats'),
+      team: [
+        { templateId, runtimeRoles: ['backend'] },
+        { templateId, runtimeRoles: ['backend'] },
+      ],
+    })
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+
+    const team = await prisma.team.findFirstOrThrow({
+      where: { workspaceId: accepted.value.workspaceId, name: 'Engineering' },
+      include: { slaves: true },
+    })
+    expect(team.slaves).toHaveLength(2)
+    const personIds = team.slaves.map((seat) => seat.personId)
+    expect(new Set(personIds).size).toBe(2)
+    expect(await prisma.person.count()).toBe(3) // one template's pool, all three managed slots
+    const persons = await prisma.person.findMany({ where: { id: { in: personIds } } })
+    expect(persons.every((person) => person.poolSlot !== null)).toBe(true)
+  })
+
+  it('resumes staffing without duplicating seats, departments or people after a seat fails (Task 4)', async (): Promise<void> => {
+    const repo = makeRepo()
+    const backendId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+    const designId = await seedTemplate('Visual Designer', 'design', 'design')
     const id = await opened(`it is at ${repo}`)
     // The draft saw both templates; one disappears only after the facts and draft are established,
     // so staffing commits its first seat before the second refuses.
-    await prisma.slaveTemplate.delete({ where: { id: reviewerId } })
+    await prisma.slaveTemplate.delete({ where: { id: designId } })
     const draft: IntakeDraft = {
       ...draftFor(repo, 'Resumable Staff'),
       team: [
         { templateId: backendId, runtimeRoles: ['backend'] },
-        { templateId: reviewerId, runtimeRoles: ['reviewer'] },
+        { templateId: designId, runtimeRoles: ['design'] },
       ],
     }
 
     const failed = await acceptIntake(id, draft)
     expect(failed.ok).toBe(false)
-    expect(await prisma.team.count({ where: { name: 'Resumable Staff' } })).toBe(1)
-    expect(await prisma.slave.count({ where: { team: { name: 'Resumable Staff' }, closedAt: null } })).toBe(1)
+    if (failed.ok) throw new Error('unreachable')
+    expect(failed.error).toMatchObject({ kind: 'template_not_found', templateId: designId })
+
+    const workspace = await prisma.workspace.findFirstOrThrow({ where: { name: 'Resumable Staff' } })
+    // Only the Engineering seat committed; no Design department and no half-open seat for it.
+    expect(await prisma.team.count({ where: { workspaceId: workspace.id } })).toBe(1)
+    expect(await prisma.team.findFirstOrThrow({ where: { workspaceId: workspace.id } })).toMatchObject({
+      name: 'Engineering',
+    })
+    expect(await prisma.slave.count({ where: { team: { workspaceId: workspace.id }, closedAt: null } })).toBe(1)
+    expect(await prisma.person.count()).toBe(3) // only the backend template's pool was ever synced
 
     await prisma.slaveTemplate.create({
-      data: {
-        id: reviewerId,
-        name: 'Review Specialist',
-        role: 'backend',
-        description: '',
-        active: true,
-        sourceDivision: 'engineering',
-      },
+      data: { id: designId, name: 'Visual Designer', role: 'design', description: '', active: true, sourceDivision: 'design' },
     })
     const resumed = await acceptIntake(id, draft)
     expect(resumed.ok).toBe(true)
-    const team = await prisma.team.findFirstOrThrow({
-      where: { name: 'Resumable Staff' },
-      include: { slaves: { where: { closedAt: null }, include: { person: true } } },
-    })
-    expect(team.slaves.map((seat) => seat.person.templateId).sort()).toEqual([backendId, reviewerId].sort())
-    expect(await prisma.person.count()).toBe(2)
+
+    const teams = await prisma.team.findMany({ where: { workspaceId: workspace.id }, include: { slaves: { where: { closedAt: null } } } })
+    expect(teams.map((team) => team.name).sort()).toEqual(['Design', 'Engineering'])
+    // The Engineering seat from the failed run was REUSED, not duplicated.
+    expect(teams.find((team) => team.name === 'Engineering')?.slaves).toHaveLength(1)
+    expect(teams.find((team) => team.name === 'Design')?.slaves).toHaveLength(1)
+    expect(await prisma.person.count()).toBe(6) // the design template's pool was synced on resume, once
     expect((await prisma.intake.findUniqueOrThrow({ where: { id } })).status).toBe('created')
+  })
+
+  it('fails the staff step with the typed refusal when the pool is still unavailable after one sync and retry (Task 4)', async (): Promise<void> => {
+    const repo = makeRepo()
+    const templateId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+    await syncPersonPool()
+    // Every managed slot released before staffing runs -- sync repairs capabilities, it never
+    // un-releases anyone, so the one retry the step allows finds the same nobody.
+    await prisma.person.updateMany({ where: { templateId }, data: { releasedAt: new Date(), releaseReason: 'test' } })
+
+    const id = await opened(`it is at ${repo}`)
+    const accepted = await acceptIntake(id, {
+      ...draftFor(repo, 'No Pool'),
+      team: [{ templateId, runtimeRoles: ['backend'] }],
+    })
+    expect(accepted.ok).toBe(false)
+    if (accepted.ok) throw new Error('unreachable')
+    expect(accepted.error).toMatchObject({ kind: 'pool_unavailable', templateId })
+    expect((await prisma.intake.findUniqueOrThrow({ where: { id } })).status).toBe('failed')
+  })
+
+  it('seats a pool person who already holds an open seat on another project, but never twice in this one (Task 4)', async (): Promise<void> => {
+    const repo = makeRepo()
+    const templateId = await seedTemplate('Backend Developer', 'engineering', 'backend')
+    await syncPersonPool()
+    const pool = await prisma.person.findMany({ where: { templateId } })
+    expect(pool).toHaveLength(3)
+
+    const other = await prisma.workspace.create({
+      data: { name: 'Other Project', repoPath: '/tmp/other-project', verifyCommands: [], setupCommands: [] },
+    })
+    const otherTeam = await prisma.team.create({ data: { workspaceId: other.id, name: 'Engineering' } })
+    // Every managed person for this template is already busy elsewhere: selection must still work,
+    // since a seat on another project is fine (Task 2's own guarantee) and nobody is excluded here
+    // merely for holding one.
+    for (const person of pool) {
+      await prisma.slave.create({ data: { teamId: otherTeam.id, personId: person.id, role: 'backend', runtimeRoles: ['backend'] } })
+    }
+
+    const id = await opened(`it is at ${repo}`)
+    const accepted = await acceptIntake(id, {
+      ...draftFor(repo, 'Shared Person'),
+      team: [{ templateId, runtimeRoles: ['backend'] }],
+    })
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+
+    const team = await prisma.team.findFirstOrThrow({
+      where: { workspaceId: accepted.value.workspaceId, name: 'Engineering' },
+      include: { slaves: true },
+    })
+    expect(team.slaves).toHaveLength(1)
+    const chosenId = team.slaves[0]?.personId
+    if (chosenId === undefined) throw new Error('unreachable')
+    expect(pool.map((person) => person.id)).toContain(chosenId)
+    // The same person's seat on the OTHER project is untouched.
+    expect(await prisma.slave.count({ where: { personId: chosenId, team: { workspaceId: other.id }, closedAt: null } })).toBe(1)
+    // And they hold exactly one open seat in THIS workspace, never two.
+    expect(
+      await prisma.slave.count({ where: { personId: chosenId, team: { workspaceId: accepted.value.workspaceId }, closedAt: null } }),
+    ).toBe(1)
   })
 
   it('creates nobody for an empty team, and says skipped rather than done', async (): Promise<void> => {

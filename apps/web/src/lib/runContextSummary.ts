@@ -102,6 +102,11 @@ export function sectionLine(source: SectionSource): SectionLine {
         detail: `${plural(source.keys.length, 'capability key')} it could ask for${source.capped ? ' (capped)' : ''}`,
         missing: [],
       }
+    // The roles NAMED, not counted: this line exists so a person reading a plan that went nowhere
+    // can see which vocabulary the planner was given, and "5 roles" answers none of that. Bounded
+    // by the section itself, which lists one project's staffed roles.
+    case 'roles':
+      return { kind: source.kind, detail: `roles it could assign: ${source.roles.join(', ')}`, missing: [] }
     // M48 R4: the contract this run was handed, and the hash of it. The COUNT of criteria is not
     // here -- the manifest carries the hash, not the contract, and a line that claimed a number it
     // had not read would be an assertion the row does not support.

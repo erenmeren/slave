@@ -42,6 +42,20 @@ export type SectionKind =
    *  references. A SECTION for `capabilities`' and `runbook`'s reason: the instruction constants
    *  are pure, static and byte-pinned, and this is per-run data read out of a table. */
   | 'memory'
+  /**
+   * The roles this project's seats actually answer to.
+   *
+   * Measured on a real project: the prompt named the capability keys and then said a task may
+   * carry a `"role"` instead, without saying what a role IS. The planner wrote the roles the key
+   * prefixes implied -- `product`, `frontend`, `qa` -- while the seats carried the words the
+   * persona catalogue uses -- `engineering`, `marketing`, `specialized`. `decide()` matches a task
+   * to a seat on that one string, so thirteen of fifteen tasks could be dispatched to nobody, and
+   * a tick that starts nothing reports no reason for it.
+   *
+   * Per-workspace data read out of a table, so a SECTION for `capabilities`' reason rather than a
+   * line in the byte-pinned instructions.
+   */
+  | 'roles'
 
 /**
  * One piece of a run's prompt, as the orchestrator hands it to {@link renderRunContext}: the
@@ -115,6 +129,10 @@ export type SectionSource =
    *  a reader asking "could this plan have named `security.application`?" wants the vocabulary the
    *  run was actually given. */
   | { readonly kind: 'capabilities'; readonly keys: readonly string[]; readonly capped: boolean }
+  /** Which role words the planner was allowed to use, which is the set the project's own seats
+   *  carry. The ROLES, not the text: a reader asking "could this plan have asked for `frontend`?"
+   *  wants the vocabulary the run was actually given, the same way `capabilities` answers it. */
+  | { readonly kind: 'roles'; readonly roles: readonly string[] }
   /**
    * M48 R4. Its OWN `sha256`, deliberately not folded into `task.sha256`: that hash is
    * `title + '\n' + description` and M37/M41 both pin it, so widening it would change the recorded
@@ -206,6 +224,10 @@ const capabilitiesSourceSchema = z.object({
   capped: z.boolean(),
 })
 
+// REQUIRED, by the same rule: the `roles` kind is new, so there is no history of rows written
+// without it to be tolerant of.
+const rolesSourceSchema = z.object({ kind: z.literal('roles'), roles: z.array(z.string()) })
+
 // M48 E3: all REQUIRED-field, by the `replan`/`capabilities` rule -- these three source kinds are
 // new in M48, so there is no history of rows written without them to be tolerant of.
 const handoffSourceSchema = z.object({ kind: z.literal('handoff'), taskId: z.string(), sha256: z.string() })
@@ -238,6 +260,7 @@ const sectionSourceSchema = z.discriminatedUnion('kind', [
   planningGoalSourceSchema,
   replanSourceSchema,
   capabilitiesSourceSchema,
+  rolesSourceSchema,
   handoffSourceSchema,
   runbookSourceSchema,
   handoffProtocolSourceSchema,

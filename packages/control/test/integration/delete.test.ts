@@ -165,6 +165,81 @@ describe('deleteSlaveTemplate', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.error).toEqual({ kind: 'template_not_found', templateId: '00000000-0000-4000-8000-000000000000' })
   })
+
+  /**
+   * Final review, Critical. `Person.templateId` is `ON DELETE SET NULL` and
+   * `Person_poolSlot_requires_templateId` is a CHECK that a non-null `poolSlot` has a non-null
+   * `templateId`. The database would therefore try to satisfy the FK by nulling `templateId` on
+   * three managed rows that still hold slots 1, 2 and 3 -- and the CHECK would refuse it, so the
+   * whole delete failed with a constraint violation out of a `Promise<Result<…>>` with nowhere to
+   * put it. Deleting an imported persona is an ordinary operator act, so the verb clears the slots
+   * itself, under the lock it already holds.
+   *
+   * Every OTHER fact about those three people survives: they are ordinary unmanaged people
+   * afterwards, which is exactly what M58 R1 promises about a persona's deletion.
+   */
+  it('releases the three managed pool slots and leaves three ordinary people behind', async () => {
+    const managed = await Promise.all(
+      [1, 2, 3].map(async (slot) =>
+        prisma.person.create({
+          data: {
+            name: `Managed Slot ${String(slot)}`,
+            templateId: f.templateId,
+            poolSlot: slot,
+            capabilities: ['backend.services'],
+          },
+        }),
+      ),
+    )
+
+    const result = await deleteSlaveTemplate(f.templateId)
+
+    expect(result.ok).toBe(true)
+    // The member seeded by the fixture plus these three: the count is what the verb reports.
+    if (result.ok) expect(result.value).toEqual({ personsUnlinked: 4 })
+    expect(await prisma.slaveTemplate.findUnique({ where: { id: f.templateId } })).toBeNull()
+    for (const person of managed) {
+      const after = await prisma.person.findUniqueOrThrow({ where: { id: person.id } })
+      expect(after.templateId).toBeNull()
+      expect(after.poolSlot).toBeNull()
+      expect(after.name).toBe(person.name)
+      expect(after.capabilities).toEqual(['backend.services'])
+    }
+    // The FK action and the CHECK no longer collide THROUGH THE SUPPORTED VERB, which is the whole
+    // point: the same delete attempted with the slots left in place is what the database refuses.
+    await expect(
+      prisma.person.update({ where: { id: managed[0]?.id ?? '' }, data: { poolSlot: 1 } }),
+    ).rejects.toThrow()
+  })
+
+  it('keeps seats, department memberships and history for a managed person whose template goes', async () => {
+    const template = await prisma.slaveTemplate.create({ data: { name: 'Pooled Persona', role: 'backend', description: '' } })
+    const person = await prisma.person.create({
+      data: {
+        name: 'Managed And Seated',
+        templateId: template.id,
+        poolSlot: 1,
+        capabilities: ['backend.api-design'],
+        departments: { create: { companyTeamId: f.companyTeamId } },
+      },
+    })
+    const seat = await prisma.slave.create({ data: { teamId: f.teamId, role: 'backend', personId: person.id } })
+    await prisma.slaveRun.create({ data: { taskId: f.taskId, slaveId: seat.id, status: 'succeeded' } })
+
+    const result = await deleteSlaveTemplate(template.id)
+
+    expect(result.ok).toBe(true)
+    const after = await prisma.person.findUniqueOrThrow({
+      where: { id: person.id },
+      include: { seats: { include: { runs: true } }, departments: true },
+    })
+    expect(after.poolSlot).toBeNull()
+    expect(after.templateId).toBeNull()
+    expect(after.capabilities).toEqual(['backend.api-design'])
+    expect(after.seats).toHaveLength(1)
+    expect(after.seats[0]?.runs).toHaveLength(1)
+    expect(after.departments).toHaveLength(1)
+  })
 })
 
 describe('deleteCompany', () => {

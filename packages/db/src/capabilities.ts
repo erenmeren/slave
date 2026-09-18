@@ -14,6 +14,22 @@ import type { CapabilityRecord } from '@slave-of-ai/domain'
  * `manager`, `reviewer`); the rest name a role a hire creates, which is what makes a hired
  * specialist dispatchable for the task that asked for it.
  *
+ * **Synonyms are EXACT alternative names, reviewed one at a time.** `normaliseCapabilities` matches
+ * a key, a label or a synonym and nothing else -- no substrings, no fuzzy scoring -- so a synonym
+ * is not a hint, it is a second correct spelling of this row and only this row. The final review's
+ * Important 7 pass added twelve of them by reading the live catalogue's own unresolved values:
+ * singulars for plurals (`design system`), spelling variants (`query optimisation`), and the
+ * standard industry term for a row whose label is a house phrasing (`secrets management` for
+ * "Secrets and credentials"). It also replaced `database.postgres`'s dead `postgresql` -- which is
+ * what that row's own LABEL already normalises to -- with `postgres`, which nothing matched.
+ *
+ * What that pass deliberately did NOT add is the more important half. The live catalogue's 279
+ * templates carry 4,003 distinct unresolved capability values, and the only eight that repeat at
+ * all are broad headings (`Performance Optimization`, `Pipeline Engineering`, `Business
+ * Integration`, ...) that could sit under three rows or none. They stay unresolved and visible in
+ * `SlaveTemplate.unresolvedCapabilities`, where an operator can act on them, rather than being
+ * guessed into a key nobody reviewed.
+ *
  * KEY ASCENDING, and the test beside this file holds it there (M47 final review, Minor 10). It is
  * the order `listCapabilities()` returns the table in, so a reader comparing the checked-in list
  * with `capabilities list` is comparing two copies of one order -- and it is the order
@@ -31,16 +47,16 @@ export const CAPABILITY_SEED: readonly CapabilityRecord[] = [
   { key: 'data.pipelines', label: 'Data pipelines', domain: 'data', role: 'data', synonyms: ['etl', 'data engineering'] },
   { key: 'data.warehousing', label: 'Data warehousing', domain: 'data', role: 'data', synonyms: ['data warehouse'] },
   { key: 'database.migrations', label: 'Migrations', domain: 'database', role: 'database', synonyms: ['schema migration'] },
-  { key: 'database.postgres', label: 'PostgreSQL', domain: 'database', role: 'database', synonyms: ['postgresql'] },
-  { key: 'database.query-performance', label: 'Query performance', domain: 'database', role: 'database', synonyms: ['index tuning', 'slow queries'] },
+  { key: 'database.postgres', label: 'PostgreSQL', domain: 'database', role: 'database', synonyms: ['postgres'] },
+  { key: 'database.query-performance', label: 'Query performance', domain: 'database', role: 'database', synonyms: ['index tuning', 'slow queries', 'query optimisation', 'query optimization'] },
   { key: 'database.schema-design', label: 'Schema design', domain: 'database', role: 'database', synonyms: ['data modelling', 'data modeling'] },
-  { key: 'design.design-systems', label: 'Design systems', domain: 'design', role: 'design', synonyms: ['component library'] },
-  { key: 'design.interaction', label: 'Interaction design', domain: 'design', role: 'design', synonyms: ['ux design'] },
+  { key: 'design.design-systems', label: 'Design systems', domain: 'design', role: 'design', synonyms: ['component library', 'design system'] },
+  { key: 'design.interaction', label: 'Interaction design', domain: 'design', role: 'design', synonyms: ['ux design', 'user experience design'] },
   { key: 'design.visual', label: 'Visual design', domain: 'design', role: 'design', synonyms: ['ui design'] },
-  { key: 'docs.api-reference', label: 'API reference', domain: 'docs', role: 'docs', synonyms: ['api documentation'] },
-  { key: 'docs.technical-writing', label: 'Technical writing', domain: 'docs', role: 'docs', synonyms: ['documentation'] },
+  { key: 'docs.api-reference', label: 'API reference', domain: 'docs', role: 'docs', synonyms: ['api documentation', 'reference documentation'] },
+  { key: 'docs.technical-writing', label: 'Technical writing', domain: 'docs', role: 'docs', synonyms: ['documentation', 'technical documentation', 'developer documentation'] },
   { key: 'frontend.accessibility', label: 'Accessibility', domain: 'frontend', role: 'frontend', synonyms: ['a11y', 'wcag'] },
-  { key: 'frontend.performance', label: 'Frontend performance', domain: 'frontend', role: 'frontend', synonyms: ['bundle size', 'web vitals'] },
+  { key: 'frontend.performance', label: 'Frontend performance', domain: 'frontend', role: 'frontend', synonyms: ['bundle size', 'web vitals', 'core web vitals', 'critical css inlining'] },
   { key: 'frontend.state-management', label: 'State management', domain: 'frontend', role: 'frontend', synonyms: ['client state'] },
   { key: 'frontend.styling', label: 'Styling and layout', domain: 'frontend', role: 'frontend', synonyms: ['css', 'design implementation'] },
   { key: 'frontend.ui-implementation', label: 'UI implementation', domain: 'frontend', role: 'frontend', synonyms: ['frontend development', 'component work'] },
@@ -51,7 +67,7 @@ export const CAPABILITY_SEED: readonly CapabilityRecord[] = [
   { key: 'operations.deployment', label: 'Deployment', domain: 'operations', role: 'operations', synonyms: ['release engineering', 'rollout'] },
   { key: 'operations.incident-response', label: 'Incident response', domain: 'operations', role: 'operations', synonyms: ['on call', 'incident management'] },
   { key: 'operations.infrastructure', label: 'Infrastructure', domain: 'operations', role: 'operations', synonyms: ['platform engineering', 'infrastructure as code'] },
-  { key: 'operations.observability', label: 'Observability', domain: 'operations', role: 'operations', synonyms: ['monitoring', 'tracing', 'logging'] },
+  { key: 'operations.observability', label: 'Observability', domain: 'operations', role: 'operations', synonyms: ['monitoring', 'tracing', 'logging', 'production monitoring'] },
   { key: 'planning.coordination', label: 'Coordination', domain: 'planning', role: 'manager', synonyms: ['project coordination'] },
   { key: 'planning.decomposition', label: 'Work decomposition', domain: 'planning', role: 'manager', synonyms: ['task breakdown', 'work breakdown'] },
   { key: 'planning.estimation', label: 'Estimation', domain: 'planning', role: 'manager', synonyms: ['sizing'] },
@@ -60,13 +76,13 @@ export const CAPABILITY_SEED: readonly CapabilityRecord[] = [
   { key: 'product.user-research', label: 'User research', domain: 'product', role: 'product', synonyms: ['customer discovery'] },
   { key: 'qa.exploratory', label: 'Exploratory testing', domain: 'qa', role: 'qa', synonyms: ['manual testing'] },
   { key: 'qa.load-testing', label: 'Load testing', domain: 'qa', role: 'qa', synonyms: ['performance testing', 'stress testing'] },
-  { key: 'qa.test-automation', label: 'Test automation', domain: 'qa', role: 'qa', synonyms: ['automated testing', 'e2e testing'] },
+  { key: 'qa.test-automation', label: 'Test automation', domain: 'qa', role: 'qa', synonyms: ['automated testing', 'e2e testing', 'end-to-end testing', 'unit testing'] },
   { key: 'qa.test-strategy', label: 'Test strategy', domain: 'qa', role: 'qa', synonyms: ['quality strategy'] },
-  { key: 'review.code-review', label: 'Code review', domain: 'review', role: 'reviewer', synonyms: ['peer review', 'diff review'] },
+  { key: 'review.code-review', label: 'Code review', domain: 'review', role: 'reviewer', synonyms: ['peer review', 'diff review', 'pull request review'] },
   { key: 'review.release-readiness', label: 'Release readiness', domain: 'review', role: 'reviewer', synonyms: ['go no go', 'release review'] },
   { key: 'security.application', label: 'Application security', domain: 'security', role: 'security', synonyms: ['appsec', 'secure code review', 'application security engineering'] },
   { key: 'security.authentication', label: 'Authentication and authorization', domain: 'security', role: 'security', synonyms: ['authn', 'authz', 'access control'] },
-  { key: 'security.dependency-audit', label: 'Dependency auditing', domain: 'security', role: 'security', synonyms: ['supply chain security', 'sca'] },
-  { key: 'security.secrets', label: 'Secrets and credentials', domain: 'security', role: 'security', synonyms: ['credential management', 'key management'] },
+  { key: 'security.dependency-audit', label: 'Dependency auditing', domain: 'security', role: 'security', synonyms: ['supply chain security', 'sca', 'dependency scanning'] },
+  { key: 'security.secrets', label: 'Secrets and credentials', domain: 'security', role: 'security', synonyms: ['credential management', 'key management', 'secrets management'] },
   { key: 'security.threat-modelling', label: 'Threat modelling', domain: 'security', role: 'security', synonyms: ['threat modeling', 'attack surface review'] },
 ]

@@ -29,6 +29,19 @@ export interface LoadedWorld {
    */
   readonly skippedNoRole: number
   /**
+   * Roles this board asks for that NO seat on the project carries, and how many tasks want them.
+   *
+   * The silent half of the same failure `skippedNoRole` was written for. A task whose role matches
+   * no seat is schedulable, dependency-clean, un-halted and still dispatched to nobody -- `decide()`
+   * simply finds no pair -- so the tick reported `started: []` with every counter at zero and no
+   * reason anywhere. Measured on a real project where thirteen of fifteen tasks were in exactly
+   * that state for two days' worth of ticks.
+   *
+   * Empty on a healthy board, which is what makes it cheap to log: something is here only when
+   * work cannot move, and the roles named are the ones an operator has to staff or rename.
+   */
+  readonly unservedRoles: readonly { readonly role: string; readonly tasks: number }[]
+  /**
    * The Supervisor's share of `world.stats.spentUsd` (M38 §5), split so a surface can say what it
    * is made of. NOT on `world.stats`: that is the domain's `WorkspaceStats`, which `decide()` and
    * `evaluateGuardrails` read, and neither of them has any business knowing WHO spent the money --
@@ -220,9 +233,25 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
 
   const world: World = { tasks, slaves, limits: snapshot.limits, stats: snapshot.stats }
 
+  // Every seat's roles, open or busy: a role held only by someone mid-run is a role this board CAN
+  // be served by, just not this tick, and reporting it as unstaffed would send an operator hiring
+  // for a seat they already have.
+  const served = new Set(slaves.flatMap((slave) => slave.runtimeRoles))
+  const wanted = new Map<string, number>()
+  for (const task of tasks) {
+    // Only what is waiting to be given to somebody. A `running` task already found a seat, and a
+    // `done` one is nobody's problem.
+    if (task.status !== 'ready') continue
+    if (served.has(task.requiredRole)) continue
+    wanted.set(task.requiredRole, (wanted.get(task.requiredRole) ?? 0) + 1)
+  }
+
   return {
     world,
     skippedNoRole,
+    unservedRoles: [...wanted]
+      .map(([role, count]) => ({ role, tasks: count }))
+      .sort((left, right) => right.tasks - left.tasks || left.role.localeCompare(right.role)),
     supervisorSpend: {
       measuredUsd: snapshot.spend.supervisorMeasuredUsd,
       unmeasuredCalls: snapshot.spend.supervisorUnmeasuredCalls,

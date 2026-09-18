@@ -26,6 +26,7 @@ import {
 import type { ProviderKind } from '@slave-of-ai/providers'
 import { askProtocolSection, inboxSection, rosterSection } from './inbox.js'
 import { memorySection } from './memory.js'
+import { staffedRolesForWorkspace } from './staffing.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -496,6 +497,43 @@ async function capabilitiesSection(): Promise<Section | null> {
 }
 
 /**
+ * The role words this project's seats answer to.
+ *
+ * `decide()` matches a task to a seat on `Task.requiredRole` against `Slave.runtimeRoles`, one
+ * exact string, and until this section existed nothing told the planner what those strings were.
+ * Measured on a real project: the plan asked for `product`, `frontend` and `qa` -- reasonable words,
+ * read off the capability key prefixes just above -- while every seat carried `engineering`,
+ * `marketing`, `design` or `specialized`, the words the persona catalogue uses. Thirteen of fifteen
+ * tasks could be dispatched to nobody, and a tick that dispatches nothing said nothing about why.
+ *
+ * Read through {@link staffedRolesForWorkspace} (Task 5), the one query this and conclusion-time
+ * board validation (`planning.ts`, `replan.ts`) both use: a role only one closed seat carried is a
+ * role no task can be given, and the prompt must never promise a vocabulary the board would refuse.
+ *
+ * `null` for a project with no staffed roles at all, so a workspace renders exactly what it
+ * rendered before this section existed. Nothing useful could be said there anyway -- a project
+ * with no seats has `dispatchPlanning` refuse it with `no_planner` long before a prompt is built.
+ */
+async function rolesSection(workspaceId: string): Promise<Section | null> {
+  const roles = await staffedRolesForWorkspace(workspaceId)
+  if (roles.length === 0) return null
+  return {
+    kind: 'roles',
+    text: block('ROLES YOU MAY ASSIGN', [
+      'Each task may carry a "role". Use ONLY the words below: a task is given to a member of this',
+      'team whose role matches it exactly, so a task asking for anything else is given to nobody and',
+      'never starts. These are the roles this team actually holds today.',
+      '',
+      ...roles.map((role) => `- ${role}`),
+      '',
+      'If a task needs work nobody here does, still give it the closest role on this list and say so',
+      'in the description, so a person can see the gap and staff it.',
+    ]),
+    source: { kind: 'roles', roles },
+  }
+}
+
+/**
  * The contract this run is being handed (M48 R4).
  *
  * Right after the `task` section on BOTH the implementation and the review order: a reviewer that
@@ -682,7 +720,9 @@ export async function renderReplanPreview(input: {
     }),
   ]
   // On the same terms as a real run (E3), so the preview a person reads IS the prompt the run
-  // would be given -- keys included.
+  // would be given -- roles and keys included.
+  const staffedRoles = await rolesSection(input.workspaceId)
+  if (staffedRoles !== null) sections.push(staffedRoles)
   const capabilities = await capabilitiesSection()
   if (capabilities !== null) sections.push(capabilities)
   // M48 R4, on the same terms and for the same reason: the process a re-plan is asked to follow is
@@ -929,6 +969,11 @@ export async function buildRunContext(input: BuildRunContextInput): Promise<Buil
         }),
       )
     }
+    // The roles this team holds, directly above the keys: a task names one or the other, and a
+    // role no seat carries is a task nobody can be given. A re-plan gets it for `capabilities`'
+    // reason -- a delta names roles the same way a first plan does.
+    const staffedRoles = await rolesSection(input.workspaceId)
+    if (staffedRoles !== null) sections.push(staffedRoles)
     // M47 R3: the keys this plan may be written in, last of the planning sections and therefore
     // directly above whichever trailer `renderRunContext` picks. A delta names capabilities the
     // same way a first plan does, so a re-plan gets the list too.

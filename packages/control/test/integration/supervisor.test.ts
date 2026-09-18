@@ -2083,8 +2083,11 @@ describe('applyDecision -- the M47 capability actions', () => {
   })
 
   it('hires from the catalog only when a human approves, and records why on the worker', async () => {
+    // Active: exactly what `loadCatalogEntries` requires of every template a `hire_from_catalog`
+    // decision can ever name (Catalog Person Pool Task 4), so this hire runs the automatic path's
+    // own rule -- prefer the managed pool, never mint an unmanaged person for it.
     const template = await prisma.slaveTemplate.create({
-      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: [CAPABILITY] },
+      data: { name: 'Security Reviewer', role: 'security', capabilityKeys: [CAPABILITY], active: true },
     })
     const before = await prisma.slave.count({ where: { team: { workspaceId: f.workspaceId } } })
     const recorded = await record(
@@ -2112,6 +2115,9 @@ describe('applyDecision -- the M47 capability actions', () => {
     expect(hired.person.selectionRationale).toContain('Application security')
     expect(hired.runtimeRoles).toContain('security')
     expect(hired.person.capabilities).toContain(CAPABILITY)
+    // Task 4: the automatic path seated a MANAGED pool person -- it created no unmanaged one.
+    expect(hired.person.poolSlot).not.toBeNull()
+    expect(await prisma.person.count({ where: { templateId: template.id } })).toBe(3)
   })
 
   it('seats somebody already working here on the project when a human approves (M58 R16)', async () => {

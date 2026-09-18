@@ -31,7 +31,7 @@ describe('SECTION_ORDER', () => {
     expect(SECTION_ORDER).toEqual({
       implementation: ['profile', 'roster', 'skills', 'inbox', 'ask_protocol', 'task', 'handoff', 'memory', 'rejection'],
       review: ['profile', 'skills', 'task', 'handoff', 'review_diff'],
-      planning: ['profile', 'planning_goal', 'replan', 'capabilities', 'runbook', 'handoff_protocol', 'memory'],
+      planning: ['profile', 'planning_goal', 'replan', 'roles', 'capabilities', 'runbook', 'handoff_protocol', 'memory'],
     })
   })
 })
@@ -277,6 +277,32 @@ describe('renderRunContext -- the capabilities section (M47 E3)', () => {
     expect(prompt.indexOf('GOAL: ship it')).toBeLessThan(prompt.indexOf('CAPABILITIES'))
     expect(prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
     expect(manifest.sections.map((s) => s.kind)).toEqual(['planning_goal', 'capabilities'])
+  })
+
+  // The two vocabulary lists read as one instruction -- a task names a role or the keys, never
+  // both -- and the narrower one comes first, because a role no seat carries is a task that can be
+  // dispatched to nobody at all.
+  it('puts the roles it may assign directly above the keys it may ask for', () => {
+    const { prompt, manifest } = renderRunContext('planning', [
+      section('capabilities', 'CAPABILITIES YOU MAY ASK FOR', {
+        kind: 'capabilities',
+        keys: ['backend.api-design'],
+        capped: false,
+      }),
+      section('roles', 'ROLES YOU MAY ASSIGN\n\n- backend', { kind: 'roles', roles: ['backend'] }),
+      section('planning_goal', 'GOAL: ship it', { kind: 'planning_goal', sha256: GOAL_SHA, version: 1 }),
+    ])
+    expect(manifest.sections.map((s) => s.kind)).toEqual(['planning_goal', 'roles', 'capabilities'])
+    expect(prompt.indexOf('ROLES YOU MAY ASSIGN')).toBeLessThan(prompt.indexOf('CAPABILITIES YOU MAY ASK FOR'))
+    expect(prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
+  })
+
+  // A role list belongs to the run that hands out work, and nowhere else: a worker does not assign
+  // roles, so a builder that put this on an implementation prompt is a bug worth a throw.
+  it('refuses a roles section on a run kind that assigns nothing', () => {
+    expect(() =>
+      renderRunContext('implementation', [section('roles', 'ROLES', { kind: 'roles', roles: ['backend'] })]),
+    ).toThrow('unknown section roles for run kind implementation')
   })
 })
 

@@ -13,6 +13,7 @@ import {
   err,
   factsSummary,
   ensureStaffRoles,
+  functionalDepartmentFor,
   intakeDraftSchema,
   intakeFactsSchema,
   intakeRepositoryPath,
@@ -31,7 +32,8 @@ import { findPaths, inspectPath } from './detect.js'
 import { setGoal } from './goal.js'
 import { resolveReposRoot, slugify } from './installation.js'
 import { createProjectTeam } from './org.js'
-import { assignPerson, createPerson } from './persons.js'
+import { selectPoolPerson, syncPersonPool } from './personPool.js'
+import { assignPerson } from './persons.js'
 import type { Principal } from './principal.js'
 import { refusalText, type ControlRefusal } from './refusal.js'
 import { createWorkspace } from './workspace.js'
@@ -697,18 +699,37 @@ export async function acceptIntake(
       await appendStep(intakeId, { step: 'create_workspace', status: 'done', at: now(), detail: workspaceId })
     }
 
-    // 3. staff -- M59 R13. The seats the draft named, with `manager` and `reviewer` guaranteed among
-    //    them, on ONE department named after the project.
+    // 3. staff -- M59 R13, reshaped by Catalog Person Pool Task 4. The seats the draft named, with
+    //    `manager` and `reviewer` guaranteed among them, land on the FUNCTIONAL departments a
+    //    hand-run company already has (Engineering, Product, Design, Marketing, QA, Operations,
+    //    Specialists -- `functionalDepartmentFor`, `@slave-of-ai/domain`), not on one department
+    //    named after the project: a project staffed from the catalogue now looks like a company,
+    //    not like a single undifferentiated pile of everyone hired for it.
     //
     //    A workspace starts with no `Team` at all (`createWorkspace` writes one row and at most one
-    //    `ProviderConfiguration`), so the department is created here, with the verb that already
-    //    exists for it -- `createProjectTeam`, which emits the `org.changed` every other project-level
-    //    org verb emits.
+    //    `ProviderConfiguration`), so each department is created here, with the verb that already
+    //    exists for it -- `createProjectTeam`, which emits the `org.changed` every other
+    //    project-level org verb emits, and whose `duplicate_name` recovery makes visiting the same
+    //    department twice (one template's seats plus another's, both Engineering) and re-visiting
+    //    it on a resume both idempotent for free.
+    //
+    //    Staffing a seat is now SELECTING a managed person from the pool (`selectPoolPerson`,
+    //    Task 2), never `createPerson`: an intake that runs to completion creates zero new `Person`
+    //    rows, only new `Slave` seats on rows the pool already holds. A pool with nothing eligible
+    //    is synced (`syncPersonPool`) ONCE for the whole step -- not once per seat, not once per
+    //    template -- and selection is retried exactly once after that; still nothing after the
+    //    retry fails the step with the same `pool_unavailable` refusal `selectPoolPerson` raised.
+    //
+    //    "Reuse already-open workspace seats for the same template up to the number approved"
+    //    (Task 4 brief) is a COUNT, not a per-seat existence check: two approved seats for one
+    //    template, with one already open from an earlier partial run, opens exactly ONE more --
+    //    the old per-seat `findFirst` matched the same open seat for both and silently under-staffed
+    //    a resume.
     //
     //    A seat that cannot be opened FAILS the step rather than being skipped: a project staffed
     //    with half the team the person approved is worse than one that says it stopped, and the
-    //    resume path re-runs `staff` from the beginning. `createPerson` and `assignPerson` are M58's
-    //    (R10); the roles are what `ensureStaffRoles` settled.
+    //    resume path re-runs `staff` from the beginning, `alreadyOpen`'s count picking up exactly
+    //    where it left off.
     currentStep = 'staff'
     if (done.get('staff') === undefined) {
       // The live catalogue, for `claimIntakes`' reason: the division heuristic that decides WHICH
@@ -723,40 +744,80 @@ export async function acceptIntake(
           detail: 'the draft asked for nobody',
         })
       } else {
-        const createdTeam = await createProjectTeam(workspaceId, draft.name, principal)
-        let teamId: string
-        if (createdTeam.ok) {
-          teamId = createdTeam.value.id
-        } else {
-          if (createdTeam.error.kind !== 'duplicate_name') return fail('staff', createdTeam.error)
-          const existing = await prisma.team.findFirst({
-            where: { workspaceId, name: draft.name },
-            select: { id: true },
-          })
-          if (existing === null) return fail('staff', createdTeam.error)
-          teamId = existing.id
-        }
+        const byTemplate = new Map<string, (typeof seats)[number][]>()
         for (const seat of seats) {
-          const alreadyOpen = await prisma.slave.findFirst({
-            where: { teamId, closedAt: null, person: { templateId: seat.templateId } },
-            select: { id: true },
-          })
-          if (alreadyOpen !== null) continue
-          const person = await createPerson({ templateId: seat.templateId }, principal)
-          if (!person.ok) return fail('staff', person.error)
-          const assigned = await assignPerson(
-            person.value.personId,
-            teamId,
-            { runtimeRoles: [...seat.runtimeRoles] },
-            principal,
-          )
-          if (!assigned.ok) return fail('staff', assigned.error)
+          const group = byTemplate.get(seat.templateId)
+          if (group === undefined) byTemplate.set(seat.templateId, [seat])
+          else group.push(seat)
         }
+
+        // One sync, for the whole step, no matter how many templates come up short -- the brief's
+        // "retry selection once", not once per template.
+        let poolSynced = false
+        const departmentsTouched = new Set<string>()
+
+        for (const [templateId, group] of byTemplate) {
+          const template = await prisma.slaveTemplate.findUnique({ where: { id: templateId }, select: { role: true } })
+          if (template === null) return fail('staff', { kind: 'template_not_found', templateId })
+
+          // The primary role decides the department for every seat of this template alike -- a
+          // template's own seats never split across two departments merely because
+          // `ensureStaffRoles` appended `manager`/`reviewer` to one of them. Only an unmapped
+          // primary role ever reaches the runtime-role fallback, and then every runtime role this
+          // template's seats were approved with is fair game, in the order they were approved.
+          const mergedRuntimeRoles = [...new Set(group.flatMap((seat) => seat.runtimeRoles))]
+          const department = functionalDepartmentFor(template.role, mergedRuntimeRoles)
+          departmentsTouched.add(department)
+
+          const createdTeam = await createProjectTeam(workspaceId, department, principal)
+          let teamId: string
+          if (createdTeam.ok) {
+            teamId = createdTeam.value.id
+          } else {
+            if (createdTeam.error.kind !== 'duplicate_name') return fail('staff', createdTeam.error)
+            const existing = await prisma.team.findFirst({
+              where: { workspaceId, name: department },
+              select: { id: true },
+            })
+            if (existing === null) return fail('staff', createdTeam.error)
+            teamId = existing.id
+          }
+
+          const alreadyOpen = await prisma.slave.count({
+            where: { teamId, closedAt: null, person: { templateId } },
+          })
+          let reused = 0
+          for (const seat of group) {
+            if (reused < alreadyOpen) {
+              reused += 1
+              continue
+            }
+
+            let selection = await selectPoolPerson(templateId, workspaceId)
+            if (!selection.ok) {
+              if (selection.error.kind === 'pool_unavailable' && !poolSynced) {
+                await syncPersonPool()
+                poolSynced = true
+                selection = await selectPoolPerson(templateId, workspaceId)
+              }
+              if (!selection.ok) return fail('staff', selection.error)
+            }
+
+            const assigned = await assignPerson(
+              selection.value.personId,
+              teamId,
+              { runtimeRoles: [...seat.runtimeRoles] },
+              principal,
+            )
+            if (!assigned.ok) return fail('staff', assigned.error)
+          }
+        }
+
         await appendStep(intakeId, {
           step: 'staff',
           status: 'done',
           at: now(),
-          detail: `${String(seats.length)} seat(s) on ${draft.name}`,
+          detail: `${String(seats.length)} seat(s) across ${[...departmentsTouched].sort().join(', ')}`,
         })
       }
     }

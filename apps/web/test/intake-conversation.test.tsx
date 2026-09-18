@@ -261,6 +261,34 @@ describe('IntakeConversation', () => {
     expect((screen.getByTestId('intake-create') as HTMLButtonElement).disabled).toBe(true)
   })
 
+  /**
+   * FINAL REVIEW, IMPORTANT 8, in the card. Three seats from one persona is legal and real -- a
+   * persona has three people -- and the chip list keyed every chip by `templateId`, so three
+   * identical keys collided and React rendered ONE. The person approving the team could not see
+   * that they were approving three of somebody.
+   */
+  it('shows one chip per seat, so three people from one persona read as three', async (): Promise<void> => {
+    const team = [1, 2, 3].map(() => ({ templateId: 't1', runtimeRoles: ['backend'] }))
+    stubFetch([view({ status: 'drafted', draft: { ...DRAFT, team }, facts: FACTS })])
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+
+    expect(screen.getAllByTestId('intake-team-chip')).toHaveLength(3)
+  })
+
+  // The schema refuses a fourth seat from one persona, and `acceptIntake` re-parses, so pressing
+  // the button on such a draft is a round trip that can only fail. The button says so instead.
+  it('will not create a project asking for a fourth person from one persona', async (): Promise<void> => {
+    const team = [1, 2, 3, 4].map(() => ({ templateId: 't1', runtimeRoles: ['backend'] }))
+    stubFetch([view({ status: 'drafted', draft: { ...DRAFT, team }, facts: FACTS })])
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+
+    expect((screen.getByTestId('intake-create') as HTMLButtonElement).disabled).toBe(true)
+    // And it says WHICH rule, in the card, rather than leaving a dead button to be puzzled over.
+    expect(screen.getByTestId('intake-team-over-limit').textContent).toContain('three')
+  })
+
   it('posts the EDITED draft and lands on the project', async (): Promise<void> => {
     const fetchMock = stubFetch([view({ status: 'drafted', draft: DRAFT, facts: FACTS })])
     render(<IntakeConversation onClose={vi.fn()} />)

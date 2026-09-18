@@ -214,6 +214,51 @@ describe('loadWorld', () => {
     expect(skippedNoRole).toBe(1)
   })
 
+  // The silent twin of the case above, measured on a real project: a board of fifteen tasks whose
+  // roles no seat carried sat still through two days of ticks, every counter zero and no reason
+  // anywhere, because a role mismatch is not an exclusion -- the task IS schedulable, `decide()`
+  // just never finds a pair for it.
+  it('names the roles the board waits on that no seat carries', async (): Promise<void> => {
+    const before = await loadWorld(workspaceId(fixture.workspaceId))
+    // The fixture is staffed for everything it asks for, and a healthy board must say nothing --
+    // otherwise this is a log line on every tick of every project.
+    expect(before.unservedRoles).toEqual([])
+
+    for (const title of ['needs a designer', 'needs another designer']) {
+      await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title,
+          description: 'nobody on this project holds the role it asks for',
+          status: 'ready',
+          requiredRole: 'design',
+          maxAttempts: 4,
+        },
+      })
+    }
+
+    const after = await loadWorld(workspaceId(fixture.workspaceId))
+    expect(after.unservedRoles).toEqual([{ role: 'design', tasks: 2 }])
+    // And the reading is honest about the cause: nothing was excluded from the schedulable set,
+    // the tasks are simply unmatchable.
+    expect(after.world.tasks.filter((task) => task.requiredRole === 'design')).toHaveLength(2)
+    expect(decide(after.world).length).toBeGreaterThanOrEqual(0)
+  })
+
+  it('stays quiet about a role only a BUSY seat holds, which is staffed and merely occupied', async (): Promise<void> => {
+    // `slaveWithRun` holds a non-terminal run and carries `backend`. A task waiting on `backend` is
+    // waiting for a colleague to finish, not for somebody to be hired, and reporting it as
+    // unstaffed would send an operator to fill a seat they already have.
+    await prisma.slave.updateMany({
+      where: { id: { in: [fixture.idleSlaveId, fixture.retiredRunSlaveId] } },
+      data: { runtimeRoles: [] },
+    })
+
+    const { unservedRoles } = await loadWorld(workspaceId(fixture.workspaceId))
+
+    expect(unservedRoles).toEqual([])
+  })
+
   it('reports a slave busy only while it holds a non-terminal run', async (): Promise<void> => {
     const { world } = await loadWorld(workspaceId(fixture.workspaceId))
 

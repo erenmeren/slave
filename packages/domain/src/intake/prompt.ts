@@ -4,7 +4,7 @@ import {
   sanitiseExternalText,
 } from '../external/fence.js'
 import { neutraliseMarkers } from '../run-context/markers.js'
-import { INTAKE_PROMPT_MESSAGES_MAX, INTAKE_TEXT_MAX_CHARS, type IntakeRole } from './constants.js'
+import { INTAKE_MAX_SEATS_PER_TEMPLATE, INTAKE_PROMPT_MESSAGES_MAX, INTAKE_TEXT_MAX_CHARS, type IntakeRole } from './constants.js'
 import type { IntakeFacts } from './facts.js'
 
 /**
@@ -116,6 +116,16 @@ export function buildIntakePrompt(input: {
     'an empty team leaves the project idle until a person staffs it by hand. Propose the smallest',
     'team that can actually do the work, and leave it empty only when the person has said they will',
     'staff it themselves.',
+    '',
+    // Final review, Important 8. The schema refuses a fourth seat from one persona, so a model that
+    // does not know the rule loses its whole draft to a validation error it cannot see the reason
+    // for -- and the cheapest place to prevent that is here, before it answers. The NUMBER is said
+    // rather than "a few": three is a fact about the catalogue (three managed people per persona),
+    // not a style preference, and a model given a vague limit picks its own.
+    `At most ${String(INTAKE_MAX_SEATS_PER_TEMPLATE)} seats from any one persona: only that many people exist for each, so a`,
+    'fourth seat from the same "templateId" names somebody who is not there. Two people from one',
+    'persona is fine when the work genuinely needs two; for more hands than a persona has, use a',
+    'different persona.',
     '',
     `You have ${String(callsLeft)} turn(s) left in this conversation. When you have enough to`,
     'propose a project, propose it -- do not keep asking.',
