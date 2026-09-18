@@ -19,7 +19,10 @@
  * so a template ADDITION arrives, a template REMOVAL disappears, and a grant survives both. The
  * recompute happens under a `FOR UPDATE` on the Person row, because otherwise a
  * `setPersonCapabilities` committing a grant between this pass's read and its write would have
- * that grant silently erased.
+ * that grant silently erased. That lock is taken only for a row whose union has actually MOVED
+ * (`managedSlotNeedsRefresh`, final review fix round 2): a pass over a pool already in step -- which
+ * is nearly every pass, on a daemon that runs one at startup and one per reconciliation -- opens no
+ * transaction and locks nobody.
  *
  * `selectPoolPerson` is a pure READ over that same table: it never creates, mutates or reserves
  * anybody (Task 2 brief). Choosing AMONG eligible candidates is `rankPoolCandidates`
@@ -109,6 +112,40 @@ function sameCapabilitySet(current: readonly string[], desired: readonly string[
   return current.every((key) => want.has(key))
 }
 
+/** One managed row, as the prefetch reads it -- the two capability columns and nothing else, because
+ *  these two are the whole of what {@link managedSlotNeedsRefresh} decides on. */
+export interface ManagedCapabilityRow {
+  readonly capabilities: readonly string[]
+  readonly capabilityGrants: readonly string[]
+}
+
+/**
+ * Whether one already-existing managed slot is worth a transaction -- the pass's per-slot decision,
+ * pure (final review fix round 2, Important B).
+ *
+ * Important 4's prefetch replaced a `findUnique` per (template, slot) with one query, and then went
+ * on calling the LOCKED {@link refreshManagedCapabilities} for every occupied slot regardless: one
+ * `BEGIN` + `Person` `FOR UPDATE` + `findUnique` + `COMMIT` per person, 834 of them per pass on the
+ * measured installation, whose honest answer for all 834 was "unchanged". It had made the reads
+ * cheap and left the expensive half exactly where it was -- and the daemon runs this pass at startup
+ * and on every reconciliation.
+ *
+ * So the prefetch carries both capability columns now and this answers, in memory, whether the row
+ * has drifted from the union of its template's current baseline and its own grants. Only a `true`
+ * costs a transaction.
+ *
+ * Pure and exported for `classifyPersonCreateError`'s own reason (its docstring above): the decision
+ * deserves a test that needs no database and nothing to spy on. What it CANNOT promise is that the
+ * grants it read are still the grants: they are a prefetched value, and a `setPersonCapabilities`
+ * committing between the prefetch and the write is exactly the lost update Important 2 closed. That
+ * is why a `true` still goes through the locked function, which re-reads the grant column under
+ * `FOR UPDATE` before writing; this decision only ever moves a row from "definitely nothing to do"
+ * to "look properly", and never the other way.
+ */
+export function managedSlotNeedsRefresh(row: ManagedCapabilityRow, capabilityKeys: readonly string[]): boolean {
+  return !sameCapabilitySet(row.capabilities, effectiveCapabilities(capabilityKeys, row.capabilityGrants))
+}
+
 /**
  * Recomputes ONE existing managed row's effective capability set and writes it iff it drifted.
  *
@@ -119,6 +156,12 @@ function sameCapabilitySet(current: readonly string[], desired: readonly string[
  * transaction per PERSON rather than one for the whole pass: a lock held across 834 rows would
  * block every other writer of the table for as long as the pass ran, and a partial pass is a
  * correct pass -- the next one finishes it.
+ *
+ * Reached only for a row {@link managedSlotNeedsRefresh} says has drifted (final review fix round 2,
+ * Important B) -- so on an ordinary pass, for which every slot is in step, this function is not
+ * called at all and no row is locked. The re-read below is unchanged and still load-bearing: the
+ * decision to come here was made off a prefetched value, and this is where the grant column is read
+ * as it actually stands.
  *
  * Never touches `name`, `poolSlot` or anything else. `capabilities` is the one column this pass
  * may ever move on a row that already exists (Task 2 brief).
@@ -207,13 +250,21 @@ async function createSlot(
  * never considered -- which is the whole of "inactive templates create nothing" and "deactivation
  * deletes/releases nobody" (the row this pass would have synced is just not in its query).
  *
- * ONE query for the work list (final review, Important 4). This pass used to run a
- * `findUnique` per (template, slot) pair: 834 round trips on the installation it was measured
- * against, every one of them a no-op on the ordinary run. The managed rows for every active
- * template come back in a single query instead, and the per-slot work is decided in memory. The
- * database's own unique constraint is still the serialisation point for a slot this list says is
- * vacant (see {@link createSlot}) -- the prefetch narrows what has to be attempted, it does not
- * replace what makes the attempt safe.
+ * ONE query for the work list, and the work DECIDED off it (final review, Important 4; widened by
+ * fix round 2's Important B). This pass used to run a `findUnique` per (template, slot) pair: 834
+ * round trips on the installation it was measured against, every one of them a no-op on the
+ * ordinary run. Important 4 replaced those reads with a single query -- and then went on opening a
+ * locked transaction per occupied slot anyway, so the round trips came back as 834 `BEGIN` +
+ * `FOR UPDATE` + `COMMIT` cycles and the pass was no cheaper than before. The prefetch therefore
+ * reads both capability columns as well, {@link managedSlotNeedsRefresh} decides in memory whether a
+ * slot has drifted at all, and {@link refreshManagedCapabilities} -- the locked half -- is reached
+ * only for one that has. An ordinary pass over a pool in step now takes no lock and opens no
+ * transaction.
+ *
+ * The database's own unique constraint is still the serialisation point for a slot this list says is
+ * vacant (see {@link createSlot}), and the grant column is still re-read under `FOR UPDATE` before a
+ * drifted row is written (see {@link refreshManagedCapabilities}). The prefetch narrows what has to
+ * be attempted; it does not replace what makes either attempt safe.
  *
  * Idempotent: a second call with nothing changed underneath reports every slot `unchanged` and
  * writes nothing at all (Task 2 brief: "running sync twice is a no-op report on the second run").
@@ -227,11 +278,14 @@ export async function syncPersonPool(): Promise<PersonPoolSyncReport> {
 
   const existing = await prisma.person.findMany({
     where: { templateId: { in: templates.map((template) => template.id) }, poolSlot: { not: null } },
-    select: { id: true, templateId: true, poolSlot: true },
+    // Both capability columns, not just the id (final review fix round 2, Important B): the union
+    // this pass would write is computable from them, so the question "does this row need a
+    // transaction at all" is answerable here, in the query that was already being run.
+    select: { id: true, templateId: true, poolSlot: true, capabilities: true, capabilityGrants: true },
   })
   // `${templateId}:${poolSlot}` -- the pair the unique constraint is on, which is what makes this
   // map a faithful stand-in for the `findUnique` it replaces.
-  const occupied = new Map(existing.map((person) => [`${String(person.templateId)}:${String(person.poolSlot)}`, person.id] as const))
+  const occupied = new Map(existing.map((person) => [`${String(person.templateId)}:${String(person.poolSlot)}`, person] as const))
 
   let created = 0
   let updated = 0
@@ -239,10 +293,16 @@ export async function syncPersonPool(): Promise<PersonPoolSyncReport> {
   for (const template of templates) {
     for (const poolSlot of POOL_SLOTS) {
       const held = occupied.get(`${template.id}:${String(poolSlot)}`)
-      const outcome =
-        held === undefined
-          ? await createSlot(template.id, template.capabilityKeys, poolSlot)
-          : await refreshManagedCapabilities(held, template.capabilityKeys)
+      let outcome: SlotOutcome
+      if (held === undefined) {
+        outcome = await createSlot(template.id, template.capabilityKeys, poolSlot)
+      } else if (managedSlotNeedsRefresh(held, template.capabilityKeys)) {
+        outcome = await refreshManagedCapabilities(held.id, template.capabilityKeys)
+      } else {
+        // Decided in memory, and that is the whole point: no transaction, no row lock, no round trip
+        // for a slot that is already exactly what this pass would have written.
+        outcome = 'unchanged'
+      }
       if (outcome === 'created') created += 1
       else if (outcome === 'updated') updated += 1
       else unchanged += 1
