@@ -694,6 +694,48 @@ try {
   if (departmentsCurrent !== 'page') {
     await fail(`the Departments segment is aria-current=${JSON.stringify(departmentsCurrent)} on its own ?tab= value, expected "page"`)
   }
+  // THE MARK, BOTH WAYS (M61 R12 / plan erratum E3). This scenario runs in DEVELOPER mode (set at
+  // the top of this file), where the four tabs are simply this person's tabs -- so the strip must
+  // carry NO `data-outside-mode` here: nobody stepped outside anything. The value was printed
+  // above and is asserted here, because a value a gate prints and does not check is a value
+  // nobody is watching.
+  if (outsideMode !== null) {
+    await fail(
+      `the Workforce strip reads data-outside-mode=${JSON.stringify(outsideMode)} in DEVELOPER mode, expected none -- ` +
+        'the tab strip is not "outside" a mode that shows it',
+    )
+  }
+  // AND THE OTHER HALF, in a context of its own: the same `?tab=` value in SIMPLE mode still
+  // renders (rule 2 -- nothing removed, only moved), with the strip marked `data-outside-mode`
+  // so a person can see where they are and leave by any other tab. Without this, "no mark in
+  // developer mode" would be satisfied by a mark that never renders at all.
+  {
+    const simpleContext = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    await simpleContext.addInitScript(() => {
+      try {
+        localStorage.setItem('mode', 'simple')
+      } catch {
+        /* the assertion below fails loudly rather than silently passing on a missing mark */
+      }
+    })
+    const simplePage = await simpleContext.newPage()
+    simplePage.setDefaultTimeout(ACTION_TIMEOUT_MS)
+    await simplePage.goto(`${baseUrl}/workforce?tab=departments`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+    await simplePage.getByTestId('workforce-segment-departments').first().waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS })
+    const simpleMark = await simplePage.evaluate(() => ({
+      outside: document.querySelector('[data-outside-mode]')?.getAttribute('data-outside-mode') ?? null,
+      segments: document.querySelectorAll('[data-testid^="workforce-segment"]').length,
+    }))
+    console.log(`?tab=departments in SIMPLE mode = ${JSON.stringify(simpleMark)}`)
+    await simplePage.close()
+    await simpleContext.close()
+    if (simpleMark.outside !== 'true') {
+      await fail(
+        `the Workforce strip reads data-outside-mode=${JSON.stringify(simpleMark.outside)} on ?tab=departments in ` +
+          'SIMPLE mode, expected "true"',
+      )
+    }
+  }
   await waitVisible(otherDeptRow, 'the "M11 Gate Other Dept" department row')
   await clickUntil(
     otherDeptRow.getByTestId('department-delete'),

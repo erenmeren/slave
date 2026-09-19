@@ -1219,11 +1219,90 @@ try {
   // ============================================================================================
   // Stage 6: the raw values are FOLDED, not hidden.
   // ============================================================================================
-  // IN DEVELOPER MODE (M61 R9): "the M45 progressive disclosure's `Details` toggle becomes
-  // 'developer mode shows it'" -- the run/worktree/artifact groups render for the person who
-  // built the thing, and the fold inside them is unchanged. The simple-mode half of the same
-  // claim is asserted first, below: with the groups absent entirely, no raw value is on screen
-  // either, which is the stronger version of what this stage always measured.
+  // TWO HALVES, because M61 R9 turned this stage's claim into a claim about a MODE: "the M45
+  // progressive disclosure's `Details` toggle becomes 'developer mode shows it'".
+  //
+  // THE SIMPLE-MODE HALF, first and in a context of its own: a person who does not read code
+  // opens the same blocked task and gets the same one word and the same one reason, with NO
+  // `details-group` at all -- and therefore no task id, no branch and no worktree path anywhere
+  // in the panel. That is the stronger version of what this stage always measured (the old
+  // assertion was "folded"; this one is "not there"), and it is measured rather than assumed,
+  // because a fold that quietly opened in simple mode would look identical to one that did not
+  // exist.
+  {
+    const simpleContext = await browser.newContext({ viewport: VIEWPORT })
+    await simpleContext.addInitScript(() => {
+      try {
+        window.localStorage.setItem('mode', 'simple')
+      } catch {
+        /* the assertions below fail loudly rather than silently passing on a hidden group */
+      }
+    })
+    const simplePage = await simpleContext.newPage()
+    simplePage.setDefaultTimeout(ACTION_TIMEOUT_MS)
+    await simplePage.goto(`${baseUrl}/w/${workspaceId}/tasks`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+    await simplePage.getByTestId('column').first().waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS })
+    // Hydration first (M61 R1): `TasksClient` reads the mode once and passes `isDeveloper` down,
+    // and its first client render is flat `'simple'` -- so a read taken on the load frame would
+    // agree with this assertion for the wrong reason.
+    await simplePage.waitForFunction(
+      () => document.querySelector('[data-testid="mode-toggle"]')?.getAttribute('aria-checked') === 'false',
+      null,
+      { timeout: ACTION_TIMEOUT_MS },
+    )
+    await simplePage.getByTestId('task-card').filter({ hasText: blockedTask.title }).first().click()
+    await simplePage.locator('aside [data-testid="detail-status"]').first().waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS })
+    const simplePanel = await simplePage.evaluate(
+      ([taskId, branch, worktree]) => {
+        const aside = document.querySelector('aside')
+        if (aside === null) return { aside: false }
+        const text = (aside.textContent ?? '').replace(/\s+/g, ' ')
+        return {
+          aside: true,
+          status: aside.querySelector('[data-testid="detail-status"]')?.textContent?.trim() ?? null,
+          why: aside.querySelector('[data-testid="task-why"]')?.textContent?.trim() ?? null,
+          groups: [...aside.querySelectorAll('[data-testid="details-group"]')].map((group) => group.getAttribute('data-group') ?? ''),
+          worktreePaths: aside.querySelectorAll('[data-testid="worktree-path"]').length,
+          leaks: { uuid: text.includes(taskId), branch: text.includes(branch), worktree: text.includes(worktree) },
+        }
+      },
+      [blockedTask.id, BLOCKED_BRANCH, BLOCKED_WORKTREE],
+    )
+    console.log(`stage 6 (simple): the panel = ${JSON.stringify(simplePanel)}`)
+    await simplePage.close()
+    await simpleContext.close()
+    if (!simplePanel.aside) await fail('stage 6 (simple): clicking the blocked card opened no detail panel at all')
+    if (simplePanel.status !== 'BLOCKED') {
+      await fail(`stage 6 (simple): the panel's status word is ${JSON.stringify(simplePanel.status)}, expected "BLOCKED"`)
+    }
+    if (simplePanel.why !== BLOCKED_REASON) {
+      await fail(`stage 6 (simple): task-why reads ${JSON.stringify(simplePanel.why)}, expected ${JSON.stringify(BLOCKED_REASON)}`)
+    }
+    // THE TECHNICAL GROUPS, not every group. `cost` is money -- what this task has spent -- and a
+    // person who runs a company reads money in both modes; R9's "developer mode shows it" is about
+    // the run, its messages, what it saw, its verification attempts, its worktree and its events.
+    // Measured against the list the developer half below prints, so the two halves cannot drift:
+    // anything on this list in simple mode is a leak, and `cost` being here is a decision.
+    const DEVELOPER_ONLY_GROUPS = ['run', 'messages', 'context', 'memories', 'verification', 'worktree', 'events']
+    const leakedGroups = simplePanel.groups.filter((group) => DEVELOPER_ONLY_GROUPS.includes(group))
+    if (leakedGroups.length > 0) {
+      await fail(
+        `stage 6 (simple): simple mode rendered the developer-only group(s) ${JSON.stringify(leakedGroups)} -- R9 says ` +
+          `the fold became the mode (the whole panel drew ${JSON.stringify(simplePanel.groups)})`,
+      )
+    }
+    if (simplePanel.worktreePaths !== 0 || simplePanel.leaks.uuid || simplePanel.leaks.branch || simplePanel.leaks.worktree) {
+      await fail(`stage 6 (simple): a raw value is on screen with no group to hold it: ${JSON.stringify(simplePanel)}`)
+    }
+    console.log(
+      `stage 6 (simple): one word, one reason, ${JSON.stringify(simplePanel.groups)} on screen (money, which both modes ` +
+        'show) and not one of the seven technical groups -- so not one raw value either',
+    )
+  }
+
+  // THE DEVELOPER-MODE HALF: the run/worktree/artifact groups render for the person who built the
+  // thing, and the fold INSIDE them is unchanged -- closed on arrival except `run`, opening on a
+  // click, with the raw value only then.
   await page.addInitScript(() => {
     try {
       window.localStorage.setItem('mode', 'developer')
@@ -1308,7 +1387,10 @@ try {
   if (!unfolded.includes(BLOCKED_WORKTREE)) {
     await fail(`stage 6: opening the Worktree group showed ${JSON.stringify(unfolded)}, expected ${JSON.stringify(BLOCKED_WORKTREE)}`)
   }
-  console.log('stage 6 PASSED: one word, one reason, and every raw value folded away until a person asks for it')
+  console.log(
+    'stage 6 PASSED: in simple mode not one of the seven technical groups and not one raw value; in developer mode ' +
+      'one word, one reason, and every raw value folded away until a person asks for it',
+  )
 
   // ============================================================================================
   // Stage 7: real is not simulated.

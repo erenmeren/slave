@@ -22,8 +22,11 @@
 // page itself did not derive it" discipline `gate-m14-fidelity.mjs`'s stage 5 uses for Analytics.
 //
 // The five checks (spec §6):
-//   1. Project Settings `/w/<seed>/settings`: the goal form's radii -- `goal-input` at 8px,
-//      `goal-submit` at 5px. (M24 Task 4 moved `GoalPanel` off Overview onto this tab.)
+//   1. Project Settings `/w/<seed>/settings?section=goal`: the goal form's radii -- `goal-input`
+//      and `goal-submit` both at 8px, which is `--radius-control` (M61 R3/R16 replaced the eleven
+//      ad-hoc radii with three tokens; these were 7px and 5px before it). (M24 Task 4 moved
+//      `GoalPanel` off Overview onto this tab; M61 R13 put each section behind its own
+//      `?section=`.)
 //   2. Project Settings `/w/<seed>/settings`: the permission matrix's cell glyphs -- at least two
 //      distinct glyphs, and `–` (unset) distinct from `✕` (denied), whenever both exist. The
 //      seeded database has NO `SlavePermission` rows, so every cell is unset and this check is

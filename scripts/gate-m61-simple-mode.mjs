@@ -4,10 +4,16 @@
 // `gate-m16-chrome.mjs`'s: a free port, a real `next dev`, a real Chromium through
 // `playwright-core` at CHROMIUM_PATH, no daemon.
 //
+//   DATABASE_URL="$GATE_DATABASE_URL" \
 //   CHROMIUM_PATH=$HOME/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome \
 //   SLAVEOFAI_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" \
 //   SLAVEOFAI_REQUIRE_FAKE_CLI=1 \
 //   npm run gate:m61-simple-mode
+//
+// DATABASE_URL MUST BE GATE_DATABASE_URL, and the preflight refuses otherwise (controller Ruling
+// 13): this gate's cleanup deletes rows by name prefix AND every workspace whose `repoPath` is
+// this checkout, and a sweep like that against the operator's dev database would take their own
+// projects with it.
 //
 // THIS GATE SPENDS NOTHING AND CANNOT. It dispatches no run, so no CLI is ever invoked -- and the
 // preflight still REFUSES to start unless SLAVEOFAI_CLAUDE_BIN points at an executable under
@@ -47,8 +53,8 @@
 //      person in a Sheet with `?slave=` behind it, and `sheet-close` puts both back (R12).
 //   9. THE OFFICE. A glass toolbar, and no mono/pixel type anywhere in the DOM around the canvas
 //      in simple mode (R17).
-//  10. RULE 2. Every route `docs/ia.md`'s tables name, every `?tab=` and `?view=` value, in BOTH
-//      modes: 200, with the frame (or, for `/login`, its own marker).
+//  10. RULE 2. Every route `docs/ia.md`'s tables name, and every `?tab=`, `?section=` and
+//      `?view=` value, in BOTH modes: 200, with the frame (or, for `/login`, its own marker).
 //  11. VOCABULARY AND IMPORTS. `gate:m26-vocabulary` exits 0, `motion` is imported by at most the
 //      two files R15 allows, and nothing animates `all`.
 //
@@ -382,6 +388,19 @@ try {
   )
   assert(RAW_TOKENS.includes('pause_requested'), 'the derived blocklist lost the RunStatus members')
   assert(RAW_TOKENS.includes('run.tool_call'), 'the derived blocklist lost the event types')
+
+  // THE GATES DATABASE, ENFORCED (controller Ruling 13). `preflightCleanup` below deletes rows --
+  // by name prefix, and (since fix round 1) every workspace whose `repoPath` is this checkout --
+  // and a sweep like that pointed at the operator's DEV database would take their own projects
+  // with it. Both names are in `.env`, which `--env-file` loads, so the check costs nothing and a
+  // gate run against the wrong database stops here instead of halfway through the teardown.
+  const gateDatabaseUrl = process.env['GATE_DATABASE_URL'] ?? ''
+  if (gateDatabaseUrl === '' || process.env['DATABASE_URL'] !== gateDatabaseUrl) {
+    throw new Error(
+      'refusing: DATABASE_URL is not GATE_DATABASE_URL -- run this gate as ' +
+        'DATABASE_URL="$GATE_DATABASE_URL" npm run gate:m61-simple-mode',
+    )
+  }
 
   await preflightCleanup()
 
@@ -859,6 +878,14 @@ try {
       [`/w/${workspaceId}/settings?section=runbook`, SCROLLS],
       ['/workforce', SCROLLS],
       ['/workforce?tab=catalog', SCROLLS],
+      // Every `?tab=` value, in both modes and at both sizes: three of these render through a
+      // `ScrollArea` this task ADDED (the Catalog, Departments and Runbooks bodies had none, so
+      // anything past the fold was clipped), and a route that is only swept for its status code
+      // would not have found that.
+      ['/workforce?tab=departments', SCROLLS],
+      ['/workforce?tab=skills', SCROLLS],
+      ['/workforce?tab=runbooks', SCROLLS],
+      ['/workforce?tab=evidence', SCROLLS],
       ['/settings', SCROLLS],
       ['/settings?section=repositories', SCROLLS],
       ['/analytics', SCROLLS],
@@ -1259,6 +1286,12 @@ try {
     await waitForMode(pg, 'simple')
     const segments = await pg.$$eval('[data-testid^="workforce-segment"]', (els) => els.length)
     console.log(`stage 8: simple mode drew ${String(segments)} workforce segment(s) -- the page IS People (R12)`)
+    if (segments !== 0) {
+      await fail(
+        `stage 8: simple mode drew ${String(segments)} workforce segment(s) on /workforce, expected 0 -- R12 says the ` +
+          'page IS the People tab there, with the strip hidden',
+      )
+    }
 
     await waitVisible(pg.getByTestId('hire-from-catalogue'), 'the Hire from catalogue action')
     await clickUntil(pg.getByTestId('hire-from-catalogue'), async () => pg.getByTestId('hire-sheet').isVisible(), 'Hire from catalogue')
@@ -1293,7 +1326,22 @@ try {
     )
     console.log(`stage 8: after sheet-close the URL is ${pg.url()}`)
     await pg.close()
-    console.log('stage 8 PASSED: the catalogue is one button away, a row is a Sheet, and ?slave= is still the source of truth')
+    // AND THE OTHER MODE, so "0 segments" is an assertion about simple mode rather than about a
+    // strip that no longer exists anywhere (plan erratum E3: developer mode renders the four).
+    const devCtx = await modeContext('developer')
+    const devPage = await devCtx.newPage()
+    devPage.setDefaultTimeout(ACTION_TIMEOUT_MS)
+    await gotoReliably(`${baseUrl}/workforce`, devPage)
+    await waitVisible(devPage.getByTestId('people-table'), 'the People table in developer mode')
+    await waitForMode(devPage, 'developer')
+    const devSegments = await devPage.$$eval('[data-testid^="workforce-segment"]', (els) => els.map((el) => el.getAttribute('data-testid')))
+    console.log(`stage 8: developer mode drew ${String(devSegments.length)} workforce segment(s): ${JSON.stringify(devSegments)}`)
+    await devPage.close()
+    await devCtx.close()
+    if (devSegments.length === 0) {
+      await fail('stage 8: developer mode drew no workforce segment at all -- the strip is supposed to be what it ADDS')
+    }
+    console.log('stage 8 PASSED: no segments in simple mode and the strip in developer, the catalogue is one button away, a row is a Sheet, and ?slave= is still the source of truth')
   }
 
   // ============================================================================================
@@ -1342,8 +1390,8 @@ try {
   // ============================================================================================
   // Stage 10: nothing was removed, only moved -- in BOTH modes (spec §5.10, `docs/ia.md` rule 2).
   //
-  // THE INVENTORY IS `docs/ia.md`'S OWN, ALL OF IT, plus every `?tab=` and `?view=` value the
-  // product accepts. There is no `?mode=` value to sweep: R1 puts the mode in `localStorage` and
+  // THE INVENTORY IS `docs/ia.md`'S OWN, ALL OF IT, plus every `?tab=`, `?section=` and `?view=`
+  // value the product accepts. There is no `?mode=` value to sweep: R1 puts the mode in `localStorage` and
   // on `<html>`, never in the URL -- which is why this stage runs the whole list TWICE, once per
   // mode, instead of appending a query parameter.
   //
@@ -1355,7 +1403,15 @@ try {
     const SHELL_ROUTES = [
       '/', '/workforce', '/workforce?tab=slaves', '/workforce?tab=departments', '/workforce?tab=catalog',
       '/workforce?tab=skills', '/workforce?tab=runbooks', '/workforce?tab=evidence',
-      '/slaves', '/skills', '/settings', '/sim', `/analytics?workspace=${workspaceId}`,
+      '/slaves', '/skills', '/sim', `/analytics?workspace=${workspaceId}`,
+      // EVERY `?section=` VALUE, both column lists (R13: only the chosen one mounts, so a sweep of
+      // the bare route is a sweep of one fifth of the page). `docs/ia.md`'s Modes section promises
+      // this stage walks them; this is the promise being kept.
+      '/settings', '/settings?section=providers', '/settings?section=appearance',
+      '/settings?section=repositories', '/settings?section=security', '/settings?section=danger',
+      `/w/${workspaceId}/settings?section=goal`, `/w/${workspaceId}/settings?section=runbook`,
+      `/w/${workspaceId}/settings?section=runtime`, `/w/${workspaceId}/settings?section=permissions`,
+      `/w/${workspaceId}/settings?section=danger`,
       `/w/${workspaceId}`, `/w/${workspaceId}/tasks`, `/w/${workspaceId}/organization`,
       `/w/${workspaceId}/knowledge`, `/w/${workspaceId}/activity`, `/w/${workspaceId}/activity?view=digest`,
       `/w/${workspaceId}/settings`, `/w/${workspaceId}/graph`, `/w/${workspaceId}/office`,
@@ -1391,7 +1447,10 @@ try {
       await pg.close()
       await ctx.close()
     }
-    console.log(`stage 10 PASSED: ${String(swept)} destination loads across two modes -- every route docs/ia.md names, and every ?tab= and ?view= value`)
+    console.log(
+      `stage 10 PASSED: ${String(swept)} destination loads across two modes -- every route docs/ia.md names, and ` +
+        'every ?tab=, ?section= and ?view= value',
+    )
   }
 
   // ============================================================================================

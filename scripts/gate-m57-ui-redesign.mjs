@@ -3,10 +3,16 @@
 // `gate-m44-ux-foundation.mjs`'s shape, which is `gate-m16-chrome.mjs`'s: a free port, a real
 // `next dev`, a real Chromium through `playwright-core` at CHROMIUM_PATH, no daemon.
 //
+//   DATABASE_URL="$GATE_DATABASE_URL" \
 //   CHROMIUM_PATH=$HOME/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome \
 //   SLAVEOFAI_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" \
 //   SLAVEOFAI_REQUIRE_FAKE_CLI=1 \
 //   npm run gate:m57-ui-redesign
+//
+// DATABASE_URL MUST BE GATE_DATABASE_URL, and the preflight refuses otherwise (controller Ruling
+// 13): this gate's cleanup deletes rows by name prefix AND every workspace whose `repoPath` is
+// this checkout, and a sweep like that against the operator's dev database would take their own
+// projects with it.
 //
 // THIS GATE SPENDS NOTHING AND CANNOT. It dispatches no run, so no CLI is ever invoked -- and the
 // preflight still REFUSES to start unless SLAVEOFAI_CLAUDE_BIN points at an executable under
@@ -377,6 +383,19 @@ try {
     RAW_TOKENS.filter((token) => token === 'run_output').length >= 2,
     'the derived blocklist lost the memory unions -- `run_output` must reach it twice, once from the event types and once from MEMORY_SOURCE_KINDS',
   )
+
+  // THE GATES DATABASE, ENFORCED (controller Ruling 13). `preflightCleanup` below deletes rows --
+  // by name prefix, and (since fix round 1) every workspace whose `repoPath` is this checkout --
+  // and a sweep like that pointed at the operator's DEV database would take their own projects
+  // with it. Both names are in `.env`, which `--env-file` loads, so the check costs nothing and a
+  // gate run against the wrong database stops here instead of halfway through the teardown.
+  const gateDatabaseUrl = process.env['GATE_DATABASE_URL'] ?? ''
+  if (gateDatabaseUrl === '' || process.env['DATABASE_URL'] !== gateDatabaseUrl) {
+    throw new Error(
+      'refusing: DATABASE_URL is not GATE_DATABASE_URL -- run this gate as ' +
+        'DATABASE_URL="$GATE_DATABASE_URL" npm run gate:m57-ui-redesign',
+    )
+  }
 
   await preflightCleanup()
 
