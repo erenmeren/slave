@@ -60,8 +60,8 @@
 // directory corrupts the on-disk build cache for both. Stop any running dev server first
 // (`pgrep -af "next dev"`).
 
-import { spawn } from 'node:child_process'
-import { accessSync, constants, existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import { accessSync, constants, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -173,6 +173,33 @@ const RAW_TOKENS = [
  * COUNTED and printed per route, never silently dropped.
  */
 
+/**
+ * A THROWAWAY GIT REPOSITORY for the fixture workspaces (`gate-m47-team-formation.mjs`'s
+ * `makeRepo`, copied with its reason sharpened by controller Ruling 12).
+ *
+ * `Workspace.repoPath` must never be THIS checkout. A planning run executes in
+ * `workspace.repoPath` ITSELF -- `apps/orchestrator/src/planning.ts` passes
+ * `worktreePath: workspace.repoPath`, because the manager plans in the repository rather than in
+ * a worktree -- and `packages/providers/test/fake-claude.mjs` does `git add -A && git commit` in
+ * its own cwd. A fixture row pointing at the repo root therefore lets ANY later gate's daemon
+ * sweep the operator's entire working tree into a commit authored by `Fake Claude`. It happened
+ * once, on 2026-09-19, from a leftover row of an interrupted run of this gate.
+ *
+ * One repository per run, in `tmpdir()`, removed in `finally`. Neither gate dispatches a run, so
+ * nothing else about either changes -- this closes the door rather than fixing a symptom.
+ */
+function makeRepo(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix))
+  const git = (args) => execFileSync('git', args, { cwd: dir })
+  git(['init', '-q', '-b', 'main'])
+  git(['config', 'user.name', 'Gate'])
+  git(['config', 'user.email', 'gate@example.com'])
+  writeFileSync(join(dir, 'README.md'), '# fixture\n')
+  git(['add', '-A'])
+  git(['commit', '-q', '-m', 'initial'])
+  return dir
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message)
 }
@@ -226,6 +253,17 @@ async function preflightCleanup() {
     await prisma.executionEvent.deleteMany({ where: { workspaceId: workspace.id } }).catch(() => {})
     await prisma.workspace.delete({ where: { id: workspace.id } }).catch(() => {})
   }
+  // A WORKSPACE POINTING AT THIS CHECKOUT CAN ONLY BE A GATE LEFTOVER (controller Ruling 12), and
+  // it is the dangerous kind: a planning run executes in `workspace.repoPath` itself, so the next
+  // daemon any gate starts would plan inside this repository and the fake CLI would commit it.
+  // Removed by repoPath, in the same FK order as the rows above.
+  const inThisRepo = await prisma.workspace.findMany({ where: { repoPath: repoRoot }, select: { id: true, name: true } })
+  for (const workspace of inThisRepo) {
+    console.log(`preflight: removing workspace ${workspace.id} (${workspace.name}) seeded against this repository`)
+    await prisma.executionEvent.deleteMany({ where: { workspaceId: workspace.id } }).catch(() => {})
+    await prisma.workspace.delete({ where: { id: workspace.id } }).catch(() => {})
+  }
+  console.log(`preflight: ${String(inThisRepo.length)} workspace(s) pointing at ${repoRoot} removed`)
 }
 
 /** `YYYY-MM-DD` in the process's own zone -- the same `localDay` `server/supervisorThreads.ts`
@@ -242,6 +280,7 @@ let nextServer = null
 let browser = null
 let page = null
 let diagDir = null
+let repoPath = null
 let workspaceId = null
 let otherWorkspaceId = null
 let teamId = null
@@ -341,22 +380,28 @@ try {
 
   await preflightCleanup()
 
+  repoPath = makeRepo('slaveofai-gate-m57-repo-')
+  console.log(`fixture repository: ${repoPath} (never this checkout -- see makeRepo's docblock)`)
+
   // ---- The fixture. Each row exists to make one stage mean something. --------------------------
   const workspace = await prisma.workspace.create({
     data: {
       name: WORKSPACE_NAME,
-      repoPath: repoRoot,
+      repoPath,
       verifyCommands: [],
       setupCommands: [],
       goal: 'Prove the frame reads.',
       goalVersion: 2,
+      // NO DAEMON EVER PLANS THESE ROWS. This gate starts none and dispatches nothing, and the
+      // flag says so to any daemon a neighbouring gate leaves running (controller Ruling 12).
+      supervisorEnabled: false,
     },
   })
   workspaceId = workspace.id
   // The SECOND project exists for one assertion each in stage 2: that the tree lists both in the
   // database's own order, and that a project which is not open does not nest its six sections.
   const other = await prisma.workspace.create({
-    data: { name: OTHER_WORKSPACE_NAME, repoPath: repoRoot, verifyCommands: [], setupCommands: [] },
+    data: { name: OTHER_WORKSPACE_NAME, repoPath, verifyCommands: [], setupCommands: [], supervisorEnabled: false },
   })
   otherWorkspaceId = other.id
   const team = await prisma.team.create({ data: { workspaceId, name: TEAM_NAME } })
@@ -1240,6 +1285,7 @@ try {
   // then trips over.
   await prisma.person.deleteMany({ where: { name: { in: GATE_PERSON_NAMES } } }).catch(() => {})
   if (templateId !== null) await prisma.slaveTemplate.delete({ where: { id: templateId } }).catch(() => {})
+  if (repoPath !== null) rmSync(repoPath, { recursive: true, force: true })
   if (diagDir !== null && exitCode === 0) rmSync(diagDir, { recursive: true, force: true })
   await prisma.$disconnect().catch(() => {})
 }
