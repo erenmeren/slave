@@ -646,12 +646,14 @@ describe('WorkforceClient row click opens the panel', () => {
     render(<TestWorkforceClient />)
     fireEvent.click(screen.getByTestId('person-open'))
 
-    // Scoped to `slave-panel` (Task 9): the person panel is inside a `Sheet` now, and the Sheet's
-    // OWN header prints the same name as its `title` -- two "Alex" headings on screen, one from
-    // the Sheet's chrome and one from `SlavePanel`'s own header, so an unscoped `findByRole` would
-    // find both.
-    const panel = await screen.findByTestId('slave-panel')
-    expect(within(panel).getByRole('heading', { name: 'Alex' })).toBeTruthy()
+    // Fix round 1 (Task 9 review, Important 1): the person panel is inside a `Sheet` now, and
+    // `SlavePanel` is rendered `chromeless` at this one call site -- its OWN `<header>` (name,
+    // close button) is suppressed, so `person-sheet` carries exactly ONE heading naming the
+    // person (the Sheet's own `<h2>{title}</h2>`) and exactly one close control (the Sheet's own
+    // `sheet-close`), not two of each.
+    const sheet = await screen.findByTestId('person-sheet')
+    expect(within(sheet).getAllByRole('heading', { name: 'Alex' })).toHaveLength(1)
+    expect(within(sheet).getAllByRole('button', { name: /close/i })).toHaveLength(1)
   })
 
   // Task 9: `useSelectedId('slave')` is what opens it now, and `person-sheet` (a `Sheet`, not the
@@ -698,8 +700,12 @@ describe('WorkforceClient row click opens the panel', () => {
 
     render(<TestWorkforceClient people={[pooled]} />)
     fireEvent.click(screen.getByTestId('person-open'))
-    const panel = await screen.findByTestId('slave-panel')
-    expect(within(panel).getByRole('heading', { name: 'Alex' })).toBeTruthy()
+    // Fix round 1 (Task 9 review, Important 1): `chromeless` means `person-sheet` carries exactly
+    // one "Alex" heading (the Sheet's own) and one close control (the Sheet's own), not a second
+    // pair from `SlavePanel`'s own (now suppressed) header.
+    const sheet = await screen.findByTestId('person-sheet')
+    expect(within(sheet).getAllByRole('heading', { name: 'Alex' })).toHaveLength(1)
+    expect(within(sheet).getAllByRole('button', { name: /close/i })).toHaveLength(1)
     expect(screen.queryByTestId('status-label')).toBeNull()
     expect(screen.queryByTestId('pause-button')).toBeNull()
     expect(screen.queryByTestId('resume-button')).toBeNull()

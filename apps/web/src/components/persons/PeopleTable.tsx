@@ -50,6 +50,14 @@ const HEADER = ['Name', 'Persona', 'Departments', 'Skills', 'Where they work', '
  *
  * Filtering is LOCAL: the page already holds every row (an installation's people are tens, not
  * thousands), and a round trip per filter click would make the three segments feel like navigation.
+ *
+ * Fix round 1 (Task 9 review, Important 2): the root is `flex min-h-0 flex-1 flex-col` and
+ * `people-rows` (the virtualized table's own wrapper) is `flex min-h-0 flex-1 flex-col` too --
+ * without a real, bounded height at every level between the viewport and the virtualizer's
+ * `ScrollArea`, `DataTable`'s own `min-h-0 flex-1` on that `ScrollArea` has nothing to bound
+ * ITSELF against, and flexbox's default "grow to fit content" behaviour wins instead of the
+ * scroll region actually scrolling. `WorkforceClient`'s `slaves` tab body and `ui/PageShell`'s
+ * own root complete the chain above this component.
  */
 export function PeopleTable({
   initial,
@@ -146,7 +154,7 @@ export function PeopleTable({
   }
 
   return (
-    <div data-testid="people-table" className="flex flex-col gap-3">
+    <div data-testid="people-table" className="flex min-h-0 flex-1 flex-col gap-3">
       <div className="flex flex-wrap items-end gap-3">
         <Segmented
           options={FILTERS}
@@ -191,7 +199,7 @@ export function PeopleTable({
           message="Nobody matches. Change the filters, or make a new slave — they do not need a project."
         />
       ) : (
-        <div data-testid="people-rows">
+        <div data-testid="people-rows" className="flex min-h-0 flex-1 flex-col">
           <DataTable
             columns={COLUMNS}
             header={[...HEADER]}

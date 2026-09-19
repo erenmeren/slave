@@ -150,4 +150,15 @@ describe('PeopleTable (M61 Task 9: virtualized)', () => {
     expect(rendered).toBeGreaterThan(0)
     expect(rendered).toBeLessThan(60)
   })
+
+  // Fix round 1 (Task 9 review, Important 2): without a real, bounded height at every level
+  // between the viewport and the virtualized `ScrollArea`, the table grows to fit every row
+  // instead of scrolling. `min-h-0` (paired with `flex-1`) is what lets each level SHRINK rather
+  // than grow-to-fit-content -- the root and the rows wrapper are the two levels this component
+  // itself owns.
+  it('carries min-h-0 on both the root and the rows wrapper, so the table can shrink to a bounded height', () => {
+    render(<PeopleTable initial={rows} departments={[]} skills={[]} onOpen={() => {}} />)
+    expect(screen.getByTestId('people-table').className.split(' ')).toContain('min-h-0')
+    expect(screen.getByTestId('people-rows').className.split(' ')).toContain('min-h-0')
+  })
 })

@@ -293,13 +293,19 @@ export function WorkforceClient({
       }
     >
       {tab === 'slaves' && (
-        <PeopleTable
-          initial={people}
-          departments={peopleDepartments}
-          skills={skillCatalogue}
-          skillHolders={skillHolders}
-          onOpen={(personId) => setSelectedPerson(personId)}
-        />
+        // Fix round 1 (Task 9 review, Important 2): the bare `flex min-h-0 flex-1 flex-col` frame
+        // `ActivityClient.tsx`/`HomeClient.tsx` use, not another `gap`-only `<div>` -- `PeopleTable`
+        // needs a REAL bounded height beneath it for its own virtualized `ScrollArea` to actually
+        // scroll instead of growing to fit every row.
+        <div className="flex min-h-0 flex-1 flex-col">
+          <PeopleTable
+            initial={people}
+            departments={peopleDepartments}
+            skills={skillCatalogue}
+            skillHolders={skillHolders}
+            onOpen={(personId) => setSelectedPerson(personId)}
+          />
+        </div>
       )}
       {tab === 'departments' && <DepartmentsTable teams={teams} workspaces={workspaces} />}
       {tab === 'catalog' && (
@@ -388,6 +394,9 @@ export function WorkforceClient({
               haltedReason={panel.haltedReason}
               onClose={() => setSelectedPerson(null)}
               onPersonChanged={() => setPersonTick((tick) => tick + 1)}
+              // Fix round 1 (Task 9 review, Important 1): `person-sheet` already draws the name
+              // and the close button -- this is the one call site inside a `Sheet`.
+              chromeless
             />
           </div>
         )}
