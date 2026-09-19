@@ -22,7 +22,7 @@
 // page itself did not derive it" discipline `gate-m14-fidelity.mjs`'s stage 5 uses for Analytics.
 //
 // The five checks (spec §6):
-//   1. Project Settings `/w/<seed>/settings`: the goal form's radii -- `goal-input` at 7px,
+//   1. Project Settings `/w/<seed>/settings`: the goal form's radii -- `goal-input` at 8px,
 //      `goal-submit` at 5px. (M24 Task 4 moved `GoalPanel` off Overview onto this tab.)
 //   2. Project Settings `/w/<seed>/settings`: the permission matrix's cell glyphs -- at least two
 //      distinct glyphs, and `–` (unset) distinct from `✕` (denied), whenever both exist. The
@@ -265,16 +265,23 @@ try {
   // ============================================================================================
   // Check 1: project Settings /w/<seed>/settings -- the goal form's radii.
   // ============================================================================================
-  await page.goto(url(`/w/${SEED_WORKSPACE_ID}/settings`), { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  // M61 R13/Task 9: project Settings is two fixed columns and only the CHOSEN section mounts, so
+  // the goal form is behind `?section=goal` and the permission matrix behind `?section=permissions`
+  // -- the same route and the same testids, one query parameter further in.
+  await page.goto(url(`/w/${SEED_WORKSPACE_ID}/settings?section=goal`), { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
   await waitVisible(page.getByTestId('goal-input'), "the goal form's input (the seed workspace's goal must be unset)")
-  await assertComputed('check 1 (project settings goal form)', '[data-testid="goal-input"]', 'border-radius', '7px')
-  await assertComputed('check 1 (project settings goal form)', '[data-testid="goal-submit"]', 'border-radius', '5px')
-  console.log('check 1 PASSED: the goal input is 7px and the set-goal button is 5px, read back from getComputedStyle')
+  // M61 R3/R16: the eleven ad-hoc radii became three tokens -- a form field is `--radius-control`,
+  // which is 8px (the old `goal-input` 7px was one of the values that token replaced).
+  await assertComputed('check 1 (project settings goal form)', '[data-testid="goal-input"]', 'border-radius', '8px')
+  await assertComputed('check 1 (project settings goal form)', '[data-testid="goal-submit"]', 'border-radius', '8px')
+  console.log('check 1 PASSED: the goal input and the set-goal button are both 8px (--radius-control), read back from getComputedStyle')
 
   // ============================================================================================
-  // Check 2: project Settings /w/<seed>/settings -- the permission matrix's cell glyphs. Same
-  // page as check 1 -- no second navigation needed.
+  // Check 2: project Settings /w/<seed>/settings -- the permission matrix's cell glyphs. ITS OWN
+  // SECTION since M61 R13 (only the chosen one mounts), so this navigates rather than reusing the
+  // page check 1 left behind.
   // ============================================================================================
+  await page.goto(url(`/w/${SEED_WORKSPACE_ID}/settings?section=permissions`), { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
   await waitVisible(page.getByTestId('perm-caption'), "the permission matrix's caption")
   const glyphs = await page.evaluate(() =>
     [...document.querySelectorAll('[data-testid^="perm-cell-"]')].map((element) => element.textContent?.trim() ?? ''),

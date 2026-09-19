@@ -67,9 +67,9 @@ describe('the header', () => {
     expect(crumb.textContent).toContain('Checkout rewrite')
   })
 
-  it('is 54px tall -- the README number (R7)', () => {
+  it('is 48px tall -- the README number (M57 R7, M61 R6)', () => {
     renderHeader()
-    expect(screen.getByTestId('app-header').className).toContain('h-[54px]')
+    expect(screen.getByTestId('app-header').className).toContain('h-[48px]')
   })
 
   it('shows the money and the bar, and keeps the budget testids the gates pin', () => {

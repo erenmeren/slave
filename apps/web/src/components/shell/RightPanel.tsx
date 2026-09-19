@@ -5,7 +5,8 @@ import { useRightPanel } from './RightPanelProvider'
 /**
  * The 340px slot (M57 R8, narrowed from 372px by M61 R4 to fit the new 1024px floor).
  *
- * It owns the WIDTH, the surface and the 54px header bar; its content owns everything below. That
+ * It owns the WIDTH, the surface and the 48px header bar (the app header's own height, R6 -- the
+ * two bars start at the same y and a 6px difference between them is a visible step); its content owns everything below. That
  * split is what lets `SlavePanel` and `TaskDetailPanel` move in here for the price of one className
  * each: they were `fixed inset-y-0 right-0 w-96` asides, and everything inside them was already a
  * vertical flex column that filled its parent.
@@ -45,7 +46,7 @@ export function RightPanel({
       {/* One header bar, at the header's own height, so the three columns line up across the top.
         * The panels that move in here bring their own title row BELOW this one -- theirs carries a
         * task id and a status pill, which this one cannot know about. */}
-      <div className="flex h-[54px] flex-none items-center gap-2 border-b border-line px-[14px] pl-[16px]">
+      <div className="flex h-[48px] flex-none items-center gap-2 border-b border-line px-[14px] pl-[16px]">
         <span className="flex-1 truncate text-[13.5px] font-semibold text-t1">{label}</span>
         {mode !== null && (
           <button

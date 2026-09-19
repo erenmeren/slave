@@ -66,6 +66,23 @@ describe('buildTeamLive', () => {
     expect(snap.shellFacts.workspace.id).toBe(fx.workspaceId)
   })
 
+  // M61 Task 11, controller Ruling 9: `stat-goal` prints `vN` beside the goal, so the snapshot has
+  // to carry the version -- and it has to be the SAME number `Workspace.goalVersion` holds, not a
+  // count of anything.
+  it('carries the goal and its version, and null version when there is no goal', async () => {
+    const withoutGoal = (await buildTeamLive(fx.workspaceId))!
+    expect(withoutGoal.stats.goal).toBe(null)
+    expect(withoutGoal.stats.goalVersion).toBe(null)
+
+    await prisma.workspace.update({
+      where: { id: fx.workspaceId },
+      data: { goal: 'Ship the printable invoice', goalVersion: 3 },
+    })
+    const withGoal = (await buildTeamLive(fx.workspaceId))!
+    expect(withGoal.stats.goal).toBe('Ship the printable invoice')
+    expect(withGoal.stats.goalVersion).toBe(3)
+  })
+
   it('404s through the route for an unknown workspace', async () => {
     const res = await GET(new Request('http://x'), { params: Promise.resolve({ workspaceId: 'nope' }) })
     expect(res.status).toBe(404)

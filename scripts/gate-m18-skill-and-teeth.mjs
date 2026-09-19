@@ -903,6 +903,17 @@ try {
   })
   console.log(`stage 3: seeded paused task ${readerTask.id} / run ${readerRun.id} with a checkpoint carrying 2 deniedToolUseIds`)
 
+  // IN DEVELOPER MODE (M61 R9): "a card is `--radius-surface` with the `technical` details (run
+  // kind, attempt, artifacts) rendered only in developer mode -- the M45 progressive disclosure's
+  // `Details` toggle becomes 'developer mode shows it'". The denied-tool-calls reader line is one
+  // of those details; the line, its words and its ellipsised ids are unchanged.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('mode', 'developer')
+    } catch {
+      /* the assertion below fails loudly rather than silently passing on a hidden line */
+    }
+  })
   await gotoReliably(`${baseUrl}/w/${workspaceId}/tasks`)
   await waitVisible(page.getByTestId('column'), 'the Tasks board')
   // The slot (`RightPanel.tsx`) IS the named landmark now (M57 Task 5, R8): its own `<aside

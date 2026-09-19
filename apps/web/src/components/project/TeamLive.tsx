@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-ai/domain'
 import { useMode } from '../mode/ModeProvider'
 import { useTeamLive } from '../../hooks/useTeamLive'
 import { useSelectedId } from '../../hooks/useSelectedId'
@@ -201,9 +202,23 @@ export function TeamLive({
             </span>
           }
           note={
-            <Link data-testid="goal-edit" href={`/w/${workspaceId}/settings#goal`} className="text-accent">
-              Edit goal
-            </Link>
+            // The VERSION, then the edit affordance (M61 Task 11, controller Ruling 9). The
+            // deleted `ProjectBrief`'s objective tile printed `vN` beside the goal and
+            // `gate-m45-project-experience.mjs` reads it; `data-goal-version` is where the gate
+            // finds the raw number, the way `docs/ia.md` rule 3 asks (the word a person reads is
+            // `v2`, the value a machine reads is on the attribute). Absent entirely when there is
+            // no goal to version.
+            <>
+              {view.stats.goalVersion !== null && (
+                <>
+                  <span data-goal-version={String(view.stats.goalVersion)}>v{view.stats.goalVersion}</span>
+                  {' · '}
+                </>
+              )}
+              <Link data-testid="goal-edit" href={`/w/${workspaceId}/settings#goal`} className="text-accent">
+                Edit goal
+              </Link>
+            </>
           }
         />
         <Stat
@@ -216,13 +231,46 @@ export function TeamLive({
           testId="stat-spend"
           label="Spend"
           value={formatUsd(view.shellFacts.status.spentUsd)}
+          // M32's upper-bound policy, restored (M61 Task 11): a total that contains calls nobody
+          // measured is an UPPER BOUND and has to say so -- never one bare figure. The deleted
+          // `ProjectBrief`'s cost tile said it in these words and nothing said it after that tile
+          // went; `gate-m45-project-experience.mjs`'s own needle for the sentence is what found
+          // the hole. Unmeasured RUNS are a different hole and are named separately, because they
+          // are in NO total at all (`server/brief.ts`'s own docstring makes the distinction).
           note={
-            view.shellFacts.guardrails.budgetUsd === null
-              ? 'no budget'
-              : `of ${formatUsd(view.shellFacts.guardrails.budgetUsd)}`
+            <>
+              {view.shellFacts.guardrails.budgetUsd === null
+                ? 'no budget'
+                : `of ${formatUsd(view.shellFacts.guardrails.budgetUsd)}`}
+              {view.stats.unmeasuredCalls > 0 && (
+                <span data-testid="stat-spend-unmeasured-calls" className="block text-s-waiting">
+                  {view.stats.unmeasuredCalls} unmeasured calls charged at {formatUsd(SUPERVISOR_PER_CALL_CAP_USD)} each
+                </span>
+              )}
+              {view.stats.unmeasuredRuns > 0 && (
+                <span data-testid="stat-spend-unmeasured-runs" className="block text-s-waiting">
+                  {view.stats.unmeasuredRuns} unmeasured runs (not in the total)
+                </span>
+              )}
+            </>
           }
+          unmeasured={view.stats.unmeasuredCalls > 0 || view.stats.unmeasuredRuns > 0}
         />
       </div>
+      {/* M49 R6, re-homed (M61 Task 11): "one line on the `latest verified` fact --
+        * `Knowledge: N verified · M candidates`, linking to the tab". That fact's tile went with
+        * the Overview; the project's page is the Team tab now, so the line is here. Developer
+        * mode only, because Knowledge is a developer TAB (R18) and a link into a place simple
+        * mode does not show is a link to nowhere a simple-mode person was heading. */}
+      {isDeveloper && (
+        <Link
+          data-testid="brief-knowledge"
+          href={`/w/${workspaceId}/knowledge`}
+          className="type-meta text-t3 hover:text-t1"
+        >
+          Knowledge: {view.stats.knowledge.verified} verified · {view.stats.knowledge.candidates} candidates
+        </Link>
+      )}
     </section>
   )
 }

@@ -582,7 +582,14 @@ try {
 
   /** Clicks `locator`, then bounded-waits for `predicate`. */
   async function clickUntil(locator, predicate, description) {
-    for (const waitBudgetMs of [ACTION_TIMEOUT_MS, 10_000]) {
+    // FOUR attempts, not two (M61 Task 11). The right panel re-renders on every wake-up the
+    // workspace stream produces -- `useShellFacts`, `NeedsYouBar`'s 5s poll and `useTeamLive`'s
+    // own refetch all land on `/w/:id` now -- and a React re-render REPLACES the node a locator
+    // resolved to, which Playwright reports as "element was detached from the DOM, retrying" and
+    // then gives up on. Nothing about the assertion changes; the click simply gets more than two
+    // chances to land between two frames.
+    let lastClickError = null
+    for (const waitBudgetMs of [ACTION_TIMEOUT_MS, 10_000, 10_000, 10_000]) {
       let clickError = null
       try {
         await locator.click({ timeout: 5_000 })
@@ -594,11 +601,52 @@ try {
         if (await predicate().catch(() => false)) return
         await delay(100)
       }
-      if (clickError !== null) {
-        await fail(`clicking ${description} failed: ${clickError instanceof Error ? clickError.message : String(clickError)}`)
-      }
+      lastClickError = clickError
     }
-    await fail(`clicking ${description} did not produce the expected result even after a retry click`)
+    if (lastClickError !== null) {
+      await fail(`clicking ${description} failed: ${lastClickError instanceof Error ? lastClickError.message : String(lastClickError)}`)
+    }
+    await fail(`clicking ${description} did not produce the expected result even after four attempts`)
+  }
+
+  /**
+   * Opens the right panel if the dock is showing (M61 R14, Task 11).
+   *
+   * `RightPanelProvider` REMEMBERS being collapsed now -- `localStorage['supervisor']`, written on
+   * every collapse and read back after hydration -- so stage 4's own `panel-collapse` outlives
+   * stage 4 and every later stage that reads the panel arrives at a dock. Worse, it arrives at a
+   * panel that collapses a beat AFTER the first paint (the server renders open, the stored choice
+   * lands on hydration), which is a race a plain `waitVisible` wins and then loses.
+   *
+   * Idempotent, and polled on `data-right` rather than on the dock's presence, so it settles after
+   * hydration rather than before it.
+   */
+  async function ensurePanelOpen() {
+    const rightNow = async () =>
+      page.evaluate(() => document.querySelector('[data-testid="app-shell"]')?.getAttribute('data-right') ?? null)
+    const stored = await page.evaluate(() => {
+      try {
+        return window.localStorage.getItem('supervisor')
+      } catch {
+        return null
+      }
+    })
+    if (stored !== 'collapsed') {
+      await waitUntil('the right panel to be open', ACTION_TIMEOUT_MS, async () => {
+        const right = await rightNow()
+        return right === 'panel' || right === 'overlay' ? { done: true, value: right } : { done: false, detail: JSON.stringify(right) }
+      })
+      return
+    }
+    // THE STORED CHOICE HAS TO LAND FIRST. The server renders the panel OPEN (it has no
+    // `localStorage` to read) and the provider's mount effect collapses it a beat later -- so a
+    // helper that saw `panel` and returned would be handing the next assertion a panel that is
+    // about to vanish under it, which is exactly the detached-node failure this replaced.
+    await waitUntil('the remembered collapse to reach the shell after hydration', ACTION_TIMEOUT_MS, async () => {
+      const right = await rightNow()
+      return right === 'dock' ? { done: true, value: right } : { done: false, detail: JSON.stringify(right) }
+    })
+    await clickUntil(page.getByTestId('dock-supervisor'), async () => (await rightNow()) === 'panel', "the dock's Supervisor button")
   }
 
   // ============================================================================================
@@ -667,6 +715,12 @@ try {
   // now the project's OWN strip rather than a nested row in a shared tree -- spec §3).
   // ============================================================================================
   const dbProjects = await prisma.workspace.findMany({ where: { archivedAt: null }, select: { id: true, name: true }, orderBy: { name: 'asc' } })
+  // ON A PROJECT ROUTE (M61 R5, Task 11): the switcher IS the breadcrumb's project crumb, so it
+  // exists on `/w/:id/*` and nowhere else -- on `/` there is no project crumb to be a button, and
+  // Home is itself the list of every project. The tree this stage used to read was global; its
+  // replacement is the header's, and the header only has one inside a project.
+  await gotoReliably(`${baseUrl}/w/${workspaceId}`)
+  await waitVisible(page.getByTestId('project-switcher'), "the header's project crumb")
   await page.click('[data-testid="project-switcher"]')
   const treeRows = await page.evaluate(() =>
     [...document.querySelectorAll('[data-testid="project-switcher-item"]')].map((row) => ({
@@ -731,8 +785,12 @@ try {
     ['/settings', 'Settings'],
     ['/sim', 'Simulations'],
     [`/w/${workspaceId}`, `Projects/${workspaceName}`],
-    [`/w/${workspaceId}/tasks`, `Projects/${workspaceName}/Tasks`],
-    [`/w/${workspaceId}/organization`, `Projects/${workspaceName}/Team`],
+    // M61 R18: `TABS` renamed the second tab `Work`, and `/organization` REDIRECTS to `/w/:id`
+    // (R7) -- the Team tab IS the project's page, so its crumb ends at the project, exactly as
+    // Overview's did. Both rows are the same assertion about the same destination, taking the
+    // label M61 gave it.
+    [`/w/${workspaceId}/tasks`, `Projects/${workspaceName}/Work`],
+    [`/w/${workspaceId}/organization`, `Projects/${workspaceName}`],
     [`/w/${workspaceId}/knowledge`, `Projects/${workspaceName}/Knowledge`],
     [`/w/${workspaceId}/activity`, `Projects/${workspaceName}/Activity`],
     [`/w/${workspaceId}/settings`, `Projects/${workspaceName}/Settings`],
@@ -874,6 +932,9 @@ try {
   // Stage 7: the Supervisor's threads, which are days.
   // ============================================================================================
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
+  // M61 R14: stage 4 collapsed the panel and the choice is REMEMBERED now -- open it again before
+  // reading the conversation out of it.
+  await ensurePanelOpen()
   await waitVisible(page.getByTestId('supervisor-thread'), 'the Supervisor thread')
   await clickUntil(page.getByTestId('supervisor-history'), async () => (await page.getByTestId('supervisor-thread-row').count()) > 0, 'the ≡ conversations button')
   const threadRows = await page.evaluate(() => [...document.querySelectorAll('[data-testid="supervisor-thread-row"]')].map((row) => row.textContent?.trim() ?? ''))
@@ -896,31 +957,40 @@ try {
   // ============================================================================================
   // Stage 8: eleven numbers out of the handoff README, read back off the browser.
   // ============================================================================================
-  // M61 erratum E9: the rail replaces the tree; the selector below is renamed to match
-  // (`aria-label` "Primary" -> "Main") but its value, and the `right-panel`/`app-shell` rows' own
-  // values, are UNCHANGED here -- the rail is 56px collapsed, the panel is 340px and the shell's
-  // floor is 1024px now (M61 R4), and all three are stale until `gate:m14-fidelity`-style
-  // regeneration reconciles this table (spec R21).
+  // RECONCILED TO M61 (spec R21, Task 11). Every row here is the same MEASUREMENT it always was,
+  // taking the value M61 gave it -- an assertion that measured a token's old value takes the new
+  // value, it is never dropped:
+  //   - the rail replaced the tree, so `nav[aria-label="Main"]` is 56px, not 236px (R5, erratum E9);
+  //   - the header is 48px (R6, spec §4), not M57's 54px;
+  //   - the panel narrowed from 372px to 340px so 1024 keeps a usable middle (R4);
+  //   - the shell's floor dropped from 1280px to 1024px, because a desktop app window is smaller
+  //     than a browser tab (R4);
+  //   - the body is 13px here, not 14px: stage 2 above puts this page in DEVELOPER mode, and
+  //     `--fs-body` is the density token R3 moves (14px simple, 13px developer);
+  //   - `project-card` became `project-row`, whose radius is `--radius-control` 8px (R3/R11);
+  //   - a task card is `--radius-surface` 12px now (R9/R16), up from `rounded-card`'s 10px;
+  //   - `needs-you`, `stat-work` and `status-pill` are unchanged: `--radius-surface` 12px and
+  //     `--radius-pill` 999px are the same numbers under the new token names.
   const NUMBERS = [
-    [`/w/${workspaceId}`, 'nav[aria-label="Main"]', 'width', '236px'],
-    [`/w/${workspaceId}`, '[data-testid="app-header"]', 'height', '54px'],
-    [`/w/${workspaceId}`, '[data-testid="right-panel"]', 'width', '372px'],
-    [`/w/${workspaceId}`, '[data-testid="app-shell"]', 'min-width', '1280px'],
-    [`/w/${workspaceId}`, 'body', 'font-size', '14px'],
+    [`/w/${workspaceId}`, 'nav[aria-label="Main"]', 'width', '56px'],
+    [`/w/${workspaceId}`, '[data-testid="app-header"]', 'height', '48px'],
+    [`/w/${workspaceId}`, '[data-testid="right-panel"]', 'width', '340px'],
+    [`/w/${workspaceId}`, '[data-testid="app-shell"]', 'min-width', '1024px'],
+    [`/w/${workspaceId}`, 'body', 'font-size', '13px'],
     // M61 R7/Task 6 selector renames: `needs-you-card` -> `needs-you` (the command strip's
     // `NeedsYouBar`), `brief-tile` -> `stat-work` (the Team tab's footer `Stat`, same 12px
     // `rounded-surface` radius the old tile carried).
     [`/w/${workspaceId}`, '[data-testid="needs-you"]', 'border-radius', '12px'],
     [`/w/${workspaceId}`, '[data-testid="stat-work"]', 'border-radius', '12px'],
-    ['/', '[data-testid="project-card"]', 'border-radius', '14px'],
-    [`/w/${workspaceId}/tasks`, '[data-testid="task-card"]', 'border-radius', '10px'],
+    ['/', '[data-testid="project-row"]', 'border-radius', '8px'],
+    [`/w/${workspaceId}/tasks`, '[data-testid="task-card"]', 'border-radius', '12px'],
     [`/w/${workspaceId}/tasks`, '[data-testid="status-pill"]', 'border-radius', '999px'],
   ]
   /** One structural marker per path above: nothing is measured until the page that owns the number
    *  has rendered, because `getComputedStyle` against the server's first paint reads a page React
    *  has not finished with. */
   const NUMBER_MARKER = {
-    '/': 'project-card',
+    '/': 'project-row',
     // `stat-work`, not `needs-you` (M61 R7/Task 6): the strip's needs-you bar is CONDITIONAL --
     // absent with an empty queue -- and a readiness marker must always be there to wait on;
     // `stat-work` is the Team tab's own always-rendered footer tile.
@@ -933,6 +1003,10 @@ try {
       await gotoReliably(`${baseUrl}${path}`)
       currentPath = path
       await waitVisible(page.getByTestId(NUMBER_MARKER[path]), `${path} before its numbers are read`)
+      // The panel's own width is one of the numbers below, and M61 R14 remembers a collapse
+      // across every navigation -- so the panel has to be open before anything on a project
+      // route is measured.
+      if (path.startsWith('/w/')) await ensurePanelOpen()
     }
     const actual = await page.evaluate(([sel, prop]) => {
       const node = document.querySelector(sel)
@@ -992,9 +1066,17 @@ try {
   /** One structural marker per route, so the scan reads a page that has finished rather than a
    *  shell that has not. Same twelve routes stage 3 walks, in the same order. */
   const SWEEP = [
-    { name: 'projects', path: '/', testId: 'project-card' },
+    // M61 R11/Task 8 selector rename: `project-card` -> `project-row` (Home is a LIST now).
+    { name: 'projects', path: '/', testId: 'project-row' },
     { name: 'workforce', path: '/workforce', testId: 'workforce' },
-    { name: 'settings', path: '/settings', testId: 'security-posture' },
+    // M61 R13/Task 9: Settings is two columns and only the CHOSEN section mounts, so one sweep of
+    // `/settings` would now read one fifth of the page this row used to cover. All five are swept
+    // instead -- the assertion did not shrink with the page, it followed it.
+    { name: 'settings/providers', path: '/settings?section=providers', testId: 'settings-providers' },
+    { name: 'settings/appearance', path: '/settings?section=appearance', testId: 'settings-appearance' },
+    { name: 'settings/repositories', path: '/settings?section=repositories', testId: 'settings-repositories' },
+    { name: 'settings/security', path: '/settings?section=security', testId: 'settings-security' },
+    { name: 'settings/danger', path: '/settings?section=danger', testId: 'settings-danger' },
     { name: 'simulations', path: '/sim', testId: 'new-simulation' },
     // M61 R7/Task 6 selector rename: `strip` (the deleted `ProjectBrief`'s wrapper) -> `stat-work`
     // (the Team tab's own always-rendered footer tile). The `organization` row below is UNCHANGED
@@ -1006,7 +1088,12 @@ try {
     { name: 'organization', path: `/w/${workspaceId}/organization`, testId: 'organization-rows' },
     { name: 'knowledge', path: `/w/${workspaceId}/knowledge`, testId: 'knowledge-counts' },
     { name: 'activity', path: `/w/${workspaceId}/activity`, testId: 'timeline-viewport' },
-    { name: 'project-settings', path: `/w/${workspaceId}/settings`, testId: 'perm-caption' },
+    // The same five-section split on a project's own Settings (M61 R13).
+    { name: 'project-settings/goal', path: `/w/${workspaceId}/settings?section=goal`, testId: 'settings-goal' },
+    { name: 'project-settings/runbook', path: `/w/${workspaceId}/settings?section=runbook`, testId: 'settings-runbook' },
+    { name: 'project-settings/runtime', path: `/w/${workspaceId}/settings?section=runtime`, testId: 'settings-runtime' },
+    { name: 'project-settings/permissions', path: `/w/${workspaceId}/settings?section=permissions`, testId: 'settings-permissions' },
+    { name: 'project-settings/danger', path: `/w/${workspaceId}/settings?section=danger`, testId: 'settings-danger' },
     { name: 'graph', path: `/w/${workspaceId}/graph`, testId: 'graph-canvas' },
     { name: 'office', path: `/w/${workspaceId}/office`, testId: 'office-canvas' },
   ]
@@ -1015,9 +1102,11 @@ try {
     await gotoReliably(`${baseUrl}${target.path}`)
     await waitVisible(page.getByTestId(target.testId), `${target.name}'s structural marker [data-testid=${target.testId}]`)
     await waitVisible(page.getByRole('navigation', { name: 'Main' }), `${target.name}'s rail`)
-    if (target.name === 'overview') {
+    if (target.name === 'activity') {
       // Waited BEFORE the scan, so the re-homed river's own strings are covered rather than raced.
-      await waitVisible(page.getByTestId('live-events'), 'the live-events river on the Overview')
+      // M61 R7/R10/Task 7: `live-events` left the deleted Overview for the Activity tab, which is
+      // where the whole river already was -- the wait MOVED with it rather than being dropped.
+      await waitVisible(page.getByTestId('live-events'), 'the live-events river on the Activity tab')
     }
     const { shown, hidden } = await readVisibleText()
     // A page that rendered NOTHING passes a negative assertion trivially (fix round 1). Every route

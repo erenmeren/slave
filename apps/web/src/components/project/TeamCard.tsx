@@ -7,7 +7,7 @@ import type { TeamLiveRow } from '../../server/teamLive'
 import { AvatarTile } from '../ui/AvatarTile'
 import { Card } from '../ui/Card'
 import { LiveDot } from '../ui/LiveDot'
-import { TONE_DOT } from '../ui/StatusPill'
+import { StatusPill, TONE_DOT } from '../ui/StatusPill'
 
 /**
  * One seat on the Team tab (M61 R7/Task 6): who, what they are doing IN ENGLISH, and -- in
@@ -42,6 +42,15 @@ export function TeamCard({
             {row.role}
             {isDeveloper && technical.provider !== null && ` · ${PROVIDER_LABEL[technical.provider]}`}
           </span>
+        </span>
+        {/* THE STATE, AS A WORD (M61 Task 11). `TeamLiveRow.stateLabel` is `USER_CARD_LABEL[state]`
+          * -- the deleted `SlaveCard` printed it as a `status-pill`, this row has carried it since
+          * Task 5, and nothing rendered it: a worker the breaker has CONSTRAINED looked exactly
+          * like one that was not, and `gate-m51-breaker.mjs`'s own assertion on that word is what
+          * found it. `StatusPill` is `LiveDot` + word since R16, and `title` keeps the raw state
+          * one hover away (`docs/ia.md` rule 3). */}
+        <span className="shrink-0">
+          <StatusPill tone={row.doingTone} label={row.stateLabel} title={row.status} />
         </span>
       </div>
       <p data-testid="team-doing" className="type-meta mt-2 flex items-center gap-2">

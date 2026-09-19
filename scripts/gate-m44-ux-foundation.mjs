@@ -35,7 +35,7 @@
 //      domain's own unions, not typed here.
 //   5. A drawer traps Tab and gives focus back on Escape.
 //   6. The skip link is the first focusable element and reaches `main`.
-//   7. The sidebar is 236px at 1440 AND at 800 -- M57 R4 states a 1280px floor for the whole frame
+//   7. The rail is 56px at 1440 AND at 800 -- M61 R4 states a 1024px floor for the whole frame
 //      instead of the old 899px icon rail.
 //   8. Simulated money and model cost never share a tile.
 //
@@ -621,6 +621,18 @@ try {
   })
   await gotoReliably(`${baseUrl}/`)
   await waitVisible(page.getByRole('navigation', { name: 'Main' }), 'the rail')
+  // HYDRATION FIRST (M61 R1): `ModeProvider` renders flat `'simple'` on the server and on the
+  // first client render, and only catches up with the stored choice after mount -- so a read taken
+  // on the load frame sees the three simple rows no matter what is in storage.
+  try {
+    await page.waitForFunction(
+      () => document.querySelector('[data-testid="mode-toggle"]')?.getAttribute('aria-checked') === 'true',
+      null,
+      { timeout: ACTION_TIMEOUT_MS },
+    )
+  } catch {
+    await fail("stage 1: the rail's mode switch never reported developer mode -- ModeProvider did not pick up the stored choice")
+  }
   const navRows = await page.evaluate(() =>
     [...document.querySelectorAll('nav[aria-label="Main"] [data-testid="rail-item"]')].map((row) => [
       row.getAttribute('data-rail') ?? '',
@@ -776,7 +788,14 @@ try {
     { name: 'workforce', path: `/workforce`, testId: 'people-rows', fidelity: true },
     { name: 'skills', path: `/skills`, testId: 'empty-tile', fidelity: true },
     { name: 'analytics', path: `/analytics?workspace=${workspaceId}`, testId: 'kpi-tile', fidelity: true },
-    { name: 'settings', path: `/settings`, testId: 'security-posture', fidelity: true },
+    // M61 R13/Task 9: Settings is two columns and only the CHOSEN section mounts, so `/settings`
+    // bare draws Providers alone. The five sections are swept one by one -- the page did not lose
+    // four fifths of itself, it gained a `?section=` for each, and the scan follows.
+    { name: 'settings/providers', path: `/settings?section=providers`, testId: 'settings-providers', fidelity: true },
+    { name: 'settings/appearance', path: `/settings?section=appearance`, testId: 'settings-appearance', fidelity: false },
+    { name: 'settings/repositories', path: `/settings?section=repositories`, testId: 'settings-repositories', fidelity: false },
+    { name: 'settings/security', path: `/settings?section=security`, testId: 'settings-security', fidelity: false },
+    { name: 'settings/danger', path: `/settings?section=danger`, testId: 'settings-danger', fidelity: false },
     // M61 R7 review fix round 1, Important 2: `strip` (the deleted `ProjectBrief`'s wrapper) ->
     // `stat-work` (the Team tab's own always-rendered footer tile).
     { name: 'overview', path: `/w/${workspaceId}`, testId: 'stat-work', fidelity: true },
@@ -784,7 +803,11 @@ try {
     { name: 'activity', path: `/w/${workspaceId}/activity`, testId: 'timeline-viewport', fidelity: true },
     { name: 'graph', path: `/w/${workspaceId}/graph`, testId: 'graph-canvas', fidelity: true },
     { name: 'office', path: `/w/${workspaceId}/office`, testId: 'office-canvas', fidelity: true },
-    { name: 'project-settings', path: `/w/${workspaceId}/settings`, testId: 'perm-caption', fidelity: true },
+    { name: 'project-settings/goal', path: `/w/${workspaceId}/settings?section=goal`, testId: 'settings-goal', fidelity: true },
+    { name: 'project-settings/runbook', path: `/w/${workspaceId}/settings?section=runbook`, testId: 'settings-runbook', fidelity: false },
+    { name: 'project-settings/runtime', path: `/w/${workspaceId}/settings?section=runtime`, testId: 'settings-runtime', fidelity: false },
+    { name: 'project-settings/permissions', path: `/w/${workspaceId}/settings?section=permissions`, testId: 'settings-permissions', fidelity: false },
+    { name: 'project-settings/danger', path: `/w/${workspaceId}/settings?section=danger`, testId: 'settings-danger', fidelity: false },
     { name: 'organization', path: `/w/${workspaceId}/organization`, testId: 'organization-rows', fidelity: true },
     // M49 R6's Knowledge tab, the thirteenth page the fidelity gate photographs. `knowledge-counts` rather
     // than `knowledge-rows` is its structural marker for `timeline-viewport`'s reason: this fixture has no
@@ -850,8 +873,10 @@ try {
     // the merge queue is gone and all three render directly, so there is nothing left to open --
     // only something to wait for. Waited on HERE, BEFORE stage 3 and stage 4 read the page, so the
     // raw-token scan still covers every string those panels render rather than racing the stream.
-    if (target.name === 'overview') {
-      await waitVisible(page.getByTestId('live-events'), 'the live-events river on the Overview')
+    // M61 R7/R10/Task 7: `live-events` left the deleted Overview for the Activity tab, which is
+    // where the whole river already was -- the wait MOVED with it rather than being dropped.
+    if (target.name === 'activity') {
+      await waitVisible(page.getByTestId('live-events'), 'the live-events river on the Activity tab')
     }
 
     // ---- Stage 3: one shell, one landmark. -----------------------------------------------------
@@ -904,7 +929,25 @@ try {
     if (target.name === 'workforce') {
       // M58 R22: People is one row per person. The fixture worker is seated, so the derived
       // state is `assigned` -- there is no run pill on this table any more.
+      // M61 R12: the People table is VIRTUALISED -- only the rows near the scrolled viewport are
+      // in the DOM at all, so a locator waiting for a row further down the list waits for a node
+      // React has deliberately not made. The table's own `ScrollArea` is scrolled in page-sized
+      // steps until the row mounts; the assertion below is exactly the one that was always here.
       const row = page.locator('[data-testid^="person-row-"]').filter({ hasText: SLAVE_NAME })
+      const scrolled = await page.evaluate(async (name) => {
+        const area = document.querySelector('[data-testid="people-rows"] [data-scroll-axis]')
+        if (area === null) return { area: false, steps: 0 }
+        const found = () => [...document.querySelectorAll('[data-testid^="person-row-"]')].some((node) => (node.textContent ?? '').includes(name))
+        for (let step = 0; step < 200; step += 1) {
+          if (found()) return { area: true, steps: step }
+          const before = area.scrollTop
+          area.scrollTop = Math.min(area.scrollTop + area.clientHeight, area.scrollHeight)
+          await new Promise((resolve) => setTimeout(resolve, 60))
+          if (area.scrollTop === before) break
+        }
+        return { area: true, steps: -1, found: found() }
+      }, SLAVE_NAME)
+      console.log(`stage 4 (workforce): scrolled the virtualised People table to reach ${SLAVE_NAME} -- ${JSON.stringify(scrolled)}`)
       await waitVisible(row, `the fixture worker's row on /workforce`)
       const state = await row.first().getAttribute('data-person-state')
       const released = await row.first().getAttribute('data-released')
@@ -927,7 +970,11 @@ try {
       if (word !== 'MISSING') await fail(`stage 4 (skills): the state chip reads ${JSON.stringify(word)}, expected "MISSING"`)
       if (raw !== 'missing') await fail(`stage 4 (skills): the state chip's title is ${JSON.stringify(raw)}, expected "missing"`)
     }
-    if (target.name === 'overview') {
+    // M61 R10/Task 7: the Supervisor's own timeline (`timeline-decisions`) moved off the deleted
+    // Overview to the Activity tab's "Recent changes", so the one page that draws the SAME
+    // proposal twice -- once in the shell's right panel, once on the timeline -- is `/activity`.
+    // The comparison is unchanged and still reads both copies in one page; only the page moved.
+    if (target.name === 'activity') {
       await waitVisible(page.getByTestId('supervisor-decision-meta'), "the Supervisor panel's decision row")
       const meta = page.getByTestId('supervisor-decision-meta').first()
       const sentence = (await meta.textContent())?.trim() ?? ''
@@ -943,21 +990,21 @@ try {
       const timelineChip = page.locator('[data-testid="timeline-decisions"] [data-testid="supervisor-proposal-kind"]').first()
       const timelineWord = (await timelineChip.textContent())?.trim() ?? ''
       const timelineRaw = await timelineChip.getAttribute('title')
-      console.log(`stage 4 (overview) POSITIVE: decision row reads ${JSON.stringify(sentence)}, title=${JSON.stringify(rawRecord)}`)
-      console.log(`stage 4 (overview) POSITIVE: the panel's proposal kind reads ${JSON.stringify(kindWord)}, title=${JSON.stringify(kindRaw)}`)
-      console.log(`stage 4 (overview) POSITIVE: the timeline's proposal kind reads ${JSON.stringify(timelineWord)}, title=${JSON.stringify(timelineRaw)}`)
+      console.log(`stage 4 (activity) POSITIVE: decision row reads ${JSON.stringify(sentence)}, title=${JSON.stringify(rawRecord)}`)
+      console.log(`stage 4 (activity) POSITIVE: the panel's proposal kind reads ${JSON.stringify(kindWord)}, title=${JSON.stringify(kindRaw)}`)
+      console.log(`stage 4 (activity) POSITIVE: the timeline's proposal kind reads ${JSON.stringify(timelineWord)}, title=${JSON.stringify(timelineRaw)}`)
       if (!sentence.includes('No reviewer')) {
-        await fail(`stage 4 (overview): the decision row reads ${JSON.stringify(sentence)}, expected it to name the situation "No reviewer"`)
+        await fail(`stage 4 (activity): the decision row reads ${JSON.stringify(sentence)}, expected it to name the situation "No reviewer"`)
       }
       if (rawRecord === null || !rawRecord.includes('no_reviewer')) {
-        await fail(`stage 4 (overview): the decision row's title is ${JSON.stringify(rawRecord)}, expected it to keep the raw record`)
+        await fail(`stage 4 (activity): the decision row's title is ${JSON.stringify(rawRecord)}, expected it to keep the raw record`)
       }
       if (kindWord !== 'No reviewer' || kindRaw !== 'no_reviewer') {
-        await fail(`stage 4 (overview): the panel's proposal kind chip is ${JSON.stringify(kindWord)}/${JSON.stringify(kindRaw)}, expected "No reviewer"/"no_reviewer"`)
+        await fail(`stage 4 (activity): the panel's proposal kind chip is ${JSON.stringify(kindWord)}/${JSON.stringify(kindRaw)}, expected "No reviewer"/"no_reviewer"`)
       }
       if (timelineWord !== kindWord || timelineRaw !== kindRaw) {
         await fail(
-          `stage 4 (overview): the timeline renders the same proposal as ${JSON.stringify(timelineWord)}/${JSON.stringify(timelineRaw)} ` +
+          `stage 4 (activity): the timeline renders the same proposal as ${JSON.stringify(timelineWord)}/${JSON.stringify(timelineRaw)} ` +
             `while the Supervisor panel renders it as ${JSON.stringify(kindWord)}/${JSON.stringify(kindRaw)} -- one proposal, two readings`,
         )
       }
@@ -1046,7 +1093,18 @@ try {
   }
   console.log(`stage 5: focus trail over 30 Tab presses = ${JSON.stringify(trail)}`)
   await page.keyboard.press('Escape')
-  await delay(200)
+  // POLLED, not a fixed 200ms (M61 R15): the intake conversation is a `ui/Sheet` now, and a Sheet
+  // leaves on an `AnimatePresence` EXIT spring -- its node is still in the DOM while it slides
+  // out. A fixed wait measures the animation's length, not whether Escape closed anything.
+  try {
+    await page.waitForFunction(
+      () => document.querySelectorAll('[data-testid="new-project-sheet"]').length === 0,
+      null,
+      { timeout: ACTION_TIMEOUT_MS },
+    )
+  } catch {
+    /* the assertion below reports what is still on screen, with the diagnostic dump */
+  }
   const afterClose = await page.evaluate(() => ({
     drawers: document.querySelectorAll('[data-testid="new-project-sheet"]').length,
     active: document.activeElement?.getAttribute('data-testid') ?? null,
@@ -1098,19 +1156,24 @@ try {
   // ============================================================================================
   // Stage 7: the width, and the floor that replaced the collapse.
   //
-  // M61 erratum E9: every selector below is renamed (`aria-label` "Primary" -> "Main",
-  // `sidebar-global` -> the rail). The 236px / 1280px VALUES this stage measures against, and the
-  // `sidebar-global` testid `narrow.labels` still reads, are UNCHANGED and stale -- the rail is
-  // 56px, the floor is 1024px (M61 R4) and `sidebar-global` no longer exists on the rail's global
-  // items -- left for the reconciliation this stage needs as a whole rather than patched selector
-  // by selector here.
+  // RECONCILED TO M61 (Task 11). The three things this stage has always measured are unchanged --
+  // the rail is the same width at a wide and a narrow viewport, the frame refuses to compress past
+  // its floor, and every global row still says its own name -- and each takes the value or the
+  // selector M61 gave it:
+  //   - 236px -> 56px: the tree became a 56px icon rail (R5, erratum E9);
+  //   - the 1280px floor -> 1024px: a desktop app window is smaller than a browser tab (R4);
+  //   - `sidebar-global` -> `rail-item[data-rail]` (erratum E9), read inside `nav[aria-label="Main"]`;
+  //   - three rows -> FIVE: stage 1 above put this page in developer mode, and `railFor('developer')`
+  //     is `home, people, settings, simulations, analytics` (R18). Simple mode's three are asserted
+  //     separately below, in a context of their own, so the mode-dependence is measured rather than
+  //     assumed.
   // ============================================================================================
   const wideWidth = await page.evaluate(() => {
     const nav = document.querySelector('nav[aria-label="Main"]')
     return nav === null ? null : window.getComputedStyle(nav).width
   })
-  console.log(`stage 7: sidebar width at 1440x900 = ${JSON.stringify(wideWidth)}`)
-  if (wideWidth !== '236px') await fail(`stage 7: the sidebar is ${JSON.stringify(wideWidth)} at 1440x900, expected "236px" (the M57 README number)`)
+  console.log(`stage 7: rail width at 1440x900 = ${JSON.stringify(wideWidth)}`)
+  if (wideWidth !== '56px') await fail(`stage 7: the rail is ${JSON.stringify(wideWidth)} at 1440x900, expected "56px" (the M61 README number)`)
   // M57 R4: the handoff states a MINIMUM WIDTH rather than a breakpoint, and the 899px icon rail
   // went with `Sidebar.tsx`. What is asserted instead is that the frame refuses to compress: at
   // 800px the shell is still at least 1280 wide and the page scrolls horizontally rather than the
@@ -1124,19 +1187,44 @@ try {
     return {
       width: nav === null ? null : window.getComputedStyle(nav).width,
       shellWidth: shell === null ? null : shell.getBoundingClientRect().width,
-      labels: [...document.querySelectorAll('[data-testid="sidebar-global"]')].map((row) => row.getAttribute('aria-label') ?? ''),
+      labels: [...document.querySelectorAll('nav[aria-label="Main"] [data-testid="rail-item"]')].map((row) => row.getAttribute('aria-label') ?? ''),
     }
   })
   console.log(`stage 7: at 800x900 = ${JSON.stringify(narrow)}`)
-  if (narrow.width !== '236px') await fail(`stage 7: the sidebar is ${JSON.stringify(narrow.width)} at 800x900, expected "236px" -- it does not collapse any more`)
-  if (narrow.shellWidth === null || narrow.shellWidth < 1280) {
-    await fail(`stage 7: the shell is ${JSON.stringify(narrow.shellWidth)} wide at 800px, expected at least 1280 (R4's floor)`)
+  if (narrow.width !== '56px') await fail(`stage 7: the rail is ${JSON.stringify(narrow.width)} at 800x900, expected "56px" -- it does not collapse any more`)
+  if (narrow.shellWidth === null || narrow.shellWidth < 1024) {
+    await fail(`stage 7: the shell is ${JSON.stringify(narrow.shellWidth)} wide at 800px, expected at least 1024 (M61 R4's floor)`)
   }
-  if (narrow.labels.length !== 3 || narrow.labels.some((label) => label === '')) {
-    await fail(`stage 7: a global row lost its aria-label (${JSON.stringify(narrow.labels)})`)
+  if (narrow.labels.length !== 5 || narrow.labels.some((label) => label === '')) {
+    await fail(`stage 7: a rail row lost its aria-label, or developer mode drew ${String(narrow.labels.length)} of five (${JSON.stringify(narrow.labels)})`)
+  }
+  // AND THE OTHER MODE, in a context of its own so the stored choice cannot leak back into the
+  // page this gate has been driving: simple mode shows exactly the three `railFor('simple')`
+  // names (R18). Without this, "five rows" would be an assertion about a mode rather than about
+  // the rail.
+  const simpleContext = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+  await simpleContext.addInitScript(() => {
+    try {
+      localStorage.setItem('mode', 'simple')
+    } catch {
+      /* the assertion below fails loudly rather than silently passing on five */
+    }
+  })
+  const simplePage = await simpleContext.newPage()
+  simplePage.setDefaultTimeout(ACTION_TIMEOUT_MS)
+  await simplePage.goto(`${baseUrl}/`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  await simplePage.getByRole('navigation', { name: 'Main' }).first().waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS })
+  const simpleRail = await simplePage.evaluate(() =>
+    [...document.querySelectorAll('nav[aria-label="Main"] [data-testid="rail-item"]')].map((row) => row.getAttribute('data-rail') ?? ''),
+  )
+  console.log(`stage 7: the rail in SIMPLE mode = ${JSON.stringify(simpleRail)}`)
+  await simplePage.close()
+  await simpleContext.close()
+  if (JSON.stringify(simpleRail) !== JSON.stringify(['home', 'people', 'settings'])) {
+    await fail(`stage 7: simple mode's rail is ${JSON.stringify(simpleRail)}, expected ["home","people","settings"] (R18)`)
   }
   await page.setViewportSize({ width: 1440, height: 900 })
-  console.log('stage 7 PASSED: 236px at both widths, a 1280px floor, and every global row still says its own name')
+  console.log('stage 7 PASSED: 56px at both widths, a 1024px floor, five rail rows in developer mode and three in simple, each saying its own name')
 
   // ============================================================================================
   // Stage 8: two kinds of money.

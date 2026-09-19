@@ -2276,7 +2276,17 @@ try {
   const spendNote = await page.evaluate(() => document.querySelector('[data-testid="kpi-note-Spend"]') !== null)
   await assertEqual(spendNote, false, 'stage 12: the Spend tile\'s own note')
 
-  // The Projects home renders the same five from the same builder.
+  // The Projects home renders the same five from the same builder -- IN DEVELOPER MODE (M61 R11:
+  // "The all-workspaces KPI strip renders on Home only in developer mode, under the numbers, with
+  // its testids unchanged"). The strip did not move and did not shrink; it became one of the
+  // things developer mode ADDS, so this read asks for the mode that shows it.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('mode', 'developer')
+    } catch {
+      /* the assertion below fails loudly rather than silently passing on a hidden strip */
+    }
+  })
   await gotoReliably(`${baseUrl}/`)
   await waitVisible(page.getByTestId('kpi-tile').first(), "the Projects home's KPI strip")
   const home = await readTiles()

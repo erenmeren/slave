@@ -28,6 +28,7 @@ import { Button } from '../ui/Button'
 import { LoadingState } from '../ui/LoadingState'
 import { PageShell } from '../ui/PageShell'
 import { Panel } from '../ui/Panel'
+import { ScrollArea } from '../ui/ScrollArea'
 import { Segmented } from '../ui/Segmented'
 import { Sheet } from '../ui/Sheet'
 import { Tabs } from '../ui/Tabs'
@@ -307,9 +308,18 @@ export function WorkforceClient({
           />
         </div>
       )}
-      {tab === 'departments' && <DepartmentsTable teams={teams} workspaces={workspaces} />}
+      {/* M61 R4/R12, Task 11: these three tab bodies are inside a `ScrollArea`, the way the other
+          three already are (`PeopleTable`, `SkillsClient` and `EvidenceTab` each carry their own).
+          `<main>` is `overflow-hidden` since R4 -- a tab body that is taller than the frame and is
+          NOT inside a scrolling region is not a long page, it is a CLIPPED one, with the rows past
+          the fold unreachable by any means. `gate:m61-simple-mode`'s stage 2 found all three. */}
+      {tab === 'departments' && (
+        <ScrollArea>
+          <DepartmentsTable teams={teams} workspaces={workspaces} />
+        </ScrollArea>
+      )}
       {tab === 'catalog' && (
-        <div className="flex flex-col gap-4">
+        <ScrollArea className="flex flex-col gap-4">
           <Panel title="Workforce catalog">
             <WorkforceCatalog initial={catalog} taxonomy={taxonomy} skillCatalogue={skillCatalogue} />
           </Panel>
@@ -333,10 +343,14 @@ export function WorkforceClient({
               </Panel>
             </div>
           </details>
-        </div>
+        </ScrollArea>
       )}
       {tab === 'skills' && <SkillsClient page={skills} />}
-      {tab === 'runbooks' && <RunbooksTab runbooks={runbooks} taxonomy={taxonomy} />}
+      {tab === 'runbooks' && (
+        <ScrollArea>
+          <RunbooksTab runbooks={runbooks} taxonomy={taxonomy} />
+        </ScrollArea>
+      )}
       {tab === 'evidence' &&
         (evidence === null ? (
           // The server is being asked for it right now (see `select`). `LoadingState` and not an

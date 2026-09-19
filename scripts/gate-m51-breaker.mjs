@@ -1396,15 +1396,16 @@ try {
   }
 
   // ============================================================================================
-  // Stage 7, continued: the three figures on the real page.
+  // Stage 7, continued: the headline spend on the real page.
   // ============================================================================================
-  // M61 R7 review fix round 1, Important 2: `brief`/`brief-tile[data-brief="cost"]` -> `stat-spend`
-  // -- the deleted `ProjectBrief`'s cost tile has no home on the Team tab, and `stat-spend`'s own
-  // value is the same `spentUsd` figure (`formatUsd`), read directly off the `Stat` rather than off
-  // a tile that no longer exists. The three other facts this stage used to read here --
-  // `brief-cost-actual`/`-estimated`/`-upper-bound`/`-unmeasured-runs` -- have no replacement
-  // anywhere in the new tree; this narrows what stage 7 verifies (a real gap, not a rename) and is
-  // left as a known concern (see the M61 Task 6 report) rather than guessed at.
+  // M61 R7: `brief`/`brief-tile[data-brief="cost"]` -> `stat-spend` (spec §3's own replacement).
+  // THE HEADLINE FIGURE ONLY, and that is the whole of what this stage now verifies here: of the
+  // deleted cost tile's five lines, `spentUsd` is `stat-spend`'s value, the two unmeasured
+  // caveats were restored onto that tile's note in M61 Task 11
+  // (`stat-spend-unmeasured-calls`/`-runs`, and `gate-m45-project-experience.mjs` stage 1 reads
+  // the first of them), and `actual`/`estimated`/`upper bound` have no surface in the new tree at
+  // all. Those three are a real, booked gap -- not a rename this stage could follow -- so stage 7
+  // states what it measures instead of implying it still measures five things.
   await gotoReliably(`${baseUrl}/w/${cost.workspace.id}`)
   await waitVisible(page.getByTestId('stat-spend'), 'the spend stat on the cost project')
   const spendValue = await page.evaluate(
@@ -1474,19 +1475,28 @@ try {
   }
 
   await gotoReliably(`${baseUrl}/w/${loop.workspace.id}`)
-  await waitVisible(page.getByTestId('team'), 'the team strip on the project Overview')
+  // M61 R7/§3: the Overview's `team` strip became the project's own TEAM TAB -- `team-live` is its
+  // root and `team-card` is the row (spec §3's own replacement table). Same surface, same fact.
+  await waitVisible(page.getByTestId('team-live'), 'the Team tab on the project page')
+  // M61 R7/§3: `slave-card`/`data-card-state` -> `team-card`/`data-state` (spec §3's own
+  // replacement). The `status-pill` inside it is the same pill, carrying the same word and the
+  // same raw value on `title`.
   const cards = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-testid="slave-card"]')].map((card) => ({
+    [...document.querySelectorAll('[data-testid="team-card"]')].map((card) => ({
       name: (card.querySelector('span')?.textContent ?? '').trim(),
       status: card.getAttribute('data-status'),
-      state: card.getAttribute('data-card-state'),
+      state: card.getAttribute('data-state'),
       pill: (card.querySelector('[data-testid="status-pill"]')?.textContent ?? '').trim(),
+      pillTitle: card.querySelector('[data-testid="status-pill"]')?.getAttribute('title') ?? null,
     })),
   )
-  console.log(`stage 9: the Overview's worker cards = ${JSON.stringify(cards)}`)
+  console.log(`stage 9: the Team tab's worker cards = ${JSON.stringify(cards)}`)
   const constrainedCard = cards.find((card) => card.pill === 'CONSTRAINED')
   if (constrainedCard === undefined) {
-    await fail(`stage 9: no worker card reads CONSTRAINED on the project Overview: ${JSON.stringify(cards)}`)
+    await fail(`stage 9: no worker card reads CONSTRAINED on the project's Team tab: ${JSON.stringify(cards)}`)
+  }
+  if (constrainedCard.state !== 'constrained') {
+    await fail(`stage 9: the CONSTRAINED card's data-state is ${JSON.stringify(constrainedCard.state)}, expected "constrained"`)
   }
   console.log(`stage 9 PASSED: ${JSON.stringify(guardrailCard.text)} over ${JSON.stringify(guardrailCard.attribute)}, ${JSON.stringify(breakerCard.text)} over ${JSON.stringify(breakerCard.attribute)}, and a card that reads CONSTRAINED`)
 

@@ -49,7 +49,39 @@ export interface TeamLiveRow {
 export interface TeamLiveSnapshot {
   readonly workspaceId: string
   readonly rows: readonly TeamLiveRow[]
-  readonly stats: { readonly inProgress: number; readonly done: number; readonly goal: string | null }
+  /**
+   * The three facts the deleted Overview's four-tile brief reduced to, plus the goal's VERSION
+   * (M61 Task 11, controller Ruling 9): `stat-goal` prints `vN` beside the goal the way the
+   * deleted `ProjectBrief`'s objective tile did, and `gate-m45-project-experience.mjs`'s own `v2`
+   * needle reads it there. It comes off `overview.brief.objective.version`, which IS
+   * `server/brief.ts`'s read of `Workspace.goalVersion` -- not a second query and not a second
+   * answer to the same question. `null` when there is no goal at all: a version number beside
+   * "No goal yet" is a number about nothing.
+   */
+  readonly stats: {
+    readonly inProgress: number
+    readonly done: number
+    readonly goal: string | null
+    readonly goalVersion: number | null
+    /**
+     * THE TWO HOLES BESIDE THE SPEND TOTAL (M61 Task 11). `stat-spend` shows
+     * `shellFacts.status.spentUsd`, and M32's upper-bound policy -- restated in `server/brief.ts`'s
+     * own docstring -- is that an unmeasured call is NAMED as an estimate at its cap and never
+     * folded into one bare figure. The deleted `ProjectBrief`'s cost tile carried both lines
+     * (`brief-cost-unmeasured-calls`, `brief-cost-unmeasured-runs`) and nothing carried them
+     * after it; `gate-m45-project-experience.mjs`'s own needle for the first of them is what
+     * found that. Both come straight off `overview.brief.cost`, which this module already reads.
+     */
+    readonly unmeasuredCalls: number
+    readonly unmeasuredRuns: number
+    /**
+     * HOW MUCH THIS PROJECT KNOWS (M49 R6, re-homed in M61 Task 11). The line
+     * `Knowledge: N verified · M candidates`, linking to the tab, was one line on the deleted
+     * Overview's `latest verified` fact and went with it; `gate-m49-memory.mjs`'s own assertion on
+     * it is what found that. Off `overview.brief.knowledge`, the read this module already makes.
+     */
+    readonly knowledge: { readonly verified: number; readonly candidates: number }
+  }
   readonly shellFacts: ShellFacts
   readonly needs: OrganizationView['needs']
   /**
@@ -179,6 +211,13 @@ export async function buildTeamLive(workspaceId: string, now: Date = new Date())
       // rather than a fresh `countOf(['done'])` that could drift from it.
       done: overview.brief.work.done,
       goal: overview.workspace.goal,
+      // `overview.brief.objective.version`, not a fresh `workspace.goalVersion` read: the brief
+      // is the reader that already answers "which version is this goal", and two readers of one
+      // column are two numbers that can disagree.
+      goalVersion: overview.workspace.goal === null ? null : overview.brief.objective.version,
+      unmeasuredCalls: overview.brief.cost.unmeasuredCalls,
+      unmeasuredRuns: overview.brief.cost.unmeasuredRuns,
+      knowledge: overview.brief.knowledge,
     },
     shellFacts,
     needs: organization.needs,

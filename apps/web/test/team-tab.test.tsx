@@ -116,7 +116,7 @@ function snapshot(rows: readonly TeamLiveRow[], over: Partial<TeamLiveSnapshot> 
   return {
     workspaceId: 'w1',
     rows,
-    stats: { inProgress: 1, done: 3, goal: 'Ship the checkout flow' },
+    stats: { inProgress: 1, done: 3, goal: 'Ship the checkout flow', goalVersion: 2, unmeasuredCalls: 0, unmeasuredRuns: 0, knowledge: { verified: 2, candidates: 1 } },
     shellFacts: {
       workspace: { id: 'w1', name: 'W' },
       counts: { slavesWorking: 1, tasksActive: 1, slavesPaused: 0 },
@@ -203,7 +203,7 @@ describe('TeamLive', () => {
   })
 
   it('reads stat-work as N in progress and M done', () => {
-    renderTeam(snapshot([row({})], { stats: { inProgress: 1, done: 3, goal: null } }))
+    renderTeam(snapshot([row({})], { stats: { inProgress: 1, done: 3, goal: null, goalVersion: null, unmeasuredCalls: 0, unmeasuredRuns: 0, knowledge: { verified: 2, candidates: 1 } } }))
     const stat = screen.getByTestId('stat-work')
     expect(stat.textContent).toContain('1 in progress')
     expect(stat.textContent).toContain('3 done')
@@ -293,10 +293,61 @@ describe('TeamLive', () => {
     expect(screen.getByTestId('organization-advice')).toBeTruthy()
   })
 
+  // M61 Task 11, controller Ruling 9: the goal's version is `stat-goal`'s note, beside Edit goal --
+  // the fact the deleted `ProjectBrief`'s objective tile carried, and the one
+  // `gate-m45-project-experience.mjs` reads back.
+  it("prints the goal's version in stat-goal's note, with the raw number on data-goal-version", () => {
+    renderTeam(snapshot([row({})]))
+    const stat = screen.getByTestId('stat-goal')
+    const version = stat.querySelector('[data-goal-version]')
+    expect(version?.getAttribute('data-goal-version')).toBe('2')
+    expect(version?.textContent).toBe('v2')
+    expect(stat.textContent).toContain('Edit goal')
+  })
+
+  it('prints no version at all when there is no goal', () => {
+    renderTeam(snapshot([row({})], { stats: { inProgress: 0, done: 0, goal: null, goalVersion: null, unmeasuredCalls: 0, unmeasuredRuns: 0, knowledge: { verified: 2, candidates: 1 } } }))
+    const stat = screen.getByTestId('stat-goal')
+    expect(stat.querySelector('[data-goal-version]')).toBe(null)
+    expect(stat.textContent).toContain('No goal yet')
+  })
+
+  // M61 Task 11: M32's upper-bound policy on the one surface that shows the project's spend --
+  // the deleted `ProjectBrief`'s cost tile said both of these and nothing said them after it.
+  it('names unmeasured calls and unmeasured runs beside the spend, and neither when there are none', () => {
+    renderTeam(snapshot([row({})]))
+    const clean = screen.getByTestId('stat-spend')
+    expect(clean.querySelector('[data-testid="stat-spend-unmeasured-calls"]')).toBe(null)
+    expect(clean.querySelector('[data-testid="stat-spend-unmeasured-runs"]')).toBe(null)
+    expect(clean.getAttribute('data-unmeasured')).toBe(null)
+
+    renderTeam(
+      snapshot([row({})], {
+        stats: { inProgress: 1, done: 3, goal: 'g', goalVersion: 1, unmeasuredCalls: 2, unmeasuredRuns: 3, knowledge: { verified: 2, candidates: 1 } },
+      }),
+    )
+    const stat = screen.getAllByTestId('stat-spend').at(-1) as HTMLElement
+    expect(stat.getAttribute('data-unmeasured')).toBe('true')
+    expect(stat.textContent).toContain('2 unmeasured calls charged at')
+    expect(stat.textContent).toContain('3 unmeasured runs (not in the total)')
+  })
+
+  // M49 R6 re-homed (M61 Task 11): the knowledge line is a developer-mode link into the tab.
+  it('links to Knowledge with both counts, in developer mode only', () => {
+    renderTeam(snapshot([row({})]))
+    expect(screen.queryByTestId('brief-knowledge')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('mode-probe'))
+
+    const link = screen.getByTestId('brief-knowledge')
+    expect(link.textContent).toBe('Knowledge: 2 verified · 1 candidates')
+    expect(link.getAttribute('href')).toContain('/knowledge')
+  })
+
   // Review fix round 1, Important 8: clamped to two lines, with the whole of it one hover away.
   it('clamps the goal line to two lines, with the full text one hover away', () => {
     const goal = 'Ship the checkout flow end to end, including refunds and partial captures.'
-    renderTeam(snapshot([row({})], { stats: { inProgress: 0, done: 0, goal } }))
+    renderTeam(snapshot([row({})], { stats: { inProgress: 0, done: 0, goal, goalVersion: 4, unmeasuredCalls: 0, unmeasuredRuns: 0, knowledge: { verified: 2, candidates: 1 } } }))
     const line = screen.getByTestId('project-goal-line')
     expect(line.textContent).toBe(goal)
     expect(line.getAttribute('title')).toBe(goal)

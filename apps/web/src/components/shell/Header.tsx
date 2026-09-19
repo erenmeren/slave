@@ -53,7 +53,8 @@ function fanoutRefusal(data: FanoutEnvelope, nothingHappened: string | null): st
 }
 
 /**
- * The 54px header (M57 R7, M61 R6): a breadcrumb, the header search, a halt pill, the money, the
+ * The 48px header (M57 R7, M61 R6 -- "the header stays 48 px", spec §4; it was 54px until the
+ * M61 Task 11 reconciliation measured it): a breadcrumb, the header search, a halt pill, the money, the
  * `⌘J` hint, one split button, and a slot the page fills.
  *
  * It is mounted by the ROOT layout and is therefore on EVERY page, global routes included -- which
@@ -128,7 +129,7 @@ export function Header({ projects }: { readonly projects: readonly SidebarProjec
   return (
     <header
       data-testid="app-header"
-      className="glass flex h-[54px] flex-none items-center gap-3 border-b border-edge px-[24px]"
+      className="glass flex h-[48px] flex-none items-center gap-3 border-b border-edge px-[24px]"
     >
       {/* README: 13px, `--t3` segments, the last one `--t1` at 600. `data-crumbs` is the gate's
         * read of the same list, so a breadcrumb that is right on screen and wrong in the DOM is

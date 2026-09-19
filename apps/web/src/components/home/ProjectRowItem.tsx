@@ -69,6 +69,12 @@ export function ProjectRowItem({
         // oracle now reads this bare attribute instead of counting avatar tiles/an overflow pill
         // that no longer exist on this row -- same fact (`server/org.ts`'s `ProjectRow.workerCount`).
         data-team-size={project.workerCount}
+        // M11's own rule, restored in M61 Task 11: a project row says which COMPANY staffs it, and
+        // says "no company" before one is assigned. The deleted `ProjectsClient` card carried it
+        // as plain text under the name; nothing carried it after that card went, and
+        // `gate-m11-shell.mjs`'s own badge assertion is what found the hole. The attribute is the
+        // raw value beside the word (`docs/ia.md` rule 3).
+        data-company={project.companyName ?? ''}
         href={`/w/${project.id}`}
         className="grid h-[var(--row-h)] grid-cols-[minmax(0,1fr)_150px_90px_80px] items-center gap-3 rounded-control px-2.5 pr-9 hover:bg-hover"
       >
@@ -79,6 +85,9 @@ export function ProjectRowItem({
               archived
             </Chip>
           )}
+          <Chip testId="project-company" tone="idle">
+            {project.companyName ?? 'no company'}
+          </Chip>
           <span className="type-meta min-w-0 flex-1 truncate text-t2">{project.goal ?? 'no goal set'}</span>
         </div>
         <div className={`type-meta truncate ${project.needsYou > 0 ? 'font-medium text-accent' : 'text-t2'}`}>

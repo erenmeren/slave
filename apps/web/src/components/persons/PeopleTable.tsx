@@ -103,13 +103,22 @@ export function PeopleTable({
     const person = rows[index]
     if (person === undefined) return null
     return (
+      // M61 R12, Task 11: "a row click opens `SlavePanel` inside a `Sheet`". The whole row is the
+      // target now, not only the `⋯` -- a simple-mode operator reading a list of people expects
+      // the person to open when they click the person. `person-open` stays exactly where it was
+      // and keeps doing the same thing: it is the KEYBOARD path (a real `<button>` with its own
+      // label, one tab stop per row) and the discoverable affordance, and its click simply
+      // bubbles into this handler, which asks for the same person twice with no second effect.
+      // The row itself deliberately takes no `tabIndex`: a second focusable per row in a
+      // virtualized list is a tab order nobody can hold in their head.
       <div
         key={person.personId}
         data-testid={`person-row-${person.personId}`}
         data-person-id={person.personId}
         data-person-state={person.state}
         data-released={person.releasedAt === null ? 'false' : 'true'}
-        className={person.releasedAt === null ? undefined : 'opacity-60'}
+        onClick={() => onOpen(person.personId)}
+        className={`cursor-pointer ${person.releasedAt === null ? '' : 'opacity-60'}`.trim()}
       >
         <Row columns={COLUMNS} last={index === rows.length - 1}>
           <span data-testid="person-name" className="truncate text-[12.5px] font-semibold text-text-1">
@@ -144,7 +153,13 @@ export function PeopleTable({
             data-testid="person-open"
             aria-label={`open ${person.name}`}
             className="text-text-3 hover:text-text-1"
-            onClick={() => onOpen(person.personId)}
+            // `stopPropagation` (M61 Task 11): the whole row opens the person now, and without
+            // this a click on `⋯` would ask for the same person twice -- harmless in the product
+            // (the second call sets the same id) and a lie in a test that counts calls.
+            onClick={(event) => {
+              event.stopPropagation()
+              onOpen(person.personId)
+            }}
           >
             ⋯
           </button>
