@@ -775,7 +775,7 @@ try {
   console.log(`stage 4: dock badge = ${JSON.stringify(badge)}, pending decisions in the database = ${pendingCount}`)
   if (Number(badge) !== pendingCount) await fail(`stage 4: the dock badge reads ${JSON.stringify(badge)} and the database has ${pendingCount} pending`)
   await gotoReliably(`${baseUrl}/workforce`)
-  await waitVisible(page.getByRole('navigation', { name: 'Primary' }), 'the sidebar on /workforce')
+  await waitVisible(page.getByRole('navigation', { name: 'Main' }), 'the rail on /workforce')
   const globalRight = await page.evaluate(() => ({
     panel: document.querySelector('[data-testid="right-panel"]') !== null,
     dock: document.querySelector('[data-testid="right-dock"]') !== null,
@@ -894,8 +894,13 @@ try {
   // ============================================================================================
   // Stage 8: eleven numbers out of the handoff README, read back off the browser.
   // ============================================================================================
+  // M61 erratum E9: the rail replaces the tree; the selector below is renamed to match
+  // (`aria-label` "Primary" -> "Main") but its value, and the `right-panel`/`app-shell` rows' own
+  // values, are UNCHANGED here -- the rail is 56px collapsed, the panel is 340px and the shell's
+  // floor is 1024px now (M61 R4), and all three are stale until `gate:m14-fidelity`-style
+  // regeneration reconciles this table (spec R21).
   const NUMBERS = [
-    [`/w/${workspaceId}`, 'nav[aria-label="Primary"]', 'width', '236px'],
+    [`/w/${workspaceId}`, 'nav[aria-label="Main"]', 'width', '236px'],
     [`/w/${workspaceId}`, '[data-testid="app-header"]', 'height', '54px'],
     [`/w/${workspaceId}`, '[data-testid="right-panel"]', 'width', '372px'],
     [`/w/${workspaceId}`, '[data-testid="app-shell"]', 'min-width', '1280px'],
@@ -996,7 +1001,7 @@ try {
   for (const target of SWEEP) {
     await gotoReliably(`${baseUrl}${target.path}`)
     await waitVisible(page.getByTestId(target.testId), `${target.name}'s structural marker [data-testid=${target.testId}]`)
-    await waitVisible(page.getByRole('navigation', { name: 'Primary' }), `${target.name}'s sidebar`)
+    await waitVisible(page.getByRole('navigation', { name: 'Main' }), `${target.name}'s rail`)
     if (target.name === 'overview') {
       // Waited BEFORE the scan, so the re-homed river's own strings are covered rather than raced.
       await waitVisible(page.getByTestId('live-events'), 'the live-events river on the Overview')
@@ -1049,8 +1054,9 @@ try {
   // now.
   //
   // TWO TIERS, because the routes are not all the same shape:
-  //   - SHELL routes answer 200 AND render the Primary navigation landmark, which is the frame this
-  //     milestone rebuilt.
+  //   - SHELL routes answer 200 AND render the Main navigation landmark (the rail, M61 erratum E9 --
+  //     `aria-label="Primary"` retired to `aria-label="Main"`), which is the frame this milestone
+  //     rebuilt.
   //   - EDGE routes answer 200 and one marker of their own. `/login` is the one that cannot take
   //     the shell assertion: ruling T3-3 renders the frame there but NOT the tree body, and this
   //     stage should assert what that ruling decided rather than what the other twenty do.
@@ -1084,7 +1090,7 @@ try {
     console.log(`stage 10 (shell): ${route} -> ${String(status)}`)
     // 200 or a 307 that landed on a 200 (the two redirects `next.config.ts` owns).
     if (status !== 200) await fail(`stage 10: ${route} answered ${String(status)} -- ia.md rule 2 says every destination still answers`)
-    await waitVisible(page.getByRole('navigation', { name: 'Primary' }), `the sidebar on ${route}`)
+    await waitVisible(page.getByRole('navigation', { name: 'Main' }), `the rail on ${route}`)
   }
   for (const [route, marker, alsoTheShell] of EDGE_ROUTES) {
     const response = await page.goto(`${baseUrl}${route}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
@@ -1092,7 +1098,7 @@ try {
     console.log(`stage 10 (edge): ${route} -> ${String(status)} (marker [data-testid=${marker}])`)
     if (status !== 200) await fail(`stage 10: ${route} answered ${String(status)} -- ia.md rule 2 says every destination still answers`)
     await waitVisible(page.getByTestId(marker), `${route}'s own marker [data-testid=${marker}]`)
-    if (alsoTheShell) await waitVisible(page.getByRole('navigation', { name: 'Primary' }), `the sidebar on ${route}`)
+    if (alsoTheShell) await waitVisible(page.getByRole('navigation', { name: 'Main' }), `the rail on ${route}`)
   }
   console.log(
     `stage 10 PASSED: ${SHELL_ROUTES.length} destinations answering 200 inside the shell and ` +

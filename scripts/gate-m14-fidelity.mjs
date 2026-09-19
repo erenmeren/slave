@@ -872,7 +872,7 @@ try {
     await waitVisible(page.getByTestId(target.testId), `${target.name}'s structural marker [data-testid=${target.testId}]`)
     // The sidebar is on every one of the nine, and its own width is stage 2's first assertion --
     // asserting it is PRESENT here means a page that renders without the shell fails by name.
-    await waitVisible(page.getByRole('navigation', { name: 'Primary' }), `${target.name}'s sidebar`)
+    await waitVisible(page.getByRole('navigation', { name: 'Main' }), `${target.name}'s sidebar`)
     // Committed evidence (Decision 9): reviewed against the mockups page by page.
     await capture(target)
     console.log(`stage 1: ${target.name} rendered and captured`)
@@ -920,7 +920,10 @@ try {
   // only on an ACTIVE edge, which needs a live run, so it is asserted as stage 2b after stage 4b
   // dispatches one.
   const NUMBERS = [
-    ['overview', `/w/${workspaceId}`, 'nav[aria-label="Primary"]', 'width', '236px'],
+    // M61 erratum E9: the rail replaces the tree; the selector is renamed to match (`aria-label`
+    // "Primary" -> "Main") but the 236px value is UNCHANGED here -- the rail is 56px collapsed
+    // (208px on hover) and this number is stale until `gate:m14-fidelity` regenerates (spec R21).
+    ['overview', `/w/${workspaceId}`, 'nav[aria-label="Main"]', 'width', '236px'],
     // M57 R7: the project header is the ROOT layout's `app-header` now, on every page in the
     // product rather than only `/w/<id>/*`, and the handoff's number for it is 54px.
     ['overview', `/w/${workspaceId}`, '[data-testid="app-header"]', 'height', '54px'],

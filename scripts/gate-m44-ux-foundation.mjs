@@ -606,47 +606,39 @@ try {
   // ============================================================================================
   // Stage 1: the ways in.
   // ============================================================================================
+  // M61 R5 (spec erratum E9): `SidebarTree`'s three `sidebar-global` rows and its "Projects" tree
+  // root are RETIRED, replaced by `RAIL`'s five destinations on `rail-item`/`data-rail` inside
+  // `nav[aria-label="Main"]` -- `sidebar-global` does not come back. Developer mode is set here (an
+  // `addInitScript`, the same shape used elsewhere in this file) so all five render in one pass;
+  // simple mode would show only `home, people, settings`. The assertion's MEANING is unchanged --
+  // the global destinations are all present, in order, each labelled -- read off the new vocabulary.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('mode', 'developer')
+    } catch {
+      /* stays simple; the assertion below fails loudly rather than silently passing on three */
+    }
+  })
   await gotoReliably(`${baseUrl}/`)
-  await waitVisible(page.getByRole('navigation', { name: 'Primary' }), "the Projects page's sidebar")
+  await waitVisible(page.getByRole('navigation', { name: 'Main' }), 'the rail')
   const navRows = await page.evaluate(() =>
-    [...document.querySelectorAll('nav[aria-label="Primary"] [data-testid="sidebar-global"]')].map((row) => [
-      row.getAttribute('data-nav') ?? '',
-      // `getAttribute`, not `.href`: the DOM property resolves to an absolute URL.
-      row.getAttribute('href') ?? '',
+    [...document.querySelectorAll('nav[aria-label="Main"] [data-testid="rail-item"]')].map((row) => [
+      row.getAttribute('data-rail') ?? '',
       row.getAttribute('aria-label') ?? '',
     ]),
   )
-  console.log(`stage 1: sidebar rows in DOM order = ${JSON.stringify(navRows.map(([nav, href]) => [nav, href]))}`)
-  // M57 R5: Projects is the TREE's root row now, above the per-project list, not a fourth sibling
-  // of these three. Its presence is asserted separately, immediately below.
+  console.log(`stage 1: rail rows in DOM order = ${JSON.stringify(navRows)}`)
   const EXPECTED_NAV = [
-    ['Workforce', '/workforce'],
-    ['Simulations', '/sim'],
-    ['Settings', '/settings'],
+    ['home', 'Home'],
+    ['people', 'People'],
+    ['settings', 'Settings'],
+    ['simulations', 'Simulations'],
+    ['analytics', 'Analytics'],
   ]
-  if (JSON.stringify(navRows.map(([nav, href]) => [nav, href])) !== JSON.stringify(EXPECTED_NAV)) {
-    await fail(
-      `stage 1: the sidebar is ${JSON.stringify(navRows.map(([nav, href]) => [nav, href]))}, expected ${JSON.stringify(EXPECTED_NAV)}`,
-    )
+  if (JSON.stringify(navRows) !== JSON.stringify(EXPECTED_NAV)) {
+    await fail(`stage 1: the rail is ${JSON.stringify(navRows)}, expected ${JSON.stringify(EXPECTED_NAV)}`)
   }
-  for (const [nav, , ariaLabel] of navRows) {
-    if (ariaLabel === '') await fail(`stage 1: the ${nav} row has no aria-label`)
-  }
-  for (const gone of ['Slaves', 'Skills', 'Analytics']) {
-    if (navRows.some(([nav]) => nav === gone)) {
-      await fail(`stage 1: the sidebar still carries a "${gone}" row -- R1 left four entries and M57 R5 leaves three global ones under a Projects root`)
-    }
-  }
-  console.log('stage 1: no Slaves, Skills or Analytics row remains in the sidebar')
-
-  const treeRoot = await page.evaluate(() => {
-    const root = [...document.querySelectorAll('nav[aria-label="Primary"] a')].find(
-      (a) => (a.textContent ?? '').trim().startsWith('Projects'),
-    )
-    return root === undefined ? null : root.getAttribute('href')
-  })
-  if (treeRoot !== '/') await fail(`stage 1: the tree's Projects root points at ${JSON.stringify(treeRoot)}, expected "/"`)
-  console.log('stage 1: the tree root is Projects → /')
+  console.log('stage 1: the rail carries all five destinations, in order, each labelled')
 
   await gotoReliably(`${baseUrl}/slaves`)
   await waitVisible(page.getByTestId('workforce-tab-slaves'), 'the Workforce Slaves tab after /slaves')
@@ -679,7 +671,7 @@ try {
   const kpiCount = await page.getByTestId('kpi-tile').count()
   console.log(`stage 1: /analytics?workspace=<fixture> answered with ${String(kpiCount)} kpi-tile(s)`)
   assert(kpiCount > 0, 'stage 1: /analytics rendered no KPI tile at all')
-  console.log('stage 1 PASSED: three global entries under a Projects root, in order, pointing where they say; /slaves and /skills land on the right tab; /analytics still answers')
+  console.log('stage 1 PASSED: five rail entries, in order, each labelled; /slaves and /skills land on the right tab; /analytics still answers')
 
   // ============================================================================================
   // Stage 2: the project's own tab strip, and the VIEWS chips' three routes.
@@ -732,12 +724,11 @@ try {
   // M57 R11: what `Advanced ▾` held is three VISIBLE chips (README) / tabs (M61) now. Graph and
   // Office moved onto the strip itself (`sidebar-view` -> `project-tab`, spec §3) and their hrefs
   // are measured off `sections` above, in place of the old `sidebar-view`/`data-view` read. Analytics
-  // is the one member `VIEWS` still owns (M61 R18 reduces `VIEWS` to it alone); it is a project-scoped
-  // chip with no route of its own under `/w/:id`, and `SidebarTree` -- the only component that ever
-  // drew it -- is deleted with no replacement surface for it in the frame this task builds. Its href
-  // is therefore NOT re-asserted here: a `sidebar-view`/`project-tab` selector for "analytics" can
-  // never match (`TABS` has no such id), and a check that can never pass is worse than no check.
-  // Flagged for the task that gives Analytics a home in the new frame.
+  // is the one member `VIEWS` still owns (M61 R18 reduces `VIEWS` to it alone) and re-homes onto the
+  // RAIL instead of the strip (spec erratum E9) -- `rail-item[data-rail="analytics"]`, already on
+  // screen from stage 1's developer-mode read above, is asserted here rather than a `project-tab`
+  // selector that could never match (`TABS` has no "analytics" id). Its PROJECT-SCOPED half
+  // (`VIEWS.analytics`'s own `/analytics?workspace=<id>`) stays parked: no surface renders it yet.
   const graphTab = sections.find((row) => row.id === 'graph')
   const officeTab = sections.find((row) => row.id === 'office')
   if (graphTab?.href !== `/w/${workspaceId}/graph`) {
@@ -745,6 +736,10 @@ try {
   }
   if (officeTab?.href !== `/w/${workspaceId}/office`) {
     await fail(`stage 2: the Office tab points at ${JSON.stringify(officeTab?.href)}, expected /w/${workspaceId}/office`)
+  }
+  const analyticsRailHref = await page.evaluate(() => document.querySelector('[data-testid="rail-item"][data-rail="analytics"]')?.getAttribute('href') ?? null)
+  if (analyticsRailHref !== '/analytics') {
+    await fail(`stage 2: the developer-mode Analytics rail item points at ${JSON.stringify(analyticsRailHref)}, expected /analytics`)
   }
   // NOT DECORATION: both routes still render (M44's own two checks, kept verbatim -- a chip that
   // points at a page nobody can draw is a chip that lies).
@@ -756,7 +751,7 @@ try {
   console.log('stage 2: /w/<id>/office rendered office-canvas')
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
 
-  console.log('stage 2 PASSED: six tab rows with the right words and hrefs, and both canvases still drawing')
+  console.log('stage 2 PASSED: six tab rows with the right words and hrefs, the Analytics rail item, and both canvases still drawing')
 
   // ============================================================================================
   // Stages 3 and 4, in ONE pass over the pages: the shell contract and the raw-token scan.
@@ -845,7 +840,7 @@ try {
   for (const target of PAGES) {
     await gotoReliably(`${baseUrl}${target.path}`)
     await waitVisible(page.getByTestId(target.testId), `${target.name}'s structural marker [data-testid=${target.testId}]`)
-    await waitVisible(page.getByRole('navigation', { name: 'Primary' }), `${target.name}'s sidebar`)
+    await waitVisible(page.getByRole('navigation', { name: 'Main' }), `${target.name}'s rail`)
 
     // M57 R11: the `Advanced ▾` disclosure that used to hold `blocked · needs you`, the river and
     // the merge queue is gone and all three render directly, so there is nothing left to open --
@@ -857,14 +852,14 @@ try {
 
     // ---- Stage 3: one shell, one landmark. -----------------------------------------------------
     const shell = await page.evaluate(() => ({
-      nav: document.querySelectorAll('nav[aria-label="Primary"]').length,
+      nav: document.querySelectorAll('nav[aria-label="Main"]').length,
       mains: document.querySelectorAll('main').length,
       mainById: document.querySelector('main#main') !== null,
       mainTabIndex: document.querySelector('main#main')?.getAttribute('tabindex') ?? null,
       pageShell: document.querySelectorAll('[data-testid="page-shell"]').length,
     }))
     console.log(`stage 3 (${target.name}): ${JSON.stringify(shell)}`)
-    if (shell.nav !== 1) await fail(`stage 3 (${target.name}): ${String(shell.nav)} Primary navigation landmark(s), expected exactly 1`)
+    if (shell.nav !== 1) await fail(`stage 3 (${target.name}): ${String(shell.nav)} Main navigation landmark(s), expected exactly 1`)
     if (shell.mains !== 1) {
       await fail(
         `stage 3 (${target.name}): ${String(shell.mains)} <main> landmark(s), expected exactly 1 -- a document with ten ` +
@@ -995,7 +990,7 @@ try {
     }
   }
   console.log(
-    `stage 3 PASSED: ${String(PAGES.length)} pages, each with one Primary navigation landmark, exactly one <main>, and that ` +
+    `stage 3 PASSED: ${String(PAGES.length)} pages, each with one Main navigation landmark, exactly one <main>, and that ` +
       'main being #main with tabindex="-1"',
   )
   console.log(
@@ -1098,9 +1093,16 @@ try {
 
   // ============================================================================================
   // Stage 7: the width, and the floor that replaced the collapse.
+  //
+  // M61 erratum E9: every selector below is renamed (`aria-label` "Primary" -> "Main",
+  // `sidebar-global` -> the rail). The 236px / 1280px VALUES this stage measures against, and the
+  // `sidebar-global` testid `narrow.labels` still reads, are UNCHANGED and stale -- the rail is
+  // 56px, the floor is 1024px (M61 R4) and `sidebar-global` no longer exists on the rail's global
+  // items -- left for the reconciliation this stage needs as a whole rather than patched selector
+  // by selector here.
   // ============================================================================================
   const wideWidth = await page.evaluate(() => {
-    const nav = document.querySelector('nav[aria-label="Primary"]')
+    const nav = document.querySelector('nav[aria-label="Main"]')
     return nav === null ? null : window.getComputedStyle(nav).width
   })
   console.log(`stage 7: sidebar width at 1440x900 = ${JSON.stringify(wideWidth)}`)
@@ -1111,9 +1113,9 @@ try {
   // sidebar shrinking into something unusable.
   await page.setViewportSize({ width: 800, height: 900 })
   await gotoReliably(`${baseUrl}/`)
-  await waitVisible(page.getByRole('navigation', { name: 'Primary' }), 'the sidebar at 800x900')
+  await waitVisible(page.getByRole('navigation', { name: 'Main' }), 'the rail at 800x900')
   const narrow = await page.evaluate(() => {
-    const nav = document.querySelector('nav[aria-label="Primary"]')
+    const nav = document.querySelector('nav[aria-label="Main"]')
     const shell = document.querySelector('[data-testid="app-shell"]')
     return {
       width: nav === null ? null : window.getComputedStyle(nav).width,
