@@ -7,7 +7,73 @@ import { useShellFacts } from '../../hooks/useShellFacts'
 import { formatAge } from '../../lib/format'
 import { postControl } from '../../lib/postControl'
 import { Button } from '../ui/Button'
+import { Chip } from '../ui/Chip'
 import { LiveDot } from '../ui/LiveDot'
+
+/**
+ * One `needs-you-row` (M61 R7/Task 6, spec erratum E8), pulled out of this bar so Home's own
+ * cross-project queue (Task 8) can draw the SAME row rather than a second copy of it: the
+ * `data-kind`, the title link, the age and the decision's Approve/Reject pair are all exactly what
+ * this bar has always rendered.
+ *
+ * `workspaceName` is the one thing Home's queue needs that this bar never has: this bar is already
+ * scoped to one project, so its own callers pass nothing and the chip is absent, byte-identical to
+ * before this extraction.
+ */
+export function NeedsYouRow({
+  item,
+  workspaceName,
+  busy,
+  onAnswer,
+}: {
+  readonly item: NeedsYouItem
+  /** Home's own addition (Task 8): a chip naming which project this item is on. Absent for
+   *  `NeedsYouBar`'s own project-scoped queue. */
+  readonly workspaceName?: string
+  readonly busy: string | null
+  readonly onAnswer: (decisionId: string, verdict: 'approve' | 'reject') => void
+}): React.JSX.Element {
+  return (
+    // A `<div>`, not a `<Link>` (review fix round 1, Important 1): a decision row's Approve/
+    // Reject are real `<button>`s, and nesting a button inside an anchor is invalid HTML the
+    // Task 6 version got away with only because nothing on the row was ever clicked but the
+    // row itself. The title is the row's own link now; the buttons are its siblings.
+    <div data-testid="needs-you-row" data-kind={item.kind} className="type-meta flex items-center gap-2">
+      <LiveDot tone="waiting" />
+      {workspaceName !== undefined && (
+        <Chip testId="needs-you-project" tone="waiting">
+          {workspaceName}
+        </Chip>
+      )}
+      <Link href={item.href} className="min-w-0 flex-1 truncate text-t1 hover:underline">
+        {item.title}
+      </Link>
+      <span className="shrink-0 text-t3">{formatAge(item.since)}</span>
+      {item.kind === 'decision' && item.decisionId !== null && (
+        <span className="flex flex-none gap-[6px]">
+          <Button
+            variant="primary"
+            size="sm"
+            data-testid="needs-you-approve"
+            disabled={busy === item.decisionId}
+            onClick={() => onAnswer(item.decisionId as string, 'approve')}
+          >
+            Approve
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="needs-you-reject"
+            disabled={busy === item.decisionId}
+            onClick={() => onAnswer(item.decisionId as string, 'reject')}
+          >
+            Reject
+          </Button>
+        </span>
+      )}
+    </div>
+  )
+}
 
 /** How often the bar may ask `GET /api/w/:id/needs-you` again -- the same 5s the spec erratum E8
  *  names, and the same throttle-by-ref shape `ProjectSwitcher.tsx`'s own poll uses. */
@@ -109,39 +175,12 @@ export function NeedsYouBar({
       )}
       <div className="flex flex-col gap-[var(--gap-1)]">
         {items.map((item) => (
-          // A `<div>`, not a `<Link>` (review fix round 1, Important 1): a decision row's Approve/
-          // Reject are real `<button>`s, and nesting a button inside an anchor is invalid HTML the
-          // Task 6 version got away with only because nothing on the row was ever clicked but the
-          // row itself. The title is the row's own link now; the buttons are its siblings.
-          <div key={`${item.kind}-${item.id}`} data-testid="needs-you-row" data-kind={item.kind} className="type-meta flex items-center gap-2">
-            <LiveDot tone="waiting" />
-            <Link href={item.href} className="min-w-0 flex-1 truncate text-t1 hover:underline">
-              {item.title}
-            </Link>
-            <span className="shrink-0 text-t3">{formatAge(item.since)}</span>
-            {item.kind === 'decision' && item.decisionId !== null && (
-              <span className="flex flex-none gap-[6px]">
-                <Button
-                  variant="primary"
-                  size="sm"
-                  data-testid="needs-you-approve"
-                  disabled={busy === item.decisionId}
-                  onClick={() => void answer(item.decisionId as string, 'approve')}
-                >
-                  Approve
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  data-testid="needs-you-reject"
-                  disabled={busy === item.decisionId}
-                  onClick={() => void answer(item.decisionId as string, 'reject')}
-                >
-                  Reject
-                </Button>
-              </span>
-            )}
-          </div>
+          <NeedsYouRow
+            key={`${item.kind}-${item.id}`}
+            item={item}
+            busy={busy}
+            onAnswer={(decisionId, verdict) => void answer(decisionId, verdict)}
+          />
         ))}
       </div>
     </section>

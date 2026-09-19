@@ -770,7 +770,9 @@ try {
   // them.
   // ============================================================================================
   const PAGES = [
-    { name: 'projects', path: `/`, testId: 'project-card', fidelity: true },
+    // M61 Task 8 selector rename: `project-card` -> `project-row` -- Home's list replaced the
+    // deleted `ProjectsClient` card grid with a `project-row` per project (`ProjectRowItem.tsx`).
+    { name: 'projects', path: `/`, testId: 'project-row', fidelity: true },
     { name: 'workforce', path: `/workforce`, testId: 'people-rows', fidelity: true },
     { name: 'skills', path: `/skills`, testId: 'empty-tile', fidelity: true },
     { name: 'analytics', path: `/analytics?workspace=${workspaceId}`, testId: 'kpi-tile', fidelity: true },
@@ -1010,11 +1012,11 @@ try {
   await waitVisible(page.getByTestId('new-project'), 'the + New project trigger')
   await clickUntil(
     page.getByTestId('new-project'),
-    async () => page.getByTestId('new-project-drawer').first().isVisible(),
+    async () => page.getByTestId('new-project-sheet').first().isVisible(),
     'the + New project trigger',
   )
   const openedInside = await page.evaluate(() => {
-    const drawer = document.querySelector('[data-testid="new-project-drawer"]')
+    const drawer = document.querySelector('[data-testid="new-project-sheet"]')
     const active = document.activeElement
     return {
       inside: drawer !== null && active !== null && drawer.contains(active),
@@ -1027,7 +1029,7 @@ try {
   for (let press = 0; press < 30; press += 1) {
     await page.keyboard.press('Tab')
     const step = await page.evaluate(() => {
-      const drawer = document.querySelector('[data-testid="new-project-drawer"]')
+      const drawer = document.querySelector('[data-testid="new-project-sheet"]')
       const active = document.activeElement
       return {
         inside: drawer !== null && active !== null && drawer.contains(active),
@@ -1046,7 +1048,7 @@ try {
   await page.keyboard.press('Escape')
   await delay(200)
   const afterClose = await page.evaluate(() => ({
-    drawers: document.querySelectorAll('[data-testid="new-project-drawer"]').length,
+    drawers: document.querySelectorAll('[data-testid="new-project-sheet"]').length,
     active: document.activeElement?.getAttribute('data-testid') ?? null,
   }))
   console.log(`stage 5: after Escape = ${JSON.stringify(afterClose)}`)

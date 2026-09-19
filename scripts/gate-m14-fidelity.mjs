@@ -791,7 +791,8 @@ try {
     // reads its inline `left` regardless of size) and required VISIBLE in the live re-capture pass
     // below, once the run has put real rows in the river.
     { name: 'activity', path: () => `/w/${workspaceId}/activity`, testId: 'timeline-viewport' },
-    { name: 'projects', path: () => '/', testId: 'project-card' },
+    // M61 Task 8 selector rename: `project-card` -> `project-row` (Home's list, `ProjectRowItem.tsx`).
+    { name: 'projects', path: () => '/', testId: 'project-row' },
     { name: 'skills', path: () => '/skills', testId: 'empty-tile' },
     { name: 'analytics', path: () => `/analytics?workspace=${workspaceId}`, testId: 'kpi-tile' },
     // The GLOBAL Settings page (M24 §4): provider adapters, security, danger zone -- the
@@ -960,7 +961,13 @@ try {
     // 7's raw activity river). Left for that task to re-measure once it has a home again.
     ['overview', `/w/${workspaceId}`, '[data-testid="live-events"]', 'width', '340px'],
     ['tasks', `/w/${workspaceId}/tasks`, '[data-testid="task-card"]', 'border-radius', '10px'],
-    ['projects', '/', '[data-testid="project-card"]', 'border-radius', '14px'],
+    // M61 Task 8 selector rename, and left UNCHANGED and KNOWN BROKEN, deliberately: the deleted
+    // `ProjectsClient` drew `project-card` as a `Card` (`rounded-page-card`, 14px); Home's
+    // `project-row` (`ProjectRowItem.tsx`) is a table row, `rounded-control` (`--radius-control`,
+    // 8px) -- a bare rename passes the SELECTOR but not the number. Fixing the number is a
+    // measurement pass against the new row, not a selector edit, and is left for a follow-up task
+    // (the same idiom this file already carries for `needs-you-empty`/`slave-card` above).
+    ['projects', '/', '[data-testid="project-row"]', 'border-radius', '14px'],
     // M57 t8 fix round 1, ruling T8-3: the row's geometry moved (`ActivityCard.tsx`'s
     // `px-4` + `64px` time + `gap-3` + `14px` dot column), so the rule's x moved with it to the
     // dot's own centre -- `16 + 64 + 12 + 7 = 99`.
