@@ -44,17 +44,17 @@ const ROW_COLUMNS = '110px minmax(0,1fr) 190px'
 const ROW_HEADER = ['kind', 'memory', 'actions'] as const
 
 /**
- * The virtualizer's starting guess for one row's height (M61 Task 10), corrected on paint by
- * nothing here -- unlike `PeopleTable`'s `--row-h` (a fixed, single-line 40/34px table row), a
- * knowledge row is a multi-line card whose height genuinely varies with its body text and with
- * whether its `DetailsGroup` fold is open, and `DataTable`'s `virtualized` contract (copied
- * verbatim from `PeopleTable`'s own wiring) has no per-row measurement hook to correct an
- * estimate against. This is a deliberately generous guess at a "live" row's typical height
- * (three classification chips beside a title, a body line, a provenance chip and three stacked
- * actions) -- an outlier row (an unusually long body, or a fold left open while scrolled far
- * away) can still overlap its neighbour by a few pixels, same as any fixed-row virtualizer asked
- * to hold variable content. Bounded and cosmetic, not a functional break: the list still scrolls
- * and every row still renders, in order, by index.
+ * The virtualizer's starting guess for one row's height (M61 Task 10) -- unlike `PeopleTable`'s
+ * `--row-h` (a fixed, single-line 40/34px table row), a knowledge row is a multi-line card whose
+ * height genuinely varies with its body text and with whether its `DetailsGroup` fold is open.
+ *
+ * Scope fix (controller Ruling 10): `DataTable`'s `virtualized.dynamic: true` below is what
+ * actually corrects this estimate now, per row, once each row paints -- the same
+ * `measureElement` idiom `activity/Timeline.tsx` already uses for its own variable-height cards.
+ * This constant is only ever the FIRST guess a row is positioned at before it is measured (three
+ * classification chips beside a title, a body line, a provenance chip and three stacked actions
+ * -- a "live" row's typical shape); it no longer has to be exactly right for rows to stop
+ * overlapping.
  */
 const ESTIMATED_ROW_HEIGHT = 200
 
@@ -511,7 +511,7 @@ export function KnowledgeClient({
             <DataTable
               columns={ROW_COLUMNS}
               header={[...ROW_HEADER]}
-              virtualized={{ rowHeight: ESTIMATED_ROW_HEIGHT, count: view.rows.length, render: renderRow }}
+              virtualized={{ rowHeight: ESTIMATED_ROW_HEIGHT, count: view.rows.length, render: renderRow, dynamic: true }}
             />
           </div>
         )}

@@ -15,6 +15,10 @@ import { ScrollArea } from './ScrollArea'
  * idiom `activity/Timeline.tsx` already uses on its own bare scroll element, here run inside
  * `ui/ScrollArea` instead. The head renders exactly as before either way; only the body's DOM
  * strategy changes, so a caller with a handful of rows never has to opt in.
+ *
+ * `virtualized.dynamic` (M61 Task 10 scope fix, controller Ruling 10) opts a caller INTO
+ * `Timeline.tsx`'s own `measureElement` idiom instead of trusting `rowHeight` as a fixed row
+ * size -- see its own doc comment below for why this is opt-in rather than the only mode.
  */
 export function DataTable({
   columns,
@@ -31,6 +35,26 @@ export function DataTable({
     readonly rowHeight: number
     readonly count: number
     readonly render: (index: number) => React.ReactNode
+    /**
+     * Opt-in dynamic sizing (M61 Task 10 scope fix, controller Ruling 10): when true, every row
+     * wrapper also carries `ref={virtualizer.measureElement}` -- the standard
+     * `@tanstack/react-virtual` "dynamic" idiom `activity/Timeline.tsx` already uses on its own
+     * bare scroll element. `rowHeight` (`estimateSize`) stays only the INITIAL guess; once a
+     * row's actual rendered height is measured, the virtualizer corrects its cache and every row
+     * after it repositions from the corrected `virtualRow.start` -- which is what stops a row
+     * whose content varies (wrapped text, an optional line, a fold that can open) from
+     * overlapping its neighbour.
+     *
+     * Default false/absent, and deliberately not the only mode: `PeopleTable`'s rows are fixed,
+     * single-line `--row-h` height by design, and its own test file mocks
+     * `HTMLElement.prototype.offsetHeight` to one constant for every element to fake a bounded
+     * jsdom viewport. `measureElement`'s own jsdom fallback (no `ResizeObserver` there) reads
+     * that same `offsetHeight` -- wired in unconditionally, every People row would "measure" at
+     * the mocked VIEWPORT height instead of the `rowHeight` estimate those tests are keyed to,
+     * changing what their virtualization-count assertions actually test. `KnowledgeClient` is
+     * the first caller to pass `dynamic: true`; `PeopleTable` and its test are untouched.
+     */
+    readonly dynamic?: boolean
   }
   readonly children?: React.ReactNode
 }): React.JSX.Element {
@@ -66,6 +90,7 @@ export function DataTable({
               <div
                 key={virtualRow.key}
                 data-index={virtualRow.index}
+                {...(virtualized.dynamic === true ? { ref: virtualizer.measureElement } : {})}
                 style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualRow.start}px)` }}
               >
                 {virtualized.render(virtualRow.index)}

@@ -283,6 +283,49 @@ describe('DataTable', () => {
     )
     expect(screen.getByTestId('data-table-row').className).toContain('last:border-b-0')
   })
+
+  // M61 Task 10 scope fix (controller Ruling 10): `virtualized.dynamic` wires
+  // `ref={virtualizer.measureElement}` onto every row wrapper, alongside the `data-index` it
+  // already carried -- the standard `@tanstack/react-virtual` dynamic-sizing idiom
+  // `activity/Timeline.tsx` already uses, so a caller with variable-height rows (`KnowledgeClient`)
+  // stops its rows overlapping. `PeopleTable`'s own fixed-height wiring never sets it and is
+  // covered by `people-table.test.tsx` alone.
+  it('a dynamic table stamps data-index on its row wrappers (and wires the virtualizer’s measure ref)', () => {
+    // `@tanstack/react-virtual` measures its scroll viewport -- and, once `dynamic` wires
+    // `measureElement`, each row -- via `offsetWidth`/`offsetHeight` when no `ResizeObserver` is
+    // present; jsdom has neither by default. Same idiom `people-table.test.tsx`'s own
+    // `mockElementSizes` uses, restored after so it cannot affect a later test in this file.
+    const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 })
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 400 })
+    try {
+      render(
+        <DataTable
+          columns="1fr"
+          header={['Name']}
+          virtualized={{
+            rowHeight: 40,
+            count: 3,
+            dynamic: true,
+            render: (index) => (
+              <Row columns="1fr" last={index === 2}>
+                <span>{`row ${index}`}</span>
+              </Row>
+            ),
+          }}
+        />,
+      )
+      const rows = screen.getAllByTestId('data-table-row')
+      expect(rows.length).toBeGreaterThan(0)
+      // `data-index` lives on the virtualizer's own wrapper div, one level up from `data-table-row`
+      // -- the same element `measureElement`'s `ref` is wired onto.
+      expect(rows[0]?.parentElement?.getAttribute('data-index')).toBe('0')
+    } finally {
+      if (width !== undefined) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', width)
+      if (height !== undefined) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', height)
+    }
+  })
 })
 
 describe('ProgressBar', () => {
