@@ -47,9 +47,10 @@ const PROFILE_ORIGIN_TEXT: Record<OverrideOrigin, string> = {
 /**
  * What a runtime's GATE means for the worker that runs on it (spec §8 / Decision 8), in words.
  *
- * The header keeps `ShellOnlyMark`, which marks the one gate spec §8 asks to be marked and nothing
- * else; this line is the whole fact, and it lives inside the Model group, where the raw value
- * belongs -- `title` carries `all-tools`/`shell-only`/`none` verbatim.
+ * The header keeps `ShellOnlyMark` -- or, when `chromeless` (Task 9 fix round 1) suppresses the
+ * header, the body's first row does instead -- which marks the one gate spec §8 asks to be marked
+ * and nothing else; this line is the whole fact, and it lives inside the Model group, where the
+ * raw value belongs -- `title` carries `all-tools`/`shell-only`/`none` verbatim.
  */
 const GATE_TEXT: Record<'all-tools' | 'shell-only' | 'none', string> = {
   'all-tools': 'every tool this runtime has',
@@ -515,11 +516,11 @@ export function SlavePanel({
       </DetailsGroup>
       )}
 
-      {/* The provider chip in the header, expanded: the runtime's WORD, its raw kind in `title`,
-        * and what its gate actually permits (spec §8 / Decision 8) with the raw gate in `title`.
-        * `ShellOnlyMark` stays in the header rather than moving here -- spec §8 asks for that one
-        * fact to be marked "wherever a worker's runtime is shown", and a mark behind a click is
-        * not a mark. */}
+      {/* The provider chip from the header (or, when `chromeless`, the body's first row -- Task 9
+        * fix round 1), expanded: the runtime's WORD, its raw kind in `title`, and what its gate
+        * actually permits (spec §8 / Decision 8) with the raw gate in `title`. `ShellOnlyMark`
+        * stays up there rather than moving here -- spec §8 asks for that one fact to be marked
+        * "wherever a worker's runtime is shown", and a mark behind a click is not a mark. */}
       <DetailsGroup group="model" title="Model">
         <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
           <dt className="text-text-3">runtime</dt>

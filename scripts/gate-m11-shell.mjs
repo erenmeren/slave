@@ -601,8 +601,11 @@ try {
     await fail(`the People table lost "${MEMBER_NAME}" after leaving one project`)
   }
   console.log(`unassigned "${MEMBER_NAME}" from "${workspaceNameA}"; the person and the "${workspaceNameB}" seat stay -- verified against prisma`)
+  // M61 Task 9 fix round 1: `SlavePanel` renders `chromeless` inside `person-sheet` now -- its own
+  // "Close slave detail" button is suppressed, and the Sheet's own close (`sheet-close`,
+  // `aria-label="Close"`) is the only close control left.
   await clickUntil(
-    page.getByLabel('Close slave detail'),
+    page.getByTestId('person-sheet').getByTestId('sheet-close'),
     async () => !(await page.getByTestId('panel-projects-group').isVisible()),
     'closing the person panel so the Departments table is clickable',
   )
