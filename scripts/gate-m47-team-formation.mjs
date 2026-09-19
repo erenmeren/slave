@@ -958,6 +958,18 @@ try {
   // Stage 7: who is here, what they can do, why -- and what is still missing.
   // ============================================================================================
 
+  // M61 R7 scope fix (controller Ruling 4): the roster table (`organization-rows` and friends) is
+  // a developer-mode-only view on the Team tab now -- `/organization` still redirects here, but
+  // the table itself renders only once `isDeveloper`. Stamping `localStorage` before the
+  // navigation is `ModeProvider`'s own read on mount (`lib/modeStorage.ts`'s `MODE_STORAGE_KEY`,
+  // the same idiom `gate-m57-ui-redesign.mjs` already uses for its own developer-mode stage).
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('mode', 'developer')
+    } catch {
+      /* stays simple; the roster wait below fails loudly rather than silently passing on none */
+    }
+  })
   await gotoReliably(`${baseUrl}/w/${workspaceId}/organization`)
   await waitVisible(page.getByTestId('organization-rows'), 'the Organization table')
 

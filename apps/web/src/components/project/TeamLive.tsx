@@ -1,7 +1,8 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { useMode } from '../mode/ModeProvider'
 import { useTeamLive } from '../../hooks/useTeamLive'
 import { useSelectedId } from '../../hooks/useSelectedId'
@@ -19,7 +20,7 @@ import { EmptyState } from '../ui/EmptyState'
 import { LoadingState } from '../ui/LoadingState'
 import { ScrollArea } from '../ui/ScrollArea'
 import { Stat } from '../ui/Stat'
-import { OrganizationNeeds, OrganizationPreferences } from '../organization/OrganizationClient'
+import { OrganizationAdd, OrganizationNeeds, OrganizationPreferences, OrganizationRoster } from '../organization/OrganizationClient'
 import { TeamCard } from './TeamCard'
 
 /**
@@ -45,8 +46,16 @@ export function TeamLive({
 }): React.JSX.Element {
   const { snapshot } = useTeamLive(workspaceId, initial)
   const view = snapshot ?? initial
-  const { mode } = useMode()
+  const { mode, isDeveloper } = useMode()
+  const router = useRouter()
   const [selectedSlaveId, selectSlave] = useSelectedId('slave')
+  /** `slaveId -> name`, for `OrganizationPreferences`/`OrganizationNeeds`'s hints byline -- built
+   *  off `TeamLiveSnapshot.workers` (scope-fix addition), the same source `OrganizationClient`'s
+   *  own lookup reads. */
+  const workerNames = useMemo(
+    (): Readonly<Record<string, string>> => Object.fromEntries(view.workers.map((worker) => [worker.slaveId, worker.name])),
+    [view.workers],
+  )
   const selected =
     view.rows.find((row) => row.personId === selectedSlaveId) ??
     view.rows.find((row) => row.slaveId === selectedSlaveId) ??
@@ -129,12 +138,29 @@ export function TeamLive({
             ))}
           </div>
         )}
+        {/* Scope fix (M61 R7, controller Ruling 4): "Add somebody" is how an end user staffs a
+          * project, in both modes. `onSeated` no-ops -- the live stream refetches this snapshot on
+          * the `slave.assigned`-shaped event the seat write appends, the same rule every other
+          * write on this page already follows. `onNewSlave` sends the person to `/workforce`
+          * rather than opening a local drawer: that drawer needs `roster`/`templates`/`teams` in
+          * shapes `TeamLiveSnapshot` cannot cheaply carry (`listRoster()` is an unscoped,
+          * installation-wide read -- see `OrganizationAdd`'s own docstring). */}
+        <OrganizationAdd
+          workspaceId={workspaceId}
+          pool={view.pool}
+          teamId={view.teamId}
+          onSeated={() => {
+            /* the live stream refetches this snapshot on the event the write appends */
+          }}
+          onNewSlave={() => router.push('/workforce')}
+        />
+        {isDeveloper && <OrganizationRoster workers={view.workers} onOpen={(personId) => selectSlave(personId)} />}
         {mode === 'developer' && (
           <OrganizationPreferences
             workspaceId={workspaceId}
             covered={view.preferences}
             templates={view.templates}
-            names={Object.fromEntries(view.rows.map((row) => [row.slaveId, row.name]))}
+            names={workerNames}
             onChanged={() => {
               /* the live stream refetches this snapshot on the event the write appends */
             }}
@@ -146,6 +172,8 @@ export function TeamLive({
           pendingElsewhere={view.pendingElsewhere}
           templates={view.templates}
           taskTitles={view.taskTitles}
+          hints={view.hints}
+          names={workerNames}
           onChanged={() => {
             /* the live stream refetches this snapshot on the event the write appends */
           }}

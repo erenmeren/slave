@@ -78,6 +78,23 @@ export interface TeamLiveSnapshot {
    *  `gate:m33-adopt` still reads it here. Additive, off the same `overview` read this module
    *  already makes. */
   readonly adoptedFrom: { readonly simulationId: string; readonly name: string } | null
+  /**
+   * Scope-fix addition (M61 R7, controller Ruling 4): `docs/ia.md` rule 2 binds the organization
+   * page's remaining UI too -- the roster table, the add-somebody/new-slave controls, and the
+   * collaboration hints all have to stay reachable from the Team tab, not only Needs/Preferences.
+   * All four fields below are pass-throughs of the SAME `organization` read this module already
+   * makes (no second query, no new field on `OrganizationView` itself):
+   *
+   * - `workers` feeds `OrganizationRoster` (the `organization-row-*`/`capability-chip` table) and
+   *   is also the richer `slaveId -> name` source `OrganizationPreferences`/the hints block resolve
+   *   names from now, in place of the thinner `TeamLiveRow[]`-derived lookup Task 6 used.
+   * - `pool`/`teamId` feed `OrganizationAdd`'s "seat somebody already here" control.
+   * - `hints` feeds the collaboration-advice block, now rendered inside `OrganizationNeeds`.
+   */
+  readonly workers: OrganizationView['workers']
+  readonly pool: OrganizationView['pool']
+  readonly teamId: OrganizationView['teamId']
+  readonly hints: OrganizationView['hints']
 }
 
 /**
@@ -171,6 +188,10 @@ export async function buildTeamLive(workspaceId: string, now: Date = new Date())
     taskTitles: organization.taskTitles,
     templates: organization.templates,
     adoptedFrom: overview.workspace.adoptedFrom,
+    workers: organization.workers,
+    pool: organization.pool,
+    teamId: organization.teamId,
+    hints: organization.hints,
   }
 }
 

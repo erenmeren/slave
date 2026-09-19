@@ -5,6 +5,7 @@ import { TeamLive } from '../src/components/project/TeamLive.js'
 import { ModeProvider, useMode } from '../src/components/mode/ModeProvider.js'
 import { RightPanelProvider } from '../src/components/shell/RightPanelProvider.js'
 import type { TeamLiveRow, TeamLiveSnapshot } from '../src/server/teamLive.js'
+import type { OrganizationView } from '../src/server/organization.js'
 
 /**
  * The Team tab (M61 R7/Task 6), replacing `organization-page.test.tsx` -- `OrganizationClient`'s
@@ -83,6 +84,23 @@ function row(over: Partial<TeamLiveRow> = {}): TeamLiveRow {
   }
 }
 
+/** A minimal `OrganizationRow` off a `TeamLiveRow`, for the `workers` fixture -- the scope fix's
+ *  `OrganizationRoster` reads this shape, not `TeamLiveRow`'s. */
+function workerFromRow(r: TeamLiveRow): OrganizationView['workers'][number] {
+  return {
+    slaveId: r.slaveId,
+    personId: r.personId,
+    name: r.name,
+    roleLabel: r.role,
+    lifecycle: r.lifecycle,
+    released: r.released,
+    capabilities: [],
+    why: r.why,
+    runtimeRoles: [],
+    doing: r.doing,
+  }
+}
+
 function snapshot(rows: readonly TeamLiveRow[], over: Partial<TeamLiveSnapshot> = {}): TeamLiveSnapshot {
   return {
     workspaceId: 'w1',
@@ -101,6 +119,10 @@ function snapshot(rows: readonly TeamLiveRow[], over: Partial<TeamLiveSnapshot> 
     taskTitles: {},
     templates: [],
     adoptedFrom: null,
+    workers: rows.map(workerFromRow),
+    pool: [],
+    teamId: 't1',
+    hints: [],
     ...over,
   }
 }
@@ -220,5 +242,43 @@ describe('TeamLive', () => {
 
     fireEvent.click(screen.getByTestId('mode-probe'))
     expect(screen.getByTestId('organization-covered').textContent).toContain('API design')
+  })
+
+  // Scope fix (M61 R7, controller Ruling 4): `docs/ia.md` rule 2 -- nothing removed, only moved --
+  // binds the rest of the organization page's UI too. "Add somebody" is how an end user staffs a
+  // project, so it renders in BOTH modes; the roster table is a developer-mode detail.
+  it('renders the add-somebody controls in simple mode, and the roster table only in developer mode', () => {
+    renderTeam(snapshot([row({})]))
+    expect(screen.getByTestId('organization-pool-person')).toBeTruthy()
+    expect(screen.getByTestId('organization-pool-submit')).toBeTruthy()
+    expect(screen.getByTestId('organization-add-from-pool')).toBeTruthy()
+    expect(screen.queryByTestId('organization-rows')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('mode-probe'))
+    expect(screen.getByTestId('organization-rows')).toBeTruthy()
+    expect(screen.getByTestId('organization-row-a1').textContent).toContain('Alex')
+    expect(screen.getByTestId('organization-why-a1').textContent).toBe('the only backend engineer here')
+    // Add-somebody stays up in developer mode too -- it does not toggle off with the roster.
+    expect(screen.getByTestId('organization-add-from-pool')).toBeTruthy()
+  })
+
+  it('renders collaboration hints inside the needs section, in both modes', () => {
+    renderTeam(
+      snapshot([row({})], {
+        hints: [
+          {
+            slaveId: 'a1',
+            text: 'Ask Alex before touching the checkout schema.',
+            targetTemplateName: null,
+            capability: 'backend.api-design',
+            capabilityLabel: 'API design',
+          },
+        ],
+      }),
+    )
+    const hint = screen.getByTestId('organization-hint')
+    expect(hint.getAttribute('data-capability')).toBe('backend.api-design')
+    expect(hint.textContent).toContain('Ask Alex before touching the checkout schema.')
+    expect(screen.getByTestId('organization-advice')).toBeTruthy()
   })
 })

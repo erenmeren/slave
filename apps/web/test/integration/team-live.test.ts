@@ -70,4 +70,13 @@ describe('buildTeamLive', () => {
     const res = await GET(new Request('http://x'), { params: Promise.resolve({ workspaceId: 'nope' }) })
     expect(res.status).toBe(404)
   })
+
+  // Scope fix (M61 R7, controller Ruling 4): `OrganizationAdd`'s "seat somebody already here"
+  // control reads `pool`/`teamId` off this snapshot -- both pass-throughs of the same
+  // `buildOrganization` read `buildTeamLive` already makes (`server/teamLive.ts`).
+  it('carries the pool and this project\'s own team id, for OrganizationAdd', async () => {
+    const snap = (await buildTeamLive(fx.workspaceId))!
+    expect(snap.teamId).toBe(fx.teamId)
+    expect(Array.isArray(snap.pool)).toBe(true)
+  })
 })
