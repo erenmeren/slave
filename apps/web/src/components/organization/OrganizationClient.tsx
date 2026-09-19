@@ -68,9 +68,9 @@ export function OrganizationClient({
   // second read here -- null for the one paint before that effect lands, same as the header's own
   // budget figure on this route.
   const projectName = useShellFacts(workspaceId)?.workspace.name ?? null
-  /** The one proposal currently writing. Per-row rather than per-page: two needs are two
-   *  independent decisions, and answering one must not grey out the other. */
-  const [busyId, setBusyId] = useState<string | null>(null)
+  /** Pool-seating's own refusal (`seat()` below). Decision writes have their own per-row busy/error
+   *  state now, inside `OrganizationNeeds` (Task 6 extraction) -- this page no longer answers a
+   *  proposal itself. */
   const [errors, setErrors] = useState<Readonly<Record<string, string>>>({})
   const [stale, setStale] = useState(false)
   const [poolPersonId, setPoolPersonId] = useState('')
@@ -87,6 +87,12 @@ export function OrganizationClient({
   const assignableProjects = useMemo(() => assignableProjectsOf(teams), [teams])
   const teamId = view.teamId
   const pool = view.pool
+  /** `slaveId -> name`, for `OrganizationPreferences`'s "who covers this" chip -- a lookup rather
+   *  than the whole `OrganizationRow[]`, so the extracted component takes only what it reads. */
+  const workerNames = useMemo(
+    (): Readonly<Record<string, string>> => Object.fromEntries(view.workers.map((worker) => [worker.slaveId, worker.name])),
+    [view.workers],
+  )
 
   /** Re-read this page after a write. The rows already on screen stay until the new ones land: a
    *  page that empties itself between an approval and its answer is harder to read than one that
@@ -103,21 +109,6 @@ export function OrganizationClient({
     } catch {
       setStale(true)
     }
-  }
-
-  const send = async (decisionId: string, path: string, body?: Record<string, unknown>): Promise<void> => {
-    setBusyId(decisionId)
-    setErrors((was) => {
-      const { [decisionId]: _gone, ...rest } = was
-      return rest
-    })
-    const result = await postControl(`/api/w/${workspaceId}/supervisor/decisions/${decisionId}/${path}`, body)
-    setBusyId(null)
-    if (!result.ok) {
-      setErrors((was) => ({ ...was, [decisionId]: result.error }))
-      return
-    }
-    await reload()
   }
 
   useEffect((): void => {
@@ -298,101 +289,22 @@ export function OrganizationClient({
           )}
         </Panel>
 
-        {(view.needs.length > 0 || view.pendingElsewhere > 0) && (
-          <Panel title="what this project still needs">
-            {view.needs.length > 0 && (
-            <div data-testid="organization-needs" className="flex flex-col gap-3">
-              {view.needs.map((need) => (
-                <section
-                  key={need.capability}
-                  data-testid={`organization-need-${need.capability}`}
-                  className="flex flex-col gap-1 rounded border border-line p-2"
-                >
-                  <span className="flex items-baseline gap-2">
-                    {/* The label, with the key still reachable (`docs/ia.md` rule 3). */}
-                    <span title={need.capability} className="text-sm text-text-1">
-                      {need.label}
-                    </span>
-                    <span className="font-mono text-[10px] text-text-3">{plural(need.readyTasks, 'ready task')}</span>
-                  </span>
-                  <span className="text-xs text-text-2">{need.summary}</span>
-                  {/* M53 R9: the decision lives where the staffing decision is READ. Two controls
-                    * and no third: a picker that names a profile or a model, and a clear. There is
-                    * no "prefer for every project" and no priority -- one decision per capability
-                    * per project is the whole of the table. */}
-                  <StaffingPreferenceControl
-                    workspaceId={workspaceId}
-                    capability={need.capability}
-                    capabilityLabel={need.label}
-                    templates={view.templates}
-                    preference={need.preference}
-                    onChanged={() => void reload()}
-                  />
-                  {need.decisions.map((decision) => (
-                    // A one-item `<ul>` per decision, because `ProposalRow` IS the `<li>` (the
-                    // M45 timeline wraps it exactly this way).
-                    <ul key={decision.id} className="flex flex-col gap-1">
-                      {/* The SAME row the Supervisor panel and the M45 timeline render, so a
-                        * proposal reads and is answered identically wherever it is shown. */}
-                      <ProposalRow
-                        decision={decision}
-                        // The panel's mailbox is not on this page; a drafted answer shows its own
-                        // summary rather than a question invented here.
-                        questions={[]}
-                        taskTitles={view.taskTitles}
-                        busy={busyId === decision.id}
-                        onApprove={(body) => void send(decision.id, 'approve', body === undefined ? undefined : { body })}
-                        onReject={(reason) => void send(decision.id, 'reject', reason.trim() === '' ? undefined : { reason })}
-                      />
-                      {errors[decision.id] !== undefined && (
-                        <li role="alert" data-testid="organization-error" className="text-[11px] text-tone-blocked">
-                          {errors[decision.id]}
-                        </li>
-                      )}
-                    </ul>
-                  ))}
-                </section>
-              ))}
-            </div>
-            )}
-            {/* A proposal recorded against a capability somebody has since been given the role for
-              * (fix round 1, minor 4): no need row above carries it, and it is still waiting on a
-              * person. The COUNT and where to answer it -- never a second Approve, which would be a
-              * second place to keep the decision queue in step. */}
-            {view.pendingElsewhere > 0 && (
-              <span data-testid="organization-pending-elsewhere" className="text-xs text-text-3">
-                {plural(view.pendingElsewhere, 'staffing proposal')}{' '}
-                {view.pendingElsewhere === 1 ? 'is' : 'are'} waiting on the Overview: the gap each was
-                made about is no longer one.
-              </span>
-            )}
-          </Panel>
-        )}
+        <OrganizationNeeds
+          workspaceId={workspaceId}
+          needs={view.needs}
+          pendingElsewhere={view.pendingElsewhere}
+          templates={view.templates}
+          taskTitles={view.taskTitles}
+          onChanged={() => void reload()}
+        />
 
-        {view.covered.length > 0 && (
-          <Panel title="what this project is covered for">
-            {/* D36: the control sits here TOO, and not only on the need rows -- a person's most
-              * likely reason to ask for somebody is that the current holder is not working out, and
-              * a capability with a holder has no need row at all. */}
-            <ul data-testid="organization-covered" className="flex flex-col gap-1.5">
-              {view.covered.map((one) => (
-                <li key={one.capability} className="flex flex-wrap items-center gap-2">
-                  <Chip title={one.capability} tone="done">
-                    {one.label} · {nameOf(one.by, view)}
-                  </Chip>
-                  <StaffingPreferenceControl
-                    workspaceId={workspaceId}
-                    capability={one.capability}
-                    capabilityLabel={one.label}
-                    templates={view.templates}
-                    preference={one.preference}
-                    onChanged={() => void reload()}
-                  />
-                </li>
-              ))}
-            </ul>
-          </Panel>
-        )}
+        <OrganizationPreferences
+          workspaceId={workspaceId}
+          covered={view.covered}
+          templates={view.templates}
+          names={workerNames}
+          onChanged={() => void reload()}
+        />
 
         {view.unfillable.length > 0 && (
           <Alert variant="notice" testId="organization-unfillable">
@@ -418,7 +330,7 @@ export function OrganizationClient({
                     className="flex flex-col gap-0.5"
                   >
                     <span className="font-mono text-[10px] text-text-3">
-                      {nameOf(hint.slaveId, view)}
+                      {nameOf(hint.slaveId, workerNames)}
                       {hint.targetTemplateName === null ? '' : ` → ${hint.targetTemplateName}`}
                       {/* The LABEL, with the key on `data-capability` above (`docs/ia.md` rule 3):
                         * the chips two panels up read `API design`, and this line read
@@ -473,6 +385,184 @@ export function OrganizationClient({
   )
 }
 
+
+/**
+ * "What this project still needs" (M53 R9), extracted out of `OrganizationClient` (M61 R7/Task 6)
+ * so the Team tab can render the same block: every capability with a ready task and nobody to give
+ * it to, each with the staffing-preference control and any pending Supervisor proposal answerable
+ * in place, plus the count of proposals answered elsewhere. Its own `busyId`/`errors` state --
+ * `OrganizationClient` used to own both for exactly this block and now owns neither, because this
+ * component is reachable from two pages (`/organization`'s redirect target and the Team tab) that
+ * do not share React state.
+ *
+ * `onChanged` is what a caller with no live stream (`OrganizationClient`, which `/organization`'s
+ * own docstring says publishes no `shellFacts`) uses to refetch; the Team tab's `useTeamLive` has
+ * an `EventSource` that wakes on the very event a decision write appends, so its `onChanged` is a
+ * no-op (the same "no `onRefresh`" rule `NeedsYouCard`'s own docstring states).
+ *
+ * `null` (renders nothing) when there is nothing to say -- no need and no proposal waiting
+ * elsewhere -- the same "silence beats noise" rule `RunbookPanel` follows.
+ */
+export function OrganizationNeeds({
+  workspaceId,
+  needs,
+  pendingElsewhere,
+  templates,
+  taskTitles,
+  onChanged,
+}: {
+  readonly workspaceId: string
+  readonly needs: OrganizationView['needs']
+  readonly pendingElsewhere: number
+  readonly templates: OrganizationView['templates']
+  readonly taskTitles: OrganizationView['taskTitles']
+  readonly onChanged: () => void
+}): React.JSX.Element | null {
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [errors, setErrors] = useState<Readonly<Record<string, string>>>({})
+
+  const send = async (decisionId: string, path: string, body?: Record<string, unknown>): Promise<void> => {
+    setBusyId(decisionId)
+    setErrors((was) => {
+      const { [decisionId]: _gone, ...rest } = was
+      return rest
+    })
+    const result = await postControl(`/api/w/${workspaceId}/supervisor/decisions/${decisionId}/${path}`, body)
+    setBusyId(null)
+    if (!result.ok) {
+      setErrors((was) => ({ ...was, [decisionId]: result.error }))
+      return
+    }
+    onChanged()
+  }
+
+  if (needs.length === 0 && pendingElsewhere === 0) return null
+
+  return (
+    <Panel title="what this project still needs">
+      {needs.length > 0 && (
+        <div data-testid="organization-needs" className="flex flex-col gap-3">
+          {needs.map((need) => (
+            <section
+              key={need.capability}
+              data-testid={`organization-need-${need.capability}`}
+              className="flex flex-col gap-1 rounded border border-line p-2"
+            >
+              <span className="flex items-baseline gap-2">
+                {/* The label, with the key still reachable (`docs/ia.md` rule 3). */}
+                <span title={need.capability} className="text-sm text-text-1">
+                  {need.label}
+                </span>
+                <span className="font-mono text-[10px] text-text-3">{plural(need.readyTasks, 'ready task')}</span>
+              </span>
+              <span className="text-xs text-text-2">{need.summary}</span>
+              {/* M53 R9: the decision lives where the staffing decision is READ. Two controls
+                * and no third: a picker that names a profile or a model, and a clear. There is
+                * no "prefer for every project" and no priority -- one decision per capability
+                * per project is the whole of the table. */}
+              <StaffingPreferenceControl
+                workspaceId={workspaceId}
+                capability={need.capability}
+                capabilityLabel={need.label}
+                templates={templates}
+                preference={need.preference}
+                onChanged={onChanged}
+              />
+              {need.decisions.map((decision) => (
+                // A one-item `<ul>` per decision, because `ProposalRow` IS the `<li>` (the
+                // M45 timeline wraps it exactly this way).
+                <ul key={decision.id} className="flex flex-col gap-1">
+                  {/* The SAME row the Supervisor panel and the M45 timeline render, so a
+                    * proposal reads and is answered identically wherever it is shown. */}
+                  <ProposalRow
+                    decision={decision}
+                    // The panel's mailbox is not on this page; a drafted answer shows its own
+                    // summary rather than a question invented here.
+                    questions={[]}
+                    taskTitles={taskTitles}
+                    busy={busyId === decision.id}
+                    onApprove={(body) => void send(decision.id, 'approve', body === undefined ? undefined : { body })}
+                    onReject={(reason) => void send(decision.id, 'reject', reason.trim() === '' ? undefined : { reason })}
+                  />
+                  {errors[decision.id] !== undefined && (
+                    <li role="alert" data-testid="organization-error" className="text-[11px] text-tone-blocked">
+                      {errors[decision.id]}
+                    </li>
+                  )}
+                </ul>
+              ))}
+            </section>
+          ))}
+        </div>
+      )}
+      {/* A proposal recorded against a capability somebody has since been given the role for
+        * (fix round 1, minor 4): no need row above carries it, and it is still waiting on a
+        * person. The COUNT and where to answer it -- never a second Approve, which would be a
+        * second place to keep the decision queue in step. */}
+      {pendingElsewhere > 0 && (
+        <span data-testid="organization-pending-elsewhere" className="text-xs text-text-3">
+          {plural(pendingElsewhere, 'staffing proposal')}{' '}
+          {pendingElsewhere === 1 ? 'is' : 'are'} waiting on the Overview: the gap each was
+          made about is no longer one.
+        </span>
+      )}
+    </Panel>
+  )
+}
+
+/**
+ * "What this project is covered for" (M53 plan decision D36), extracted alongside
+ * `OrganizationNeeds` (M61 R7/Task 6) for the same reason: a person's most likely reason to ask for
+ * somebody is that the current holder is not working out, and a capability WITH a holder carries no
+ * need row at all, so the staffing-preference control has to sit here too, not only on the need
+ * rows above.
+ *
+ * `names` is a `slaveId -> name` lookup rather than the full `OrganizationRow[]` `nameOf` used to
+ * close over: the Team tab has no `OrganizationRow[]` of its own (`TeamLiveRow[]` is a different
+ * shape), and a lookup is the one thing both callers can build off what they already have.
+ *
+ * `null` when nothing is covered -- an empty list here would be a panel affirming a fact by drawing
+ * an empty box around it (`docs/ia.md` rule 2).
+ */
+export function OrganizationPreferences({
+  workspaceId,
+  covered,
+  templates,
+  names,
+  onChanged,
+}: {
+  readonly workspaceId: string
+  readonly covered: OrganizationView['covered']
+  readonly templates: OrganizationView['templates']
+  readonly names: Readonly<Record<string, string>>
+  readonly onChanged: () => void
+}): React.JSX.Element | null {
+  if (covered.length === 0) return null
+  return (
+    <Panel title="what this project is covered for">
+      {/* D36: the control sits here TOO, and not only on the need rows -- a person's most
+        * likely reason to ask for somebody is that the current holder is not working out, and
+        * a capability with a holder has no need row at all. */}
+      <ul data-testid="organization-covered" className="flex flex-col gap-1.5">
+        {covered.map((one) => (
+          <li key={one.capability} className="flex flex-wrap items-center gap-2">
+            <Chip title={one.capability} tone="done">
+              {one.label} · {nameOf(one.by, names)}
+            </Chip>
+            <StaffingPreferenceControl
+              workspaceId={workspaceId}
+              capability={one.capability}
+              capabilityLabel={one.label}
+              templates={templates}
+              preference={one.preference}
+              onChanged={onChanged}
+            />
+          </li>
+        ))}
+      </ul>
+    </Panel>
+  )
+}
 
 /**
  * One capability's staffing decision, where the staffing decision is read (M53 R9).
@@ -609,8 +699,9 @@ function askedFor(preference: OrganizationPreference): string {
   return `Asked for: ${who} — by ${by}. A preference is obeyed ahead of any record and behind any refusal.`
 }
 
-/** A worker's name for an id this view already holds, and the id itself when it does not -- which
- *  is findable, rather than a name this component would have to invent. */
-function nameOf(slaveId: string, view: OrganizationView): string {
-  return view.workers.find((worker) => worker.slaveId === slaveId)?.name ?? slaveId
+/** A worker's name off the `names` lookup `OrganizationPreferences` was handed, and the id itself
+ *  when it is not in it -- which is findable, rather than a name this component would have to
+ *  invent. */
+function nameOf(slaveId: string, names: Readonly<Record<string, string>>): string {
+  return names[slaveId] ?? slaveId
 }

@@ -709,7 +709,11 @@ try {
   // grid in M57, on the surfaces they moved to.
   // ============================================================================================
   await gotoReliably(projectUrl)
-  await waitVisible(page.getByTestId('brief'), "the project brief on /w/<id>")
+  // M61 R7/Task 6: the four-tile brief left `/w/<id>` with the Overview it was part of --
+  // `stat-work` is the Team tab's own always-rendered marker that the page has finished its first
+  // paint (selector rename only; the fact-tile assertions below this point are a known gap left
+  // for a follow-up task -- see the M61 Task 6 report).
+  await waitVisible(page.getByTestId('stat-work'), "the project page on /w/<id>")
   const tiles = await page.evaluate(() =>
     [...document.querySelectorAll('[data-testid="brief-tile"]')].map((tile) => ({
       fact: tile.getAttribute('data-brief') ?? '',
@@ -1201,7 +1205,8 @@ try {
   // Stage 7: real is not simulated.
   // ============================================================================================
   await gotoReliably(projectUrl)
-  await waitVisible(page.getByTestId('brief'), 'the project brief, for the simulation check')
+  // M61 R7/Task 6: selector rename, see stage 1's note above.
+  await waitVisible(page.getByTestId('stat-work'), 'the project page, for the simulation check')
   const simulationMarkers = await page.evaluate(() => document.querySelectorAll('[data-simulation]').length)
   console.log(`stage 7: [data-simulation] elements on /w/<id> = ${String(simulationMarkers)}`)
   if (simulationMarkers !== 0) {

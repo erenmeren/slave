@@ -33,7 +33,9 @@
 // selected, submit, and the URL becoming `/w/<workspaceId>`.
 //
 // Stage 5 (the workspace page and rows): `ws-adopted-from` names the run and links to its page;
-// seven `slave-card`s; seven `Slave` rows with the translated roles and a `runtimeRoles` set
+// seven `team-card`s (M61 R7/Task 6: `slave-card` left `/w/<workspaceId>` with the Overview it was
+// part of -- the Team tab draws `team-card` rows now); seven `Slave` rows with the translated
+// roles and a `runtimeRoles` set
 // holding each worker's own roster role (M37 §5, replacing this stage's pre-M37 `requiredRole`
 // reading); the workspace's `companyId`, `adoptedFromSimulationId`, `maxConcurrentRuns 4`, `maxAttempts
 // 3`, `autoMerge false`, `budgetUsd` untouched.
@@ -436,10 +438,12 @@ try {
     if (noteText === undefined || !noteText.includes(SIM_NAME)) await fail(`ws-adopted-from reads ${JSON.stringify(noteText)}, expected it to name ${JSON.stringify(SIM_NAME)}`)
     if (noteHref !== `/sim/${simulationId}`) await fail(`ws-adopted-from links to ${JSON.stringify(noteHref)}, expected /sim/${simulationId}`)
 
-    await waitVisible(page.getByTestId('slave-card').first(), 'a slave card on the adopted workspace page')
-    const cardCount = await settleTo(() => page.getByTestId('slave-card').count(), ROSTER.length)
-    console.log(`workspace page shows ${cardCount} slave-card(s)`)
-    if (cardCount !== ROSTER.length) await fail(`the workspace page shows ${cardCount} slave-card(s), expected ${ROSTER.length}`)
+    // M61 R7/Task 6 selector rename: `slave-card` -> `team-card` (`/w/<workspaceId>` draws the
+    // Team tab's rows now, not `OverviewClient`'s deleted ones).
+    await waitVisible(page.getByTestId('team-card').first(), 'a team card on the adopted workspace page')
+    const cardCount = await settleTo(() => page.getByTestId('team-card').count(), ROSTER.length)
+    console.log(`workspace page shows ${cardCount} team-card(s)`)
+    if (cardCount !== ROSTER.length) await fail(`the workspace page shows ${cardCount} team-card(s), expected ${ROSTER.length}`)
 
     // M58 R2: a seat carries no name of its own -- the person in it does, so the roster this stage
     // checks is read through `person` and flattened back to the shape the assertions below expect.

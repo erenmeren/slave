@@ -61,6 +61,23 @@ export interface TeamLiveSnapshot {
    */
   readonly preferences: OrganizationView['covered']
   readonly haltedReason: string | null
+  /**
+   * The three facts `OrganizationNeeds`/`OrganizationPreferences` need beyond `needs`/`preferences`
+   * themselves (Task 6 addition, additive-only -- nothing above this line moved or changed shape).
+   * All three are already sitting on the SAME `organization` read this module makes above; passing
+   * them through costs no second query. `pendingElsewhere` is the "N staffing proposals waiting
+   * elsewhere" count `OrganizationNeeds` prints; `taskTitles` is what `ProposalRow` resolves a
+   * task id to inside a proposal; `templates` is the pick list behind every staffing-preference
+   * control.
+   */
+  readonly pendingElsewhere: number
+  readonly taskTitles: OrganizationView['taskTitles']
+  readonly templates: OrganizationView['templates']
+  /** M33 §4's provenance note, carried through from `overview.workspace.adoptedFrom` -- the same
+   *  fact `OverviewClient.tsx`'s `ws-adopted-from` band used to show on this page, and
+   *  `gate:m33-adopt` still reads it here. Additive, off the same `overview` read this module
+   *  already makes. */
+  readonly adoptedFrom: { readonly simulationId: string; readonly name: string } | null
 }
 
 /**
@@ -150,6 +167,10 @@ export async function buildTeamLive(workspaceId: string, now: Date = new Date())
     needs: organization.needs,
     preferences: organization.covered,
     haltedReason: overview.workspace.haltedReason,
+    pendingElsewhere: organization.pendingElsewhere,
+    taskTitles: organization.taskTitles,
+    templates: organization.templates,
+    adoptedFrom: overview.workspace.adoptedFrom,
   }
 }
 

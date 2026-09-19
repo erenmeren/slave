@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { publishShellFacts } from '../../hooks/useShellFacts'
 import type { ShellFacts } from '../../server/shell'
 import type { ProjectSettings } from '../../server/projectSettings'
+import type { RunbookPanelView } from '../../server/runbook'
 import { plural } from '../../lib/plural'
 import { sendControl } from '../../lib/postControl'
 import { EmergencyStopButton } from '../EmergencyStopButton'
@@ -13,20 +14,33 @@ import { PermissionMatrix } from '../PermissionMatrix'
 import { DangerConfirm } from '../ui/DangerConfirm'
 import { PageShell } from '../ui/PageShell'
 import { GoalPanel } from './GoalPanel'
+import { RunbookPanel } from './RunbookPanel'
 import { RuntimePanel } from './RuntimePanel'
 import { Button } from '../ui/Button'
 
-/** The project Settings tab (M24 §4; M27 §3.4): goal, runtime, this project's permissions, and
- *  the danger zone -- the stop (hidden once the project is archived, since an archived project
- *  already runs nothing) plus archive/restore. Archiving POSTs `/api/w/:id/archive` and leaves
- *  the project (`router.push('/')` -- the archived project leaves this header's world, spec
- *  §3.3); restoring is reversible and has no confirm, so it just POSTs and refreshes in place. */
+/**
+ * The project Settings tab (M24 §4; M27 §3.4): goal, runtime, this project's permissions, and
+ * the danger zone -- the stop (hidden once the project is archived, since an archived project
+ * already runs nothing) plus archive/restore. Archiving POSTs `/api/w/:id/archive` and leaves
+ * the project (`router.push('/')` -- the archived project leaves this header's world, spec
+ * §3.3); restoring is reversible and has no confirm, so it just POSTs and refreshes in place.
+ *
+ * M61 R7/Task 6 adds the Runbook section -- moved off the deleted Overview, `RunbookPanel` and its
+ * eleven testids unchanged. `GoalHistory` is not a section of its own (spec erratum E1): `GoalPanel`
+ * already renders it, folded, the moment a goal exists, so it needs no second mount here.
+ */
 export function ProjectSettingsClient({
   settings,
   shellFacts,
+  // Optional, defaulting to `null` (RunbookPanel's own "nothing to say" case) rather than
+  // required: `test/project-settings.test.tsx`'s existing cases render this component for its
+  // goal/runtime/permissions/danger behaviour and know nothing about runbooks, and a required prop
+  // would fail every one of them on a change this task did not ask them to make.
+  runbook = null,
 }: {
   readonly settings: ProjectSettings
   readonly shellFacts: ShellFacts
+  readonly runbook?: RunbookPanelView | null
 }): React.JSX.Element {
   const { workspace, permissions, footprint } = settings
   const router = useRouter()
@@ -65,6 +79,7 @@ export function ProjectSettingsClient({
         <nav className="sticky top-0 flex flex-col gap-2 text-[13px] text-t2">
           <a href="#goal" className="hover:text-t1">Goal</a>
           <a href="#runtime" className="hover:text-t1">Runtime</a>
+          <a href="#runbook" className="hover:text-t1">Runbook</a>
           <a href="#permissions" className="hover:text-t1">Permissions</a>
           <a href="#danger" className="text-s-blocked hover:opacity-80">Danger zone</a>
         </nav>
@@ -96,6 +111,13 @@ export function ProjectSettingsClient({
               costBlindBudgeted={workspace.costBlindBudgeted}
               limits={{ maxConcurrentRuns: workspace.maxConcurrentRuns, runTimeoutMs: workspace.runTimeoutMs, maxAttempts: workspace.maxAttempts }}
             />
+          </section>
+          {/* M61 R7/Task 6: moved off the deleted Overview, between who is doing it (Team, now the
+            * project's own page) and what happened (Activity) -- the same relative position the
+            * README always gave it. `RunbookPanel` draws its own `runbook-panel` div and `Panel`
+            * card, so this section is a bare anchor, exactly like `#goal`/`#runtime` above it. */}
+          <section id="runbook">
+            <RunbookPanel workspaceId={workspace.id} view={runbook} />
           </section>
           {/* Permissions and Danger have no inner `Panel` of their own to double up with, so THEY
             * keep the section's own card recipe -- an `<h2>` (Settings' Appearance section's own

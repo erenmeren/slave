@@ -766,7 +766,9 @@ try {
   // Stage 1: thirteen pages render, and each is screenshotted.
   // ============================================================================================
   const PAGES = [
-    { name: 'overview', path: () => `/w/${workspaceId}`, testId: 'strip' },
+    // M61 R7/Task 6 selector rename: `strip` (the deleted `ProjectBrief`'s wrapper) -> `stat-work`
+    // (the Team tab's own always-rendered footer tile, `overview.png`'s readiness marker now).
+    { name: 'overview', path: () => `/w/${workspaceId}`, testId: 'stat-work' },
     // M44 R8/E8: the Slaves page IS the Workforce page's Slaves tab now, and `/slaves` is a 307
     // into it. Screenshotted at its real route, so the committed evidence shows the page a person
     // actually lands on rather than a redirect's destination reached the long way round.
@@ -930,30 +932,32 @@ try {
     // M57 R8: the third column. 372px open, and the 52px dock it collapses to is
     // `gate:m57-ui-redesign` stage 8's, because it takes a click to exist.
     ['overview', `/w/${workspaceId}`, '[data-testid="right-panel"]', 'width', '372px'],
-    // `needs-you-empty`, NOT `needs-you-card`: this gate's fixture has nothing waiting on a person
-    // -- one `ready` task, no blocked task, no pending decision, no unintegrated `done` -- so the
-    // Overview draws the queue's EMPTY state, which is the same `rounded-panel-card` at the same
-    // README radius. The POPULATED card is measured by `gate:m57-ui-redesign` stage 8, whose
-    // fixture seeds both a decision and a blocked task on purpose.
+    // M61 R7/Task 6 leaves this row UNCHANGED and KNOWN BROKEN, deliberately: `needs-you-empty`
+    // does not exist any more -- the command strip's `NeedsYouBar` renders NOTHING at all with an
+    // empty queue (spec-required: `command-strip.test.tsx` pins "with none, needs-you is absent"),
+    // not an empty-state placeholder the old card drew. There is no testid to rename this row TO;
+    // fixing it means picking a different element to measure, which is a bigger edit than a
+    // selector rename and is left for a follow-up task (see the Task 6 report).
     ['overview', `/w/${workspaceId}`, '[data-testid="needs-you-empty"]', 'border-radius', '12px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="brief-tile"]', 'border-radius', '12px'],
-    // M57 R18: `slave-card` is a ROW on the README's `34px 120px 120px 1fr 96px 32px` grid, not a
-    // bordered card. The radius row and the `12px 13px` padding row are GONE -- a row has neither
-    // -- and the padding it does have is the README's. The SCOPED selectors survive because the
-    // row still carries `slave-card` with `avatar-tile` and `status-pill` inside it, which is why
-    // R18 made keeping those three testids a requirement rather than a convenience.
+    // M61 R7/Task 6 selector rename: `brief-tile` -> `stat-work` (the Team tab's footer `Stat`),
+    // same `rounded-surface` 12px radius the old fact tile carried.
+    ['overview', `/w/${workspaceId}`, '[data-testid="stat-work"]', 'border-radius', '12px'],
+    // M61 R7/Task 6 leaves this row UNCHANGED and KNOWN BROKEN, deliberately: `TeamCard` (`ui/Card`)
+    // pads `p-3` (12px on all four sides), not the README row's `10px 14px` -- a bare rename would
+    // leave a WRONG expected value on screen, not a passing one. Left for a follow-up task with a
+    // real measurement pass against the rendered Team tab (see the Task 6 report).
     ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"]', 'padding', '10px 14px'],
-    // 30x30 on THIS row, and 28x28 everywhere else: `ui/AvatarTile` has a `size` prop whose default
-    // is the 28px every other caller already gets, and the Team row is the ONE caller that passes
-    // `md`. The SCOPING is therefore load-bearing rather than defensive -- an unscoped selector
-    // would hit whichever 28px tile rendered first (`TaskCard`, `AllSlavesTable`, `ProjectsClient`,
-    // `GraphDrawer`) and fail against 30.
-    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="avatar-tile"]', 'width', '30px'],
-    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="avatar-tile"]', 'height', '30px'],
-    // M57 erratum E9: the handoff's pill radius is 999, not the 20 M44's token carried.
+    // M61 R7/Task 6 selector rename: `slave-card` -> `team-card`. The VALUE is unchanged and still
+    // true -- `TeamCard` renders the SAME `ui/AvatarTile size="md"` (30x30) the old row did.
+    ['overview', `/w/${workspaceId}`, '[data-testid="team-card"] [data-testid="avatar-tile"]', 'width', '30px'],
+    ['overview', `/w/${workspaceId}`, '[data-testid="team-card"] [data-testid="avatar-tile"]', 'height', '30px'],
+    // M61 R7/Task 6 leaves this row UNCHANGED and KNOWN BROKEN, deliberately: `TeamCard` draws its
+    // own `LiveDot`, not `ui/StatusPill` -- there is no `status-pill` inside `team-card` to rename
+    // this selector to. Left for a follow-up task (see the Task 6 report).
     ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="status-pill"]', 'border-radius', '999px'],
-    // M57 R11 re-homed the live-events river out of a disclosure and onto `recent-changes`; it is
-    // the same component at the same 340px, and it needs no click to be measurable any more.
+    // M61 R7/Task 6 leaves this row UNCHANGED and KNOWN BROKEN, deliberately: `LiveEventsPanel`
+    // moved to `components/activity/OverviewPanels.tsx` and is not wired into any page yet (Task
+    // 7's raw activity river). Left for that task to re-measure once it has a home again.
     ['overview', `/w/${workspaceId}`, '[data-testid="live-events"]', 'width', '340px'],
     ['tasks', `/w/${workspaceId}/tasks`, '[data-testid="task-card"]', 'border-radius', '10px'],
     ['projects', '/', '[data-testid="project-card"]', 'border-radius', '14px'],
@@ -1134,7 +1138,8 @@ try {
     await fail(`stage 4a: clear-halt left haltedReason=${JSON.stringify(cleared.haltedReason)}`)
   }
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
-  await waitVisible(page.getByTestId('strip'), 'the Overview strip after the halt was cleared')
+  // M61 R7/Task 6 selector rename, see the `overview.png` row above.
+  await waitVisible(page.getByTestId('stat-work'), 'the Team tab after the halt was cleared')
   await waitUntil('the halt banner to disappear once the halt is cleared', 30_000, async () => {
     const remaining = await page.getByRole('alert').filter({ hasText: 'workspace halted' }).count()
     return remaining === 0 ? { done: true, value: 0 } : { done: false, detail: `${String(remaining)} banner(s) still on the page` }

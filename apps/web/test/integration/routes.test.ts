@@ -2,6 +2,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { GET as getOverview } from '../../src/app/api/w/[workspaceId]/overview/route.js'
 import { listWorkspaces } from '../../src/server/workspaces.js'
+import OrganizationRedirect from '../../src/app/w/[workspaceId]/organization/page.js'
 
 describe('the overview route', () => {
   beforeEach(async (): Promise<void> => {
@@ -48,5 +49,41 @@ describe('the overview route', () => {
     const all = await listWorkspaces()
 
     expect(all.map((w) => w.name).sort()).toEqual(['A', 'B'])
+  })
+})
+
+describe('/w/:id/organization redirects to the Team tab (M61 R7)', () => {
+  it('307s to /w/:id, carrying every query param forward', async (): Promise<void> => {
+    let digest = ''
+    try {
+      await OrganizationRedirect({
+        params: Promise.resolve({ workspaceId: 'w1' }),
+        searchParams: Promise.resolve({ slave: 'x' }),
+      })
+      throw new Error('OrganizationRedirect did not redirect')
+    } catch (cause) {
+      digest = (cause as { digest?: string }).digest ?? ''
+    }
+    // `next/navigation`'s `redirect()` throws an error whose `digest` encodes the whole call:
+    // `NEXT_REDIRECT;<type>;<destination>;<statusCode>;` (`next/dist/client/components/redirect.js`).
+    const [code, , destination, status] = digest.split(';')
+    expect(code).toBe('NEXT_REDIRECT')
+    expect(status).toBe('307')
+    expect(destination).toBe('/w/w1?slave=x')
+  })
+
+  it('redirects to the bare project route when there is no query string at all', async (): Promise<void> => {
+    let digest = ''
+    try {
+      await OrganizationRedirect({
+        params: Promise.resolve({ workspaceId: 'w1' }),
+        searchParams: Promise.resolve({}),
+      })
+      throw new Error('OrganizationRedirect did not redirect')
+    } catch (cause) {
+      digest = (cause as { digest?: string }).digest ?? ''
+    }
+    const destination = digest.split(';').slice(2, -2).join(';')
+    expect(destination).toBe('/w/w1')
   })
 })

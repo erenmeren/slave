@@ -791,7 +791,9 @@ try {
   // Stage 5: answering a decision, end to end.
   // ============================================================================================
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
-  await waitVisible(page.getByTestId('needs-you-card'), 'the Needs you card')
+  // M61 R7/Task 6: the Needs you card left the page for the command strip's `NeedsYouBar`,
+  // testid `needs-you` (selector rename only).
+  await waitVisible(page.getByTestId('needs-you'), 'the Needs you bar')
   // SCOPED to the seeded project's own row (fix round 1), now read off the switcher's own
   // `data-needs-you` attribute rather than a nested `sidebar-needs-you` span (M61 R5) -- opened
   // first, since the row only exists in the popover's DOM once it has been clicked open.
@@ -905,8 +907,11 @@ try {
     [`/w/${workspaceId}`, '[data-testid="right-panel"]', 'width', '372px'],
     [`/w/${workspaceId}`, '[data-testid="app-shell"]', 'min-width', '1280px'],
     [`/w/${workspaceId}`, 'body', 'font-size', '14px'],
-    [`/w/${workspaceId}`, '[data-testid="needs-you-card"]', 'border-radius', '12px'],
-    [`/w/${workspaceId}`, '[data-testid="brief-tile"]', 'border-radius', '12px'],
+    // M61 R7/Task 6 selector renames: `needs-you-card` -> `needs-you` (the command strip's
+    // `NeedsYouBar`), `brief-tile` -> `stat-work` (the Team tab's footer `Stat`, same 12px
+    // `rounded-surface` radius the old tile carried).
+    [`/w/${workspaceId}`, '[data-testid="needs-you"]', 'border-radius', '12px'],
+    [`/w/${workspaceId}`, '[data-testid="stat-work"]', 'border-radius', '12px'],
     ['/', '[data-testid="project-card"]', 'border-radius', '14px'],
     [`/w/${workspaceId}/tasks`, '[data-testid="task-card"]', 'border-radius', '10px'],
     [`/w/${workspaceId}/tasks`, '[data-testid="status-pill"]', 'border-radius', '999px'],
@@ -916,7 +921,10 @@ try {
    *  has not finished with. */
   const NUMBER_MARKER = {
     '/': 'project-card',
-    [`/w/${workspaceId}`]: 'needs-you-card',
+    // `stat-work`, not `needs-you` (M61 R7/Task 6): the strip's needs-you bar is CONDITIONAL --
+    // absent with an empty queue -- and a readiness marker must always be there to wait on;
+    // `stat-work` is the Team tab's own always-rendered footer tile.
+    [`/w/${workspaceId}`]: 'stat-work',
     [`/w/${workspaceId}/tasks`]: 'column',
   }
   let currentPath = null
@@ -988,7 +996,12 @@ try {
     { name: 'workforce', path: '/workforce', testId: 'workforce' },
     { name: 'settings', path: '/settings', testId: 'security-posture' },
     { name: 'simulations', path: '/sim', testId: 'new-simulation' },
-    { name: 'overview', path: `/w/${workspaceId}`, testId: 'strip' },
+    // M61 R7/Task 6 selector rename: `strip` (the deleted `ProjectBrief`'s wrapper) -> `stat-work`
+    // (the Team tab's own always-rendered footer tile). The `organization` row below is UNCHANGED
+    // and out of this task's selector-rename scope -- `/organization` now redirects to `/w/:id`
+    // and `organization-rows` (the roster block) is not part of what the Team tab renders, so this
+    // row is expected to fail until a follow-up task decides what marks the redirected page ready.
+    { name: 'overview', path: `/w/${workspaceId}`, testId: 'stat-work' },
     { name: 'tasks', path: `/w/${workspaceId}/tasks`, testId: 'column' },
     { name: 'organization', path: `/w/${workspaceId}/organization`, testId: 'organization-rows' },
     { name: 'knowledge', path: `/w/${workspaceId}/knowledge`, testId: 'knowledge-counts' },

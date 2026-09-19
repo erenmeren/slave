@@ -1,41 +1,26 @@
-import { buildOrganization } from '../../../../server/organization'
-import { listProjectTeams, listRoster, listTemplates } from '../../../../server/org'
-import { listSkillCatalogue } from '../../../../server/persons'
-import { OrganizationClient } from '../../../../components/organization/OrganizationClient'
+import { redirect } from 'next/navigation'
 
 export const dynamic = 'force-dynamic'
 
 /**
- * The Organization tab (M47 R6, `docs/ia.md` tab 3): who works on this project, why they were
- * chosen, what they provide, and what the board still needs.
+ * `/organization` → `/w/:id` (M61 R7/Task 6): Team IS the project's own page now
+ * (`lib/routes.ts`'s `sectionOf` has answered `team` for this route since Task 2), and this old
+ * route is kept only as a redirect target -- every link anybody has ever saved still lands
+ * somewhere real. Query params carry over so a `?slave=` deep link still opens the same panel.
  */
-export default async function OrganizationPage({
+export default async function OrganizationRedirect({
   params,
+  searchParams,
 }: {
   params: Promise<{ workspaceId: string }>
-}): Promise<React.JSX.Element> {
+  searchParams: Promise<Record<string, string | string[] | undefined>>
+}): Promise<never> {
   const { workspaceId } = await params
-  const [view, roster, templates, teams, skillCatalogue] = await Promise.all([
-    buildOrganization(workspaceId),
-    listRoster(),
-    listTemplates(),
-    listProjectTeams(),
-    listSkillCatalogue(),
-  ])
-  if (view === null) {
-    return <div className="p-6 text-tone-blocked">no project with id {workspaceId}</div>
+  const query = new URLSearchParams()
+  for (const [k, v] of Object.entries(await searchParams)) {
+    const first = typeof v === 'string' ? v : v?.[0]
+    if (first !== undefined) query.set(k, first)
   }
-  // Keyed, like every other project tab: a client-side move between projects remounts rather than
-  // rendering the old project's rows under the new URL.
-  return (
-    <OrganizationClient
-      key={workspaceId}
-      workspaceId={workspaceId}
-      initial={view}
-      roster={roster}
-      templates={templates}
-      teams={teams}
-      skillCatalogue={skillCatalogue}
-    />
-  )
+  const qs = query.toString()
+  redirect(`/w/${workspaceId}${qs === '' ? '' : `?${qs}`}`)
 }

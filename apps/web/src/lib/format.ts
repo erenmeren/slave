@@ -30,6 +30,27 @@ export function formatTimeout(ms: number): string {
   return seconds === 0 ? `${minutes}m` : `${minutes}m${seconds}s`
 }
 
+/**
+ * `2026-09-19T10:58:00.000Z` (with `now` five minutes later) → `5m ago`; under a minute →
+ * `just now` (M61 R7).
+ *
+ * The Command strip's `NeedsYouBar` is this function's first caller -- a needs-you item's age
+ * beside its title, the way the handoff's rows read. Nothing in this tree had a RELATIVE clock
+ * before this (`GoalHistory.tsx`/`NeedsYouCard.tsx` both print the absolute `toLocaleString()`
+ * stamp instead), so this is a new function rather than a moved one. `now` is a parameter, not
+ * `Date.now()` read inside, so a test can pin the age without faking the system clock.
+ */
+export function formatAge(iso: string, now: number = Date.now()): string {
+  const ms = Math.max(0, now - Date.parse(iso))
+  const minutes = Math.floor(ms / 60_000)
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${String(minutes)}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${String(hours)}h ago`
+  const days = Math.floor(hours / 24)
+  return `${String(days)}d ago`
+}
+
 // `formatTokens` was deleted by M53 R12 with the per-slave Analytics table, which its own docstring
 // already named as "this function's one remaining caller" -- the flat worker list it was written for
 // went in M24 and `AllSlavesTable` has no Tokens column. Nothing in this tree calls it, no test

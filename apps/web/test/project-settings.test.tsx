@@ -178,15 +178,39 @@ describe('ProjectSettingsClient', () => {
   // components are untouched), so this section wraps them bare -- no second card recipe of its
   // own. Permissions/Danger have no inner `Panel` to double up with, so THEY keep the section's
   // card recipe and name themselves with an `<h2>` instead.
-  it('renders the four sections in order, one card each', () => {
+  it('renders the five sections in order, one card each', () => {
     render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
     const sectionIds = [...document.querySelectorAll('section[id]')].map((section) => section.id)
-    expect(sectionIds).toEqual(['goal', 'runtime', 'permissions', 'danger'])
+    // M61 R7/Task 6: Runbook moved off the deleted Overview, between Runtime and Permissions.
+    expect(sectionIds).toEqual(['goal', 'runtime', 'runbook', 'permissions', 'danger'])
     // `Panel` renders `PanelHeader` → `SectionLabel` as its first child when it has a title.
     const panelTitles = screen.getAllByTestId('panel').map((p) => p.firstElementChild?.textContent?.trim().toLowerCase())
     expect(panelTitles).toEqual(['goal', 'runtime'])
     expect(document.getElementById('permissions')?.querySelector('h2')?.textContent).toBe('Permissions')
     expect(document.getElementById('danger')?.querySelector('h2')?.textContent).toBe('Danger zone')
+  })
+
+  // M61 R7/Task 6: `RunbookPanel`'s own eleven testids are untouched (`runbook-panel.test.tsx`
+  // covers them); this proves the prop this page hands it actually reaches it.
+  it('renders the adopted runbook when the page loads one, and nothing when it loads none', () => {
+    const { rerender } = render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
+    expect(screen.queryByTestId('runbook-panel')).toBeNull()
+
+    rerender(
+      <ProjectSettingsClient
+        settings={settings()}
+        shellFacts={shellFacts()}
+        runbook={{
+          adopted: { key: 'feature-delivery', name: 'Feature delivery', description: 'd', stageCount: 1, source: 'seed', why: null },
+          currentStage: 'design',
+          stages: [{ key: 'design', title: 'Design', objective: 'Decide', state: 'active', taskCount: 1, capabilities: [] }],
+          recommendations: [],
+          all: [],
+          pendingDecision: null,
+        }}
+      />,
+    )
+    expect(screen.getByTestId('runbook-name').textContent).toBe('Feature delivery')
   })
 
   it("shows the three limits read-only in the sidebar's old format", () => {
@@ -203,13 +227,14 @@ describe('ProjectSettingsClient', () => {
   })
 
   // M57 R15: the sticky in-page nav, one anchor per section, the danger link in the blocked tone.
-  it('offers a sticky in-page nav to the four sections, with Danger zone in the blocked tone', () => {
+  it('offers a sticky in-page nav to the five sections, with Danger zone in the blocked tone', () => {
     render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
     const links = screen.getAllByRole('link').filter((link) => link.getAttribute('href')?.startsWith('#') === true)
-    expect(links.map((link) => link.getAttribute('href'))).toEqual(['#goal', '#runtime', '#permissions', '#danger'])
-    expect(links[3]?.className).toContain('text-s-blocked')
+    expect(links.map((link) => link.getAttribute('href'))).toEqual(['#goal', '#runtime', '#runbook', '#permissions', '#danger'])
+    expect(links[4]?.className).toContain('text-s-blocked')
     expect(document.getElementById('goal')).toBeTruthy()
     expect(document.getElementById('runtime')).toBeTruthy()
+    expect(document.getElementById('runbook')).toBeTruthy()
     expect(document.getElementById('permissions')).toBeTruthy()
     expect(document.getElementById('danger')).toBeTruthy()
   })
