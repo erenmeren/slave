@@ -222,7 +222,7 @@ export function GraphClient({
     // width exactly and not a pixel moves. The shell is here for its landmark and its
     // `page-shell` marker.
     <PageShell flush>
-      <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
+      <div className={`flex min-h-0 flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
         {view.workspace.haltedReason !== null && <HaltBanner reason={view.workspace.haltedReason} />}
         {/* M44 R3: `ui/Alert`, the same band the Overview and Tasks pages show. */}
         {error !== null && <Alert variant="notice">showing stale data: {error}</Alert>}
@@ -246,7 +246,12 @@ export function GraphClient({
           />
         </div>
         <div className="relative flex min-h-0 flex-1">
-          <div className="relative min-w-0 flex-1">
+          {/* M61 Task 10: `min-h-0` alongside the `flex-1` this container already had -- React
+            * Flow's own canvas needs a DEFINITE height to size its pane against, not a `ScrollArea`
+            * (it owns its own pan/zoom viewport, and a scrolling ancestor would fight its wheel
+            * handling). `min-h-0` is what lets this container actually SHRINK to the row's bounded
+            * height above it instead of growing to whatever the canvas measures itself at. */}
+          <div className="relative min-h-0 min-w-0 flex-1">
             {mode === 'org' && (
               <>
                 <GraphCanvas nodes={positionedOrgNodes} edges={visibleOrgEdges} nodeTypes={ORG_NODE_TYPES} onNodeClick={onNodeClick} />

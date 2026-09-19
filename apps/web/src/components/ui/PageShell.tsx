@@ -16,6 +16,16 @@ import { SectionLabel } from './SectionLabel'
  * descendant shrinking to fit the frame -- which is what a page with its own internal
  * `min-h-0 flex-1` scroll region (e.g. `PeopleTable`'s virtualized table) needs from every
  * ancestor between it and the viewport.
+ *
+ * `children` render inside their OWN `flex min-h-0 flex-1 flex-col` wrapper now (M61 Task 10):
+ * the title row and `tabs` slot stay outside it (they are fixed, never scrolling), so a page
+ * whose whole body is one `ui/ScrollArea` gets a bounded ancestor for free and needs no flex
+ * wrapper of its own at all (`EvidenceTab`, `SkillsClient`'s two columns). A page with more than
+ * one top-level element still carries its OWN `flex min-h-0 flex-1 flex-col` div, same as
+ * before -- this wrapper only guarantees that div's own PARENT is bounded rather than growing to
+ * fit it, one more link in the chain rather than a replacement for the page's own. `flush` is
+ * unaffected: it only ever touched the ROOT's own `gap-4 p-3 md:p-4`, and this wrapper carries no
+ * padding or gap of its own either way.
  */
 export function PageShell({
   title,
@@ -50,7 +60,7 @@ export function PageShell({
         </div>
       )}
       {tabs}
-      {children}
+      <div className="flex min-h-0 flex-1 flex-col">{children}</div>
     </div>
   )
 }

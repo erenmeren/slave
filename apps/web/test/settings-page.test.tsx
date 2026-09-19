@@ -859,7 +859,10 @@ describe('SettingsClient (M44 E25 / M45 R5)', () => {
     renderSettings({ adapters: [], showReseed: false, mode: 'loopback-only', posture: 'loopback-only · no accounts · cross-site requests refused' })
     const shell = screen.getByTestId('page-shell')
     expect(shell.className).not.toContain('p-3')
-    expect(shell.querySelector(':scope > div')?.className).toBe(
+    // M61 Task 10: `PageShell`'s `children` render inside their own `flex min-h-0 flex-1
+    // flex-col` body wrapper now, one level deeper than the shell's own root -- this page's
+    // two-column grid is that wrapper's own child.
+    expect(shell.querySelector(':scope > div > div')?.className).toBe(
       'grid min-h-0 flex-1 grid-cols-[180px_minmax(0,760px)] gap-[var(--gap-3)] p-[var(--gap-3)]',
     )
   })

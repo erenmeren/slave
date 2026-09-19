@@ -23,6 +23,7 @@ import { Alert } from '../ui/Alert'
 import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
 import { DangerConfirm } from '../ui/DangerConfirm'
+import { DataTable } from '../ui/DataTable'
 import { DetailsGroup } from '../ui/DetailsGroup'
 import { Drawer } from '../ui/Drawer'
 import { EmptyState } from '../ui/EmptyState'
@@ -32,6 +33,30 @@ import { Panel } from '../ui/Panel'
 import { SectionLabel } from '../ui/SectionLabel'
 import { Segmented } from '../ui/Segmented'
 import { StatusPill, type StatusTone } from '../ui/StatusPill'
+
+/**
+ * The row grid every `knowledge-row` article already drew (M57 R10): a fixed classification
+ * rail, the substance in the middle, and the live actions on the right. `DataTable`'s own
+ * `columns`/`header` line up with this same template (M61 Task 10) -- the article's markup
+ * inside each row is unchanged; only the list around it is now `DataTable`'s virtualized body.
+ */
+const ROW_COLUMNS = '110px minmax(0,1fr) 190px'
+const ROW_HEADER = ['kind', 'memory', 'actions'] as const
+
+/**
+ * The virtualizer's starting guess for one row's height (M61 Task 10), corrected on paint by
+ * nothing here -- unlike `PeopleTable`'s `--row-h` (a fixed, single-line 40/34px table row), a
+ * knowledge row is a multi-line card whose height genuinely varies with its body text and with
+ * whether its `DetailsGroup` fold is open, and `DataTable`'s `virtualized` contract (copied
+ * verbatim from `PeopleTable`'s own wiring) has no per-row measurement hook to correct an
+ * estimate against. This is a deliberately generous guess at a "live" row's typical height
+ * (three classification chips beside a title, a body line, a provenance chip and three stacked
+ * actions) -- an outlier row (an unusually long body, or a fold left open while scrolled far
+ * away) can still overlap its neighbour by a few pixels, same as any fixed-row virtualizer asked
+ * to hold variable content. Bounded and cosmetic, not a functional break: the list still scrolls
+ * and every row still renders, in order, by index.
+ */
+const ESTIMATED_ROW_HEIGHT = 200
 
 /**
  * The tone a memory's life is painted in. Literal per status (Tailwind v4 generates only what it
@@ -228,9 +253,146 @@ export function KnowledgeClient({
     return null
   }
 
+  /**
+   * One `knowledge-row` article, drawn by index -- `DataTable`'s `virtualized.render` (M61 Task
+   * 10, copied from `PeopleTable`'s own wiring). The markup below is byte-identical to what this
+   * component's `view.rows.map` rendered directly before this task; only the list around it
+   * changed. Kept as a function rather than inlined so the same JSX serves `virtualized.render`.
+   */
+  const renderRow = (index: number): React.ReactNode => {
+    const row = view.rows[index]
+    if (row === undefined) return null
+    const { memory } = row
+    const live = LIVE.includes(memory.status)
+    return (
+      <article
+        key={memory.id}
+        data-testid="knowledge-row"
+        data-memory-id={memory.id}
+        data-memory-type={memory.type}
+        data-memory-status={memory.status}
+        data-memory-scope={memory.scope}
+        className="flex flex-col overflow-hidden rounded-panel border border-line bg-bg-1 shadow-resting"
+      >
+        {/* The README's three-column row (M57 R10): a fixed classification rail, the
+          * substance in the middle, and the live actions on the right -- `190px` is the
+          * remove-reason input's own width below, not a coincidence. */}
+        <div className="grid grid-cols-[110px_minmax(0,1fr)_190px] gap-[14px] border-b border-line px-4 py-3">
+          <div className="flex flex-col items-start gap-1.5">
+            <Chip testId="knowledge-type" title={memory.type}>
+              {row.typeLabel}
+            </Chip>
+            <Chip testId="knowledge-scope" title={memory.scope}>
+              {row.scopeLabel}
+            </Chip>
+            <StatusPill tone={STATUS_TONE[memory.status]} label={row.statusLabel} title={memory.status} />
+          </div>
+
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <span className="min-w-0 text-sm text-text-1">{memory.title}</span>
+            <p className="text-xs text-text-2">{memory.body}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <span data-testid="knowledge-provenance" className="text-[11px] text-text-3">
+                {row.provenance}
+              </span>
+              <Chip testId="knowledge-confidence" title={memory.confidence}>
+                {row.confidenceLabel}
+              </Chip>
+            </div>
+            {memory.removedReason !== null && (
+              <span data-testid="knowledge-removed-reason" className="text-[11px] text-tone-blocked">
+                withdrawn: {memory.removedReason}
+              </span>
+            )}
+          </div>
+
+          {live && (
+            <div className="flex flex-col items-start gap-2">
+              {memory.status === 'candidate' && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  data-testid="knowledge-verify"
+                  disabled={busyId === memory.id}
+                  onClick={() => void verify(row)}
+                >
+                  Verify
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                data-testid="knowledge-correct"
+                onClick={() => {
+                  setCorrecting(row)
+                  setDraft({ title: memory.title, body: memory.body })
+                  setCorrectError(null)
+                }}
+              >
+                Correct
+              </Button>
+              <input
+                data-testid="knowledge-remove-reason"
+                value={reasons[memory.id] ?? ''}
+                onChange={(event) => setReasons((was) => ({ ...was, [memory.id]: event.target.value }))}
+                placeholder="why withdraw this?"
+                aria-label="why withdraw this"
+                className={`${INPUT_SHELL} w-[190px] text-xs`}
+              />
+              <DangerConfirm
+                label="Remove"
+                testId="knowledge-remove"
+                confirmText="remove"
+                confirmName="confirm removing this memory"
+                onConfirm={async () => remove(row)}
+              />
+            </div>
+          )}
+        </div>
+
+        {errors[memory.id] !== undefined && (
+          <span role="alert" data-testid="knowledge-error" className="px-4 pt-3 text-[11px] text-tone-blocked">
+            {errors[memory.id]}
+          </span>
+        )}
+
+        {/* Folded, never hidden: the ids, the raw source kind and the capability keys live
+          * INSIDE the group, so the row above stays a sentence a person reads
+          * (`DetailsGroup`'s own rule). */}
+        <div className="px-4 pb-3 pt-3">
+          <DetailsGroup group="provenance" title="Where this came from">
+            <dl data-testid="knowledge-chain" className="flex flex-col gap-1 font-mono text-[10px] text-text-3">
+              <ChainRow label="replaced" ids={row.supersedesIds} titles={view.memoryTitles} />
+              <ChainRow
+                label="replaced by"
+                ids={memory.supersededById === null ? [] : [memory.supersededById]}
+                titles={view.memoryTitles}
+              />
+              <ChainRow label="summarises" ids={memory.sourceIds} titles={view.memoryTitles} />
+              <Fact label="this memory">{memory.id}</Fact>
+              <Fact label="source">{memory.provenance.sourceKind}</Fact>
+              {memory.provenance.sourceRef !== null && <Fact label="reference">{memory.provenance.sourceRef}</Fact>}
+              {memory.provenance.runId !== null && <Fact label="run">{memory.provenance.runId}</Fact>}
+              {memory.provenance.goalVersion !== null && (
+                <Fact label="goal version">{String(memory.provenance.goalVersion)}</Fact>
+              )}
+              {row.taskTitle !== null && <Fact label="task">{row.taskTitle}</Fact>}
+            </dl>
+            {row.capabilities.length > 0 && (
+              <div className="flex flex-col gap-1">
+                <SectionLabel>asked for by</SectionLabel>
+                <CapabilityChips capabilities={row.capabilities} max={row.capabilities.length} />
+              </div>
+            )}
+          </DetailsGroup>
+        </div>
+      </article>
+    )
+  }
+
   return (
     <PageShell flush>
-      <div className="flex flex-col gap-[11px] px-[20px] pt-[16px]">
+      <div className="flex min-h-0 flex-1 flex-col gap-[11px] px-[20px] pt-[16px]">
         {stale && (
           <Alert variant="error" testId="knowledge-stale">
             could not refresh this page — showing the last answer.
@@ -345,135 +507,12 @@ export function KnowledgeClient({
             />
           </Panel>
         ) : (
-          <div data-testid="knowledge-rows" className="flex flex-col gap-[11px]">
-            {view.rows.map((row) => {
-              const { memory } = row
-              const live = LIVE.includes(memory.status)
-              return (
-                <article
-                  key={memory.id}
-                  data-testid="knowledge-row"
-                  data-memory-id={memory.id}
-                  data-memory-type={memory.type}
-                  data-memory-status={memory.status}
-                  data-memory-scope={memory.scope}
-                  className="flex flex-col overflow-hidden rounded-panel border border-line bg-bg-1 shadow-resting"
-                >
-                  {/* The README's three-column row (M57 R10): a fixed classification rail, the
-                    * substance in the middle, and the live actions on the right -- `190px` is the
-                    * remove-reason input's own width below, not a coincidence. */}
-                  <div className="grid grid-cols-[110px_minmax(0,1fr)_190px] gap-[14px] border-b border-line px-4 py-3">
-                    <div className="flex flex-col items-start gap-1.5">
-                      <Chip testId="knowledge-type" title={memory.type}>
-                        {row.typeLabel}
-                      </Chip>
-                      <Chip testId="knowledge-scope" title={memory.scope}>
-                        {row.scopeLabel}
-                      </Chip>
-                      <StatusPill tone={STATUS_TONE[memory.status]} label={row.statusLabel} title={memory.status} />
-                    </div>
-
-                    <div className="flex min-w-0 flex-col gap-1.5">
-                      <span className="min-w-0 text-sm text-text-1">{memory.title}</span>
-                      <p className="text-xs text-text-2">{memory.body}</p>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span data-testid="knowledge-provenance" className="text-[11px] text-text-3">
-                          {row.provenance}
-                        </span>
-                        <Chip testId="knowledge-confidence" title={memory.confidence}>
-                          {row.confidenceLabel}
-                        </Chip>
-                      </div>
-                      {memory.removedReason !== null && (
-                        <span data-testid="knowledge-removed-reason" className="text-[11px] text-tone-blocked">
-                          withdrawn: {memory.removedReason}
-                        </span>
-                      )}
-                    </div>
-
-                    {live && (
-                      <div className="flex flex-col items-start gap-2">
-                        {memory.status === 'candidate' && (
-                          <Button
-                            variant="primary"
-                            size="sm"
-                            data-testid="knowledge-verify"
-                            disabled={busyId === memory.id}
-                            onClick={() => void verify(row)}
-                          >
-                            Verify
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          data-testid="knowledge-correct"
-                          onClick={() => {
-                            setCorrecting(row)
-                            setDraft({ title: memory.title, body: memory.body })
-                            setCorrectError(null)
-                          }}
-                        >
-                          Correct
-                        </Button>
-                        <input
-                          data-testid="knowledge-remove-reason"
-                          value={reasons[memory.id] ?? ''}
-                          onChange={(event) => setReasons((was) => ({ ...was, [memory.id]: event.target.value }))}
-                          placeholder="why withdraw this?"
-                          aria-label="why withdraw this"
-                          className={`${INPUT_SHELL} w-[190px] text-xs`}
-                        />
-                        <DangerConfirm
-                          label="Remove"
-                          testId="knowledge-remove"
-                          confirmText="remove"
-                          confirmName="confirm removing this memory"
-                          onConfirm={async () => remove(row)}
-                        />
-                      </div>
-                    )}
-                  </div>
-
-                  {errors[memory.id] !== undefined && (
-                    <span role="alert" data-testid="knowledge-error" className="px-4 pt-3 text-[11px] text-tone-blocked">
-                      {errors[memory.id]}
-                    </span>
-                  )}
-
-                  {/* Folded, never hidden: the ids, the raw source kind and the capability keys live
-                    * INSIDE the group, so the row above stays a sentence a person reads
-                    * (`DetailsGroup`'s own rule). */}
-                  <div className="px-4 pb-3 pt-3">
-                    <DetailsGroup group="provenance" title="Where this came from">
-                      <dl data-testid="knowledge-chain" className="flex flex-col gap-1 font-mono text-[10px] text-text-3">
-                        <ChainRow label="replaced" ids={row.supersedesIds} titles={view.memoryTitles} />
-                        <ChainRow
-                          label="replaced by"
-                          ids={memory.supersededById === null ? [] : [memory.supersededById]}
-                          titles={view.memoryTitles}
-                        />
-                        <ChainRow label="summarises" ids={memory.sourceIds} titles={view.memoryTitles} />
-                        <Fact label="this memory">{memory.id}</Fact>
-                        <Fact label="source">{memory.provenance.sourceKind}</Fact>
-                        {memory.provenance.sourceRef !== null && <Fact label="reference">{memory.provenance.sourceRef}</Fact>}
-                        {memory.provenance.runId !== null && <Fact label="run">{memory.provenance.runId}</Fact>}
-                        {memory.provenance.goalVersion !== null && (
-                          <Fact label="goal version">{String(memory.provenance.goalVersion)}</Fact>
-                        )}
-                        {row.taskTitle !== null && <Fact label="task">{row.taskTitle}</Fact>}
-                      </dl>
-                      {row.capabilities.length > 0 && (
-                        <div className="flex flex-col gap-1">
-                          <SectionLabel>asked for by</SectionLabel>
-                          <CapabilityChips capabilities={row.capabilities} max={row.capabilities.length} />
-                        </div>
-                      )}
-                    </DetailsGroup>
-                  </div>
-                </article>
-              )
-            })}
+          <div data-testid="knowledge-rows" className="flex min-h-0 flex-1 flex-col">
+            <DataTable
+              columns={ROW_COLUMNS}
+              header={[...ROW_HEADER]}
+              virtualized={{ rowHeight: ESTIMATED_ROW_HEIGHT, count: view.rows.length, render: renderRow }}
+            />
           </div>
         )}
       </div>

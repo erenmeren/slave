@@ -6,6 +6,7 @@ import { BarChart } from './BarChart'
 import { KpiStrip } from './analytics/KpiStrip'
 import { PageShell } from './ui/PageShell'
 import { Panel } from './ui/Panel'
+import { ScrollArea } from './ui/ScrollArea'
 
 /**
  * The Analytics page (spec §5.9, design README "3a — Analytics"): a workspace selector, five
@@ -52,7 +53,7 @@ export function AnalyticsClient({
     // width exactly and not a pixel moves. The shell is here for its landmark and its
     // `page-shell` marker.
     <PageShell flush>
-      <div className="flex flex-col gap-4 p-4">
+      <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
         <div className="flex items-center justify-between gap-3">
           <h1 className="text-[15px] font-semibold tracking-[-.2px] text-text-1">analytics</h1>
           <select
@@ -71,32 +72,40 @@ export function AnalyticsClient({
           </select>
         </div>
 
-        {/* M44 t3: the strip is `analytics/KpiStrip` now, so the Projects home's all-workspaces
-          * section renders the same five tiles from the same builder rather than a second recipe. */}
-        <KpiStrip kpis={snapshot.kpis} />
+        {/* M61 Task 10: the workspace selector stays fixed above -- the KPI strip and the two
+          * panels below are the page's own scrolling body, in `ui/ScrollArea` now. The inner
+          * `gap-4` reproduces exactly the gap this content had as a direct child of the row
+          * above, so nothing moves a pixel. */}
+        <ScrollArea>
+          <div className="flex flex-col gap-4">
+            {/* M44 t3: the strip is `analytics/KpiStrip` now, so the Projects home's all-workspaces
+              * section renders the same five tiles from the same builder rather than a second recipe. */}
+            <KpiStrip kpis={snapshot.kpis} />
 
-        <div className="grid grid-cols-2 gap-[16px]">
-          <Panel title="tasks completed · 7 days">
-            <p data-testid="analytics-caption" className="font-mono text-[9.5px] text-text-3">
-              {seeded ? 'Last 7 days · seeded development data' : 'Last 7 days'}
-            </p>
-            <BarChart series={snapshot.series} height={180} label="tasks completed, last 7 days" />
-          </Panel>
+            <div className="grid grid-cols-2 gap-[16px]">
+              <Panel title="tasks completed · 7 days">
+                <p data-testid="analytics-caption" className="font-mono text-[9.5px] text-text-3">
+                  {seeded ? 'Last 7 days · seeded development data' : 'Last 7 days'}
+                </p>
+                <BarChart series={snapshot.series} height={180} label="tasks completed, last 7 days" />
+              </Panel>
 
-          <Panel title="how this workforce is doing">
-            {/* `docs/ia.md` rule 2: nothing is removed, only moved. The per-slave table that stood
-              * here counted one project's materialised workers and summed `costUsd` raw -- no
-              * provenance, no profile, no model, no domain. Its questions are answered on the
-              * Evidence tab, per PROFILE and per MODEL, which are two different questions. */}
-            <p className="text-xs text-text-2">
-              Per-profile and per-model evidence — counts, rates and what it cost —{' '}
-              <a data-testid="evidence-link" className="underline" href="/workforce?tab=evidence">
-                moved to Workforce → Evidence
-              </a>
-              .
-            </p>
-          </Panel>
-        </div>
+              <Panel title="how this workforce is doing">
+                {/* `docs/ia.md` rule 2: nothing is removed, only moved. The per-slave table that stood
+                  * here counted one project's materialised workers and summed `costUsd` raw -- no
+                  * provenance, no profile, no model, no domain. Its questions are answered on the
+                  * Evidence tab, per PROFILE and per MODEL, which are two different questions. */}
+                <p className="text-xs text-text-2">
+                  Per-profile and per-model evidence — counts, rates and what it cost —{' '}
+                  <a data-testid="evidence-link" className="underline" href="/workforce?tab=evidence">
+                    moved to Workforce → Evidence
+                  </a>
+                  .
+                </p>
+              </Panel>
+            </div>
+          </div>
+        </ScrollArea>
       </div>
     </PageShell>
   )

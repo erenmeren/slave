@@ -588,3 +588,18 @@ describe('SimulationClient', () => {
     })
   })
 })
+
+// M61 Task 10 (R19): the controls/panels/tabs below the strip are this page's scrolling body, in
+// `ui/ScrollArea` now, and no `SectionLabel` on the page carries `uppercase`/`font-mono` on top
+// of `.type-label`.
+describe('SimulationClient (M61 Task 10)', () => {
+  it('wraps its scrolling body in a ScrollArea, and carries no uppercase/font-mono SectionLabel', () => {
+    render(<SimulationClient initial={snapshot()} />)
+    expect(document.querySelector('[data-scroll-axis]')).toBeTruthy()
+
+    const offenders = [...document.querySelectorAll('.type-label')].filter((element) =>
+      element.className.split(' ').some((cls) => cls === 'uppercase' || cls === 'font-mono'),
+    )
+    expect(offenders).toHaveLength(0)
+  })
+})

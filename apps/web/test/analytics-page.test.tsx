@@ -79,8 +79,9 @@ describe('AnalyticsClient', () => {
   it('pads the page the way the other global pages do', () => {
     render(<AnalyticsClient snapshot={snapshot()} workspaces={workspaces} seeded={false} />)
     // M45 R5: the page's own frame is one level in now, under the flush `PageShell`. The padding
-    // is still the page's own -- that is exactly what `flush` is for.
-    expect(screen.getByTestId('page-shell').querySelector(':scope > div')?.className).toContain('p-4')
+    // is still the page's own -- that is exactly what `flush` is for. M61 Task 10: one level
+    // deeper again, under `PageShell`'s own `children` body wrapper.
+    expect(screen.getByTestId('page-shell').querySelector(':scope > div > div')?.className).toContain('p-4')
   })
 
   it('shows the seeded caption only on the seeded workspace', () => {
@@ -109,6 +110,25 @@ describe('AnalyticsClient (M44 E25 / M45 R5)', () => {
     render(<AnalyticsClient snapshot={snapshot()} workspaces={workspaces} seeded={false} />)
     const shell = screen.getByTestId('page-shell')
     expect(shell.className).not.toContain('p-3')
-    expect(shell.querySelector(':scope > div')?.className).toBe('flex flex-col gap-4 p-4')
+    // M61 Task 10: `PageShell`'s `children` render inside their own `flex min-h-0 flex-1
+    // flex-col` body wrapper now, one level deeper than the shell's own root -- and this page's
+    // own root picked up `min-h-0 flex-1` too, to participate in that same chain for its new
+    // `ScrollArea`.
+    expect(shell.querySelector(':scope > div > div')?.className).toBe('flex min-h-0 flex-1 flex-col gap-4 p-4')
+  })
+})
+
+// M61 Task 10 (R19): the KPI strip and the two panels are this page's scrolling body, in
+// `ui/ScrollArea` now, and no `SectionLabel` on the page carries `uppercase`/`font-mono` on top
+// of `.type-label`.
+describe('AnalyticsClient (M61 Task 10)', () => {
+  it('wraps its scrolling body in a ScrollArea, and carries no uppercase/font-mono SectionLabel', () => {
+    render(<AnalyticsClient snapshot={snapshot()} workspaces={workspaces} seeded={false} />)
+    expect(document.querySelector('[data-scroll-axis]')).toBeTruthy()
+
+    const offenders = [...document.querySelectorAll('.type-label')].filter((element) =>
+      element.className.split(' ').some((cls) => cls === 'uppercase' || cls === 'font-mono'),
+    )
+    expect(offenders).toHaveLength(0)
   })
 })

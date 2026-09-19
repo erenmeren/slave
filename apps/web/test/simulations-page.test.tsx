@@ -216,7 +216,23 @@ describe('SimulationsClient (M44 E25 / M45 R5)', () => {
     render(<SimulationsClient cards={[]} companiesBySector={companiesBySector} />)
     const shell = screen.getByTestId('page-shell')
     expect(shell.className).not.toContain('p-3')
-    // `p-6`, not the shell's `p-4`: `flush` is what lets this page keep it.
-    expect(shell.querySelector(':scope > div')?.className).toBe('flex flex-col gap-4 p-6')
+    // `p-6`, not the shell's `p-4`: `flush` is what lets this page keep it. M61 Task 10: one
+    // level deeper, under `PageShell`'s own `children` body wrapper, and `min-h-0 flex-1` added
+    // to this page's own root so its new `ScrollArea` has a bounded height to fill.
+    expect(shell.querySelector(':scope > div > div')?.className).toBe('flex min-h-0 flex-1 flex-col gap-4 p-6')
+  })
+})
+
+// M61 Task 10 (R19): the simulation-card grid is this page's scrolling body, in `ui/ScrollArea`
+// now, and no `SectionLabel` on the page carries `uppercase`/`font-mono` on top of `.type-label`.
+describe('SimulationsClient (M61 Task 10)', () => {
+  it('wraps the card grid in a ScrollArea, and carries no uppercase/font-mono SectionLabel', () => {
+    render(<SimulationsClient cards={[card()]} companiesBySector={companiesBySector} />)
+    expect(document.querySelector('[data-scroll-axis]')).toBeTruthy()
+
+    const offenders = [...document.querySelectorAll('.type-label')].filter((element) =>
+      element.className.split(' ').some((cls) => cls === 'uppercase' || cls === 'font-mono'),
+    )
+    expect(offenders).toHaveLength(0)
   })
 })
