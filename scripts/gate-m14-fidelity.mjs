@@ -739,6 +739,19 @@ try {
   // 1440x900 (spec §6 stage 1), wider than m11/m13's 1280 -- the Slaves grid's `1fr` column needs
   // the room, and a screenshot taken at a narrower width is not the design being reviewed.
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+  // M61 R21: the committed evidence is SIMPLE MODE, DARK -- the mode and the palette a person who
+  // has never chosen gets on a dark desktop, which is what the mockups were drawn in. `mode` is
+  // written explicitly rather than left absent so a stale profile cannot photograph the other one,
+  // and `theme` is `dark` because `prefers-color-scheme` in a headless Chromium is light and these
+  // pictures are the product's own default look, not the browser's.
+  await context.addInitScript(() => {
+    try {
+      window.localStorage.setItem('mode', 'simple')
+      window.localStorage.setItem('theme', 'dark')
+    } catch {
+      /* the numbers below fail loudly rather than the pictures quietly changing palette */
+    }
+  })
   page = await context.newPage()
   page.setDefaultTimeout(ACTION_TIMEOUT_MS)
   // The browser's own console, kept for the failure dump: a page that renders on the server and
@@ -777,7 +790,11 @@ try {
     // M47 R6: the project's fifth tab. In `PAGES` and deliberately NOT in `LIVE_PAGES` -- the rows
     // it lists are who is on the project and what they provide, and neither of those changes when
     // a run goes live, so a second capture would be a diff that says nothing.
-    { name: 'organization', path: () => `/w/${workspaceId}/organization`, testId: 'organization-rows' },
+    // M61 R7: `/w/:id/organization` REDIRECTS (307, query preserved) to the Team tab, which is
+    // this page's content now -- so its committed picture is of the Team tab, which is the truth
+    // of what that URL shows a person. The marker moves with it: `organization-rows` is the
+    // developer-mode roster and these pictures are taken in simple mode.
+    { name: 'organization', path: () => `/w/${workspaceId}/organization`, testId: 'team-live' },
     // M49 R6: the project's fourth tab. In `PAGES` and deliberately NOT in `LIVE_PAGES` -- what a project
     // has LEARNT does not change because a run went live, so a second capture would be a diff that says
     // nothing. `knowledge-counts` is its structural marker rather than `knowledge-rows`, for
@@ -791,20 +808,24 @@ try {
     // reads its inline `left` regardless of size) and required VISIBLE in the live re-capture pass
     // below, once the run has put real rows in the river.
     { name: 'activity', path: () => `/w/${workspaceId}/activity`, testId: 'timeline-viewport' },
-    // M61 Task 8 selector rename: `project-card` -> `project-row` (Home's list, `ProjectRowItem.tsx`).
-    { name: 'projects', path: () => '/', testId: 'project-row' },
+    // M61 R11/Task 8: `/` is HOME now -- a list of `project-row`s beside the Happening now feed,
+    // not a grid of `project-card`s -- so the picture is named for the page it is of. `projects.png`
+    // is removed in the same commit; no route lost its screenshot, one was renamed with its page.
+    { name: 'home', path: () => '/', testId: 'project-row' },
     { name: 'skills', path: () => '/skills', testId: 'empty-tile' },
     { name: 'analytics', path: () => `/analytics?workspace=${workspaceId}`, testId: 'kpi-tile' },
     // The GLOBAL Settings page (M24 §4): provider adapters, security, danger zone -- the
     // permission matrix moved to the project Settings tab, so `security-posture` is this page's
     // own structural marker now (`perm-caption` is asserted separately, on `/w/<id>/settings`,
     // right after the README numbers below).
-    { name: 'settings', path: () => '/settings', testId: 'security-posture' },
+    { name: 'settings', path: () => '/settings', testId: 'settings-providers' },
     // M44 R8: the two pages M14 never covered. Office postdates M14 (M28) and the project Settings
     // tab's numbers were only ever asserted in stage 2a -- neither had a committed screenshot, so
     // neither had any protection against a redesign at all.
     { name: 'office', path: () => `/w/${workspaceId}/office`, testId: 'office-canvas' },
-    { name: 'project-settings', path: () => `/w/${workspaceId}/settings`, testId: 'perm-caption' },
+    // M61 R13/Task 9: only the chosen section mounts, and `?section=goal` is the one a project's
+    // Settings opens on -- so that is the picture.
+    { name: 'project-settings', path: () => `/w/${workspaceId}/settings?section=goal`, testId: 'settings-goal' },
   ]
   /** The four pages whose content changes once a run is live; re-captured after stage 4b so the
    *  committed evidence shows the design doing its job, not an empty board.
@@ -923,51 +944,41 @@ try {
   // only on an ACTIVE edge, which needs a live run, so it is asserted as stage 2b after stage 4b
   // dispatches one.
   const NUMBERS = [
-    // M61 erratum E9: the rail replaces the tree; the selector is renamed to match (`aria-label`
-    // "Primary" -> "Main") but the 236px value is UNCHANGED here -- the rail is 56px collapsed
-    // (208px on hover) and this number is stale until `gate:m14-fidelity` regenerates (spec R21).
-    ['overview', `/w/${workspaceId}`, 'nav[aria-label="Main"]', 'width', '236px'],
-    // M57 R7: the project header is the ROOT layout's `app-header` now, on every page in the
-    // product rather than only `/w/<id>/*`, and the handoff's number for it is 54px.
-    ['overview', `/w/${workspaceId}`, '[data-testid="app-header"]', 'height', '54px'],
-    // M57 R8: the third column. 372px open, and the 52px dock it collapses to is
-    // `gate:m57-ui-redesign` stage 8's, because it takes a click to exist.
-    ['overview', `/w/${workspaceId}`, '[data-testid="right-panel"]', 'width', '372px'],
-    // M61 R7/Task 6 leaves this row UNCHANGED and KNOWN BROKEN, deliberately: `needs-you-empty`
-    // does not exist any more -- the command strip's `NeedsYouBar` renders NOTHING at all with an
-    // empty queue (spec-required: `command-strip.test.tsx` pins "with none, needs-you is absent"),
-    // not an empty-state placeholder the old card drew. There is no testid to rename this row TO;
-    // fixing it means picking a different element to measure, which is a bigger edit than a
-    // selector rename and is left for a follow-up task (see the Task 6 report).
-    ['overview', `/w/${workspaceId}`, '[data-testid="needs-you-empty"]', 'border-radius', '12px'],
-    // M61 R7/Task 6 selector rename: `brief-tile` -> `stat-work` (the Team tab's footer `Stat`),
-    // same `rounded-surface` 12px radius the old fact tile carried.
+    // RECONCILED TO M61 (spec R21). The README's numbers are the M61 handoff's now: three radius
+    // TOKENS instead of eleven ad-hoc values, a 56px rail, a 48px header, a 340px panel, a 40px
+    // row and a 14px body in simple mode (13px in developer -- `gate:m57-ui-redesign` measures
+    // that one, in the mode it belongs to).
+    //
+    // The rail (R5): 56px in its track. It expands to 208px on hover, over the content, which is
+    // a hover state and not a layout number.
+    ['overview', `/w/${workspaceId}`, 'nav[aria-label="Main"]', 'width', '56px'],
+    // The header (R6, spec §4): 48px, on every page in the product.
+    ['overview', `/w/${workspaceId}`, '[data-testid="app-header"]', 'height', '48px'],
+    // The third column (R4): 340px open -- narrowed from M57's 372 so 1024 keeps a usable middle.
+    // The 52px dock it collapses to is `gate:m57-ui-redesign` stage 8's, because it takes a click.
+    ['overview', `/w/${workspaceId}`, '[data-testid="right-panel"]', 'width', '340px'],
+    // The frame's floor (R4): 1024x680, down from M57's 1280 -- a desktop app window is smaller
+    // than a browser tab.
+    ['overview', `/w/${workspaceId}`, '[data-testid="app-shell"]', 'min-width', '1024px'],
+    ['overview', `/w/${workspaceId}`, '[data-testid="app-shell"]', 'min-height', '680px'],
+    // The density scale (R3): 14px body in simple mode.
+    ['overview', `/w/${workspaceId}`, 'body', 'font-size', '14px'],
+    // `--radius-surface` (12px), on the two surfaces R16 gives it: a `Card` and a `Stat`.
+    ['overview', `/w/${workspaceId}`, '[data-testid="team-card"]', 'border-radius', '12px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="stat-work"]', 'border-radius', '12px'],
-    // M61 R7/Task 6 leaves this row UNCHANGED and KNOWN BROKEN, deliberately: `TeamCard` (`ui/Card`)
-    // pads `p-3` (12px on all four sides), not the README row's `10px 14px` -- a bare rename would
-    // leave a WRONG expected value on screen, not a passing one. Left for a follow-up task with a
-    // real measurement pass against the rendered Team tab (see the Task 6 report).
-    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"]', 'padding', '10px 14px'],
-    // M61 R7/Task 6 selector rename: `slave-card` -> `team-card`. The VALUE is unchanged and still
-    // true -- `TeamCard` renders the SAME `ui/AvatarTile size="md"` (30x30) the old row did.
+    // The avatar tile is unchanged from M14: `ui/AvatarTile size="md"` is 30x30 wherever it is.
     ['overview', `/w/${workspaceId}`, '[data-testid="team-card"] [data-testid="avatar-tile"]', 'width', '30px'],
     ['overview', `/w/${workspaceId}`, '[data-testid="team-card"] [data-testid="avatar-tile"]', 'height', '30px'],
-    // M61 R7/Task 6 leaves this row UNCHANGED and KNOWN BROKEN, deliberately: `TeamCard` draws its
-    // own `LiveDot`, not `ui/StatusPill` -- there is no `status-pill` inside `team-card` to rename
-    // this selector to. Left for a follow-up task (see the Task 6 report).
-    ['overview', `/w/${workspaceId}`, '[data-testid="slave-card"] [data-testid="status-pill"]', 'border-radius', '999px'],
-    // M61 R7/Task 6 leaves this row UNCHANGED and KNOWN BROKEN, deliberately: `LiveEventsPanel`
-    // moved to `components/activity/OverviewPanels.tsx` and is not wired into any page yet (Task
-    // 7's raw activity river). Left for that task to re-measure once it has a home again.
-    ['overview', `/w/${workspaceId}`, '[data-testid="live-events"]', 'width', '340px'],
-    ['tasks', `/w/${workspaceId}/tasks`, '[data-testid="task-card"]', 'border-radius', '10px'],
-    // M61 Task 8 selector rename, and left UNCHANGED and KNOWN BROKEN, deliberately: the deleted
-    // `ProjectsClient` drew `project-card` as a `Card` (`rounded-page-card`, 14px); Home's
-    // `project-row` (`ProjectRowItem.tsx`) is a table row, `rounded-control` (`--radius-control`,
-    // 8px) -- a bare rename passes the SELECTOR but not the number. Fixing the number is a
-    // measurement pass against the new row, not a selector edit, and is left for a follow-up task
-    // (the same idiom this file already carries for `needs-you-empty`/`slave-card` above).
-    ['projects', '/', '[data-testid="project-row"]', 'border-radius', '14px'],
+    // The Team card's own state pill is `--radius-pill` (999px), the same pill M14 measured on the
+    // old `slave-card` -- `StatusPill` kept its name, its testid and its shape (R16).
+    ['overview', `/w/${workspaceId}`, '[data-testid="team-card"] [data-testid="status-pill"]', 'border-radius', '999px'],
+    // The board (R9): a task card is `--radius-surface` now, up from `rounded-card`'s 10px.
+    ['tasks', `/w/${workspaceId}/tasks`, '[data-testid="task-card"]', 'border-radius', '12px'],
+    // Home (R11): a `project-row` is one `--row-h` row with `--radius-control` corners.
+    ['home', '/', '[data-testid="project-row"]', 'height', '40px'],
+    ['home', '/', '[data-testid="project-row"]', 'border-radius', '8px'],
+    // `--radius-control` (8px) on a real `ui/Button` -- Home's own `+ New project` header action.
+    ['home', '/', '[data-testid="new-project"]', 'border-radius', '8px'],
     // M57 t8 fix round 1, ruling T8-3: the row's geometry moved (`ActivityCard.tsx`'s
     // `px-4` + `64px` time + `gap-3` + `14px` dot column), so the rule's x moved with it to the
     // dot's own centre -- `16 + 64 + 12 + 7 = 99`.
@@ -997,11 +1008,31 @@ try {
     await assertComputed(pageName, selector, property, expected)
   }
 
+  // `--radius-sheet` (16px), measured on a real `Sheet` -- the one modal surface R15 leaves in the
+  // product, opened the way a person opens it. Done HERE, after stage 1 has already photographed
+  // Home, so the picture is of the page and not of the page with a sheet over it.
+  await gotoReliably(`${baseUrl}/`)
+  await waitVisible(page.getByTestId('new-project'), "Home's + New project action")
+  await clickUntil(
+    page.getByTestId('new-project'),
+    async () => page.getByTestId('new-project-sheet').isVisible(),
+    '+ New project, to measure the sheet',
+  )
+  await assertComputed('home', '[data-testid="new-project-sheet"]', 'border-top-left-radius', '16px')
+  await assertComputed('home', '[data-testid="new-project-sheet"]', 'width', '440px')
+  await page.keyboard.press('Escape')
+  console.log('stage 2a: a Sheet is 440px wide with --radius-sheet (16px) corners on its open edge')
+
   // The project Settings tab (M24 §4): `perm-caption` moved here from the global `/settings`, and
   // the read-only `runtime-timeout` figure the sidebar's old guardrail block used to carry (M24
   // Task 2 removed that block; Task 4 re-homed the number here).
-  await gotoReliably(`${baseUrl}/w/${workspaceId}/settings`)
+  // M61 R13/Task 9: project Settings is two columns and only the CHOSEN section mounts, so the
+  // matrix and the runtime figure are behind their own `?section=` values -- the same route and
+  // the same testids, one query parameter further in.
+  await gotoReliably(`${baseUrl}/w/${workspaceId}/settings?section=permissions`)
   await waitVisible(page.getByTestId('perm-caption'), "the project Settings tab's permission matrix caption")
+  await gotoReliably(`${baseUrl}/w/${workspaceId}/settings?section=runtime`)
+  await waitVisible(page.getByTestId('runtime-limits'), "the project Settings tab's runtime limits")
   await assertComputed('project-settings', '[data-testid="runtime-timeout"]', 'font-size', '10.5px')
   console.log('stage 2a: the project Settings tab carries perm-caption and a 10.5px mono runtime-timeout figure')
 
@@ -1106,8 +1137,11 @@ try {
   // not import it). So they are neither -- listed by name below, asserted to show no banner, and
   // reported as what they are. Closing that gap is a change to those three pages, which M44 §3 and
   // M49 §3 both put out of scope.
-  const SCOPED = new Set(['overview', 'tasks', 'graph', 'activity', 'project-settings'])
-  const SCOPED_WITHOUT_BANNER = new Set(['office', 'organization', 'knowledge'])
+  // M61 R7: `organization` moves from SCOPED_WITHOUT_BANNER into SCOPED, exactly as the message
+  // below instructs -- that URL redirects to the Team tab now, and the Team tab DOES draw the
+  // workspace halt banner (it is the project's own page).
+  const SCOPED = new Set(['overview', 'organization', 'tasks', 'graph', 'activity', 'project-settings'])
+  const SCOPED_WITHOUT_BANNER = new Set(['office', 'knowledge'])
   for (const target of PAGES) {
     await gotoReliably(`${baseUrl}${target.path()}`)
     await waitVisible(page.getByTestId(target.testId), `${target.name} while the workspace is halted`)
@@ -1217,14 +1251,16 @@ try {
   // Truth from snapshot, never optimistic (design README "State Management"): the card is read for
   // the label the SERVER derived, not for anything a click set locally.
   await waitUntil('the card to show WORKING', 30_000, async () => {
+    // M61 R7/§3: `slave-card` -> `team-card`. The pill is the same `ui/StatusPill` carrying the
+    // same `USER_CARD_LABEL` word, on the Team tab instead of the deleted Overview.
     const text = await page
-      .locator('[data-testid="slave-card"] [data-testid="status-pill"]')
+      .locator('[data-testid="team-card"] [data-testid="status-pill"]')
       .first()
       .textContent()
       .catch(() => null)
     return text === 'WORKING' ? { done: true, value: text } : { done: false, detail: `pill reads ${JSON.stringify(text)}` }
   })
-  console.log('stage 4b: the Overview card followed the snapshot to WORKING')
+  console.log('stage 4b: the Team card followed the snapshot to WORKING')
 
   // The four live pages, re-captured now that there is work to show. Decision 9's evidence is
   // reviewed against mockups that show a board mid-run; a screenshot of an idle board is a
@@ -1250,14 +1286,20 @@ try {
   // ============================================================================================
   // Stage 3b: the motion that a `working` card is supposed to have.
   // ============================================================================================
+  // M61 R7/R16: the Team card is not `SlaveCard` -- there is no `card-sweep` band on it. What a
+  // working card has instead is the two things R7 and R16 name: a 3px `team-progress` bar whose
+  // WIDTH transitions as the run moves, and a `LiveDot` that pulses on an in-flight tone through
+  // the same `status-pulse` keyframe the old pill's dot used. The motion assertion followed the
+  // motion; it was not dropped.
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
-  await waitVisible(page.getByTestId('card-sweep'), "the working card's sweep")
-  await assertComputed('overview', '[data-testid="card-sweep"]', 'animation-duration', '2.2s')
-  await assertComputed('overview', '[data-testid="card-sweep"]', 'animation-timing-function', 'cubic-bezier(0.4, 0, 0.2, 1)')
-  await assertComputed('overview', '[data-testid="card-sweep"]', 'animation-name', 'card-sweep')
-  await assertComputed('overview', '[data-testid="slave-card"] [data-testid="status-pill"] span', 'animation-duration', '1.5s')
-  await assertComputed('overview', '[data-testid="slave-card"] [data-testid="status-pill"] span', 'animation-name', 'status-pulse')
-  console.log('stage 3b PASSED: a working card sweeps at 2.2s cubic-bezier(.4,0,.2,1) and its pill dot pulses at 1.5s')
+  await waitVisible(page.getByTestId('team-progress'), "the working card's progress bar")
+  await assertComputed('overview', '[data-testid="team-progress"] span', 'transition-property', 'width')
+  await assertComputed('overview', '[data-testid="team-progress"] span', 'transition-duration', '0.24s')
+  await assertComputed('overview', '[data-testid="team-progress"] span', 'transition-timing-function', 'cubic-bezier(0.23, 1, 0.32, 1)')
+  await waitVisible(page.locator('[data-testid="team-card"] [data-testid="live-dot"]').first(), "the working card's live dot")
+  await assertComputed('overview', '[data-testid="team-card"] [data-testid="status-pill"] [data-testid="live-dot"]', 'animation-duration', '1.5s')
+  await assertComputed('overview', '[data-testid="team-card"] [data-testid="status-pill"] [data-testid="live-dot"]', 'animation-name', 'status-pulse')
+  console.log('stage 3b PASSED: a working card\'s progress bar transitions its width and its state dot pulses at 1.5s')
 
   // ============================================================================================
   // Stage 2b: the cable, which exists only while something is flowing along it.
@@ -1282,7 +1324,7 @@ try {
     // The elements whose motion stage 3b/2b just proved must still BE here -- otherwise "nothing
     // animates" would be satisfied by a page that rendered nothing.
     await waitVisible(
-      path.endsWith('/graph') ? page.locator('path[data-cable="flow"]') : page.getByTestId('card-sweep'),
+      path.endsWith('/graph') ? page.locator('path[data-cable="flow"]') : page.getByTestId('team-progress'),
       `the animated element on ${path} under reduced motion`,
     )
     const animated = await page.evaluate(() =>
@@ -1308,11 +1350,22 @@ try {
   // ============================================================================================
   // Stage 4b (second half): a pause shows `pause_requested`, then `paused`.
   // ============================================================================================
+  // M61 R7: the Team card is a SURFACE that opens the person, not a row of run buttons -- the
+  // deleted `SlaveCard`'s `card-pause` went with it. The pause a person reaches from the Team tab
+  // is the one in the right panel: clicking the card opens `SlavePanel` in the slot, and
+  // `pause-button` there is the same control over the same route. The assertion moved to where
+  // the button is.
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
-  await waitVisible(page.getByTestId('card-pause'), "the card's Pause button")
+  await waitVisible(page.getByTestId('team-card'), "the working card on the Team tab")
+  await clickUntil(
+    page.getByTestId('team-card').first(),
+    async () => page.getByTestId('pause-button').isVisible(),
+    "the working card, to open its person in the panel",
+  )
+  await waitVisible(page.getByTestId('pause-button'), "the panel's Pause button")
   let sawPauseRequested = false
   await clickUntil(
-    page.getByTestId('card-pause'),
+    page.getByTestId('pause-button'),
     async () => {
       const row = await prisma.slaveRun.findUnique({ where: { id: run.id } })
       if (row === null) return false
@@ -1346,7 +1399,7 @@ try {
   }
   await waitUntil('the card to show PAUSED', 30_000, async () => {
     const text = await page
-      .locator('[data-testid="slave-card"] [data-testid="status-pill"]')
+      .locator('[data-testid="team-card"] [data-testid="status-pill"]')
       .first()
       .textContent()
       .catch(() => null)
