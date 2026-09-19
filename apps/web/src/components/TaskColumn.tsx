@@ -2,6 +2,7 @@ import { COLUMN_STATE, type BoardColumn } from '../lib/taskColumns'
 import { CARD_STATE_TONE } from '../lib/tones'
 import type { TaskBoardItem } from '../server/tasks'
 import { TaskCard } from './TaskCard'
+import { ScrollArea } from './ui/ScrollArea'
 import { TONE_DOT } from './ui/StatusPill'
 
 export function TaskColumn({
@@ -21,7 +22,11 @@ export function TaskColumn({
   // chosen here.
   const tone = CARD_STATE_TONE[COLUMN_STATE[column]].tone
   return (
-    <div data-testid="column" data-column={column} className="flex min-w-0 flex-col gap-2">
+    // M61 R9/Task 7: `self-stretch min-h-0` -- the grid's own `items-start` (`TasksClient.tsx`)
+    // sizes a track to its tallest column's CONTENT height by default, the same override
+    // `ActivityClient`'s own family rail needed (ruling T8-4) for `column-scroll` below to have an
+    // actual bounded box to scroll inside rather than just growing the whole board past the frame.
+    <div data-testid="column" data-column={column} className="flex min-h-0 min-w-0 flex-col gap-2 self-stretch">
       <header className="flex items-center gap-[7px] border-b border-line pb-[7px]">
         <span data-testid={`column-dot-${column}`} data-tone={tone} className={`h-[7px] w-[7px] rounded-full ${TONE_DOT[tone]}`} />
         {/* An `<h2>`, not `SectionLabel`'s `<div>`: `tasks-components.test.tsx` reaches these by
@@ -31,7 +36,7 @@ export function TaskColumn({
           {tasks.length}
         </span>
       </header>
-      <div className="flex flex-col gap-2">
+      <ScrollArea testId="column-scroll" className="flex flex-col gap-2">
         {tasks.map((task) => (
           <TaskCard key={task.id} task={task} workspaceGoalVersion={workspaceGoalVersion} onSelect={onSelect} />
         ))}
@@ -40,7 +45,7 @@ export function TaskColumn({
             Nothing here
           </p>
         )}
-      </div>
+      </ScrollArea>
     </div>
   )
 }

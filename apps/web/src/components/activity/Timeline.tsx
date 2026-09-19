@@ -4,6 +4,7 @@ import { forwardRef, useImperativeHandle, useLayoutEffect, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { ACTIVITY_CARDS } from './cards'
 import type { ActivityEventRow } from '../../server/activity'
+import { ScrollArea } from '../ui/ScrollArea'
 
 /** Fallback row-height estimate for the virtualizer and for the "one row of the bottom/top"
  *  thresholds below — cards vary (a `run.output` body is taller than a bare `task.started`), so
@@ -248,14 +249,16 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
   const virtualItems = virtualizer.getVirtualItems()
 
   return (
-    <div
+    // M61 R10/Task 7: `ui/ScrollArea` now, the same idiom `ui/DataTable.tsx`'s virtualized mode
+    // already uses -- `ref` is what `useVirtualizer`'s `getScrollElement` reads, unchanged.
+    <ScrollArea
       ref={scrollRef}
-      data-testid="timeline-viewport"
+      testId="timeline-viewport"
       onScroll={handleScroll}
       // `pt-3` and NOT `p-3` (the mock's own `padding:12px 0 0`, `Slave of AI Mockups.dc.html:855`):
       // a left padding here would shift every row right without moving the rule, and the dot
       // would no longer sit on it. The row's `pr-[18px]` carries the right-hand inset instead.
-      className="flex-1 overflow-y-auto pt-3"
+      className="pt-3"
     >
       <div style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
         {/* The design README's vertical rule, run through the dot's own centre (1c / §3a.5).
@@ -317,6 +320,6 @@ export const Timeline = forwardRef<TimelineHandle, TimelineProps>(function Timel
           )
         })}
       </div>
-    </div>
+    </ScrollArea>
   )
 })

@@ -2,6 +2,8 @@
 
 import { useState } from 'react'
 import type { LiveStatus } from '../../lib/office/liveOffice'
+import { Button } from '../ui/Button'
+import { Card } from '../ui/Card'
 
 export interface FocusView {
   readonly id: string
@@ -19,9 +21,12 @@ export interface FocusView {
   readonly waitingFor: string | null
 }
 
-/** The design's focus card (M28 §5–§6): who, what, how far, and the run's Pause/Resume/Stop. The
- *  buttons call back with the action; the caller talks to the run routes and returns the refusal
- *  text (or null), which stays on the card until the next action. */
+/**
+ * The focused slave (M28 §5–§6, M61 R17): who, what, how far, and the run's Pause/Resume/Stop --
+ * a `Card` beside the canvas now, not a floating overlay on top of it. The buttons call back with
+ * the action; the caller talks to the run routes and returns the refusal text (or null), which
+ * stays on the card until the next action.
+ */
 export function FocusCard({
   view,
   archived,
@@ -49,66 +54,75 @@ export function FocusCard({
     setError(await onRun(view.runId, action))
     setPending(false)
   }
-  const button = 'flex-1 rounded-chip border border-[rgba(255,255,255,.12)] bg-transparent py-1 text-[10.5px] font-medium text-text-body disabled:opacity-40'
   return (
-    <div
-      data-testid="office-focus"
-      className="absolute right-3 top-3 flex w-[min(236px,calc(100%-24px))] flex-col gap-[6px] rounded-lg border border-[rgba(255,255,255,.1)] bg-[rgba(10,12,16,.86)] px-3 py-[10px] backdrop-blur-[6px]"
-    >
+    <Card testId="office-focus" className="gap-[10px]">
       <div className="flex items-center gap-2">
+        {/* Per-slave colour, from the office engine's own palette -- not a design token, and not
+          * a "colour literal" in the sense the redesign forbids: the canvas draws thirty distinct
+          * sprites and this is the one place their identity carries off it. */}
         <div
-          className="grid h-[26px] w-[26px] flex-none place-items-center rounded-md border font-mono text-[10px] font-semibold"
+          className="grid h-7 w-7 flex-none place-items-center rounded-tile border font-mono text-[10px] font-semibold"
           style={{ background: `${view.color}1a`, borderColor: `${view.color}3d`, color: view.color }}
         >
           {view.name.slice(0, 2).toUpperCase()}
         </div>
         <div className="min-w-0">
-          <div className="truncate text-[12.5px] font-semibold">{view.name}</div>
-          <div className="truncate text-[10px] text-text-dim">
+          <div className="truncate type-body font-semibold">{view.name}</div>
+          <div className="truncate type-meta text-t3">
             {view.role} · {view.department}
           </div>
         </div>
-        <span className="ml-auto whitespace-nowrap font-mono text-[9.5px] font-medium" style={{ color: view.statusColor }}>
+        <span className="type-meta ml-auto whitespace-nowrap font-medium" style={{ color: view.statusColor }}>
           ● {view.status}
         </span>
       </div>
-      <div className="truncate text-[11px] text-text-body">
-        <span className="font-mono text-[10px] text-text-3">{view.taskKey}</span> {view.taskTitle}
+      <div className="truncate type-body">
+        <span className="type-meta text-t3">{view.taskKey}</span> {view.taskTitle}
       </div>
-      <div className="h-[3px] rounded-sm bg-[rgba(255,255,255,.06)]">
-        <div className="h-full rounded-sm transition-[width] duration-500" style={{ width: `${view.pct}%`, background: view.statusColor, boxShadow: `0 0 8px ${view.statusColor}` }} />
+      <div className="h-[3px] rounded-sm bg-sel">
+        <div
+          className="h-full rounded-sm transition-[width] duration-500"
+          style={{ width: `${view.pct}%`, background: view.statusColor }}
+        />
       </div>
       {waitingFor !== null && (
-        <span data-testid="office-focus-waiting" className="truncate text-[10px] text-tone-waiting">
+        <span data-testid="office-focus-waiting" className="type-meta truncate text-tone-waiting">
           waiting for {waitingFor}
         </span>
       )}
       <div className="flex gap-[5px]">
         {!archived && waitingFor === null && (
-          <button type="button" data-testid="office-focus-pause" disabled={pending || view.runId === null || view.status === 'pausing'} onClick={() => void runAction(paused ? 'resume' : 'pause')} className={button}>
+          <Button
+            variant="ghost"
+            size="sm"
+            data-testid="office-focus-pause"
+            disabled={pending || view.runId === null || view.status === 'pausing'}
+            onClick={() => void runAction(paused ? 'resume' : 'pause')}
+            className="flex-1"
+          >
             {paused ? 'Resume' : 'Pause'}
-          </button>
+          </Button>
         )}
-        <button type="button" data-testid="office-focus-next" onClick={onNext} className={button}>
+        <Button variant="ghost" size="sm" data-testid="office-focus-next" onClick={onNext} className="flex-1">
           Next ⇄
-        </button>
+        </Button>
         {!archived && (
-          <button
-            type="button"
+          <Button
+            variant="danger"
+            size="sm"
             data-testid="office-focus-stop"
             disabled={pending || view.runId === null}
             onClick={() => void runAction('stop')}
-            className="rounded-chip border border-[#f871713d] bg-transparent px-[9px] py-1 text-[10.5px] font-medium text-tone-blocked disabled:opacity-40"
           >
             Stop
-          </button>
+          </Button>
         )}
       </div>
       {error !== null && (
-        <span role="alert" data-testid="office-focus-error" className="text-[10px] text-tone-blocked">
+        <span role="alert" data-testid="office-focus-error" className="type-meta text-tone-blocked">
           {error}
         </span>
       )}
-    </div>
+    </Card>
   )
 }

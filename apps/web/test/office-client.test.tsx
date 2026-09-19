@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OfficeSnapshot } from '../src/server/office.js'
 import type { OverviewSnapshot, SlaveCardData } from '../src/server/overview.js'
@@ -412,15 +412,37 @@ describe('OfficeClient', () => {
   })
 })
 
-// M44 erratum E25 / M45 R5: the one page frame reaches this page too. `flush`, so it brings its
-// landmark and its `page-shell` marker and none of its padding -- the frame's own classes are
-// unchanged, which is what keeps `gate:m14-fidelity`'s numbers where they are.
-describe('OfficeClient (M44 E25 / M45 R5)', () => {
-  it('renders inside the one page shell, with its own frame classes untouched', async () => {
+// M61 R17/Task 7: `PageShell` is gone -- the office fills whatever height the project layout
+// leaves it (`min-h-0 flex-1`), not a hardcoded viewport calc, and every `office-*` toolbar
+// control lives inside one `office-toolbar` bar above the canvas now.
+describe('OfficeClient (M61 R17: office in the product frame)', () => {
+  it('renders no page-shell landmark, and the canvas region fills the remaining height', async () => {
     await mount()
-    const shell = screen.getByTestId('page-shell')
-    expect(shell.className).not.toContain('p-3')
-    // The office is untouched inside the shell: the canvas keeps its own box.
-    expect(shell.querySelector(':scope > div')?.className).toContain('h-[calc(100vh-52px-41px)]')
+    expect(screen.queryByTestId('page-shell')).toBeNull()
+    const canvasWrap = screen.getByTestId('office-canvas').parentElement
+    expect(canvasWrap?.className).toContain('flex-1')
+    expect(canvasWrap?.className).toContain('overflow-hidden')
+    expect(canvasWrap?.className).toContain('rounded-surface')
+  })
+
+  it('gathers every office-* toolbar control inside office-toolbar -- moved, not vanished', async () => {
+    await mount()
+    const toolbar = screen.getByTestId('office-toolbar')
+    for (const testId of ['office-hud-counts', 'office-tod', 'office-clock', 'office-hour', 'office-live', 'office-legend', 'office-zoom-in', 'office-zoom-out', 'office-stream']) {
+      expect(within(toolbar).getByTestId(testId)).toBeTruthy()
+    }
+  })
+
+  it('carries no font-mono anywhere in the toolbar DOM -- the canvas alone keeps the pixel font', async () => {
+    await mount()
+    const toolbar = screen.getByTestId('office-toolbar')
+    expect(toolbar.innerHTML).not.toContain('font-mono')
+  })
+
+  it('renders the Focus card as a real Card beside the canvas, not an absolutely-positioned overlay', async () => {
+    await mount()
+    const focus = screen.getByTestId('office-focus')
+    expect(focus.className).not.toContain('absolute')
+    expect(focus.className).toContain('rounded-surface')
   })
 })

@@ -91,12 +91,22 @@ export function TaskDetailPanel({
   task,
   workspaceId,
   workspaceGoalVersion,
+  isDeveloper = true,
   onClose,
 }: {
   readonly task: TaskBoardItem
   readonly workspaceId: string
   /** The goal version the PROJECT is on (M40 §6) -- the other half of the stale badge. */
   readonly workspaceGoalVersion: number
+  /**
+   * Whether the raw `task-details` section below (run/messages/context/memories/verification/
+   * cost/worktree/events) renders at all (M61 R9). An explicit prop, not this panel's own
+   * `useMode()` read -- `TasksClient` reads the mode ONCE and passes it down, because this panel
+   * is also rendered directly by a great many of this file's neighbouring tests with no
+   * `<ModeProvider>` ancestor at all, and `useMode()` throws outside one. Defaults to `true` so
+   * every one of those direct renders keeps seeing exactly what it always has.
+   */
+  readonly isDeveloper?: boolean
   readonly onClose: () => void
 }): React.JSX.Element {
   const router = useRouter()
@@ -352,6 +362,12 @@ export function TaskDetailPanel({
         </DetailsGroup>
       )}
 
+      {/* M61 R9: everything below Handoff is a raw, debug-shaped detail -- ids, hashes, per-run
+        * figures, fetched-on-demand logs -- and simple mode (spec R9) does not show it at all. The
+        * ONE gate around the whole run of `DetailsGroup`s, so a mode flip cannot leave some open
+        * and some closed; `task-details` is what a test or a gate names this section by. */}
+      {isDeveloper && (
+        <div data-testid="task-details" className="flex flex-col gap-4">
       {/* The one group this panel leads with: what its runs are doing right now. */}
       <DetailsGroup group="run" title="Run" defaultOpen>
         {/*
@@ -740,6 +756,8 @@ export function TaskDetailPanel({
           every event for this task →
         </Link>
       </DetailsGroup>
+        </div>
+      )}
     </aside>
   )
 }

@@ -7,14 +7,32 @@ import { publishStreamState } from '../../hooks/useStreamState'
 import { useUrlFilters } from '../../hooks/useUrlFilters'
 import { eventPrefixLabel } from '../../lib/eventLabels'
 import type { ActivityPage } from '../../server/activity'
+import type { OverviewSnapshot } from '../../server/overview'
 import type { ShellFacts } from '../../server/shell'
 import { HaltBanner } from '../HaltBanner'
+import { SupervisorTimeline } from '../project/SupervisorTimeline'
 import { Sparkline } from '../Sparkline'
 import { EmptyState } from '../ui/EmptyState'
-import { PageShell } from '../ui/PageShell'
 import { PanelHeader } from '../ui/PanelHeader'
+import { ScrollArea } from '../ui/ScrollArea'
+import { SectionLabel } from '../ui/SectionLabel'
 import { FilterBar } from './FilterBar'
+import { LiveEventsPanel, MergeQueuePanel } from './OverviewPanels'
 import { Timeline, type TimelineHandle } from './Timeline'
+
+/**
+ * The three `OverviewSnapshot` slices the river's `recent-changes` section renders (M61 R10/Task
+ * 7, controller Ruling 6) -- `needsYou` rides along because `SupervisorTimeline` needs it beside
+ * `timeline` to render the DECISION REQUIRED lane. A subset rather than the whole snapshot: this
+ * client never needs the roster, the spend figures or anything else `OverviewSnapshot` carries for
+ * the Team tab.
+ */
+export interface RecentChanges {
+  readonly timeline: OverviewSnapshot['timeline']
+  readonly needsYou: OverviewSnapshot['needsYou']
+  readonly liveEvents: OverviewSnapshot['liveEvents']
+  readonly mergeQueue: OverviewSnapshot['mergeQueue']
+}
 
 /**
  * How long the page waits after the newest event before re-reading the shell facts. A burst of
@@ -40,9 +58,14 @@ export const SHELL_REFETCH_DEBOUNCE_MS = 1_000
 export function ActivityClient({
   workspaceId,
   initial,
+  recent,
 }: {
   readonly workspaceId: string
   readonly initial: ActivityPage
+  /** The river's `recent-changes` section (M61 R10/Task 7). Optional so the digest view's own
+   *  server component never has to build it, and so this file's own pre-existing tests -- which
+   *  render the river with no such section at all -- keep rendering exactly as they did. */
+  readonly recent?: RecentChanges
 }): React.JSX.Element {
   const { filters, kinds, rawTypes, setKinds, setRawTypes, setSlaves, setTasks } = useUrlFilters()
   const { events, connection, loadOlder, sparkline, latencyMs } = useActivityStream({ workspaceId, filters, initial })
@@ -89,6 +112,39 @@ export function ActivityClient({
       clearTimeout(timer)
     }
   }, [workspaceId, newestSeq])
+
+  // `recent-changes`' own live figures (M61 R10/Task 7), same debounce and the same "only on a
+  // real change" gate as the shell-facts refetch above -- one more read off the same wake-up, not
+  // a second stream. Gated on `recent !== undefined` rather than firing unconditionally: a caller
+  // that never passed a `recent` prop (the digest view never does; neither does this file's own
+  // pre-existing test suite) has no section to keep current and must not issue a request for one.
+  const [refetchedRecent, setRefetchedRecent] = useState<RecentChanges | null>(null)
+  useEffect((): (() => void) | undefined => {
+    if (recent === undefined) return undefined
+    if (newestSeq === null || newestSeq === mountSeqRef.current) return undefined
+
+    let cancelled = false
+    const timer = setTimeout((): void => {
+      void (async (): Promise<void> => {
+        try {
+          const response = await fetch(`/api/w/${workspaceId}/overview`)
+          if (!response.ok) return
+          const body = (await response.json()) as OverviewSnapshot
+          if (!cancelled) {
+            setRefetchedRecent({ timeline: body.timeline, needsYou: body.needsYou, liveEvents: body.liveEvents, mergeQueue: body.mergeQueue })
+          }
+        } catch {
+          // Keep the last good slices rather than blanking the section over a transient failure.
+        }
+      })()
+    }, SHELL_REFETCH_DEBOUNCE_MS)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [workspaceId, newestSeq, recent])
+  const recentView = refetchedRecent ?? recent ?? null
 
   // Controller ruling carried from Task 3/8, and re-aimed by M24 §2.2: Activity is the last of the
   // four workspace pages, so with this publication the project header and the Tasks tab's badge
@@ -174,11 +230,12 @@ export function ActivityClient({
   }
 
   return (
-    // M44 erratum E25 / M45 R5: `flush`, because this page owns its own gutters and
-    // `gate:m14-fidelity` measures the timeline rule against them. The shell is here for its
-    // landmark and its `page-shell` marker; it REPLACES the page's own `flex flex-1 flex-col`
-    // wrapper rather than nesting inside it, since that wrapper carried nothing else.
-    <PageShell flush>
+    // M61 R10/Task 7: the bare `flex min-h-0 flex-1 flex-col` frame `TeamLive`/`TasksClient` use
+    // now, not `PageShell` -- this page owns its own gutters below, and the filter bar/sparkline
+    // slot stay OUTSIDE any scrolling region (the "fixed" half of the Resolutions note); the grid
+    // row below them, and the new `recent-changes` section after it, are each their own bounded,
+    // independently-scrollable region.
+    <div className="flex min-h-0 flex-1 flex-col">
       {initial.workspace.haltedReason !== null && <HaltBanner reason={initial.workspace.haltedReason} />}
       <FilterBar
         slaves={initial.slaves}
@@ -300,6 +357,23 @@ export function ActivityClient({
           )}
         </div>
       </div>
-    </PageShell>
+      {/* Controller Ruling 6: the raw river's own "Recent changes" -- the Supervisor timeline plus
+        * the live-events/merge-queue panels the deleted Overview used to carry, moved here rather
+        * than reinvented. Rendered only once `recent` has landed (the digest view never passes
+        * one), in its OWN bounded flex row beside the grid above -- each half of the page below
+        * the fixed filter bar gets an equal share of the remaining height and scrolls on its own. */}
+      {recentView !== null && (
+        <div data-testid="recent-changes" className="flex min-h-0 flex-1 flex-col gap-2 px-[24px] pb-5">
+          <SectionLabel>Recent changes</SectionLabel>
+          <ScrollArea>
+            <div className="flex flex-col gap-5 pr-1">
+              <SupervisorTimeline workspaceId={workspaceId} entries={recentView.timeline} needsYou={recentView.needsYou} />
+              <LiveEventsPanel workspaceId={workspaceId} events={recentView.liveEvents} />
+              <MergeQueuePanel queue={recentView.mergeQueue} />
+            </div>
+          </ScrollArea>
+        </div>
+      )}
+    </div>
   )
 }

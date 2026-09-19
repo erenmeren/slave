@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { TaskDetailPanel } from '../src/components/TaskDetailPanel'
 import { TasksClient } from '../src/components/TasksClient'
+import { ModeProvider, useMode } from '../src/components/mode/ModeProvider'
 import { RightPanel } from '../src/components/shell/RightPanel'
 import { RightPanelProvider } from '../src/components/shell/RightPanelProvider'
 import type { KnowledgeRow, TaskMemoriesView } from '../src/server/memory'
@@ -183,13 +184,27 @@ describe('the drawer is a new drawer for a new task (M49 R6)', () => {
     )
     vi.stubGlobal('fetch', fetchMock)
     // The page mirrors `?task=` into the shell's right panel now (M57 R8), so the slot has to be
-    // in the tree or the detail panel this case reads has nowhere to be drawn.
+    // in the tree or the detail panel this case reads has nowhere to be drawn. `TasksClient` reads
+    // `useMode()` now (M61 R9) and the Knowledge group this case opens is developer-only, so a
+    // `ModeProvider` ancestor is required and mode is flipped before the panel opens.
+    function ModeProbe(): React.JSX.Element {
+      const { setMode } = useMode()
+      return (
+        <button type="button" data-testid="mode-probe" onClick={() => setMode('developer')}>
+          developer
+        </button>
+      )
+    }
     render(
-      <RightPanelProvider>
-        <TasksClient workspaceId="w1" initial={snapshot} />
-        <RightPanel title="Supervisor">{null}</RightPanel>
-      </RightPanelProvider>,
+      <ModeProvider>
+        <ModeProbe />
+        <RightPanelProvider>
+          <TasksClient workspaceId="w1" initial={snapshot} />
+          <RightPanel title="Supervisor">{null}</RightPanel>
+        </RightPanelProvider>
+      </ModeProvider>,
     )
+    fireEvent.click(screen.getByTestId('mode-probe'))
 
     fireEvent.click(screen.getByText('Add the thing'))
     fireEvent.click(within(group()).getByRole('button', { name: /Knowledge/ }))

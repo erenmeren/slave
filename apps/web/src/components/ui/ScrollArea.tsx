@@ -18,14 +18,20 @@ export const ScrollArea = forwardRef<
     readonly axis?: keyof typeof AXIS
     readonly className?: string
     readonly testId?: string
+    /** M61 R10/Task 7: `activity/Timeline.tsx`'s own scroll-position tracking (pinned/near-top)
+     *  needs the raw scroll event, the same way `DataTable`'s virtualized mode needs the raw
+     *  scroll ELEMENT above -- optional, and every other caller that never passes it sees no
+     *  change at all. */
+    readonly onScroll?: (event: React.UIEvent<HTMLDivElement>) => void
     readonly children: React.ReactNode
   }
->(function ScrollArea({ axis = 'y', className = '', testId = 'scroll-area', children }, ref): React.JSX.Element {
+>(function ScrollArea({ axis = 'y', className = '', testId = 'scroll-area', onScroll, children }, ref): React.JSX.Element {
   return (
     <div
       ref={ref}
       data-testid={testId}
       data-scroll-axis={axis}
+      {...(onScroll === undefined ? {} : { onScroll })}
       className={`min-h-0 min-w-0 flex-1 [overscroll-behavior:contain] ${AXIS[axis]} ${className}`}
     >
       {children}

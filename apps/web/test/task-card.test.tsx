@@ -1,8 +1,15 @@
 // @vitest-environment jsdom
-import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { render, screen, within } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import { TaskCard } from '../src/components/TaskCard'
-import type { TaskBoardItem } from '../src/server/tasks'
+import { TaskDetailPanel } from '../src/components/TaskDetailPanel'
+import type { TaskBoardItem, TaskRunSummary } from '../src/server/tasks'
+
+// `TaskDetailPanel` calls `useRouter()` (the worktree-collect control) -- unused by the cases
+// below, but Next throws mounting it with no app router in the tree at all.
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ replace: vi.fn(), refresh: vi.fn() }),
+}))
 
 const ORIGIN = {
   source: 'github' as const,
@@ -95,5 +102,80 @@ describe('TaskCard`s origin sentence (M54 R9)', () => {
       <TaskCard task={task({ origin: { ...ORIGIN, ref: null } })} workspaceGoalVersion={2} onSelect={() => undefined} />,
     )
     expect(screen.getByTestId('task-origin').textContent).toBe('from GitHub · acme/checkout')
+  })
+})
+
+// M61 R9/Task 7: the details block (run kind/attempt/artifacts, and everything else `DetailsGroup`
+// folds) renders only for a developer -- `TaskDetailPanel`'s own explicit `isDeveloper` prop, so
+// every one of this suite's neighbouring `TaskDetailPanel` renders below and elsewhere in the repo
+// -- none of which pass it -- keeps seeing exactly what it always has (the prop defaults to `true`).
+describe('TaskDetailPanel — raw details only in developer mode (M61 R9)', () => {
+  const run: TaskRunSummary = {
+    id: 'r1',
+    status: 'succeeded',
+    costUsd: 0.42,
+    kind: 'implementation',
+    tokensIn: null,
+    tokensOut: null,
+    model: null,
+    provider: 'claude_code',
+    toolCallCap: null,
+    toolCalls: 5,
+    startedAt: new Date(0).toISOString(),
+    endedAt: new Date(1).toISOString(),
+    worktreePath: null,
+    checkpoint: null,
+    waitingFor: null,
+  }
+  const withRun = (overrides: Partial<TaskBoardItem> = {}): TaskBoardItem =>
+    ({
+      id: 't1',
+      title: 'Retry the charge',
+      description: '',
+      status: 'done',
+      priority: 0,
+      attempt: 1,
+      maxAttempts: 3,
+      assigneeName: null,
+      branch: null,
+      lastRejectionReason: null,
+      goalVersion: 2,
+      origin: null,
+      integratedAt: null,
+      runs: [run],
+      collectable: false,
+      artifacts: [],
+      handoff: null,
+      stage: null,
+      stageTitle: null,
+      ...overrides,
+    }) as TaskBoardItem
+
+  it('shows the run kind/attempt/artifact details by default (isDeveloper omitted)', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={withRun()} onClose={() => {}} />)
+    const details = screen.getByTestId('task-details')
+    expect(within(details).getAllByTestId('details-group').map((el) => el.getAttribute('data-group'))).toContain('run')
+    expect(within(details).getByTestId('run-total-cost').textContent).toContain('across 1 run')
+  })
+
+  it('shows it when isDeveloper is explicitly true', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={withRun()} isDeveloper onClose={() => {}} />)
+    expect(screen.getByTestId('task-details')).toBeTruthy()
+  })
+
+  it('renders nothing at all -- no task-details wrapper and no DetailsGroup -- when isDeveloper is false', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={withRun()} isDeveloper={false} onClose={() => {}} />)
+    expect(screen.queryByTestId('task-details')).toBeNull()
+    expect(screen.queryByTestId('details-group')).toBeNull()
+    expect(screen.queryByTestId('run-total-cost')).toBeNull()
+  })
+
+  // The identity block above Details (ref, priority, goal stamp, title, status word, the one-line
+  // why) is never gated -- only the RAW groups are (M45 R4's own progressive disclosure, folded
+  // further by mode rather than replaced).
+  it('keeps the panel identity visible in simple mode', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={withRun()} isDeveloper={false} onClose={() => {}} />)
+    expect(screen.getByTestId('task-panel-ref').textContent).toBe('TASK-t1')
+    expect(screen.getByText('Retry the charge')).toBeTruthy()
   })
 })

@@ -6,7 +6,6 @@ import { STATUS, renderIsoE, setPixelFont, tod } from '../../lib/office/engine.j
 import { LiveOffice, boardFromOverview, liveSlavesOf } from '../../lib/office/liveOffice'
 import { sendControl } from '../../lib/postControl'
 import type { OfficeSnapshot } from '../../server/office'
-import { PageShell } from '../ui/PageShell'
 import { FocusCard, type FocusView } from './FocusCard'
 import { OfficeHud, type HudView } from './OfficeHud'
 
@@ -312,58 +311,68 @@ export function OfficeClient({
         })()
 
   return (
-    // M44 erratum E25 / M45 R5: the office is UNTOUCHED inside the shell. `flush` gives it the
-    // one page frame's landmark and its `page-shell` marker and nothing else -- the canvas keeps
-    // its own `h-[calc(100vh-52px-41px)]` box, which `gate:m14-fidelity` screenshots.
-    <PageShell flush>
-      <div ref={wrapRef} className="relative h-[calc(100vh-52px-41px)] min-h-[360px] w-full overflow-hidden bg-bg-floor">
-        <canvas
-          ref={canvasRef}
-          data-testid="office-canvas"
-          role="img"
-          aria-label={`The project's office: ${hud.slaves} slaves across ${hud.departments} departments, ${hud.working} working`}
-          className="block h-full w-full cursor-grab"
-        />
-        {/* The canvas is a picture. This line is the same facts as text, for a person who cannot see
-          * it and for a person whose browser draws nothing -- it is NOT a replacement office, and
-          * the Focus card below already gives the per-slave detail (M44 R6). */}
-        <p data-testid="office-fallback" className="sr-only">
-          {hud.slaves} slaves across {hud.departments} departments; {hud.working} working now. The
-          same information is on the Overview tab as cards.
-        </p>
-        <OfficeHud
-          view={hud}
-          onHour={(hour) => {
-            if (worldRef.current !== null) worldRef.current.hourLock = hour
-            setFrame((f) => f + 1)
-          }}
-          onLive={() => {
-            if (worldRef.current !== null) worldRef.current.hourLock = null
-            setFrame((f) => f + 1)
-          }}
-          onZoom={(dir) => zoom(dir)}
-        />
-        {focus !== null && (
-          <FocusCard
-            key={focus.id}
-            view={focus}
-            archived={initial.workspace.archived}
-            onRun={(runId, action) => sendControl(`/api/w/${workspaceId}/runs/${runId}/${action}`, { method: 'POST' })}
-            onNext={() => {
-              const w = worldRef.current
-              if (w === null || w.slaves.length === 0) return
-              // `world.focusId` is null until something explicitly sets it (the render below falls
-              // back to the first slave) — `findIndex` then returns -1, and a bare `i + 1` would
-              // land back on index 0, the very slave already on screen. Treat "not found" as "before
-              // the first" so the first click always advances.
-              const found = w.slaves.findIndex((s) => s.id === w.focusId)
-              const i = found === -1 ? 0 : found
-              w.focusId = (w.slaves[(i + 1) % w.slaves.length] as { id: string }).id
-              setFrame((f) => f + 1)
-            }}
+    // M61 R17/Task 7: the office in the product's own frame -- `PageShell` is gone, the toolbar
+    // sits above the canvas rather than floating on it, and the Focus card is a real `Card`
+    // beside the canvas (right, 260px) instead of an absolutely-positioned overlay. The whole
+    // thing fills whatever height the project layout leaves it (`min-h-0 flex-1`), not a
+    // hardcoded `h-[calc(100vh-52px-41px)]`.
+    <div className="flex min-h-0 flex-1 flex-col gap-[var(--gap-2)] p-[var(--gap-3)]">
+      <OfficeHud
+        view={hud}
+        onHour={(hour) => {
+          if (worldRef.current !== null) worldRef.current.hourLock = hour
+          setFrame((f) => f + 1)
+        }}
+        onLive={() => {
+          if (worldRef.current !== null) worldRef.current.hourLock = null
+          setFrame((f) => f + 1)
+        }}
+        onZoom={(dir) => zoom(dir)}
+      />
+      {/* `md:flex-row`: the Focus card sits beside the canvas on a normal width and stacks below
+        * it on a narrow one (Resolutions note) -- the canvas region itself is `min-h-0 flex-1` in
+        * both directions, so it always takes whatever room the Focus card (fixed 260px on
+        * `md:`, full width when stacked) leaves it. */}
+      <div className="flex min-h-0 flex-1 flex-col gap-[var(--gap-2)] md:flex-row">
+        <div ref={wrapRef} className="relative min-h-0 min-w-0 flex-1 overflow-hidden rounded-surface border border-line bg-bg-floor">
+          <canvas
+            ref={canvasRef}
+            data-testid="office-canvas"
+            role="img"
+            aria-label={`The project's office: ${hud.slaves} slaves across ${hud.departments} departments, ${hud.working} working`}
+            className="block h-full w-full cursor-grab"
           />
+          {/* The canvas is a picture. This line is the same facts as text, for a person who cannot
+            * see it and for a person whose browser draws nothing -- it is NOT a replacement
+            * office, and the Focus card beside it already gives the per-slave detail (M44 R6). */}
+          <p data-testid="office-fallback" className="sr-only">
+            {hud.slaves} slaves across {hud.departments} departments; {hud.working} working now. The
+            same information is on the Overview tab as cards.
+          </p>
+        </div>
+        {focus !== null && (
+          <div className="w-full shrink-0 md:w-[260px]">
+            <FocusCard
+              key={focus.id}
+              view={focus}
+              archived={initial.workspace.archived}
+              onRun={(runId, action) => sendControl(`/api/w/${workspaceId}/runs/${runId}/${action}`, { method: 'POST' })}
+              onNext={() => {
+                const w = worldRef.current
+                if (w === null || w.slaves.length === 0) return
+                // `world.focusId` is null until something explicitly sets it (the render below
+                // falls back to the first slave) — `findIndex` then returns -1, and a bare `i + 1`
+                // would land back on index 0, the very slave already on screen. Treat "not found"
+                // as "before the first" so the first click always advances.
+                const found = w.slaves.findIndex((s) => s.id === w.focusId)
+                const i = found === -1 ? 0 : found
+                w.focusId = (w.slaves[(i + 1) % w.slaves.length] as { id: string }).id
+                setFrame((f) => f + 1)
+              }}
+            />
+          </div>
         )}
       </div>
-    </PageShell>
+    </div>
   )
 }
