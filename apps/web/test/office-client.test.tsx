@@ -433,10 +433,15 @@ describe('OfficeClient (M61 R17: office in the product frame)', () => {
     }
   })
 
-  it('carries no font-mono anywhere in the toolbar DOM -- the canvas alone keeps the pixel font', async () => {
+  // Fix round 1 (Important finding): `font-mono` was still on FocusCard's avatar-initials tile --
+  // widened past `office-toolbar` alone to `office-focus` too, with a focused slave on screen
+  // (the default `mount()` fixture already focuses Alex) so the card actually renders.
+  it('carries no font-mono anywhere in the toolbar or the Focus card DOM -- the canvas alone keeps the pixel font', async () => {
     await mount()
     const toolbar = screen.getByTestId('office-toolbar')
     expect(toolbar.innerHTML).not.toContain('font-mono')
+    const focus = screen.getByTestId('office-focus')
+    expect(focus.innerHTML).not.toContain('font-mono')
   })
 
   it('renders the Focus card as a real Card beside the canvas, not an absolutely-positioned overlay', async () => {

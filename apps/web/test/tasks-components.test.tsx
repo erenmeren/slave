@@ -1235,13 +1235,16 @@ describe('TasksClient (M61 R9: scrolls inside, not the page)', () => {
 })
 
 // M61 R9/Task 7: the panel's raw run/attempt/artifact details render only in developer mode.
+// Fix round 1, Ruling 7: Cost is the one raw group that is NOT gated -- it stays visible in
+// simple mode, in its own spot between Verification and Worktree, while the other seven do not.
 describe('TaskDetailPanel details -- developer mode only (M61 R9)', () => {
-  it('renders no task-details section in simple mode (the default, unstored mode)', () => {
+  it('renders no task-details section in simple mode, but keeps the ungated Cost group', () => {
     renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', description: 'The full description' })])} />)
     fireEvent.click(screen.getByText('Add the thing'))
     expect(screen.getByText('The full description')).toBeTruthy()
     expect(screen.queryByTestId('task-details')).toBeNull()
-    expect(screen.queryByTestId('details-group')).toBeNull()
+    const groups = screen.getAllByTestId('details-group').map((el) => el.getAttribute('data-group'))
+    expect(groups).toEqual(['cost'])
   })
 
   it('renders task-details once the mode flips to developer', () => {
@@ -1262,9 +1265,13 @@ describe('TaskDetailPanel details -- developer mode only (M61 R9)', () => {
     expect(screen.getByTestId('task-details')).toBeTruthy()
   })
 
-  it('hides it when isDeveloper is explicitly false', () => {
+  it('hides task-details when isDeveloper is explicitly false, but shows Cost and hides Run/Events', () => {
     render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({})} isDeveloper={false} onClose={() => {}} />)
     expect(screen.queryByTestId('task-details')).toBeNull()
+    const groups = screen.getAllByTestId('details-group').map((el) => el.getAttribute('data-group'))
+    expect(groups).toContain('cost')
+    expect(groups).not.toContain('run')
+    expect(groups).not.toContain('events')
   })
 })
 

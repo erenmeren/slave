@@ -61,7 +61,7 @@ export function FocusCard({
           * a "colour literal" in the sense the redesign forbids: the canvas draws thirty distinct
           * sprites and this is the one place their identity carries off it. */}
         <div
-          className="grid h-7 w-7 flex-none place-items-center rounded-tile border font-mono text-[10px] font-semibold"
+          className="grid h-7 w-7 flex-none place-items-center rounded-tile border text-[10px] font-semibold"
           style={{ background: `${view.color}1a`, borderColor: `${view.color}3d`, color: view.color }}
         >
           {view.name.slice(0, 2).toUpperCase()}

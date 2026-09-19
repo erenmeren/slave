@@ -163,11 +163,25 @@ describe('TaskDetailPanel — raw details only in developer mode (M61 R9)', () =
     expect(screen.getByTestId('task-details')).toBeTruthy()
   })
 
-  it('renders nothing at all -- no task-details wrapper and no DetailsGroup -- when isDeveloper is false', () => {
+  // Fix round 1, Ruling 7: Cost is the one raw group that is NOT gated -- it stays in its own spot
+  // (between Verification and Worktree) and renders in both modes, so "nothing at all" is no
+  // longer true; the `task-details` wrapper (the other seven groups) is still absent.
+  it('renders no task-details wrapper (the seven gated groups) but keeps Cost, when isDeveloper is false', () => {
     render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={withRun()} isDeveloper={false} onClose={() => {}} />)
     expect(screen.queryByTestId('task-details')).toBeNull()
-    expect(screen.queryByTestId('details-group')).toBeNull()
     expect(screen.queryByTestId('run-total-cost')).toBeNull()
+    const groups = screen.getAllByTestId('details-group').map((el) => el.getAttribute('data-group'))
+    expect(groups).toEqual(['cost'])
+  })
+
+  // The exact assertion the review asked for: Cost present, Run/Events (two of the seven still
+  // gated groups) absent.
+  it('shows Cost but not Run/Events when isDeveloper is false', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={withRun()} isDeveloper={false} onClose={() => {}} />)
+    const groups = screen.getAllByTestId('details-group').map((el) => el.getAttribute('data-group'))
+    expect(groups).toContain('cost')
+    expect(groups).not.toContain('run')
+    expect(groups).not.toContain('events')
   })
 
   // The identity block above Details (ref, priority, goal stamp, title, status word, the one-line
