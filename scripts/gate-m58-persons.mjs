@@ -460,6 +460,18 @@ try {
     return last
   }
 
+  // M61 Task 9: `new-slave` is the Workforce header action in DEVELOPER mode only now -- simple
+  // mode offers `hire-from-catalogue` instead. Set once, before the first navigation (the same
+  // `addInitScript` idiom `gate-m44-ux-foundation.mjs` uses); it applies to every `page.goto`
+  // this file makes from here on.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('mode', 'developer')
+    } catch {
+      /* stays simple; the click below fails loudly rather than silently finding nothing */
+    }
+  })
+
   // ---- stage 1 -------------------------------------------------------------------------------
   await gotoReliably(`${baseUrl}/workforce?tab=slaves`)
   await page.getByTestId('new-slave').click()

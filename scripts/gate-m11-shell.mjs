@@ -334,6 +334,19 @@ try {
   page.setDefaultTimeout(ACTION_TIMEOUT_MS)
   page.on('pageerror', (error) => console.error(`[browser:pageerror] ${error}`))
 
+  // M61 Task 9: `workforce-segment-departments` (stage 6b below) only renders in developer mode
+  // now -- simple mode hides the whole Workforce tab strip on the `slaves` tab. Set once, here,
+  // before the first navigation (the same `addInitScript` idiom `gate-m44-ux-foundation.mjs`
+  // uses): it applies to every `page.goto`/`page.reload` this file makes from here on, and
+  // nothing else in this scenario depends on simple mode.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('mode', 'developer')
+    } catch {
+      /* stays simple; the segment click below fails loudly rather than silently finding nothing */
+    }
+  })
+
   // ---- Scenario stage 1: /workforce?tab=catalog -- template, company, team, member, all through
   // the team-catalog forms. M24 Task 6 moved the template catalog and company manager off Settings
   // onto the Projects page; M44 R1 moved them again, off the Projects page onto the Workforce

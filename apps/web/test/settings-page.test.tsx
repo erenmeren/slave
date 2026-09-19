@@ -69,9 +69,13 @@ async function waitForModelSelect(): Promise<HTMLSelectElement> {
 }
 
 const routerRefresh = vi.fn()
+const routerReplace = vi.fn()
+let search = ''
 
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ refresh: routerRefresh }),
+  useRouter: () => ({ refresh: routerRefresh, replace: routerReplace }),
+  usePathname: () => '/settings',
+  useSearchParams: () => new URLSearchParams(search),
 }))
 
 function template(
@@ -129,6 +133,8 @@ beforeEach(() => {
 
 afterEach(() => {
   routerRefresh.mockClear()
+  routerReplace.mockClear()
+  search = ''
   // Fix round 1 minor: the Appearance case's `dark` click writes `document.documentElement`'s own
   // `data-theme` attribute and `localStorage[THEME_STORAGE_KEY]` -- real global state `ThemeProvider`
   // re-reads on mount, outside this file's render container and outside vitest's own reset. The
@@ -150,21 +156,39 @@ afterEach(() => {
   }
 })
 
+/** One `settings-nav-item` by its `data-section` (`SettingsFrame`'s own contract) -- the same
+ *  helper shape `settings-frame.test.tsx` uses inline, here reused across many cases. */
+function clickSettingsSection(id: string): void {
+  const item = screen.getAllByTestId('settings-nav-item').find((el) => el.getAttribute('data-section') === id)
+  if (item === undefined) throw new Error(`no settings-nav-item for section ${JSON.stringify(id)}`)
+  fireEvent.click(item)
+}
+
 describe('SettingsClient', () => {
-  it('renders the three panels in order, with the moved-out surfaces gone', () => {
+  // M61 Task 9: the five sections used to all stack in one scroll; `SettingsFrame` shows one at a
+  // time now, mounted on demand -- Providers first (the nav's own order), nothing else in the DOM
+  // until it is chosen.
+  it('mounts one section at a time, Providers first, with the moved-out surfaces gone', () => {
     renderSettings({
       adapters: [],
       showReseed: false,
       mode: 'loopback-only',
       posture: 'loopback-only · no accounts · cross-site requests refused',
     })
+    expect(screen.getByTestId('settings-providers')).toBeTruthy()
     // `Panel` renders `PanelHeader` → `SectionLabel` as its first child when it has a title —
-    // the same idiom `ProjectSettingsClient`'s "renders the four panels in order" test uses.
-    const titles = screen.getAllByTestId('panel').map((p) => p.firstElementChild?.textContent?.trim().toLowerCase())
-    expect(titles).toEqual(['provider adapters', 'security', 'danger zone'])
+    // the same idiom `ProjectSettingsClient`'s "renders the five sections in order" test uses.
+    expect(screen.getAllByTestId('panel').map((p) => p.firstElementChild?.textContent?.trim().toLowerCase())).toEqual([
+      'provider adapters',
+    ])
+    expect(screen.queryByTestId('settings-appearance')).toBeNull()
+    expect(screen.queryByTestId('settings-repositories')).toBeNull()
+    expect(screen.queryByTestId('settings-security')).toBeNull()
+    expect(screen.queryByTestId('settings-danger')).toBeNull()
 
     // The permission matrix, the workspace create form, the template/company forms and the
-    // transport chooser all left this page (M24 Task 5/6) — none of their surfaces render here.
+    // transport chooser all left this page (M24 Task 5/6) — none of their surfaces render here,
+    // on any section.
     expect(screen.queryByTestId('perm-caption')).toBeNull()
     expect(screen.queryByTestId('create-workspace-form')).toBeNull()
     expect(screen.queryByTestId('template-form')).toBeNull()
@@ -173,24 +197,56 @@ describe('SettingsClient', () => {
     expect(screen.queryByTestId('transport-sse')).toBeNull()
   })
 
-  it('states the security posture, honestly and without controls', () => {
+  it('switches to the section clicked, unmounting the one before it', () => {
     renderSettings({
       adapters: [],
       showReseed: false,
       mode: 'loopback-only',
       posture: 'loopback-only · no accounts · cross-site requests refused',
     })
+    clickSettingsSection('security')
+    expect(screen.getByTestId('settings-security')).toBeTruthy()
+    expect(screen.queryByTestId('settings-providers')).toBeNull()
+
+    clickSettingsSection('danger')
+    expect(screen.getByTestId('settings-danger')).toBeTruthy()
+    expect(screen.queryByTestId('settings-security')).toBeNull()
+    expect(screen.getAllByTestId('panel').map((p) => p.firstElementChild?.textContent?.trim().toLowerCase())).toEqual([
+      'danger zone',
+    ])
+  })
+
+  it('states the security posture, honestly and without controls', () => {
+    renderSettings({
+      adapters: [],
+      showReseed: false,
+      mode: 'loopback-only',
+      posture: 'loopback-only · no accounts · cross-site requests refused',
+      initialSection: 'security',
+    })
     const posture = screen.getByTestId('security-posture')
     expect(posture.textContent).toBe('loopback-only · no accounts · cross-site requests refused')
   })
 
   it('renders whatever posture the server computed (accounts mode names the user)', () => {
-    renderSettings({ adapters: [], showReseed: false, mode: 'accounts', posture: 'accounts · signed in as ada · cross-site requests refused' })
+    renderSettings({
+      adapters: [],
+      showReseed: false,
+      mode: 'accounts',
+      posture: 'accounts · signed in as ada · cross-site requests refused',
+      initialSection: 'security',
+    })
     expect(screen.getByTestId('security-posture').textContent).toBe('accounts · signed in as ada · cross-site requests refused')
   })
 
   it('offers Logout only in accounts mode', () => {
-    renderSettings({ adapters: [], showReseed: false, mode: 'loopback-only', posture: 'loopback-only · no accounts · cross-site requests refused' })
+    renderSettings({
+      adapters: [],
+      showReseed: false,
+      mode: 'loopback-only',
+      posture: 'loopback-only · no accounts · cross-site requests refused',
+      initialSection: 'security',
+    })
     expect(screen.queryByTestId('logout')).toBeNull()
   })
 
@@ -198,7 +254,13 @@ describe('SettingsClient', () => {
     const assign = vi.fn()
     Object.defineProperty(window, 'location', { configurable: true, value: { assign, pathname: '/settings', search: '' } })
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
-    renderSettings({ adapters: [], showReseed: false, mode: 'accounts', posture: 'accounts · signed in as ada · cross-site requests refused' })
+    renderSettings({
+      adapters: [],
+      showReseed: false,
+      mode: 'accounts',
+      posture: 'accounts · signed in as ada · cross-site requests refused',
+      initialSection: 'security',
+    })
     await act(async () => {
       fireEvent.click(screen.getByTestId('logout'))
     })
@@ -207,13 +269,19 @@ describe('SettingsClient', () => {
     vi.restoreAllMocks()
   })
 
-  // M57 t8: the Appearance section, folded in beside the provider-adapter cards. `Segmented`
-  // (M57 R21) owns the group's own `appearance-theme`/`appearance-theme-<id>` testids; the
-  // CHOSEN mode's `data-theme-mode` rides on that SAME group element (`Segmented`'s `data`
-  // passthrough), which is what lets a gate read it straight off `appearance-theme` with no
-  // wrapper of this page's own to reach through.
+  // M57 t8: the Appearance section, its own nav entry now (Task 9) rather than folded in beside
+  // the provider-adapter cards. `Segmented` (M57 R21) owns the group's own
+  // `appearance-theme`/`appearance-theme-<id>` testids; the CHOSEN mode's `data-theme-mode` rides
+  // on that SAME group element (`Segmented`'s `data` passthrough), which is what lets a gate read
+  // it straight off `appearance-theme` with no wrapper of this page's own to reach through.
   it('offers the three theme choices and stamps the one that is chosen', () => {
-    renderSettings({ adapters: [], showReseed: false, mode: 'loopback-only', posture: 'loopback-only · no accounts · cross-site requests refused' })
+    renderSettings({
+      adapters: [],
+      showReseed: false,
+      mode: 'loopback-only',
+      posture: 'loopback-only · no accounts · cross-site requests refused',
+      initialSection: 'appearance',
+    })
     expect(screen.getByTestId('appearance-theme').getAttribute('data-theme-mode')).toBe('system')
     act((): void => {
       screen.getByTestId('appearance-theme-dark').click()
@@ -224,11 +292,48 @@ describe('SettingsClient', () => {
 
   // M61 t1: the mode switch's second home, directly under the theme control.
   it('offers the two mode choices and stamps the one that is chosen', () => {
-    renderSettings({ adapters: [], showReseed: false, mode: 'loopback-only', posture: 'loopback-only · no accounts · cross-site requests refused' })
+    renderSettings({
+      adapters: [],
+      showReseed: false,
+      mode: 'loopback-only',
+      posture: 'loopback-only · no accounts · cross-site requests refused',
+      initialSection: 'appearance',
+    })
     act((): void => {
       screen.getByTestId('appearance-mode-developer').click()
     })
     expect(document.documentElement.dataset.mode).toBe('developer')
+  })
+
+  // M61 Task 9: `?section=` (read on the server, `SettingsPage`'s own new test covers the read
+  // itself) reaches this component as `initialSection`, and shows THAT section alone.
+  it('?section=appearance shows the Appearance section only', () => {
+    search = 'section=appearance'
+    renderSettings({
+      adapters: [],
+      showReseed: false,
+      mode: 'loopback-only',
+      posture: 'loopback-only · no accounts · cross-site requests refused',
+      initialSection: 'appearance',
+    })
+    expect(screen.getByTestId('settings-appearance')).toBeTruthy()
+    expect(screen.queryByTestId('settings-providers')).toBeNull()
+    expect(screen.queryByTestId('settings-repositories')).toBeNull()
+    expect(screen.queryByTestId('settings-security')).toBeNull()
+    expect(screen.queryByTestId('settings-danger')).toBeNull()
+  })
+
+  // An unknown or missing `?section=` falls back to the first section rather than rendering
+  // nothing at all.
+  it('falls back to the first section for an unknown initialSection', () => {
+    renderSettings({
+      adapters: [],
+      showReseed: false,
+      mode: 'loopback-only',
+      posture: 'loopback-only · no accounts · cross-site requests refused',
+      initialSection: 'nonsense',
+    })
+    expect(screen.getByTestId('settings-providers')).toBeTruthy()
   })
 })
 
@@ -240,7 +345,7 @@ describe('SettingsClient', () => {
 describe('SettingsPage', () => {
   const currentPrincipal = vi.fn()
 
-  async function renderSettingsPage(): Promise<void> {
+  async function renderSettingsPage(searchParams: { readonly section?: string } = {}): Promise<void> {
     vi.doMock('../src/server/principal.js', () => ({ currentPrincipal }))
     vi.doMock('../src/server/settings.js', () => ({
       buildProviderAdapters: async () => [],
@@ -250,12 +355,18 @@ describe('SettingsPage', () => {
       resolveReposRoot: async () => ({ root: '/home/me/projects', source: 'default' }),
     }))
     vi.doMock('../src/components/SettingsClient.js', () => ({
-      SettingsClient: ({ mode, posture }: { readonly mode: string; readonly posture: string }) => (
-        <div data-testid="settings-client-stub" data-mode={mode} data-posture={posture} />
-      ),
+      SettingsClient: ({
+        mode,
+        posture,
+        initialSection,
+      }: {
+        readonly mode: string
+        readonly posture: string
+        readonly initialSection?: string
+      }) => <div data-testid="settings-client-stub" data-mode={mode} data-posture={posture} data-initial-section={initialSection} />,
     }))
     const { default: SettingsPage } = await import('../src/app/settings/page.js')
-    render(await SettingsPage())
+    render(await SettingsPage({ searchParams: Promise.resolve(searchParams) }))
   }
 
   beforeEach(() => {
@@ -292,6 +403,14 @@ describe('SettingsPage', () => {
     const stub = screen.getByTestId('settings-client-stub')
     expect(stub.getAttribute('data-mode')).toBe('loopback-only')
     expect(stub.getAttribute('data-posture')).toBe('loopback-only · no accounts · cross-site requests refused')
+  })
+
+  // M61 Task 9: `?section=` is read on the SERVER, the same way `?tab=` is on `/workforce`.
+  it('reads ?section= and hands it to SettingsClient as initialSection', async () => {
+    vi.stubEnv('SLAVEOFAI_SESSION_SECRET', '')
+    currentPrincipal.mockResolvedValue(null)
+    await renderSettingsPage({ section: 'appearance' })
+    expect(screen.getByTestId('settings-client-stub').getAttribute('data-initial-section')).toBe('appearance')
   })
 })
 
@@ -730,11 +849,18 @@ describe('the danger zone', () => {
 // M44 erratum E25 / M45 R5: the one page frame reaches this page too. `flush`, so it brings its
 // landmark and its `page-shell` marker and none of its padding -- the frame's own classes are
 // unchanged, which is what keeps `gate:m14-fidelity`'s numbers where they are.
+// M44 erratum E25 / M45 R5: the one page frame reaches this page too. `flush`, so it brings its
+// landmark and its `page-shell` marker and none of its padding -- the shell itself is still
+// untouched by this page's OWN layout, which Task 9 changed from a single stacked column of
+// panels to `SettingsFrame`'s two-column split (its own `settings-frame.test.tsx` covers the
+// frame's own contract; this only pins that the shell still wraps it flush).
 describe('SettingsClient (M44 E25 / M45 R5)', () => {
-  it('renders inside the one page shell, with its own frame classes untouched', () => {
+  it('renders inside the one page shell, with its own two-column layout', () => {
     renderSettings({ adapters: [], showReseed: false, mode: 'loopback-only', posture: 'loopback-only · no accounts · cross-site requests refused' })
     const shell = screen.getByTestId('page-shell')
     expect(shell.className).not.toContain('p-3')
-    expect(shell.querySelector(':scope > div')?.className).toBe('flex flex-col gap-4 p-4')
+    expect(shell.querySelector(':scope > div')?.className).toBe(
+      'grid min-h-0 flex-1 grid-cols-[180px_minmax(0,760px)] gap-[var(--gap-3)] p-[var(--gap-3)]',
+    )
   })
 })

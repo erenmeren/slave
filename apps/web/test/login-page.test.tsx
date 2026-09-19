@@ -57,6 +57,15 @@ describe('LoginPage', () => {
     expect(screen.queryByTestId('login-unconfigured')).toBeNull()
   })
 
+  // M61 R12/R13, Task 9: the form sits on a glass card now, the same `rounded-sheet` corner
+  // radius every Sheet uses -- not the plain `Panel` it used to.
+  it('puts the form inside an element with class rounded-sheet', async () => {
+    vi.stubEnv('SLAVEOFAI_SESSION_SECRET', SECRET)
+    await renderLoginPage({})
+    const card = screen.getByTestId('login-form').closest('.rounded-sheet')
+    expect(card).not.toBeNull()
+  })
+
   it('runs a protocol-relative `next` through safeNext before the form ever sees it', async () => {
     vi.stubEnv('SLAVEOFAI_SESSION_SECRET', SECRET)
     await renderWithStubbedForm({ next: '//evil' })
