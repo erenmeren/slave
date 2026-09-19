@@ -104,7 +104,12 @@ export async function buildTeamLive(workspaceId: string, now: Date = new Date())
     // The exact facts `SlaveCard.tsx:66-120` passes today -- the breaker's rung is the third fact
     // the state is built from, and this row must not disagree with the card about it.
     const state = cardStateFor(slave.status, slave.taskStatus, { breakerLevel: slave.breakerLevel })
-    const doing = doingSentence(slave, org, queuedByRole.get(slave.role) ?? null)
+    // `runtimeRoles`, not `role`: the scheduler's own dispatch key (`packages/domain/src/scheduler
+    // /decide.ts:71` matches `Task.requiredRole` against `runtimeRoles`, never `Slave.role`, which
+    // M37 repurposed as the profile's title). A worker with several dispatch roles takes the first
+    // one that has a queued task.
+    const nextTitle = slave.runtimeRoles.map((role) => queuedByRole.get(role)).find((title) => title !== undefined) ?? null
+    const doing = doingSentence(slave, org, nextTitle)
     return {
       slaveId: slave.id,
       personId: slave.personId,
