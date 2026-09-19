@@ -19,15 +19,31 @@ import { ScrollArea } from './ScrollArea'
  * `virtualized.dynamic` (M61 Task 10 scope fix, controller Ruling 10) opts a caller INTO
  * `Timeline.tsx`'s own `measureElement` idiom instead of trusting `rowHeight` as a fixed row
  * size -- see its own doc comment below for why this is opt-in rather than the only mode.
+ *
+ * `virtualized.gap` (M61 Task 10 review, fix round 1) is `useVirtualizer`'s own `gap` option,
+ * passed straight through -- the library adds it into every item's `start` and into
+ * `getTotalSize()` for you, so a caller that used to space its rows with a flex `gap-[Npx]`
+ * before virtualizing keeps the same spacing without hand-rolling it into `rowHeight`.
+ *
+ * `hideHeader` (M61 Task 10 review, controller Ruling 11) omits the header row entirely --
+ * not an empty one -- for a caller whose "columns" are a visual grid template rather than
+ * actual labelled fields (`KnowledgeClient`'s classification/substance/actions rail has no
+ * column HEADINGS in the design, only the row's own content). The bordered shell around the
+ * body is unchanged either way.
  */
 export function DataTable({
   columns,
   header,
+  hideHeader = false,
   virtualized,
   children,
 }: {
   readonly columns: string
-  readonly header: ReadonlyArray<string>
+  /** Optional when `hideHeader` is true -- there is no header row to label. */
+  readonly header?: ReadonlyArray<string>
+  /** Omits the header row (and its `data-table-header`/`data-table-header-cell` testids)
+   *  entirely rather than rendering one with nothing in it. Default `false`. */
+  readonly hideHeader?: boolean
   /** When set, the body renders `count` rows through `useVirtualizer` instead of `children` --
    *  `render(index)` draws one row (typically a `Row` with this same `columns` template), and only
    *  the rows within (or near) the scrolled viewport ever mount. */
@@ -35,6 +51,8 @@ export function DataTable({
     readonly rowHeight: number
     readonly count: number
     readonly render: (index: number) => React.ReactNode
+    /** The gap between rows, in px -- `useVirtualizer`'s own `gap` option. Default `0`. */
+    readonly gap?: number
     /**
      * Opt-in dynamic sizing (M61 Task 10 scope fix, controller Ruling 10): when true, every row
      * wrapper also carries `ref={virtualizer.measureElement}` -- the standard
@@ -63,6 +81,7 @@ export function DataTable({
     count: virtualized?.count ?? 0,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => virtualized?.rowHeight ?? 0,
+    gap: virtualized?.gap ?? 0,
   })
 
   return (
@@ -72,13 +91,15 @@ export function DataTable({
     // the table fits -- a non-`visible` overflow on one axis computes the other to `auto`, so the
     // rounded card still clips its rows' corners.
     <div data-testid="data-table" className="flex flex-col overflow-x-auto rounded-control border border-line bg-bg-2">
-      <div data-testid="data-table-header" className="grid gap-2 border-b border-line px-3 py-2" style={{ gridTemplateColumns: columns }}>
-        {header.map((label) => (
-          <span key={label} data-testid="data-table-header-cell" className={SECTION_LABEL_CLASS}>
-            {label}
-          </span>
-        ))}
-      </div>
+      {hideHeader !== true && (
+        <div data-testid="data-table-header" className="grid gap-2 border-b border-line px-3 py-2" style={{ gridTemplateColumns: columns }}>
+          {(header ?? []).map((label) => (
+            <span key={label} data-testid="data-table-header-cell" className={SECTION_LABEL_CLASS}>
+              {label}
+            </span>
+          ))}
+        </div>
+      )}
       {virtualized === undefined ? (
         <div data-testid="data-table-rows" className="flex flex-col">
           {children}

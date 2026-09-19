@@ -284,17 +284,17 @@ describe('DataTable', () => {
     expect(screen.getByTestId('data-table-row').className).toContain('last:border-b-0')
   })
 
-  // M61 Task 10 scope fix (controller Ruling 10): `virtualized.dynamic` wires
-  // `ref={virtualizer.measureElement}` onto every row wrapper, alongside the `data-index` it
-  // already carried -- the standard `@tanstack/react-virtual` dynamic-sizing idiom
-  // `activity/Timeline.tsx` already uses, so a caller with variable-height rows (`KnowledgeClient`)
-  // stops its rows overlapping. `PeopleTable`'s own fixed-height wiring never sets it and is
-  // covered by `people-table.test.tsx` alone.
-  it('a dynamic table stamps data-index on its row wrappers (and wires the virtualizer’s measure ref)', () => {
+  // M61 Task 10 review, fix round 1 (Important 2): the first cut of this test only asserted
+  // `data-index` was present, which is true whether or not `measureElement` ever actually ran --
+  // it proved nothing about MEASUREMENT. Rewritten to prove the thing `dynamic` exists for: once
+  // a row's real height is measured, the row AFTER it repositions from that measurement, not from
+  // the `rowHeight` estimate.
+  it('a dynamic table repositions the next row from a measured height, not the rowHeight estimate', () => {
     // `@tanstack/react-virtual` measures its scroll viewport -- and, once `dynamic` wires
     // `measureElement`, each row -- via `offsetWidth`/`offsetHeight` when no `ResizeObserver` is
     // present; jsdom has neither by default. Same idiom `people-table.test.tsx`'s own
-    // `mockElementSizes` uses, restored after so it cannot affect a later test in this file.
+    // `mockElementSizes` uses for the VIEWPORT, restored after so it cannot affect a later test in
+    // this file.
     const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
     const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
     Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 })
@@ -308,6 +308,60 @@ describe('DataTable', () => {
             rowHeight: 40,
             count: 3,
             dynamic: true,
+            render: (index) =>
+              index === 0 ? (
+                // ROW 0's own measured height (not the mocked viewport's 400, not the 40
+                // estimate): an `Object.defineProperty` on this ONE element, set from a ref on a
+                // CHILD of the virtualizer's row wrapper -- React attaches a child's ref before
+                // its parent's during commit, so by the time the wrapper's own
+                // `ref={virtualizer.measureElement}` fires, `wrapper.offsetHeight` already reads
+                // 120 rather than the prototype's mocked 400.
+                <span
+                  ref={(node) => {
+                    const wrapper = node?.parentElement ?? null
+                    if (wrapper !== null) Object.defineProperty(wrapper, 'offsetHeight', { configurable: true, value: 120 })
+                  }}
+                >
+                  row 0
+                </span>
+              ) : (
+                <Row columns="1fr" last={index === 2}>
+                  <span>{`row ${index}`}</span>
+                </Row>
+              ),
+          }}
+        />,
+      )
+      const wrapperFor = (index: number): Element | null | undefined =>
+        document.querySelector(`[data-index="${String(index)}"]`)
+      // Row 0's OWN wrapper sits at the top (its start is 0 regardless of its size).
+      expect((wrapperFor(0) as HTMLElement | null)?.style.transform).toBe('translateY(0px)')
+      // Row 1 starts where row 0's MEASURED size (120) ends -- not the 40px estimate every row
+      // would have used before `measureElement` ran.
+      expect((wrapperFor(1) as HTMLElement | null)?.style.transform).toBe('translateY(120px)')
+    } finally {
+      if (width !== undefined) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', width)
+      if (height !== undefined) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', height)
+    }
+  })
+
+  // M61 Task 10 review, fix round 1 (Important 1): `virtualized.gap` is `useVirtualizer`'s own
+  // `gap` option, passed straight through -- it belongs in every item's `start`, not hand-rolled
+  // into `rowHeight` (which would also inflate `getTotalSize()` by one extra gap's worth).
+  it('gap adds space between virtualized rows, on top of rowHeight', () => {
+    const width = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth')
+    const height = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight')
+    Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 })
+    Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 400 })
+    try {
+      render(
+        <DataTable
+          columns="1fr"
+          header={['Name']}
+          virtualized={{
+            rowHeight: 40,
+            count: 3,
+            gap: 10,
             render: (index) => (
               <Row columns="1fr" last={index === 2}>
                 <span>{`row ${index}`}</span>
@@ -316,15 +370,30 @@ describe('DataTable', () => {
           }}
         />,
       )
-      const rows = screen.getAllByTestId('data-table-row')
-      expect(rows.length).toBeGreaterThan(0)
-      // `data-index` lives on the virtualizer's own wrapper div, one level up from `data-table-row`
-      // -- the same element `measureElement`'s `ref` is wired onto.
-      expect(rows[0]?.parentElement?.getAttribute('data-index')).toBe('0')
+      const second = document.querySelector('[data-index="1"]') as HTMLElement | null
+      // 40 (row 0's height) + 10 (the gap) = 50, not the bare 40 `rowHeight` would give alone.
+      expect(second?.style.transform).toBe('translateY(50px)')
     } finally {
       if (width !== undefined) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', width)
       if (height !== undefined) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', height)
     }
+  })
+
+  // M61 Task 10 review, controller Ruling 11: `hideHeader` omits the row entirely -- not an
+  // empty one -- for a caller whose grid template has no column HEADINGS in the design
+  // (`KnowledgeClient`'s classification/substance/actions rail).
+  it('hideHeader renders no header row at all', () => {
+    render(
+      <DataTable columns="1fr" header={['Name']} hideHeader>
+        <Row columns="1fr">
+          <span>only</span>
+        </Row>
+      </DataTable>,
+    )
+    expect(screen.queryByTestId('data-table-header')).toBeNull()
+    expect(screen.queryAllByTestId('data-table-header-cell')).toHaveLength(0)
+    // The bordered shell around the body is unaffected.
+    expect(screen.getByTestId('data-table').className).toContain('rounded-control')
   })
 })
 

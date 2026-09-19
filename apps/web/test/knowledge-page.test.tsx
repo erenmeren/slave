@@ -410,4 +410,13 @@ describe('KnowledgeClient', () => {
     )
     expect(offenders).toHaveLength(0)
   })
+
+  // M61 Task 10 review, controller Ruling 11: the design has no "kind / memory / actions" column
+  // headings above these rows -- `DataTable`'s `hideHeader` drops that bar (an artifact of routing
+  // through `DataTable` at all) entirely, rather than rendering an empty one.
+  it('renders no column-header row above the rows', () => {
+    render(<KnowledgeClient workspaceId="w1" initial={VIEW} />)
+    expect(screen.queryByTestId('data-table-header')).toBeNull()
+    expect(screen.queryAllByTestId('data-table-header-cell')).toHaveLength(0)
+  })
 })

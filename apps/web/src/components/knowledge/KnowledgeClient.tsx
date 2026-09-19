@@ -37,11 +37,23 @@ import { StatusPill, type StatusTone } from '../ui/StatusPill'
 /**
  * The row grid every `knowledge-row` article already drew (M57 R10): a fixed classification
  * rail, the substance in the middle, and the live actions on the right. `DataTable`'s own
- * `columns`/`header` line up with this same template (M61 Task 10) -- the article's markup
- * inside each row is unchanged; only the list around it is now `DataTable`'s virtualized body.
+ * `columns` line up with this same template (M61 Task 10) -- the article's markup inside each
+ * row is unchanged; only the list around it is now `DataTable`'s virtualized body.
+ *
+ * `hideHeader` (M61 Task 10 review, controller Ruling 11): the design has no "kind / memory /
+ * actions" column HEADINGS above these rows -- that bar was an artifact of routing through
+ * `DataTable` at all, not part of the page. `DataTable`'s bordered shell stays; only the empty
+ * header row it would otherwise draw is gone.
  */
 const ROW_COLUMNS = '110px minmax(0,1fr) 190px'
-const ROW_HEADER = ['kind', 'memory', 'actions'] as const
+
+/**
+ * The gap between rows (M61 Task 10 review, fix round 1): the 11px the rows carried as a plain
+ * `gap-[11px]` flex column before virtualization, now `useVirtualizer`'s own `gap` option
+ * (`DataTable`'s `virtualized.gap`) -- lost when the list first moved into `DataTable` (a
+ * virtualized item's position comes from `rowHeight`/measurement alone unless a gap is stated).
+ */
+const ROW_GAP = 11
 
 /**
  * The virtualizer's starting guess for one row's height (M61 Task 10) -- unlike `PeopleTable`'s
@@ -510,8 +522,8 @@ export function KnowledgeClient({
           <div data-testid="knowledge-rows" className="flex min-h-0 flex-1 flex-col">
             <DataTable
               columns={ROW_COLUMNS}
-              header={[...ROW_HEADER]}
-              virtualized={{ rowHeight: ESTIMATED_ROW_HEIGHT, count: view.rows.length, render: renderRow, dynamic: true }}
+              hideHeader
+              virtualized={{ rowHeight: ESTIMATED_ROW_HEIGHT, count: view.rows.length, render: renderRow, dynamic: true, gap: ROW_GAP }}
             />
           </div>
         )}
