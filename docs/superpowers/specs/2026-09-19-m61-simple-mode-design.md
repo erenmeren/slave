@@ -516,3 +516,7 @@ event, provider or orchestrator change. Any new refusal kind.
 ## 7. Errata
 
 Appended during execution in the form `**En (amends Rx)** — <claim>.`
+
+- **E8 (amends R7/R11)** — `GET /api/w/:id/needs-you` is a third additive web route (over the
+  unchanged `buildNeedsYou`), so the command strip's needs-you bar can refresh on the stream's
+  wake-up without re-reading the whole Team snapshot; found while planning Task 6.
