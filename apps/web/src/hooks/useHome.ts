@@ -36,8 +36,16 @@ export function useHome(initial: HomeSnapshot, archived: boolean): HomeSnapshot 
     const load = async (): Promise<void> => {
       try {
         const response = await fetch(`/api/home${archived ? '?archived=1' : ''}`, { signal: controller.signal })
+        // Belt-and-braces (M61 Task 8 review, item 4): a real aborted `fetch` REJECTS (caught
+        // below), but a request that was already in flight when unmount fired can still resolve
+        // after `controller.abort()` ran -- and a test double that does not implement abort
+        // semantics at all would resolve regardless. Checked again after the `await`, not only
+        // relied on via the `signal` passed above, so a state update can never land on an
+        // unmounted hook either way.
+        if (controller.signal.aborted) return
         if (!response.ok) return
         const next = (await response.json()) as HomeSnapshot
+        if (controller.signal.aborted) return
         setSnapshot(next)
       } catch {
         // Keep the snapshot we have -- a page that empties itself because one poll failed is worse

@@ -414,16 +414,18 @@ try {
   // ---- Scenario stage 2: / -- both project cards start "no company"; assign M11 Gate Co to both.
   await page.goto(`${baseUrl}/`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
 
-  // `project-card` sits on `ui/Card` itself now (M57 Task 6, ruling P17): the per-card `<div>`
-  // that used to carry the testid lost it because a `<button>`-rendering `Card` cannot contain
-  // `assign-company-button`/`restore-project` (also `<button>`s) without nesting a button inside
-  // a button. Those two now render as the Card's SIBLINGS inside that untestid'd wrapper `<div>`,
-  // so scoping to the Card element alone (as this used to) makes them undiscoverable descendants.
-  // Climbing one level with `xpath=..` from the already name-filtered (so already-unique) Card
-  // recovers the wrapper both live in -- everything the Card itself contains is still a descendant
-  // from there, so every other locator built on `projectWrapper` keeps working unchanged.
+  // M61 Task 8 review: `project-card` was deleted with `ProjectsClient` -- Home's `project-row`
+  // (`ProjectRowItem.tsx`) is a `<Link>` for the whole row now, not a `Card`, but the SAME
+  // constraint from M57 ruling P17 still holds: `assign-company-button`/`restore-project`/
+  // `archive-project` are `<button>`s (inside the row's `⋯` menu popover), and a `<button>`
+  // cannot nest inside the row's own `<a>` without nesting an interactive element inside another
+  // -- so they render as the row's SIBLINGS inside the untestid'd wrapper `<div>` `ProjectRowItem`
+  // wraps both in. Climbing one level with `xpath=..` from the already name-filtered (so
+  // already-unique) row recovers that wrapper -- everything the row itself contains (its own
+  // name, goal and, when archived, `project-archived`) is still a descendant from there too, so
+  // every other locator built on `projectWrapper` keeps working unchanged.
   function projectWrapper(name) {
-    return page.getByTestId('project-card').filter({ hasText: name }).locator('xpath=..')
+    return page.getByTestId('project-row').filter({ hasText: name }).locator('xpath=..')
   }
   // M57's card recipe (ProjectsClient.tsx, Task 6) prints the company as plain text under the
   // project name rather than a `ui/Chip` -- the same argument spec R11 makes for moved widgets:

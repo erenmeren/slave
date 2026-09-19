@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { HomeClient } from '../src/components/home/HomeClient.js'
 import { HeaderActionProvider, useHeaderActionNode } from '../src/components/shell/HeaderActionProvider.js'
@@ -187,6 +187,31 @@ describe('HomeClient', () => {
     expect(second?.getAttribute('data-needs-you')).toBe('0')
   })
 
+  // M61 Task 8 review, item 1: the deleted `ProjectsClient` card carried an `archived` chip; the
+  // row must too, and `gate-m11-shell.mjs`'s `projectWrapper(...).getByTestId('project-archived')`
+  // reads it after checking "show archived".
+  it('shows project-archived on an archived project row', () => {
+    renderHome(snapshot({ projects: [project({ id: 'w1', archived: true })] }))
+    expect(screen.getByTestId('project-archived').textContent).toBe('archived')
+  })
+
+  it('has no project-archived chip on an active project row', () => {
+    renderHome(snapshot({ projects: [project({ id: 'w1', archived: false })] }))
+    expect(screen.queryByTestId('project-archived')).toBeNull()
+  })
+
+  // M61 Task 8 review, item 2: "working" is an invariant adjective (`OfficeHud.tsx`'s own
+  // `${view.working} working`), never run through `plural()` -- which would read "2 workings".
+  it('reads the active-task count as an invariant "N working", not pluralized', () => {
+    renderHome(
+      snapshot({
+        projects: [project({ id: 'w1', taskCounts: { done: 0, total: 2, active: 2, blocked: 0 } })],
+      }),
+    )
+    expect(screen.getByTestId('project-row').textContent).toContain('2 working')
+    expect(screen.getByTestId('project-row').textContent).not.toContain('workings')
+  })
+
   it('renders the feed with one feed-item per happening', () => {
     renderHome()
     const feed = screen.getByTestId('home-feed')
@@ -283,10 +308,8 @@ describe('HomeClient', () => {
     })
 
     it('shows Restore for an archived project and posts the restore control on click', async () => {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 })),
-      )
+      const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }))
+      vi.stubGlobal('fetch', fetchMock)
       renderHome(
         snapshot({
           projects: [project({ id: 'w1', archived: true })],
@@ -296,6 +319,11 @@ describe('HomeClient', () => {
       const menuButton = within(row.parentElement as HTMLElement).getByTestId('project-menu')
       fireEvent.click(menuButton)
       expect(screen.getByTestId('restore-project')).toBeTruthy()
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('restore-project'))
+      })
+      expect(fetchMock).toHaveBeenCalledWith('/api/w/w1/restore', expect.objectContaining({ method: 'POST' }))
     })
   })
 })

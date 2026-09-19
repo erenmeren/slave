@@ -11,6 +11,7 @@ import type { ProjectRow } from '../../server/org'
 import { AssignCompanyDialog } from '../AssignCompanyDialog'
 import type { CompanyRow } from '../CompanyManager'
 import { Button } from '../ui/Button'
+import { Chip } from '../ui/Chip'
 import { DangerConfirm } from '../ui/DangerConfirm'
 import { useModalDismiss } from '../ui/useModalDismiss'
 
@@ -64,16 +65,28 @@ export function ProjectRowItem({
         data-workspace={project.id}
         data-status={status.state}
         data-needs-you={project.needsYou}
+        // M61 Task 8 review, Ruling 8: `gate-m16-chrome.mjs` check 3's independent-Prisma-count
+        // oracle now reads this bare attribute instead of counting avatar tiles/an overflow pill
+        // that no longer exist on this row -- same fact (`server/org.ts`'s `ProjectRow.workerCount`).
+        data-team-size={project.workerCount}
         href={`/w/${project.id}`}
         className="grid h-[var(--row-h)] grid-cols-[minmax(0,1fr)_150px_90px_80px] items-center gap-3 rounded-control px-2.5 pr-9 hover:bg-hover"
       >
         <div className="flex min-w-0 items-baseline gap-2">
           <span className="truncate text-[13px] font-medium text-t1">{project.name}</span>
+          {project.archived && (
+            <Chip testId="project-archived" tone="idle">
+              archived
+            </Chip>
+          )}
           <span className="type-meta min-w-0 flex-1 truncate text-t2">{project.goal ?? 'no goal set'}</span>
         </div>
         <div className={`type-meta truncate ${project.needsYou > 0 ? 'font-medium text-accent' : 'text-t2'}`}>
           {status.label}
-          {project.taskCounts.active > 0 && ` · ${plural(project.taskCounts.active, 'working')}`}
+          {/* An invariant adjective, never `plural(n, 'working')` (M61 Task 8 review, item 2) --
+            * "working" describes the STATE these tasks are in, not a countable noun that takes an
+            * `s`; `OfficeHud.tsx`'s own `${view.working} working` is the same idiom. */}
+          {project.taskCounts.active > 0 && ` · ${project.taskCounts.active} working`}
         </div>
         <div className="type-meta text-t2">{project.archived ? '' : formatUsd(project.spend)}</div>
         <div className="type-meta text-t2">{pct}%</div>

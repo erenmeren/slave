@@ -9,13 +9,14 @@ import type { HomeSnapshot } from '../src/server/home.js'
 // here it would spin up a real Prisma client in every unit-test process for no reason).
 const HOME_POLL_MS = 10_000
 
-function snapshot(): HomeSnapshot {
+function snapshot(over: Partial<HomeSnapshot> = {}): HomeSnapshot {
   return {
     projects: [],
     needsYou: [],
     feed: [],
     numbers: { peopleWorking: 0, peopleIdle: 0, spendUsd: 0, unmeasured: false, finishedThisWeek: 0 },
     kpis: [],
+    ...over,
   }
 }
 
@@ -98,9 +99,40 @@ describe('useHome', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/home?archived=1', expect.anything())
   })
 
-  it('aborts the in-flight fetch on unmount', (): void => {
+  it('aborts the in-flight fetch on unmount, and a response arriving after unmount never reaches state', async (): Promise<void> => {
+    // A fetch the test controls the resolution of, unlike the auto-resolving `beforeEach` mock --
+    // this is what lets the assertion below actually distinguish "the guard works" from "the
+    // request just happened to finish before `unmount()` ran".
+    let resolveFetch: ((response: Response) => void) | null = null
+    const pending = new Promise<Response>((resolve) => {
+      resolveFetch = resolve
+    })
+    const controlledFetch = vi.fn((_url: string, _options: { signal: AbortSignal }) => pending)
+    vi.stubGlobal('fetch', controlledFetch)
+
     const initial = snapshot()
-    const { unmount } = renderHook(() => useHome(initial, false))
-    expect(() => unmount()).not.toThrow()
+    const { unmount, result } = renderHook(() => useHome(initial, false))
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(HOME_POLL_MS)
+    })
+    expect(controlledFetch).toHaveBeenCalledTimes(1)
+    const options = controlledFetch.mock.calls[0]?.[1] as { signal: AbortSignal }
+    expect(options.signal.aborted).toBe(false)
+
+    unmount()
+    expect(options.signal.aborted).toBe(true)
+
+    // The response lands AFTER unmount -- a distinguishable snapshot, so a guard that failed to
+    // drop it would show up here rather than passing by coincidence. `pending` is awaited twice
+    // (once as `load()`'s own continuation, once here) with an extra microtask flush after, so
+    // `load()`'s post-`await` guard has definitely run before the assertion reads `result.current`.
+    await act(async () => {
+      resolveFetch?.(new Response(JSON.stringify(snapshot({ numbers: { peopleWorking: 0, peopleIdle: 0, spendUsd: 0, unmeasured: false, finishedThisWeek: 999 } })), { status: 200 }))
+      await pending
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(result.current).toEqual(initial)
   })
 })
