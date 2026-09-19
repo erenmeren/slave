@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useMode } from '../components/mode/ModeProvider'
 // Runtime import, not `../server/home.js`: that module imports `@slave-of-ai/db/client` at module
 // scope, and a client hook value-importing even one pure export from it drags `pg`'s Node-only
 // dependency graph (`fs`, `net`, `tls`, `dns`) into the browser bundle and fails `next build` --
@@ -25,6 +26,10 @@ const HOME_POLL_MS = 10_000
  */
 export function useHome(initial: HomeSnapshot, archived: boolean): HomeSnapshot {
   const [snapshot, setSnapshot] = useState(initial)
+  // I4 (final-review wave): the poll asks for the developer-only KPI strip only when it will
+  // actually be shown -- `buildAnalytics(null)` is an unscoped, cross-workspace read, and simple
+  // mode's own `HomeClient` never renders `KpiStrip` at all.
+  const { isDeveloper } = useMode()
 
   useEffect((): void => {
     setSnapshot(initial)
@@ -35,7 +40,11 @@ export function useHome(initial: HomeSnapshot, archived: boolean): HomeSnapshot 
 
     const load = async (): Promise<void> => {
       try {
-        const response = await fetch(`/api/home${archived ? '?archived=1' : ''}`, { signal: controller.signal })
+        const params = new URLSearchParams()
+        if (archived) params.set('archived', '1')
+        if (isDeveloper) params.set('kpis', '1')
+        const query = params.toString()
+        const response = await fetch(`/api/home${query === '' ? '' : `?${query}`}`, { signal: controller.signal })
         // Belt-and-braces (M61 Task 8 review, item 4): a real aborted `fetch` REJECTS (caught
         // below), but a request that was already in flight when unmount fired can still resolve
         // after `controller.abort()` ran -- and a test double that does not implement abort
@@ -68,7 +77,7 @@ export function useHome(initial: HomeSnapshot, archived: boolean): HomeSnapshot 
       clearInterval(timer)
       document.removeEventListener('visibilitychange', onVisibilityChange)
     }
-  }, [archived])
+  }, [archived, isDeveloper])
 
   return snapshot
 }

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { NeedsYouBar } from '../src/components/project/NeedsYouBar.js'
+import { NeedsYouBar, NeedsYouRow } from '../src/components/project/NeedsYouBar.js'
 import type { NeedsYouItem } from '../src/server/needsYou.js'
 
 /**
@@ -122,5 +123,32 @@ describe('NeedsYouBar', () => {
   it('is absent for an empty queue', () => {
     render(<NeedsYouBar workspaceId="w1" initial={[]} />)
     expect(screen.queryByTestId('needs-you')).toBeNull()
+  })
+
+  it('wraps the list in a ScrollArea capped at 40dvh, so 30 items scroll inside the strip instead of growing it (I2)', () => {
+    const many: NeedsYouItem[] = Array.from({ length: 30 }, (_, i) => ({
+      ...BLOCKED,
+      id: `t-${String(i)}`,
+      title: `Task ${String(i)}`,
+    }))
+    render(<NeedsYouBar workspaceId="w1" initial={many} />)
+    expect(screen.getAllByTestId('needs-you-row')).toHaveLength(30)
+    const scrollArea = screen.getByTestId('scroll-area')
+    expect(scrollArea.className).toMatch(/max-h-/)
+    expect(scrollArea.querySelectorAll('[data-testid="needs-you-row"]')).toHaveLength(30)
+  })
+
+  describe('the age (hydration fix, T11 minor promoted)', () => {
+    it('renders no age text on the server, so the first client render matches it', () => {
+      const html = renderToStaticMarkup(<NeedsYouRow item={DECISION} busy={null} onAnswer={() => {}} />)
+      expect(html).not.toMatch(/ago|just now/)
+    })
+
+    it('shows the real age once mounted client-side', async () => {
+      render(<NeedsYouRow item={DECISION} busy={null} onAnswer={() => {}} />)
+      await waitFor(() => {
+        expect(screen.getByTestId('needs-you-row').textContent).toMatch(/ago|just now/)
+      })
+    })
   })
 })

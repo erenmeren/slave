@@ -74,6 +74,10 @@ describe('the right panel', () => {
     expect(panel.getAttribute('data-mode')).toBe('supervisor')
     // M61 R4: 340px, narrowed from M57's 372px to fit the new 1024px floor.
     expect(panel.className).toContain('w-[340px]')
+    // R14/I3 (final-review wave): a glass surface, not the flat `bg-panel`, matching the rail and
+    // the header.
+    expect(panel.className).toContain('glass')
+    expect(panel.className).toContain('border-edge')
     // I2/I3: the visible title and the landmark name are both DERIVED from the mode, not from a
     // caller-supplied `title` prop (none is even passed above) -- Supervisor mode is the only one
     // where this outer `<aside>` carries its own `aria-label` and is itself the named landmark.

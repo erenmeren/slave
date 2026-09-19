@@ -9,6 +9,7 @@ import { postControl } from '../../lib/postControl'
 import { Button } from '../ui/Button'
 import { Chip } from '../ui/Chip'
 import { LiveDot } from '../ui/LiveDot'
+import { ScrollArea } from '../ui/ScrollArea'
 
 /**
  * One `needs-you-row` (M61 R7/Task 6, spec erratum E8), pulled out of this bar so Home's own
@@ -33,6 +34,13 @@ export function NeedsYouRow({
   readonly busy: string | null
   readonly onAnswer: (decisionId: string, verdict: 'approve' | 'reject') => void
 }): React.JSX.Element {
+  // Hydration-mismatch fix (final-review wave, T11 minor promoted): `formatAge` reads `Date.now()`,
+  // which is a different instant on the server (render time) and the client (hydrate time) --
+  // exactly the divergence `useGreeting` in `home/HomeClient.tsx` already avoids the same way. The
+  // first client render matches the server's (no age text at all); the real age appears one effect
+  // later, same idiom, same reason.
+  const [mounted, setMounted] = useState(false)
+  useEffect((): void => setMounted(true), [])
   return (
     // A `<div>`, not a `<Link>` (review fix round 1, Important 1): a decision row's Approve/
     // Reject are real `<button>`s, and nesting a button inside an anchor is invalid HTML the
@@ -48,7 +56,7 @@ export function NeedsYouRow({
       <Link href={item.href} className="min-w-0 flex-1 truncate text-t1 hover:underline">
         {item.title}
       </Link>
-      <span className="shrink-0 text-t3">{formatAge(item.since)}</span>
+      <span className="shrink-0 text-t3">{mounted ? formatAge(item.since) : ''}</span>
       {item.kind === 'decision' && item.decisionId !== null && (
         <span className="flex flex-none gap-[6px]">
           <Button
@@ -173,7 +181,9 @@ export function NeedsYouBar({
           {errorText}
         </p>
       )}
-      <div className="flex flex-col gap-[var(--gap-1)]">
+      {/* I2 (final-review wave): unbounded, this list grows past the strip's own `overflow-hidden`
+        * frame -- `40dvh` caps it and the list scrolls inside itself instead. */}
+      <ScrollArea className="flex flex-col gap-[var(--gap-1)] max-h-[40dvh]">
         {items.map((item) => (
           <NeedsYouRow
             key={`${item.kind}-${item.id}`}
@@ -182,7 +192,7 @@ export function NeedsYouBar({
             onAnswer={(decisionId, verdict) => void answer(decisionId, verdict)}
           />
         ))}
-      </div>
+      </ScrollArea>
     </section>
   )
 }

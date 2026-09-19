@@ -234,6 +234,11 @@ body {
 }
 @media (prefers-reduced-transparency: reduce) {
   .glass {
+    /* Fixed at class level (final-review wave, E12): the bare `:root` override above loses the
+     * cascade to the dark/developer palette blocks below it, which set `--glass` again on a more
+     * specific selector (`:root[data-theme=…]`/`:root[data-mode=…]`). `.glass` itself always wins
+     * over `--glass`'s value at the point it is READ, so the opaque fallback belongs here. */
+    background: var(--panel);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }

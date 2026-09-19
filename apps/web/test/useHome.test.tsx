@@ -2,6 +2,8 @@
 import { act, renderHook } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useHome } from '../src/hooks/useHome.js'
+import { ModeProvider } from '../src/components/mode/ModeProvider.js'
+import { MODE_STORAGE_KEY } from '../src/lib/modeStorage.js'
 import type { HomeSnapshot } from '../src/server/home.js'
 
 // Mirrors `useHome.ts`'s own local `HOME_POLL_MS` -- not imported from `server/home.js`, the same
@@ -25,11 +27,30 @@ function setVisibility(state: 'visible' | 'hidden'): void {
   document.dispatchEvent(new Event('visibilitychange'))
 }
 
+/** jsdom implements `localStorage` but this runner never hands it over (`command-strip.test.tsx`'s
+ *  own note) -- `ModeProvider`'s hydration effect needs a working one. */
+function installStorage(): void {
+  const cells = new Map<string, string>()
+  vi.stubGlobal('localStorage', {
+    getItem: (key: string): string | null => cells.get(key) ?? null,
+    setItem: (key: string, value: string): void => void cells.set(key, value),
+    removeItem: (key: string): void => void cells.delete(key),
+    clear: (): void => cells.clear(),
+  })
+}
+
+/** I4 (final-review wave): `useHome` now reads `useMode()` -- every `renderHook` below needs the
+ *  same `<ModeProvider>` a real page tree provides. */
+function wrapper({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
+  return <ModeProvider>{children}</ModeProvider>
+}
+
 describe('useHome', () => {
   let fetchMock: ReturnType<typeof vi.fn>
 
   beforeEach((): void => {
     vi.useFakeTimers()
+    installStorage()
     setVisibility('visible')
     fetchMock = vi.fn(async () => new Response(JSON.stringify(snapshot()), { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
@@ -43,7 +64,7 @@ describe('useHome', () => {
 
   it('does not fetch on mount -- the server render is already fresh', (): void => {
     const initial = snapshot()
-    renderHook(() => useHome(initial, false))
+    renderHook(() => useHome(initial, false), { wrapper })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -53,7 +74,7 @@ describe('useHome', () => {
     // literal there would make `useHome`'s own `initial`-resync effect fire (and re-render) on
     // every single render, forever.
     const initial = snapshot()
-    renderHook(() => useHome(initial, false))
+    renderHook(() => useHome(initial, false), { wrapper })
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(HOME_POLL_MS)
@@ -69,7 +90,7 @@ describe('useHome', () => {
   it('does not poll while the tab is hidden', async (): Promise<void> => {
     setVisibility('hidden')
     const initial = snapshot()
-    renderHook(() => useHome(initial, false))
+    renderHook(() => useHome(initial, false), { wrapper })
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(HOME_POLL_MS * 2)
@@ -80,7 +101,7 @@ describe('useHome', () => {
   it('refetches once when the tab becomes visible again', async (): Promise<void> => {
     setVisibility('hidden')
     const initial = snapshot()
-    renderHook(() => useHome(initial, false))
+    renderHook(() => useHome(initial, false), { wrapper })
     expect(fetchMock).not.toHaveBeenCalled()
 
     await act(async () => {
@@ -91,12 +112,30 @@ describe('useHome', () => {
 
   it('requests ?archived=1 when archived is true', async (): Promise<void> => {
     const initial = snapshot()
-    renderHook(() => useHome(initial, true))
+    renderHook(() => useHome(initial, true), { wrapper })
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(HOME_POLL_MS)
     })
     expect(fetchMock).toHaveBeenCalledWith('/api/home?archived=1', expect.anything())
+  })
+
+  it('requests ?kpis=1 only in developer mode (I4)', async (): Promise<void> => {
+    const initial = snapshot()
+    renderHook(() => useHome(initial, false), { wrapper })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(HOME_POLL_MS)
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/home', expect.anything())
+
+    fetchMock.mockClear()
+    window.localStorage.setItem(MODE_STORAGE_KEY, 'developer')
+    const developerInitial = snapshot()
+    renderHook(() => useHome(developerInitial, false), { wrapper })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(HOME_POLL_MS)
+    })
+    expect(fetchMock).toHaveBeenCalledWith('/api/home?kpis=1', expect.anything())
   })
 
   it('aborts the in-flight fetch on unmount, and a response arriving after unmount never reaches state', async (): Promise<void> => {
@@ -111,7 +150,7 @@ describe('useHome', () => {
     vi.stubGlobal('fetch', controlledFetch)
 
     const initial = snapshot()
-    const { unmount, result } = renderHook(() => useHome(initial, false))
+    const { unmount, result } = renderHook(() => useHome(initial, false), { wrapper })
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(HOME_POLL_MS)

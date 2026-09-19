@@ -529,3 +529,5 @@ Appended during execution in the form `**En (amends Rx)** — <claim>.`
   wake-up without re-reading the whole Team snapshot; found while planning Task 6.
 - **E9 (amends R5/§3)** — `sidebar-global` is retired with the tree and replaced by `rail-item[data-rail]`; the rail's landmark is `nav[aria-label="Main"]`. §3's retired list was incomplete; found in Task 3's review.
 - **E10 (amends §5)** — a Sheet's testid is the caller's (`new-project-sheet`, `hire-sheet`, `person-sheet`); `sheet-close` is the shared close.
+- **E11 (amends §5)** — gates m30/m31a/m31b/m50 read `team-card` where they read `slave-card`; `slave-card` has no renderer since the Overview dissolved and stays only as a constants module.
+- **E12 (amends R3)** — the reduced-transparency rule is applied on `.glass` (class specificity), not on `:root`, because the palette blocks outrank a bare `:root`.

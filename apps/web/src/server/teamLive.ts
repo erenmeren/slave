@@ -152,10 +152,14 @@ export async function buildTeamLive(workspaceId: string, now: Date = new Date())
   // The one small query the brief allows beyond the two composed reads: the first `ready` /
   // `assigned` / `backlog` task's title per required role, so an idle seat can say what it would
   // pick up next instead of a bare "Idle". Ordered oldest-first so the first row seen per role is
-  // the one that would actually be picked up next.
+  // the one that would actually be picked up next -- `distinct: ['requiredRole']` (final-review
+  // wave, I5) is what BOUNDS the read to that: Prisma keeps the first row per distinct value under
+  // the given `orderBy`, so this returns at most one row per role no matter how deep the backlog
+  // is, rather than every queued task in the workspace.
   const queuedTasks = await prisma.task.findMany({
     where: { workspaceId, status: { in: ['ready', 'assigned', 'backlog'] } },
     select: { title: true, requiredRole: true },
+    distinct: ['requiredRole'],
     orderBy: { createdAt: 'asc' },
   })
   const queuedByRole = new Map<string, string>()

@@ -175,6 +175,18 @@ describe('HomeClient', () => {
     expect(screen.getAllByTestId('needs-you-row')).toHaveLength(2)
   })
 
+  it('wraps the needs-you queue in a ScrollArea capped at 30dvh, so 30 items scroll inside Home instead of growing it (I2)', () => {
+    const many = Array.from({ length: 30 }, (_, i) => needsYouItem({ id: `t${String(i)}`, title: `Task ${String(i)} — blocked` }))
+    renderHome(snapshot({ needsYou: many }))
+    expect(screen.getAllByTestId('needs-you-row')).toHaveLength(30)
+    // `HappeningFeed` draws its own `scroll-area` too (default testid) -- scoped to the
+    // `home-needs-you` section so this reads the queue's own wrapper, not the feed's.
+    const scrollArea = screen.getByTestId('home-needs-you').querySelector('[data-testid="scroll-area"]')
+    expect(scrollArea).toBeTruthy()
+    expect(scrollArea?.className).toMatch(/max-h-/)
+    expect(scrollArea?.querySelectorAll('[data-testid="needs-you-row"]')).toHaveLength(30)
+  })
+
   it('renders one project-row per project, carrying its workspace, status and needs-you count', () => {
     renderHome()
     const rows = screen.getAllByTestId('project-row')

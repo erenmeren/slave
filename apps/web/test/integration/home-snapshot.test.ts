@@ -111,5 +111,12 @@ describe('buildHomeSnapshot', () => {
     const withArchived = await buildHomeSnapshot({ includeArchived: true })
     expect(withArchived.projects).toHaveLength(3)
     expect(withArchived.projects.map((project) => project.id)).toContain(archived.workspaceId)
+
+    // I4 (final-review wave): `kpis` costs nothing unless asked for -- `buildAnalytics(null)`'s
+    // unscoped read only runs when `includeKpis` is true.
+    expect(snapshot.kpis).toEqual([])
+    const withKpis = await buildHomeSnapshot({ includeKpis: true })
+    expect(withKpis.kpis.length).toBeGreaterThan(0)
+    expect(withKpis.kpis.map((kpi) => kpi.label)).toContain('Active slaves')
   })
 })

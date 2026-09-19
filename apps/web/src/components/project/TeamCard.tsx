@@ -17,6 +17,12 @@ import { StatusPill, TONE_DOT } from '../ui/StatusPill'
  * `data-slave`/`data-status`/`data-state` on the card surface, not on a wrapper, so a gate reading
  * `[data-testid="team-card"][data-slave="…"]` finds the row directly -- the same idiom
  * `organization-row-${slaveId}` used before this milestone, moved onto `ui/Card`'s own `data` bag.
+ *
+ * `data-released` (fix wave after the whole-branch review) carries the SAME fact the deleted
+ * `SlaveCard.tsx`'s own `data-released`/greyed treatment did -- a released worker is still a row,
+ * still opens its panel, and just reads as finished (`docs/ia.md` rule 2, M50 R3/D7). Present only
+ * when `row.released !== null`, exactly as the old card's `data-released` was `undefined` or
+ * `'true'` and never `'false'`.
  */
 export function TeamCard({
   row,
@@ -31,7 +37,15 @@ export function TeamCard({
   return (
     <Card
       testId="team-card"
-      data={{ 'data-slave': row.slaveId, 'data-status': row.status, 'data-state': row.state }}
+      data={{
+        'data-slave': row.slaveId,
+        'data-status': row.status,
+        'data-state': row.state,
+        ...(row.released === null ? {} : { 'data-released': 'true' }),
+      }}
+      // `exactOptionalPropertyTypes`: the prop has to be ABSENT, not `undefined`, when there is
+      // nothing to grey -- so this spreads it in rather than passing a possibly-`undefined` value.
+      {...(row.released === null ? {} : { className: 'opacity-60' })}
       onClick={() => onOpen(row.personId)}
     >
       <div className="flex items-center gap-[var(--gap-1)]">

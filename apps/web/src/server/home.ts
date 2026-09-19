@@ -58,7 +58,9 @@ export interface HomeSnapshot {
     readonly finishedThisWeek: number
   }
   /** The all-workspaces KPI tiles, `buildAnalytics(null).kpis` verbatim -- developer mode only
-   *  (`HomeClient`'s own gate), the same five tiles the deleted Projects page drew. */
+   *  (`HomeClient`'s own gate), the same five tiles the deleted Projects page drew. Empty unless
+   *  `buildHomeSnapshot` was asked for them (`includeKpis`, I4 fix) -- simple mode never shows this
+   *  strip, so it never has to pay for computing it either. */
   readonly kpis: readonly Kpi[]
 }
 
@@ -78,13 +80,19 @@ export interface HomeSnapshot {
  * archived between them) rather than trusting the sidebar's own archived filter alone.
  */
 export async function buildHomeSnapshot(
-  options: { readonly includeArchived?: boolean; readonly now?: Date } = {},
+  options: { readonly includeArchived?: boolean; readonly includeKpis?: boolean; readonly now?: Date } = {},
 ): Promise<HomeSnapshot> {
   const now = options.now ?? new Date()
+  // I4 (final-review wave): `buildAnalytics(null)` is an UNSCOPED read across every workspace --
+  // the 7-day series, run totals and task counts `AnalyticsSnapshot` carries -- built for the five
+  // developer-only KPI tiles this page's own docstring already says they are. `useHome`'s poll ran
+  // it on every tick regardless of mode; `includeKpis` (default false) is what the poll now passes
+  // only in developer mode, and simple mode's `kpis: []` costs nothing.
+  const includeKpis = options.includeKpis ?? false
   const [projects, tree, analytics] = await Promise.all([
     listProjects({ includeArchived: options.includeArchived ?? false }),
     buildSidebarTree(),
-    buildAnalytics(null),
+    includeKpis ? buildAnalytics(null) : Promise.resolve(null),
   ])
   const nameOf = new Map(projects.map((project) => [project.id, project.name]))
   const ids = [...nameOf.keys()]
@@ -141,6 +149,6 @@ export async function buildHomeSnapshot(
       unmeasured: projects.some((project) => project.unmeasuredRuns > 0),
       finishedThisWeek,
     },
-    kpis: analytics.kpis,
+    kpis: analytics?.kpis ?? [],
   }
 }

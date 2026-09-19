@@ -18,8 +18,13 @@ export default async function Home({
   readonly searchParams: Promise<{ readonly archived?: string }>
 }): Promise<React.JSX.Element> {
   const { archived } = await searchParams
+  // I4 (final-review wave): `includeKpis: true` here is the ONE unscoped `buildAnalytics(null)`
+  // read this page pays for -- the server render happens once per navigation, not once per
+  // `HOME_POLL_MS` tick, so it stays cheap even though the server has no way to know yet whether
+  // this visitor is in developer mode (`mode` lives in `localStorage`, not a cookie). `useHome`'s
+  // own poll is the one this fix actually targets: it asks for `kpis=1` only in developer mode.
   const [snapshot, companies] = await Promise.all([
-    buildHomeSnapshot({ includeArchived: archived === '1' }),
+    buildHomeSnapshot({ includeArchived: archived === '1', includeKpis: true }),
     listCompanies(),
   ])
   return <HomeClient initial={snapshot} companies={companies} />

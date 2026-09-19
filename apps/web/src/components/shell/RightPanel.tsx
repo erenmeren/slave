@@ -41,7 +41,7 @@ export function RightPanel({
       // the inner one as the sole named `complementary` region.
       aria-label={showing === 'supervisor' ? label : undefined}
       role={showing === 'supervisor' ? undefined : 'presentation'}
-      className="flex min-h-0 w-[340px] flex-none flex-col border-l border-line bg-panel"
+      className="glass flex min-h-0 w-[340px] flex-none flex-col border-l border-edge"
     >
       {/* One header bar, at the header's own height, so the three columns line up across the top.
         * The panels that move in here bring their own title row BELOW this one -- theirs carries a

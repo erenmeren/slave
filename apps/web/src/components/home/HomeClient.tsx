@@ -149,7 +149,9 @@ export function HomeClient({
               {needsYouError}
             </p>
           )}
-          <div className="flex flex-col gap-[var(--gap-1)]">
+          {/* I2 (final-review wave): unbounded, this list grows past Home's own `overflow-hidden`
+            * frame -- `30dvh` caps it and the list scrolls inside itself instead. */}
+          <ScrollArea className="flex flex-col gap-[var(--gap-1)] max-h-[30dvh]">
             {needsYou.map((item) => (
               <NeedsYouRow
                 key={`${item.workspaceId}-${item.kind}-${item.id}`}
@@ -159,7 +161,7 @@ export function HomeClient({
                 onAnswer={(decisionId, verdict) => void answerNeedsYou(decisionId, verdict)}
               />
             ))}
-          </div>
+          </ScrollArea>
         </section>
       )}
 

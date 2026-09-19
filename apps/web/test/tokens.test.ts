@@ -97,6 +97,19 @@ describe('the token sheet', () => {
     expect(CSS).toContain('@media (prefers-reduced-motion: reduce)')
     expect(CSS).toContain('animation-name: none !important')
   })
+
+  it('degrades .glass to the opaque panel colour under prefers-reduced-transparency, at class specificity (I1 fix, E12)', () => {
+    // The bare `:root` override earlier in the sheet loses the cascade to the palette blocks'
+    // more specific selectors (`:root[data-theme=…]`), so the real fallback has to live on
+    // `.glass` itself -- the second `prefers-reduced-transparency` media query, the one that wraps
+    // `.glass`, not `:root`.
+    const firstGlassRule = CSS.indexOf('.glass {')
+    const mediaStart = CSS.indexOf('@media (prefers-reduced-transparency: reduce)', firstGlassRule)
+    expect(mediaStart, 'a second reduced-transparency media query, after .glass is first declared').toBeGreaterThan(-1)
+    const reduceBlock = blockIn(CSS.slice(mediaStart), '.glass {')
+    expect(reduceBlock).toContain('background: var(--panel)')
+    expect(reduceBlock).toContain('backdrop-filter: none')
+  })
 })
 
 describe('the two mode palettes (M61 R2)', () => {
