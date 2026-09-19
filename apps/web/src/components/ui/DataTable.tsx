@@ -1,27 +1,53 @@
+'use client'
+
+import { useRef } from 'react'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { SECTION_LABEL_CLASS } from './SectionLabel'
+import { ScrollArea } from './ScrollArea'
 
 /**
  * The handoff data table (spec §3): an explicit `grid-template-columns` shared between the header
  * and every row rather than an actual `<table>` — matches the mockups' grid-row layouts (e.g. the
  * slaves table's `200px 130px 120px 1fr 110px 90px 80px`). `columns` is passed straight through to
  * both `DataTable` and each `Row` so they line up.
+ *
+ * `virtualized` (M61 R16) swaps the plain `children` body for a `useVirtualizer` viewport -- same
+ * idiom `activity/Timeline.tsx` already uses on its own bare scroll element, here run inside
+ * `ui/ScrollArea` instead. The head renders exactly as before either way; only the body's DOM
+ * strategy changes, so a caller with a handful of rows never has to opt in.
  */
 export function DataTable({
   columns,
   header,
+  virtualized,
   children,
 }: {
   readonly columns: string
   readonly header: ReadonlyArray<string>
-  readonly children: React.ReactNode
+  /** When set, the body renders `count` rows through `useVirtualizer` instead of `children` --
+   *  `render(index)` draws one row (typically a `Row` with this same `columns` template), and only
+   *  the rows within (or near) the scrolled viewport ever mount. */
+  readonly virtualized?: {
+    readonly rowHeight: number
+    readonly count: number
+    readonly render: (index: number) => React.ReactNode
+  }
+  readonly children?: React.ReactNode
 }): React.JSX.Element {
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const virtualizer = useVirtualizer({
+    count: virtualized?.count ?? 0,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => virtualized?.rowHeight ?? 0,
+  })
+
   return (
     // `overflow-x-auto`, not `overflow-hidden` (M44 final review, minor c): the Slaves table's
     // nine tracks add up to ~1030px of FIXED width, and a hidden overflow simply CUT the last
     // three columns off a narrow window with no way to reach them. Clipping is unchanged wherever
     // the table fits -- a non-`visible` overflow on one axis computes the other to `auto`, so the
     // rounded card still clips its rows' corners.
-    <div data-testid="data-table" className="flex flex-col overflow-x-auto rounded-card border border-line bg-bg-2">
+    <div data-testid="data-table" className="flex flex-col overflow-x-auto rounded-control border border-line bg-bg-2">
       <div data-testid="data-table-header" className="grid gap-2 border-b border-line px-3 py-2" style={{ gridTemplateColumns: columns }}>
         {header.map((label) => (
           <span key={label} data-testid="data-table-header-cell" className={SECTION_LABEL_CLASS}>
@@ -29,9 +55,25 @@ export function DataTable({
           </span>
         ))}
       </div>
-      <div data-testid="data-table-rows" className="flex flex-col">
-        {children}
-      </div>
+      {virtualized === undefined ? (
+        <div data-testid="data-table-rows" className="flex flex-col">
+          {children}
+        </div>
+      ) : (
+        <ScrollArea ref={scrollRef} testId="data-table-rows" className="flex flex-col">
+          <div style={{ height: virtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
+            {virtualizer.getVirtualItems().map((virtualRow) => (
+              <div
+                key={virtualRow.key}
+                data-index={virtualRow.index}
+                style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${virtualRow.start}px)` }}
+              >
+                {virtualized.render(virtualRow.index)}
+              </div>
+            ))}
+          </div>
+        </ScrollArea>
+      )}
     </div>
   )
 }

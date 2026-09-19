@@ -10,6 +10,8 @@ import { DataTable, Row } from '../src/components/ui/DataTable.js'
 import { DetailsGroup } from '../src/components/ui/DetailsGroup.js'
 import { EmptyState } from '../src/components/ui/EmptyState.js'
 import { EmptyTile } from '../src/components/ui/EmptyTile.js'
+import { Kbd } from '../src/components/ui/Kbd.js'
+import { LiveDot } from '../src/components/ui/LiveDot.js'
 import { LoadingState } from '../src/components/ui/LoadingState.js'
 import { PageShell } from '../src/components/ui/PageShell.js'
 import { Panel } from '../src/components/ui/Panel.js'
@@ -148,6 +150,47 @@ describe('StatusPill pulse', () => {
   })
 })
 
+// M61 R16: the pipeline dot `StatusPill` and `Chip` both now render, factored out on its own.
+describe('LiveDot', () => {
+  it('sets data-tone, and defaults to `live-dot` when no testId is given', () => {
+    render(<LiveDot tone="working" />)
+    const dot = screen.getByTestId('live-dot')
+    expect(dot.getAttribute('data-tone')).toBe('working')
+  })
+
+  it('takes a caller testId', () => {
+    render(<LiveDot tone="blocked" testId="my-dot" />)
+    expect(screen.getByTestId('my-dot')).toBeTruthy()
+    expect(screen.queryByTestId('live-dot')).toBeNull()
+  })
+
+  it('adds the pulse class only for the four in-flight tones', () => {
+    for (const tone of ['working', 'planning', 'review', 'waiting'] as const) {
+      const { unmount } = render(<LiveDot tone={tone} testId="d" />)
+      expect(screen.getByTestId('d').className).toContain('animate-[status-pulse')
+      unmount()
+    }
+    for (const tone of ['blocked', 'done', 'paused', 'idle'] as const) {
+      const { unmount } = render(<LiveDot tone={tone} testId="d" />)
+      expect(screen.getByTestId('d').className).not.toContain('animate-[status-pulse')
+      unmount()
+    }
+  })
+
+  it('lets pulse={false} silence an in-flight tone', () => {
+    render(<LiveDot tone="working" pulse={false} testId="d" />)
+    expect(screen.getByTestId('d').className).not.toContain('animate-[status-pulse')
+  })
+})
+
+describe('Kbd', () => {
+  it('renders its children inside a real <kbd> element', () => {
+    render(<Kbd>⌘K</Kbd>)
+    const kbd = screen.getByText('⌘K')
+    expect(kbd.tagName).toBe('KBD')
+  })
+})
+
 describe('StatStrip', () => {
   it('renders n items', () => {
     render(
@@ -199,7 +242,8 @@ describe('DataTable', () => {
     expect(table.className).toContain('overflow-x-auto')
     expect(table.className).not.toContain('overflow-hidden')
     // The card's own rounding is unchanged -- this is a scroll fix, not a shape change (D8).
-    expect(table.className).toContain('rounded-card')
+    // M61 R16: same radius, new name -- `rounded-card` was always an alias of `--radius-control`.
+    expect(table.className).toContain('rounded-control')
   })
 
   // M46 final wave, I1. `last` has three states, not two. Omitted means "my rows are direct
@@ -326,6 +370,26 @@ describe('Chip', () => {
     expect(titled?.getAttribute('title')).toBe('finished')
     expect(plain?.hasAttribute('title')).toBe(false)
   })
+
+  // M61 R16: the tone reads off a `LiveDot`, not a tinted fill -- `TONE_FILL` is gone from this
+  // component entirely, tone or no tone.
+  it('renders a LiveDot for a toned chip, and no bg-tone-* fill class either way', () => {
+    render(<Chip tone="blocked">backend</Chip>)
+    const chip = screen.getByTestId('chip')
+    const dot = screen.getByTestId('live-dot')
+    expect(dot.getAttribute('data-tone')).toBe('blocked')
+    expect(chip.className).not.toMatch(/bg-tone-/)
+  })
+
+  it('renders no dot at all for an untoned chip', () => {
+    render(<Chip>plain</Chip>)
+    expect(screen.queryByTestId('live-dot')).toBeNull()
+  })
+
+  it('is a pill, not the old 5px chip radius', () => {
+    render(<Chip>plain</Chip>)
+    expect(screen.getByTestId('chip').className).toContain('rounded-pill')
+  })
 })
 
 describe('Button', () => {
@@ -386,12 +450,22 @@ describe('Button (M44 R3: one button, three variants, two sizes)', () => {
     expect(sm?.getAttribute('data-size')).toBe('sm')
   })
 
-  it('paints danger on the blocked tone and primary on working, at the handoff alphas', () => {
+  // M61 R16: danger keeps riding the `blocked` tone's alpha fill; primary moves OFF the tone
+  // system entirely and onto the accent surface (the handoff's "go" colour is now `--accent`, not
+  // a tone).
+  it('paints danger on the blocked tone at the handoff alphas, and primary on the accent surface', () => {
     render(<><Button variant="danger">x</Button><Button variant="primary">y</Button></>)
     const [danger, primary] = screen.getAllByTestId('button')
     expect(danger?.className).toContain('bg-tone-blocked/10')
     expect(danger?.className).toContain('border-tone-blocked/24')
-    expect(primary?.className).toContain('bg-tone-working/10')
+    expect(primary?.className).toContain('bg-accent')
+    expect(primary?.className).toContain('text-accent-ink')
+    expect(primary?.className).not.toContain('bg-tone-working')
+  })
+
+  it('scales down on press -- active:scale-[0.97], on every variant', () => {
+    render(<Button variant="ghost">press</Button>)
+    expect(screen.getByTestId('button').className).toContain('active:scale-[0.97]')
   })
 
   it('lets a caller name its own testid without losing the variant attribute', () => {
@@ -412,12 +486,13 @@ describe('Button (M44 R3: one button, three variants, two sizes)', () => {
     expect(button.className).not.toContain('text-text-0')
   })
 
-  it('carries the 5px chip radius on every variant, and passes disabled through', () => {
+  // M61 R16: same radius, new name -- `rounded-chip` was always an alias of `--radius-control`.
+  it('carries the control radius on every variant, and passes disabled through', () => {
     render(<><Button variant="ghost" size="sm" data-testid="gb" disabled>cancel</Button><Button variant="danger" size="sm" data-testid="db">stop</Button></>)
     const ghost = screen.getByTestId('gb') as HTMLButtonElement
-    expect(ghost.className).toContain('rounded-chip')
+    expect(ghost.className).toContain('rounded-control')
     expect(ghost.disabled).toBe(true)
-    expect(screen.getByTestId('db').className).toContain('rounded-chip')
+    expect(screen.getByTestId('db').className).toContain('rounded-control')
   })
 })
 

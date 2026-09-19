@@ -5,13 +5,16 @@ import { describe, expect, it } from 'vitest'
 import { FieldLabel, INPUT_SHELL, SelectField, TextField } from '../src/components/ui/FormControls.js'
 
 describe('FormControls', () => {
-  it('TextField: 7px radius shell, mono label, props reach the input', () => {
+  // M61 R16: `FieldLabel` composes `SECTION_LABEL_CLASS`, which is now `.type-label` (sentence
+  // case, no mono/uppercase) rather than the old 9px mono/uppercase recipe -- the RECIPE, not one
+  // of its old classes, is what this pins (same reasoning `organization-page.test.tsx`'s "the
+  // caption itself" case gives for the same constant).
+  it('TextField: 7px radius shell, type-label caption, props reach the input', () => {
     render(<TextField label="budget (usd)" inputProps={{ 'data-testid': 'tf', 'aria-label': 'budget (USD)', defaultValue: '20' } as React.InputHTMLAttributes<HTMLInputElement>} />)
     const input = screen.getByTestId('tf')
     expect(input.className).toContain('rounded-tile')
     expect((input as HTMLInputElement).value).toBe('20')
-    expect(screen.getByText('budget (usd)').className).toMatch(/font-mono/)
-    expect(screen.getByText('budget (usd)').className).toContain('uppercase')
+    expect(screen.getByText('budget (usd)').className).toBe('type-label')
   })
 
   it('TextField without a label renders no label element', () => {
