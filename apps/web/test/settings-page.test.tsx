@@ -8,6 +8,8 @@ import { clearModelSelectCache } from '../src/components/ModelSelect.js'
 import { ProviderAdapterCards } from '../src/components/ProviderAdapterCards.js'
 import { SettingsClient } from '../src/components/SettingsClient.js'
 import { THEME_STORAGE_KEY, ThemeProvider } from '../src/components/theme/ThemeProvider.js'
+import { ModeProvider } from '../src/components/mode/ModeProvider.js'
+import { MODE_STORAGE_KEY } from '../src/lib/modeStorage.js'
 import type { RosterCompany, RosterMemberRow } from '../src/server/org.js'
 
 // jsdom has no `matchMedia`, and `SettingsClient` now mounts `ThemeProvider` (M57 t8: the
@@ -25,14 +27,17 @@ function installMatchMedia(): void {
 type SettingsClientProps = React.ComponentProps<typeof SettingsClient>
 const reposRoot = { reposRoot: null, resolved: '/home/me/projects', source: 'default' as const }
 
-/** Every `<SettingsClient>` render in this file now needs `ThemeProvider` above it -- the
- *  Appearance section calls `useTheme()`, which throws outside one. */
+/** Every `<SettingsClient>` render in this file now needs `ThemeProvider` AND `ModeProvider` above
+ *  it -- the Appearance section calls `useTheme()` and `useMode()`, either of which throws outside
+ *  its own provider (M61 t1). */
 function renderSettings(
   props: Omit<SettingsClientProps, 'reposRoot'> & Partial<Pick<SettingsClientProps, 'reposRoot'>>,
 ): ReturnType<typeof render> {
   return render(
     <ThemeProvider>
-      <SettingsClient reposRoot={reposRoot} {...props} />
+      <ModeProvider>
+        <SettingsClient reposRoot={reposRoot} {...props} />
+      </ModeProvider>
     </ThemeProvider>,
   )
 }
@@ -136,6 +141,13 @@ afterEach(() => {
   } catch {
     /* nothing was stored -- see above */
   }
+  // Same story for `ModeProvider`'s own attribute and key (M61 t1).
+  document.documentElement.removeAttribute('data-mode')
+  try {
+    window.localStorage.removeItem(MODE_STORAGE_KEY)
+  } catch {
+    /* nothing was stored -- see above */
+  }
 })
 
 describe('SettingsClient', () => {
@@ -208,6 +220,15 @@ describe('SettingsClient', () => {
     })
     expect(document.documentElement.getAttribute('data-theme')).toBe('dark')
     expect(screen.getByTestId('appearance-theme').getAttribute('data-theme-mode')).toBe('dark')
+  })
+
+  // M61 t1: the mode switch's second home, directly under the theme control.
+  it('offers the two mode choices and stamps the one that is chosen', () => {
+    renderSettings({ adapters: [], showReseed: false, mode: 'loopback-only', posture: 'loopback-only · no accounts · cross-site requests refused' })
+    act((): void => {
+      screen.getByTestId('appearance-mode-developer').click()
+    })
+    expect(document.documentElement.dataset.mode).toBe('developer')
   })
 })
 

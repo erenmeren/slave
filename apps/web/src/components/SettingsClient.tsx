@@ -6,6 +6,7 @@ import type { BoundaryMode } from '../lib/authEnv'
 import { errorMessage } from '../lib/postControl'
 import { onUnauthorized } from '../lib/onUnauthorized'
 import { THEME_LABEL, useTheme } from './theme/ThemeProvider'
+import { useMode } from './mode/ModeProvider'
 import { DangerZone } from './DangerZone'
 import { LogoutButton } from './LogoutButton'
 import { ProviderAdapterCards } from './ProviderAdapterCards'
@@ -110,6 +111,9 @@ export function SettingsClient({
   readonly reposRoot: ReposRootState
 }): React.JSX.Element {
   const { theme, setTheme } = useTheme()
+  // Renamed on destructure: this component's own `mode` prop is already `BoundaryMode`
+  // (accounts/loopback-only, M23) -- a same-named UI mode from `useMode()` would shadow it.
+  const { mode: uiMode, setMode: setUiMode } = useMode()
   return (
     // M44 erratum E25 / M45 R5: the shell WRAPS this page's own frame rather than replacing it --
     // `flush` drops the shell's `gap-4 p-3 md:p-4`, so the page keeps its own padding, gap and
@@ -145,6 +149,24 @@ export function SettingsClient({
               testIdPrefix="appearance-theme"
               data={{ 'data-theme-mode': theme }}
             />
+          </div>
+          {/* M61 R1: the mode switch's second home (the rail's own toggle, `mode-toggle`, arrives
+            * in Task 3). Directly under the theme control, same section, same idiom. */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center justify-between gap-4 text-[13.5px]">
+              <div className="font-medium text-t1">Mode</div>
+              <Segmented
+                options={[
+                  { id: 'simple', label: 'Simple' },
+                  { id: 'developer', label: 'Developer' },
+                ]}
+                value={uiMode}
+                onChange={setUiMode}
+                ariaLabel="Mode"
+                testIdPrefix="appearance-mode"
+              />
+            </div>
+            <p className="type-meta m-0 text-t3">Simple hides the developer views; developer mode shows everything and packs it tighter.</p>
           </div>
         </section>
         <section data-testid="settings-repositories" className="flex flex-col gap-3 rounded-page-card border border-line bg-card p-[18px_20px]">

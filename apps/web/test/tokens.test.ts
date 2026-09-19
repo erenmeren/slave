@@ -3,6 +3,8 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 const CSS = readFileSync(fileURLToPath(new URL('../src/app/globals.css', import.meta.url)), 'utf8')
+const SIMPLE = readFileSync(fileURLToPath(new URL('../src/app/tokens/simple.css', import.meta.url)), 'utf8')
+const DEVELOPER = readFileSync(fileURLToPath(new URL('../src/app/tokens/developer.css', import.meta.url)), 'utf8')
 
 /** The handoff README's own names (M57 R1). */
 const NEW_TOKENS = [
@@ -11,6 +13,9 @@ const NEW_TOKENS = [
   '--s-working', '--s-planning', '--s-review', '--s-waiting',
   '--s-blocked', '--s-done', '--s-paused', '--s-idle',
 ]
+
+const SURFACE_TOKENS = ['--glass', '--glass-strong', '--edge']
+const FRAME_TOKENS = ['--radius-control', '--radius-surface', '--radius-sheet', '--fs-body', '--row-h', '--gap-1', '--gap-2', '--gap-3', '--ease-out', '--ease-in-out', '--dur-fast', '--dur-base', '--dur-slow']
 
 /** Every name `src/` already paints with. Nothing here may stop being declared: ~90 files spell
  *  these as Tailwind utilities, and a deleted token is a silently unstyled page. */
@@ -24,28 +29,32 @@ const OLD_TOKENS = [
   '--shadow-resting', '--font-sans', '--font-mono',
 ]
 
-/** The three blocks R2 requires, by their exact selectors. */
-function blockOf(selector: string): string {
-  const at = CSS.indexOf(selector)
-  expect(at, `${selector} is not in globals.css`).toBeGreaterThan(-1)
-  const open = CSS.indexOf('{', at)
+/** The three blocks R2 requires, by their exact selectors. `blockOf` is `blockIn` parameterised on
+ *  `globals.css`'s own text -- the alias layer, `@theme inline` and the radii stay there, so most
+ *  of this file's existing assertions still read `CSS`. The palette itself moved (M61 R2), so the
+ *  three palette assertions below read `SIMPLE` instead. */
+function blockIn(css: string, selector: string): string {
+  const at = css.indexOf(selector)
+  expect(at, `${selector} is not in the sheet`).toBeGreaterThan(-1)
+  const open = css.indexOf('{', at)
   // Token blocks contain no nested braces, so the first `}` closes them.
-  return CSS.slice(open, CSS.indexOf('}', open))
+  return css.slice(open, css.indexOf('}', open))
 }
+const blockOf = (selector: string): string => blockIn(CSS, selector)
 
 describe('the token sheet', () => {
   it('declares every new token on bare :root -- the LIGHT palette', () => {
-    const light = blockOf('\n:root {')
+    const light = blockIn(SIMPLE, '\n:root {')
     for (const token of NEW_TOKENS) expect(light, token).toContain(`${token}:`)
   })
 
   it('redefines every new token under the system-dark guard', () => {
-    const dark = blockOf(":root:not([data-theme='light'])")
+    const dark = blockIn(SIMPLE, ":root:not([data-theme='light'])")
     for (const token of NEW_TOKENS) expect(dark, token).toContain(`${token}:`)
   })
 
   it('redefines every new token under the pinned-dark selector, so the toggle wins both ways', () => {
-    const pinned = blockOf(":root[data-theme='dark']")
+    const pinned = blockIn(SIMPLE, ":root[data-theme='dark']")
     for (const token of NEW_TOKENS) expect(pinned, token).toContain(`${token}:`)
   })
 
@@ -88,4 +97,41 @@ describe('the token sheet', () => {
     expect(CSS).toContain('@media (prefers-reduced-motion: reduce)')
     expect(CSS).toContain('animation-name: none !important')
   })
+})
+
+describe('the two mode palettes (M61 R2)', () => {
+  it('imports both token files right after tailwind', () => {
+    expect(CSS.indexOf("@import './tokens/simple.css'")).toBeGreaterThan(CSS.indexOf("@import 'tailwindcss'"))
+    expect(CSS).toContain("@import './tokens/developer.css'")
+  })
+  it('declares every palette token three times in each file', () => {
+    for (const file of [SIMPLE, DEVELOPER]) for (const token of NEW_TOKENS) {
+      expect(file.split(`${token}:`).length - 1, token).toBe(3)
+    }
+  })
+  it('guards every developer selector on the attribute and no simple selector on it', () => {
+    expect(DEVELOPER).toContain(":root[data-mode='developer'] {")
+    expect(DEVELOPER).toContain(":root[data-mode='developer']:not([data-theme='light'])")
+    expect(DEVELOPER).toContain(":root[data-mode='developer'][data-theme='dark']")
+    expect(SIMPLE).not.toContain('data-mode')
+    expect(SIMPLE).toContain('\n:root {')
+    expect(SIMPLE).toContain(":root:not([data-theme='light'])")
+    expect(SIMPLE).toContain(":root[data-theme='dark']")
+  })
+  it('keeps the status tones identical across the two modes, per theme', () => {
+    const tones = (css: string, selector: string): string[] => blockIn(css, selector).match(/--s-[a-z]+: [^;]+/g) ?? []
+    expect(tones(SIMPLE, '\n:root {')).toEqual(tones(DEVELOPER, ":root[data-mode='developer'] {"))
+    expect(tones(SIMPLE, ":root[data-theme='dark']")).toEqual(tones(DEVELOPER, ":root[data-mode='developer'][data-theme='dark']"))
+  })
+  it('declares the surface tokens in both files and the frame tokens in globals', () => {
+    for (const t of SURFACE_TOKENS) { expect(SIMPLE).toContain(`${t}:`); expect(DEVELOPER).toContain(`${t}:`) }
+    for (const t of FRAME_TOKENS) expect(CSS).toContain(`${t}:`)
+  })
+  it('aliases the eleven old radii onto the three new ones', () => {
+    for (const [old, target] of [['chip', 'control'], ['nav', 'control'], ['tile', 'control'], ['card', 'control'], ['panel', 'control'], ['tile-lg', 'surface'], ['panel-card', 'surface'], ['page-card', 'sheet'], ['bubble', 'sheet']]) {
+      expect(CSS).toContain(`--radius-${old}: var(--radius-${target});`)
+    }
+    expect(CSS).toContain('--radius-pill: 999px')
+  })
+  it('never spells transition: all', () => { expect(CSS).not.toMatch(/transition:\s*all/) })
 })
