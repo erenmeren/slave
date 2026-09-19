@@ -6,3 +6,6 @@ dist/
 packages/db/src/generated/
 apps/web/.next/
 packages/db/prisma/*.db
+
+# brainstorming companion sessions (mockups, per-session)
+.superpowers/brainstorm/
