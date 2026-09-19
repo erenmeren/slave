@@ -8,6 +8,8 @@ import { postJson } from '../../lib/postControl'
 import { useShellFacts } from '../../hooks/useShellFacts'
 import type { SidebarProject } from '../../server/sidebar'
 import { useHeaderActionNode } from './HeaderActionProvider'
+import { HeaderSearch } from './HeaderSearch'
+import { ProjectSwitcher } from './ProjectSwitcher'
 
 /** The three shapes the right half of the split button takes (README "Shell" → Header). A halted
  *  project offers the way OUT rather than the way further in. */
@@ -51,8 +53,8 @@ function fanoutRefusal(data: FanoutEnvelope, nothingHappened: string | null): st
 }
 
 /**
- * The 54px header (M57 R7): a breadcrumb, a halt pill, the money, one split button, and a slot the
- * page fills.
+ * The 54px header (M57 R7, M61 R6): a breadcrumb, the header search, a halt pill, the money, the
+ * `⌘J` hint, one split button, and a slot the page fills.
  *
  * It is mounted by the ROOT layout and is therefore on EVERY page, global routes included -- which
  * is what lets the breadcrumb be the one thing that always says where you are. The project cluster
@@ -62,6 +64,11 @@ function fanoutRefusal(data: FanoutEnvelope, nothingHappened: string | null): st
  * `ProjectHeader.tsx`'s gradient hairline does not come with it. That was the old handoff's
  * signature and the new one draws a plain `--line` rule; `project-header-hairline` is in §3's
  * removed column with "nothing" beside it.
+ *
+ * M61 R5/R6: the breadcrumb's project crumb is now `ProjectSwitcher`'s trigger rather than plain
+ * text -- the tree `SidebarTree` used to draw is gone, and the project list lives in this popover
+ * instead. The crumb's own last/not-last styling (`--t1` 600 vs `--t3`) still wraps it, so the
+ * trigger reads exactly as the text it replaced used to; only its content became a button.
  */
 export function Header({ projects }: { readonly projects: readonly SidebarProject[] }): React.JSX.Element {
   const pathname = usePathname()
@@ -121,19 +128,29 @@ export function Header({ projects }: { readonly projects: readonly SidebarProjec
   return (
     <header
       data-testid="app-header"
-      className="flex h-[54px] flex-none items-center gap-3 border-b border-line bg-panel px-[24px]"
+      className="glass flex h-[54px] flex-none items-center gap-3 border-b border-edge px-[24px]"
     >
       {/* README: 13px, `--t3` segments, the last one `--t1` at 600. `data-crumbs` is the gate's
         * read of the same list, so a breadcrumb that is right on screen and wrong in the DOM is
-        * not a thing that can happen. */}
+        * not a thing that can happen. The PROJECT crumb (index 1, whenever there is one) is the
+        * switcher's trigger rather than plain text (M61 R5) -- its visible text IS `crumb.text`,
+        * so `data-crumbs` and the text on screen never disagree about what the crumb says. */}
       <nav aria-label="Breadcrumb" data-testid="breadcrumb" data-crumbs={crumbs.map((crumb) => crumb.text).join('/')} className="flex items-center gap-[6px] text-[13px]">
         {crumbs.map((crumb, index) => (
           <span key={`${crumb.text}-${String(index)}`} className="flex items-center gap-[6px]">
             {index > 0 && <span aria-hidden className="text-t3">/</span>}
-            <span className={crumb.last ? 'font-semibold text-t1' : 'text-t3'}>{crumb.text}</span>
+            <span className={crumb.last ? 'font-semibold text-t1' : 'text-t3'}>
+              {workspaceId !== null && index === 1 ? (
+                <ProjectSwitcher projects={projects} currentId={workspaceId} currentName={projectName} />
+              ) : (
+                crumb.text
+              )}
+            </span>
           </span>
         ))}
       </nav>
+
+      <HeaderSearch />
 
       {halted && (
         <span
@@ -153,6 +170,16 @@ export function Header({ projects }: { readonly projects: readonly SidebarProjec
       )}
 
       <div className="ml-auto flex items-center gap-2">
+        {/* The Supervisor's `⌘J` hint (M61 R14), unconditional on `facts` -- the panel it toggles
+          * is available on every project route regardless of whether this particular page has
+          * published its facts yet, and `docs/ia.md`'s "Panels that stay where they are" is a
+          * promise about the ROUTE, not about a data fetch's timing. `<Kbd>`-less: plain text, not
+          * the styled primitive R16 introduces elsewhere. */}
+        {workspaceId !== null && (
+          <span data-testid="supervisor-hint" className="inline-flex items-center gap-1 font-mono text-[11px] text-t3">
+            ⌘J
+          </span>
+        )}
         {facts !== null && workspaceId !== null && (
           <>
             <span data-testid="budget" className="flex items-center gap-2 font-mono text-[12.5px] font-medium text-t2">

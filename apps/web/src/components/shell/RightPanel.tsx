@@ -3,7 +3,7 @@
 import { useRightPanel } from './RightPanelProvider'
 
 /**
- * The 372px slot (M57 R8).
+ * The 340px slot (M57 R8, narrowed from 372px by M61 R4 to fit the new 1024px floor).
  *
  * It owns the WIDTH, the surface and the 54px header bar; its content owns everything below. That
  * split is what lets `SlavePanel` and `TaskDetailPanel` move in here for the price of one className
@@ -40,7 +40,7 @@ export function RightPanel({
       // the inner one as the sole named `complementary` region.
       aria-label={showing === 'supervisor' ? label : undefined}
       role={showing === 'supervisor' ? undefined : 'presentation'}
-      className="flex min-h-0 w-[372px] flex-none flex-col border-l border-line bg-panel"
+      className="flex min-h-0 w-[340px] flex-none flex-col border-l border-line bg-panel"
     >
       {/* One header bar, at the header's own height, so the three columns line up across the top.
         * The panels that move in here bring their own title row BELOW this one -- theirs carries a

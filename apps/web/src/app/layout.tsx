@@ -4,7 +4,7 @@ import './globals.css'
 import { buildSidebarTree } from '../server/sidebar'
 import { requirePrincipal } from '../server/principal'
 import { ShellFrame } from '../components/shell/ShellFrame'
-import { SidebarTree } from '../components/shell/SidebarTree'
+import { Rail } from '../components/shell/Rail'
 import { HeaderActionProvider } from '../components/shell/HeaderActionProvider'
 import { RightPanelProvider } from '../components/shell/RightPanelProvider'
 import { ThemeProvider } from '../components/theme/ThemeProvider'
@@ -128,7 +128,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <head>
         <script dangerouslySetInnerHTML={{ __html: BOOT_SCRIPT }} />
       </head>
-      <body className="min-h-screen">
+      {/* No `min-h-screen` any more (M61 R4): `globals.css`'s `html, body { height: 100%; overflow:
+        * hidden }` is what fixes the frame to the viewport now, and a `min-h-screen` body would
+        * fight that by letting the document itself grow past `100dvh`. */}
+      <body>
         <ThemeProvider>
           <ModeProvider>
             <RightPanelProvider>
@@ -138,8 +141,10 @@ export default async function RootLayout({ children }: { children: React.ReactNo
                   * clients, and the breadcrumb has to be able to name the project on all eight.
                   * `ShellFrame` owns the third column, because how wide it is depends on the ROUTE
                   * and on whether somebody collapsed it -- two client facts a server layout has
-                  * no way to read (M57 R8). */}
-                <ShellFrame sidebar={<SidebarTree initial={projects} />} projects={projects}>
+                  * no way to read (M57 R8). The sidebar slot is the icon `Rail` now (M61 R5) --
+                  * `SidebarTree` and the project TREE it drew are gone; the project list lives in
+                  * the header's `ProjectSwitcher` instead, fed by the same `projects` read. */}
+                <ShellFrame sidebar={<Rail />} projects={projects}>
                   {children}
                 </ShellFrame>
               </HeaderActionProvider>

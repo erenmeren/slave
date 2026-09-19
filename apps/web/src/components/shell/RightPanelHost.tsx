@@ -7,17 +7,20 @@ import { useShellFacts } from '../../hooks/useShellFacts'
 import { SupervisorThreadPanel, type PendingDecision } from '../supervisor/SupervisorThreadPanel'
 import { RightPanel } from './RightPanel'
 import { RightPanelDock } from './RightPanelDock'
-import { useRightPanel } from './RightPanelProvider'
+import { useRightWidth } from './RightColumn'
 
 /** One array, so "nothing read yet" does not hand the panel a new identity on every render. */
 const NONE_PENDING: readonly PendingDecision[] = []
 
 /**
- * What goes in the grid's third column, and how wide it is (M57 R8).
+ * What goes in the grid's third column, and how wide it is (M57 R8, M61 R14).
  *
  * NOTHING on a global route: `/`, `/workforce`, `/settings`, `/sim*` and `/analytics` have no
  * project to supervise, and a dock on them would be a button that opens an empty panel. Inside a
- * project it is the 372px panel, or the 52px dock once somebody has collapsed it.
+ * project it is the 340px panel, the 52px dock once somebody has collapsed it, or -- below 1280px
+ * -- the same panel content `position: fixed` at the right, OUTSIDE the grid entirely (`useRightWidth`
+ * already took the project and the collapse state into account; this component only has to ask it
+ * which of the three to draw).
  *
  * The pending-decision count the dock badges comes from one small read this component makes for
  * itself, refetched on the same wake-up everything else in the shell uses (`useShellFacts`'s
@@ -28,7 +31,7 @@ export function RightPanelHost(): React.JSX.Element | null {
   const pathname = usePathname()
   const workspaceId = workspaceIdOf(pathname)
   const facts = useShellFacts(workspaceId)
-  const { collapsed } = useRightPanel()
+  const width = useRightWidth()
   /** Tagged with the project it was read FOR. The state survives a navigation from one project to
    *  the next, and a badge carrying the last project's number is worse than no badge at all --
    *  the same "one workspace at a time" rule `hooks/useShellFacts.ts` states for its own store. */
@@ -59,7 +62,16 @@ export function RightPanelHost(): React.JSX.Element | null {
 
   if (workspaceId === null) return null
   const decisions = pending?.workspaceId === workspaceId ? pending.list : NONE_PENDING
-  if (collapsed) return <RightPanelDock workspaceId={workspaceId} pendingDecisions={decisions.length} />
+  if (width === 'dock') return <RightPanelDock workspaceId={workspaceId} pendingDecisions={decisions.length} />
+  if (width === 'overlay') {
+    return (
+      <div data-testid="right-overlay" className="glass fixed inset-y-0 right-0 z-30 w-[340px] border-l border-line shadow-resting">
+        <RightPanel>
+          <SupervisorThreadPanel workspaceId={workspaceId} pending={decisions} />
+        </RightPanel>
+      </div>
+    )
+  }
   return (
     <RightPanel>
       <SupervisorThreadPanel workspaceId={workspaceId} pending={decisions} />

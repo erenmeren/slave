@@ -661,48 +661,61 @@ try {
   console.log('stage 1 PASSED: absent is system, the pill cycles, the palette moves, and the choice survives a reload')
 
   // ============================================================================================
-  // Stage 2: the sidebar tree, against the database rather than against itself.
+  // Stage 2: the project switcher, against the database rather than against itself (M61 R5: the
+  // tree is gone; `sidebar-project`/`sidebar-needs-you` -> `project-switcher-item[data-needs-you]`,
+  // opened from the header's trigger; `sidebar-section`/`data-section` -> `project-tab`/`data-tab`,
+  // now the project's OWN strip rather than a nested row in a shared tree -- spec §3).
   // ============================================================================================
   const dbProjects = await prisma.workspace.findMany({ where: { archivedAt: null }, select: { id: true, name: true }, orderBy: { name: 'asc' } })
+  await page.click('[data-testid="project-switcher"]')
   const treeRows = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-testid="sidebar-project"]')].map((row) => ({
-      id: row.getAttribute('data-project-id'),
+    [...document.querySelectorAll('[data-testid="project-switcher-item"]')].map((row) => ({
+      id: row.getAttribute('data-workspace'),
       status: row.getAttribute('data-status'),
-      needs: row.querySelector('[data-testid="sidebar-needs-you"]')?.textContent?.trim() ?? null,
+      needs: row.getAttribute('data-needs-you'),
     })),
   )
-  console.log(`stage 2: tree rows = ${JSON.stringify(treeRows)}`)
+  console.log(`stage 2: switcher rows = ${JSON.stringify(treeRows)}`)
   if (JSON.stringify(treeRows.map((row) => row.id)) !== JSON.stringify(dbProjects.map((row) => row.id))) {
-    await fail(`stage 2: the tree lists ${JSON.stringify(treeRows.map((r) => r.id))}, the database has ${JSON.stringify(dbProjects.map((r) => r.id))}`)
+    await fail(`stage 2: the switcher lists ${JSON.stringify(treeRows.map((r) => r.id))}, the database has ${JSON.stringify(dbProjects.map((r) => r.id))}`)
   }
   const seeded = treeRows.find((row) => row.id === workspaceId)
   if (seeded === undefined || seeded.needs === null || !/^\d+$/.test(seeded.needs) || Number(seeded.needs) < 1) {
     await fail(`stage 2: the seeded project has a pending decision and a blocked task, and its needs-you count reads ${JSON.stringify(seeded?.needs)}`)
   }
+  // M61 R18: the strip only ever shows the SIX developer ids (mode set here because the default,
+  // simple, only shows four -- `team, tasks, office, activity` -- and this stage's own history is
+  // the full six).
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('mode', 'developer')
+    } catch {
+      /* stays simple; the assertion below fails loudly rather than silently passing on four */
+    }
+  })
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
-  await waitVisible(page.getByTestId('sidebar-section'), "the open project's section rows")
+  await waitVisible(page.getByTestId('project-tab'), "the open project's own tab bar")
   const sections = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-testid="sidebar-section"]')].map((row) => ({
-      id: row.getAttribute('data-section'),
+    [...document.querySelectorAll('[data-testid="project-tab"]')].map((row) => ({
+      id: row.getAttribute('data-tab'),
       href: row.getAttribute('href'),
     })),
   )
-  console.log(`stage 2: section rows = ${JSON.stringify(sections)}`)
-  if (JSON.stringify(sections.map((row) => row.id)) !== JSON.stringify(['overview', 'tasks', 'organization', 'knowledge', 'activity', 'settings'])) {
-    await fail(`stage 2: the open project's sections are ${JSON.stringify(sections.map((row) => row.id))}`)
+  console.log(`stage 2: tab rows = ${JSON.stringify(sections)}`)
+  if (JSON.stringify(sections.map((row) => row.id)) !== JSON.stringify(['team', 'tasks', 'office', 'activity', 'graph', 'knowledge'])) {
+    await fail(`stage 2: the open project's tabs are ${JSON.stringify(sections.map((row) => row.id))}`)
   }
-  // ONLY THE OPEN PROJECT NESTS. Asserted by the section rows' own hrefs and by their COUNT, not by
-  // a descendant selector under `[data-project-id]`: the section rows are SIBLINGS of the project
-  // row (the anchor cannot contain them), so a `[data-project-id="x"] [data-testid="sidebar-section"]`
-  // query answers null for the open project too and could never fail.
+  // EVERY TAB BELONGS TO THE OPEN PROJECT'S OWN STRIP (M61 R7: `CommandStrip` renders inside
+  // `/w/[workspaceId]/layout.tsx`, one project at a time -- there is no other project's row to leak
+  // in the way there was when this was a shared tree with every project nested in it).
   const foreign = sections.filter((row) => !(row.href ?? '').startsWith(`/w/${workspaceId}`))
   if (foreign.length > 0 || sections.length !== 6) {
     await fail(
-      `stage 2: the tree drew ${String(sections.length)} section row(s), ${String(foreign.length)} of them pointing outside ` +
-        `the open project (${JSON.stringify(foreign)}) -- only the current project nests`,
+      `stage 2: the strip drew ${String(sections.length)} tab row(s), ${String(foreign.length)} of them pointing outside ` +
+        `the open project (${JSON.stringify(foreign)})`,
     )
   }
-  console.log('stage 2 PASSED: the tree is the database, the count is real, and only the open project nests')
+  console.log('stage 2 PASSED: the switcher is the database, the count is real, and the strip is the open project s own tabs')
 
   // ============================================================================================
   // Stage 3: the breadcrumb, on every route the tree can reach.
@@ -779,15 +792,14 @@ try {
   // ============================================================================================
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
   await waitVisible(page.getByTestId('needs-you-card'), 'the Needs you card')
-  // SCOPED to the seeded project's own row (fix round 1). An unscoped
-  // `querySelector('[data-testid="sidebar-needs-you"]')` answers the FIRST badge in the tree, which
-  // is whichever project sorts first by name in whatever database this gate is pointed at -- not
-  // necessarily this one. The badge is a span inside the project's own anchor, so the descendant
-  // selector is exact.
+  // SCOPED to the seeded project's own row (fix round 1), now read off the switcher's own
+  // `data-needs-you` attribute rather than a nested `sidebar-needs-you` span (M61 R5) -- opened
+  // first, since the row only exists in the popover's DOM once it has been clicked open.
+  await page.click('[data-testid="project-switcher"]')
   const before = await page.evaluate(
     (id) => ({
       rows: document.querySelectorAll('[data-testid="needs-you-row"]').length,
-      count: document.querySelector(`[data-project-id="${id}"] [data-testid="sidebar-needs-you"]`)?.textContent?.trim() ?? null,
+      count: document.querySelector(`[data-testid="project-switcher-item"][data-workspace="${id}"]`)?.getAttribute('data-needs-you') ?? null,
     }),
     workspaceId,
   )
@@ -797,27 +809,30 @@ try {
   console.log(`stage 5: rows ${before.rows} -> ${await page.getByTestId('needs-you-row').count()}, pending in the database -> ${resolved}`)
   if (resolved !== 0) await fail(`stage 5: Approve left ${resolved} pending decisions in the database`)
   // AND THE COUNT, not only the row (fix round 1). Read after a RELOAD rather than polled in place,
-  // and that is a fact about the tree rather than a convenience: `SidebarTree` refetches
-  // `GET /api/sidebar` on a pathname change and, on a `ShellFacts` wake-up, at most once per ten
-  // seconds -- and that throttle DROPS the wake-up rather than scheduling it (spec erratum E22,
-  // `SidebarTree.tsx:105-108`). Every wake-up this approval produces lands inside the window this
-  // page's own mount opened, so an in-place poll would be waiting for a fetch the component has
-  // already decided not to make. A reload re-reads the tree SERVER-side, which is the database, and
-  // that is the number the row and the count have to agree about.
+  // and that is a fact about the switcher rather than a convenience: `ProjectSwitcher` refetches
+  // `GET /api/sidebar` on open and on a pathname change, throttled at most once per ten seconds --
+  // and that throttle DROPS the wake-up rather than scheduling it (spec erratum E22, the same rule
+  // `SidebarTree.tsx` used to carry, moved to `ProjectSwitcher.tsx` with the fetch in M61 R5). Every
+  // wake-up this approval produces lands inside the window this page's own mount opened, so an
+  // in-place poll would be waiting for a fetch the component has already decided not to make. A
+  // reload re-reads the tree SERVER-side, which is the database, and that is the number the row and
+  // the count have to agree about. The switcher is reopened after the reload -- a navigation
+  // unmounts the popover along with everything else.
   const expectedCount = String(Number(before.count) - 1)
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
+  await page.click('[data-testid="project-switcher"]')
   const afterCount = await waitUntil(
-    `the sidebar needs-you count to fall to ${expectedCount}`,
+    `the switcher's needs-you count to fall to ${expectedCount}`,
     ACTION_TIMEOUT_MS,
     async () => {
       const seen = await page.evaluate(
-        (id) => document.querySelector(`[data-project-id="${id}"] [data-testid="sidebar-needs-you"]`)?.textContent?.trim() ?? null,
+        (id) => document.querySelector(`[data-testid="project-switcher-item"][data-workspace="${id}"]`)?.getAttribute('data-needs-you') ?? null,
         workspaceId,
       )
       return seen === expectedCount ? { done: true, value: seen } : { done: false, detail: JSON.stringify(seen) }
     },
   )
-  console.log(`stage 5: the sidebar count ${JSON.stringify(before.count)} -> ${JSON.stringify(afterCount)}`)
+  console.log(`stage 5: the switcher's count ${JSON.stringify(before.count)} -> ${JSON.stringify(afterCount)}`)
   console.log('stage 5 PASSED: approved in place, through the route that already existed, and the row and the count went together')
 
   // ============================================================================================

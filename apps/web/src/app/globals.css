@@ -208,6 +208,14 @@
   }
 }
 
+/* M61 R4 -- the page never scrolls; the frame is 100dvh and every region scrolls through its own
+ * `ui/ScrollArea` instead. `body` stays `min-h-screen`-free (`layout.tsx` no longer stamps it). */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   background: var(--bg);
   color: var(--t1);

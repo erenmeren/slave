@@ -682,53 +682,69 @@ try {
   console.log('stage 1 PASSED: three global entries under a Projects root, in order, pointing where they say; /slaves and /skills land on the right tab; /analytics still answers')
 
   // ============================================================================================
-  // Stage 2: the tree's section rows, and the VIEWS chips' three routes.
+  // Stage 2: the project's own tab strip, and the VIEWS chips' three routes.
+  //
+  // M61 R5/R18: `SidebarTree`'s nested `sidebar-section` rows are gone; the six section ids live on
+  // `project-tab`/`data-tab` now, on the project's OWN strip (`CommandStrip`, Task 6), and they are
+  // mode-aware -- simple mode shows four, developer mode all six. Developer mode is set here (an
+  // `addInitScript`, the same shape `gate-m49-memory.mjs` uses) so this stage keeps measuring all
+  // six, exactly as it always has. `project-tab` does not exist until Task 6 lands `CommandStrip`,
+  // so this stage stays RED until then -- the edit below is the vocabulary this stage will use once
+  // it does, not a claim that it passes today.
   // ============================================================================================
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('mode', 'developer')
+    } catch {
+      /* stays simple; the assertion below fails loudly rather than silently passing on four */
+    }
+  })
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
-  await waitVisible(page.getByTestId('sidebar-section'), "the project's section rows in the tree")
-  const sectionIds = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-testid="sidebar-section"]')].map((row) => row.getAttribute('data-section') ?? ''),
+  await waitVisible(page.getByTestId('project-tab'), "the project's own tab bar (developer mode)")
+  const sections = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid="project-tab"]')].map((row) => ({
+      id: row.getAttribute('data-tab') ?? '',
+      href: row.getAttribute('href') ?? '',
+    })),
   )
-  console.log(`stage 2: section rows = ${JSON.stringify(sectionIds)}`)
-  const EXPECTED_SECTIONS = ['overview', 'tasks', 'organization', 'knowledge', 'activity', 'settings']
+  const sectionIds = sections.map((row) => row.id)
+  console.log(`stage 2: tab rows = ${JSON.stringify(sections)}`)
+  const EXPECTED_SECTIONS = ['team', 'tasks', 'office', 'activity', 'graph', 'knowledge']
   if (JSON.stringify(sectionIds) !== JSON.stringify(EXPECTED_SECTIONS)) {
-    await fail(`stage 2: the tree's sections are ${JSON.stringify(sectionIds)}, expected ${JSON.stringify(EXPECTED_SECTIONS)}`)
+    await fail(`stage 2: the strip's tabs are ${JSON.stringify(sectionIds)}, expected ${JSON.stringify(EXPECTED_SECTIONS)}`)
   }
   // The LABEL assertion the tab strip used to carry, re-pointed at the rows that carry those words
-  // now. `Organization` became `Team` in M57 R6 -- a label change over an unchanged route -- and
-  // this line is where a reviewer sees that, in the same commit as the component.
+  // now. `Organization` became `Team` in M57 R6, and `Overview` became `Team`'s own page (M61 R7/R8)
+  // -- a label change over an unchanged route each time, and this line is where a reviewer sees it,
+  // in the same commit as the component.
   const sectionLabels = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-testid="sidebar-section"]')].map((row) =>
-      // The Tasks row carries a count in its own text, the way the tab's badge did; the label is
+    [...document.querySelectorAll('[data-testid="project-tab"]')].map((row) =>
+      // The Work row carries a count in its own text, the way the tab's badge did; the label is
       // what is left.
       (row.textContent ?? '').replace(/\d+$/, '').trim(),
     ),
   )
-  console.log(`stage 2: section labels = ${JSON.stringify(sectionLabels)}`)
-  const EXPECTED_LABELS = ['Overview', 'Tasks', 'Team', 'Knowledge', 'Activity', 'Settings']
+  console.log(`stage 2: tab labels = ${JSON.stringify(sectionLabels)}`)
+  const EXPECTED_LABELS = ['Team', 'Work', 'Office', 'Activity', 'Graph', 'Knowledge']
   if (JSON.stringify(sectionLabels) !== JSON.stringify(EXPECTED_LABELS)) {
-    await fail(`stage 2: the tree's section labels are ${JSON.stringify(sectionLabels)}, expected ${JSON.stringify(EXPECTED_LABELS)}`)
+    await fail(`stage 2: the strip's tab labels are ${JSON.stringify(sectionLabels)}, expected ${JSON.stringify(EXPECTED_LABELS)}`)
   }
-  // M57 R11: what `Advanced ▾` held is three VISIBLE chips now. No menu to open, and therefore no
-  // Escape-refocus contract to hold -- the destinations are the promise `docs/ia.md` makes, and
-  // they are all three here, at the URLs they always had.
-  const viewHrefs = await page.evaluate(() =>
-    Object.fromEntries(
-      [...document.querySelectorAll('[data-testid="sidebar-view"]')].map((chip) => [
-        chip.getAttribute('data-view') ?? '',
-        chip.getAttribute('href') ?? '',
-      ]),
-    ),
-  )
-  console.log(`stage 2: VIEWS chips = ${JSON.stringify(viewHrefs)}`)
-  if (viewHrefs.graph !== `/w/${workspaceId}/graph`) {
-    await fail(`stage 2: the Graph chip points at ${JSON.stringify(viewHrefs.graph)}, expected /w/${workspaceId}/graph`)
+  // M57 R11: what `Advanced ▾` held is three VISIBLE chips (README) / tabs (M61) now. Graph and
+  // Office moved onto the strip itself (`sidebar-view` -> `project-tab`, spec §3) and their hrefs
+  // are measured off `sections` above, in place of the old `sidebar-view`/`data-view` read. Analytics
+  // is the one member `VIEWS` still owns (M61 R18 reduces `VIEWS` to it alone); it is a project-scoped
+  // chip with no route of its own under `/w/:id`, and `SidebarTree` -- the only component that ever
+  // drew it -- is deleted with no replacement surface for it in the frame this task builds. Its href
+  // is therefore NOT re-asserted here: a `sidebar-view`/`project-tab` selector for "analytics" can
+  // never match (`TABS` has no such id), and a check that can never pass is worse than no check.
+  // Flagged for the task that gives Analytics a home in the new frame.
+  const graphTab = sections.find((row) => row.id === 'graph')
+  const officeTab = sections.find((row) => row.id === 'office')
+  if (graphTab?.href !== `/w/${workspaceId}/graph`) {
+    await fail(`stage 2: the Graph tab points at ${JSON.stringify(graphTab?.href)}, expected /w/${workspaceId}/graph`)
   }
-  if (viewHrefs.office !== `/w/${workspaceId}/office`) {
-    await fail(`stage 2: the Office chip points at ${JSON.stringify(viewHrefs.office)}, expected /w/${workspaceId}/office`)
-  }
-  if (viewHrefs.analytics !== `/analytics?workspace=${workspaceId}`) {
-    await fail(`stage 2: the Analytics chip points at ${JSON.stringify(viewHrefs.analytics)}, expected /analytics?workspace=${workspaceId}`)
+  if (officeTab?.href !== `/w/${workspaceId}/office`) {
+    await fail(`stage 2: the Office tab points at ${JSON.stringify(officeTab?.href)}, expected /w/${workspaceId}/office`)
   }
   // NOT DECORATION: both routes still render (M44's own two checks, kept verbatim -- a chip that
   // points at a page nobody can draw is a chip that lies).
@@ -740,7 +756,7 @@ try {
   console.log('stage 2: /w/<id>/office rendered office-canvas')
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
 
-  console.log('stage 2 PASSED: six section rows with the right words, three VIEWS chips, and both canvases still drawing')
+  console.log('stage 2 PASSED: six tab rows with the right words and hrefs, and both canvases still drawing')
 
   // ============================================================================================
   // Stages 3 and 4, in ONE pass over the pages: the shell contract and the raw-token scan.

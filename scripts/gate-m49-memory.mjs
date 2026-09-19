@@ -1538,26 +1538,37 @@ try {
   //          can do about it.
   // ============================================================================================
 
+  // M61 R5/R18: `SidebarTree`'s nested `sidebar-section` rows are gone; the six section ids live on
+  // `project-tab`/`data-tab` now, on the project's OWN strip, and are mode-aware -- simple mode
+  // shows four, developer mode all six. Developer mode is set BEFORE the navigation below (the same
+  // `addInitScript` shape `gate-m44-ux-foundation.mjs`'s stage 2 now uses) so this stage keeps
+  // measuring all six. `project-tab` does not exist until Task 6 lands `CommandStrip`, so this stage
+  // stays RED until then.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('mode', 'developer')
+    } catch {
+      /* stays simple; the assertion below fails loudly rather than silently passing on four */
+    }
+  })
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
   await waitVisible(page.getByTestId('strip'), "the project's Overview")
-  // M57 R5: the project's sections are the sidebar tree's rows now, and each carries its ROUTE
-  // SEGMENT on `data-section` -- the same six ids the tab strip carried, with two labels changed.
   const tabs = await page
-    .locator('[data-testid="sidebar-section"]')
-    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-section') ?? ''))
-  console.log(`stage 7 -- the project's section rows: ${JSON.stringify(tabs)}`)
+    .locator('[data-testid="project-tab"]')
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-tab') ?? ''))
+  console.log(`stage 7 -- the project's tab rows: ${JSON.stringify(tabs)}`)
   await assertEqual(
     tabs,
-    ['overview', 'tasks', 'organization', 'knowledge', 'activity', 'settings'],
-    'stage 7: six section rows, with Knowledge the fourth of them',
+    ['team', 'tasks', 'office', 'activity', 'graph', 'knowledge'],
+    'stage 7: six tab rows, with Knowledge the sixth of them',
   )
-  const knowledgeRow = page.locator('[data-testid="sidebar-section"][data-section="knowledge"]')
+  const knowledgeRow = page.locator('[data-testid="project-tab"][data-tab="knowledge"]')
   const knowledgeTab = (await knowledgeRow.first().textContent())?.trim() ?? ''
   const knowledgeHref = await knowledgeRow.first().getAttribute('href')
-  console.log(`stage 7 -- the fourth row reads ${JSON.stringify(knowledgeTab)} and goes to ${JSON.stringify(knowledgeHref)}`)
-  if (knowledgeTab !== 'Knowledge') await fail(`stage 7: the fourth row reads ${JSON.stringify(knowledgeTab)}, expected "Knowledge"`)
+  console.log(`stage 7 -- the sixth row reads ${JSON.stringify(knowledgeTab)} and goes to ${JSON.stringify(knowledgeHref)}`)
+  if (knowledgeTab !== 'Knowledge') await fail(`stage 7: the sixth row reads ${JSON.stringify(knowledgeTab)}, expected "Knowledge"`)
   if (knowledgeHref !== `/w/${workspaceId}/knowledge`) {
-    await fail(`stage 7: the fourth row goes to ${JSON.stringify(knowledgeHref)}`)
+    await fail(`stage 7: the sixth row goes to ${JSON.stringify(knowledgeHref)}`)
   }
 
   const briefLink = page.getByTestId('brief-knowledge')

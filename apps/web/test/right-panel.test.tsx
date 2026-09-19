@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { render, screen, within, act } from '@testing-library/react'
+import { render, screen, within, act, waitFor, fireEvent } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { RightPanelProvider, useRightPanel } from '../src/components/shell/RightPanelProvider.js'
 import { RightPanel } from '../src/components/shell/RightPanel.js'
 import { RightPanelDock } from '../src/components/shell/RightPanelDock.js'
+import { SUPERVISOR_STORAGE_KEY } from '../src/lib/supervisorStorage.js'
 
 let pathname = '/w/w1'
 
@@ -12,6 +13,18 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
 }))
+
+/** jsdom DOES implement `localStorage`, but this runner never hands it over (Node 26's own global
+ *  shadows it) -- the same stub `theme.test.tsx`/`mode.test.tsx` install. */
+function installStorage(): void {
+  const cells = new Map<string, string>()
+  vi.stubGlobal('localStorage', {
+    getItem: (key: string): string | null => cells.get(key) ?? null,
+    setItem: (key: string, value: string): void => void cells.set(key, value),
+    removeItem: (key: string): void => void cells.delete(key),
+    clear: (): void => cells.clear(),
+  })
+}
 
 const closed = vi.fn()
 
@@ -42,10 +55,12 @@ function Opener(): React.JSX.Element {
 beforeEach((): void => {
   pathname = '/w/w1'
   closed.mockClear()
+  installStorage()
 })
 
 afterEach((): void => {
   vi.clearAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('the right panel', () => {
@@ -57,7 +72,8 @@ describe('the right panel', () => {
     )
     const panel = screen.getByTestId('right-panel')
     expect(panel.getAttribute('data-mode')).toBe('supervisor')
-    expect(panel.className).toContain('w-[372px]')
+    // M61 R4: 340px, narrowed from M57's 372px to fit the new 1024px floor.
+    expect(panel.className).toContain('w-[340px]')
     // I2/I3: the visible title and the landmark name are both DERIVED from the mode, not from a
     // caller-supplied `title` prop (none is even passed above) -- Supervisor mode is the only one
     // where this outer `<aside>` carries its own `aria-label` and is itself the named landmark.
@@ -190,5 +206,71 @@ describe('the dock', () => {
     expect(screen.queryByTestId('task-body')).toBeNull()
     // And the owning page was told, so the `?task=` this button walked away from went with it.
     expect(closed).toHaveBeenCalledTimes(1)
+  })
+})
+
+/** A probe reaching `useRightPanel()` the way a page does -- see `app-shell.test.tsx`'s own copy
+ *  of this pattern; `collapsed` is a fresh value on every render, so a captured reference would
+ *  report the first render's state forever. */
+function mountPanel(): () => ReturnType<typeof useRightPanel> {
+  let panel: ReturnType<typeof useRightPanel> | null = null
+  function Probe(): null {
+    panel = useRightPanel()
+    return null
+  }
+  render(
+    <RightPanelProvider>
+      <Probe />
+    </RightPanelProvider>,
+  )
+  return (): ReturnType<typeof useRightPanel> => {
+    if (panel === null) throw new Error('the provider rendered no state')
+    return panel
+  }
+}
+
+describe('the Supervisor remembers being closed (M61 R14)', () => {
+  it('reads a collapsed choice from storage after hydration', async () => {
+    localStorage.setItem(SUPERVISOR_STORAGE_KEY, 'collapsed')
+    const panel = mountPanel()
+    // FLAT `false` first (hydration must match the server, same rule `ThemeProvider`/`ModeProvider`
+    // keep) -- the mount effect that reads storage lands a beat later.
+    await waitFor((): void => {
+      expect(panel().collapsed).toBe(true)
+    })
+  })
+
+  it('stays open when nothing is stored, and writes "collapsed" / "open" as collapse()/expand() are called', () => {
+    const panel = mountPanel()
+    expect(panel().collapsed).toBe(false)
+    act((): void => panel().collapse())
+    expect(panel().collapsed).toBe(true)
+    expect(localStorage.getItem(SUPERVISOR_STORAGE_KEY)).toBe('collapsed')
+    act((): void => panel().expand())
+    expect(panel().collapsed).toBe(false)
+    expect(localStorage.getItem(SUPERVISOR_STORAGE_KEY)).toBe('open')
+  })
+
+  it('toggles on Mod+J while on a project route', () => {
+    pathname = '/w/w1'
+    const panel = mountPanel()
+    expect(panel().collapsed).toBe(false)
+    act((): void => {
+      fireEvent.keyDown(window, { key: 'j', metaKey: true })
+    })
+    expect(panel().collapsed).toBe(true)
+    act((): void => {
+      fireEvent.keyDown(window, { key: 'j', metaKey: true })
+    })
+    expect(panel().collapsed).toBe(false)
+  })
+
+  it('does nothing on a global route, where there is no panel to toggle', () => {
+    pathname = '/workforce'
+    const panel = mountPanel()
+    act((): void => {
+      fireEvent.keyDown(window, { key: 'j', metaKey: true })
+    })
+    expect(panel().collapsed).toBe(false)
   })
 })
