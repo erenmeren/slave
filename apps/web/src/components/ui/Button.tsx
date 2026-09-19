@@ -49,7 +49,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       data-testid="button"
       data-variant={variant}
       data-size={size}
-      className={`inline-flex items-center justify-center gap-1.5 rounded-control border ${GEOMETRY[size]} text-xs font-medium transition-colors transition-transform duration-[var(--dur-base)] ease-[var(--ease-out)] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50 ${SURFACE[variant]} ${className ?? ''}`}
+      className={`inline-flex items-center justify-center gap-1.5 rounded-control border ${GEOMETRY[size]} text-xs font-medium transition-[color,background-color,border-color,transform] duration-[var(--dur-base)] ease-[var(--ease-out)] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50 ${SURFACE[variant]} ${className ?? ''}`}
       {...rest}
     />
   )

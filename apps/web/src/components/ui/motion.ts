@@ -1,8 +1,8 @@
 /**
- * The motion constants `Sheet` animates with (M61 R15/R16). This file and `Sheet.tsx` are the
- * ONLY two files in `src/` that import `motion` -- every other consumer of a spring/duration value
- * imports the plain numbers from here instead, so the dependency stays load-bearing in exactly one
- * place.
+ * The motion constants `Sheet` animates with (M61 R15/R16). This file holds only plain numbers --
+ * it does not itself import the `motion` package. `Sheet.tsx` is the ONLY file in `src/` that
+ * imports `motion`; every other consumer of a spring/duration value (this file included) imports
+ * the plain numbers from here instead, so the dependency stays load-bearing in exactly one place.
  */
 
 /** The enter spring: a critically-damped (`bounce: 0`) spring tuned to *feel* like a 0.35s curve

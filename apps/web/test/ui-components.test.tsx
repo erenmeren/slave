@@ -468,6 +468,18 @@ describe('Button (M44 R3: one button, three variants, two sizes)', () => {
     expect(screen.getByTestId('button').className).toContain('active:scale-[0.97]')
   })
 
+  // Review fix round 1, Important: `transition-colors` and `transition-transform` stacked on one
+  // element both set the `transition-property` LONGHAND, so whichever Tailwind emits second wins
+  // outright and the other's properties stop transitioning at all -- not a partial-coverage bug, a
+  // silent all-or-nothing one. One arbitrary-value utility naming every property sidesteps it.
+  it('names every transitioned property in one utility, not two that fight over transition-property', () => {
+    render(<Button variant="ghost">press</Button>)
+    const className = screen.getByTestId('button').className
+    expect(className).toContain('transition-[color,background-color,border-color,transform]')
+    expect(className).not.toContain('transition-colors')
+    expect(className).not.toContain('transition-transform')
+  })
+
   it('lets a caller name its own testid without losing the variant attribute', () => {
     render(<Button variant="ghost" data-testid="my-button">x</Button>)
     expect(screen.getByTestId('my-button').getAttribute('data-variant')).toBe('ghost')
