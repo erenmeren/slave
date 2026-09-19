@@ -1552,7 +1552,8 @@ try {
     }
   })
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
-  await waitVisible(page.getByTestId('strip'), "the project's Overview")
+  // M61 R7 review fix round 1, Important 2: `strip` -> `stat-work` (selector rename).
+  await waitVisible(page.getByTestId('stat-work'), "the project's Team tab")
   const tabs = await page
     .locator('[data-testid="project-tab"]')
     .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-tab') ?? ''))

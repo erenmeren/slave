@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { NeedsYouItem } from '../../server/needsYou'
 import { useShellFacts } from '../../hooks/useShellFacts'
 import { formatAge } from '../../lib/format'
+import { postControl } from '../../lib/postControl'
 import { Button } from '../ui/Button'
 import { LiveDot } from '../ui/LiveDot'
 
@@ -23,6 +24,13 @@ const NEEDS_YOU_REFETCH_MS = 5_000
  * exactly the kind of fact that snapshot's writes can create or resolve. The throttle keeps a
  * fast-streaming page (many events in a few seconds) from re-asking this route on every one of
  * them.
+ *
+ * Review fix round 1 (Important 1): a `decision` row answers in place again, the way the deleted
+ * `NeedsYouCard.tsx` let it -- `postControl` against the same
+ * `/api/w/:id/supervisor/decisions/:id/(approve|reject)` route, `needs-you-approve`/
+ * `needs-you-reject`, and the same shared `needs-you-error` line. It refetches directly on success
+ * rather than waiting for the throttled poll: the row it just answered must not sit there stale
+ * for up to `NEEDS_YOU_REFETCH_MS`.
  */
 export function NeedsYouBar({
   workspaceId,
@@ -32,6 +40,8 @@ export function NeedsYouBar({
   readonly initial: readonly NeedsYouItem[]
 }): React.JSX.Element | null {
   const [items, setItems] = useState<readonly NeedsYouItem[]>(initial)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [errorText, setErrorText] = useState<string | null>(null)
   const shellFacts = useShellFacts(workspaceId)
   const lastFetchedAt = useRef(0)
 
@@ -43,6 +53,18 @@ export function NeedsYouBar({
     setItems(initial)
   }, [initial])
 
+  const load = async (): Promise<void> => {
+    try {
+      const response = await fetch(`/api/w/${workspaceId}/needs-you`)
+      if (!response.ok) return
+      const next = (await response.json()) as readonly NeedsYouItem[]
+      setItems(next)
+    } catch {
+      // Keep the list we have -- a bar that empties itself because one poll failed is worse
+      // than one that is a few seconds stale (`ProjectSwitcher.tsx`'s own rule).
+    }
+  }
+
   useEffect((): (() => void) | undefined => {
     if (shellFacts === null) return undefined
     const now = Date.now()
@@ -50,41 +72,76 @@ export function NeedsYouBar({
     lastFetchedAt.current = now
     let cancelled = false
     void (async (): Promise<void> => {
-      try {
-        const response = await fetch(`/api/w/${workspaceId}/needs-you`)
-        if (!response.ok) return
-        const next = (await response.json()) as readonly NeedsYouItem[]
-        if (!cancelled) setItems(next)
-      } catch {
-        // Keep the list we have -- a bar that empties itself because one poll failed is worse
-        // than one that is a few seconds stale (`ProjectSwitcher.tsx`'s own rule).
-      }
+      if (!cancelled) await load()
     })()
     return (): void => {
       cancelled = true
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` closes over `workspaceId`
+    // alone and is recreated every render; depending on it would defeat the throttle above.
   }, [workspaceId, shellFacts])
+
+  /** Copied off the deleted `NeedsYouCard.tsx`'s own `answer` -- same route, same "no optimistic
+   *  removal, the refusal belongs to the attempt that earned it" rule. It DOES refetch on success
+   *  now, though (unlike the old card, which rode the page's own stream): this bar has no stream
+   *  of its own to ride, so the row it just answered has to be asked for directly. */
+  const answer = async (decisionId: string, verdict: 'approve' | 'reject'): Promise<void> => {
+    setBusy(decisionId)
+    setErrorText(null)
+    const result = await postControl(`/api/w/${workspaceId}/supervisor/decisions/${decisionId}/${verdict}`)
+    setBusy(null)
+    if (!result.ok) {
+      setErrorText(result.error)
+      return
+    }
+    lastFetchedAt.current = Date.now()
+    await load()
+  }
 
   if (items.length === 0) return null
 
   return (
     <section data-testid="needs-you" className="rounded-surface border border-accent/35 bg-accent/10 px-3.5 py-2.5">
+      {errorText !== null && (
+        <p role="alert" data-testid="needs-you-error" className="type-meta mb-[var(--gap-1)] text-s-blocked">
+          {errorText}
+        </p>
+      )}
       <div className="flex flex-col gap-[var(--gap-1)]">
         {items.map((item) => (
-          <Link
-            key={`${item.kind}-${item.id}`}
-            data-testid="needs-you-row"
-            data-kind={item.kind}
-            href={item.href}
-            className="type-meta flex items-center gap-2"
-          >
+          // A `<div>`, not a `<Link>` (review fix round 1, Important 1): a decision row's Approve/
+          // Reject are real `<button>`s, and nesting a button inside an anchor is invalid HTML the
+          // Task 6 version got away with only because nothing on the row was ever clicked but the
+          // row itself. The title is the row's own link now; the buttons are its siblings.
+          <div key={`${item.kind}-${item.id}`} data-testid="needs-you-row" data-kind={item.kind} className="type-meta flex items-center gap-2">
             <LiveDot tone="waiting" />
-            <span className="min-w-0 flex-1 truncate text-t1">{item.title}</span>
+            <Link href={item.href} className="min-w-0 flex-1 truncate text-t1 hover:underline">
+              {item.title}
+            </Link>
             <span className="shrink-0 text-t3">{formatAge(item.since)}</span>
-            <Button variant="primary" size="sm">
-              Open
-            </Button>
-          </Link>
+            {item.kind === 'decision' && item.decisionId !== null && (
+              <span className="flex flex-none gap-[6px]">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  data-testid="needs-you-approve"
+                  disabled={busy === item.decisionId}
+                  onClick={() => void answer(item.decisionId as string, 'approve')}
+                >
+                  Approve
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  data-testid="needs-you-reject"
+                  disabled={busy === item.decisionId}
+                  onClick={() => void answer(item.decisionId as string, 'reject')}
+                >
+                  Reject
+                </Button>
+              </span>
+            )}
+          </div>
         ))}
       </div>
     </section>

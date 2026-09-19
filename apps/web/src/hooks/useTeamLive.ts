@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react'
 import { publishShellFacts } from './useShellFacts'
+import { publishStreamState } from './useStreamState'
 import { useWorkspaceStream, type WorkspaceStreamState } from './useWorkspaceStream'
 import type { TeamLiveSnapshot } from '../server/teamLive'
 
@@ -22,6 +23,15 @@ export function useTeamLive(workspaceId: string, initial: TeamLiveSnapshot): Wor
     initial,
     onSnapshot: (snapshot) => publishShellFacts(workspaceId, snapshot.shellFacts),
   })
+  const { connection, latencyMs } = state
+
+  // Review fix round 1, Important 5: the rail's live chip reads `hooks/useStreamState.ts`, which
+  // was published by `OverviewClient.tsx` (and still is by `TasksClient.tsx:69-71`, the shape this
+  // copies) but was dropped when `TeamLive` replaced the Overview -- the chip went dark on `/w/:id`.
+  useEffect((): void => {
+    publishStreamState(workspaceId, { connection, latencyMs })
+  }, [workspaceId, connection, latencyMs])
+  useEffect((): (() => void) => () => publishStreamState(workspaceId, null), [workspaceId])
 
   // The mount-time publish `onSnapshot` alone cannot give: the stream's first refetch lands after
   // the SSE `onopen` plus a 250ms debounce, and the header must not show its own fallback facts for

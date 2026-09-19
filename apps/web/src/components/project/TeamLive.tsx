@@ -44,7 +44,7 @@ export function TeamLive({
   readonly skillCatalogue?: readonly { readonly skillId: string; readonly name: string; readonly providerName: string }[]
   readonly projects?: readonly AssignableProject[]
 }): React.JSX.Element {
-  const { snapshot } = useTeamLive(workspaceId, initial)
+  const { snapshot, error } = useTeamLive(workspaceId, initial)
   const view = snapshot ?? initial
   const { mode, isDeveloper } = useMode()
   const router = useRouter()
@@ -118,6 +118,10 @@ export function TeamLive({
   return (
     <section data-testid="team-live" className="flex min-h-0 flex-1 flex-col gap-[var(--gap-2)] p-[var(--gap-3)]">
       {view.haltedReason !== null && <HaltBanner reason={view.haltedReason} />}
+      {/* Review fix round 1, Important 6: carried off `OverviewClient.tsx`'s own band, same words,
+        * same tone, no testid of its own -- the deleted page never gave it one, so this one does
+        * not either; a test reads it by role/text the way that page's own test did. */}
+      {error !== null && <Alert variant="notice">showing stale data: {error}</Alert>}
       {/* M33 §4, carried off `OverviewClient.tsx`'s own band: standing provenance, not a warning --
         * `role="status"`, the neutral surface, same as it always was. */}
       {view.adoptedFrom !== null && (
@@ -183,7 +187,19 @@ export function TeamLive({
         <Stat
           testId="stat-goal"
           label="Goal"
-          value={view.stats.goal ?? 'No goal yet'}
+          value={
+            // Review fix round 1, Important 8: clamped to two lines with the whole of it one
+            // hover away, the same rule the deleted `OverviewClient.tsx`'s own goal line followed
+            // -- `project-goal-line` is the testid `gate-m45-project-experience.mjs` reads it by
+            // (Ruling 6), moved here rather than reinvented.
+            <span
+              data-testid="project-goal-line"
+              {...(view.stats.goal === null ? {} : { title: view.stats.goal })}
+              className="line-clamp-2"
+            >
+              {view.stats.goal ?? 'No goal yet'}
+            </span>
+          }
           note={
             <Link data-testid="goal-edit" href={`/w/${workspaceId}/settings#goal`} className="text-accent">
               Edit goal
@@ -246,17 +262,28 @@ function TeamPersonSlot({
 
   useEffect((): void => {
     setLoaded(false)
+    // Review fix round 1, Important 7: BOTH fetches are caught now, and so is the `Promise.all`
+    // itself -- the first fetch had no `.catch` at all, so a rejection (offline, a network error)
+    // left the slot on `team-panel-loading` forever with an unhandled rejection behind it, instead
+    // of the `team-panel-error` state that already existed for exactly this case.
     void Promise.all([
-      fetch(`/api/persons/${personId}`).then(async (response) => (response.ok ? ((await response.json()) as unknown) : null)),
+      fetch(`/api/persons/${personId}`)
+        .then(async (response) => (response.ok ? ((await response.json()) as unknown) : null))
+        .catch(() => null),
       fetch(`/api/w/${workspaceId}/overview`)
         .then(async (response) => (response.ok ? ((await response.json()) as unknown) : null))
         .catch(() => null),
-    ]).then(([detail, snapshot]) => {
-      setPerson(personOf(detail))
-      setSlave(liveSeatOf(cardsOf(snapshot), slaveId, personId))
-      setHaltedReason(haltedReasonOf(snapshot))
-      setLoaded(true)
-    })
+    ])
+      .then(([detail, snapshot]) => {
+        setPerson(personOf(detail))
+        setSlave(liveSeatOf(cardsOf(snapshot), slaveId, personId))
+        setHaltedReason(haltedReasonOf(snapshot))
+        setLoaded(true)
+      })
+      .catch(() => {
+        setPerson(null)
+        setLoaded(true)
+      })
   }, [personId, slaveId, workspaceId, personTick])
 
   if (!loaded) return <LoadingState testId="team-panel-loading" message="opening this slave…" />

@@ -104,7 +104,8 @@ describe('CommandStrip', () => {
     const rows = screen.getAllByTestId('needs-you-row')
     expect(rows).toHaveLength(2)
     expect(rows.map((row) => row.getAttribute('data-kind'))).toEqual(['decision', 'blocked_task'])
-    expect(rows[0]?.getAttribute('href')).toBe('/w/w1#decision-d-1')
+    // The row is a `<div>` now (review fix round 1, Important 1) -- its title is the `<a>`.
+    expect(rows[0]?.querySelector('a')?.getAttribute('href')).toBe('/w/w1#decision-d-1')
     expect(rows[0]?.textContent).toContain('Staffing: nobody can review')
 
     rerender(

@@ -1398,37 +1398,22 @@ try {
   // ============================================================================================
   // Stage 7, continued: the three figures on the real page.
   // ============================================================================================
+  // M61 R7 review fix round 1, Important 2: `brief`/`brief-tile[data-brief="cost"]` -> `stat-spend`
+  // -- the deleted `ProjectBrief`'s cost tile has no home on the Team tab, and `stat-spend`'s own
+  // value is the same `spentUsd` figure (`formatUsd`), read directly off the `Stat` rather than off
+  // a tile that no longer exists. The three other facts this stage used to read here --
+  // `brief-cost-actual`/`-estimated`/`-upper-bound`/`-unmeasured-runs` -- have no replacement
+  // anywhere in the new tree; this narrows what stage 7 verifies (a real gap, not a rename) and is
+  // left as a known concern (see the M61 Task 6 report) rather than guessed at.
   await gotoReliably(`${baseUrl}/w/${cost.workspace.id}`)
-  await waitVisible(page.getByTestId('brief'), 'the project brief on the cost project')
-  const costTile = await page.evaluate(() => {
-    const tile = document.querySelector('[data-testid="brief-tile"][data-brief="cost"]')
-    if (tile === null) return null
-    const read = (testId) => {
-      const node = tile.querySelector(`[data-testid="${testId}"]`)
-      return node === null ? null : (node.textContent ?? '').replace(/\s+/g, ' ').trim()
-    }
-    return {
-      all: (tile.textContent ?? '').replace(/\s+/g, ' ').trim(),
-      actual: read('brief-cost-actual'),
-      estimated: read('brief-cost-estimated'),
-      upperBound: read('brief-cost-upper-bound'),
-      unmeasuredRuns: read('brief-cost-unmeasured-runs'),
-    }
-  })
-  console.log(`stage 7: the cost tile = ${JSON.stringify(costTile)}`)
-  if (costTile === null) await fail('stage 7: there is no cost tile on the project brief')
-  await assertEqual(costTile.actual, expectedActual, 'stage 7: brief-cost-actual')
-  await assertEqual(costTile.estimated, expectedEstimated, 'stage 7: brief-cost-estimated')
-  await assertEqual(costTile.upperBound, expectedUpperBound, 'stage 7: brief-cost-upper-bound')
-  // The two runs the upper bound is built from, said out loud on the tile: `upperBoundUsd` is
-  // `spentUsd` plus one `RUN_UNMEASURED_CAP_USD` per concluded run that left no figure, and BOTH the
-  // unmeasured run and the estimable one are such runs -- an estimate is a display figure, not a
-  // measurement (spec R5).
-  await assertEqual(costTile.unmeasuredRuns, '2 unmeasured runs (not in the total)', 'stage 7: brief-cost-unmeasured-runs')
-  if (!costTile.all.includes(expectedHeadline)) {
-    await fail(`stage 7: the tile's big figure is not ${JSON.stringify(expectedHeadline)}: ${JSON.stringify(costTile.all)}`)
-  }
-  console.log(`stage 7 PASSED: ${expectedHeadline} · ${expectedActual} · ${expectedEstimated} · ${expectedUpperBound}, and spentUsd never moved`)
+  await waitVisible(page.getByTestId('stat-spend'), 'the spend stat on the cost project')
+  const spendValue = await page.evaluate(
+    () => (document.querySelector('[data-testid="stat-spend"] .type-heading')?.textContent ?? '').trim(),
+  )
+  console.log(`stage 7: the spend stat's value = ${JSON.stringify(spendValue)}`)
+  const expectedSpendValue = `$${MEASURED_USD.toFixed(2)}`
+  await assertEqual(spendValue, expectedSpendValue, 'stage 7: stat-spend value')
+  console.log(`stage 7 PASSED: ${expectedSpendValue} on stat-spend, and spentUsd never moved`)
 
   // ============================================================================================
   // Stage 9: in a real browser -- the label and not the key, the breaker card, and the word.

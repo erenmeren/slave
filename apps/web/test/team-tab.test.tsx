@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TeamLive } from '../src/components/project/TeamLive.js'
 import { ModeProvider, useMode } from '../src/components/mode/ModeProvider.js'
+import { RightPanel } from '../src/components/shell/RightPanel.js'
 import { RightPanelProvider } from '../src/components/shell/RightPanelProvider.js'
+import { useStreamState } from '../src/hooks/useStreamState.js'
 import type { TeamLiveRow, TeamLiveSnapshot } from '../src/server/teamLive.js'
 import type { OrganizationView } from '../src/server/organization.js'
 
@@ -22,8 +24,12 @@ vi.mock('next/navigation', () => ({
 }))
 
 const selectSlave = vi.fn()
+// A mutable module-level binding, not a fixed `[null, selectSlave]` -- the review fix round 1
+// panel-error case (Important 7) needs a REAL `?slave=` selection to open the panel, which the
+// original fixed mock could never produce (`selectSlave` was a spy, not real state).
+let mockSelectedId: string | null = null
 vi.mock('../src/hooks/useSelectedId.js', () => ({
-  useSelectedId: () => [null, selectSlave],
+  useSelectedId: () => [mockSelectedId, selectSlave],
 }))
 
 /** jsdom implements `localStorage` but this runner never hands it over (`rail.test.tsx`'s own
@@ -39,10 +45,13 @@ function installStorage(): void {
 }
 
 class SilentEventSource {
+  static instances: SilentEventSource[] = []
   onmessage: ((event: { data: string }) => void) | null = null
   onerror: (() => void) | null = null
   onopen: (() => void) | null = null
-  constructor(public url: string) {}
+  constructor(public url: string) {
+    SilentEventSource.instances.push(this)
+  }
   close(): void {}
 }
 
@@ -50,6 +59,8 @@ beforeEach((): void => {
   installStorage()
   document.documentElement.removeAttribute('data-mode')
   selectSlave.mockClear()
+  mockSelectedId = null
+  SilentEventSource.instances = []
   vi.stubGlobal('EventSource', SilentEventSource as unknown as typeof EventSource)
 })
 
@@ -280,5 +291,78 @@ describe('TeamLive', () => {
     expect(hint.getAttribute('data-capability')).toBe('backend.api-design')
     expect(hint.textContent).toContain('Ask Alex before touching the checkout schema.')
     expect(screen.getByTestId('organization-advice')).toBeTruthy()
+  })
+
+  // Review fix round 1, Important 8: clamped to two lines, with the whole of it one hover away.
+  it('clamps the goal line to two lines, with the full text one hover away', () => {
+    const goal = 'Ship the checkout flow end to end, including refunds and partial captures.'
+    renderTeam(snapshot([row({})], { stats: { inProgress: 0, done: 0, goal } }))
+    const line = screen.getByTestId('project-goal-line')
+    expect(line.textContent).toBe(goal)
+    expect(line.getAttribute('title')).toBe(goal)
+    expect(line.className).toContain('line-clamp-2')
+  })
+
+  // Review fix round 1, Important 5: `hooks/useTeamLive.ts` publishes `useStreamState`, the same
+  // pair `TasksClient.tsx:69-71` does, so the rail's live chip is right on `/w/:id` too.
+  it('publishes the stream connection state for the rail chip', () => {
+    function StreamProbe(): React.JSX.Element {
+      const state = useStreamState('w1')
+      return <span data-testid="stream-probe" data-connection={state?.connection ?? 'none'} />
+    }
+    render(
+      <ModeProvider>
+        <RightPanelProvider>
+          <TeamLive workspaceId="w1" initial={snapshot([row({})])} />
+          <StreamProbe />
+        </RightPanelProvider>
+      </ModeProvider>,
+    )
+    expect(screen.getByTestId('stream-probe').getAttribute('data-connection')).toBe('connected')
+  })
+
+  // Review fix round 1, Important 6: the same "showing stale data: …" band the deleted
+  // `OverviewClient.tsx` drew, carrying no testid of its own (neither did the page it moved off).
+  it('shows the stale-data band when the stream refetch fails', async (): Promise<void> => {
+    vi.useFakeTimers()
+    const fetchMock = vi.fn(async () => {
+      throw new Error('offline')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      renderTeam(snapshot([row({})]))
+      expect(screen.queryByText(/showing stale data/)).toBeNull()
+      act(() => {
+        SilentEventSource.instances[0]?.onopen?.()
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300)
+      })
+      expect(screen.getByText(/showing stale data: offline/)).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  // Review fix round 1, Important 7: both the `/api/persons/:id` fetch and the `Promise.all` are
+  // caught now, so an offline/rejected fetch resolves to the pre-existing `team-panel-error` state
+  // instead of leaving the slot on `team-panel-loading` forever.
+  it('renders team-panel-error when opening a slave panel fails to load', async (): Promise<void> => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error('offline')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    mockSelectedId = 'p1'
+    render(
+      <ModeProvider>
+        <RightPanelProvider>
+          <TeamLive workspaceId="w1" initial={snapshot([row({})])} />
+          <RightPanel>{null}</RightPanel>
+        </RightPanelProvider>
+      </ModeProvider>,
+    )
+    await waitFor(() => {
+      expect(screen.getByTestId('team-panel-error')).toBeTruthy()
+    })
   })
 })

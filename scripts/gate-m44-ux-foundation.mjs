@@ -775,7 +775,9 @@ try {
     { name: 'skills', path: `/skills`, testId: 'empty-tile', fidelity: true },
     { name: 'analytics', path: `/analytics?workspace=${workspaceId}`, testId: 'kpi-tile', fidelity: true },
     { name: 'settings', path: `/settings`, testId: 'security-posture', fidelity: true },
-    { name: 'overview', path: `/w/${workspaceId}`, testId: 'strip', fidelity: true },
+    // M61 R7 review fix round 1, Important 2: `strip` (the deleted `ProjectBrief`'s wrapper) ->
+    // `stat-work` (the Team tab's own always-rendered footer tile).
+    { name: 'overview', path: `/w/${workspaceId}`, testId: 'stat-work', fidelity: true },
     { name: 'tasks', path: `/w/${workspaceId}/tasks`, testId: 'column', fidelity: true },
     { name: 'activity', path: `/w/${workspaceId}/activity`, testId: 'timeline-viewport', fidelity: true },
     { name: 'graph', path: `/w/${workspaceId}/graph`, testId: 'graph-canvas', fidelity: true },

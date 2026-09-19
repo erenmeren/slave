@@ -773,8 +773,10 @@ try {
 
   // M57 R18: the team left the tile grid for the Team ROWS, which list EVERY worker rather than the
   // five the tile sliced to. Same two names, more of them.
+  // M61 R7 review fix round 1, Ruling 6: `[data-testid="team"] [data-testid="slave-card"]` ->
+  // `[data-testid="team-live"] [data-testid="team-card"]` (the Team tab's own root and row now).
   const teamNames = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-testid="team"] [data-testid="slave-card"]')].map((row) =>
+    [...document.querySelectorAll('[data-testid="team-live"] [data-testid="team-card"]')].map((row) =>
       (row.textContent ?? '').replace(/\s+/g, ' ').trim(),
     ),
   )
@@ -796,21 +798,19 @@ try {
     await fail(`stage 1: the Needs you card does not carry the seeded pending decision -- it reads ${JSON.stringify(needsYouRows)}`)
   }
 
-  const supervisorState = await page.evaluate(() => {
-    const element = document.querySelector('[data-testid="brief-supervisor-state"]')
-    return element === null ? null : { word: (element.textContent ?? '').trim(), title: element.getAttribute('title') }
-  })
-  console.log(`stage 1: brief-supervisor-state = ${JSON.stringify(supervisorState)}`)
-  if (supervisorState === null || supervisorState.word !== '1 DECISION WAITING' || supervisorState.title !== 'decisions') {
-    await fail(
-      `stage 1: the Supervisor tile reads ${JSON.stringify(supervisorState)}, expected the word "1 DECISION WAITING" with ` +
-        'the raw state "decisions" in title (docs/ia.md rule 3)',
-    )
-  }
+  // M61 R7 review fix round 1, Ruling 6: `brief-supervisor-state` is parked, not renamed -- the
+  // Supervisor's state lives in the right panel since M61; no tile.
 
   // M57 R17: "recent changes" is the `recent-changes` section now, not a five-line tile. The two
   // things this block has always asserted are asserted still: there ARE rows, and none of them
   // prints a raw dotted event type (`docs/ia.md` rule 3).
+  //
+  // M61 R7 review fix round 1, Ruling 6: `recent-changes`/`timeline-entry` moved off the deleted
+  // Overview to `/w/<id>/activity`, under "Recent changes" -- but only once Task 7 mounts
+  // `OverviewPanels`/`SupervisorTimeline` there. THIS STAGE IS RED UNTIL TASK 7 LANDS: navigating
+  // here is the correct target, not a working fix, and `fail()` below will fire for real until
+  // that task's own commit.
+  await gotoReliably(`${baseUrl}/w/${workspaceId}/activity`)
   const changes = await page.evaluate(() => {
     const section = document.querySelector('[data-testid="recent-changes"]')
     return section === null
@@ -838,6 +838,11 @@ try {
   // ============================================================================================
   // Stage 2: six lanes, the right entries, and no model chatter.
   // ============================================================================================
+  // M61 R7 review fix round 1, Ruling 6: `supervisor-timeline` moved off the deleted Overview to
+  // `/w/<id>/activity` alongside `recent-changes` above -- re-navigated here too (stage 1 already
+  // left the browser there, but this stage does not depend on that). STILL RED UNTIL TASK 7 LANDS
+  // (see stage 1's own note): `SupervisorTimeline` is not mounted on `/activity` yet.
+  await gotoReliably(`${baseUrl}/w/${workspaceId}/activity`)
   await waitVisible(page.getByTestId('supervisor-timeline'), "the project's own timeline")
   const laneButtons = await page.evaluate(() =>
     [...document.querySelectorAll('[data-testid="timeline-lanes"] button')].map((button) => [
