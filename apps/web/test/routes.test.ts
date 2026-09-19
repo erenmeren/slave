@@ -1,77 +1,87 @@
 import { describe, expect, it } from 'vitest'
 import {
-  SECTIONS,
+  RAIL,
+  TABS,
   VIEWS,
   breadcrumbOf,
   isGlobalRoute,
+  railFor,
+  railIdOf,
   sectionOf,
-  viewOf,
+  tabsFor,
   workspaceIdOf,
 } from '../src/lib/routes.js'
 
-describe('SECTIONS', () => {
-  it('is the six sections in the sidebar tree, in the README order, keyed by their ROUTE segment', () => {
-    expect(SECTIONS.map((s) => s.id)).toEqual([
-      'overview', 'tasks', 'organization', 'knowledge', 'activity', 'settings',
+describe('TABS', () => {
+  it('is the six tabs, team first, keyed by route segment', () => {
+    expect(TABS.map((t) => t.id)).toEqual(['team', 'tasks', 'office', 'activity', 'graph', 'knowledge'])
+  })
+
+  it('shows four in simple mode and six in developer mode', () => {
+    expect(tabsFor('simple').map((t) => t.id)).toEqual(['team', 'tasks', 'office', 'activity'])
+    expect(tabsFor('developer').map((t) => t.id)).toEqual([
+      'team', 'tasks', 'office', 'activity', 'graph', 'knowledge',
     ])
   })
 
-  it('labels the organization route "Team" -- the label changes, the route does not (ia.md rule 2)', () => {
-    expect(SECTIONS.find((s) => s.id === 'organization')?.label).toBe('Team')
-    expect(SECTIONS.find((s) => s.id === 'organization')?.href('w1')).toBe('/w/w1/organization')
+  it('points Team at the bare project route and Work at /tasks', () => {
+    expect(TABS[0]?.href('w1', 'simple')).toBe('/w/w1')
+    expect(TABS.find((t) => t.id === 'tasks')?.label).toBe('Work')
   })
 
-  it('points Overview at the bare project route', () => {
-    expect(SECTIONS.find((s) => s.id === 'overview')?.href('w1')).toBe('/w/w1')
+  it("gives Activity the digest in simple mode and the river in developer mode (R10)", () => {
+    const activity = TABS.find((t) => t.id === 'activity')
+    expect(activity?.href('w1', 'simple')).toBe('/w/w1/activity?view=digest')
+    expect(activity?.href('w1', 'developer')).toBe('/w/w1/activity')
   })
 })
 
-describe('VIEWS', () => {
-  it('is Graph, Office and this project scoped Analytics -- what Advanced was (M44 R2)', () => {
-    expect(VIEWS.map((v) => v.id)).toEqual(['graph', 'office', 'analytics'])
-    expect(VIEWS.map((v) => v.label)).toEqual(['Graph', 'Office', 'Analytics'])
-    expect(VIEWS.find((v) => v.id === 'graph')?.href('w1')).toBe('/w/w1/graph')
-    expect(VIEWS.find((v) => v.id === 'office')?.href('w1')).toBe('/w/w1/office')
-    expect(VIEWS.find((v) => v.id === 'analytics')?.href('w1')).toBe('/analytics?workspace=w1')
+describe('RAIL', () => {
+  it('is Home, People, Settings for everybody and Simulations, Analytics for developers', () => {
+    expect(railFor('simple').map((r) => r.id)).toEqual(['home', 'people', 'settings'])
+    expect(railFor('developer').map((r) => r.id)).toEqual([
+      'home', 'people', 'settings', 'simulations', 'analytics',
+    ])
+    expect(RAIL.find((r) => r.id === 'people')?.href).toBe('/workforce')
+  })
+
+  it('answers which rail item a global path lights', () => {
+    expect(railIdOf('/')).toBe('home')
+    expect(railIdOf('/workforce?tab=catalog')).toBe('people')
+    expect(railIdOf('/sim/abc')).toBe('simulations')
+    expect(railIdOf('/w/w1')).toBe(null)
   })
 })
 
 describe('sectionOf', () => {
-  it('answers the section a project route is on', () => {
-    expect(sectionOf('/w/w1')).toBe('overview')
+  it('answers team for the project root AND for /organization (the redirect target, R7)', () => {
+    expect(sectionOf('/w/w1')).toBe('team')
+    expect(sectionOf('/w/w1/organization')).toBe('team')
     expect(sectionOf('/w/w1/tasks')).toBe('tasks')
-    expect(sectionOf('/w/w1/organization')).toBe('organization')
-    expect(sectionOf('/w/w1/knowledge')).toBe('knowledge')
-    expect(sectionOf('/w/w1/activity')).toBe('activity')
+    expect(sectionOf('/w/w1/graph')).toBe('graph')
     expect(sectionOf('/w/w1/settings')).toBe('settings')
+    expect(sectionOf('/workforce')).toBe(null)
   })
 
   it('answers a deeper path by its first segment, so a sub-route still lights its row', () => {
     expect(sectionOf('/w/w1/tasks/anything')).toBe('tasks')
   })
 
-  it('answers null for a VIEW and for every global route -- a view is not a section', () => {
-    expect(sectionOf('/w/w1/graph')).toBeNull()
-    expect(sectionOf('/w/w1/office')).toBeNull()
+  it('answers null for every global route', () => {
     expect(sectionOf('/')).toBeNull()
     expect(sectionOf('/workforce')).toBeNull()
     expect(sectionOf('/analytics')).toBeNull()
   })
 
   it('tolerates a trailing slash', () => {
-    expect(sectionOf('/w/w1/')).toBe('overview')
+    expect(sectionOf('/w/w1/')).toBe('team')
     expect(sectionOf('/w/w1/tasks/')).toBe('tasks')
   })
 })
 
-describe('viewOf', () => {
-  it('answers graph and office by path, and analytics only when it carries this project scope', () => {
-    expect(viewOf('/w/w1/graph')).toBe('graph')
-    expect(viewOf('/w/w1/office')).toBe('office')
-    // `/analytics` has no `/w/:id` prefix, so `viewOf` cannot tell WHICH project it is scoped to;
-    // the chip's own `aria-current` is driven by the search string, not by this function.
-    expect(viewOf('/analytics')).toBeNull()
-    expect(viewOf('/w/w1/tasks')).toBeNull()
+describe('VIEWS', () => {
+  it('is analytics alone now that graph and office are tabs', () => {
+    expect(VIEWS.map((v) => v.id)).toEqual(['analytics'])
   })
 })
 
@@ -94,7 +104,7 @@ describe('isGlobalRoute', () => {
     }
   })
 
-  it('is false inside a project, including its views', () => {
+  it('is false inside a project, including its former views', () => {
     for (const path of ['/w/w1', '/w/w1/tasks', '/w/w1/graph', '/w/w1/office']) {
       expect(isGlobalRoute(path), path).toBe(false)
     }
@@ -102,22 +112,29 @@ describe('isGlobalRoute', () => {
 })
 
 describe('breadcrumbOf', () => {
-  it('reads Projects / <project> / <section>, with only the last one emphasised', () => {
+  it('reads Projects / <project> / <tab>, with only the last one emphasised', () => {
     expect(breadcrumbOf('/w/w1/tasks', 'Checkout rewrite')).toEqual([
       { text: 'Projects', last: false },
       { text: 'Checkout rewrite', last: false },
-      { text: 'Tasks', last: true },
+      { text: 'Work', last: true },
     ])
   })
 
-  it('ends at the project on its Overview -- Overview is the project, not a place inside it', () => {
+  it('ends at the project on Team -- Team is the project, not a place inside it', () => {
     expect(breadcrumbOf('/w/w1', 'Checkout rewrite')).toEqual([
       { text: 'Projects', last: false },
       { text: 'Checkout rewrite', last: true },
     ])
   })
 
-  it('names a VIEW where a section would be', () => {
+  it('ends at the project on /organization too -- the redirect target reads the same as the bare route', () => {
+    expect(breadcrumbOf('/w/w1/organization', 'Checkout rewrite')).toEqual([
+      { text: 'Projects', last: false },
+      { text: 'Checkout rewrite', last: true },
+    ])
+  })
+
+  it('names a TAB where the section would be', () => {
     expect(breadcrumbOf('/w/w1/graph', 'Checkout rewrite')).toEqual([
       { text: 'Projects', last: false },
       { text: 'Checkout rewrite', last: false },
@@ -129,7 +146,7 @@ describe('breadcrumbOf', () => {
     expect(breadcrumbOf('/w/w1/tasks', null)).toEqual([
       { text: 'Projects', last: false },
       { text: 'w1', last: false },
-      { text: 'Tasks', last: true },
+      { text: 'Work', last: true },
     ])
   })
 

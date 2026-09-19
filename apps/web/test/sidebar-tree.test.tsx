@@ -103,16 +103,16 @@ describe('the sidebar tree', () => {
     expect(counts[0]?.textContent).toBe('2')
   })
 
-  it('nests the six sections under the CURRENT project only', () => {
+  it('nests the six tabs under the CURRENT project only', () => {
     pathname = '/w/w1/tasks'
     renderTree()
     const sections = screen.getAllByTestId('sidebar-section')
     expect(sections.map((row) => row.getAttribute('data-section'))).toEqual([
-      'overview', 'tasks', 'organization', 'knowledge', 'activity', 'settings',
+      'team', 'tasks', 'office', 'activity', 'graph', 'knowledge',
     ])
-    // The labels are the README's, and `organization` is called Team.
+    // The labels are the README's; `tasks` is called Work now (M61 R8).
     expect(sections.map((row) => row.textContent?.replace(/\d+$/, '').trim())).toEqual([
-      'Overview', 'Tasks', 'Team', 'Knowledge', 'Activity', 'Settings',
+      'Team', 'Work', 'Office', 'Activity', 'Graph', 'Knowledge',
     ])
     expect(sections[1]?.getAttribute('aria-current')).toBe('page')
     expect(sections[0]?.getAttribute('aria-current')).toBeNull()
@@ -125,15 +125,18 @@ describe('the sidebar tree', () => {
     expect(screen.queryAllByTestId('sidebar-view')).toEqual([])
   })
 
-  it('renders the three VIEWS chips under the open project -- what Advanced held (R11)', () => {
+  it('renders the analytics chip alone under the open project -- Graph and Office are tabs now (M61 R8)', () => {
     pathname = '/w/w1/graph'
     renderTree()
     const views = screen.getAllByTestId('sidebar-view')
-    expect(views.map((chip) => chip.getAttribute('data-view'))).toEqual(['graph', 'office', 'analytics'])
-    expect(views.map((chip) => chip.getAttribute('href'))).toEqual([
-      '/w/w1/graph', '/w/w1/office', '/analytics?workspace=w1',
-    ])
-    expect(views[0]?.getAttribute('aria-current')).toBe('page')
+    expect(views.map((chip) => chip.getAttribute('data-view'))).toEqual(['analytics'])
+    expect(views.map((chip) => chip.getAttribute('href'))).toEqual(['/analytics?workspace=w1'])
+    // Graph is current on the TAB row instead, not on this chip -- `viewOf` answers null now.
+    expect(views[0]?.getAttribute('aria-current')).toBeNull()
+    const sections = screen.getAllByTestId('sidebar-section')
+    expect(sections.find((row) => row.getAttribute('data-section') === 'graph')?.getAttribute('aria-current')).toBe(
+      'page',
+    )
   })
 
   it('keeps the three global rows, with the data-nav contract nav-row used to carry', () => {
@@ -188,8 +191,8 @@ describe('the sidebar tree', () => {
       null,
     ])
     const views = screen.getAllByTestId('sidebar-view')
-    expect(views.map((chip) => chip.getAttribute('data-view'))).toEqual(['graph', 'office', 'analytics'])
-    expect(views.map((chip) => chip.getAttribute('aria-current'))).toEqual([null, null, 'page'])
+    expect(views.map((chip) => chip.getAttribute('data-view'))).toEqual(['analytics'])
+    expect(views.map((chip) => chip.getAttribute('aria-current'))).toEqual(['page'])
     // A view is beside the sections, not one of them: no section row is current on this route.
     expect(screen.getAllByTestId('sidebar-section').map((row) => row.getAttribute('aria-current'))).toEqual(
       new Array(6).fill(null),

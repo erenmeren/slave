@@ -60,10 +60,10 @@ function renderHeader(): ReturnType<typeof render> {
 }
 
 describe('the header', () => {
-  it('reads Projects / <project> / <section>, with only the last emphasised', () => {
+  it('reads Projects / <project> / <tab>, with only the last emphasised', () => {
     renderHeader()
     const crumb = screen.getByTestId('breadcrumb')
-    expect(crumb.getAttribute('data-crumbs')).toBe('Projects/Checkout rewrite/Tasks')
+    expect(crumb.getAttribute('data-crumbs')).toBe('Projects/Checkout rewrite/Work')
     expect(crumb.textContent).toContain('Checkout rewrite')
   })
 
@@ -260,8 +260,10 @@ describe('the header', () => {
     pathname = '/w/w1/organization'
     facts = null
     renderHeader()
-    // The name comes from the TREE, so it is there even though nothing published.
-    expect(screen.getByTestId('breadcrumb').getAttribute('data-crumbs')).toBe('Projects/Checkout rewrite/Team')
+    // The name comes from the TREE, so it is there even though nothing published. `/organization`
+    // reads the same as the bare project route -- Team is the project's own page, so no third
+    // crumb (same rule Overview/Team had).
+    expect(screen.getByTestId('breadcrumb').getAttribute('data-crumbs')).toBe('Projects/Checkout rewrite')
   })
 })
 

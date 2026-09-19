@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { useEffect, useRef, useState } from 'react'
-import { SECTIONS, VIEWS, sectionOf, viewOf, workspaceIdOf } from '../../lib/routes'
+import { VIEWS, sectionOf, tabsFor, viewOf, workspaceIdOf } from '../../lib/routes'
 import type { SidebarProject } from '../../server/sidebar'
 import { useShellFacts } from '../../hooks/useShellFacts'
 import { useStreamState } from '../../hooks/useStreamState'
@@ -65,7 +65,7 @@ export function SidebarTree({ initial }: { readonly initial: readonly SidebarPro
   const lastPathname = useRef(pathname)
   // WHICH PROJECT IS OPEN, and the query string is the second way of saying it (ruling T3-2).
   // `/analytics?workspace=<id>` is a project's page that does not live under `/w/<id>` -- it is the
-  // one VIEWS destination with a global route (`lib/routes.ts:52-54`) -- so a pathname-only answer
+  // one VIEWS destination with a global route (`lib/routes.ts`'s `VIEWS`) -- so a pathname-only answer
   // would close the whole subtree the moment somebody followed the Analytics chip out of it.
   const workspaceParam = searchParams.get('workspace')
   const openId = workspaceIdOf(pathname) ?? workspaceParam
@@ -196,12 +196,14 @@ export function SidebarTree({ initial }: { readonly initial: readonly SidebarPro
 
                   {open && (
                     <div className="ml-[14px] flex flex-col gap-px">
-                      {SECTIONS.map((spec) => (
+                      {/* This tree is deleted in Task 3; until then it stays on the tab strip's
+                        * developer-mode set (M61 R8) rather than gaining a mode of its own. */}
+                      {tabsFor('developer').map((spec) => (
                         <Link
                           key={spec.id}
                           data-testid="sidebar-section"
                           data-section={spec.id}
-                          href={spec.href(project.id)}
+                          href={spec.href(project.id, 'developer')}
                           aria-current={section === spec.id ? 'page' : undefined}
                           className={rowClass(section === spec.id, true)}
                         >
@@ -211,16 +213,17 @@ export function SidebarTree({ initial }: { readonly initial: readonly SidebarPro
                           )}
                         </Link>
                       ))}
-                      {/* README: mono 600 10.5px, .08em, `--t3`. This is the `Advanced ▾` menu's
-                        * three destinations, visible (M57 R11). */}
+                      {/* README: mono 600 10.5px, .08em, `--t3`. This was the `Advanced ▾` menu's
+                        * three destinations (M57 R11); Graph and Office moved onto the tab strip
+                        * above (M61 R8), so Analytics is what is left here. */}
                       <div className="px-[9px] pb-[3px] pt-2 font-mono text-[10.5px] font-semibold uppercase tracking-[.08em] text-t3">
                         Views
                       </div>
                       <div className="flex flex-wrap gap-1 px-[6px] pb-[6px]">
                         {VIEWS.map((spec) => {
                           // Analytics answers from the SEARCH STRING, because its route carries no
-                          // `/w/<id>` for `viewOf` to read (`lib/routes.ts:97-98` says the caller
-                          // decides, and this is the caller). The other two are a path segment.
+                          // `/w/<id>` for `viewOf` to read -- and `viewOf` always answers null now
+                          // that Graph and Office are tabs, so this is the only branch left live.
                           const current =
                             spec.id === 'analytics'
                               ? pathname === '/analytics' && workspaceParam === project.id
