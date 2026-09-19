@@ -520,3 +520,4 @@ Appended during execution in the form `**En (amends Rx)** — <claim>.`
 - **E8 (amends R7/R11)** — `GET /api/w/:id/needs-you` is a third additive web route (over the
   unchanged `buildNeedsYou`), so the command strip's needs-you bar can refresh on the stream's
   wake-up without re-reading the whole Team snapshot; found while planning Task 6.
+- **E9 (amends R5/§3)** — `sidebar-global` is retired with the tree and replaced by `rail-item[data-rail]`; the rail's landmark is `nav[aria-label="Main"]`. §3's retired list was incomplete; found in Task 3's review.
