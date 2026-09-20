@@ -306,6 +306,11 @@ export async function adoptWorktree(input: AdoptWorktreeInput): Promise<Worktree
  * `git worktree prune` afterwards, not before: removing the directory is what makes the metadata
  * entry (if any) stale, and prune is git's own verb for exactly that -- it drops registrations
  * whose directories are gone and touches no branch and no file.
+ *
+ * IT SAYS SO FIRST (final review, Minor 5). A recursive remove is the loudest thing this module
+ * does and it happened silently, inside a retry a person did not ask for -- so an operator
+ * wondering where a half-finished tree went had nothing but the absence to read. One line on
+ * stderr, the daemon's own channel for what it is about to do, naming the path before it goes.
  */
 export async function discardStaleWorktree(input: {
   readonly repoPath: string
@@ -323,6 +328,7 @@ export async function discardStaleWorktree(input: {
   if (!path.startsWith(root + sep)) {
     throw new Error(`refusing to remove ${path}: it is not inside ${root}`)
   }
+  process.stderr.write(`discarding a worktree directory with no branch behind it: ${path}\n`)
   rmSync(path, { recursive: true, force: true })
   await gitIn(repoPath, 'worktree', 'prune')
 }

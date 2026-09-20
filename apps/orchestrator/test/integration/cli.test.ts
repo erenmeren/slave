@@ -773,6 +773,83 @@ describe('the orchestrator CLI', () => {
     expect(`${result.stdout}${result.stderr}`).toMatch(/no message with id/)
   }, 30_000)
 
+  /**
+   * Final review, recommendation 5: `failed` is the one status an operator had no verb for. The
+   * Supervisor gained `retry_task` in this milestone and a person did not, so the only way back
+   * for a failed task was to wait for the Supervisor to decide to retry it.
+   */
+  it('retry-task puts a failed task back to rework on fresh attempts', async (): Promise<void> => {
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'failed', attempt: 3, maxAttempts: 3, retries: 0, lastRejectionReason: 'the run was refused the web' },
+    })
+
+    const result = await runCli(['retry-task', '--task', fixture.taskId])
+
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('rework')
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('rework')
+    expect(task.attempt).toBe(0)
+    expect(task.retries).toBe(1)
+    // No `--reason`, so the note the pipeline wrote about WHY it failed is the one the next run reads.
+    expect(task.lastRejectionReason).toBe('the run was refused the web')
+  }, 30_000)
+
+  it('retry-task --grant gives the operation to the worker of the task\'s newest run, and --reason replaces the note', async (): Promise<void> => {
+    await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, kind: 'implementation', status: 'failed', startedAt: new Date() },
+    })
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'failed', attempt: 3, maxAttempts: 3, retries: 0 },
+    })
+
+    const result = await runCli([
+      'retry-task',
+      '--task',
+      fixture.taskId,
+      '--grant',
+      'network_fetch',
+      '--reason',
+      'It was refused the web; it has it now.',
+    ])
+
+    expect(result.code).toBe(0)
+    const permission = await prisma.slavePermission.findUniqueOrThrow({
+      where: { slaveId_kind: { slaveId: fixture.slaveId, kind: 'network_fetch' } },
+    })
+    expect(permission.mode).toBe('allow')
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).toBe('rework')
+    expect(task.lastRejectionReason).toBe('It was refused the web; it has it now.')
+  }, 30_000)
+
+  it('exits non-zero for retry-task on a task that is not failed, and for one with no --task', async (): Promise<void> => {
+    // `fixture.taskId` seeds as `ready` (see `seed` above), not `failed`.
+    const notFailed = await runCli(['retry-task', '--task', fixture.taskId])
+    expect(notFailed.code).not.toBe(0)
+    expect(`${notFailed.stdout}${notFailed.stderr}`).toMatch(/only a failed task can be retried/)
+
+    const noFlag = await runCli(['retry-task'])
+    expect(noFlag.code).not.toBe(0)
+    expect(`${noFlag.stdout}${noFlag.stderr}`).toMatch(/--task is required/)
+  }, 30_000)
+
+  it('exits non-zero for retry-task --grant naming something a plan may not ask for', async (): Promise<void> => {
+    await prisma.slaveRun.create({
+      data: { taskId: fixture.taskId, slaveId: fixture.slaveId, kind: 'implementation', status: 'failed', startedAt: new Date() },
+    })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'failed', attempt: 3, retries: 0 } })
+
+    const result = await runCli(['retry-task', '--task', fixture.taskId, '--grant', 'read_secret'])
+
+    expect(result.code).not.toBe(0)
+    expect(`${result.stdout}${result.stderr}`).toMatch(/a plan can ask/)
+    expect(await prisma.slavePermission.count()).toBe(0)
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).status).toBe('failed')
+  }, 30_000)
+
   it('exits non-zero for unblock-task on a task that is not blocked', async (): Promise<void> => {
     // `fixture.taskId` seeds as `ready` (see `seed` above), not `blocked`.
     const result = await runCli(['unblock-task', '--task', fixture.taskId])

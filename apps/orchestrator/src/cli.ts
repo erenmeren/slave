@@ -102,6 +102,7 @@ import {
   requestStop,
   restoreWorkspace,
   resumeSimulation,
+  retryTask,
   resolveReposRoot,
   runbookStatus,
   sendIntakeMessage,
@@ -252,6 +253,17 @@ const USAGE = `usage: orchestrator <command> [options]
                                        never reset -- a task already at its attempt ceiling is
                                        refused unless --allow-another-attempt raises the ceiling
                                        by exactly one.
+  retry-task --task <id> [--grant <kind>] [--reason "<text>"]
+                                       the exit from FAILED, which unblock-task does not cover: the
+                                       task goes back to rework with its attempts reset and its
+                                       retry counted. Refused unless the task is failed, and
+                                       refused after two retries -- two remedies that did not work
+                                       is the finding. --grant gives the worker of the task's
+                                       newest run one of the two operations a plan may ask for
+                                       (network_fetch, run_commands) before the task moves; a deny
+                                       a person wrote is never overturned. --reason is the note the
+                                       next run reads; without it the failure note already on the
+                                       task is kept.
   cancel-task --task <id> --reason "<text>"
                                        take a task off the board for good: it becomes cancelled and
                                        the reason is kept on it. Only from backlog, ready or blocked
@@ -1781,6 +1793,50 @@ export async function main(argv: readonly string[]): Promise<number> {
       const result = await unblockTask(taskIdFlag, { allowAnotherAttempt })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`task ${taskIdFlag} is unblocked and back in ${result.value.status}\n`)
+      return 0
+    }
+
+    case 'retry-task': {
+      // The human's own half of the Supervisor's `retry_task` (final review, recommendation 5).
+      // `unblock-task` is the exit from `blocked` and this is the exit from `failed`, and an
+      // operator had neither a CLI nor a web button for the second one -- the only way back for a
+      // failed task was to let the Supervisor decide to retry it.
+      //
+      // No `--by`, for `cancel-task`'s reason below: `retryTask`'s third parameter is a
+      // `Principal` and the CLI has never had one. The fourth is the envelope actor, and this is
+      // a person at a terminal -- `'human'` is the default and is left to be it.
+      const taskIdFlag = requireFlag(flags, 'task')
+      const permissionKind = flagText(flags, 'grant')
+      const reason = flagText(flags, 'reason')
+      // WHO the grant is for is not asked for, it is read -- the same fact the rules read
+      // (`candidates.ts`' `deniedWorker`): the worker whose run met the wall. The newest run on
+      // this task, whatever its kind, because the operation a retry grants is the one the last
+      // attempt was refused and the operator typing this is looking at that attempt.
+      const ranIt =
+        permissionKind === undefined
+          ? null
+          : await prisma.slaveRun.findFirst({
+              where: { taskId: taskIdFlag },
+              orderBy: { startedAt: 'desc' },
+              select: { slaveId: true },
+            })
+      if (permissionKind !== undefined && ranIt === null) {
+        throw new Error(`task ${taskIdFlag} has no run to grant anything to: nobody has worked on it yet`)
+      }
+      const result = await retryTask(taskIdFlag, {
+        // ABSENT IS NOT EMPTY on both: a retry with no `--reason` keeps the failure note the
+        // pipeline wrote, which is the one thing the next run most needs to read, and a retry with
+        // no `--grant` grants nothing rather than granting to nobody.
+        ...(ranIt === null || permissionKind === undefined
+          ? {}
+          : { grant: { slaveId: ranIt.slaveId, permissionKind } }),
+        ...(reason === undefined ? {} : { reason }),
+      })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(
+        `task ${taskIdFlag} is back in rework on fresh attempts (retry ${String(result.value.retries)}). ` +
+          `The next tick picks it up.\n`,
+      )
       return 0
     }
 
