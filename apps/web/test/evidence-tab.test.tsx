@@ -261,4 +261,17 @@ describe('EvidenceTab (M53 R11, R12)', () => {
     expect(replaceState).toHaveBeenCalledWith(null, '', '/workforce?tab=evidence')
     replaceState.mockRestore()
   })
+
+  // M61 Task 10 (R19): the domain chips stay fixed; both tables and the sort caption share ONE
+  // `ui/ScrollArea` (the resolution's own word for a page this short), and no `SectionLabel` on
+  // the page carries `uppercase`/`font-mono` on top of `.type-label`.
+  it('wraps both tables in one ScrollArea, and carries no uppercase/font-mono SectionLabel', () => {
+    render(<EvidenceTab page={page()} />)
+    expect(document.querySelector('[data-scroll-axis]')).toBeTruthy()
+
+    const offenders = [...document.querySelectorAll('.type-label')].filter((element) =>
+      element.className.split(' ').some((cls) => cls === 'uppercase' || cls === 'font-mono'),
+    )
+    expect(offenders).toHaveLength(0)
+  })
 })

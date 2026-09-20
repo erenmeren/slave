@@ -10,8 +10,17 @@ export const dynamic = 'force-dynamic'
 /** The GLOBAL Settings page (M24 §4): the provider adapters (resolved against the real binaries
  *  on PATH), the security posture line, and the reseed. The org catalog (templates, companies)
  *  and the per-project surfaces (the permission matrix, the emergency stop) live elsewhere now --
- *  see `SettingsClient`'s docstring for where. */
-export default async function SettingsPage(): Promise<React.JSX.Element> {
+ *  see `SettingsClient`'s docstring for where.
+ *
+ *  M61 Task 9: `?section=` picks which of the five sections opens -- read here, on the server,
+ *  the same way `app/workforce/page.tsx` reads `?tab=`; an unknown or absent value is handed
+ *  through as-is, and `SettingsClient` is what falls back to the first section. */
+export default async function SettingsPage({
+  searchParams,
+}: {
+  readonly searchParams: Promise<{ readonly section?: string }>
+}): Promise<React.JSX.Element> {
+  const { section } = await searchParams
   const [adapters, principal, root] = await Promise.all([
     buildProviderAdapters(),
     // The one page that asks WHO is reading it. `null` in accounts mode is the revoked-user case
@@ -33,6 +42,7 @@ export default async function SettingsPage(): Promise<React.JSX.Element> {
       mode={mode}
       posture={postureFor(mode, principal?.username ?? null)}
       reposRoot={{ reposRoot: stored.reposRoot, resolved: root.root, source: root.source }}
+      initialSection={section}
     />
   )
 }

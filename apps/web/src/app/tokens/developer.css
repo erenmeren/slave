@@ -1,0 +1,87 @@
+/* M61 R2 -- DEVELOPER mode: the colder, denser cousin -- today's sheet, moved here verbatim and
+ * guarded on `[data-mode='developer']` so it wins only when the attribute is present. */
+:root[data-mode='developer'] {
+  --bg: #f5f3ef;
+  --panel: #faf9f6;
+  --card: #ffffff;
+  --line: rgba(30, 27, 22, 0.09);
+  --line2: rgba(30, 27, 22, 0.16);
+  --t1: #1b1a17;
+  --t2: #5d5a53;
+  --t3: #75716a;
+  --hover: rgba(30, 27, 22, 0.045);
+  --sel: rgba(30, 27, 22, 0.07);
+  --accent: #1f8a7a;
+  --accent-ink: #ffffff;
+  --s-working: #0b7466;
+  --s-planning: #4453d6;
+  --s-review: #7d3fc9;
+  --s-waiting: #9a6200;
+  --s-blocked: #c43a31;
+  --s-done: #1f7d45;
+  --s-paused: #6b7080;
+  --s-idle: #8a8b85;
+  --glass: color-mix(in srgb, var(--panel) 72%, transparent);
+  --glass-strong: color-mix(in srgb, var(--panel) 88%, transparent);
+  --edge: rgba(255, 255, 255, 0.7);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-mode='developer']:not([data-theme='light']) {
+    --bg: #141518;
+    --panel: #191a1e;
+    --card: #1e2025;
+    --line: rgba(255, 255, 255, 0.08);
+    --line2: rgba(255, 255, 255, 0.15);
+    --t1: #eeede8;
+    --t2: #a6a59d;
+    --t3: #8f8f87;
+    --hover: rgba(255, 255, 255, 0.05);
+    --sel: rgba(255, 255, 255, 0.08);
+    --accent: #3ccbb5;
+    --accent-ink: #0f2521;
+    --s-working: #2ee6cf;
+    --s-planning: #7b8cff;
+    --s-review: #c084fc;
+    --s-waiting: #f5b34a;
+    --s-blocked: #f87171;
+    --s-done: #4ade80;
+    --s-paused: #8a929e;
+    --s-idle: #6b7280;
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-resting: 0 4px 16px rgba(0, 0, 0, 0.35);
+    --glass: color-mix(in srgb, var(--panel) 72%, transparent);
+    --glass-strong: color-mix(in srgb, var(--panel) 88%, transparent);
+    --edge: rgba(255, 255, 255, 0.06);
+  }
+}
+
+/* Dark, pinned. The same block again, outside the media query, so a person on a light OS who
+ * chose Dark actually gets it. */
+:root[data-mode='developer'][data-theme='dark'] {
+  --bg: #141518;
+  --panel: #191a1e;
+  --card: #1e2025;
+  --line: rgba(255, 255, 255, 0.08);
+  --line2: rgba(255, 255, 255, 0.15);
+  --t1: #eeede8;
+  --t2: #a6a59d;
+  --t3: #8f8f87;
+  --hover: rgba(255, 255, 255, 0.05);
+  --sel: rgba(255, 255, 255, 0.08);
+  --accent: #3ccbb5;
+  --accent-ink: #0f2521;
+  --s-working: #2ee6cf;
+  --s-planning: #7b8cff;
+  --s-review: #c084fc;
+  --s-waiting: #f5b34a;
+  --s-blocked: #f87171;
+  --s-done: #4ade80;
+  --s-paused: #8a929e;
+  --s-idle: #6b7280;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-resting: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --glass: color-mix(in srgb, var(--panel) 72%, transparent);
+  --glass-strong: color-mix(in srgb, var(--panel) 88%, transparent);
+  --edge: rgba(255, 255, 255, 0.06);
+}

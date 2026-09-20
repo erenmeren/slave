@@ -5,12 +5,13 @@ import { userTaskStatus } from '@slave-of-ai/domain'
 import { publishShellFacts } from '../hooks/useShellFacts'
 import { publishStreamState } from '../hooks/useStreamState'
 import { useSelectedId } from '../hooks/useSelectedId'
+import { useMode } from './mode/ModeProvider'
 import { useRightPanel } from './shell/RightPanelProvider'
 import { useTasks } from '../hooks/useTasks'
 import { BOARD_COLUMNS, COLUMN_FOR_STATUS } from '../lib/taskColumns'
 import type { TasksSnapshot } from '../server/tasks'
 import { Alert } from './ui/Alert'
-import { PageShell } from './ui/PageShell'
+import { ScrollArea } from './ui/ScrollArea'
 import { HaltBanner } from './HaltBanner'
 import { TaskColumn } from './TaskColumn'
 import { TaskDetailPanel } from './TaskDetailPanel'
@@ -71,6 +72,12 @@ export function TasksClient({
   useEffect((): (() => void) => () => publishStreamState(workspaceId, null), [workspaceId])
 
   const { open: openPanel, close: closePanel, mode: panelMode } = useRightPanel()
+  // M61 R9/Task 7: the panel's raw run/attempt/artifact details render only in developer mode
+  // (`TaskDetailPanel`'s own `isDeveloper` prop) -- read here, once, rather than in the panel
+  // itself, so every one of `TaskDetailPanel`'s many *direct*-render tests keeps seeing the
+  // details section by default (the prop is optional there, defaulting to `true`) without every
+  // one of those call sites needing a `<ModeProvider>` ancestor of its own.
+  const { isDeveloper } = useMode()
 
   // What the URL names RIGHT NOW, readable from a closure created for an earlier subject. The
   // provider calls the PREVIOUS owner's clearer whenever a DIFFERENT subject takes the slot
@@ -141,6 +148,7 @@ export function TasksClient({
         task={selectedTask}
         workspaceId={workspaceId}
         workspaceGoalVersion={snapshotView.workspace.goalVersion}
+        isDeveloper={isDeveloper}
         onClose={() => {
           setSelectedId(null)
           closePanel()
@@ -162,48 +170,45 @@ export function TasksClient({
   }, [selectedTask?.id])
 
   return (
-    <>
-      {/* The stale-data dim stays OUTSIDE the shell (the M45 t3 idiom on the Overview):
-        * `PageShell` owns the frame and takes no `className`. */}
-      <div className={`flex flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
-        {/* M44 erratum E25 / M45 R5: `flush`, because this page already carries the design
-        * handoff's own gutters and `gate:m14-fidelity` measures them. The shell is here for its
-        * landmark and its `page-shell` marker, not for its padding -- not a pixel moves. */}
-        <PageShell flush>
-          {snapshotView.workspace.haltedReason !== null && <HaltBanner reason={snapshotView.workspace.haltedReason} />}
-          {/* M44 R3: the band three surfaces hand-rolled, each with its own class string, is
-            * `ui/Alert` now. The one-line `role="alert"` refusal sentences under forms are NOT
-            * alerts in this sense and stay exactly as they are (erratum E21). */}
-          {error !== null && <Alert variant="notice">showing stale data: {error}</Alert>}
-          <TaskFilters
-            query={query}
-            onQuery={setQuery}
-            needsOnly={needsOnly}
-            onNeedsOnly={() => setNeedsOnly((was) => !was)}
-            needsCount={needsYouIds.size}
-            assignees={assignees}
-            assignee={effectiveAssignee}
-            onAssignee={setAssignee}
-            view={view}
-            onView={setView}
-          />
-          {view === 'list' ? (
-            <TaskList tasks={visible} onSelect={setSelectedId} />
-          ) : (
-            <div className="grid gap-3 overflow-x-auto p-[16px_24px_24px] [grid-template-columns:repeat(5,minmax(172px,1fr))] items-start">
-              {BOARD_COLUMNS.map((column) => (
-                <TaskColumn
-                  key={column}
-                  column={column}
-                  tasks={visible.filter((task) => COLUMN_FOR_STATUS[task.status] === column)}
-                  workspaceGoalVersion={snapshotView.workspace.goalVersion}
-                  onSelect={setSelectedId}
-                />
-              ))}
-            </div>
-          )}
-        </PageShell>
-      </div>
-    </>
+    // M61 R9/Task 7: the bare `flex min-h-0 flex-1 flex-col` frame -- `PageShell` is gone, so the
+    // stale-data dim (M45 t3 idiom) rides on this same root now rather than a wrapper around it.
+    <div className={`flex min-h-0 flex-1 flex-col ${error !== null ? 'opacity-60' : ''}`}>
+      {snapshotView.workspace.haltedReason !== null && <HaltBanner reason={snapshotView.workspace.haltedReason} />}
+      {/* M44 R3: the band three surfaces hand-rolled, each with its own class string, is
+        * `ui/Alert` now. The one-line `role="alert"` refusal sentences under forms are NOT
+        * alerts in this sense and stay exactly as they are (erratum E21). */}
+      {error !== null && <Alert variant="notice">showing stale data: {error}</Alert>}
+      <TaskFilters
+        query={query}
+        onQuery={setQuery}
+        needsOnly={needsOnly}
+        onNeedsOnly={() => setNeedsOnly((was) => !was)}
+        needsCount={needsYouIds.size}
+        assignees={assignees}
+        assignee={effectiveAssignee}
+        onAssignee={setAssignee}
+        view={view}
+        onView={setView}
+      />
+      {view === 'list' ? (
+        <ScrollArea>
+          <TaskList tasks={visible} onSelect={setSelectedId} />
+        </ScrollArea>
+      ) : (
+        <ScrollArea axis="x" testId="board-scroll" className="px-[var(--gap-3)] pb-[var(--gap-3)]">
+          <div className="grid h-full items-start gap-[var(--gap-2)] [grid-template-columns:repeat(5,minmax(220px,1fr))]">
+            {BOARD_COLUMNS.map((column) => (
+              <TaskColumn
+                key={column}
+                column={column}
+                tasks={visible.filter((task) => COLUMN_FOR_STATUS[task.status] === column)}
+                workspaceGoalVersion={snapshotView.workspace.goalVersion}
+                onSelect={setSelectedId}
+              />
+            ))}
+          </div>
+        </ScrollArea>
+      )}
+    </div>
   )
 }

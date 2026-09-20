@@ -1,8 +1,10 @@
-/** The handoff section label (spec §3): 9px mono, uppercase, `.09em` tracking. */
+/** The handoff section label (spec §3, M61 R16): `.type-label` -- sentence case, no more
+ *  uppercase/mono. Uppercase tracked mono captions are gone in simple mode; mono is reserved for
+ *  `technical` lines and developer-mode identifiers (`globals.css`'s own `.type-label` comment). */
 
-/** The one mono section/field caption recipe (design handoff "Design Tokens"): every consumer
- *  composes this constant so the seven call sites cannot drift apart again (M11 review item). */
-export const SECTION_LABEL_CLASS = 'font-mono text-[9px] uppercase tracking-[.09em] text-text-3'
+/** The one section/field caption recipe (design handoff "Design Tokens"): every consumer
+ *  composes this constant so the call sites cannot drift apart again (M11 review item). */
+export const SECTION_LABEL_CLASS = 'type-label'
 
 export function SectionLabel({
   testId = 'section-label',

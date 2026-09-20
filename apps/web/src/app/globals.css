@@ -1,4 +1,6 @@
 @import 'tailwindcss';
+@import './tokens/simple.css';
+@import './tokens/developer.css';
 
 /* ============================================================================================
  * M57 R1 — ONE sheet, TWO themes, and every name that ever meant something still meaning it.
@@ -23,45 +25,36 @@
  * ========================================================================================== */
 
 :root {
-  /* ---- The handoff palette, LIGHT ---------------------------------------------------------- */
-  --bg: #f5f3ef;
-  --panel: #faf9f6;
-  --card: #ffffff;
-  --line: rgba(30, 27, 22, 0.09);
-  --line2: rgba(30, 27, 22, 0.16);
-  --t1: #1b1a17;
-  --t2: #5d5a53;
-  --t3: #75716a;
-  --hover: rgba(30, 27, 22, 0.045);
-  --sel: rgba(30, 27, 22, 0.07);
-  --accent: #1f8a7a;
-  --accent-ink: #ffffff;
-  --s-working: #0b7466;
-  --s-planning: #4453d6;
-  --s-review: #7d3fc9;
-  --s-waiting: #9a6200;
-  --s-blocked: #c43a31;
-  --s-done: #1f7d45;
-  --s-paused: #6b7080;
-  --s-idle: #8a8b85;
+  /* ---- M61 R2: the palette moved to `tokens/simple.css` / `tokens/developer.css` -- the same
+   *      twenty names, imported above, and still every other declaration in this block points at
+   *      them by `var()`, so nothing here had to change to keep pointing at the right colour. */
 
-  /* ---- Radii (README "Radius"): 5 ref chip · 6 kind chip/segment · 7 small button ·
-   *      8 button/input/nav · 9-10 tile/card · 12 panel card · 14 page card · 999 pill.
-   *      The first five keep the names M44 minted for them; the three the README adds are new;
-   *      `--radius-pill` takes the README's 999 (M57 erratum E9 -- one gate row measured the old
-   *      20, and Task 9 rewrites that row). `--radius-hair` (2px bar cap) and `--radius-bubble`
-   *      (14px message bubble) are M44 erratum E14's and stay. */
-  --radius-chip: 5px;
-  --radius-nav: 6px;
-  --radius-tile: 7px;
-  --radius-card: 8px;
-  --radius-panel: 9px;
-  --radius-tile-lg: 10px;
-  --radius-panel-card: 12px;
-  --radius-page-card: 14px;
+  /* ---- M61 R3: three radii, and every old name is an alias of one of them ------------------ */
+  --radius-control: 8px;
+  --radius-surface: 12px;
+  --radius-sheet: 16px;
+  --radius-chip: var(--radius-control);
+  --radius-nav: var(--radius-control);
+  --radius-tile: var(--radius-control);
+  --radius-card: var(--radius-control);
+  --radius-panel: var(--radius-control);
+  --radius-tile-lg: var(--radius-surface);
+  --radius-panel-card: var(--radius-surface);
+  --radius-page-card: var(--radius-sheet);
+  --radius-bubble: var(--radius-sheet);
   --radius-pill: 999px;
   --radius-hair: 2px;
-  --radius-bubble: 14px;
+  /* ---- density (developer overrides below) and motion ------------------------------------- */
+  --fs-body: 14px;
+  --row-h: 40px;
+  --gap-1: 8px;
+  --gap-2: 12px;
+  --gap-3: 16px;
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-slow: 240ms;
 
   /* ---- Shadows. The README allows cards exactly one (`0 1px 2px rgba(0,0,0,.04)`); that is
    *      `--shadow-card`. `--shadow-resting` is NOT that and is not being replaced by it: it names
@@ -103,61 +96,10 @@
   --tone-idle: var(--s-idle);
 }
 
-/* Dark, when the OS asks for it and nobody has pinned light. Only the twenty palette tokens are
- * restated -- the aliases, the radii and the type above point at these names, so they follow. */
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) {
-    --bg: #141518;
-    --panel: #191a1e;
-    --card: #1e2025;
-    --line: rgba(255, 255, 255, 0.08);
-    --line2: rgba(255, 255, 255, 0.15);
-    --t1: #eeede8;
-    --t2: #a6a59d;
-    --t3: #8f8f87;
-    --hover: rgba(255, 255, 255, 0.05);
-    --sel: rgba(255, 255, 255, 0.08);
-    --accent: #3ccbb5;
-    --accent-ink: #0f2521;
-    --s-working: #2ee6cf;
-    --s-planning: #7b8cff;
-    --s-review: #c084fc;
-    --s-waiting: #f5b34a;
-    --s-blocked: #f87171;
-    --s-done: #4ade80;
-    --s-paused: #8a929e;
-    --s-idle: #6b7280;
-    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --shadow-resting: 0 4px 16px rgba(0, 0, 0, 0.35);
-  }
-}
-
-/* Dark, pinned. The same twenty values, outside the media query, so a person on a light OS who
- * chose Dark actually gets it. */
-:root[data-theme='dark'] {
-  --bg: #141518;
-  --panel: #191a1e;
-  --card: #1e2025;
-  --line: rgba(255, 255, 255, 0.08);
-  --line2: rgba(255, 255, 255, 0.15);
-  --t1: #eeede8;
-  --t2: #a6a59d;
-  --t3: #8f8f87;
-  --hover: rgba(255, 255, 255, 0.05);
-  --sel: rgba(255, 255, 255, 0.08);
-  --accent: #3ccbb5;
-  --accent-ink: #0f2521;
-  --s-working: #2ee6cf;
-  --s-planning: #7b8cff;
-  --s-review: #c084fc;
-  --s-waiting: #f5b34a;
-  --s-blocked: #f87171;
-  --s-done: #4ade80;
-  --s-paused: #8a929e;
-  --s-idle: #6b7280;
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-resting: 0 4px 16px rgba(0, 0, 0, 0.35);
-}
+/* M61 R2 -- both dark palette blocks (system-dark and pinned-dark) moved to `tokens/simple.css`
+ * and `tokens/developer.css`; their selectors carry more specificity than the bare `:root` above,
+ * so they win in dark mode regardless of import order -- the light default above is what a mode
+ * with no dark override would fall back to, and neither token file leaves one unset. */
 
 @theme inline {
   /* The handoff's own names. */
@@ -222,6 +164,14 @@
   --shadow-resting: var(--shadow-resting);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
+
+  /* M61 R3 -- the surface tokens and the three new radii. */
+  --color-glass: var(--glass);
+  --color-glass-strong: var(--glass-strong);
+  --color-edge: var(--edge);
+  --radius-control: var(--radius-control);
+  --radius-surface: var(--radius-surface);
+  --radius-sheet: var(--radius-sheet);
 }
 
 /* `color-scheme` tells the browser which way to paint the things CSS does not own -- form
@@ -239,14 +189,95 @@
   color-scheme: dark;
 }
 
+/* M61 R3 -- developer mode is the denser cousin: a smaller body size, a shorter row, tighter
+ * gaps. Nothing here is a colour, so it lives in `globals.css`, not in either token file. */
+:root[data-mode='developer'] {
+  --fs-body: 13px;
+  --row-h: 34px;
+  --gap-1: 6px;
+  --gap-2: 8px;
+  --gap-3: 12px;
+}
+
+/* A translucent surface degrades to its opaque `--panel` colour, blur off, for anybody who asked
+ * the OS for less transparency -- the same `prefers-*` guarantee the motion tokens give below. */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --glass: var(--panel);
+    --glass-strong: var(--panel);
+  }
+}
+
+/* M61 R4 -- the page never scrolls; the frame is 100dvh and every region scrolls through its own
+ * `ui/ScrollArea` instead. `body` stays `min-h-screen`-free (`layout.tsx` no longer stamps it). */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   background: var(--bg);
   color: var(--t1);
   font-family: var(--font-sans);
-  /* README "Type": body is 14px. Every page's own sizes are relative to this one. */
-  font-size: 14px;
+  /* README "Type": body follows the density token, so developer mode reads one size smaller. */
+  font-size: var(--fs-body);
   line-height: 1.4;
   text-wrap: pretty;
+}
+
+/* M61 R3 -- the glass surface: the rail, the header, the right panel and every `Sheet`. */
+.glass {
+  background: var(--glass);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+}
+@media (prefers-reduced-transparency: reduce) {
+  .glass {
+    /* Fixed at class level (final-review wave, E12): the bare `:root` override above loses the
+     * cascade to the dark/developer palette blocks below it, which set `--glass` again on a more
+     * specific selector (`:root[data-theme=…]`/`:root[data-mode=…]`). `.glass` itself always wins
+     * over `--glass`'s value at the point it is READ, so the opaque fallback belongs here. */
+    background: var(--panel);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+/* M61 R3 -- the type scale, as utilities. Uppercase tracked mono labels are gone in simple mode:
+ * `SectionLabel` becomes `.type-label` sentence case in `--t2`; mono is reserved for `technical`
+ * lines and developer-mode identifiers. */
+.type-label {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--t2);
+}
+.type-meta {
+  font-size: 12.5px;
+  font-weight: 400;
+}
+.type-body {
+  font-size: var(--fs-body);
+  font-weight: 400;
+}
+.type-title {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+.type-heading {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+.type-display {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
 }
 
 /* README "Scrollbars": 8px, transparent track, `--line2` thumb at radius 8, `--t3` on hover.

@@ -958,16 +958,31 @@ try {
   // Stage 7: who is here, what they can do, why -- and what is still missing.
   // ============================================================================================
 
+  // M61 R7 scope fix (controller Ruling 4): the roster table (`organization-rows` and friends) is
+  // a developer-mode-only view on the Team tab now -- `/organization` still redirects here, but
+  // the table itself renders only once `isDeveloper`. Stamping `localStorage` before the
+  // navigation is `ModeProvider`'s own read on mount (`lib/modeStorage.ts`'s `MODE_STORAGE_KEY`,
+  // the same idiom `gate-m57-ui-redesign.mjs` already uses for its own developer-mode stage).
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('mode', 'developer')
+    } catch {
+      /* stays simple; the roster wait below fails loudly rather than silently passing on none */
+    }
+  })
   await gotoReliably(`${baseUrl}/w/${workspaceId}/organization`)
   await waitVisible(page.getByTestId('organization-rows'), 'the Organization table')
 
-  // The Team row, on the page it names (E6, M57 R5): a tree that does not carry it is a page
-  // nobody can reach without typing the URL.
+  // The Team row, on the page it names (E6, M57 R5). M61 R7 review fix round 1, Important 3:
+  // `sidebar-section` is the pre-M61 sidebar tree's own testid and does not exist any more (M61
+  // R5 replaced it with the command strip's `project-tab` row) -- a tree that does not carry Team
+  // is a page nobody can reach without typing the URL, and the command strip's own `team` tab is
+  // what answers that now.
   const tabHref = await page.evaluate(
-    () => document.querySelector('[data-testid="sidebar-section"][data-section="organization"]')?.getAttribute('href') ?? null,
+    () => document.querySelector('[data-testid="project-tab"][data-tab="team"]')?.getAttribute('href') ?? null,
   )
-  console.log(`stage 7 -- the tree's Team row points at ${JSON.stringify(tabHref)}`)
-  if (tabHref !== `/w/${workspaceId}/organization`) await fail(`stage 7: the tree's Team row points at ${String(tabHref)}`)
+  console.log(`stage 7 -- the command strip's Team tab points at ${JSON.stringify(tabHref)}`)
+  if (tabHref !== `/w/${workspaceId}`) await fail(`stage 7: the command strip's Team tab points at ${String(tabHref)}`)
 
   await waitVisible(page.getByTestId(`organization-row-${hired.id}`), "the hired specialist's row")
   await waitVisible(page.getByTestId(`organization-row-${devId}`), "the worker who was already here")

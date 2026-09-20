@@ -10,6 +10,7 @@ import { DataTable, Row } from '../ui/DataTable'
 import { EmptyState } from '../ui/EmptyState'
 import { Panel } from '../ui/Panel'
 import { ProgressBar } from '../ui/ProgressBar'
+import { ScrollArea } from '../ui/ScrollArea'
 import { SectionLabel } from '../ui/SectionLabel'
 
 const PROFILE_COLUMNS = '1.5fr 1.1fr 70px 132px 132px 64px 132px 78px 74px 86px 104px'
@@ -218,7 +219,7 @@ export function EvidenceTab({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
       <div data-testid="evidence-domains" className="flex flex-wrap items-center gap-1">
         {/* The way back to every domain, beside the chips rather than hidden in a second click of
           * the selected one: a filter a person cannot undo is a filter they stop using. */}
@@ -248,37 +249,45 @@ export function EvidenceTab({
         ))}
       </div>
 
-      <Panel title="by profile">
-        <div data-testid="evidence-table-profile">
-          {page.byProfile.length === 0 ? (
-            <EvidenceEmpty testId="evidence-profile-empty" domainLabel={currentLabel} />
-          ) : (
-            <DataTable columns={PROFILE_COLUMNS} header={[...PROFILE_HEADER]}>
-              {page.byProfile.map((row, index) => (
-                <ProfileRow key={`${row.profileKey}/${row.repositoryKey}`} row={row} last={index === page.byProfile.length - 1} />
-              ))}
-            </DataTable>
-          )}
-        </div>
-      </Panel>
+      {/* M61 Task 10: the domain chips above stay fixed; both tables -- and the sort caption
+        * beneath them -- are short (the resolution's own word), so they share ONE ScrollArea
+        * rather than one apiece. */}
+      <ScrollArea>
+        <div className="flex flex-col gap-4">
+          <Panel title="by profile">
+            <div data-testid="evidence-table-profile">
+              {page.byProfile.length === 0 ? (
+                <EvidenceEmpty testId="evidence-profile-empty" domainLabel={currentLabel} />
+              ) : (
+                <DataTable columns={PROFILE_COLUMNS} header={[...PROFILE_HEADER]}>
+                  {page.byProfile.map((row, index) => (
+                    <ProfileRow key={`${row.profileKey}/${row.repositoryKey}`} row={row} last={index === page.byProfile.length - 1} />
+                  ))}
+                </DataTable>
+              )}
+            </div>
+          </Panel>
 
-      <Panel title="by model">
-        <div data-testid="evidence-table-model">
-          {page.byModel.length === 0 ? (
-            <EvidenceEmpty testId="evidence-model-empty" domainLabel={currentLabel} />
-          ) : (
-            <DataTable columns={MODEL_COLUMNS} header={[...MODEL_HEADER]}>
-              {page.byModel.map((row, index) => (
-                <ModelRow key={row.model ?? ''} row={row} last={index === page.byModel.length - 1} />
-              ))}
-            </DataTable>
-          )}
-        </div>
-      </Panel>
+          <Panel title="by model">
+            <div data-testid="evidence-table-model">
+              {page.byModel.length === 0 ? (
+                <EvidenceEmpty testId="evidence-model-empty" domainLabel={currentLabel} />
+              ) : (
+                <DataTable columns={MODEL_COLUMNS} header={[...MODEL_HEADER]}>
+                  {page.byModel.map((row, index) => (
+                    <ModelRow key={row.model ?? ''} row={row} last={index === page.byModel.length - 1} />
+                  ))}
+                </DataTable>
+              )}
+            </div>
+          </Panel>
 
-      {/* The sort, in words, under both tables (R11): stated rather than left to be inferred from
-        * the order -- and the sentence `gate:m53-evidence` stage 11 checks the order against. */}
-      <SectionLabel testId="evidence-sort-caption">{page.sortCaption}</SectionLabel>
+          {/* The sort, in words, under both tables (R11): stated rather than left to be inferred
+            * from the order -- and the sentence `gate:m53-evidence` stage 11 checks the order
+            * against. */}
+          <SectionLabel testId="evidence-sort-caption">{page.sortCaption}</SectionLabel>
+        </div>
+      </ScrollArea>
     </div>
   )
 }

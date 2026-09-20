@@ -1523,45 +1523,114 @@ try {
   }
 
   /** Every `knowledge-row` on screen, as its own `data-` attributes describe it. */
-  const knowledgeRows = () =>
-    page.getByTestId('knowledge-row').evaluateAll((nodes) =>
-      nodes.map((node) => ({
-        id: node.getAttribute('data-memory-id'),
-        type: node.getAttribute('data-memory-type'),
-        status: node.getAttribute('data-memory-status'),
-        scope: node.getAttribute('data-memory-scope'),
-      })),
-    )
+  /**
+   * Every `knowledge-row` in the list -- SCROLLED, because M61 R4/Task 10 made the Knowledge list
+   * virtualised: only the rows near the scrolled viewport are in the DOM at all, so a single
+   * `evaluateAll` counts a window rather than a list. The table's own `ScrollArea` is walked from
+   * the top in page-sized steps and the rows are accumulated BY MEMORY ID, so the overlap between
+   * two steps cannot double-count and a row that scrolls out of the window is not lost.
+   *
+   * What this returns is what it always returned: one entry per row the page would show a person
+   * who scrolled to the bottom.
+   */
+  const knowledgeRows = async () =>
+    page.evaluate(async () => {
+      const area = document.querySelector('[data-testid="knowledge-rows"] [data-scroll-axis]')
+      const seen = new Map()
+      const harvest = () => {
+        for (const node of document.querySelectorAll('[data-testid="knowledge-row"]')) {
+          const id = node.getAttribute('data-memory-id')
+          if (id === null) continue
+          seen.set(id, {
+            id,
+            type: node.getAttribute('data-memory-type'),
+            status: node.getAttribute('data-memory-status'),
+            scope: node.getAttribute('data-memory-scope'),
+          })
+        }
+      }
+      if (area === null) {
+        harvest()
+        return [...seen.values()]
+      }
+      area.scrollTop = 0
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      for (let step = 0; step < 300; step += 1) {
+        harvest()
+        const before = area.scrollTop
+        area.scrollTop = Math.min(area.scrollTop + Math.max(1, area.clientHeight - 40), area.scrollHeight)
+        await new Promise((resolve) => setTimeout(resolve, 80))
+        if (area.scrollTop === before) break
+      }
+      harvest()
+      area.scrollTop = 0
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      return [...seen.values()]
+    })
+
+  /** Scrolls the virtualised Knowledge list until the row for `memoryId` is MOUNTED (M61 R4/Task
+   *  10). A locator cannot wait for a node React has deliberately not made; this makes it. */
+  const scrollKnowledgeTo = async (memoryId) =>
+    page.evaluate(async (id) => {
+      const area = document.querySelector('[data-testid="knowledge-rows"] [data-scroll-axis]')
+      const found = () => document.querySelector(`[data-testid="knowledge-row"][data-memory-id="${id}"]`) !== null
+      if (area === null) return { area: false, found: found() }
+      area.scrollTop = 0
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      for (let step = 0; step < 300; step += 1) {
+        if (found()) return { area: true, steps: step, found: true }
+        const before = area.scrollTop
+        area.scrollTop = Math.min(area.scrollTop + Math.max(1, area.clientHeight - 40), area.scrollHeight)
+        await new Promise((resolve) => setTimeout(resolve, 80))
+        if (area.scrollTop === before) break
+      }
+      return { area: true, steps: -1, found: found() }
+    }, memoryId)
 
   // ============================================================================================
   // Stage 7: in a real browser -- what this project knows, where it came from, and what a person
   //          can do about it.
   // ============================================================================================
 
+  // M61 R5/R18: `SidebarTree`'s nested `sidebar-section` rows are gone; the six section ids live on
+  // `project-tab`/`data-tab` now, on the project's OWN strip, and are mode-aware -- simple mode
+  // shows four, developer mode all six. Developer mode is set BEFORE the navigation below (the same
+  // `addInitScript` shape `gate-m44-ux-foundation.mjs`'s stage 2 now uses) so this stage keeps
+  // measuring all six. `project-tab` does not exist until Task 6 lands `CommandStrip`, so this stage
+  // stays RED until then.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('mode', 'developer')
+    } catch {
+      /* stays simple; the assertion below fails loudly rather than silently passing on four */
+    }
+  })
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
-  await waitVisible(page.getByTestId('strip'), "the project's Overview")
-  // M57 R5: the project's sections are the sidebar tree's rows now, and each carries its ROUTE
-  // SEGMENT on `data-section` -- the same six ids the tab strip carried, with two labels changed.
+  // M61 R7 review fix round 1, Important 2: `strip` -> `stat-work` (selector rename).
+  await waitVisible(page.getByTestId('stat-work'), "the project's Team tab")
   const tabs = await page
-    .locator('[data-testid="sidebar-section"]')
-    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-section') ?? ''))
-  console.log(`stage 7 -- the project's section rows: ${JSON.stringify(tabs)}`)
+    .locator('[data-testid="project-tab"]')
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-tab') ?? ''))
+  console.log(`stage 7 -- the project's tab rows: ${JSON.stringify(tabs)}`)
   await assertEqual(
     tabs,
-    ['overview', 'tasks', 'organization', 'knowledge', 'activity', 'settings'],
-    'stage 7: six section rows, with Knowledge the fourth of them',
+    ['team', 'tasks', 'office', 'activity', 'graph', 'knowledge'],
+    'stage 7: six tab rows, with Knowledge the sixth of them',
   )
-  const knowledgeRow = page.locator('[data-testid="sidebar-section"][data-section="knowledge"]')
+  const knowledgeRow = page.locator('[data-testid="project-tab"][data-tab="knowledge"]')
   const knowledgeTab = (await knowledgeRow.first().textContent())?.trim() ?? ''
   const knowledgeHref = await knowledgeRow.first().getAttribute('href')
-  console.log(`stage 7 -- the fourth row reads ${JSON.stringify(knowledgeTab)} and goes to ${JSON.stringify(knowledgeHref)}`)
-  if (knowledgeTab !== 'Knowledge') await fail(`stage 7: the fourth row reads ${JSON.stringify(knowledgeTab)}, expected "Knowledge"`)
+  console.log(`stage 7 -- the sixth row reads ${JSON.stringify(knowledgeTab)} and goes to ${JSON.stringify(knowledgeHref)}`)
+  if (knowledgeTab !== 'Knowledge') await fail(`stage 7: the sixth row reads ${JSON.stringify(knowledgeTab)}, expected "Knowledge"`)
   if (knowledgeHref !== `/w/${workspaceId}/knowledge`) {
-    await fail(`stage 7: the fourth row goes to ${JSON.stringify(knowledgeHref)}`)
+    await fail(`stage 7: the sixth row goes to ${JSON.stringify(knowledgeHref)}`)
   }
 
+  // M61 R7/Task 11: the deleted Overview's `latest verified` tile carried this line; the project's
+  // page is the TEAM TAB now, and the line moved there with it (developer mode, because Knowledge
+  // is a developer tab -- this stage is already in developer mode, set above).
   const briefLink = page.getByTestId('brief-knowledge')
-  await waitVisible(briefLink, "the Overview's knowledge line")
+  await waitVisible(briefLink, "the Team tab's knowledge line")
   const briefText = (await briefLink.first().textContent())?.trim() ?? ''
   const briefHref = await briefLink.first().getAttribute('href')
   const counts = {
@@ -1569,7 +1638,7 @@ try {
     candidates: await prisma.memory.count({ where: { workspaceId, status: 'candidate' } }),
   }
   console.log(`stage 7 -- brief-knowledge reads ${JSON.stringify(briefText)}, href ${JSON.stringify(briefHref)}; the table says ${JSON.stringify(counts)}`)
-  await assertEqual(briefText, `Knowledge: ${String(counts.verified)} verified · ${String(counts.candidates)} candidates`, 'stage 7: the Overview names both counts')
+  await assertEqual(briefText, `Knowledge: ${String(counts.verified)} verified · ${String(counts.candidates)} candidates`, 'stage 7: the Team tab names both counts')
   await assertEqual(briefHref, `/w/${workspaceId}/knowledge`, 'stage 7: and links to the tab')
 
   // ---- the tab itself ---------------------------------------------------------------------------
@@ -1614,19 +1683,42 @@ try {
   await gotoReliably(`${baseUrl}/w/${workspaceId}/knowledge?status=verified&status=candidate&status=superseded&status=removed`)
   await waitVisible(page.getByTestId('knowledge-rows'), 'every memory this project owns, at every status')
   {
-    const chips = await page.evaluate(() =>
-      [...document.querySelectorAll('[data-testid="knowledge-row"]')].flatMap((row) =>
-        [
-          ...row.querySelectorAll(
+    // SCROLLED AND ACCUMULATED, like `knowledgeRows` above: the list is virtualised (M61 R4/Task
+    // 10) and a single pass reads the handful of rows in the window. Keyed on the row's memory id
+    // plus the chip's testid so two passes over an overlapping window cannot double-count.
+    const chips = await page.evaluate(async () => {
+      const area = document.querySelector('[data-testid="knowledge-rows"] [data-scroll-axis]')
+      const seen = new Map()
+      const harvest = () => {
+        for (const row of document.querySelectorAll('[data-testid="knowledge-row"]')) {
+          const rowId = row.getAttribute('data-memory-id') ?? ''
+          for (const node of row.querySelectorAll(
             '[data-testid="knowledge-type"],[data-testid="knowledge-scope"],[data-testid="knowledge-confidence"],[data-testid="status-pill"]',
-          ),
-        ].map((node) => ({
-          testid: node.getAttribute('data-testid'),
-          text: (node.textContent ?? '').trim(),
-          title: node.getAttribute('title'),
-        })),
-      ),
-    )
+          )) {
+            seen.set(`${rowId}:${node.getAttribute('data-testid') ?? ''}`, {
+              testid: node.getAttribute('data-testid'),
+              text: (node.textContent ?? '').trim(),
+              title: node.getAttribute('title'),
+            })
+          }
+        }
+      }
+      if (area === null) {
+        harvest()
+        return [...seen.values()]
+      }
+      area.scrollTop = 0
+      await new Promise((resolve) => setTimeout(resolve, 80))
+      for (let step = 0; step < 300; step += 1) {
+        harvest()
+        const before = area.scrollTop
+        area.scrollTop = Math.min(area.scrollTop + Math.max(1, area.clientHeight - 40), area.scrollHeight)
+        await new Promise((resolve) => setTimeout(resolve, 80))
+        if (area.scrollTop === before) break
+      }
+      harvest()
+      return [...seen.values()]
+    })
     console.log(`stage 7 -- ${String(chips.length)} chip(s) across every row; the first six: ${JSON.stringify(chips.slice(0, 6))}`)
     const keyless = chips.filter((chip) => chip.title === null || chip.title === '')
     if (chips.length === 0) await fail('stage 7: no chips at all, so this assertion measures nothing')
@@ -1649,6 +1741,8 @@ try {
   // (ids, hashes and statuses live in the group so the row above stays a sentence).
   {
     const retired = page.locator(`[data-testid="knowledge-row"][data-memory-id="${observation.id}"]`)
+    const reached = await scrollKnowledgeTo(observation.id)
+    console.log(`stage 7 -- scrolled the virtualised list to the retired claim: ${JSON.stringify(reached)}`)
     await waitVisible(retired, "the retired claim's row")
     await clickUntil(
       retired.locator('[data-testid="details-group"][data-group="provenance"] button').first(),
@@ -1681,6 +1775,8 @@ try {
   await gotoReliably(`${baseUrl}/w/${workspaceId}/knowledge?type=fact&status=verified`)
   await waitVisible(page.getByTestId('knowledge-rows'), 'the verified facts')
   const correctionRow = page.locator(`[data-testid="knowledge-row"][data-memory-id="${correctionId}"]`)
+  // The list is virtualised (M61 R4/Task 10) -- scrolled to before it is waited on.
+  console.log(`stage 7 -- scrolled to the corrected fact: ${JSON.stringify(await scrollKnowledgeTo(correctionId))}`)
   await waitVisible(correctionRow, "the corrected fact's row")
   const provenanceText = (await correctionRow.getByTestId('knowledge-provenance').first().textContent())?.trim() ?? ''
   console.log(`stage 7 -- knowledge-provenance on the corrected fact reads ${JSON.stringify(provenanceText)}`)
@@ -1705,6 +1801,7 @@ try {
   // ---- Verify, on a claim nothing checked -------------------------------------------------------
   await gotoReliably(`${baseUrl}/w/${workspaceId}/knowledge?status=candidate`)
   await waitVisible(page.getByTestId('knowledge-rows'), 'the unverified claims')
+  console.log(`stage 7 -- scrolled to the unverified claim: ${JSON.stringify(await scrollKnowledgeTo(candidate.id))}`)
   const candidateRow = page.locator(`[data-testid="knowledge-row"][data-memory-id="${candidate.id}"]`)
   await waitVisible(candidateRow, "the unverified claim's row")
   await clickUntil(
@@ -1716,6 +1813,7 @@ try {
   console.log(`stage 7 -- the claim after a person verified it: ${describeMemory(verifiedNow)}`)
   await assertEqual({ status: verifiedNow.status, verifiedBy: verifiedNow.verifiedBy }, { status: 'verified', verifiedBy: 'human' }, 'stage 7: a person verified it')
   await gotoReliably(`${baseUrl}/w/${workspaceId}/knowledge?status=verified`)
+  console.log(`stage 7 -- scrolled to the now-verified claim: ${JSON.stringify(await scrollKnowledgeTo(candidate.id))}`)
   await waitVisible(page.locator(`[data-testid="knowledge-row"][data-memory-id="${candidate.id}"]`), 'the claim, now under Verified')
   const verifiedPill = (await page
     .locator(`[data-testid="knowledge-row"][data-memory-id="${candidate.id}"] [data-testid="status-pill"]`)
@@ -1727,6 +1825,7 @@ try {
   // ---- Correct, through the drawer --------------------------------------------------------------
   const toCorrect = seededIds[0]
   await gotoReliably(`${baseUrl}/w/${workspaceId}/knowledge?q=M49%20gate%20fact%201`)
+  console.log(`stage 7 -- scrolled to the fact about to be corrected: ${JSON.stringify(await scrollKnowledgeTo(toCorrect))}`)
   await waitVisible(page.locator(`[data-testid="knowledge-row"][data-memory-id="${toCorrect}"]`), 'the fact a person is about to correct')
   await clickUntil(
     page.locator(`[data-testid="knowledge-row"][data-memory-id="${toCorrect}"] [data-testid="knowledge-correct"]`).first(),
@@ -1745,8 +1844,33 @@ try {
   const correctedNew = await prisma.memory.findUniqueOrThrow({ where: { id: correctedOld.supersededById ?? '' } })
   console.log(`stage 7 -- the corrected pair:\n  ${describeMemory(correctedOld)}\n  ${describeMemory(correctedNew)}`)
   await assertEqual(correctedNew.title, CORRECTED_TITLE, "stage 7: the correction carries the person's own title")
+  // OVER THE WHOLE LIST, not the window: virtualised since M61 R4/Task 10, so the rows are
+  // collected with the same scroll-and-accumulate walk `knowledgeRows` uses.
   await waitUntil('the list to show the corrected title', ACTION_TIMEOUT_MS, async (note) => {
-    const rows = await page.getByTestId('knowledge-row').evaluateAll((nodes) => nodes.map((node) => (node.textContent ?? '').trim()))
+    const rows = await page.evaluate(async () => {
+      const area = document.querySelector('[data-testid="knowledge-rows"] [data-scroll-axis]')
+      const seen = new Map()
+      const harvest = () => {
+        for (const node of document.querySelectorAll('[data-testid="knowledge-row"]')) {
+          seen.set(node.getAttribute('data-memory-id') ?? String(seen.size), (node.textContent ?? '').trim())
+        }
+      }
+      if (area === null) {
+        harvest()
+        return [...seen.values()]
+      }
+      area.scrollTop = 0
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      for (let step = 0; step < 300; step += 1) {
+        harvest()
+        const before = area.scrollTop
+        area.scrollTop = Math.min(area.scrollTop + Math.max(1, area.clientHeight - 40), area.scrollHeight)
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        if (area.scrollTop === before) break
+      }
+      harvest()
+      return [...seen.values()]
+    })
     note(`${String(rows.length)} row(s)`)
     return rows.some((text) => text.includes(CORRECTED_TITLE))
   })

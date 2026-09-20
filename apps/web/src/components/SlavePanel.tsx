@@ -47,9 +47,10 @@ const PROFILE_ORIGIN_TEXT: Record<OverrideOrigin, string> = {
 /**
  * What a runtime's GATE means for the worker that runs on it (spec §8 / Decision 8), in words.
  *
- * The header keeps `ShellOnlyMark`, which marks the one gate spec §8 asks to be marked and nothing
- * else; this line is the whole fact, and it lives inside the Model group, where the raw value
- * belongs -- `title` carries `all-tools`/`shell-only`/`none` verbatim.
+ * The header keeps `ShellOnlyMark` -- or, when `chromeless` (Task 9 fix round 1) suppresses the
+ * header, the body's first row does instead -- which marks the one gate spec §8 asks to be marked
+ * and nothing else; this line is the whole fact, and it lives inside the Model group, where the
+ * raw value belongs -- `title` carries `all-tools`/`shell-only`/`none` verbatim.
  */
 const GATE_TEXT: Record<'all-tools' | 'shell-only' | 'none', string> = {
   'all-tools': 'every tool this runtime has',
@@ -179,6 +180,7 @@ export function SlavePanel({
   skillCatalogue = [],
   onPersonChanged,
   openedGlobally = false,
+  chromeless = false,
 }: {
   /** The live Team-band seat. `null` when this is a person with no seat on this workspace -- do
    *  not invent an idle card; run controls stay hidden and seat writes stay disabled. */
@@ -198,6 +200,17 @@ export function SlavePanel({
   /** Workforce (and any other non-project surface): the confirmation counts every open project,
    *  because there is no "this" project to subtract. */
   readonly openedGlobally?: boolean
+  /** Fix round 1 (Task 9 review, Important 1): `true` when a caller already draws its own header
+   *  and close control around this panel -- `WorkforceClient`'s `person-sheet` `Sheet`, which
+   *  prints the person's name as its OWN `<h2>{title}</h2>` and its OWN close button, so this
+   *  panel's `<header>` (name, close button included) would be a second, redundant copy of both.
+   *  Suppresses ONLY the `<header>` element: the status dot, the role, the status label, the
+   *  provider chip and the shell-only mark it carried move to the body's first row instead, so
+   *  none of that information -- or its testid -- is lost, only the name (the Sheet's title
+   *  already says it) and the close button (the Sheet's own). `TeamLive.tsx` and
+   *  `OrganizationClient.tsx` never pass this -- they have no header of their own around this
+   *  panel, so they keep drawing it. */
+  readonly chromeless?: boolean
 }): React.JSX.Element {
   const [pending, setPending] = useState<ReadonlySet<ControlAction>>(new Set())
   const [errorText, setErrorText] = useState<string | null>(null)
@@ -331,6 +344,40 @@ export function SlavePanel({
     await post('answer', `/api/w/${workspaceId}/messages/${answerMessageId}/answer`, { answer: draft })
   }
 
+  // Shared between the two `chromeless` branches below, so the same testids render identically
+  // either way -- only the `<header>`'s name and close button (redundant with a wrapping `Sheet`'s
+  // own title and close, fix round 1) differ between them.
+  const statusDot = slave !== null && (
+    <span
+      data-testid="status-dot"
+      className={`inline-block h-2 w-2 shrink-0 rounded-full ${DOT[slave.status]} ${slave.status === 'working' ? 'animate-pulse' : ''}`}
+    />
+  )
+  // R5 leak 2: this printed the raw `SlaveStatus`. The projected word is what a person reads;
+  // `data-status` and `title` keep the raw value on the node. No live seat means no status word --
+  // Idle would be a lie about a seat this panel does not have.
+  const statusLabel = slave !== null && (
+    <span
+      data-testid="status-label"
+      data-status={slave.status}
+      data-slave-id={slave.id}
+      title={slave.status}
+      className="ml-1 text-xs text-text-2"
+    >
+      {userSlaveStatus(slave.status).label}
+    </span>
+  )
+  // The runtime's WORD (M44 R4, final review item I3), `—` when no run has resolved one (M12 Task
+  // 9, ruling R10), raw kind in `title`. The shell-only gate mark (spec §8) is `ShellOnlyMark`
+  // (M12 Task 13 fix round 1, finding 4a).
+  const providerChip = (
+    <Chip>
+      <span data-testid="provider-chip" title={provider ?? undefined}>
+        {providerLabel(provider)}
+      </span>
+    </Chip>
+  )
+
   return (
     <aside
       aria-label="Slave detail"
@@ -343,46 +390,36 @@ export function SlavePanel({
       // `/workforce` (a global route, no slot) wraps it in the geometry this className gave up.
       className="flex h-full w-full flex-col gap-4 overflow-y-auto p-4 motion-safe:animate-[panel-in_160ms_ease-out]"
     >
-      <header className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
-          {slave !== null && (
-            <span
-              data-testid="status-dot"
-              className={`inline-block h-2 w-2 shrink-0 rounded-full ${DOT[slave.status]} ${slave.status === 'working' ? 'animate-pulse' : ''}`}
-            />
-          )}
-          <div>
-            <h2 className="text-sm font-medium text-text-1">{name}</h2>
-            <span className="text-xs text-text-3">{role}</span>
+      {!chromeless && (
+        <header className="flex items-start justify-between gap-2">
+          <div className="flex items-center gap-2">
+            {statusDot}
+            <div>
+              <h2 className="text-sm font-medium text-text-1">{name}</h2>
+              <span className="text-xs text-text-3">{role}</span>
+            </div>
+            {statusLabel}
+            {providerChip}
+            <ShellOnlyMark gate={gate} />
           </div>
-          {/* R5 leak 2: this printed the raw `SlaveStatus`. The projected word is what a person
-            * reads; `data-status` and `title` keep the raw value on the node. No live seat means
-            * no status word -- Idle would be a lie about a seat this panel does not have. */}
-          {slave !== null && (
-            <span
-              data-testid="status-label"
-              data-status={slave.status}
-              data-slave-id={slave.id}
-              title={slave.status}
-              className="ml-1 text-xs text-text-2"
-            >
-              {userSlaveStatus(slave.status).label}
-            </span>
-          )}
-          {/* The runtime's WORD (M44 R4, final review item I3), `—` when no run has resolved
-            *  one (M12 Task 9, ruling R10), raw kind in `title`. The shell-only gate mark (spec
-            *  §8) is `ShellOnlyMark` (M12 Task 13 fix round 1, finding 4a). */}
-          <Chip>
-            <span data-testid="provider-chip" title={provider ?? undefined}>
-              {providerLabel(provider)}
-            </span>
-          </Chip>
+          <Button variant="ghost" onClick={onClose} aria-label="Close slave detail">
+            close
+          </Button>
+        </header>
+      )}
+      {/* Fix round 1 (Task 9 review, Important 1): the wrapping `Sheet` already draws the name as
+        * its own `<h2>` and its own close button, so this row carries everything else the header
+        * would have -- the status dot, the role, the status label, the provider chip and the
+        * shell-only mark -- with no testid dropped. */}
+      {chromeless && (
+        <div className="flex items-center gap-2">
+          {statusDot}
+          <span className="text-xs text-text-3">{role}</span>
+          {statusLabel}
+          {providerChip}
           <ShellOnlyMark gate={gate} />
         </div>
-        <Button variant="ghost" onClick={onClose} aria-label="Close slave detail">
-          close
-        </Button>
-      </header>
+      )}
 
       {slave !== null && (
         <div className="text-sm text-text-1">{slave.taskTitle ?? <span className="text-text-3">idle</span>}</div>
@@ -479,11 +516,11 @@ export function SlavePanel({
       </DetailsGroup>
       )}
 
-      {/* The provider chip in the header, expanded: the runtime's WORD, its raw kind in `title`,
-        * and what its gate actually permits (spec §8 / Decision 8) with the raw gate in `title`.
-        * `ShellOnlyMark` stays in the header rather than moving here -- spec §8 asks for that one
-        * fact to be marked "wherever a worker's runtime is shown", and a mark behind a click is
-        * not a mark. */}
+      {/* The provider chip from the header (or, when `chromeless`, the body's first row -- Task 9
+        * fix round 1), expanded: the runtime's WORD, its raw kind in `title`, and what its gate
+        * actually permits (spec §8 / Decision 8) with the raw gate in `title`. `ShellOnlyMark`
+        * stays up there rather than moving here -- spec §8 asks for that one fact to be marked
+        * "wherever a worker's runtime is shown", and a mark behind a click is not a mark. */}
       <DetailsGroup group="model" title="Model">
         <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
           <dt className="text-text-3">runtime</dt>

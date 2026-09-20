@@ -9,9 +9,23 @@ import type { KnowledgeRow, KnowledgeView } from '../src/server/memory'
 let search = ''
 vi.mock('next/navigation', () => ({ useSearchParams: () => new URLSearchParams(search) }))
 
+/**
+ * `KnowledgeClient`'s rows are virtualized now (M61 Task 10): `@tanstack/react-virtual` measures
+ * its scroll viewport via `offsetWidth`/`offsetHeight` when no `ResizeObserver` is present --
+ * jsdom has none by default -- the same idiom `test/people-table.test.tsx`'s own
+ * `mockElementSizes` uses. Without it every case below (a row or two apiece) would find none
+ * rendered at all, since jsdom's unmeasured viewport is 0px tall. Generous by default -- large
+ * enough that every fixture in this file (never more than two rows) renders in full.
+ */
+function mockElementSizes(height: number): void {
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 })
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: height })
+}
+
 beforeEach(() => {
   search = ''
   window.history.replaceState(null, '', '/w/w1/knowledge')
+  mockElementSizes(2000)
 })
 
 /** Drains every pending microtask AND lets React apply what they set. A `await Promise.resolve()`
@@ -381,5 +395,28 @@ describe('KnowledgeClient', () => {
     await vi.waitFor(() => expect(screen.getByTestId('knowledge-stale')).toBeDefined())
     expect(screen.getAllByTestId('knowledge-row')).toHaveLength(2)
     vi.unstubAllGlobals()
+  })
+
+  // M61 Task 10 (R19): the rows list is `DataTable`'s virtualized body now, which renders its own
+  // `ScrollArea` (the same `data-table-rows` idiom `PeopleTable` already uses) -- and no
+  // `SectionLabel` on the page (the "asked for by" caption inside the fold, or the drawer's own)
+  // carries `uppercase`/`font-mono` on top of `.type-label`.
+  it('wraps its rows in a ScrollArea, and carries no uppercase/font-mono SectionLabel', () => {
+    render(<KnowledgeClient workspaceId="w1" initial={VIEW} />)
+    expect(document.querySelector('[data-scroll-axis]')).toBeTruthy()
+
+    const offenders = [...document.querySelectorAll('.type-label')].filter((element) =>
+      element.className.split(' ').some((cls) => cls === 'uppercase' || cls === 'font-mono'),
+    )
+    expect(offenders).toHaveLength(0)
+  })
+
+  // M61 Task 10 review, controller Ruling 11: the design has no "kind / memory / actions" column
+  // headings above these rows -- `DataTable`'s `hideHeader` drops that bar (an artifact of routing
+  // through `DataTable` at all) entirely, rather than rendering an empty one.
+  it('renders no column-header row above the rows', () => {
+    render(<KnowledgeClient workspaceId="w1" initial={VIEW} />)
+    expect(screen.queryByTestId('data-table-header')).toBeNull()
+    expect(screen.queryAllByTestId('data-table-header-cell')).toHaveLength(0)
   })
 })

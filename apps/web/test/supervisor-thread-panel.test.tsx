@@ -261,4 +261,17 @@ describe('the Supervisor panel', () => {
     // The composer is still there: an empty conversation is where you START one.
     expect(screen.getByTestId('supervisor-composer')).toBeTruthy()
   })
+
+  // R14/I3 (final-review wave): the chrome fixes -- the footer's own "recorded as an event" line
+  // is gone, the composer names the Enter key with a real `<kbd>`, and the scope line is still
+  // findable, just promoted out of the composer's footer.
+  it('drops the composer footer line, keeps the scope line, and names Enter with a kbd', async (): Promise<void> => {
+    render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
+    await waitFor(() => expect(screen.getByTestId('supervisor-composer')).toBeTruthy())
+    expect(screen.queryByText('Every message is recorded as an event.')).toBeNull()
+    expect(screen.getByText('this project', { exact: false })).toBeTruthy()
+    const composer = screen.getByTestId('supervisor-composer')
+    expect(composer.querySelector('kbd')).toBeTruthy()
+    expect(composer.querySelector('kbd')?.textContent).toBe('⏎')
+  })
 })

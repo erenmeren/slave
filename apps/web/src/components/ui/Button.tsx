@@ -12,11 +12,10 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 
 const SURFACE: Record<ButtonProps['variant'], string> = {
   ghost: 'border-line bg-transparent text-text-2 hover:border-line-hover hover:text-text-1',
-  // Primary rides the `working` tone (the handoff's default "go" colour) and danger the `blocked`
-  // one -- both through `StatusPill`'s own `1a`-alpha fill / `3d`-alpha border tables, not a
-  // bespoke button colour. `FormControls` had drifted to `/15` and `/40`; M44 converges on the
-  // handoff's stated alphas, which is the only visual change this consolidation makes.
-  primary: `${TONE_FILL.working} ${TONE_BORDER.working} ${TONE_TEXT.working} hover:brightness-125`,
+  // M61 R16: primary moves OFF the tone system entirely and onto the accent surface -- the
+  // handoff's "go" colour is `--accent` now, not the `working` tone's alpha fill. Danger keeps
+  // riding the `blocked` tone through `StatusPill`'s `1a`-alpha fill / `3d`-alpha border tables.
+  primary: 'bg-accent text-accent-ink border-transparent hover:brightness-110',
   danger: `${TONE_FILL.blocked} ${TONE_BORDER.blocked} ${TONE_TEXT.blocked} hover:brightness-125`,
 }
 
@@ -50,7 +49,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       data-testid="button"
       data-variant={variant}
       data-size={size}
-      className={`inline-flex items-center justify-center gap-1.5 rounded-chip border ${GEOMETRY[size]} text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${SURFACE[variant]} ${className ?? ''}`}
+      className={`inline-flex items-center justify-center gap-1.5 rounded-control border ${GEOMETRY[size]} text-xs font-medium transition-[color,background-color,border-color,transform] duration-[var(--dur-base)] ease-[var(--ease-out)] active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50 ${SURFACE[variant]} ${className ?? ''}`}
       {...rest}
     />
   )

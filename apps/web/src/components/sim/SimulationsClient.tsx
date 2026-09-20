@@ -8,6 +8,7 @@ import { Card } from '../ui/Card'
 import { Chip } from '../ui/Chip'
 import { PageShell } from '../ui/PageShell'
 import { Panel } from '../ui/Panel'
+import { ScrollArea } from '../ui/ScrollArea'
 import { SIMULATION_STATUS_LABEL } from '../../lib/simulationLabels'
 import { NewSimulationDrawer, type SimulationCompanyOption } from './NewSimulationDrawer'
 import { Button } from '../ui/Button'
@@ -32,45 +33,50 @@ export function SimulationsClient({
     // width exactly and not a pixel moves. The shell is here for its landmark and its
     // `page-shell` marker.
     <PageShell flush>
-      <div className="flex flex-col gap-4 p-6">
-        <Panel title="Simulations" action={<Button variant="primary" size="sm" data-testid="new-simulation" onClick={() => setOpen(true)}>+ New simulation</Button>}>
-          {cards.length === 0 ? (
-            <p data-testid="sim-empty" className="text-xs text-text-3">No simulations yet. Create the first run from a catalog company whose roster fits the sector.</p>
-          ) : (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {cards.map((card) => (
-                <div key={card.id} data-testid="sim-card">
-                  <div data-testid={`sim-card-${card.id}`}>
-                    {/* The README's dashed border (M57 R15) -- the "not real" cue every
-                      * simulation card carries. */}
-                    <Card className="rounded-page-card border-dashed border-line2" onClick={() => router.push(`/sim/${card.id}`)}>
-                      <div className="flex items-center gap-2">
-                        <span data-testid="sim-chip"><Chip tone="waiting">SIMULATION</Chip></span>
-                        <span className="text-sm text-text-1">{card.name}</span>
-                        <span data-testid="sim-sector-chip"><Chip>{card.sector}</Chip></span>
-                      </div>
-                      <div className="text-xs text-text-3">{card.companyName} · {card.sector} · policy {card.policy} · {card.decisionProvider} provider</div>
-                      {card.clonedFromName !== null && <div className="text-xs text-text-3">clone of {card.clonedFromName}</div>}
-                      {card.adoptedBy.length > 0 && (
-                        <div className="flex flex-wrap items-center gap-1">
-                          {card.adoptedBy.map((workspace) => (
-                            <Chip key={workspace.workspaceId} tone="done"><span data-testid="sim-adopted-chip">adopted → {workspace.workspaceName}</span></Chip>
-                          ))}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 p-6">
+        {/* M61 Task 10: the list's own scrolling body -- the drawer below stays outside it, same
+          * as it always sat outside this padded column's own bounds. */}
+        <ScrollArea>
+          <Panel title="Simulations" action={<Button variant="primary" size="sm" data-testid="new-simulation" onClick={() => setOpen(true)}>+ New simulation</Button>}>
+            {cards.length === 0 ? (
+              <p data-testid="sim-empty" className="text-xs text-text-3">No simulations yet. Create the first run from a catalog company whose roster fits the sector.</p>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {cards.map((card) => (
+                  <div key={card.id} data-testid="sim-card">
+                    <div data-testid={`sim-card-${card.id}`}>
+                      {/* The README's dashed border (M57 R15) -- the "not real" cue every
+                        * simulation card carries. `Card` already gives `rounded-surface` (M61
+                        * Task 10: the stale `rounded-page-card` override is gone). */}
+                      <Card className="border-dashed border-line2" onClick={() => router.push(`/sim/${card.id}`)}>
+                        <div className="flex items-center gap-2">
+                          <span data-testid="sim-chip"><Chip tone="waiting">SIMULATION</Chip></span>
+                          <span className="text-sm text-text-1">{card.name}</span>
+                          <span data-testid="sim-sector-chip"><Chip>{card.sector}</Chip></span>
                         </div>
-                      )}
-                      <div className="flex items-center gap-2 text-xs text-text-2">
-                        <span>day {card.simTime} / {card.horizonDays}</span>
-                        <Chip tone={STATUS_TONE[card.status]} title={card.status}>{SIMULATION_STATUS_LABEL[card.status]}</Chip>
-                        {card.decisionProvider === 'llm' && <Chip tone="working">llm</Chip>}
-                        {card.autoRun !== null && <Chip tone="working">auto-run</Chip>}
-                      </div>
-                    </Card>
+                        <div className="text-xs text-text-3">{card.companyName} · {card.sector} · policy {card.policy} · {card.decisionProvider} provider</div>
+                        {card.clonedFromName !== null && <div className="text-xs text-text-3">clone of {card.clonedFromName}</div>}
+                        {card.adoptedBy.length > 0 && (
+                          <div className="flex flex-wrap items-center gap-1">
+                            {card.adoptedBy.map((workspace) => (
+                              <Chip key={workspace.workspaceId} tone="done"><span data-testid="sim-adopted-chip">adopted → {workspace.workspaceName}</span></Chip>
+                            ))}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2 text-xs text-text-2">
+                          <span>day {card.simTime} / {card.horizonDays}</span>
+                          <Chip tone={STATUS_TONE[card.status]} title={card.status}>{SIMULATION_STATUS_LABEL[card.status]}</Chip>
+                          {card.decisionProvider === 'llm' && <Chip tone="working">llm</Chip>}
+                          {card.autoRun !== null && <Chip tone="working">auto-run</Chip>}
+                        </div>
+                      </Card>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </Panel>
+                ))}
+              </div>
+            )}
+          </Panel>
+        </ScrollArea>
         <NewSimulationDrawer open={open} onClose={() => setOpen(false)} companiesBySector={companiesBySector} />
       </div>
     </PageShell>

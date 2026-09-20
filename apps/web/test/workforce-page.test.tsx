@@ -3,6 +3,9 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WorkforceClient, type WorkforceTab } from '../src/components/workforce/WorkforceClient.js'
 import WorkforcePage from '../src/app/workforce/page.js'
+import { HeaderActionProvider, useHeaderActionNode } from '../src/components/shell/HeaderActionProvider.js'
+import { ModeProvider } from '../src/components/mode/ModeProvider.js'
+import { MODE_STORAGE_KEY } from '../src/lib/modeStorage.js'
 import type { AllSlaveRow, AllSlavesPage, CatalogRowView, WorkforceCatalogView } from '../src/server/org.js'
 import type { EvidencePage } from '../src/server/evidence.js'
 import type { PersonDetail, PersonRow } from '../src/server/persons.js'
@@ -16,7 +19,28 @@ let search = ''
 vi.mock('next/navigation', () => ({
   useRouter: () => ({ refresh: routerRefresh, replace: routerReplace }),
   useSearchParams: () => new URLSearchParams(search),
+  usePathname: () => '/workforce',
 }))
+
+/** jsdom implements `localStorage` but this runner never hands it over (`command-strip.test.tsx`'s
+ *  own note, copied from `home.test.tsx`'s idiom) -- `ModeProvider`'s hydration effect needs a
+ *  working one. */
+function installStorage(): void {
+  const cells = new Map<string, string>()
+  vi.stubGlobal('localStorage', {
+    getItem: (key: string): string | null => cells.get(key) ?? null,
+    setItem: (key: string, value: string): void => void cells.set(key, value),
+    removeItem: (key: string): void => void cells.delete(key),
+    clear: (): void => cells.clear(),
+  })
+}
+
+/** What the shell's `Header` renders in its action slot (M57 R7, `home.test.tsx`'s own idiom) --
+ *  `WorkforceClient` now declares its primary action with `useHeaderAction` (Task 9), so a render
+ *  of the client alone shows no `+ New slave`/`hire-from-catalogue` button without this. */
+function HeaderActionSlot(): React.JSX.Element {
+  return <>{useHeaderActionNode()}</>
+}
 
 /**
  * The Workforce page itself is a server component that reads eleven loaders, one of which opens
@@ -250,37 +274,80 @@ const catalogPage = (rows: readonly CatalogRowView[]): WorkforceCatalogView => (
 /** Every prop `WorkforceClient` takes, defaulted to the empty shape, so a case states only what it
  *  is about. An explicit prop wins over the default (JSX prop order). */
 type WorkforceProps = React.ComponentProps<typeof WorkforceClient>
+
+/**
+ * The UI mode every case in this file renders under, defaulting to `developer` -- this suite
+ * predates `useMode` and every one of its assertions about the tab strip, the catalog, skills,
+ * runbooks and evidence describes what the FULL nav shows, which developer mode is what keeps
+ * "as before" true for (spec erratum E3). Set to `'simple'` (never restored by hand -- the
+ * `afterEach` below resets it) by the handful of Task 9 cases that are themselves ABOUT simple
+ * mode's own People frame.
+ *
+ * `TestWorkforceClient` writes it into storage on every render, before `ModeProvider` mounts --
+ * the same "set the stored value, then render" order `home.test.tsx`'s own `renderHome` uses,
+ * just folded into this component instead of a second wrapper function, so the ~20 existing
+ * `render(<TestWorkforceClient .../>)` call sites below need no change of their own.
+ */
+let mode: 'simple' | 'developer' = 'developer'
+
 function TestWorkforceClient(
   props: Partial<WorkforceProps> & { readonly initialTab?: WorkforceTab },
 ): React.JSX.Element {
+  window.localStorage.setItem(MODE_STORAGE_KEY, mode)
   return (
-    <WorkforceClient
-      initialTab="slaves"
-      slaves={page([slaveRow({})])}
-      teams={[]}
-      workspaces={[]}
-      companies={[]}
-      roster={[]}
-      templates={[]}
-      catalog={catalogPage([])}
-      catalogImports={[]}
-      skills={skillsPage()}
-      taxonomy={[]}
-      runbooks={[]}
-      evidence={emptyEvidence()}
-      people={[personRow()]}
-      peopleDepartments={[{ companyTeamId: 'ct1', name: 'Engineering' }]}
-      skillCatalogue={[]}
-      skillHolders={{}}
-      {...props}
-    />
+    <ModeProvider>
+      <HeaderActionProvider>
+        <HeaderActionSlot />
+        <WorkforceClient
+          initialTab="slaves"
+          slaves={page([slaveRow({})])}
+          teams={[]}
+          workspaces={[]}
+          companies={[]}
+          roster={[]}
+          templates={[]}
+          catalog={catalogPage([])}
+          catalogImports={[]}
+          skills={skillsPage()}
+          taxonomy={[]}
+          runbooks={[]}
+          evidence={emptyEvidence()}
+          people={[personRow()]}
+          peopleDepartments={[{ companyTeamId: 'ct1', name: 'Engineering' }]}
+          skillCatalogue={[]}
+          skillHolders={{}}
+          {...props}
+        />
+      </HeaderActionProvider>
+    </ModeProvider>
   )
 }
+
+/**
+ * `PeopleTable`'s `DataTable` is virtualized now (Task 9): `@tanstack/react-virtual` measures its
+ * scroll viewport via `offsetWidth`/`offsetHeight` when no `ResizeObserver` is present -- jsdom
+ * has none -- and without this every case in this file that opens a person row would find NONE
+ * rendered, since jsdom's unmeasured viewport is 0px tall. The same idiom
+ * `test/activity-page.test.tsx`'s own `mockElementSizes` uses, sized generously (every fixture
+ * here is a handful of rows, never `people-table.test.tsx`'s 500) so every row this file's fixtures
+ * ever hand `WorkforceClient` renders.
+ */
+function mockElementSizes(): void {
+  Object.defineProperty(HTMLElement.prototype, 'offsetWidth', { configurable: true, value: 800 })
+  Object.defineProperty(HTMLElement.prototype, 'offsetHeight', { configurable: true, value: 2000 })
+}
+
+beforeEach(() => {
+  installStorage()
+  mockElementSizes()
+})
 
 afterEach(() => {
   routerRefresh.mockClear()
   routerReplace.mockClear()
   search = ''
+  mode = 'developer'
+  document.documentElement.removeAttribute('data-mode')
 })
 
 /** Opens one `DetailsGroup` by `data-group`. A closed group renders no children. */
@@ -495,6 +562,65 @@ describe('WorkforceClient tabs (M44 R1)', () => {
   })
 })
 
+// Task 9 / spec erratum E3 (binding): simple mode renders the `slaves` tab -- "People" -- with
+// the whole tab strip (the four `workforce-tab-*` and any `workforce-segment-*` beneath them)
+// hidden; any OTHER `?tab=` still renders the strip even in simple mode (rule 2: nothing removed
+// only moved, every `?tab=` value still lands somewhere a person can see), marked
+// `data-outside-mode="true"` on its wrapper.
+describe('WorkforceClient simple mode (M61 R12/R13, Task 9)', () => {
+  it('hides the tab strip on the People frame in simple mode, and offers Hire from catalogue instead of + New slave', () => {
+    mode = 'simple'
+    render(<TestWorkforceClient initialTab="slaves" />)
+
+    expect(screen.queryByTestId('workforce-tab-slaves')).toBeNull()
+    expect(screen.queryByTestId('workforce-segment-departments')).toBeNull()
+    expect(screen.queryByTestId('new-slave')).toBeNull()
+    // The People content itself is unaffected -- only the nav strip around it hides.
+    expect(screen.getByTestId('people-rows')).toBeTruthy()
+    expect(screen.getByTestId('hire-from-catalogue')).toBeTruthy()
+  })
+
+  it('opens Hire from catalogue in a Sheet containing the workforce catalog', () => {
+    mode = 'simple'
+    render(<TestWorkforceClient initialTab="slaves" catalog={catalogPage([templateRow()])} />)
+
+    expect(screen.queryByTestId('hire-sheet')).toBeNull()
+    fireEvent.click(screen.getByTestId('hire-from-catalogue'))
+
+    const sheet = screen.getByTestId('hire-sheet')
+    expect(sheet).toBeTruthy()
+    expect(within(sheet).getByTestId('workforce-catalog')).toBeTruthy()
+    expect(within(sheet).getByTestId('catalog-row-t1')).toBeTruthy()
+
+    // `Sheet` keeps its panel mounted through its exit animation (`home.test.tsx`'s own note) --
+    // this just asserts the close button is reachable and wired, not the animated unmount.
+    expect(within(sheet).getByTestId('sheet-close')).toBeTruthy()
+  })
+
+  it('still shows the tab strip, marked data-outside-mode, for any other ?tab= in simple mode', () => {
+    mode = 'simple'
+    render(<TestWorkforceClient initialTab="catalog" />)
+
+    const tab = screen.getByTestId('workforce-tab-catalog')
+    expect(tab.getAttribute('aria-selected')).toBe('true')
+    const wrapper = tab.closest('[data-outside-mode="true"]')
+    expect(wrapper).toBeTruthy()
+  })
+
+  it('shows all four tabs and their segments in developer mode, exactly as before (E3)', () => {
+    mode = 'developer'
+    render(<TestWorkforceClient initialTab="slaves" />)
+
+    expect(screen.getAllByRole('tab')).toHaveLength(4)
+    expect(screen.getByTestId('workforce-segment-departments')).toBeTruthy()
+    expect(screen.getByTestId('new-slave')).toBeTruthy()
+    expect(screen.queryByTestId('hire-from-catalogue')).toBeNull()
+    // Developer mode is not "outside" -- the strip renders because it is developer mode, not
+    // because the tab is exceptional.
+    expect(screen.getByTestId('workforce-tab-slaves').closest('[data-outside-mode]')).toBeNull()
+  })
+})
+
 // MOVED from `slaves-page.test.tsx` unchanged in substance (M44 t3). From `WorkersTable`'s
 // M11-era days: the row-click panel must resolve `workspaceId` off the clicked row itself, never
 // by re-deriving from this component's own snapshot prop. `AllSlavesTable` (M24 Task 7) keeps
@@ -520,7 +646,42 @@ describe('WorkforceClient row click opens the panel', () => {
     render(<TestWorkforceClient />)
     fireEvent.click(screen.getByTestId('person-open'))
 
-    expect(await screen.findByRole('heading', { name: 'Alex' })).toBeTruthy()
+    // Fix round 1 (Task 9 review, Important 1): the person panel is inside a `Sheet` now, and
+    // `SlavePanel` is rendered `chromeless` at this one call site -- its OWN `<header>` (name,
+    // close button) is suppressed, so `person-sheet` carries exactly ONE heading naming the
+    // person (the Sheet's own `<h2>{title}</h2>`) and exactly one close control (the Sheet's own
+    // `sheet-close`), not two of each.
+    const sheet = await screen.findByTestId('person-sheet')
+    expect(within(sheet).getAllByRole('heading', { name: 'Alex' })).toHaveLength(1)
+    expect(within(sheet).getAllByRole('button', { name: /close/i })).toHaveLength(1)
+  })
+
+  // Task 9: `useSelectedId('slave')` is what opens it now, and `person-sheet` (a `Sheet`, not the
+  // old fixed aside) is the frame -- with `slave-panel` nested inside, and closing it clears
+  // `?slave=` through the SAME `router.replace` the hook writes with.
+  it('opens person-sheet with slave-panel inside on a row click, and closing it clears ?slave=', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/persons/p1') return new Response(JSON.stringify(personDetail()), { status: 200 })
+      if (url === '/api/w/w1/overview') return new Response(JSON.stringify({ slaves: [] }), { status: 200 })
+      throw new Error(`unexpected fetch ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(<TestWorkforceClient />)
+    fireEvent.click(screen.getByTestId('person-open'))
+
+    const sheet = await screen.findByTestId('person-sheet')
+    expect(within(sheet).getByTestId('slave-panel')).toBeTruthy()
+    // `useSelectedId`'s own `router.replace` -- separate from `select()`'s `tab` write, which goes
+    // through `window.history.replaceState` directly and never touches this mock's `search`.
+    expect(routerReplace).toHaveBeenCalledWith('/workforce?slave=p1', { scroll: false })
+
+    // `Sheet` keeps its panel mounted through its exit animation (`home.test.tsx`'s own note) --
+    // this asserts the SIDE EFFECT `onClose` is responsible for, not the animated unmount jsdom
+    // cannot settle without real timers.
+    fireEvent.click(within(sheet).getByTestId('sheet-close'))
+    expect(routerReplace).toHaveBeenLastCalledWith('/workforce', { scroll: false })
   })
 
   it('disables profile and runtime-roles save for a person in the pool (no seat)', async () => {
@@ -539,7 +700,12 @@ describe('WorkforceClient row click opens the panel', () => {
 
     render(<TestWorkforceClient people={[pooled]} />)
     fireEvent.click(screen.getByTestId('person-open'))
-    expect(await screen.findByRole('heading', { name: 'Alex' })).toBeTruthy()
+    // Fix round 1 (Task 9 review, Important 1): `chromeless` means `person-sheet` carries exactly
+    // one "Alex" heading (the Sheet's own) and one close control (the Sheet's own), not a second
+    // pair from `SlavePanel`'s own (now suppressed) header.
+    const sheet = await screen.findByTestId('person-sheet')
+    expect(within(sheet).getAllByRole('heading', { name: 'Alex' })).toHaveLength(1)
+    expect(within(sheet).getAllByRole('button', { name: /close/i })).toHaveLength(1)
     expect(screen.queryByTestId('status-label')).toBeNull()
     expect(screen.queryByTestId('pause-button')).toBeNull()
     expect(screen.queryByTestId('resume-button')).toBeNull()

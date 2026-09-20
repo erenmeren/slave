@@ -399,11 +399,13 @@ try {
 
   // ---- Scenario stage 6b: the pre-existing software flow is untouched ----
   const seedSlaveCount = await prisma.slave.count({ where: { team: { workspaceId: SEED_WORKSPACE_ID } } })
+  // M61 R7 review fix round 1, Important 2: `slave-card` -> `team-card` (the Team tab's own row,
+  // `/w/<id>` no longer draws `OverviewClient`'s deleted ones).
   await page.goto(`${baseUrl}/w/${SEED_WORKSPACE_ID}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
-  await waitVisible(page.getByTestId('slave-card').first(), 'the seeded workspace Overview page a slave card')
-  const seedCardCount = await page.getByTestId('slave-card').count()
+  await waitVisible(page.getByTestId('team-card').first(), 'the seeded workspace Team tab a team card')
+  const seedCardCount = await page.getByTestId('team-card').count()
   if (seedCardCount !== seedSlaveCount) {
-    await fail(`the seeded workspace Overview shows ${seedCardCount} slave-card(s), expected ${seedSlaveCount} (matching prisma.slave for that workspace)`)
+    await fail(`the seeded workspace Team tab shows ${seedCardCount} team-card(s), expected ${seedSlaveCount} (matching prisma.slave for that workspace)`)
   }
   console.log(`the seeded workspace's Overview still renders ${seedCardCount} slave card(s), matching prisma -- the software flow is untouched`)
 

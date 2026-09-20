@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import type { ReactElement } from 'react'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DomainEventType } from '@slave-of-ai/db'
-import { SHELL_REFETCH_DEBOUNCE_MS } from '../src/components/activity/ActivityClient.js'
+import { SHELL_REFETCH_DEBOUNCE_MS, type RecentChanges } from '../src/components/activity/ActivityClient.js'
 import { publishShellFacts } from '../src/hooks/useShellFacts.js'
 import { publishStreamState } from '../src/hooks/useStreamState.js'
 import type { ActivityEventRow, ActivityPage } from '../src/server/activity.js'
@@ -92,6 +92,21 @@ vi.mock('../src/server/activity.js', () => ({
   buildActivityPage: (...args: unknown[]) => buildActivityPageMock(...args),
 }))
 
+// M61 R10/Task 7: the route now also reads `buildOverviewSnapshot` for the river's
+// `recent-changes` section -- mocked the same way `buildActivityPage` is, so this file's route
+// tests never touch the real Prisma client.
+const buildOverviewSnapshotMock = vi.fn()
+
+vi.mock('../src/server/overview.js', () => ({
+  buildOverviewSnapshot: (...args: unknown[]) => buildOverviewSnapshotMock(...args),
+}))
+
+const buildActivityDigestMock = vi.fn()
+
+vi.mock('../src/server/activityDigest.js', () => ({
+  buildActivityDigest: (...args: unknown[]) => buildActivityDigestMock(...args),
+}))
+
 function row(seq: number, overrides: Partial<ActivityEventRow> = {}): ActivityEventRow {
   return {
     seq,
@@ -146,7 +161,7 @@ function scrollTo(element: HTMLElement, state: { scrollTop: number; scrollHeight
 }
 
 describe('ActivityClient', () => {
-  let ActivityClient: (props: { workspaceId: string; initial: ActivityPage }) => ReactElement
+  let ActivityClient: (props: { workspaceId: string; initial: ActivityPage; recent?: RecentChanges }) => ReactElement
 
   beforeEach(async () => {
     mockElementSizes()
@@ -690,16 +705,42 @@ describe('ActivityClient', () => {
     expect(publishShellFacts).toHaveBeenCalledWith('w1', page({}).shellFacts)
   })
 
-  // M44 erratum E25 / M45 R5: the one page frame reaches this page too. `flush`, so it brings its
-  // landmark and its `page-shell` marker and none of its padding -- the page's own frame classes
-  // are unchanged, which is what keeps `gate:m14-fidelity`'s numbers where they are.
-  it('M44 E25 / M45 R5: renders inside the one page shell, with its own frame classes untouched', () => {
-    render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
-    const shell = screen.getByTestId('page-shell')
-    expect(shell.className).toContain('flex-1')
-    expect(shell.className).not.toContain('p-3')
+  // M61 R10/Task 7: `PageShell` is gone from this page -- the bare `flex min-h-0 flex-1 flex-col`
+  // frame `TeamLive`/`TasksClient` use, so it carries no `page-shell` landmark of its own any more.
+  it('renders its own bounded flex-column frame, not the retired page-shell', () => {
+    const { container } = render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+    expect(screen.queryByTestId('page-shell')).toBeNull()
+    expect(container.firstElementChild?.className).toContain('flex-1')
+    expect(container.firstElementChild?.className).not.toContain('p-3')
   })
 
+  // Controller Ruling 6: `recent-changes` is absent whenever the caller passes no `recent` prop --
+  // the digest view's own server component never builds one, and this file's every other test
+  // above renders `<ActivityClient>` bare, exactly as before this task.
+  it('renders no recent-changes section when no recent prop is passed', () => {
+    render(<ActivityClient workspaceId="w1" initial={INITIAL} />)
+    expect(screen.queryByTestId('recent-changes')).toBeNull()
+  })
+
+  it('renders recent-changes -- the supervisor timeline plus the live-events and merge-queue panels -- when recent is passed', () => {
+    render(
+      <ActivityClient
+        workspaceId="w1"
+        initial={INITIAL}
+        recent={{
+          timeline: [],
+          needsYou: [],
+          liveEvents: [{ seq: 9, ts: '2026-08-22T10:00:09.000Z', type: 'task.created', summary: 'event 9' }],
+          mergeQueue: [{ id: 't1', title: 'Ship it', hasApproval: true }],
+        }}
+      />,
+    )
+    const section = screen.getByTestId('recent-changes')
+    expect(within(section).getByText('Recent changes')).toBeTruthy()
+    expect(within(section).getByTestId('supervisor-timeline')).toBeTruthy()
+    expect(within(section).getByTestId('live-events').textContent).toContain('event 9')
+    expect(within(section).getByTestId('merge-row').textContent).toContain('Ship it')
+  })
 })
 
 describe('Timeline scroll anchoring', () => {
@@ -746,12 +787,18 @@ describe('Timeline scroll anchoring', () => {
 describe('the activity page route', () => {
   afterEach(() => {
     buildActivityPageMock.mockReset()
+    buildOverviewSnapshotMock.mockReset()
+    buildActivityDigestMock.mockReset()
   })
 
   it('renders the 404 copy for an unknown workspace', async () => {
     buildActivityPageMock.mockResolvedValue(null)
+    buildOverviewSnapshotMock.mockResolvedValue(null)
     const { default: ActivityPageRoute } = await import('../src/app/w/[workspaceId]/activity/page.js')
-    const element = await ActivityPageRoute({ params: Promise.resolve({ workspaceId: 'nope' }) })
+    const element = await ActivityPageRoute({
+      params: Promise.resolve({ workspaceId: 'nope' }),
+      searchParams: Promise.resolve({}),
+    })
     render(element)
     expect(screen.getByText(/no project with id nope/)).toBeTruthy()
   })
@@ -759,9 +806,50 @@ describe('the activity page route', () => {
   it('renders ActivityClient when the workspace exists', async () => {
     mockElementSizes()
     buildActivityPageMock.mockResolvedValue(INITIAL)
+    buildOverviewSnapshotMock.mockResolvedValue(null)
     const { default: ActivityPageRoute } = await import('../src/app/w/[workspaceId]/activity/page.js')
-    const element = await ActivityPageRoute({ params: Promise.resolve({ workspaceId: 'w1' }) })
+    const element = await ActivityPageRoute({
+      params: Promise.resolve({ workspaceId: 'w1' }),
+      searchParams: Promise.resolve({}),
+    })
     render(element)
     expect(screen.getByTestId('filter-bar')).toBeTruthy()
+  })
+
+  // M61 R10/Task 7: `?view=digest` is the whole point of the branch -- proves the route reaches
+  // `buildActivityDigest`/`ActivityDigest` instead of the river when the query string asks for it.
+  it('renders the digest view when ?view=digest, without touching buildActivityPage at all', async () => {
+    buildActivityDigestMock.mockResolvedValue([])
+    const { default: ActivityPageRoute } = await import('../src/app/w/[workspaceId]/activity/page.js')
+    const element = await ActivityPageRoute({
+      params: Promise.resolve({ workspaceId: 'w1' }),
+      searchParams: Promise.resolve({ view: 'digest' }),
+    })
+    render(element)
+    expect(screen.getByTestId('digest-empty')).toBeTruthy()
+    expect(buildActivityPageMock).not.toHaveBeenCalled()
+    expect(buildActivityDigestMock).toHaveBeenCalledWith('w1')
+  })
+
+  // Controller Ruling 6: the river's `recent-changes` section is fed by `buildOverviewSnapshot`,
+  // passed down as ActivityClient's `recent` prop -- proven here through the real route, not just
+  // through `ActivityClient`'s own unit tests below.
+  it('feeds the river its recent-changes section from buildOverviewSnapshot', async () => {
+    mockElementSizes()
+    buildActivityPageMock.mockResolvedValue(INITIAL)
+    buildOverviewSnapshotMock.mockResolvedValue({
+      timeline: [],
+      needsYou: [],
+      liveEvents: [{ seq: 1, ts: '2026-08-22T10:00:00.000Z', type: 'task.created', summary: 'a task was added' }],
+      mergeQueue: [],
+    })
+    const { default: ActivityPageRoute } = await import('../src/app/w/[workspaceId]/activity/page.js')
+    const element = await ActivityPageRoute({
+      params: Promise.resolve({ workspaceId: 'w1' }),
+      searchParams: Promise.resolve({}),
+    })
+    render(element)
+    expect(screen.getByTestId('recent-changes')).toBeTruthy()
+    expect(screen.getByTestId('live-events').textContent).toContain('a task was added')
   })
 })

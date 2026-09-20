@@ -4,11 +4,13 @@ import './globals.css'
 import { buildSidebarTree } from '../server/sidebar'
 import { requirePrincipal } from '../server/principal'
 import { ShellFrame } from '../components/shell/ShellFrame'
-import { SidebarTree } from '../components/shell/SidebarTree'
+import { Rail } from '../components/shell/Rail'
 import { HeaderActionProvider } from '../components/shell/HeaderActionProvider'
 import { RightPanelProvider } from '../components/shell/RightPanelProvider'
 import { ThemeProvider } from '../components/theme/ThemeProvider'
 import { THEME_STORAGE_KEY } from '../lib/themeStorage'
+import { ModeProvider } from '../components/mode/ModeProvider'
+import { MODE_STORAGE_KEY } from '../lib/modeStorage'
 
 /**
  * M57 R3 — the handoff's two families, self-hosted, one `localFont()` call PER FAMILY PER SUBSET.
@@ -74,23 +76,26 @@ const monoExt = localFont({
 const FONT_VARIABLES = `${sansLatin.variable} ${sansExt.variable} ${monoLatin.variable} ${monoExt.variable}`
 
 /**
- * M57 R2 / erratum E8 — the flash killer.
+ * M57 R2 / erratum E8 — the flash killer. M61 R1 adds a second clause: the MODE the operator
+ * pinned, stamped the same way and for the same reason.
  *
  * It is inline, it is in `<head>`, and it cannot import anything: it runs before the bundle exists.
- * That is why `THEME_STORAGE_KEY` is interpolated into it rather than spelled twice, and why
- * `apps/web/test/theme.test.tsx` pins the constant's value -- those are the two halves of keeping
- * one string in one place across a boundary a module graph cannot cross.
+ * That is why `THEME_STORAGE_KEY` and `MODE_STORAGE_KEY` are interpolated into it rather than
+ * spelled twice, and why `apps/web/test/theme.test.tsx` and `apps/web/test/shortcuts.test.ts` pin
+ * the constants' values -- those are the two halves of keeping one string in one place across a
+ * boundary a module graph cannot cross.
  *
- * IT COMES FROM `lib/themeStorage.ts`, NOT FROM `ThemeProvider` (M57 erratum E20). This file is a
- * server component, and importing the constant out of a `'use client'` module gave a CLIENT
- * REFERENCE rather than the string: the script shipped as `localStorage.getItem(undefined)` and
- * stamped nothing, so a pinned operator got the flash this script exists to kill on every load.
- * `gate:m57-ui-redesign` stage 1 caught it -- no jsdom test can, because in a test both sides
- * import the same real module.
+ * BOTH COME FROM THEIR OWN PLAIN MODULES, NOT FROM `ThemeProvider`/`ModeProvider` (M57 erratum
+ * E20). This file is a server component, and importing a constant out of a `'use client'` module
+ * gives a CLIENT REFERENCE rather than the string: the script would ship as
+ * `localStorage.getItem(undefined)` and stamp nothing, so a pinned operator got the flash this
+ * script exists to kill on every load. `gate:m57-ui-redesign` stage 1 caught it for the theme half
+ * -- no jsdom test can, because in a test both sides import the same real module.
  *
- * It stamps NOTHING for `system`: absent is system, and the stylesheet's media query answers it.
+ * It stamps NOTHING for `system` or for `simple`: absent is the default for each, and the
+ * stylesheet answers both with a selector guard rather than a third attribute value.
  */
-const THEME_SCRIPT = `(function(){try{var t=localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)});if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t)}}catch(e){}})()`
+const BOOT_SCRIPT = `(function(){try{var t=localStorage.getItem(${JSON.stringify(THEME_STORAGE_KEY)});if(t==='light'||t==='dark'){document.documentElement.setAttribute('data-theme',t)}var m=localStorage.getItem(${JSON.stringify(MODE_STORAGE_KEY)});if(m==='developer'){document.documentElement.setAttribute('data-mode','developer')}}catch(e){}})()`
 
 export const metadata = { title: 'Slave of AI' }
 
@@ -121,23 +126,30 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         * head. `suppressHydrationWarning` on `<html>` because the script mutates the element's
         * attributes before React sees it -- which is exactly its job. */}
       <head>
-        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+        <script dangerouslySetInnerHTML={{ __html: BOOT_SCRIPT }} />
       </head>
-      <body className="min-h-screen">
+      {/* No `min-h-screen` any more (M61 R4): `globals.css`'s `html, body { height: 100%; overflow:
+        * hidden }` is what fixes the frame to the viewport now, and a `min-h-screen` body would
+        * fight that by letting the document itself grow past `100dvh`. */}
+      <body>
         <ThemeProvider>
-          <RightPanelProvider>
-            <HeaderActionProvider>
-              {/* The header takes the TREE as a prop rather than reading the facts store alone
-                * (spec erratum E12): the store is published by five of a project's eight page
-                * clients, and the breadcrumb has to be able to name the project on all eight.
-                * `ShellFrame` owns the third column, because how wide it is depends on the ROUTE
-                * and on whether somebody collapsed it -- two client facts a server layout has
-                * no way to read (M57 R8). */}
-              <ShellFrame sidebar={<SidebarTree initial={projects} />} projects={projects}>
-                {children}
-              </ShellFrame>
-            </HeaderActionProvider>
-          </RightPanelProvider>
+          <ModeProvider>
+            <RightPanelProvider>
+              <HeaderActionProvider>
+                {/* The header takes the TREE as a prop rather than reading the facts store alone
+                  * (spec erratum E12): the store is published by five of a project's eight page
+                  * clients, and the breadcrumb has to be able to name the project on all eight.
+                  * `ShellFrame` owns the third column, because how wide it is depends on the ROUTE
+                  * and on whether somebody collapsed it -- two client facts a server layout has
+                  * no way to read (M57 R8). The sidebar slot is the icon `Rail` now (M61 R5) --
+                  * `SidebarTree` and the project TREE it drew are gone; the project list lives in
+                  * the header's `ProjectSwitcher` instead, fed by the same `projects` read. */}
+                <ShellFrame sidebar={<Rail />} projects={projects}>
+                  {children}
+                </ShellFrame>
+              </HeaderActionProvider>
+            </RightPanelProvider>
+          </ModeProvider>
         </ThemeProvider>
       </body>
     </html>

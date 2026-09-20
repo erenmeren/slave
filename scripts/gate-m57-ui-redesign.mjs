@@ -3,10 +3,16 @@
 // `gate-m44-ux-foundation.mjs`'s shape, which is `gate-m16-chrome.mjs`'s: a free port, a real
 // `next dev`, a real Chromium through `playwright-core` at CHROMIUM_PATH, no daemon.
 //
+//   DATABASE_URL="$GATE_DATABASE_URL" \
 //   CHROMIUM_PATH=$HOME/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome \
 //   SLAVEOFAI_CLAUDE_BIN="$PWD/scripts/gate-fakes/fake-claude.sh" \
 //   SLAVEOFAI_REQUIRE_FAKE_CLI=1 \
 //   npm run gate:m57-ui-redesign
+//
+// DATABASE_URL MUST BE GATE_DATABASE_URL, and the preflight refuses otherwise (controller Ruling
+// 13): this gate's cleanup deletes rows by name prefix AND every workspace whose `repoPath` is
+// this checkout, and a sweep like that against the operator's dev database would take their own
+// projects with it.
 //
 // THIS GATE SPENDS NOTHING AND CANNOT. It dispatches no run, so no CLI is ever invoked -- and the
 // preflight still REFUSES to start unless SLAVEOFAI_CLAUDE_BIN points at an executable under
@@ -60,8 +66,8 @@
 // directory corrupts the on-disk build cache for both. Stop any running dev server first
 // (`pgrep -af "next dev"`).
 
-import { spawn } from 'node:child_process'
-import { accessSync, constants, existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import { accessSync, constants, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -173,6 +179,33 @@ const RAW_TOKENS = [
  * COUNTED and printed per route, never silently dropped.
  */
 
+/**
+ * A THROWAWAY GIT REPOSITORY for the fixture workspaces (`gate-m47-team-formation.mjs`'s
+ * `makeRepo`, copied with its reason sharpened by controller Ruling 12).
+ *
+ * `Workspace.repoPath` must never be THIS checkout. A planning run executes in
+ * `workspace.repoPath` ITSELF -- `apps/orchestrator/src/planning.ts` passes
+ * `worktreePath: workspace.repoPath`, because the manager plans in the repository rather than in
+ * a worktree -- and `packages/providers/test/fake-claude.mjs` does `git add -A && git commit` in
+ * its own cwd. A fixture row pointing at the repo root therefore lets ANY later gate's daemon
+ * sweep the operator's entire working tree into a commit authored by `Fake Claude`. It happened
+ * once, on 2026-09-19, from a leftover row of an interrupted run of this gate.
+ *
+ * One repository per run, in `tmpdir()`, removed in `finally`. Neither gate dispatches a run, so
+ * nothing else about either changes -- this closes the door rather than fixing a symptom.
+ */
+function makeRepo(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix))
+  const git = (args) => execFileSync('git', args, { cwd: dir })
+  git(['init', '-q', '-b', 'main'])
+  git(['config', 'user.name', 'Gate'])
+  git(['config', 'user.email', 'gate@example.com'])
+  writeFileSync(join(dir, 'README.md'), '# fixture\n')
+  git(['add', '-A'])
+  git(['commit', '-q', '-m', 'initial'])
+  return dir
+}
+
 function assert(condition, message) {
   if (!condition) throw new Error(message)
 }
@@ -226,6 +259,17 @@ async function preflightCleanup() {
     await prisma.executionEvent.deleteMany({ where: { workspaceId: workspace.id } }).catch(() => {})
     await prisma.workspace.delete({ where: { id: workspace.id } }).catch(() => {})
   }
+  // A WORKSPACE POINTING AT THIS CHECKOUT CAN ONLY BE A GATE LEFTOVER (controller Ruling 12), and
+  // it is the dangerous kind: a planning run executes in `workspace.repoPath` itself, so the next
+  // daemon any gate starts would plan inside this repository and the fake CLI would commit it.
+  // Removed by repoPath, in the same FK order as the rows above.
+  const inThisRepo = await prisma.workspace.findMany({ where: { repoPath: repoRoot }, select: { id: true, name: true } })
+  for (const workspace of inThisRepo) {
+    console.log(`preflight: removing workspace ${workspace.id} (${workspace.name}) seeded against this repository`)
+    await prisma.executionEvent.deleteMany({ where: { workspaceId: workspace.id } }).catch(() => {})
+    await prisma.workspace.delete({ where: { id: workspace.id } }).catch(() => {})
+  }
+  console.log(`preflight: ${String(inThisRepo.length)} workspace(s) pointing at ${repoRoot} removed`)
 }
 
 /** `YYYY-MM-DD` in the process's own zone -- the same `localDay` `server/supervisorThreads.ts`
@@ -242,6 +286,7 @@ let nextServer = null
 let browser = null
 let page = null
 let diagDir = null
+let repoPath = null
 let workspaceId = null
 let otherWorkspaceId = null
 let teamId = null
@@ -339,24 +384,43 @@ try {
     'the derived blocklist lost the memory unions -- `run_output` must reach it twice, once from the event types and once from MEMORY_SOURCE_KINDS',
   )
 
+  // THE GATES DATABASE, ENFORCED (controller Ruling 13). `preflightCleanup` below deletes rows --
+  // by name prefix, and (since fix round 1) every workspace whose `repoPath` is this checkout --
+  // and a sweep like that pointed at the operator's DEV database would take their own projects
+  // with it. Both names are in `.env`, which `--env-file` loads, so the check costs nothing and a
+  // gate run against the wrong database stops here instead of halfway through the teardown.
+  const gateDatabaseUrl = process.env['GATE_DATABASE_URL'] ?? ''
+  if (gateDatabaseUrl === '' || process.env['DATABASE_URL'] !== gateDatabaseUrl) {
+    throw new Error(
+      'refusing: DATABASE_URL is not GATE_DATABASE_URL -- run this gate as ' +
+        'DATABASE_URL="$GATE_DATABASE_URL" npm run gate:m57-ui-redesign',
+    )
+  }
+
   await preflightCleanup()
+
+  repoPath = makeRepo('slaveofai-gate-m57-repo-')
+  console.log(`fixture repository: ${repoPath} (never this checkout -- see makeRepo's docblock)`)
 
   // ---- The fixture. Each row exists to make one stage mean something. --------------------------
   const workspace = await prisma.workspace.create({
     data: {
       name: WORKSPACE_NAME,
-      repoPath: repoRoot,
+      repoPath,
       verifyCommands: [],
       setupCommands: [],
       goal: 'Prove the frame reads.',
       goalVersion: 2,
+      // NO DAEMON EVER PLANS THESE ROWS. This gate starts none and dispatches nothing, and the
+      // flag says so to any daemon a neighbouring gate leaves running (controller Ruling 12).
+      supervisorEnabled: false,
     },
   })
   workspaceId = workspace.id
   // The SECOND project exists for one assertion each in stage 2: that the tree lists both in the
   // database's own order, and that a project which is not open does not nest its six sections.
   const other = await prisma.workspace.create({
-    data: { name: OTHER_WORKSPACE_NAME, repoPath: repoRoot, verifyCommands: [], setupCommands: [] },
+    data: { name: OTHER_WORKSPACE_NAME, repoPath, verifyCommands: [], setupCommands: [], supervisorEnabled: false },
   })
   otherWorkspaceId = other.id
   const team = await prisma.team.create({ data: { workspaceId, name: TEAM_NAME } })
@@ -582,7 +646,14 @@ try {
 
   /** Clicks `locator`, then bounded-waits for `predicate`. */
   async function clickUntil(locator, predicate, description) {
-    for (const waitBudgetMs of [ACTION_TIMEOUT_MS, 10_000]) {
+    // FOUR attempts, not two (M61 Task 11). The right panel re-renders on every wake-up the
+    // workspace stream produces -- `useShellFacts`, `NeedsYouBar`'s 5s poll and `useTeamLive`'s
+    // own refetch all land on `/w/:id` now -- and a React re-render REPLACES the node a locator
+    // resolved to, which Playwright reports as "element was detached from the DOM, retrying" and
+    // then gives up on. Nothing about the assertion changes; the click simply gets more than two
+    // chances to land between two frames.
+    let lastClickError = null
+    for (const waitBudgetMs of [ACTION_TIMEOUT_MS, 10_000, 10_000, 10_000]) {
       let clickError = null
       try {
         await locator.click({ timeout: 5_000 })
@@ -594,11 +665,52 @@ try {
         if (await predicate().catch(() => false)) return
         await delay(100)
       }
-      if (clickError !== null) {
-        await fail(`clicking ${description} failed: ${clickError instanceof Error ? clickError.message : String(clickError)}`)
-      }
+      lastClickError = clickError
     }
-    await fail(`clicking ${description} did not produce the expected result even after a retry click`)
+    if (lastClickError !== null) {
+      await fail(`clicking ${description} failed: ${lastClickError instanceof Error ? lastClickError.message : String(lastClickError)}`)
+    }
+    await fail(`clicking ${description} did not produce the expected result even after four attempts`)
+  }
+
+  /**
+   * Opens the right panel if the dock is showing (M61 R14, Task 11).
+   *
+   * `RightPanelProvider` REMEMBERS being collapsed now -- `localStorage['supervisor']`, written on
+   * every collapse and read back after hydration -- so stage 4's own `panel-collapse` outlives
+   * stage 4 and every later stage that reads the panel arrives at a dock. Worse, it arrives at a
+   * panel that collapses a beat AFTER the first paint (the server renders open, the stored choice
+   * lands on hydration), which is a race a plain `waitVisible` wins and then loses.
+   *
+   * Idempotent, and polled on `data-right` rather than on the dock's presence, so it settles after
+   * hydration rather than before it.
+   */
+  async function ensurePanelOpen() {
+    const rightNow = async () =>
+      page.evaluate(() => document.querySelector('[data-testid="app-shell"]')?.getAttribute('data-right') ?? null)
+    const stored = await page.evaluate(() => {
+      try {
+        return window.localStorage.getItem('supervisor')
+      } catch {
+        return null
+      }
+    })
+    if (stored !== 'collapsed') {
+      await waitUntil('the right panel to be open', ACTION_TIMEOUT_MS, async () => {
+        const right = await rightNow()
+        return right === 'panel' || right === 'overlay' ? { done: true, value: right } : { done: false, detail: JSON.stringify(right) }
+      })
+      return
+    }
+    // THE STORED CHOICE HAS TO LAND FIRST. The server renders the panel OPEN (it has no
+    // `localStorage` to read) and the provider's mount effect collapses it a beat later -- so a
+    // helper that saw `panel` and returned would be handing the next assertion a panel that is
+    // about to vanish under it, which is exactly the detached-node failure this replaced.
+    await waitUntil('the remembered collapse to reach the shell after hydration', ACTION_TIMEOUT_MS, async () => {
+      const right = await rightNow()
+      return right === 'dock' ? { done: true, value: right } : { done: false, detail: JSON.stringify(right) }
+    })
+    await clickUntil(page.getByTestId('dock-supervisor'), async () => (await rightNow()) === 'panel', "the dock's Supervisor button")
   }
 
   // ============================================================================================
@@ -661,48 +773,67 @@ try {
   console.log('stage 1 PASSED: absent is system, the pill cycles, the palette moves, and the choice survives a reload')
 
   // ============================================================================================
-  // Stage 2: the sidebar tree, against the database rather than against itself.
+  // Stage 2: the project switcher, against the database rather than against itself (M61 R5: the
+  // tree is gone; `sidebar-project`/`sidebar-needs-you` -> `project-switcher-item[data-needs-you]`,
+  // opened from the header's trigger; `sidebar-section`/`data-section` -> `project-tab`/`data-tab`,
+  // now the project's OWN strip rather than a nested row in a shared tree -- spec §3).
   // ============================================================================================
   const dbProjects = await prisma.workspace.findMany({ where: { archivedAt: null }, select: { id: true, name: true }, orderBy: { name: 'asc' } })
+  // ON A PROJECT ROUTE (M61 R5, Task 11): the switcher IS the breadcrumb's project crumb, so it
+  // exists on `/w/:id/*` and nowhere else -- on `/` there is no project crumb to be a button, and
+  // Home is itself the list of every project. The tree this stage used to read was global; its
+  // replacement is the header's, and the header only has one inside a project.
+  await gotoReliably(`${baseUrl}/w/${workspaceId}`)
+  await waitVisible(page.getByTestId('project-switcher'), "the header's project crumb")
+  await page.click('[data-testid="project-switcher"]')
   const treeRows = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-testid="sidebar-project"]')].map((row) => ({
-      id: row.getAttribute('data-project-id'),
+    [...document.querySelectorAll('[data-testid="project-switcher-item"]')].map((row) => ({
+      id: row.getAttribute('data-workspace'),
       status: row.getAttribute('data-status'),
-      needs: row.querySelector('[data-testid="sidebar-needs-you"]')?.textContent?.trim() ?? null,
+      needs: row.getAttribute('data-needs-you'),
     })),
   )
-  console.log(`stage 2: tree rows = ${JSON.stringify(treeRows)}`)
+  console.log(`stage 2: switcher rows = ${JSON.stringify(treeRows)}`)
   if (JSON.stringify(treeRows.map((row) => row.id)) !== JSON.stringify(dbProjects.map((row) => row.id))) {
-    await fail(`stage 2: the tree lists ${JSON.stringify(treeRows.map((r) => r.id))}, the database has ${JSON.stringify(dbProjects.map((r) => r.id))}`)
+    await fail(`stage 2: the switcher lists ${JSON.stringify(treeRows.map((r) => r.id))}, the database has ${JSON.stringify(dbProjects.map((r) => r.id))}`)
   }
   const seeded = treeRows.find((row) => row.id === workspaceId)
   if (seeded === undefined || seeded.needs === null || !/^\d+$/.test(seeded.needs) || Number(seeded.needs) < 1) {
     await fail(`stage 2: the seeded project has a pending decision and a blocked task, and its needs-you count reads ${JSON.stringify(seeded?.needs)}`)
   }
+  // M61 R18: the strip only ever shows the SIX developer ids (mode set here because the default,
+  // simple, only shows four -- `team, tasks, office, activity` -- and this stage's own history is
+  // the full six).
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('mode', 'developer')
+    } catch {
+      /* stays simple; the assertion below fails loudly rather than silently passing on four */
+    }
+  })
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
-  await waitVisible(page.getByTestId('sidebar-section'), "the open project's section rows")
+  await waitVisible(page.getByTestId('project-tab'), "the open project's own tab bar")
   const sections = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-testid="sidebar-section"]')].map((row) => ({
-      id: row.getAttribute('data-section'),
+    [...document.querySelectorAll('[data-testid="project-tab"]')].map((row) => ({
+      id: row.getAttribute('data-tab'),
       href: row.getAttribute('href'),
     })),
   )
-  console.log(`stage 2: section rows = ${JSON.stringify(sections)}`)
-  if (JSON.stringify(sections.map((row) => row.id)) !== JSON.stringify(['overview', 'tasks', 'organization', 'knowledge', 'activity', 'settings'])) {
-    await fail(`stage 2: the open project's sections are ${JSON.stringify(sections.map((row) => row.id))}`)
+  console.log(`stage 2: tab rows = ${JSON.stringify(sections)}`)
+  if (JSON.stringify(sections.map((row) => row.id)) !== JSON.stringify(['team', 'tasks', 'office', 'activity', 'graph', 'knowledge'])) {
+    await fail(`stage 2: the open project's tabs are ${JSON.stringify(sections.map((row) => row.id))}`)
   }
-  // ONLY THE OPEN PROJECT NESTS. Asserted by the section rows' own hrefs and by their COUNT, not by
-  // a descendant selector under `[data-project-id]`: the section rows are SIBLINGS of the project
-  // row (the anchor cannot contain them), so a `[data-project-id="x"] [data-testid="sidebar-section"]`
-  // query answers null for the open project too and could never fail.
+  // EVERY TAB BELONGS TO THE OPEN PROJECT'S OWN STRIP (M61 R7: `CommandStrip` renders inside
+  // `/w/[workspaceId]/layout.tsx`, one project at a time -- there is no other project's row to leak
+  // in the way there was when this was a shared tree with every project nested in it).
   const foreign = sections.filter((row) => !(row.href ?? '').startsWith(`/w/${workspaceId}`))
   if (foreign.length > 0 || sections.length !== 6) {
     await fail(
-      `stage 2: the tree drew ${String(sections.length)} section row(s), ${String(foreign.length)} of them pointing outside ` +
-        `the open project (${JSON.stringify(foreign)}) -- only the current project nests`,
+      `stage 2: the strip drew ${String(sections.length)} tab row(s), ${String(foreign.length)} of them pointing outside ` +
+        `the open project (${JSON.stringify(foreign)})`,
     )
   }
-  console.log('stage 2 PASSED: the tree is the database, the count is real, and only the open project nests')
+  console.log('stage 2 PASSED: the switcher is the database, the count is real, and the strip is the open project s own tabs')
 
   // ============================================================================================
   // Stage 3: the breadcrumb, on every route the tree can reach.
@@ -718,8 +849,12 @@ try {
     ['/settings', 'Settings'],
     ['/sim', 'Simulations'],
     [`/w/${workspaceId}`, `Projects/${workspaceName}`],
-    [`/w/${workspaceId}/tasks`, `Projects/${workspaceName}/Tasks`],
-    [`/w/${workspaceId}/organization`, `Projects/${workspaceName}/Team`],
+    // M61 R18: `TABS` renamed the second tab `Work`, and `/organization` REDIRECTS to `/w/:id`
+    // (R7) -- the Team tab IS the project's page, so its crumb ends at the project, exactly as
+    // Overview's did. Both rows are the same assertion about the same destination, taking the
+    // label M61 gave it.
+    [`/w/${workspaceId}/tasks`, `Projects/${workspaceName}/Work`],
+    [`/w/${workspaceId}/organization`, `Projects/${workspaceName}`],
     [`/w/${workspaceId}/knowledge`, `Projects/${workspaceName}/Knowledge`],
     [`/w/${workspaceId}/activity`, `Projects/${workspaceName}/Activity`],
     [`/w/${workspaceId}/settings`, `Projects/${workspaceName}/Settings`],
@@ -762,7 +897,7 @@ try {
   console.log(`stage 4: dock badge = ${JSON.stringify(badge)}, pending decisions in the database = ${pendingCount}`)
   if (Number(badge) !== pendingCount) await fail(`stage 4: the dock badge reads ${JSON.stringify(badge)} and the database has ${pendingCount} pending`)
   await gotoReliably(`${baseUrl}/workforce`)
-  await waitVisible(page.getByRole('navigation', { name: 'Primary' }), 'the sidebar on /workforce')
+  await waitVisible(page.getByRole('navigation', { name: 'Main' }), 'the rail on /workforce')
   const globalRight = await page.evaluate(() => ({
     panel: document.querySelector('[data-testid="right-panel"]') !== null,
     dock: document.querySelector('[data-testid="right-dock"]') !== null,
@@ -778,16 +913,17 @@ try {
   // Stage 5: answering a decision, end to end.
   // ============================================================================================
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
-  await waitVisible(page.getByTestId('needs-you-card'), 'the Needs you card')
-  // SCOPED to the seeded project's own row (fix round 1). An unscoped
-  // `querySelector('[data-testid="sidebar-needs-you"]')` answers the FIRST badge in the tree, which
-  // is whichever project sorts first by name in whatever database this gate is pointed at -- not
-  // necessarily this one. The badge is a span inside the project's own anchor, so the descendant
-  // selector is exact.
+  // M61 R7/Task 6: the Needs you card left the page for the command strip's `NeedsYouBar`,
+  // testid `needs-you` (selector rename only).
+  await waitVisible(page.getByTestId('needs-you'), 'the Needs you bar')
+  // SCOPED to the seeded project's own row (fix round 1), now read off the switcher's own
+  // `data-needs-you` attribute rather than a nested `sidebar-needs-you` span (M61 R5) -- opened
+  // first, since the row only exists in the popover's DOM once it has been clicked open.
+  await page.click('[data-testid="project-switcher"]')
   const before = await page.evaluate(
     (id) => ({
       rows: document.querySelectorAll('[data-testid="needs-you-row"]').length,
-      count: document.querySelector(`[data-project-id="${id}"] [data-testid="sidebar-needs-you"]`)?.textContent?.trim() ?? null,
+      count: document.querySelector(`[data-testid="project-switcher-item"][data-workspace="${id}"]`)?.getAttribute('data-needs-you') ?? null,
     }),
     workspaceId,
   )
@@ -797,27 +933,30 @@ try {
   console.log(`stage 5: rows ${before.rows} -> ${await page.getByTestId('needs-you-row').count()}, pending in the database -> ${resolved}`)
   if (resolved !== 0) await fail(`stage 5: Approve left ${resolved} pending decisions in the database`)
   // AND THE COUNT, not only the row (fix round 1). Read after a RELOAD rather than polled in place,
-  // and that is a fact about the tree rather than a convenience: `SidebarTree` refetches
-  // `GET /api/sidebar` on a pathname change and, on a `ShellFacts` wake-up, at most once per ten
-  // seconds -- and that throttle DROPS the wake-up rather than scheduling it (spec erratum E22,
-  // `SidebarTree.tsx:105-108`). Every wake-up this approval produces lands inside the window this
-  // page's own mount opened, so an in-place poll would be waiting for a fetch the component has
-  // already decided not to make. A reload re-reads the tree SERVER-side, which is the database, and
-  // that is the number the row and the count have to agree about.
+  // and that is a fact about the switcher rather than a convenience: `ProjectSwitcher` refetches
+  // `GET /api/sidebar` on open and on a pathname change, throttled at most once per ten seconds --
+  // and that throttle DROPS the wake-up rather than scheduling it (spec erratum E22, the same rule
+  // `SidebarTree.tsx` used to carry, moved to `ProjectSwitcher.tsx` with the fetch in M61 R5). Every
+  // wake-up this approval produces lands inside the window this page's own mount opened, so an
+  // in-place poll would be waiting for a fetch the component has already decided not to make. A
+  // reload re-reads the tree SERVER-side, which is the database, and that is the number the row and
+  // the count have to agree about. The switcher is reopened after the reload -- a navigation
+  // unmounts the popover along with everything else.
   const expectedCount = String(Number(before.count) - 1)
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
+  await page.click('[data-testid="project-switcher"]')
   const afterCount = await waitUntil(
-    `the sidebar needs-you count to fall to ${expectedCount}`,
+    `the switcher's needs-you count to fall to ${expectedCount}`,
     ACTION_TIMEOUT_MS,
     async () => {
       const seen = await page.evaluate(
-        (id) => document.querySelector(`[data-project-id="${id}"] [data-testid="sidebar-needs-you"]`)?.textContent?.trim() ?? null,
+        (id) => document.querySelector(`[data-testid="project-switcher-item"][data-workspace="${id}"]`)?.getAttribute('data-needs-you') ?? null,
         workspaceId,
       )
       return seen === expectedCount ? { done: true, value: seen } : { done: false, detail: JSON.stringify(seen) }
     },
   )
-  console.log(`stage 5: the sidebar count ${JSON.stringify(before.count)} -> ${JSON.stringify(afterCount)}`)
+  console.log(`stage 5: the switcher's count ${JSON.stringify(before.count)} -> ${JSON.stringify(afterCount)}`)
   console.log('stage 5 PASSED: approved in place, through the route that already existed, and the row and the count went together')
 
   // ============================================================================================
@@ -857,6 +996,9 @@ try {
   // Stage 7: the Supervisor's threads, which are days.
   // ============================================================================================
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
+  // M61 R14: stage 4 collapsed the panel and the choice is REMEMBERED now -- open it again before
+  // reading the conversation out of it.
+  await ensurePanelOpen()
   await waitVisible(page.getByTestId('supervisor-thread'), 'the Supervisor thread')
   await clickUntil(page.getByTestId('supervisor-history'), async () => (await page.getByTestId('supervisor-thread-row').count()) > 0, 'the ≡ conversations button')
   const threadRows = await page.evaluate(() => [...document.querySelectorAll('[data-testid="supervisor-thread-row"]')].map((row) => row.textContent?.trim() ?? ''))
@@ -879,24 +1021,44 @@ try {
   // ============================================================================================
   // Stage 8: eleven numbers out of the handoff README, read back off the browser.
   // ============================================================================================
+  // RECONCILED TO M61 (spec R21, Task 11). Every row here is the same MEASUREMENT it always was,
+  // taking the value M61 gave it -- an assertion that measured a token's old value takes the new
+  // value, it is never dropped:
+  //   - the rail replaced the tree, so `nav[aria-label="Main"]` is 56px, not 236px (R5, erratum E9);
+  //   - the header is 48px (R6, spec §4), not M57's 54px;
+  //   - the panel narrowed from 372px to 340px so 1024 keeps a usable middle (R4);
+  //   - the shell's floor dropped from 1280px to 1024px, because a desktop app window is smaller
+  //     than a browser tab (R4);
+  //   - the body is 13px here, not 14px: stage 2 above puts this page in DEVELOPER mode, and
+  //     `--fs-body` is the density token R3 moves (14px simple, 13px developer);
+  //   - `project-card` became `project-row`, whose radius is `--radius-control` 8px (R3/R11);
+  //   - a task card is `--radius-surface` 12px now (R9/R16), up from `rounded-card`'s 10px;
+  //   - `needs-you`, `stat-work` and `status-pill` are unchanged: `--radius-surface` 12px and
+  //     `--radius-pill` 999px are the same numbers under the new token names.
   const NUMBERS = [
-    [`/w/${workspaceId}`, 'nav[aria-label="Primary"]', 'width', '236px'],
-    [`/w/${workspaceId}`, '[data-testid="app-header"]', 'height', '54px'],
-    [`/w/${workspaceId}`, '[data-testid="right-panel"]', 'width', '372px'],
-    [`/w/${workspaceId}`, '[data-testid="app-shell"]', 'min-width', '1280px'],
-    [`/w/${workspaceId}`, 'body', 'font-size', '14px'],
-    [`/w/${workspaceId}`, '[data-testid="needs-you-card"]', 'border-radius', '12px'],
-    [`/w/${workspaceId}`, '[data-testid="brief-tile"]', 'border-radius', '12px'],
-    ['/', '[data-testid="project-card"]', 'border-radius', '14px'],
-    [`/w/${workspaceId}/tasks`, '[data-testid="task-card"]', 'border-radius', '10px'],
+    [`/w/${workspaceId}`, 'nav[aria-label="Main"]', 'width', '56px'],
+    [`/w/${workspaceId}`, '[data-testid="app-header"]', 'height', '48px'],
+    [`/w/${workspaceId}`, '[data-testid="right-panel"]', 'width', '340px'],
+    [`/w/${workspaceId}`, '[data-testid="app-shell"]', 'min-width', '1024px'],
+    [`/w/${workspaceId}`, 'body', 'font-size', '13px'],
+    // M61 R7/Task 6 selector renames: `needs-you-card` -> `needs-you` (the command strip's
+    // `NeedsYouBar`), `brief-tile` -> `stat-work` (the Team tab's footer `Stat`, same 12px
+    // `rounded-surface` radius the old tile carried).
+    [`/w/${workspaceId}`, '[data-testid="needs-you"]', 'border-radius', '12px'],
+    [`/w/${workspaceId}`, '[data-testid="stat-work"]', 'border-radius', '12px'],
+    ['/', '[data-testid="project-row"]', 'border-radius', '8px'],
+    [`/w/${workspaceId}/tasks`, '[data-testid="task-card"]', 'border-radius', '12px'],
     [`/w/${workspaceId}/tasks`, '[data-testid="status-pill"]', 'border-radius', '999px'],
   ]
   /** One structural marker per path above: nothing is measured until the page that owns the number
    *  has rendered, because `getComputedStyle` against the server's first paint reads a page React
    *  has not finished with. */
   const NUMBER_MARKER = {
-    '/': 'project-card',
-    [`/w/${workspaceId}`]: 'needs-you-card',
+    '/': 'project-row',
+    // `stat-work`, not `needs-you` (M61 R7/Task 6): the strip's needs-you bar is CONDITIONAL --
+    // absent with an empty queue -- and a readiness marker must always be there to wait on;
+    // `stat-work` is the Team tab's own always-rendered footer tile.
+    [`/w/${workspaceId}`]: 'stat-work',
     [`/w/${workspaceId}/tasks`]: 'column',
   }
   let currentPath = null
@@ -905,6 +1067,10 @@ try {
       await gotoReliably(`${baseUrl}${path}`)
       currentPath = path
       await waitVisible(page.getByTestId(NUMBER_MARKER[path]), `${path} before its numbers are read`)
+      // The panel's own width is one of the numbers below, and M61 R14 remembers a collapse
+      // across every navigation -- so the panel has to be open before anything on a project
+      // route is measured.
+      if (path.startsWith('/w/')) await ensurePanelOpen()
     }
     const actual = await page.evaluate(([sel, prop]) => {
       const node = document.querySelector(sel)
@@ -964,16 +1130,34 @@ try {
   /** One structural marker per route, so the scan reads a page that has finished rather than a
    *  shell that has not. Same twelve routes stage 3 walks, in the same order. */
   const SWEEP = [
-    { name: 'projects', path: '/', testId: 'project-card' },
+    // M61 R11/Task 8 selector rename: `project-card` -> `project-row` (Home is a LIST now).
+    { name: 'projects', path: '/', testId: 'project-row' },
     { name: 'workforce', path: '/workforce', testId: 'workforce' },
-    { name: 'settings', path: '/settings', testId: 'security-posture' },
+    // M61 R13/Task 9: Settings is two columns and only the CHOSEN section mounts, so one sweep of
+    // `/settings` would now read one fifth of the page this row used to cover. All five are swept
+    // instead -- the assertion did not shrink with the page, it followed it.
+    { name: 'settings/providers', path: '/settings?section=providers', testId: 'settings-providers' },
+    { name: 'settings/appearance', path: '/settings?section=appearance', testId: 'settings-appearance' },
+    { name: 'settings/repositories', path: '/settings?section=repositories', testId: 'settings-repositories' },
+    { name: 'settings/security', path: '/settings?section=security', testId: 'settings-security' },
+    { name: 'settings/danger', path: '/settings?section=danger', testId: 'settings-danger' },
     { name: 'simulations', path: '/sim', testId: 'new-simulation' },
-    { name: 'overview', path: `/w/${workspaceId}`, testId: 'strip' },
+    // M61 R7/Task 6 selector rename: `strip` (the deleted `ProjectBrief`'s wrapper) -> `stat-work`
+    // (the Team tab's own always-rendered footer tile). The `organization` row below is UNCHANGED
+    // and out of this task's selector-rename scope -- `/organization` now redirects to `/w/:id`
+    // and `organization-rows` (the roster block) is not part of what the Team tab renders, so this
+    // row is expected to fail until a follow-up task decides what marks the redirected page ready.
+    { name: 'overview', path: `/w/${workspaceId}`, testId: 'stat-work' },
     { name: 'tasks', path: `/w/${workspaceId}/tasks`, testId: 'column' },
     { name: 'organization', path: `/w/${workspaceId}/organization`, testId: 'organization-rows' },
     { name: 'knowledge', path: `/w/${workspaceId}/knowledge`, testId: 'knowledge-counts' },
     { name: 'activity', path: `/w/${workspaceId}/activity`, testId: 'timeline-viewport' },
-    { name: 'project-settings', path: `/w/${workspaceId}/settings`, testId: 'perm-caption' },
+    // The same five-section split on a project's own Settings (M61 R13).
+    { name: 'project-settings/goal', path: `/w/${workspaceId}/settings?section=goal`, testId: 'settings-goal' },
+    { name: 'project-settings/runbook', path: `/w/${workspaceId}/settings?section=runbook`, testId: 'settings-runbook' },
+    { name: 'project-settings/runtime', path: `/w/${workspaceId}/settings?section=runtime`, testId: 'settings-runtime' },
+    { name: 'project-settings/permissions', path: `/w/${workspaceId}/settings?section=permissions`, testId: 'settings-permissions' },
+    { name: 'project-settings/danger', path: `/w/${workspaceId}/settings?section=danger`, testId: 'settings-danger' },
     { name: 'graph', path: `/w/${workspaceId}/graph`, testId: 'graph-canvas' },
     { name: 'office', path: `/w/${workspaceId}/office`, testId: 'office-canvas' },
   ]
@@ -981,10 +1165,12 @@ try {
   for (const target of SWEEP) {
     await gotoReliably(`${baseUrl}${target.path}`)
     await waitVisible(page.getByTestId(target.testId), `${target.name}'s structural marker [data-testid=${target.testId}]`)
-    await waitVisible(page.getByRole('navigation', { name: 'Primary' }), `${target.name}'s sidebar`)
-    if (target.name === 'overview') {
+    await waitVisible(page.getByRole('navigation', { name: 'Main' }), `${target.name}'s rail`)
+    if (target.name === 'activity') {
       // Waited BEFORE the scan, so the re-homed river's own strings are covered rather than raced.
-      await waitVisible(page.getByTestId('live-events'), 'the live-events river on the Overview')
+      // M61 R7/R10/Task 7: `live-events` left the deleted Overview for the Activity tab, which is
+      // where the whole river already was -- the wait MOVED with it rather than being dropped.
+      await waitVisible(page.getByTestId('live-events'), 'the live-events river on the Activity tab')
     }
     const { shown, hidden } = await readVisibleText()
     // A page that rendered NOTHING passes a negative assertion trivially (fix round 1). Every route
@@ -1034,8 +1220,9 @@ try {
   // now.
   //
   // TWO TIERS, because the routes are not all the same shape:
-  //   - SHELL routes answer 200 AND render the Primary navigation landmark, which is the frame this
-  //     milestone rebuilt.
+  //   - SHELL routes answer 200 AND render the Main navigation landmark (the rail, M61 erratum E9 --
+  //     `aria-label="Primary"` retired to `aria-label="Main"`), which is the frame this milestone
+  //     rebuilt.
   //   - EDGE routes answer 200 and one marker of their own. `/login` is the one that cannot take
   //     the shell assertion: ruling T3-3 renders the frame there but NOT the tree body, and this
   //     stage should assert what that ruling decided rather than what the other twenty do.
@@ -1069,7 +1256,7 @@ try {
     console.log(`stage 10 (shell): ${route} -> ${String(status)}`)
     // 200 or a 307 that landed on a 200 (the two redirects `next.config.ts` owns).
     if (status !== 200) await fail(`stage 10: ${route} answered ${String(status)} -- ia.md rule 2 says every destination still answers`)
-    await waitVisible(page.getByRole('navigation', { name: 'Primary' }), `the sidebar on ${route}`)
+    await waitVisible(page.getByRole('navigation', { name: 'Main' }), `the rail on ${route}`)
   }
   for (const [route, marker, alsoTheShell] of EDGE_ROUTES) {
     const response = await page.goto(`${baseUrl}${route}`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
@@ -1077,7 +1264,7 @@ try {
     console.log(`stage 10 (edge): ${route} -> ${String(status)} (marker [data-testid=${marker}])`)
     if (status !== 200) await fail(`stage 10: ${route} answered ${String(status)} -- ia.md rule 2 says every destination still answers`)
     await waitVisible(page.getByTestId(marker), `${route}'s own marker [data-testid=${marker}]`)
-    if (alsoTheShell) await waitVisible(page.getByRole('navigation', { name: 'Primary' }), `the sidebar on ${route}`)
+    if (alsoTheShell) await waitVisible(page.getByRole('navigation', { name: 'Main' }), `the rail on ${route}`)
   }
   console.log(
     `stage 10 PASSED: ${SHELL_ROUTES.length} destinations answering 200 inside the shell and ` +
@@ -1117,6 +1304,7 @@ try {
   // then trips over.
   await prisma.person.deleteMany({ where: { name: { in: GATE_PERSON_NAMES } } }).catch(() => {})
   if (templateId !== null) await prisma.slaveTemplate.delete({ where: { id: templateId } }).catch(() => {})
+  if (repoPath !== null) rmSync(repoPath, { recursive: true, force: true })
   if (diagDir !== null && exitCode === 0) rmSync(diagDir, { recursive: true, force: true })
   await prisma.$disconnect().catch(() => {})
 }

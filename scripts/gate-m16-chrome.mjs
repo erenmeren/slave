@@ -22,18 +22,21 @@
 // page itself did not derive it" discipline `gate-m14-fidelity.mjs`'s stage 5 uses for Analytics.
 //
 // The five checks (spec §6):
-//   1. Project Settings `/w/<seed>/settings`: the goal form's radii -- `goal-input` at 7px,
-//      `goal-submit` at 5px. (M24 Task 4 moved `GoalPanel` off Overview onto this tab.)
+//   1. Project Settings `/w/<seed>/settings?section=goal`: the goal form's radii -- `goal-input`
+//      and `goal-submit` both at 8px, which is `--radius-control` (M61 R3/R16 replaced the eleven
+//      ad-hoc radii with three tokens; these were 7px and 5px before it). (M24 Task 4 moved
+//      `GoalPanel` off Overview onto this tab; M61 R13 put each section behind its own
+//      `?section=`.)
 //   2. Project Settings `/w/<seed>/settings`: the permission matrix's cell glyphs -- at least two
 //      distinct glyphs, and `–` (unset) distinct from `✕` (denied), whenever both exist. The
 //      seeded database has NO `SlavePermission` rows, so every cell is unset and this check is
 //      vacuous-but-stated: it prints the one glyph found and passes rather than silently skipping.
 //      (M24 Task 4 moved the permission matrix off the global `/settings` onto this same tab, so
 //      checks 1 and 2 now share one page visit.)
-//   3. Projects `/`: a workspace card's `team-overflow` pill iff its TRUE team size (read straight
-//      from Prisma, an independent oracle) is over six -- and the seed's own 9-slave workspace
-//      proves the tile genuinely reachable (fix round 1: `server/org.ts` no longer caps
-//      `ProjectRow.team` server-side).
+//   3. Projects `/`: a project row's `data-team-size` matches its TRUE team size (read straight
+//      from Prisma, an independent oracle) -- M61 Task 8 review Ruling 8: `project-row` draws no
+//      avatar stack, so `team-overflow` has nothing to be attached to any more; `data-team-size`
+//      carries the same oracle fact as a bare attribute instead.
 //   4. Repo hygiene (no browser): Task 7's own clean-check grep, expected empty.
 //   5. Evidence `/workforce?tab=evidence` (MOVED here by M53 R12 / plan erratum E11, from the
 //      `/analytics` per-slave table that milestone deleted): a by-profile row that claims no rate --
@@ -265,16 +268,23 @@ try {
   // ============================================================================================
   // Check 1: project Settings /w/<seed>/settings -- the goal form's radii.
   // ============================================================================================
-  await page.goto(url(`/w/${SEED_WORKSPACE_ID}/settings`), { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  // M61 R13/Task 9: project Settings is two fixed columns and only the CHOSEN section mounts, so
+  // the goal form is behind `?section=goal` and the permission matrix behind `?section=permissions`
+  // -- the same route and the same testids, one query parameter further in.
+  await page.goto(url(`/w/${SEED_WORKSPACE_ID}/settings?section=goal`), { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
   await waitVisible(page.getByTestId('goal-input'), "the goal form's input (the seed workspace's goal must be unset)")
-  await assertComputed('check 1 (project settings goal form)', '[data-testid="goal-input"]', 'border-radius', '7px')
-  await assertComputed('check 1 (project settings goal form)', '[data-testid="goal-submit"]', 'border-radius', '5px')
-  console.log('check 1 PASSED: the goal input is 7px and the set-goal button is 5px, read back from getComputedStyle')
+  // M61 R3/R16: the eleven ad-hoc radii became three tokens -- a form field is `--radius-control`,
+  // which is 8px (the old `goal-input` 7px was one of the values that token replaced).
+  await assertComputed('check 1 (project settings goal form)', '[data-testid="goal-input"]', 'border-radius', '8px')
+  await assertComputed('check 1 (project settings goal form)', '[data-testid="goal-submit"]', 'border-radius', '8px')
+  console.log('check 1 PASSED: the goal input and the set-goal button are both 8px (--radius-control), read back from getComputedStyle')
 
   // ============================================================================================
-  // Check 2: project Settings /w/<seed>/settings -- the permission matrix's cell glyphs. Same
-  // page as check 1 -- no second navigation needed.
+  // Check 2: project Settings /w/<seed>/settings -- the permission matrix's cell glyphs. ITS OWN
+  // SECTION since M61 R13 (only the chosen one mounts), so this navigates rather than reusing the
+  // page check 1 left behind.
   // ============================================================================================
+  await page.goto(url(`/w/${SEED_WORKSPACE_ID}/settings?section=permissions`), { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
   await waitVisible(page.getByTestId('perm-caption'), "the permission matrix's caption")
   const glyphs = await page.evaluate(() =>
     [...document.querySelectorAll('[data-testid^="perm-cell-"]')].map((element) => element.textContent?.trim() ?? ''),
@@ -316,15 +326,19 @@ try {
   }
 
   // ============================================================================================
-  // Check 3: Projects / -- team-overflow iff the TRUE team size (read from Prisma, independent of
-  // whatever the page itself renders) is over six.
+  // Check 3: Projects / -- a project row's `data-team-size` matches the TRUE team size (read from
+  // Prisma, an independent oracle).
   //
-  // Fix round 1 (controller ruling): `server/org.ts`'s `listProjects` USED to cap `ProjectRow.team`
-  // at 6 slaves server-side, on top of the six-avatar cap `ProjectsClient.tsx` already owns --
-  // which made `team-overflow` structurally unreachable no matter how large a workspace's real
-  // roster was. That server-side `.slice(0, 6)` is gone: `ProjectRow.team` now carries the FULL
-  // team, so this check asserts the genuine oracle (the raw roster size) with no accommodation for
-  // a cap that no longer exists.
+  // M61 Task 8 review, Ruling 8: the deleted `ProjectsClient` card drew a six-avatar stack with a
+  // `team-overflow` `+N` pill past it; Home's `project-row` (`ProjectRowItem.tsx`) draws no avatar
+  // stack at all, so there is no overflow tile left to reach. `data-team-size={project.workerCount}`
+  // carries the SAME fact (`server/org.ts`'s `ProjectRow.workerCount`, the count `team-overflow`
+  // used to make visible one avatar at a time) as a bare attribute instead -- same oracle, same
+  // meaning, no avatar stack required to read it.
+  //
+  // Fix round 1 (earlier controller ruling, still true): `server/org.ts`'s `listProjects` carries
+  // the FULL team on `ProjectRow.team` (no server-side `.slice(0, 6)`), so `workerCount` is never a
+  // capped number either.
   // ============================================================================================
   const workspacesByName = await prisma.workspace.findMany({
     include: { teams: { include: { slaves: true } } },
@@ -337,55 +351,27 @@ try {
   }))
 
   await page.goto(url('/'), { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
-  await waitVisible(page.getByTestId('project-card'), 'a project card')
-  const cardCount = await page.getByTestId('project-card').count()
-  if (cardCount !== trueTeamSizes.length) {
+  await waitVisible(page.getByTestId('project-row'), 'a project row')
+  const rowCount = await page.getByTestId('project-row').count()
+  if (rowCount !== trueTeamSizes.length) {
     await fail(
-      `check 3 (projects): ${String(cardCount)} project card(s) rendered, but Prisma has ${String(trueTeamSizes.length)} ` +
+      `check 3 (projects): ${String(rowCount)} project row(s) rendered, but Prisma has ${String(trueTeamSizes.length)} ` +
         'workspace(s) -- the page and the independent oracle disagree on how many projects exist',
     )
   }
-  let sawOverflow = false
-  for (let index = 0; index < trueTeamSizes.length; index += 1) {
-    const oracle = trueTeamSizes[index]
-    const card = page.getByTestId('project-card').nth(index)
-    const overflow = card.getByTestId('team-overflow')
-    const overflowCount = await overflow.count()
-    if (oracle.size > 6) {
-      const expectedText = `+${String(oracle.size - 6)}`
-      if (overflowCount === 0) {
-        await fail(
-          `check 3 (projects): workspace ${oracle.id} (${oracle.name}) has ${String(oracle.size)} team members ` +
-            `(>6) but its card shows no team-overflow pill`,
-        )
-      }
-      const actualText = (await overflow.first().textContent())?.trim() ?? ''
-      assert(
-        actualText === expectedText,
-        `check 3 (projects): workspace ${oracle.id} (${oracle.name}) team-overflow reads ${JSON.stringify(actualText)}, ` +
-          `expected ${JSON.stringify(expectedText)} (${String(oracle.size)} members)`,
-      )
-      sawOverflow = true
-      console.log(
-        `check 3: workspace ${oracle.name} genuinely has ${String(oracle.size)} team members -- team-overflow reads ` +
-          `${actualText}, proving the tile is reachable`,
-      )
-    } else {
-      if (overflowCount !== 0) {
-        await fail(
-          `check 3 (projects): workspace ${oracle.id} (${oracle.name}) has ${String(oracle.size)} team members ` +
-            `(<=6) but its card shows a team-overflow pill anyway`,
-        )
-      }
-      console.log(`check 3: workspace ${oracle.name} has ${String(oracle.size)} team members (<=6) -- team-overflow correctly absent`)
-    }
+  for (const oracle of trueTeamSizes) {
+    const row = page.locator(`[data-testid="project-row"][data-workspace="${oracle.id}"]`)
+    await waitVisible(row, `the "${oracle.name}" project row (workspace ${oracle.id})`)
+    const teamSize = await row.getAttribute('data-team-size')
+    assert(
+      teamSize === String(oracle.size),
+      `check 3 (projects): workspace ${oracle.id} (${oracle.name}) data-team-size is ${JSON.stringify(teamSize)}, ` +
+        `expected ${JSON.stringify(String(oracle.size))} (Prisma's own team-size count)`,
+    )
+    console.log(`check 3: workspace ${oracle.name} data-team-size=${teamSize} matches Prisma's own team-size count`)
   }
   console.log(
-    sawOverflow
-      ? `check 3 PASSED: team-overflow matches Prisma's own team-size count on all ${String(cardCount)} project card(s), ` +
-          'and a genuine >6-member workspace proved the tile reachable'
-      : `check 3 PASSED: team-overflow matches Prisma's own team-size count on all ${String(cardCount)} project card(s) ` +
-          '(no workspace in this database has more than 6 team members, so only the absent-branch was exercised)',
+    `check 3 PASSED: data-team-size matches Prisma's own team-size count on all ${String(rowCount)} project row(s)`,
   )
 
   // ============================================================================================

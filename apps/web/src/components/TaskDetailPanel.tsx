@@ -91,12 +91,22 @@ export function TaskDetailPanel({
   task,
   workspaceId,
   workspaceGoalVersion,
+  isDeveloper = true,
   onClose,
 }: {
   readonly task: TaskBoardItem
   readonly workspaceId: string
   /** The goal version the PROJECT is on (M40 §6) -- the other half of the stale badge. */
   readonly workspaceGoalVersion: number
+  /**
+   * Whether the raw `task-details` section below (run/messages/context/memories/verification/
+   * cost/worktree/events) renders at all (M61 R9). An explicit prop, not this panel's own
+   * `useMode()` read -- `TasksClient` reads the mode ONCE and passes it down, because this panel
+   * is also rendered directly by a great many of this file's neighbouring tests with no
+   * `<ModeProvider>` ancestor at all, and `useMode()` throws outside one. Defaults to `true` so
+   * every one of those direct renders keeps seeing exactly what it always has.
+   */
+  readonly isDeveloper?: boolean
   readonly onClose: () => void
 }): React.JSX.Element {
   const router = useRouter()
@@ -352,292 +362,302 @@ export function TaskDetailPanel({
         </DetailsGroup>
       )}
 
-      {/* The one group this panel leads with: what its runs are doing right now. */}
-      <DetailsGroup group="run" title="Run" defaultOpen>
-        {/*
-          * The attempt counter the scheduler reads (final wave M1). A fact about the WORK, so it
-          * belongs beside the runs it describes rather than under Messages, which is for the
-          * sentences a reviewer or a re-plan left behind. Above the run list and outside its empty
-          * case: a task that has never run still has an attempt counter, and `no runs yet` is a
-          * fact about the LIST alone.
-          *
-          * Its OTHER half, the branch, went to the Worktree group instead of coming here with it:
-          * a branch name is a raw git value, R4 folds raw values behind a disclosure, and this
-          * group leads OPEN. `gate:m45-project-experience` stage 6 measures exactly that -- the
-          * task's uuid, its branch and its worktree path must be absent from the panel until a
-          * person opens the group holding them -- so an always-open branch would be a regression
-          * against R4 dressed up as a tidy-up. Messages keeps only the sentence either way, which
-          * is what M1 asked for.
-          */}
-        <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
-          <dt className="text-text-3">attempt</dt>
-          <dd className="font-mono text-text-2">
-            {task.attempt}/{task.maxAttempts}
-          </dd>
-        </dl>
-        {task.runs.length === 0 ? (
-          <p className="text-xs text-text-3">no runs yet</p>
-        ) : (
-          <>
-            {/* One line, not a figure per row (M45 R4): the per-run money moved into the Cost
-              * group, and a run row that carried it was two questions in one line. `—` when no run
-              * reported spend at all, never `$0.00` -- that would claim a measurement nobody made
-              * (spec Decision 6). */}
-            <p data-testid="run-total-cost" className="font-mono text-[10.5px] text-text-3">
-              {measuredRuns.length === 0 ? '—' : formatUsd(totalCostUsd)} across {task.runs.length} run
-              {task.runs.length === 1 ? '' : 's'}
-              {unmeasuredRuns > 0 && ` · ${unmeasuredRuns} unmeasured`}
-            </p>
-            <ul className="flex flex-col gap-2">
-              {task.runs.map((run) => (
-                <li key={run.id} data-testid="run-row" className="rounded border border-line p-2 text-xs text-text-2">
-                  <div className="flex items-center justify-between">
-                    {/* The same 8-char id prefix the Cost group's rows carry, so the two lists can
-                      * be matched row for row by eye (fix round 1, minor 3). */}
-                    <span>
-                      <span className="font-mono text-[10px] text-text-faint">{run.id.slice(0, 8)}</span> {run.status}
-                    </span>
-                    {/* The ceiling this run is actually counting against (M51 R7, decision D16):
-                      * the breaker's cap STANDS after its word de-escalates, so a constrained run
-                      * that reads WORKING again still has a ceiling nothing else on the page would
-                      * mention. Absent for every run nothing capped. */}
-                    <span
-                      data-testid="run-tool-calls"
-                      className="font-mono"
-                      {...(run.toolCallCap === null
-                        ? {}
-                        : { title: `the behavioural breaker capped this run at ${run.toolCallCap} tool calls` })}
+      {/* M61 R9: run/messages/context/memories/verification/worktree/events are raw,
+        * debug-shaped detail -- ids, hashes, per-run figures, fetched-on-demand logs -- and
+        * simple mode (spec R9) does not show them at all. `task-details` is what a test or a
+        * gate names this section by. Ruling 7 (fix round 1): Cost is the one exception -- it
+        * reports what the work already cost in EITHER mode, so it renders on its own below,
+        * ungated, in the same spot between Verification and Worktree it always had. */}
+      {isDeveloper && (
+        <div data-testid="task-details" className="flex flex-col gap-4">
+          {/* The one group this panel leads with: what its runs are doing right now. */}
+          <DetailsGroup group="run" title="Run" defaultOpen>
+            {/*
+              * The attempt counter the scheduler reads (final wave M1). A fact about the WORK, so it
+              * belongs beside the runs it describes rather than under Messages, which is for the
+              * sentences a reviewer or a re-plan left behind. Above the run list and outside its empty
+              * case: a task that has never run still has an attempt counter, and `no runs yet` is a
+              * fact about the LIST alone.
+              *
+              * Its OTHER half, the branch, went to the Worktree group instead of coming here with it:
+              * a branch name is a raw git value, R4 folds raw values behind a disclosure, and this
+              * group leads OPEN. `gate:m45-project-experience` stage 6 measures exactly that -- the
+              * task's uuid, its branch and its worktree path must be absent from the panel until a
+              * person opens the group holding them -- so an always-open branch would be a regression
+              * against R4 dressed up as a tidy-up. Messages keeps only the sentence either way, which
+              * is what M1 asked for.
+              */}
+            <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
+              <dt className="text-text-3">attempt</dt>
+              <dd className="font-mono text-text-2">
+                {task.attempt}/{task.maxAttempts}
+              </dd>
+            </dl>
+            {task.runs.length === 0 ? (
+              <p className="text-xs text-text-3">no runs yet</p>
+            ) : (
+              <>
+                {/* One line, not a figure per row (M45 R4): the per-run money moved into the Cost
+                  * group, and a run row that carried it was two questions in one line. `—` when no run
+                  * reported spend at all, never `$0.00` -- that would claim a measurement nobody made
+                  * (spec Decision 6). */}
+                <p data-testid="run-total-cost" className="font-mono text-[10.5px] text-text-3">
+                  {measuredRuns.length === 0 ? '—' : formatUsd(totalCostUsd)} across {task.runs.length} run
+                  {task.runs.length === 1 ? '' : 's'}
+                  {unmeasuredRuns > 0 && ` · ${unmeasuredRuns} unmeasured`}
+                </p>
+                <ul className="flex flex-col gap-2">
+                  {task.runs.map((run) => (
+                    <li key={run.id} data-testid="run-row" className="rounded border border-line p-2 text-xs text-text-2">
+                      <div className="flex items-center justify-between">
+                        {/* The same 8-char id prefix the Cost group's rows carry, so the two lists can
+                          * be matched row for row by eye (fix round 1, minor 3). */}
+                        <span>
+                          <span className="font-mono text-[10px] text-text-faint">{run.id.slice(0, 8)}</span> {run.status}
+                        </span>
+                        {/* The ceiling this run is actually counting against (M51 R7, decision D16):
+                          * the breaker's cap STANDS after its word de-escalates, so a constrained run
+                          * that reads WORKING again still has a ceiling nothing else on the page would
+                          * mention. Absent for every run nothing capped. */}
+                        <span
+                          data-testid="run-tool-calls"
+                          className="font-mono"
+                          {...(run.toolCallCap === null
+                            ? {}
+                            : { title: `the behavioural breaker capped this run at ${run.toolCallCap} tool calls` })}
+                        >
+                          {run.toolCallCap === null ? `${run.toolCalls} calls` : `${run.toolCalls}/${run.toolCallCap} calls`}
+                        </span>
+                      </div>
+                      {run.checkpoint !== null && run.checkpoint.pausedAtStep !== null && (
+                        <div className="mt-1 text-text-3">
+                          {/* M36 t3: a run waiting for another slave's answer is `paused`, but "paused at
+                            * step N" reads as a pause a human is being asked to end. Name what it is
+                            * actually waiting on instead. */}
+                          {run.waitingFor === null
+                            ? `paused at step ${run.checkpoint.pausedAtStep}`
+                            : `waiting for ${run.waitingFor} at step ${run.checkpoint.pausedAtStep}`}{' '}
+                          · session {run.checkpoint.sessionId} · {run.checkpoint.dirtyFileCount} dirty files
+                        </div>
+                      )}
+                      {run.checkpoint !== null && run.checkpoint.deniedDuringPause.length > 0 && (
+                        // `summary` is always `null` today (see `TaskRunSummary.checkpoint`'s own
+                        // comment: no join key exists), so this always renders the id-prefix fallback --
+                        // not a bug, a fact of the data. Same 8-char id-prefix convention as
+                        // `TaskCard`/`SlaveCard`'s `TASK-{id.slice(0, 8)}`; unlike a task's random UUID
+                        // this can render two Claude `toolu_01…` ids identically (they share that fixed
+                        // vendor prefix) -- an accepted limit of a best-effort display, not a bug to fix
+                        // here. `font-mono text-[10px] text-text-3`, adjacent to `SECTION_LABEL_CLASS`
+                        // (`ui/SectionLabel.tsx`) rather than reusing it: that class is for headings
+                        // (uppercase, wide tracking), and this is a value line, same relationship the
+                        // `paused at step` line above already has to it.
+                        <div className="mt-1 font-mono text-[10px] text-text-3">
+                          {run.checkpoint.deniedDuringPause.length} tool call{run.checkpoint.deniedDuringPause.length === 1 ? '' : 's'} denied
+                          during pause · {run.checkpoint.deniedDuringPause.map((denied) => denied.summary ?? `${denied.id.slice(0, 8)}…`).join(', ')}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </DetailsGroup>
+
+          {/* What was SAID to and about this task: the sentence a reviewer or a re-plan left behind,
+            * and nothing else (final wave M1 -- the attempt counter and the branch moved into the Run
+            * group, where the work they describe is). A task nobody has said anything about says so,
+            * rather than opening onto an empty list. */}
+          <DetailsGroup group="messages" title="Messages">
+            {task.lastRejectionReason === null ? (
+              <p className="text-xs text-text-3">nothing said about this task yet</p>
+            ) : (
+              // One column, two meanings, named apart (M40 §6): `cancelTask` writes the CANCELLATION
+              // reason into `lastRejectionReason`, and labelling that "rejection" would tell an
+              // operator a reviewer turned the work down when nobody reviewed it at all. Muted for a
+              // cancelled task, like its card: nothing here needs anybody.
+              <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
+                <dt className="text-text-3">{task.status === 'cancelled' ? 'cancelled' : 'rejection'}</dt>
+                <dd
+                  data-testid={task.status === 'cancelled' ? 'detail-cancel-reason' : 'detail-rejection-reason'}
+                  className={task.status === 'cancelled' ? 'text-text-3' : 'text-tone-waiting'}
+                >
+                  {task.lastRejectionReason}
+                </dd>
+              </dl>
+            )}
+          </DetailsGroup>
+
+          {/* M37 §6, one group lower. Fetched on demand rather than with the snapshot: a prompt is the
+            * whole text a model was given, and shipping one per run into every board poll would dwarf
+            * the snapshot it rides in -- which is also why this group renders nothing until it is
+            * opened, so arriving at the panel costs no request at all. */}
+          <DetailsGroup group="context" title="Context sources">
+            {task.runs.length === 0 ? (
+              <p className="text-xs text-text-3">no runs yet, so nothing was assembled for one</p>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {task.runs.map((run) => (
+                  <li key={run.id} data-testid="run-context-row" className="flex flex-col gap-1 text-xs text-text-2">
+                    <button
+                      type="button"
+                      data-testid="run-context-open"
+                      disabled={runContextPending}
+                      onClick={() => void openRunContext(run.id)}
+                      className="text-left text-[10.5px] text-text-3 underline decoration-dotted hover:text-text-1 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {run.toolCallCap === null ? `${run.toolCalls} calls` : `${run.toolCalls}/${run.toolCallCap} calls`}
-                    </span>
-                  </div>
-                  {run.checkpoint !== null && run.checkpoint.pausedAtStep !== null && (
-                    <div className="mt-1 text-text-3">
-                      {/* M36 t3: a run waiting for another slave's answer is `paused`, but "paused at
-                        * step N" reads as a pause a human is being asked to end. Name what it is
-                        * actually waiting on instead. */}
-                      {run.waitingFor === null
-                        ? `paused at step ${run.checkpoint.pausedAtStep}`
-                        : `waiting for ${run.waitingFor} at step ${run.checkpoint.pausedAtStep}`}{' '}
-                      · session {run.checkpoint.sessionId} · {run.checkpoint.dirtyFileCount} dirty files
-                    </div>
-                  )}
-                  {run.checkpoint !== null && run.checkpoint.deniedDuringPause.length > 0 && (
-                    // `summary` is always `null` today (see `TaskRunSummary.checkpoint`'s own
-                    // comment: no join key exists), so this always renders the id-prefix fallback --
-                    // not a bug, a fact of the data. Same 8-char id-prefix convention as
-                    // `TaskCard`/`SlaveCard`'s `TASK-{id.slice(0, 8)}`; unlike a task's random UUID
-                    // this can render two Claude `toolu_01…` ids identically (they share that fixed
-                    // vendor prefix) -- an accepted limit of a best-effort display, not a bug to fix
-                    // here. `font-mono text-[10px] text-text-3`, adjacent to `SECTION_LABEL_CLASS`
-                    // (`ui/SectionLabel.tsx`) rather than reusing it: that class is for headings
-                    // (uppercase, wide tracking), and this is a value line, same relationship the
-                    // `paused at step` line above already has to it.
-                    <div className="mt-1 font-mono text-[10px] text-text-3">
-                      {run.checkpoint.deniedDuringPause.length} tool call{run.checkpoint.deniedDuringPause.length === 1 ? '' : 's'} denied
-                      during pause · {run.checkpoint.deniedDuringPause.map((denied) => denied.summary ?? `${denied.id.slice(0, 8)}…`).join(', ')}
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </>
-        )}
-      </DetailsGroup>
-
-      {/* What was SAID to and about this task: the sentence a reviewer or a re-plan left behind,
-        * and nothing else (final wave M1 -- the attempt counter and the branch moved into the Run
-        * group, where the work they describe is). A task nobody has said anything about says so,
-        * rather than opening onto an empty list. */}
-      <DetailsGroup group="messages" title="Messages">
-        {task.lastRejectionReason === null ? (
-          <p className="text-xs text-text-3">nothing said about this task yet</p>
-        ) : (
-          // One column, two meanings, named apart (M40 §6): `cancelTask` writes the CANCELLATION
-          // reason into `lastRejectionReason`, and labelling that "rejection" would tell an
-          // operator a reviewer turned the work down when nobody reviewed it at all. Muted for a
-          // cancelled task, like its card: nothing here needs anybody.
-          <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
-            <dt className="text-text-3">{task.status === 'cancelled' ? 'cancelled' : 'rejection'}</dt>
-            <dd
-              data-testid={task.status === 'cancelled' ? 'detail-cancel-reason' : 'detail-rejection-reason'}
-              className={task.status === 'cancelled' ? 'text-text-3' : 'text-tone-waiting'}
-            >
-              {task.lastRejectionReason}
-            </dd>
-          </dl>
-        )}
-      </DetailsGroup>
-
-      {/* M37 §6, one group lower. Fetched on demand rather than with the snapshot: a prompt is the
-        * whole text a model was given, and shipping one per run into every board poll would dwarf
-        * the snapshot it rides in -- which is also why this group renders nothing until it is
-        * opened, so arriving at the panel costs no request at all. */}
-      <DetailsGroup group="context" title="Context sources">
-        {task.runs.length === 0 ? (
-          <p className="text-xs text-text-3">no runs yet, so nothing was assembled for one</p>
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {task.runs.map((run) => (
-              <li key={run.id} data-testid="run-context-row" className="flex flex-col gap-1 text-xs text-text-2">
-                <button
-                  type="button"
-                  data-testid="run-context-open"
-                  disabled={runContextPending}
-                  onClick={() => void openRunContext(run.id)}
-                  className="text-left text-[10.5px] text-text-3 underline decoration-dotted hover:text-text-1 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  What this run saw
-                </button>
-                {runContext !== null && runContext.runId === run.id && (
-                  <div data-testid="run-context" className="flex flex-col gap-1">
-                    <ul className="flex flex-col gap-0.5">
-                      {runContext.manifest.sections.map((source, index) => {
-                        const line = sectionLine(source)
-                        return (
-                          // The index belongs in the key: the manifest is an ORDERED record and a
-                          // kind can legitimately repeat, so `kind` alone is not a stable identity.
-                          <li key={`${line.kind}-${String(index)}`} data-testid="run-context-section" className="text-[10.5px]">
-                            <span data-testid={`run-context-section-${String(index)}`}>
-                              <span className="font-mono text-text-3">{line.kind}</span> {line.detail}
-                            </span>
-                            {line.missing.length > 0 && (
-                              // The one thing on this list an operator may have to act on: a skill
-                              // the worker was assigned that its run never got (spec §4 -- the run
-                              // proceeds without it).
-                              <span data-testid="run-context-missing" className="text-tone-blocked">
-                                {' '}
-                                · missing: {line.missing.join(', ')}
-                              </span>
-                            )}
-                          </li>
-                        )
-                      })}
-                    </ul>
-                    <details data-testid="run-context-prompt">
-                      <summary className="cursor-pointer text-[10.5px] text-text-3">the prompt, in full</summary>
-                      {/* A `<pre>`, so another party's text is characters and never elements
-                        * (spec §1: another party's text is data). */}
-                      <pre
-                        data-testid="run-context-prompt-body"
-                        className="mt-1 max-h-64 overflow-auto rounded border border-line bg-bg-2 p-2 font-mono text-[10px] text-text-2"
-                      >
-                        {runContext.prompt}
-                      </pre>
-                    </details>
-                  </div>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-        {runContextError !== null && (
-          <span role="alert" data-testid="run-context-error" className="text-xs text-tone-blocked">
-            {runContextError}
-          </span>
-        )}
-      </DetailsGroup>
-
-      {/* M49 R6: the knowledge this task's runs were GIVEN (off their recorded manifests, which is
-        * the only record of it) and what it PRODUCED. Fetched on demand, like the context group
-        * above it: a board poll must not carry every task's memories. */}
-      <DetailsGroup group="memories" title="Knowledge">
-        <button
-          type="button"
-          data-testid="task-memories-open"
-          disabled={memoriesPending}
-          onClick={() => void openMemories()}
-          className="text-left text-[10.5px] text-text-3 underline decoration-dotted hover:text-text-1 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          What this task knew, and what it taught
-        </button>
-        {memories !== null && (
-          <div className="flex flex-col gap-2">
-            {/* Two lists, one under the other, each with its own caption (final review, Minor 5):
-              * without them a reader cannot tell the knowledge a run was GIVEN from the knowledge
-              * this task PRODUCED, and the two mean opposite things about the same task. */}
-            <SectionLabel testId="task-memory-received-label">Received by its runs</SectionLabel>
-            <ul data-testid="task-memory-received" className="flex flex-col gap-0.5">
-              {memories.received.length === 0 ? (
-                <li className="text-[10.5px] text-text-3">no run of this task was given anything yet</li>
-              ) : (
-                memories.received.map((row) => (
-                  <li key={row.memory.id} data-testid="task-memory-row" className="text-[10.5px] text-text-2">
-                    {/* The LABEL, with the key one hover away (`docs/ia.md` rule 3), and the
-                      * memory's own words as JSX children (spec section 1). */}
-                    <span title={row.memory.type}>{row.typeLabel}</span> · {row.memory.title}
+                      What this run saw
+                    </button>
+                    {runContext !== null && runContext.runId === run.id && (
+                      <div data-testid="run-context" className="flex flex-col gap-1">
+                        <ul className="flex flex-col gap-0.5">
+                          {runContext.manifest.sections.map((source, index) => {
+                            const line = sectionLine(source)
+                            return (
+                              // The index belongs in the key: the manifest is an ORDERED record and a
+                              // kind can legitimately repeat, so `kind` alone is not a stable identity.
+                              <li key={`${line.kind}-${String(index)}`} data-testid="run-context-section" className="text-[10.5px]">
+                                <span data-testid={`run-context-section-${String(index)}`}>
+                                  <span className="font-mono text-text-3">{line.kind}</span> {line.detail}
+                                </span>
+                                {line.missing.length > 0 && (
+                                  // The one thing on this list an operator may have to act on: a skill
+                                  // the worker was assigned that its run never got (spec §4 -- the run
+                                  // proceeds without it).
+                                  <span data-testid="run-context-missing" className="text-tone-blocked">
+                                    {' '}
+                                    · missing: {line.missing.join(', ')}
+                                  </span>
+                                )}
+                              </li>
+                            )
+                          })}
+                        </ul>
+                        <details data-testid="run-context-prompt">
+                          <summary className="cursor-pointer text-[10.5px] text-text-3">the prompt, in full</summary>
+                          {/* A `<pre>`, so another party's text is characters and never elements
+                            * (spec §1: another party's text is data). */}
+                          <pre
+                            data-testid="run-context-prompt-body"
+                            className="mt-1 max-h-64 overflow-auto rounded border border-line bg-bg-2 p-2 font-mono text-[10px] text-text-2"
+                          >
+                            {runContext.prompt}
+                          </pre>
+                        </details>
+                      </div>
+                    )}
                   </li>
-                ))
-              )}
-            </ul>
-            <SectionLabel testId="task-memory-produced-label">Produced by this task</SectionLabel>
-            <ul data-testid="task-memory-produced" className="flex flex-col gap-0.5">
-              {memories.produced.length === 0 ? (
-                <li className="text-[10.5px] text-text-3">this task has not taught anybody anything yet</li>
-              ) : (
-                memories.produced.map((row) => (
-                  <li key={row.memory.id} data-testid="task-memory-row" className="text-[10.5px] text-text-2">
-                    <span title={row.memory.type}>{row.typeLabel}</span> · {row.memory.title} —{' '}
-                    <span title={row.memory.status}>{row.statusLabel}</span>
-                  </li>
-                ))
-              )}
-            </ul>
-          </div>
-        )}
-        {memoriesError !== null && (
-          <span role="alert" data-testid="task-memories-error" className="text-xs text-tone-blocked">
-            {memoriesError}
-          </span>
-        )}
-      </DetailsGroup>
-
-      {/* The verify/merge logs a run wrote (M23 C1-C3) -- the attempts that proved, or failed to
-        * prove, that this task's work holds. Read on click, one at a time. */}
-      <DetailsGroup group="verification" title="Verification attempts">
-        {task.artifacts.length === 0 ? (
-          <p className="text-xs text-text-3">no artifacts yet</p>
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {task.artifacts.map((row) => (
-              <li key={row.id}>
-                <button
-                  type="button"
-                  data-testid="artifact-row"
-                  disabled={artifactPending}
-                  onClick={() => void openArtifact(row.id)}
-                  className="w-full rounded border border-line p-2 text-left text-xs text-text-2 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <div className="flex items-center justify-between">
-                    <span>{row.label}</span>
-                    <span className="font-mono">{row.createdAt.slice(11, 19)}</span>
-                  </div>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        {artifactError !== null && (
-          <span role="alert" data-testid="artifact-error" className="text-xs text-tone-blocked">
-            {artifactError}
-          </span>
-        )}
-        {artifact !== null && (
-          <>
-            <pre
-              data-testid="artifact-body"
-              className="max-h-64 overflow-auto rounded border border-line bg-bg-2 p-2 font-mono text-[10px] text-text-2"
-            >
-              {artifact.text}
-            </pre>
-            {artifact.truncated && (
-              <span data-testid="artifact-truncated" className="text-xs text-text-3">
-                truncated to the last 256 KiB
+                ))}
+              </ul>
+            )}
+            {runContextError !== null && (
+              <span role="alert" data-testid="run-context-error" className="text-xs text-tone-blocked">
+                {runContextError}
               </span>
             )}
-          </>
-        )}
-      </DetailsGroup>
+          </DetailsGroup>
+
+          {/* M49 R6: the knowledge this task's runs were GIVEN (off their recorded manifests, which is
+            * the only record of it) and what it PRODUCED. Fetched on demand, like the context group
+            * above it: a board poll must not carry every task's memories. */}
+          <DetailsGroup group="memories" title="Knowledge">
+            <button
+              type="button"
+              data-testid="task-memories-open"
+              disabled={memoriesPending}
+              onClick={() => void openMemories()}
+              className="text-left text-[10.5px] text-text-3 underline decoration-dotted hover:text-text-1 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              What this task knew, and what it taught
+            </button>
+            {memories !== null && (
+              <div className="flex flex-col gap-2">
+                {/* Two lists, one under the other, each with its own caption (final review, Minor 5):
+                  * without them a reader cannot tell the knowledge a run was GIVEN from the knowledge
+                  * this task PRODUCED, and the two mean opposite things about the same task. */}
+                <SectionLabel testId="task-memory-received-label">Received by its runs</SectionLabel>
+                <ul data-testid="task-memory-received" className="flex flex-col gap-0.5">
+                  {memories.received.length === 0 ? (
+                    <li className="text-[10.5px] text-text-3">no run of this task was given anything yet</li>
+                  ) : (
+                    memories.received.map((row) => (
+                      <li key={row.memory.id} data-testid="task-memory-row" className="text-[10.5px] text-text-2">
+                        {/* The LABEL, with the key one hover away (`docs/ia.md` rule 3), and the
+                          * memory's own words as JSX children (spec section 1). */}
+                        <span title={row.memory.type}>{row.typeLabel}</span> · {row.memory.title}
+                      </li>
+                    ))
+                  )}
+                </ul>
+                <SectionLabel testId="task-memory-produced-label">Produced by this task</SectionLabel>
+                <ul data-testid="task-memory-produced" className="flex flex-col gap-0.5">
+                  {memories.produced.length === 0 ? (
+                    <li className="text-[10.5px] text-text-3">this task has not taught anybody anything yet</li>
+                  ) : (
+                    memories.produced.map((row) => (
+                      <li key={row.memory.id} data-testid="task-memory-row" className="text-[10.5px] text-text-2">
+                        <span title={row.memory.type}>{row.typeLabel}</span> · {row.memory.title} —{' '}
+                        <span title={row.memory.status}>{row.statusLabel}</span>
+                      </li>
+                    ))
+                  )}
+                </ul>
+              </div>
+            )}
+            {memoriesError !== null && (
+              <span role="alert" data-testid="task-memories-error" className="text-xs text-tone-blocked">
+                {memoriesError}
+              </span>
+            )}
+          </DetailsGroup>
+
+          {/* The verify/merge logs a run wrote (M23 C1-C3) -- the attempts that proved, or failed to
+            * prove, that this task's work holds. Read on click, one at a time. */}
+          <DetailsGroup group="verification" title="Verification attempts">
+            {task.artifacts.length === 0 ? (
+              <p className="text-xs text-text-3">no artifacts yet</p>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {task.artifacts.map((row) => (
+                  <li key={row.id}>
+                    <button
+                      type="button"
+                      data-testid="artifact-row"
+                      disabled={artifactPending}
+                      onClick={() => void openArtifact(row.id)}
+                      className="w-full rounded border border-line p-2 text-left text-xs text-text-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span>{row.label}</span>
+                        <span className="font-mono">{row.createdAt.slice(11, 19)}</span>
+                      </div>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {artifactError !== null && (
+              <span role="alert" data-testid="artifact-error" className="text-xs text-tone-blocked">
+                {artifactError}
+              </span>
+            )}
+            {artifact !== null && (
+              <>
+                <pre
+                  data-testid="artifact-body"
+                  className="max-h-64 overflow-auto rounded border border-line bg-bg-2 p-2 font-mono text-[10px] text-text-2"
+                >
+                  {artifact.text}
+                </pre>
+                {artifact.truncated && (
+                  <span data-testid="artifact-truncated" className="text-xs text-text-3">
+                    truncated to the last 256 KiB
+                  </span>
+                )}
+              </>
+            )}
+          </DetailsGroup>
+        </div>
+      )}
 
       {/* What this task's runs actually spent, run by run. `—` for a run whose runtime reported no
         * spend (spec Decision 6) -- never `$0.00`, which claims a measurement nobody made. */}
@@ -679,67 +699,71 @@ export function TaskDetailPanel({
       {/* M23 B4: the tree comes off disk, the branch stays. Only a terminal task whose runs still
         * have a worktree can be collected -- `task.collectable` is computed server-side on the DTO
         * (`buildTasksSnapshot`), so this panel never imports `TERMINAL` from the domain. */}
-      <DetailsGroup group="worktree" title="Worktree">
-        {/* WHICH branch the work lives on (final wave M1): the same kind of raw git value as the
-          * paths below it, folded the same way, and beside the one button that talks about it
-          * ("remove the tree, keep the branch"). `—` for a task no run has branched yet. */}
-        <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
-          <dt className="text-text-3">branch</dt>
-          <dd data-testid="detail-branch" className="font-mono text-text-2">{task.branch ?? '—'}</dd>
-        </dl>
-        {/* WHICH tree, on disk, per run (M45 R4 fix round 1). `worktreePath` has been on the DTO
-          * since M23 B4 and was rendered nowhere -- so `collectable` said a tree existed and
-          * nothing on screen said where. A path is exactly the kind of raw value R4 folds rather
-          * than hides: absent while the group is closed, and there in full once it is open. */}
-        {task.runs.some((run) => run.worktreePath !== null) && (
-          <ul className="flex flex-col gap-0.5">
-            {task.runs
-              .filter((run) => run.worktreePath !== null)
-              .map((run) => (
-                <li key={run.id} className="flex items-baseline gap-2">
-                  <span className="font-mono text-[10px] text-text-faint">{run.id.slice(0, 8)}</span>
-                  <span data-testid="worktree-path" className="font-mono text-[10px] text-text-3">{run.worktreePath}</span>
-                </li>
-              ))}
-          </ul>
-        )}
-        {!collectable ? (
-          <p className="text-xs text-text-3">nothing to collect — no run of this task has a tree left on disk</p>
-        ) : (
-          <div className="flex items-center gap-2">
-            {!confirming ? (
-              <Button variant="ghost" size="sm" data-testid="collect-worktree" onClick={() => setConfirming(true)}>
-                Collect worktree
-              </Button>
-            ) : (
-              <>
-                <Button variant="danger" size="sm" data-testid="collect-worktree-confirm" disabled={pending} onClick={() => void collect()}>
-                  remove the tree, keep the branch
+      {isDeveloper && (
+        <DetailsGroup group="worktree" title="Worktree">
+          {/* WHICH branch the work lives on (final wave M1): the same kind of raw git value as the
+            * paths below it, folded the same way, and beside the one button that talks about it
+            * ("remove the tree, keep the branch"). `—` for a task no run has branched yet. */}
+          <dl className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs">
+            <dt className="text-text-3">branch</dt>
+            <dd data-testid="detail-branch" className="font-mono text-text-2">{task.branch ?? '—'}</dd>
+          </dl>
+          {/* WHICH tree, on disk, per run (M45 R4 fix round 1). `worktreePath` has been on the DTO
+            * since M23 B4 and was rendered nowhere -- so `collectable` said a tree existed and
+            * nothing on screen said where. A path is exactly the kind of raw value R4 folds rather
+            * than hides: absent while the group is closed, and there in full once it is open. */}
+          {task.runs.some((run) => run.worktreePath !== null) && (
+            <ul className="flex flex-col gap-0.5">
+              {task.runs
+                .filter((run) => run.worktreePath !== null)
+                .map((run) => (
+                  <li key={run.id} className="flex items-baseline gap-2">
+                    <span className="font-mono text-[10px] text-text-faint">{run.id.slice(0, 8)}</span>
+                    <span data-testid="worktree-path" className="font-mono text-[10px] text-text-3">{run.worktreePath}</span>
+                  </li>
+                ))}
+            </ul>
+          )}
+          {!collectable ? (
+            <p className="text-xs text-text-3">nothing to collect — no run of this task has a tree left on disk</p>
+          ) : (
+            <div className="flex items-center gap-2">
+              {!confirming ? (
+                <Button variant="ghost" size="sm" data-testid="collect-worktree" onClick={() => setConfirming(true)}>
+                  Collect worktree
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>cancel</Button>
-              </>
-            )}
-            {collectError !== null && (
-              <span role="alert" data-testid="collect-worktree-error" className="text-xs text-tone-blocked">
-                {collectError}
-              </span>
-            )}
-          </div>
-        )}
-      </DetailsGroup>
+              ) : (
+                <>
+                  <Button variant="danger" size="sm" data-testid="collect-worktree-confirm" disabled={pending} onClick={() => void collect()}>
+                    remove the tree, keep the branch
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => setConfirming(false)}>cancel</Button>
+                </>
+              )}
+              {collectError !== null && (
+                <span role="alert" data-testid="collect-worktree-error" className="text-xs text-tone-blocked">
+                  {collectError}
+                </span>
+              )}
+            </div>
+          )}
+        </DetailsGroup>
+      )}
 
       {/* A task has no event feed of its own, and inventing one here would be a second reader of the
         * stream the Activity page already owns. `?tasks=` is `lib/activityFilters.ts`'s own
         * parameter name for a task filter, so this link lands on that page already narrowed. */}
-      <DetailsGroup group="events" title="Events">
-        <Link
-          data-testid="task-events-link"
-          href={`/w/${workspaceId}/activity?tasks=${task.id}`}
-          className="text-xs text-text-3 underline decoration-dotted hover:text-text-1"
-        >
-          every event for this task →
-        </Link>
-      </DetailsGroup>
+      {isDeveloper && (
+        <DetailsGroup group="events" title="Events">
+          <Link
+            data-testid="task-events-link"
+            href={`/w/${workspaceId}/activity?tasks=${task.id}`}
+            className="text-xs text-text-3 underline decoration-dotted hover:text-text-1"
+          >
+            every event for this task →
+          </Link>
+        </DetailsGroup>
+      )}
     </aside>
   )
 }

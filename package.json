@@ -70,7 +70,8 @@
     "gate:m56a-provider-contract": "tsc --build && node --env-file=.env scripts/gate-m56a-provider-contract.mjs",
     "gate:m57-ui-redesign": "tsc --build && node --env-file=.env scripts/gate-m57-ui-redesign.mjs",
     "gate:m58-persons": "tsc --build && node --env-file=.env scripts/gate-m58-persons.mjs",
-    "gate:m59-intake": "tsc --build && node --env-file=.env scripts/gate-m59-intake.mjs"
+    "gate:m59-intake": "tsc --build && node --env-file=.env scripts/gate-m59-intake.mjs",
+    "gate:m61-simple-mode": "tsc --build && node --env-file=.env scripts/gate-m61-simple-mode.mjs"
   },
   "devDependencies": {
     "@testing-library/react": "^16.0.0",

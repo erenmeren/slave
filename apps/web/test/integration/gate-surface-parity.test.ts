@@ -15,6 +15,7 @@ import { buildGoalHistory } from '../../src/server/goal.js'
 import { buildOverviewSnapshot } from '../../src/server/overview.js'
 import { RECENT_DECISION_LIMIT, buildSupervisorView } from '../../src/server/supervisor.js'
 import { COLUMN_FOR_STATUS } from '../../src/lib/taskColumns.js'
+import { TABS, tabsFor } from '../../src/lib/routes.js'
 import { buildTasksSnapshot } from '../../src/server/tasks.js'
 
 /**
@@ -244,5 +245,31 @@ describe('the m57 gate reads the same task columns the board draws', () => {
       [...(block ?? '').matchAll(/^\s*(\w+):\s*'([^']+)',/gm)].map((match) => [match[1], match[2]]),
     )
     expect(parsed).toEqual(COLUMN_FOR_STATUS)
+  })
+})
+
+describe('the m61 gate reads the same project tabs lib/routes.ts declares', () => {
+  // `scripts/gate-m61-simple-mode.mjs` re-declares the six tab ids and the four simple ones,
+  // for the reason the block above states about `COLUMN_FOR_STATUS`: `apps/web` compiles with
+  // `noEmit: true` under a bundler resolver, so a plain `node` gate has nothing to import. This
+  // is the pin -- a seventh tab, a reordering, or a tab moving between the modes fails here, in
+  // the same commit that moved it.
+  const source = readFileSync(
+    fileURLToPath(new URL('../../../../scripts/gate-m61-simple-mode.mjs', import.meta.url)),
+    'utf8',
+  )
+
+  function arrayIn(name: string): readonly string[] {
+    const block = new RegExp(`const ${name} = \\[([^\\]]*)\\]`).exec(source)?.[1]
+    expect(block, `${name} is not in the gate`).toBeDefined()
+    return [...(block ?? '').matchAll(/'([^']+)'/g)].map((match) => match[1] as string)
+  }
+
+  it("TAB_IDS is TABS' own ids, in TABS' own order", () => {
+    expect(arrayIn('TAB_IDS')).toEqual(TABS.map((tab) => tab.id))
+  })
+
+  it("SIMPLE_TAB_IDS is tabsFor('simple')", () => {
+    expect(arrayIn('SIMPLE_TAB_IDS')).toEqual(tabsFor('simple').map((tab) => tab.id))
   })
 })

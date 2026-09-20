@@ -49,14 +49,17 @@ const THREAD_TYPES: readonly DomainEventType[] = [
  *  NOTE: the bubble's own clock time is formatted client-side, in the BROWSER's zone
  *  (`SupervisorThreadPanel.tsx`'s `toLocaleTimeString()`), so the day this function buckets a
  *  message into and the time printed beside it are not guaranteed to agree across a timezone. */
-function localDay(at: Date): string {
+// Exported for `activityDigest.ts` (Task 7, controller ruling): the digest's day grouping and
+// `when` label are this same function, reused rather than copied so the two readers can never
+// bucket the same event into different days.
+export function localDay(at: Date): string {
   const year = at.getFullYear()
   const month = String(at.getMonth() + 1).padStart(2, '0')
   const day = String(at.getDate()).padStart(2, '0')
   return `${String(year)}-${month}-${day}`
 }
 
-function whenLabel(day: string, now: Date): string {
+export function whenLabel(day: string, now: Date): string {
   const today = localDay(now)
   if (day === today) return 'today'
   const yesterday = new Date(now)

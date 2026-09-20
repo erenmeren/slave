@@ -447,6 +447,28 @@ try {
     return response
   }
 
+  /** Scrolls the VIRTUALISED People table (M61 R12) until a row matching `needle` is mounted.
+   *  Only the rows near the scrolled viewport are in the DOM, so a locator waiting for one
+   *  further down waits for a node React has deliberately not made. */
+  async function scrollPeopleTo(needle) {
+    return page.evaluate(async (text) => {
+      const area = document.querySelector('[data-testid="people-rows"] [data-scroll-axis]')
+      const found = () =>
+        [...document.querySelectorAll('[data-testid^="person-row-"]')].some((node) => (node.textContent ?? '').includes(text))
+      if (area === null) return { area: false, found: found() }
+      area.scrollTop = 0
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      for (let step = 0; step < 300; step += 1) {
+        if (found()) return { area: true, steps: step, found: true }
+        const before = area.scrollTop
+        area.scrollTop = Math.min(area.scrollTop + Math.max(1, area.clientHeight - 40), area.scrollHeight)
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        if (area.scrollTop === before) break
+      }
+      return { area: true, steps: -1, found: found() }
+    }, needle)
+  }
+
   async function settleTo(read, expected) {
     const deadline = Date.now() + ACTION_TIMEOUT_MS
     let last = await read()
@@ -460,6 +482,18 @@ try {
     return last
   }
 
+  // M61 Task 9: `new-slave` is the Workforce header action in DEVELOPER mode only now -- simple
+  // mode offers `hire-from-catalogue` instead. Set once, before the first navigation (the same
+  // `addInitScript` idiom `gate-m44-ux-foundation.mjs` uses); it applies to every `page.goto`
+  // this file makes from here on.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('mode', 'developer')
+    } catch {
+      /* stays simple; the click below fails loudly rather than silently finding nothing */
+    }
+  })
+
   // ---- stage 1 -------------------------------------------------------------------------------
   await gotoReliably(`${baseUrl}/workforce?tab=slaves`)
   await page.getByTestId('new-slave').click()
@@ -471,7 +505,10 @@ try {
   if (!/pool/i.test(poolNote)) await fail(`stage 1: the drawer does not say the slave lands in the pool: ${poolNote}`)
   await page.getByTestId('new-slave-submit').click()
 
-  await settleTo(async () => page.locator('[data-testid^="person-row-"]').filter({ hasText: PERSON_A }).count(), 1)
+  await settleTo(async () => {
+    await scrollPeopleTo(PERSON_A)
+    return page.locator('[data-testid^="person-row-"]').filter({ hasText: PERSON_A }).count()
+  }, 1)
   const personId = await page.locator('[data-testid^="person-row-"]').filter({ hasText: PERSON_A }).first().getAttribute('data-person-id')
   if (personId === null) await fail('stage 1: the new People row has no data-person-id')
   const row = page.getByTestId(`person-row-${personId}`)
@@ -485,8 +522,17 @@ try {
   console.log(`stage 1 PASSED: ${PERSON_A} (${personId}) is in the pool with no seat`)
 
   // ---- stage 2 -------------------------------------------------------------------------------
-  for (const teamId of [teamAId, teamBId]) {
+  // M61 R12/Task 9: the person panel is a MODAL `Sheet` now, and `?slave=` keeps it open across
+  // the assign round-trip -- so the second pass must NOT click the row again (the row is behind
+  // the sheet's own scrim). Opened only when it is not already open; the same panel, the same
+  // controls, reached once.
+  const openPerson = async () => {
+    if (await page.getByTestId('person-sheet').first().isVisible().catch(() => false)) return
+    await scrollPeopleTo(PERSON_A)
     await page.getByTestId(`person-row-${personId}`).getByTestId('person-open').click()
+  }
+  for (const teamId of [teamAId, teamBId]) {
+    await openPerson()
     await waitVisible(page.getByTestId('panel-projects-group'), "the person panel's Projects group")
     await page.getByTestId('panel-assign-project').selectOption(teamId === teamAId ? workspaceAId : workspaceBId)
     await page.getByTestId('panel-assign-team').selectOption(teamId)
@@ -494,6 +540,7 @@ try {
     await settleTo(async () => prisma.slave.count({ where: { personId, closedAt: null } }), teamId === teamAId ? 1 : 2)
   }
   await gotoReliably(`${baseUrl}/workforce?tab=slaves`)
+  await scrollPeopleTo(PERSON_A)
   const chips = await page.getByTestId(`person-row-${personId}`).getByTestId('person-seat-chip').allTextContents()
   console.log(`stage 2 -- the seat chips: ${JSON.stringify(chips)}`)
   if (chips.length !== 2) await fail(`stage 2: expected two seat chips, got ${JSON.stringify(chips)}`)
@@ -546,7 +593,8 @@ try {
   const otherHiredPersonId = otherHired.id
 
   await gotoReliably(`${baseUrl}/workforce?tab=slaves`)
-  await page.getByTestId(`person-row-${hiredPersonId}`).getByTestId('person-open').click()
+  console.log(`scrolled the virtualised People table to the hired person: ${JSON.stringify(await scrollPeopleTo(PERSON_A))}`)
+  await openPerson()
   await waitVisible(page.getByTestId(`panel-person-skill-${skillId}`), "the person's skill row")
   const origin = await page.getByTestId(`panel-person-skill-${skillId}`).getAttribute('data-skill-state')
   console.log(`stage 4 -- the skill's origin on the slave: ${JSON.stringify(origin)}`)
@@ -586,13 +634,17 @@ try {
     2,
   )
 
-  await page.getByTestId('person-delete').click()
-  const confirmation = ((await page.getByTestId('person-delete-count').textContent()) ?? '').trim()
+  // SCOPED TO THE SHEET (M61 R12/Task 9): `SlavePanel` renders inside `person-sheet` now, which is
+  // a MODAL surface -- anything matching outside it is behind the scrim and cannot be clicked. The
+  // one a person can reach is the one in the sheet, and that is the one this drives.
+  const personSheet = page.getByTestId('person-sheet')
+  await personSheet.getByTestId('person-delete').click()
+  const confirmation = ((await personSheet.getByTestId('person-delete-count').textContent()) ?? '').trim()
   console.log(`stage 6 -- the confirmation said: ${JSON.stringify(confirmation)}`)
   if (!/2 (other )?projects/.test(confirmation)) {
     await fail(`stage 6: the confirmation does not state the project count: ${confirmation}`)
   }
-  await page.getByTestId('person-delete-confirm').click()
+  await personSheet.getByTestId('person-delete-confirm').click()
   await settleTo(async () => prisma.person.count({ where: { id: personId } }), 0)
   for (const [what, count] of [
     ['seats', await prisma.slave.count({ where: { personId } })],

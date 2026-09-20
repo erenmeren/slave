@@ -1243,13 +1243,13 @@ try {
   await assertEqual(releasedFlags.filter((flag) => flag === 'true').length, 1, 'stage 9: one row carries the released state')
 
   await gotoReliably(`${baseUrl}/w/${workspaceId}`)
-  await waitVisible(page.getByTestId('slave-card').first(), 'the Overview cards')
+  await waitVisible(page.getByTestId('team-card').first(), 'the Team tab cards')
   const cards = await page
-    .locator('[data-testid="slave-card"]')
+    .locator('[data-testid="team-card"]')
     .evaluateAll((nodes) => nodes.map((node) => ({ released: node.getAttribute('data-released'), text: (node.textContent ?? '').trim().slice(0, 120) })))
-  console.log(`stage 9 -- the Overview cards: ${JSON.stringify(cards)}`)
+  console.log(`stage 9 -- the Team tab cards: ${JSON.stringify(cards)}`)
   const greyed = cards.filter((card) => card.released === 'true')
-  await assertEqual(greyed.length, 1, 'stage 9: exactly one card on the Overview is greyed')
+  await assertEqual(greyed.length, 1, 'stage 9: exactly one card on the Team tab is greyed')
   if (!greyed[0].text.includes(`${SECURITY_PERSONA} 2`)) {
     await fail(`stage 9: the greyed card is not the released specialist: ${JSON.stringify(greyed[0])}`)
   }

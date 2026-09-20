@@ -535,7 +535,10 @@ try {
     })
     assert(login.status === 204, `stage 11 login: expected 204, got ${login.status}`)
     freshCookie = cookieFrom(login.headers.get('set-cookie') ?? '')
-    const res = await fetch(url('/settings'), { headers: { cookie: freshCookie } })
+    // M61 R13/Task 9: Settings is two fixed columns and only the CHOSEN section MOUNTS, so the
+    // security posture line and the Logout button are behind `?section=security` -- the same
+    // route, the same testids, one query parameter further in (`docs/ia.md` rule 2).
+    const res = await fetch(url('/settings?section=security'), { headers: { cookie: freshCookie } })
     assert(res.status === 200, `settings: expected 200, got ${res.status}`)
     const html = await res.text()
     assert(

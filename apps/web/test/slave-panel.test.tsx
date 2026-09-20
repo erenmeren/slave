@@ -1097,3 +1097,48 @@ describe('SlavePanel without a live seat', () => {
     expect((screen.getByTestId('runtime-roles-save') as HTMLButtonElement).disabled).toBe(true)
   })
 })
+
+// Fix round 1 (Task 9 review, Important 1): `WorkforceClient`'s `person-sheet` already draws a
+// header (the person's name) and a close control of its own -- `chromeless` is how the ONE call
+// site inside that `Sheet` stops `SlavePanel` from drawing a second, redundant pair.
+describe('SlavePanel chromeless', () => {
+  it('renders no <header> when chromeless, moving the status dot/role/status label/provider chip/shell-only mark into the body instead', () => {
+    render(
+      <SlavePanel
+        slave={slave({ status: 'working', gate: 'shell-only' })}
+        liveEvents={[]}
+        workspaceId="w1"
+        haltedReason={null}
+        onClose={() => {}}
+        chromeless
+      />,
+    )
+    expect(document.querySelector('header')).toBeNull()
+    // The name moved off entirely (the wrapping Sheet's own title already says it) and so did the
+    // close button (the Sheet's own) -- every OTHER testid the header used to carry is still here.
+    expect(screen.queryByRole('heading', { name: 'Alex' })).toBeNull()
+    expect(screen.queryByLabelText('Close slave detail')).toBeNull()
+    expect(screen.getByTestId('status-dot')).toBeTruthy()
+    expect(screen.getByTestId('status-label').textContent).toBe('WORKING')
+    expect(screen.getByTestId('provider-chip')).toBeTruthy()
+    expect(screen.getByTestId('shell-only-mark')).toBeTruthy()
+    // The role text itself carries no testid, but it is still on screen -- information, not just
+    // the handle to it, is what the fix promises not to lose.
+    expect(screen.getByText('backend')).toBeTruthy()
+  })
+
+  it('draws its own <header> (name + close button) when chromeless is left at its default', () => {
+    render(
+      <SlavePanel
+        slave={slave({})}
+        liveEvents={[]}
+        workspaceId="w1"
+        haltedReason={null}
+        onClose={() => {}}
+      />,
+    )
+    expect(document.querySelector('header')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Alex' })).toBeTruthy()
+    expect(screen.getByLabelText('Close slave detail')).toBeTruthy()
+  })
+})

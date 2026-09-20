@@ -36,6 +36,16 @@ describe('Segmented', () => {
     expect(screen.getByRole('group', { name: 'View' })).toBeTruthy()
   })
 
+  // M61 R16: the sliding `segmented-indicator` (measured off the active option's own
+  // offsetLeft/offsetWidth in a layout effect -- 0 in jsdom, which the indicator's mere presence
+  // does not depend on) plus `aria-selected` alongside the pre-existing `aria-pressed`.
+  it('marks the chosen option aria-selected (alongside aria-pressed), and renders one indicator', () => {
+    render(<Segmented options={OPTIONS} value="board" onChange={vi.fn()} ariaLabel="View" testIdPrefix="task-view" />)
+    expect(screen.getByTestId('task-view-board').getAttribute('aria-selected')).toBe('true')
+    expect(screen.getByTestId('task-view-list').getAttribute('aria-selected')).toBe('false')
+    expect(screen.getByTestId('segmented-indicator')).toBeTruthy()
+  })
+
   // M57 t8 fix round 1, ruling T8-2: an option that carries `href` renders as a link (Workforce's
   // two sub-segments navigate), not a button -- `aria-current`, never `aria-selected`/
   // `aria-pressed`, which are not valid ARIA on an element with an implicit `role="link"`.

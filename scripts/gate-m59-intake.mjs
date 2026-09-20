@@ -648,8 +648,12 @@ try {
     await fail(`stage 8: the conversation records ${String(spendRow.modelCostUsd)} USD, expected 0.02`)
   }
   await gotoReliably(`${baseUrl}/`)
-  const exactCard = page.locator(`[data-testid="project-card"][data-workspace-id="${workspaceId}"]`)
-  if ((await exactCard.count()) !== 1) await fail(`stage 8: expected exactly one card for workspace ${workspaceId}`)
+  // M61 R11/Task 8: Home is a LIST -- `project-card`/`data-workspace-id` became
+  // `project-row`/`data-workspace` when `ProjectsClient`'s card grid was replaced. Same
+  // assertion: the conversation produced exactly one project, and it is on Home once.
+  const exactCard = page.locator(`[data-testid="project-row"][data-workspace="${workspaceId}"]`)
+  await waitVisible(exactCard, `the row for workspace ${workspaceId} on Home`)
+  if ((await exactCard.count()) !== 1) await fail(`stage 8: expected exactly one row for workspace ${workspaceId}`)
   // $0.02 intake + the plan-graph fixture's measured $0.209339 = $0.23 at card precision.
   const expectedCardSpend = '$0.23'
   const cardSpend = await exactCard.textContent().catch(() => null)

@@ -88,4 +88,17 @@ describe('CompareClient', () => {
     render(<CompareClient comparison={comparison()} />)
     expect(screen.getByTestId('sim-compare-footer').textContent).toContain('no verdict')
   })
+
+  // M61 Task 10 (R19): the strip stays fixed; the warning band, the table and the footer are this
+  // page's scrolling body, in `ui/ScrollArea` now, and no `SectionLabel` on the page carries
+  // `uppercase`/`font-mono` on top of `.type-label`.
+  it('wraps its scrolling body in a ScrollArea, and carries no uppercase/font-mono SectionLabel', () => {
+    render(<CompareClient comparison={comparison()} />)
+    expect(document.querySelector('[data-scroll-axis]')).toBeTruthy()
+
+    const offenders = [...document.querySelectorAll('.type-label')].filter((element) =>
+      element.className.split(' ').some((cls) => cls === 'uppercase' || cls === 'font-mono'),
+    )
+    expect(offenders).toHaveLength(0)
+  })
 })

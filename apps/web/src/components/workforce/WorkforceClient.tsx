@@ -8,9 +8,12 @@ import type { SlaveCardData } from '../../server/overview'
 import type { PersonDetail, PersonRow } from '../../server/persons'
 import type { EvidencePage } from '../../server/evidence'
 import type { SkillsPage } from '../../server/skills'
+import { useSelectedId } from '../../hooks/useSelectedId'
 import { CatalogImports, type CatalogImportRow } from '../CatalogImports'
 import { CompanyManager, type CompanyRow } from '../CompanyManager'
 import { DepartmentsTable } from '../DepartmentsTable'
+import { useMode } from '../mode/ModeProvider'
+import { useHeaderAction } from '../shell/HeaderActionProvider'
 import { SkillsClient } from '../SkillsClient'
 import { SlavePanel } from '../SlavePanel'
 import { PeopleTable } from '../persons/PeopleTable'
@@ -25,7 +28,9 @@ import { Button } from '../ui/Button'
 import { LoadingState } from '../ui/LoadingState'
 import { PageShell } from '../ui/PageShell'
 import { Panel } from '../ui/Panel'
+import { ScrollArea } from '../ui/ScrollArea'
 import { Segmented } from '../ui/Segmented'
+import { Sheet } from '../ui/Sheet'
 import { Tabs } from '../ui/Tabs'
 
 export type WorkforceTab = 'slaves' | 'departments' | 'catalog' | 'skills' | 'runbooks' | 'evidence'
@@ -139,6 +144,7 @@ export function WorkforceClient({
 }): React.JSX.Element {
   const searchParams = useSearchParams()
   const router = useRouter()
+  const { isDeveloper } = useMode()
   const [tab, setTab] = useState<WorkforceTab>(initialTab)
   // A defensive backstop, not the fix for the segment's own click (that is `select` itself, called
   // directly from `Segmented`'s `onChange` -- ruling T8-2, fix round 1): re-syncs local state
@@ -152,16 +158,17 @@ export function WorkforceClient({
     setTab(initialTab)
   }, [initialTab])
   const [newOpen, setNewOpen] = useState(false)
+  const [hireOpen, setHireOpen] = useState(false)
   const catalogPeople = useMemo(
     () => people.map((row) => ({ personId: row.personId, name: row.name })),
     [people],
   )
   const assignableProjects = useMemo(() => assignableProjectsOf(teams), [teams])
-  const [selectedPerson, setSelectedPerson] = useState<string | null>(null)
-  const namedPerson = searchParams.get('slave')
-  useEffect((): void => {
-    if (namedPerson !== null && namedPerson !== '') setSelectedPerson(namedPerson)
-  }, [namedPerson])
+  // `?slave=` (Task 9): the SAME shared "which thing is open in the side panel" hook the tasks
+  // board's `?task=` already uses -- `useSelectedId`'s own docblock names this exact call out.
+  // `onClose` clearing `?slave=` (the person Sheet's contract below) is `select(null)`, which was
+  // not true of the state this replaced (a plain `useState` this component never wrote a URL for).
+  const [selectedPerson, setSelectedPerson] = useSelectedId('slave')
   const [personTick, setPersonTick] = useState(0)
   const [panel, setPanel] = useState<
     | { readonly kind: 'idle' }
@@ -227,54 +234,92 @@ export function WorkforceClient({
     return `/workforce?${query.toString()}`
   }
 
+  // The page's primary action (M61 R12, Task 9): `useHeaderAction`, not `PageShell`'s own `action`
+  // slot -- the same move `HomeClient`'s `+ New project` made (Task 8). Developer mode keeps
+  // `+ New slave`, which opens the SAME `NewSlaveDrawer` it always has; simple mode offers `Hire
+  // from catalogue` instead, which opens the Catalog tab's own `WorkforceCatalog` in a `Sheet`
+  // rather than sending an operator away from the People they were just looking at. Slaves-tab
+  // only, like the button it replaces.
+  useHeaderAction(
+    tab === 'slaves' ? (
+      isDeveloper ? (
+        <Button variant="primary" data-testid="new-slave" onClick={() => setNewOpen(true)}>
+          + New slave
+        </Button>
+      ) : (
+        <Button variant="primary" data-testid="hire-from-catalogue" onClick={() => setHireOpen(true)}>
+          Hire from catalogue
+        </Button>
+      )
+    ) : null,
+    [tab, isDeveloper],
+  )
+
+  // Erratum E3 (binding): simple mode renders the `slaves` tab with the whole tab strip hidden --
+  // "People" has no segments to show. Any OTHER `?tab=` still renders the strip even in simple
+  // mode (rule 2: nothing removed only moved, every `?tab=` value still lands somewhere a person
+  // can see), marked `data-outside-mode` so a gate or a reviewer can tell the two cases apart.
+  const outside = !isDeveloper && tab !== 'slaves'
+
   return (
     <PageShell
       title="Workforce"
       testId="workforce"
-      action={
-        tab === 'slaves' ? (
-          <Button variant="primary" data-testid="new-slave" onClick={() => setNewOpen(true)}>
-            + New slave
-          </Button>
-        ) : undefined
-      }
       tabs={
-        <div className="flex flex-col gap-2">
-          <Tabs
-            tabs={WORKFORCE_TABS}
-            current={visibleTabFor(tab)}
-            ariaLabel="Workforce"
-            testIdPrefix="workforce-tab"
-            onSelect={(id) => select(id as WorkforceTab)}
-          />
-          {SUB_TABS[visibleTabFor(tab)] !== undefined && (
-            // `ui/Segmented` (ruling T8-2, fix round 1) -- not a hand-rolled twin of it. `onChange`
-            // is `select` itself: the SAME local-state update the main strip's `onSelect` makes,
-            // so the segment's own `href` navigation is not the only thing that can move `tab` --
-            // closing the dead-click race a navigation-only update left open.
-            <Segmented
-              options={(SUB_TABS[visibleTabFor(tab)] ?? []).map((sub) => ({ id: sub.id, label: sub.label, href: hrefForTab(sub.id) }))}
-              value={tab}
-              onChange={select}
-              ariaLabel="Workforce sub-section"
-              testIdPrefix="workforce-segment"
+        (isDeveloper || outside) && (
+          <div className="flex flex-col gap-2" {...(outside ? { 'data-outside-mode': 'true' } : {})}>
+            <Tabs
+              tabs={WORKFORCE_TABS}
+              current={visibleTabFor(tab)}
+              ariaLabel="Workforce"
+              testIdPrefix="workforce-tab"
+              onSelect={(id) => select(id as WorkforceTab)}
             />
-          )}
-        </div>
+            {SUB_TABS[visibleTabFor(tab)] !== undefined && (
+              // `ui/Segmented` (ruling T8-2, fix round 1) -- not a hand-rolled twin of it.
+              // `onChange` is `select` itself: the SAME local-state update the main strip's
+              // `onSelect` makes, so the segment's own `href` navigation is not the only thing
+              // that can move `tab` -- closing the dead-click race a navigation-only update left
+              // open.
+              <Segmented
+                options={(SUB_TABS[visibleTabFor(tab)] ?? []).map((sub) => ({ id: sub.id, label: sub.label, href: hrefForTab(sub.id) }))}
+                value={tab}
+                onChange={select}
+                ariaLabel="Workforce sub-section"
+                testIdPrefix="workforce-segment"
+              />
+            )}
+          </div>
+        )
       }
     >
       {tab === 'slaves' && (
-        <PeopleTable
-          initial={people}
-          departments={peopleDepartments}
-          skills={skillCatalogue}
-          skillHolders={skillHolders}
-          onOpen={(personId) => setSelectedPerson(personId)}
-        />
+        // Fix round 1 (Task 9 review, Important 2): the bare `flex min-h-0 flex-1 flex-col` frame
+        // `ActivityClient.tsx`/`HomeClient.tsx` use, not another `gap`-only `<div>` -- `PeopleTable`
+        // needs a REAL bounded height beneath it for its own virtualized `ScrollArea` to actually
+        // scroll instead of growing to fit every row.
+        <div className="flex min-h-0 flex-1 flex-col">
+          <PeopleTable
+            initial={people}
+            departments={peopleDepartments}
+            skills={skillCatalogue}
+            skillHolders={skillHolders}
+            onOpen={(personId) => setSelectedPerson(personId)}
+          />
+        </div>
       )}
-      {tab === 'departments' && <DepartmentsTable teams={teams} workspaces={workspaces} />}
+      {/* M61 R4/R12, Task 11: these three tab bodies are inside a `ScrollArea`, the way the other
+          three already are (`PeopleTable`, `SkillsClient` and `EvidenceTab` each carry their own).
+          `<main>` is `overflow-hidden` since R4 -- a tab body that is taller than the frame and is
+          NOT inside a scrolling region is not a long page, it is a CLIPPED one, with the rows past
+          the fold unreachable by any means. `gate:m61-simple-mode`'s stage 2 found all three. */}
+      {tab === 'departments' && (
+        <ScrollArea>
+          <DepartmentsTable teams={teams} workspaces={workspaces} />
+        </ScrollArea>
+      )}
       {tab === 'catalog' && (
-        <div className="flex flex-col gap-4">
+        <ScrollArea className="flex flex-col gap-4">
           <Panel title="Workforce catalog">
             <WorkforceCatalog initial={catalog} taxonomy={taxonomy} skillCatalogue={skillCatalogue} />
           </Panel>
@@ -298,10 +343,14 @@ export function WorkforceClient({
               </Panel>
             </div>
           </details>
-        </div>
+        </ScrollArea>
       )}
       {tab === 'skills' && <SkillsClient page={skills} />}
-      {tab === 'runbooks' && <RunbooksTab runbooks={runbooks} taxonomy={taxonomy} />}
+      {tab === 'runbooks' && (
+        <ScrollArea>
+          <RunbooksTab runbooks={runbooks} taxonomy={taxonomy} />
+        </ScrollArea>
+      )}
       {tab === 'evidence' &&
         (evidence === null ? (
           // The server is being asked for it right now (see `select`). `LoadingState` and not an
@@ -318,33 +367,54 @@ export function WorkforceClient({
         templates={templates}
         teams={teams}
       />
-      {panel.kind === 'loading' && <LoadingState testId="workforce-panel-loading" message="opening this slave…" />}
-      {panel.kind === 'error' && (
-        <Alert variant="error" testId="workforce-panel-error">
-          could not open this slave — they may have been deleted. Try clicking the row again.
-        </Alert>
-      )}
-      {panel.kind === 'ready' && (
-        <div className="fixed inset-y-0 right-0 z-10 w-96 border-l border-line bg-panel shadow-resting motion-safe:animate-[panel-in_160ms_ease-out]">
-          <SlavePanel
-            key={panel.slave?.id ?? panel.person.personId}
-            slave={panel.slave}
-            person={panel.person}
-            projects={assignableProjects}
-            skillCatalogue={skillCatalogue}
-            liveEvents={[]}
-            workspaceId={
-              panel.person.seats.find((seat) => seat.slaveId === panel.slave?.id)?.workspaceId
-              ?? panel.person.seats[0]?.workspaceId
-              ?? ''
-            }
-            openedGlobally
-            haltedReason={panel.haltedReason}
-            onClose={() => setSelectedPerson(null)}
-            onPersonChanged={() => setPersonTick((tick) => tick + 1)}
-          />
-        </div>
-      )}
+      {/* `hire-from-catalogue`'s own Sheet (Task 9): the SAME `WorkforceCatalog`, fed the same
+          props the Catalog tab passes it, opened without leaving the People a simple-mode
+          operator was just looking at. Mounted unconditionally, like `NewSlaveDrawer` above --
+          `open` is what drives visibility. */}
+      <Sheet open={hireOpen} onClose={() => setHireOpen(false)} testId="hire-sheet" title="Hire from the catalogue" width="720px">
+        <WorkforceCatalog initial={catalog} taxonomy={taxonomy} skillCatalogue={skillCatalogue} />
+      </Sheet>
+      {/* The person panel (`panel` above), inside a `Sheet` rather than a hand-rolled fixed aside
+          (Task 9) -- open for every non-idle `panel.kind`, so the loading and error states get the
+          same frame the ready one does rather than rendering loose in the page's own flow.
+          `onClose` clears `?slave=` through `useSelectedId`'s own `select(null)`. */}
+      <Sheet
+        open={panel.kind !== 'idle'}
+        onClose={() => setSelectedPerson(null)}
+        testId="person-sheet"
+        title={panel.kind === 'ready' ? panel.person.name : 'Slave detail'}
+      >
+        {panel.kind === 'loading' && <LoadingState testId="workforce-panel-loading" message="opening this slave…" />}
+        {panel.kind === 'error' && (
+          <Alert variant="error" testId="workforce-panel-error">
+            could not open this slave — they may have been deleted. Try clicking the row again.
+          </Alert>
+        )}
+        {panel.kind === 'ready' && (
+          <div data-testid="slave-panel">
+            <SlavePanel
+              key={panel.slave?.id ?? panel.person.personId}
+              slave={panel.slave}
+              person={panel.person}
+              projects={assignableProjects}
+              skillCatalogue={skillCatalogue}
+              liveEvents={[]}
+              workspaceId={
+                panel.person.seats.find((seat) => seat.slaveId === panel.slave?.id)?.workspaceId
+                ?? panel.person.seats[0]?.workspaceId
+                ?? ''
+              }
+              openedGlobally
+              haltedReason={panel.haltedReason}
+              onClose={() => setSelectedPerson(null)}
+              onPersonChanged={() => setPersonTick((tick) => tick + 1)}
+              // Fix round 1 (Task 9 review, Important 1): `person-sheet` already draws the name
+              // and the close button -- this is the one call site inside a `Sheet`.
+              chromeless
+            />
+          </div>
+        )}
+      </Sheet>
     </PageShell>
   )
 }

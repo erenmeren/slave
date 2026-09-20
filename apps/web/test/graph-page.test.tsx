@@ -590,9 +590,27 @@ describe('GraphClient', () => {
     render(<GraphClient workspaceId="w1" initial={SNAPSHOT} />)
     const shell = screen.getByTestId('page-shell')
     expect(shell.className).not.toContain('p-3')
-    expect(shell.querySelector(':scope > div')?.className).toContain('flex flex-1 flex-col')
+    // M61 Task 10: one level deeper, under `PageShell`'s own `children` body wrapper; this
+    // page's own root picked up `min-h-0` alongside its `flex-1`.
+    expect(shell.querySelector(':scope > div > div')?.className).toContain('flex min-h-0 flex-1 flex-col')
   })
 
+  // M61 Task 10 (R19): the canvas area needs `min-h-0 flex-1` to size itself, not a `ScrollArea`
+  // -- React Flow owns its own pan/zoom viewport. The drawer's own body IS a genuine `ScrollArea`
+  // (its raw `overflow-y-auto` is `ui/ScrollArea` now), which is where this page's assertion is
+  // proven; and no `SectionLabel` usage on the page (the drawer's `provider`/`model` captions
+  // included) carries `uppercase` or `font-mono` on top of `.type-label`.
+  it('M61 Task 10: the drawer body is a ScrollArea, and no SectionLabel on the page carries uppercase or font-mono', async () => {
+    render(<GraphClient workspaceId="w1" initial={DRAWER_SNAPSHOT} />)
+    await waitFor(() => expect(screen.getByTestId('rf__node-slave:a1')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('rf__node-slave:a1'))
+    expect(screen.getByTestId('graph-drawer').querySelector('[data-scroll-axis]')).toBeTruthy()
+
+    const offenders = [...document.querySelectorAll('.type-label')].filter((element) =>
+      element.className.split(' ').some((cls) => cls === 'uppercase' || cls === 'font-mono'),
+    )
+    expect(offenders).toHaveLength(0)
+  })
 })
 
 describe('useLayoutedGraph', () => {

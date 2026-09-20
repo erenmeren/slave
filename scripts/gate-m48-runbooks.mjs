@@ -1324,8 +1324,10 @@ try {
   //          was handed.
   // ============================================================================================
 
-  await gotoReliably(`${baseUrl}/w/${workspaceId}`)
-  await waitVisible(page.getByTestId('runbook-panel'), "the Overview's runbook panel")
+  // M61 R7/Task 6: `RunbookPanel` moved off the deleted Overview to project Settings -- navigate
+  // there instead of `/w/<workspaceId>` (selector rename plus the route it now needs).
+  await gotoReliably(`${baseUrl}/w/${workspaceId}/settings`)
+  await waitVisible(page.getByTestId('runbook-panel'), "the Settings tab's runbook panel")
   // SCOPED to the panel: `runbook-name` is also the Activity river's adopted-runbook card's testid
   // (M48 t4 report §2), and an unscoped read could be measuring the other one.
   const panel = page.getByTestId('runbook-panel')

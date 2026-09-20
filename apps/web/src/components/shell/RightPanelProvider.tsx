@@ -1,6 +1,10 @@
 'use client'
 
-import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react'
+import { usePathname } from 'next/navigation'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { workspaceIdOf } from '../../lib/routes'
+import { matchesShortcut } from '../../lib/shortcuts'
+import { SUPERVISOR_STORAGE_KEY, isSupervisorChoice, type SupervisorChoice } from '../../lib/supervisorStorage'
 
 /** What the 372px slot is showing (M57 R8). `supervisor` is the DEFAULT on every `/w/:id/*` route;
  *  `task` and `slave` replace it while one is selected and hand it back when it closes. */
@@ -26,7 +30,25 @@ export interface RightPanelState {
 
 const RightPanelContext = createContext<RightPanelState | null>(null)
 
+/** Every `localStorage` touch is wrapped: a private window, blocked site data, or a browser that
+ *  throws on the accessor itself must degrade to "open this session", never to a blank page --
+ *  same rule `ThemeProvider`'s/`ModeProvider`'s own `writeStored` keep. */
+function writeSupervisorChoice(choice: SupervisorChoice): void {
+  try {
+    window.localStorage.setItem(SUPERVISOR_STORAGE_KEY, choice)
+  } catch {
+    /* the state above still applies this session */
+  }
+}
+
+/**
+ * `RightPanelProvider` (M61 R14): the Supervisor's open/collapsed state is now REMEMBERED, the same
+ * `flat first render, catch up after mount` shape `ThemeProvider`/`ModeProvider` use -- `collapsed`
+ * starts `false` (open) because the server has no `localStorage` to read, and a mount effect below
+ * reads the stored choice once the component is on the client for certain.
+ */
 export function RightPanelProvider({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
+  const pathname = usePathname()
   const [mode, setMode] = useState<RightPanelMode | null>(null)
   const [content, setContent] = useState<React.ReactNode>(null)
   const [collapsed, setCollapsed] = useState(false)
@@ -58,7 +80,15 @@ export function RightPanelProvider({ children }: { readonly children: React.Reac
       // unconditional `setCollapsed(false)` turns that into an un-collapse loop. A click that
       // produces no visible change is a click a person repeats — so a genuinely new subject still
       // un-collapses, and only a re-assertion of the same one does not.
-      if (changed) setCollapsed(false)
+      //
+      // M61 R14: this rule still applies unchanged, and now ALSO writes `'open'` -- a person who
+      // had the panel remembered as collapsed and then opened a task from the board is choosing
+      // "open" exactly as much as a click on the collapse button chooses "collapsed", and the next
+      // load should remember it that way too.
+      if (changed) {
+        setCollapsed(false)
+        writeSupervisorChoice('open')
+      }
       openKeyRef.current = nextKey
     },
     [],
@@ -73,8 +103,45 @@ export function RightPanelProvider({ children }: { readonly children: React.Reac
     onClose?.()
   }, [])
 
-  const collapse = useCallback((): void => setCollapsed(true), [])
-  const expand = useCallback((): void => setCollapsed(false), [])
+  const collapse = useCallback((): void => {
+    setCollapsed(true)
+    writeSupervisorChoice('collapsed')
+  }, [])
+  const expand = useCallback((): void => {
+    setCollapsed(false)
+    writeSupervisorChoice('open')
+  }, [])
+
+  // The stored choice, read once the component is on the client for certain (M61 R14) -- the same
+  // shape `ThemeProvider`'s/`ModeProvider`'s own mount effects use. Absent (or anything that is not
+  // exactly `'collapsed'`) reads as OPEN, which is already this state's flat first value, so there
+  // is nothing to do for that case.
+  useEffect((): void => {
+    try {
+      const raw = window.localStorage.getItem(SUPERVISOR_STORAGE_KEY)
+      if (isSupervisorChoice(raw) && raw === 'collapsed') setCollapsed(true)
+    } catch {
+      /* stays open, the same as a browser with no storage at all */
+    }
+  }, [])
+
+  // `Mod+J` toggles the panel (M61 R14) -- lives HERE, not on a per-page component, so it works on
+  // every route that has a panel without every one of those routes wiring its own listener. Only
+  // acts on a project route: outside one there is no panel for it to toggle, and a global `Mod+J`
+  // would otherwise silently flip the remembered choice for the NEXT project a person opens. A
+  // keyboard toggle animates nothing (spec R14), which is already true here -- `collapsed` drives a
+  // CSS-free grid-track change, not a transitioned one.
+  useEffect((): (() => void) => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (!matchesShortcut(event, { key: 'j' })) return
+      if (workspaceIdOf(pathname) === null) return
+      event.preventDefault()
+      if (collapsed) expand()
+      else collapse()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return (): void => window.removeEventListener('keydown', onKeyDown)
+  }, [pathname, collapsed, collapse, expand])
 
   const value = useMemo<RightPanelState>(
     () => ({ mode, collapsed, content, open, close, collapse, expand }),

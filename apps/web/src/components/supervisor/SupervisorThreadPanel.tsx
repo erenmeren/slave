@@ -6,6 +6,7 @@ import { SITUATION_LABEL } from '@slave-of-ai/domain'
 import { postControl, postJson } from '../../lib/postControl'
 import { useShellFacts } from '../../hooks/useShellFacts'
 import type { SupervisorThread } from '../../server/supervisorThreads'
+import { Kbd } from '../ui/Kbd'
 
 /** Exactly what this panel reads off `GET /api/w/:id/supervisor` — the pending proposals, and
  *  nothing else. The full `SupervisorView` carries a report, recent decisions, questions and two
@@ -282,6 +283,13 @@ export function SupervisorThreadPanel({
         </button>
       </div>
 
+      {/* R14/I3 (final-review wave): the scope line, promoted from the composer's footer to the
+        * panel's own subtitle -- it is a fact about the WHOLE conversation ("who this thread is
+        * with"), not a note that belongs beside the send button. */}
+      <div className="flex-none px-[16px] py-[6px] text-[11.5px] text-t3">
+        Scope: <b className="font-medium text-t2">{facts?.workspace.name ?? 'this project'}</b>
+      </div>
+
       {historyOpen && (
         <div className="flex flex-none flex-col gap-px border-b border-line bg-bg px-3 py-[10px]">
           <div className="px-[6px] pb-[6px] pt-[2px] font-mono text-[10.5px] font-semibold uppercase tracking-[.08em] text-t3">
@@ -331,8 +339,8 @@ export function SupervisorThreadPanel({
               <div
                 className={
                   mine
-                    ? 'max-w-[86%] rounded-[12px_12px_4px_12px] bg-[color-mix(in_oklab,var(--accent)_16%,transparent)] px-3 py-2 text-t1'
-                    : 'max-w-[92%] rounded-[12px_12px_12px_4px] border border-line bg-card px-3 py-2 text-t1'
+                    ? 'max-w-[86%] rounded-sheet bg-[color-mix(in_oklab,var(--accent)_16%,transparent)] px-3 py-2 text-t1'
+                    : 'max-w-[92%] rounded-sheet border border-line bg-card px-3 py-2 text-t1'
                 }
               >
                 <span className="block">{message.text}</span>
@@ -387,7 +395,10 @@ export function SupervisorThreadPanel({
             {errorText}
           </span>
         )}
-        <div className="flex items-end gap-2 rounded-[11px] border border-line2 bg-card py-2 pl-3 pr-2">
+        {/* R14/I3: `rounded-[11px]` was the one hand-rolled radius left on this panel -- the field
+          * is a `--radius-surface` surface like every other input now, and `Kbd` names the Enter
+          * key beside the button it triggers instead of leaving it to be guessed. */}
+        <div className="flex items-end gap-2 rounded-surface border border-line2 bg-card py-2 pl-3 pr-2">
           <textarea
             data-testid="supervisor-request-input"
             rows={2}
@@ -404,6 +415,7 @@ export function SupervisorThreadPanel({
             aria-label="Message the Supervisor"
             className="min-h-[40px] flex-1 resize-none border-0 bg-transparent py-[2px] text-[13.5px] leading-[1.45] text-t1 outline-none"
           />
+          <Kbd>⏎</Kbd>
           <button
             type="button"
             data-testid="supervisor-request-send"
@@ -413,12 +425,6 @@ export function SupervisorThreadPanel({
           >
             Send
           </button>
-        </div>
-        <div className="flex justify-between text-[11.5px] text-t3">
-          <span>Every message is recorded as an event.</span>
-          <span>
-            Scope: <b className="font-medium text-t2">{facts?.workspace.name ?? 'this project'}</b>
-          </span>
         </div>
       </div>
     </div>

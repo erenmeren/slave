@@ -334,6 +334,19 @@ try {
   page.setDefaultTimeout(ACTION_TIMEOUT_MS)
   page.on('pageerror', (error) => console.error(`[browser:pageerror] ${error}`))
 
+  // M61 Task 9: `workforce-segment-departments` (stage 6b below) only renders in developer mode
+  // now -- simple mode hides the whole Workforce tab strip on the `slaves` tab. Set once, here,
+  // before the first navigation (the same `addInitScript` idiom `gate-m44-ux-foundation.mjs`
+  // uses): it applies to every `page.goto`/`page.reload` this file makes from here on, and
+  // nothing else in this scenario depends on simple mode.
+  await page.addInitScript(() => {
+    try {
+      localStorage.setItem('mode', 'developer')
+    } catch {
+      /* stays simple; the segment click below fails loudly rather than silently finding nothing */
+    }
+  })
+
   // ---- Scenario stage 1: /workforce?tab=catalog -- template, company, team, member, all through
   // the team-catalog forms. M24 Task 6 moved the template catalog and company manager off Settings
   // onto the Projects page; M44 R1 moved them again, off the Projects page onto the Workforce
@@ -395,6 +408,28 @@ try {
   // word is on the chip, the raw state is on `data-person-state`.
   await page.goto(`${baseUrl}/workforce`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
   await waitVisible(page.getByTestId('people-rows'), 'the People table')
+  // M61 R12: the People table is VIRTUALISED -- only the rows near the scrolled viewport are in
+  // the DOM, so a locator waiting for a row further down waits for a node React has deliberately
+  // not made. The table's own `ScrollArea` is walked in page-sized steps until the row mounts.
+  async function scrollPeopleTo(name) {
+    return page.evaluate(async (needle) => {
+      const area = document.querySelector('[data-testid="people-rows"] [data-scroll-axis]')
+      const found = () =>
+        [...document.querySelectorAll('[data-testid^="person-row-"]')].some((node) => (node.textContent ?? '').includes(needle))
+      if (area === null) return { area: false, found: found() }
+      area.scrollTop = 0
+      await new Promise((resolve) => setTimeout(resolve, 60))
+      for (let step = 0; step < 300; step += 1) {
+        if (found()) return { area: true, steps: step, found: true }
+        const before = area.scrollTop
+        area.scrollTop = Math.min(area.scrollTop + Math.max(1, area.clientHeight - 40), area.scrollHeight)
+        await new Promise((resolve) => setTimeout(resolve, 60))
+        if (area.scrollTop === before) break
+      }
+      return { area: true, steps: -1, found: found() }
+    }, name)
+  }
+  console.log(`scrolled the virtualised People table to "${MEMBER_NAME}": ${JSON.stringify(await scrollPeopleTo(MEMBER_NAME))}`)
   const catalogRow = page.locator('[data-testid^="person-row-"]').filter({ hasText: MEMBER_NAME })
   await waitVisible(catalogRow, `a pooled "${MEMBER_NAME}" row before any project is assigned`)
   const catalogRowCount = await catalogRow.count()
@@ -414,16 +449,18 @@ try {
   // ---- Scenario stage 2: / -- both project cards start "no company"; assign M11 Gate Co to both.
   await page.goto(`${baseUrl}/`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
 
-  // `project-card` sits on `ui/Card` itself now (M57 Task 6, ruling P17): the per-card `<div>`
-  // that used to carry the testid lost it because a `<button>`-rendering `Card` cannot contain
-  // `assign-company-button`/`restore-project` (also `<button>`s) without nesting a button inside
-  // a button. Those two now render as the Card's SIBLINGS inside that untestid'd wrapper `<div>`,
-  // so scoping to the Card element alone (as this used to) makes them undiscoverable descendants.
-  // Climbing one level with `xpath=..` from the already name-filtered (so already-unique) Card
-  // recovers the wrapper both live in -- everything the Card itself contains is still a descendant
-  // from there, so every other locator built on `projectWrapper` keeps working unchanged.
+  // M61 Task 8 review: `project-card` was deleted with `ProjectsClient` -- Home's `project-row`
+  // (`ProjectRowItem.tsx`) is a `<Link>` for the whole row now, not a `Card`, but the SAME
+  // constraint from M57 ruling P17 still holds: `assign-company-button`/`restore-project`/
+  // `archive-project` are `<button>`s (inside the row's `⋯` menu popover), and a `<button>`
+  // cannot nest inside the row's own `<a>` without nesting an interactive element inside another
+  // -- so they render as the row's SIBLINGS inside the untestid'd wrapper `<div>` `ProjectRowItem`
+  // wraps both in. Climbing one level with `xpath=..` from the already name-filtered (so
+  // already-unique) row recovers that wrapper -- everything the row itself contains (its own
+  // name, goal and, when archived, `project-archived`) is still a descendant from there too, so
+  // every other locator built on `projectWrapper` keeps working unchanged.
   function projectWrapper(name) {
-    return page.getByTestId('project-card').filter({ hasText: name }).locator('xpath=..')
+    return page.getByTestId('project-row').filter({ hasText: name }).locator('xpath=..')
   }
   // M57's card recipe (ProjectsClient.tsx, Task 6) prints the company as plain text under the
   // project name rather than a `ui/Chip` -- the same argument spec R11 makes for moved widgets:
@@ -439,9 +476,20 @@ try {
   await assertCardBadge(workspaceNameB, 'no company')
   console.log('both project cards start with the "no company" badge')
 
+  /** Opens a project row's `⋯` menu (M61 R11/Task 8: `AssignCompanyDialog`, Restore and the rest
+   *  moved into `project-menu`'s popover). Idempotent -- a second call while it is already open
+   *  finds the popover and does nothing. */
+  async function openProjectMenu(name) {
+    const wrapper = projectWrapper(name)
+    const popover = wrapper.getByTestId('project-menu-popover')
+    if (await popover.first().isVisible().catch(() => false)) return
+    await clickUntil(wrapper.getByTestId('project-menu'), async () => popover.first().isVisible(), `the "${name}" row's ⋯ menu`)
+  }
+
   async function assignCompanyToProject(name) {
     const wrapper = projectWrapper(name)
     const dialog = page.getByTestId('assign-company-dialog')
+    await openProjectMenu(name)
     await clickUntil(wrapper.getByTestId('assign-company-button'), async () => dialog.first().isVisible(), `"Assign company" on the "${name}" card`)
     await waitVisible(dialog, `the assign-company dialog for "${name}"`)
     const option = dialog.getByTestId('company-option').filter({ hasText: COMPANY_NAME })
@@ -454,15 +502,37 @@ try {
     )
   }
 
+  /** M61 R11/Task 8: a project ROW has no avatar stack -- the card grid that carried one went
+   *  with `ProjectsClient`. The same fact ("the company's people are on this project now") is on
+   *  the row itself, as `data-team-size`, which `ProjectRow.team` fills from the same read. */
+  async function assertRowHasTeam(name) {
+    const read = async () =>
+      page.evaluate(
+        (needle) =>
+          [...document.querySelectorAll('[data-testid="project-row"]')]
+            .filter((row) => (row.textContent ?? '').includes(needle))
+            .map((row) => row.getAttribute('data-team-size'))[0] ?? null,
+        name,
+      )
+    const deadline = Date.now() + ACTION_TIMEOUT_MS
+    let size = await read()
+    while ((size === null || Number(size) <= 0) && Date.now() < deadline) {
+      await delay(200)
+      size = await read()
+    }
+    console.log(`the "${name}" row reads data-team-size=${JSON.stringify(size)}`)
+    if (size === null || Number(size) <= 0) {
+      await fail(`the "${name}" row carries data-team-size=${JSON.stringify(size)} after assigning a company with people on it`)
+    }
+  }
+
   await assignCompanyToProject(workspaceNameA)
   await assertCardBadge(workspaceNameA, COMPANY_NAME)
-  await waitVisible(projectWrapper(workspaceNameA).getByTestId('avatar-tile'), `a worker avatar on the "${workspaceNameA}" card`)
-  console.log(`"${workspaceNameA}" assigned "${COMPANY_NAME}" and shows a worker avatar`)
+  await assertRowHasTeam(workspaceNameA)
 
   await assignCompanyToProject(workspaceNameB)
   await assertCardBadge(workspaceNameB, COMPANY_NAME)
-  await waitVisible(projectWrapper(workspaceNameB).getByTestId('avatar-tile'), `a worker avatar on the "${workspaceNameB}" card`)
-  console.log(`"${workspaceNameB}" assigned "${COMPANY_NAME}" and shows a worker avatar`)
+  await assertRowHasTeam(workspaceNameB)
   console.log('stage 2 (/) complete: both projects staffed by the same company, asserted through the browser')
 
   // The header's `budget` chip (M57 R7 -- the project header is the root layout's `app-header`
@@ -479,7 +549,12 @@ try {
   const memberRows = page.locator('[data-testid^="person-row-"]').filter({ hasText: MEMBER_NAME })
   await clickUntil(
     slavesTab,
-    async () => (await slavesTab.getAttribute('aria-selected')) === 'true' && (await memberRows.first().isVisible()),
+    async () => {
+      if ((await slavesTab.getAttribute('aria-selected')) !== 'true') return false
+      // Virtualised (M61 R12), so the row has to be scrolled to before it can be seen.
+      await scrollPeopleTo(MEMBER_NAME)
+      return memberRows.first().isVisible()
+    },
     'the People tab',
   )
   await waitVisible(memberRows, `a "${MEMBER_NAME}" row in the People table`)
@@ -586,8 +661,11 @@ try {
     await fail(`the People table lost "${MEMBER_NAME}" after leaving one project`)
   }
   console.log(`unassigned "${MEMBER_NAME}" from "${workspaceNameA}"; the person and the "${workspaceNameB}" seat stay -- verified against prisma`)
+  // M61 Task 9 fix round 1: `SlavePanel` renders `chromeless` inside `person-sheet` now -- its own
+  // "Close slave detail" button is suppressed, and the Sheet's own close (`sheet-close`,
+  // `aria-label="Close"`) is the only close control left.
   await clickUntil(
-    page.getByLabel('Close slave detail'),
+    page.getByTestId('person-sheet').getByTestId('sheet-close'),
     async () => !(await page.getByTestId('panel-projects-group').isVisible()),
     'closing the person panel so the Departments table is clickable',
   )
@@ -598,13 +676,66 @@ try {
   // M57 t8 fix round 1 (ruling T8-2): the segment is `ui/Segmented`'s own LINK form now, which
   // carries `aria-current="page"` when selected -- never `aria-selected`, which is not a valid
   // ARIA attribute on an element with an implicit `role="link"`.
+  // M61 R12 / plan erratum E3: in SIMPLE mode (this gate's default) `/workforce` IS the People tab
+  // and the segment strip is hidden -- "People" has no segments to show. Departments is not gone:
+  // `?tab=departments` still answers and still renders the strip, marked `data-outside-mode`,
+  // which is `docs/ia.md` rule 2's own promise ("by a tab, by a menu, or by its own unchanged
+  // URL"). So this stage goes to the URL and then asserts the segment is there and current --
+  // the same two things it asserted before, reached the way a simple-mode operator reaches them.
+  await page.goto(`${baseUrl}/workforce?tab=departments`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
   const departmentsTab = page.getByTestId('workforce-segment-departments')
   const otherDeptRow = page.getByTestId('data-table-row').filter({ hasText: 'M11 Gate Other Dept' })
-  await clickUntil(
-    departmentsTab,
-    async () => (await departmentsTab.getAttribute('aria-current')) === 'page' && (await otherDeptRow.first().isVisible()),
-    'the Departments tab',
+  await waitVisible(departmentsTab, 'the Departments segment on ?tab=departments')
+  const departmentsCurrent = await departmentsTab.first().getAttribute('aria-current')
+  const outsideMode = await page.evaluate(
+    () => document.querySelector('[data-outside-mode]')?.getAttribute('data-outside-mode') ?? null,
   )
+  console.log(`the Departments segment reads aria-current=${JSON.stringify(departmentsCurrent)}, strip data-outside-mode=${JSON.stringify(outsideMode)}`)
+  if (departmentsCurrent !== 'page') {
+    await fail(`the Departments segment is aria-current=${JSON.stringify(departmentsCurrent)} on its own ?tab= value, expected "page"`)
+  }
+  // THE MARK, BOTH WAYS (M61 R12 / plan erratum E3). This scenario runs in DEVELOPER mode (set at
+  // the top of this file), where the four tabs are simply this person's tabs -- so the strip must
+  // carry NO `data-outside-mode` here: nobody stepped outside anything. The value was printed
+  // above and is asserted here, because a value a gate prints and does not check is a value
+  // nobody is watching.
+  if (outsideMode !== null) {
+    await fail(
+      `the Workforce strip reads data-outside-mode=${JSON.stringify(outsideMode)} in DEVELOPER mode, expected none -- ` +
+        'the tab strip is not "outside" a mode that shows it',
+    )
+  }
+  // AND THE OTHER HALF, in a context of its own: the same `?tab=` value in SIMPLE mode still
+  // renders (rule 2 -- nothing removed, only moved), with the strip marked `data-outside-mode`
+  // so a person can see where they are and leave by any other tab. Without this, "no mark in
+  // developer mode" would be satisfied by a mark that never renders at all.
+  {
+    const simpleContext = await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    await simpleContext.addInitScript(() => {
+      try {
+        localStorage.setItem('mode', 'simple')
+      } catch {
+        /* the assertion below fails loudly rather than silently passing on a missing mark */
+      }
+    })
+    const simplePage = await simpleContext.newPage()
+    simplePage.setDefaultTimeout(ACTION_TIMEOUT_MS)
+    await simplePage.goto(`${baseUrl}/workforce?tab=departments`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+    await simplePage.getByTestId('workforce-segment-departments').first().waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS })
+    const simpleMark = await simplePage.evaluate(() => ({
+      outside: document.querySelector('[data-outside-mode]')?.getAttribute('data-outside-mode') ?? null,
+      segments: document.querySelectorAll('[data-testid^="workforce-segment"]').length,
+    }))
+    console.log(`?tab=departments in SIMPLE mode = ${JSON.stringify(simpleMark)}`)
+    await simplePage.close()
+    await simpleContext.close()
+    if (simpleMark.outside !== 'true') {
+      await fail(
+        `the Workforce strip reads data-outside-mode=${JSON.stringify(simpleMark.outside)} on ?tab=departments in ` +
+          'SIMPLE mode, expected "true"',
+      )
+    }
+  }
   await waitVisible(otherDeptRow, 'the "M11 Gate Other Dept" department row')
   await clickUntil(
     otherDeptRow.getByTestId('department-delete'),
@@ -624,7 +755,10 @@ try {
   // (`archive-project` -> `archive-project-confirm`, landing back on "/"), confirm the card
   // disappears from the default (no `?archived=1`) list, reappears with the `project-archived`
   // chip once `show-archived` is checked, then restore it from that same card (M27 spec §§3.3-3.4).
-  await page.goto(`${baseUrl}/w/${workspaceIdA}/settings`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+  // M61 R13/Task 9: project Settings is two columns and only the CHOSEN section mounts, so the
+  // danger zone is behind its own `?section=danger` -- the same route, the same testids, one
+  // query parameter further in (`docs/ia.md` rule 2).
+  await page.goto(`${baseUrl}/w/${workspaceIdA}/settings?section=danger`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
   await waitVisible(page.getByTestId('archive-project'), `the "${workspaceNameA}" project's archive-project button`)
   await clickUntil(
     page.getByTestId('archive-project'),
@@ -660,6 +794,7 @@ try {
   )
   console.log(`checking "show archived" reveals the "${workspaceNameA}" card with its "archived" chip`)
 
+  await openProjectMenu(workspaceNameA)
   await clickUntil(
     projectWrapper(workspaceNameA).getByTestId('restore-project'),
     async () => {

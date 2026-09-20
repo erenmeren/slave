@@ -1396,39 +1396,25 @@ try {
   }
 
   // ============================================================================================
-  // Stage 7, continued: the three figures on the real page.
+  // Stage 7, continued: the headline spend on the real page.
   // ============================================================================================
+  // M61 R7: `brief`/`brief-tile[data-brief="cost"]` -> `stat-spend` (spec §3's own replacement).
+  // THE HEADLINE FIGURE ONLY, and that is the whole of what this stage now verifies here: of the
+  // deleted cost tile's five lines, `spentUsd` is `stat-spend`'s value, the two unmeasured
+  // caveats were restored onto that tile's note in M61 Task 11
+  // (`stat-spend-unmeasured-calls`/`-runs`, and `gate-m45-project-experience.mjs` stage 1 reads
+  // the first of them), and `actual`/`estimated`/`upper bound` have no surface in the new tree at
+  // all. Those three are a real, booked gap -- not a rename this stage could follow -- so stage 7
+  // states what it measures instead of implying it still measures five things.
   await gotoReliably(`${baseUrl}/w/${cost.workspace.id}`)
-  await waitVisible(page.getByTestId('brief'), 'the project brief on the cost project')
-  const costTile = await page.evaluate(() => {
-    const tile = document.querySelector('[data-testid="brief-tile"][data-brief="cost"]')
-    if (tile === null) return null
-    const read = (testId) => {
-      const node = tile.querySelector(`[data-testid="${testId}"]`)
-      return node === null ? null : (node.textContent ?? '').replace(/\s+/g, ' ').trim()
-    }
-    return {
-      all: (tile.textContent ?? '').replace(/\s+/g, ' ').trim(),
-      actual: read('brief-cost-actual'),
-      estimated: read('brief-cost-estimated'),
-      upperBound: read('brief-cost-upper-bound'),
-      unmeasuredRuns: read('brief-cost-unmeasured-runs'),
-    }
-  })
-  console.log(`stage 7: the cost tile = ${JSON.stringify(costTile)}`)
-  if (costTile === null) await fail('stage 7: there is no cost tile on the project brief')
-  await assertEqual(costTile.actual, expectedActual, 'stage 7: brief-cost-actual')
-  await assertEqual(costTile.estimated, expectedEstimated, 'stage 7: brief-cost-estimated')
-  await assertEqual(costTile.upperBound, expectedUpperBound, 'stage 7: brief-cost-upper-bound')
-  // The two runs the upper bound is built from, said out loud on the tile: `upperBoundUsd` is
-  // `spentUsd` plus one `RUN_UNMEASURED_CAP_USD` per concluded run that left no figure, and BOTH the
-  // unmeasured run and the estimable one are such runs -- an estimate is a display figure, not a
-  // measurement (spec R5).
-  await assertEqual(costTile.unmeasuredRuns, '2 unmeasured runs (not in the total)', 'stage 7: brief-cost-unmeasured-runs')
-  if (!costTile.all.includes(expectedHeadline)) {
-    await fail(`stage 7: the tile's big figure is not ${JSON.stringify(expectedHeadline)}: ${JSON.stringify(costTile.all)}`)
-  }
-  console.log(`stage 7 PASSED: ${expectedHeadline} · ${expectedActual} · ${expectedEstimated} · ${expectedUpperBound}, and spentUsd never moved`)
+  await waitVisible(page.getByTestId('stat-spend'), 'the spend stat on the cost project')
+  const spendValue = await page.evaluate(
+    () => (document.querySelector('[data-testid="stat-spend"] .type-heading')?.textContent ?? '').trim(),
+  )
+  console.log(`stage 7: the spend stat's value = ${JSON.stringify(spendValue)}`)
+  const expectedSpendValue = `$${MEASURED_USD.toFixed(2)}`
+  await assertEqual(spendValue, expectedSpendValue, 'stage 7: stat-spend value')
+  console.log(`stage 7 PASSED: ${expectedSpendValue} on stat-spend, and spentUsd never moved`)
 
   // ============================================================================================
   // Stage 9: in a real browser -- the label and not the key, the breaker card, and the word.
@@ -1489,19 +1475,28 @@ try {
   }
 
   await gotoReliably(`${baseUrl}/w/${loop.workspace.id}`)
-  await waitVisible(page.getByTestId('team'), 'the team strip on the project Overview')
+  // M61 R7/§3: the Overview's `team` strip became the project's own TEAM TAB -- `team-live` is its
+  // root and `team-card` is the row (spec §3's own replacement table). Same surface, same fact.
+  await waitVisible(page.getByTestId('team-live'), 'the Team tab on the project page')
+  // M61 R7/§3: `slave-card`/`data-card-state` -> `team-card`/`data-state` (spec §3's own
+  // replacement). The `status-pill` inside it is the same pill, carrying the same word and the
+  // same raw value on `title`.
   const cards = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-testid="slave-card"]')].map((card) => ({
+    [...document.querySelectorAll('[data-testid="team-card"]')].map((card) => ({
       name: (card.querySelector('span')?.textContent ?? '').trim(),
       status: card.getAttribute('data-status'),
-      state: card.getAttribute('data-card-state'),
+      state: card.getAttribute('data-state'),
       pill: (card.querySelector('[data-testid="status-pill"]')?.textContent ?? '').trim(),
+      pillTitle: card.querySelector('[data-testid="status-pill"]')?.getAttribute('title') ?? null,
     })),
   )
-  console.log(`stage 9: the Overview's worker cards = ${JSON.stringify(cards)}`)
+  console.log(`stage 9: the Team tab's worker cards = ${JSON.stringify(cards)}`)
   const constrainedCard = cards.find((card) => card.pill === 'CONSTRAINED')
   if (constrainedCard === undefined) {
-    await fail(`stage 9: no worker card reads CONSTRAINED on the project Overview: ${JSON.stringify(cards)}`)
+    await fail(`stage 9: no worker card reads CONSTRAINED on the project's Team tab: ${JSON.stringify(cards)}`)
+  }
+  if (constrainedCard.state !== 'constrained') {
+    await fail(`stage 9: the CONSTRAINED card's data-state is ${JSON.stringify(constrainedCard.state)}, expected "constrained"`)
   }
   console.log(`stage 9 PASSED: ${JSON.stringify(guardrailCard.text)} over ${JSON.stringify(guardrailCard.attribute)}, ${JSON.stringify(breakerCard.text)} over ${JSON.stringify(breakerCard.attribute)}, and a card that reads CONSTRAINED`)
 

@@ -93,12 +93,18 @@ const CHATTER = 'GATE-CHATTER-MUST-NOT-APPEAR'
  *  but a person (`holdersOf` in `packages/control/src/supervisorWorld.ts`). */
 const NOBODY_ROLE = 'nobody-holds-this'
 
-// M57 R17: the brief IS the README's four fact tiles now. The four that left are not gone -- the
-// objective is the page's own title row, `needs-you` is the Needs-you card above these tiles (which
-// shows all four kinds rather than a five-row slice and answers a decision in place), `team` is the
-// Team rows below them, and `recent-changes` is the `recent-changes` section. Each is asserted
-// below, on its new surface.
-const EXPECTED_BRIEF_FACTS = ['work', 'cost', 'supervisor', 'latest-verified']
+// M61 R7: the four-tile brief is gone as a WIDGET (`ProjectBrief.tsx` was deleted with the
+// Overview) and each of its facts has a home -- spec §3 names the replacement:
+// `brief`/`strip` -> `stat-goal` / `stat-work` / `stat-spend`. These are the three tiles the Team
+// tab draws under the grid, in DOM order, and stage 1 measures the same thing it always did
+// against them: that the facts are on ONE SCREEN.
+//
+// The two facts that are NOT one of the three tiles are asserted on the surfaces they moved to
+// rather than dropped: the objective's own text and version are `stat-goal`'s value and note
+// (M61 Task 11, controller Ruling 9), the SUPERVISOR's state is the right panel (`docs/ia.md`,
+// "the Supervisor panel is the RIGHT PANEL on every project page") and the LATEST VERIFIED task
+// is the Activity tab's river, where `task.integrated` already lived.
+const EXPECTED_STAT_TILES = ['stat-goal', 'stat-work', 'stat-spend']
 
 /** The first viewport. "Ten seconds" is a claim about ONE SCREEN, and stage 1 measures it. */
 const VIEWPORT = { width: 1440, height: 900 }
@@ -449,7 +455,15 @@ try {
   // `workspace.goal_set` x2 is already in the log: `set-goal` and `request-change` wrote them
   // through the real verb, and the second carries the request words on its payload (R3).
   await event('workspace.replan_started', { payload: { version: 2, runId: succeededRun.id } })
-  await event('workspace.replanned', { payload: { version: 2, added: [runningTask.id], proposedCancellations: [] } })
+  // The FULL payload `packages/domain/src/events/schema.ts` requires (M61 Task 11): `runId` and
+  // `droppedCancellations` are not optional there, and `activity/cards.tsx`'s
+  // `WorkspaceReplannedCard` reads `droppedCancellations.length` straight off the row. This
+  // fixture wrote neither, so the card threw the moment the river drew it -- a client-side crash
+  // that took the whole Activity page with it, found once M61's bounded scroll region put this
+  // row inside the virtualizer's rendered window.
+  await event('workspace.replanned', {
+    payload: { version: 2, runId: succeededRun.id, added: [runningTask.id], proposedCancellations: [], droppedCancellations: [] },
+  })
   await event('task.created', { taskId: runningTask.id, payload: { title: runningTask.title } })
   await event('task.started', { taskId: runningTask.id, slaveId: developer.id, payload: { title: runningTask.title } })
   await event('task.verify_passed', { taskId: verifyingTask.id, payload: { title: verifyingTask.title } })
@@ -528,6 +542,10 @@ try {
   }
   const baseUrl = `http://127.0.0.1:${String(resolvedPort)}`
   const projectUrl = `${baseUrl}/w/${workspaceId}`
+  /** Where the Supervisor's six-lane timeline lives since M61 R10/Task 7 -- it left the deleted
+   *  Overview for the Activity tab's raw view, under "Recent changes", where the whole river
+   *  already was. Every stage that reads `timeline-*` navigates here. */
+  const activityUrl = `${baseUrl}/w/${workspaceId}/activity`
   console.log(`next dev ready at ${baseUrl}, loopback-bound`)
 
   browser = await chromium.launch({
@@ -539,7 +557,9 @@ try {
   page = await context.newPage()
   page.setDefaultTimeout(ACTION_TIMEOUT_MS)
   page.on('pageerror', (error) => {
-    console.error(`[browser:pageerror] ${error}`)
+    // The STACK, not only the message: a bare `TypeError: Cannot read properties of undefined` is
+    // a diagnostic that names no file, and this gate's whole job is to say what broke and where.
+    console.error(`[browser:pageerror] ${error}\n${error instanceof Error ? (error.stack ?? '<no stack>') : ''}`)
     browserConsole.push(`[pageerror] ${String(error).slice(0, 300)}`)
   })
   page.on('console', (message) => browserConsole.push(`[${message.type()}] ${message.text().slice(0, 300)}`))
@@ -709,19 +729,23 @@ try {
   // grid in M57, on the surfaces they moved to.
   // ============================================================================================
   await gotoReliably(projectUrl)
-  await waitVisible(page.getByTestId('brief'), "the project brief on /w/<id>")
+  // M61 R7/Task 6: the four-tile brief left `/w/<id>` with the Overview it was part of --
+  // `stat-work` is the Team tab's own always-rendered marker that the page has finished its first
+  // paint (selector rename only; the fact-tile assertions below this point are a known gap left
+  // for a follow-up task -- see the M61 Task 6 report).
+  await waitVisible(page.getByTestId('stat-work'), "the project page on /w/<id>")
   const tiles = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-testid="brief-tile"]')].map((tile) => ({
-      fact: tile.getAttribute('data-brief') ?? '',
+    [...document.querySelectorAll('[data-testid="stat-goal"], [data-testid="stat-work"], [data-testid="stat-spend"]')].map((tile) => ({
+      fact: tile.getAttribute('data-testid') ?? '',
       bottom: Math.round(tile.getBoundingClientRect().bottom),
       text: (tile.textContent ?? '').replace(/\s+/g, ' ').trim(),
     })),
   )
-  console.log(`stage 1: brief tiles in DOM order = ${JSON.stringify(tiles.map((tile) => tile.fact))}`)
-  if (JSON.stringify(tiles.map((tile) => tile.fact)) !== JSON.stringify(EXPECTED_BRIEF_FACTS)) {
+  console.log(`stage 1: stat tiles in DOM order = ${JSON.stringify(tiles.map((tile) => tile.fact))}`)
+  if (JSON.stringify(tiles.map((tile) => tile.fact)) !== JSON.stringify(EXPECTED_STAT_TILES)) {
     await fail(
-      `stage 1: the brief renders ${JSON.stringify(tiles.map((tile) => tile.fact))}, expected the four facts ` +
-        `${JSON.stringify(EXPECTED_BRIEF_FACTS)}`,
+      `stage 1: the Team tab renders ${JSON.stringify(tiles.map((tile) => tile.fact))}, expected the three tiles ` +
+        `${JSON.stringify(EXPECTED_STAT_TILES)}`,
     )
   }
   // THE MILESTONE'S ACTUAL CLAIM, measured rather than paraphrased: "ten seconds" is a claim about
@@ -738,13 +762,16 @@ try {
   }
 
   const tileText = (fact) => tiles.find((tile) => tile.fact === fact)?.text ?? ''
+  // The SAME facts, in M61's words. The work tile counted `WORKING` and `IN REVIEW` as two of
+  // `ProjectBrief.work`'s five figures; `stat-work` says how much work is in flight and how much
+  // landed, which is the same question asked once. The cost tile's `$25` total and its
+  // unmeasured-calls caveat are `stat-spend`'s value and note -- the caveat is M32's upper-bound
+  // policy and it is on the tile again (M61 Task 11) rather than nowhere.
   const wants = [
-    ['work', 'WORKING'],
-    ['work', 'IN REVIEW'],
-    ['cost', '$25'],
-    ['cost', 'unmeasured calls charged at $1.00 each'],
-    ['latest-verified', integratedTask.title],
-    ['latest-verified', 'integrated'],
+    ['stat-work', 'in progress'],
+    ['stat-work', 'done'],
+    ['stat-spend', '$25'],
+    ['stat-spend', 'unmeasured calls charged at $1.00 each'],
   ]
   for (const [fact, needle] of wants) {
     const text = tileText(fact)
@@ -754,23 +781,36 @@ try {
     }
   }
 
-  // M57 R17: the objective left the tile grid for the page's own title row, where a goal belongs --
-  // it is what the project IS, not one fact among four. The same two things are asserted: the goal
-  // text and its version.
+  // M57 R17 / M61 R7: the objective is `stat-goal` -- its value is the goal's own words and its
+  // note is the version (controller Ruling 9), with the raw number on `data-goal-version` the way
+  // `docs/ia.md` rule 3 asks. The same two things are asserted as ever: the goal text and its
+  // version.
   const goalLine = await page.evaluate(
     () => document.querySelector('[data-testid="project-goal-line"]')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
   )
-  console.log(`stage 1: goal line = ${JSON.stringify(goalLine)}`)
-  for (const needle of [GOAL_V1, 'v2']) {
-    if (!goalLine.includes(needle)) {
-      await fail(`stage 1: the goal line does not say ${JSON.stringify(needle)} -- it reads ${JSON.stringify(goalLine)}`)
-    }
+  const goalVersion = await page.evaluate(
+    () => document.querySelector('[data-testid="stat-goal"] [data-goal-version]')?.getAttribute('data-goal-version') ?? null,
+  )
+  console.log(`stage 1: goal line = ${JSON.stringify(goalLine)}, data-goal-version = ${JSON.stringify(goalVersion)}`)
+  if (!goalLine.includes(GOAL_V1)) {
+    await fail(`stage 1: the goal line does not say ${JSON.stringify(GOAL_V1)} -- it reads ${JSON.stringify(goalLine)}`)
+  }
+  if (goalVersion !== '2') {
+    await fail(`stage 1: stat-goal's note reads version ${JSON.stringify(goalVersion)}, expected "2" -- request-change wrote a v2`)
+  }
+  const goalNote = await page.evaluate(
+    () => document.querySelector('[data-testid="stat-goal"]')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+  )
+  if (!goalNote.includes('v2')) {
+    await fail(`stage 1: stat-goal does not PRINT the version -- it reads ${JSON.stringify(goalNote)}`)
   }
 
   // M57 R18: the team left the tile grid for the Team ROWS, which list EVERY worker rather than the
   // five the tile sliced to. Same two names, more of them.
+  // M61 R7 review fix round 1, Ruling 6: `[data-testid="team"] [data-testid="slave-card"]` ->
+  // `[data-testid="team-live"] [data-testid="team-card"]` (the Team tab's own root and row now).
   const teamNames = await page.evaluate(() =>
-    [...document.querySelectorAll('[data-testid="team"] [data-testid="slave-card"]')].map((row) =>
+    [...document.querySelectorAll('[data-testid="team-live"] [data-testid="team-card"]')].map((row) =>
       (row.textContent ?? '').replace(/\s+/g, ' ').trim(),
     ),
   )
@@ -792,21 +832,19 @@ try {
     await fail(`stage 1: the Needs you card does not carry the seeded pending decision -- it reads ${JSON.stringify(needsYouRows)}`)
   }
 
-  const supervisorState = await page.evaluate(() => {
-    const element = document.querySelector('[data-testid="brief-supervisor-state"]')
-    return element === null ? null : { word: (element.textContent ?? '').trim(), title: element.getAttribute('title') }
-  })
-  console.log(`stage 1: brief-supervisor-state = ${JSON.stringify(supervisorState)}`)
-  if (supervisorState === null || supervisorState.word !== '1 DECISION WAITING' || supervisorState.title !== 'decisions') {
-    await fail(
-      `stage 1: the Supervisor tile reads ${JSON.stringify(supervisorState)}, expected the word "1 DECISION WAITING" with ` +
-        'the raw state "decisions" in title (docs/ia.md rule 3)',
-    )
-  }
+  // M61 R7 review fix round 1, Ruling 6: `brief-supervisor-state` is parked, not renamed -- the
+  // Supervisor's state lives in the right panel since M61; no tile.
 
   // M57 R17: "recent changes" is the `recent-changes` section now, not a five-line tile. The two
   // things this block has always asserted are asserted still: there ARE rows, and none of them
   // prints a raw dotted event type (`docs/ia.md` rule 3).
+  //
+  // M61 R7 review fix round 1, Ruling 6: `recent-changes`/`timeline-entry` moved off the deleted
+  // Overview to `/w/<id>/activity`, under "Recent changes" -- but only once Task 7 mounts
+  // `OverviewPanels`/`SupervisorTimeline` there. THIS STAGE IS RED UNTIL TASK 7 LANDS: navigating
+  // here is the correct target, not a working fix, and `fail()` below will fire for real until
+  // that task's own commit.
+  await gotoReliably(`${baseUrl}/w/${workspaceId}/activity`)
   const changes = await page.evaluate(() => {
     const section = document.querySelector('[data-testid="recent-changes"]')
     return section === null
@@ -826,14 +864,53 @@ try {
       }
     }
   }
+  // M45 R1's `latest verified` fact. The brief tile that carried it went with `ProjectBrief.tsx`
+  // (M61 R7) and the question it answered -- "what was the last thing that actually landed?" --
+  // is answered by the Activity tab's river, where `task.integrated` already lived before any of
+  // this. The SAME two things are asserted, on the surface they moved to: the task's own title,
+  // and the fact that it was integrated, said in words (stage 8 is what forbids the raw type).
+  // POLLED, not read once: the river is VIRTUALISED (M61 R4 put it inside a bounded `ScrollArea`),
+  // so its rows mount after the viewport has a measured height and the fetch has landed -- a
+  // single read on the load frame sees an empty list and proves nothing.
+  const verified = await waitUntil('the Activity river to draw its cards', ACTION_TIMEOUT_MS, async () => {
+    const cards = await page.evaluate(() =>
+      [...document.querySelectorAll('[data-testid="activity-card"]')].map((card) => ({
+        type: card.querySelector('[data-testid="event-kind"]')?.getAttribute('title') ?? null,
+        text: (card.textContent ?? '').replace(/\s+/g, ' ').trim(),
+      })),
+    )
+    return cards.length > 0 ? { done: true, value: cards } : { done: false, detail: '0 activity-card(s)' }
+  })
+  const integratedCards = verified.filter((card) => card.type === 'task.integrated')
+  console.log(`stage 1: task.integrated cards on the river = ${JSON.stringify(integratedCards.map((card) => card.text.slice(0, 120)))}`)
+  if (integratedCards.length === 0) {
+    await fail(
+      `stage 1: no task.integrated card on the Activity river -- the latest-verified fact has nowhere to be read ` +
+        `(${String(verified.length)} card(s) on the page)`,
+    )
+  }
+  for (const needle of [integratedTask.title, 'integrated']) {
+    if (!integratedCards.some((card) => card.text.toLowerCase().includes(needle.toLowerCase()))) {
+      await fail(
+        `stage 1: the task.integrated card does not say ${JSON.stringify(needle)} -- it reads ` +
+          `${JSON.stringify(integratedCards.map((card) => card.text.slice(0, 160)))}`,
+      )
+    }
+  }
+
   console.log(
-    'stage 1 PASSED: four facts, the objective on its own title row, the team in rows and the changes in the timeline -- ' +
-      'every tile above the fold at 1440x900, saying what R1 promises',
+    'stage 1 PASSED: three tiles, the objective and its version on stat-goal, the team in rows, the changes in the ' +
+      'timeline and the latest verified task on the river -- every tile above the fold at 1440x900, saying what R1 promises',
   )
 
   // ============================================================================================
   // Stage 2: six lanes, the right entries, and no model chatter.
   // ============================================================================================
+  // M61 R7 review fix round 1, Ruling 6: `supervisor-timeline` moved off the deleted Overview to
+  // `/w/<id>/activity` alongside `recent-changes` above -- re-navigated here too (stage 1 already
+  // left the browser there, but this stage does not depend on that). STILL RED UNTIL TASK 7 LANDS
+  // (see stage 1's own note): `SupervisorTimeline` is not mounted on `/activity` yet.
+  await gotoReliably(`${baseUrl}/w/${workspaceId}/activity`)
   await waitVisible(page.getByTestId('supervisor-timeline'), "the project's own timeline")
   const laneButtons = await page.evaluate(() =>
     [...document.querySelectorAll('[data-testid="timeline-lanes"] button')].map((button) => [
@@ -903,11 +980,25 @@ try {
   if (pausedEntries[0]?.lane !== 'work') {
     await fail(`stage 2: the run.paused entry is on lane ${JSON.stringify(pausedEntries[0]?.lane)}, expected "work"`)
   }
-  const { shown: pageStrings } = await readVisibleText(null)
+  // SCOPED TO THE SUPERVISOR'S OWN SECTION (M61 R10/Task 7). The claim has always been that model
+  // chatter does not reach the INTERPRETED timeline -- the six lanes, which is what `LANE_BY_TYPE`
+  // leaves `run.tool_call` off. Until M61 that section was the only thing on the page this ran
+  // against; now it lives on `/w/:id/activity` beside the RAW RIVER, and the raw river shows every
+  // event by design (`docs/ia.md`: "`/w/:id/activity` still the whole river"). Scanning the whole
+  // page would therefore be asserting that the river is not the river. The root moved with the
+  // section; the assertion did not change.
+  const chatterRoot = '[data-testid="recent-changes"]'
+  const { shown: pageStrings } = await readVisibleText(chatterRoot)
+  if (pageStrings.length === 0) {
+    await fail(`stage 2: nothing rendered inside ${chatterRoot} -- a negative over an empty section proves nothing`)
+  }
   const chatterLeak = pageStrings.filter((entry) => entry.text.includes(CHATTER))
-  console.log(`stage 2: page strings containing ${JSON.stringify(CHATTER)} = ${String(chatterLeak.length)} of ${String(pageStrings.length)}`)
+  console.log(
+    `stage 2: strings inside ${chatterRoot} containing ${JSON.stringify(CHATTER)} = ${String(chatterLeak.length)} of ` +
+      `${String(pageStrings.length)}`,
+  )
   if (chatterLeak.length > 0) {
-    await fail(`stage 2: the run.tool_call literal is on the project page: ${JSON.stringify(chatterLeak)}`)
+    await fail(`stage 2: the run.tool_call literal reached the Supervisor timeline: ${JSON.stringify(chatterLeak)}`)
   }
 
   // The pending proposal is PINNED: inside `timeline-decisions`, and that section comes before the
@@ -969,10 +1060,13 @@ try {
   // ============================================================================================
   // Stage 3: exactly four things need a person, and every link works.
   // ============================================================================================
+  // M61 R7/Task 6: the queue is the command strip's `NeedsYouBar` now, and a row states its kind
+  // on ITSELF -- `data-kind`, the attribute `NeedsYouRow` stamps -- rather than through a nested
+  // `chip` whose `title` carried it. The same fact, read off the element that now holds it; the
+  // dot beside the title is a `LiveDot`, not a word, so there is no chip text left to read.
   const needsYou = await page.evaluate(() =>
     [...document.querySelectorAll('[data-testid="needs-you-row"]')].map((row) => ({
-      kind: row.querySelector('[data-testid="chip"]')?.getAttribute('title') ?? null,
-      word: row.querySelector('[data-testid="chip"]')?.textContent?.trim() ?? '',
+      kind: row.getAttribute('data-kind'),
       // `getAttribute`, not `.href`: the DOM property resolves to an absolute URL.
       href: row.querySelector('a')?.getAttribute('href') ?? null,
       title: row.querySelector('a')?.textContent?.trim() ?? '',
@@ -992,8 +1086,11 @@ try {
   for (const item of needsYou) {
     if (item.href === null || item.href === '') await fail(`stage 3: the ${String(item.kind)} row has no link at all`)
     const response = await gotoReliably(`${baseUrl}${item.href}`)
-    // `page-shell` is on ten paths; `/workforce` names its own frame `workforce` (M44 R3), so both
-    // are accepted as "a real page rendered" -- renaming that frame would break the m44 gate.
+    // `page-shell` is on ten paths; `/workforce` names its own frame `workforce` (M44 R3), and
+    // since M61 R7 every project route draws `command-strip` from its own layout -- the three are
+    // accepted as "a real page rendered". The Work tab stopped being a `PageShell` when the board
+    // moved inside a `ScrollArea` (M61 R9), which is why the third name is here: the marker moved,
+    // the assertion did not.
     //
     // The not-found probe reads `main#main`, NOT `document.body`: `textContent` on the body
     // includes every inlined `<script>`, and a Next app's RSC flight payload carries the default
@@ -1003,7 +1100,8 @@ try {
       url: window.location.pathname + window.location.hash,
       shell:
         document.querySelectorAll('[data-testid="page-shell"]').length +
-        document.querySelectorAll('[data-testid="workforce"]').length,
+        document.querySelectorAll('[data-testid="workforce"]').length +
+        document.querySelectorAll('[data-testid="command-strip"]').length,
       mains: document.querySelectorAll('main#main').length,
       notFound: /this page could not be found/iu.test(document.querySelector('main#main')?.textContent ?? ''),
     }))
@@ -1021,7 +1119,10 @@ try {
   // ============================================================================================
   // Stage 4: approving FROM THE TIMELINE really cancels the task.
   // ============================================================================================
-  await gotoReliably(projectUrl)
+  // ON THE ACTIVITY TAB (M61 R10/Task 7): the timeline moved there with the rest of "Recent
+  // changes". The assertion -- that Approve on a pinned proposal really cancels the task -- is
+  // unchanged; only the URL the timeline is read at moved.
+  await gotoReliably(activityUrl)
   await waitVisible(page.getByTestId('timeline-decisions'), 'the pinned DECISION REQUIRED section')
   const before = await prisma.task.findUniqueOrThrow({ where: { id: readyTask.id }, select: { status: true } })
   console.log(`stage 4: subject task ${readyTask.id} status before = ${before.status}`)
@@ -1118,6 +1219,97 @@ try {
   // ============================================================================================
   // Stage 6: the raw values are FOLDED, not hidden.
   // ============================================================================================
+  // TWO HALVES, because M61 R9 turned this stage's claim into a claim about a MODE: "the M45
+  // progressive disclosure's `Details` toggle becomes 'developer mode shows it'".
+  //
+  // THE SIMPLE-MODE HALF, first and in a context of its own: a person who does not read code
+  // opens the same blocked task and gets the same one word and the same one reason, with NO
+  // `details-group` at all -- and therefore no task id, no branch and no worktree path anywhere
+  // in the panel. That is the stronger version of what this stage always measured (the old
+  // assertion was "folded"; this one is "not there"), and it is measured rather than assumed,
+  // because a fold that quietly opened in simple mode would look identical to one that did not
+  // exist.
+  {
+    const simpleContext = await browser.newContext({ viewport: VIEWPORT })
+    await simpleContext.addInitScript(() => {
+      try {
+        window.localStorage.setItem('mode', 'simple')
+      } catch {
+        /* the assertions below fail loudly rather than silently passing on a hidden group */
+      }
+    })
+    const simplePage = await simpleContext.newPage()
+    simplePage.setDefaultTimeout(ACTION_TIMEOUT_MS)
+    await simplePage.goto(`${baseUrl}/w/${workspaceId}/tasks`, { waitUntil: 'load', timeout: NEXT_READY_TIMEOUT_MS })
+    await simplePage.getByTestId('column').first().waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS })
+    // Hydration first (M61 R1): `TasksClient` reads the mode once and passes `isDeveloper` down,
+    // and its first client render is flat `'simple'` -- so a read taken on the load frame would
+    // agree with this assertion for the wrong reason.
+    await simplePage.waitForFunction(
+      () => document.querySelector('[data-testid="mode-toggle"]')?.getAttribute('aria-checked') === 'false',
+      null,
+      { timeout: ACTION_TIMEOUT_MS },
+    )
+    await simplePage.getByTestId('task-card').filter({ hasText: blockedTask.title }).first().click()
+    await simplePage.locator('aside [data-testid="detail-status"]').first().waitFor({ state: 'visible', timeout: ACTION_TIMEOUT_MS })
+    const simplePanel = await simplePage.evaluate(
+      ([taskId, branch, worktree]) => {
+        const aside = document.querySelector('aside')
+        if (aside === null) return { aside: false }
+        const text = (aside.textContent ?? '').replace(/\s+/g, ' ')
+        return {
+          aside: true,
+          status: aside.querySelector('[data-testid="detail-status"]')?.textContent?.trim() ?? null,
+          why: aside.querySelector('[data-testid="task-why"]')?.textContent?.trim() ?? null,
+          groups: [...aside.querySelectorAll('[data-testid="details-group"]')].map((group) => group.getAttribute('data-group') ?? ''),
+          worktreePaths: aside.querySelectorAll('[data-testid="worktree-path"]').length,
+          leaks: { uuid: text.includes(taskId), branch: text.includes(branch), worktree: text.includes(worktree) },
+        }
+      },
+      [blockedTask.id, BLOCKED_BRANCH, BLOCKED_WORKTREE],
+    )
+    console.log(`stage 6 (simple): the panel = ${JSON.stringify(simplePanel)}`)
+    await simplePage.close()
+    await simpleContext.close()
+    if (!simplePanel.aside) await fail('stage 6 (simple): clicking the blocked card opened no detail panel at all')
+    if (simplePanel.status !== 'BLOCKED') {
+      await fail(`stage 6 (simple): the panel's status word is ${JSON.stringify(simplePanel.status)}, expected "BLOCKED"`)
+    }
+    if (simplePanel.why !== BLOCKED_REASON) {
+      await fail(`stage 6 (simple): task-why reads ${JSON.stringify(simplePanel.why)}, expected ${JSON.stringify(BLOCKED_REASON)}`)
+    }
+    // THE TECHNICAL GROUPS, not every group. `cost` is money -- what this task has spent -- and a
+    // person who runs a company reads money in both modes; R9's "developer mode shows it" is about
+    // the run, its messages, what it saw, its verification attempts, its worktree and its events.
+    // Measured against the list the developer half below prints, so the two halves cannot drift:
+    // anything on this list in simple mode is a leak, and `cost` being here is a decision.
+    const DEVELOPER_ONLY_GROUPS = ['run', 'messages', 'context', 'memories', 'verification', 'worktree', 'events']
+    const leakedGroups = simplePanel.groups.filter((group) => DEVELOPER_ONLY_GROUPS.includes(group))
+    if (leakedGroups.length > 0) {
+      await fail(
+        `stage 6 (simple): simple mode rendered the developer-only group(s) ${JSON.stringify(leakedGroups)} -- R9 says ` +
+          `the fold became the mode (the whole panel drew ${JSON.stringify(simplePanel.groups)})`,
+      )
+    }
+    if (simplePanel.worktreePaths !== 0 || simplePanel.leaks.uuid || simplePanel.leaks.branch || simplePanel.leaks.worktree) {
+      await fail(`stage 6 (simple): a raw value is on screen with no group to hold it: ${JSON.stringify(simplePanel)}`)
+    }
+    console.log(
+      `stage 6 (simple): one word, one reason, ${JSON.stringify(simplePanel.groups)} on screen (money, which both modes ` +
+        'show) and not one of the seven technical groups -- so not one raw value either',
+    )
+  }
+
+  // THE DEVELOPER-MODE HALF: the run/worktree/artifact groups render for the person who built the
+  // thing, and the fold INSIDE them is unchanged -- closed on arrival except `run`, opening on a
+  // click, with the raw value only then.
+  await page.addInitScript(() => {
+    try {
+      window.localStorage.setItem('mode', 'developer')
+    } catch {
+      /* the assertions below fail loudly rather than silently passing on a hidden group */
+    }
+  })
   await gotoReliably(`${baseUrl}/w/${workspaceId}/tasks`)
   await waitVisible(page.getByTestId('column'), 'the task board')
   const blockedCard = page.getByTestId('task-card').filter({ hasText: blockedTask.title })
@@ -1195,13 +1387,17 @@ try {
   if (!unfolded.includes(BLOCKED_WORKTREE)) {
     await fail(`stage 6: opening the Worktree group showed ${JSON.stringify(unfolded)}, expected ${JSON.stringify(BLOCKED_WORKTREE)}`)
   }
-  console.log('stage 6 PASSED: one word, one reason, and every raw value folded away until a person asks for it')
+  console.log(
+    'stage 6 PASSED: in simple mode not one of the seven technical groups and not one raw value; in developer mode ' +
+      'one word, one reason, and every raw value folded away until a person asks for it',
+  )
 
   // ============================================================================================
   // Stage 7: real is not simulated.
   // ============================================================================================
   await gotoReliably(projectUrl)
-  await waitVisible(page.getByTestId('brief'), 'the project brief, for the simulation check')
+  // M61 R7/Task 6: selector rename, see stage 1's note above.
+  await waitVisible(page.getByTestId('stat-work'), 'the project page, for the simulation check')
   const simulationMarkers = await page.evaluate(() => document.querySelectorAll('[data-simulation]').length)
   console.log(`stage 7: [data-simulation] elements on /w/<id> = ${String(simulationMarkers)}`)
   if (simulationMarkers !== 0) {
@@ -1218,6 +1414,10 @@ try {
   if (dotted.length > 0) {
     await fail(`stage 8: a raw event type is visible text: ${JSON.stringify(dotted.slice(0, 10))}`)
   }
+  // The POSITIVE half reads the timeline, which is on the Activity tab since M61 R10/Task 7 --
+  // the negative above deliberately stays on the project page it was always about.
+  await gotoReliably(activityUrl)
+  await waitVisible(page.getByTestId('recent-changes'), 'the Recent changes section, for the positive half')
   const typedEntries = (await readEntries()).filter((entry) => entry.type !== null && DOTTED_TYPE.test(entry.type))
   console.log(`stage 8 POSITIVE: ${String(typedEntries.length)} timeline entr(y/ies) carry a raw event type on data-event-type, e.g. ${JSON.stringify(typedEntries.slice(0, 3).map((entry) => entry.type))}`)
   if (typedEntries.length === 0) {

@@ -1,9 +1,15 @@
+import { LiveDot } from './LiveDot'
+
 /**
  * The handoff status vocabulary (spec §3) — independent of the older M4 `SlaveCardData['status']`
  * / `TaskStatus` vocabularies (`SlaveCard.tsx`'s `DOT`, `TaskCard.tsx`'s `TASK_STATUS_DOT`, etc.):
  * this is the tone set the `ui/` component library itself renders. Every `ui/` component that
  * takes a `tone` prop imports this type (and, where it needs the class-per-tone pattern below,
  * the `TONE_*` maps) from here rather than redefining it.
+ *
+ * This file and `LiveDot.tsx` import from each other (this one for the `LiveDot` component
+ * itself, that one for `TONE_DOT`/`StatusTone`) -- both references are read lazily, inside a
+ * function body, never at module-evaluation time, so the cycle resolves fine under ESM.
  */
 export type StatusTone = 'working' | 'planning' | 'review' | 'waiting' | 'blocked' | 'done' | 'paused' | 'idle'
 
@@ -109,13 +115,11 @@ export const TONE_GLOW: Record<StatusTone, string> = {
   idle: 'shadow-[0_0_8px_var(--color-tone-idle)]',
 }
 
-/** In-flight tones (spec §3 / handoff "Motion": "status dots pulse 1.5s ease-in-out (only for
- *  in-flight states)") — the pipeline's active-class states. `blocked`/`done`/`paused`/`idle`
- *  are at-rest states and stay static. */
-const IN_FLIGHT_TONES: ReadonlySet<StatusTone> = new Set(['working', 'planning', 'review', 'waiting'])
-
-/** The `1a`-alpha fill / `3d`-alpha border pill (spec §3). Presentational only — callers own
- *  what `tone` means for their domain object. */
+/**
+ * The status pill (M61 R16): a `LiveDot` plus the word, no tinted fill any more -- just the
+ * tone's border and text colour. `LiveDot` itself now owns the "which tones pulse" rule (the old
+ * `IN_FLIGHT_TONES` set moved there as `PULSE`, word for word); `pulse` here just passes through.
+ */
 export function StatusPill({
   tone,
   label,
@@ -134,21 +138,19 @@ export function StatusPill({
    * Overrides the tone's own in-flight default. `lib/tones.ts`'s `CARD_STATE_TONE` supplies it,
    * because pulse is a fact about the STATE and two states can share one tone: `pause_requested`
    * ("PAUSING") rides the amber `waiting` tone and pulses, while plain `waiting` does not.
-   * Omitted, the pre-M14 `IN_FLIGHT_TONES` rule applies unchanged, so every M11/M12 call site
+   * Omitted, `LiveDot`'s own in-flight rule applies unchanged, so every M11/M12 call site
    * (`AllSlavesTable`, `ProjectsClient`) keeps exactly the behaviour it has.
    */
   readonly pulse?: boolean
 }): React.JSX.Element {
-  const shouldPulse = pulse ?? IN_FLIGHT_TONES.has(tone)
-  const pulseClass = shouldPulse ? 'motion-safe:animate-[status-pulse_1.5s_ease-in-out_infinite]' : ''
   return (
     <span
       data-testid="status-pill"
       data-tone={tone}
       {...(title === undefined ? {} : { title })}
-      className={`inline-flex items-center gap-1.5 rounded-pill border px-[7px] py-[3px] font-mono text-[9.5px] uppercase tracking-wide ${TONE_FILL[tone]} ${TONE_BORDER[tone]} ${TONE_TEXT[tone]}`}
+      className={`inline-flex items-center gap-1.5 rounded-pill border px-[7px] py-[3px] font-mono text-[9.5px] uppercase tracking-wide ${TONE_BORDER[tone]} ${TONE_TEXT[tone]}`}
     >
-      <span aria-hidden className={`h-[5px] w-[5px] rounded-full ${TONE_DOT[tone]} ${pulseClass}`} />
+      <LiveDot tone={tone} {...(pulse === undefined ? {} : { pulse })} />
       {label}
     </span>
   )

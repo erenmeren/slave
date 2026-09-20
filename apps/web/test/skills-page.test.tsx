@@ -143,4 +143,17 @@ describe('SkillsClient', () => {
     // The add-source tile survives an empty catalog -- it is what tells an operator where to look.
     expect(screen.getByTestId('empty-tile')).toBeTruthy()
   })
+
+  // M61 Task 10 (R19): each column scrolls on its own -- the provider list in one `ui/ScrollArea`,
+  // the domain-tile grid in another -- and no `SectionLabel` on the page carries
+  // `uppercase`/`font-mono` on top of `.type-label`.
+  it('gives each column its own ScrollArea, and carries no uppercase/font-mono SectionLabel', () => {
+    render(<SkillsClient page={page()} />)
+    expect(document.querySelectorAll('[data-scroll-axis]').length).toBeGreaterThanOrEqual(2)
+
+    const offenders = [...document.querySelectorAll('.type-label')].filter((element) =>
+      element.className.split(' ').some((cls) => cls === 'uppercase' || cls === 'font-mono'),
+    )
+    expect(offenders).toHaveLength(0)
+  })
 })

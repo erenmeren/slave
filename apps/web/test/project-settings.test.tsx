@@ -10,8 +10,14 @@ import { sendControl } from '../src/lib/postControl.js'
 
 const refresh = vi.fn()
 const push = vi.fn()
+const replace = vi.fn()
+let search = ''
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh, push }) }))
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ refresh, push, replace }),
+  usePathname: () => '/w/w1/settings',
+  useSearchParams: () => new URLSearchParams(search),
+}))
 
 vi.mock('../src/lib/postControl.js', () => ({
   postControl: vi.fn(async () => ({ ok: true as const })),
@@ -22,6 +28,7 @@ vi.mock('../src/hooks/useShellFacts.js', () => ({ publishShellFacts: vi.fn() }))
 
 afterEach(() => {
   vi.clearAllMocks()
+  search = ''
 })
 
 // `GoalPanel`'s own cases live in `goal-panel.test.tsx` (M40 t4): the panel dials `fetch`
@@ -173,24 +180,74 @@ function settings(over: Partial<ProjectSettings['workspace']> = {}): ProjectSett
   }
 }
 
+/** One `settings-nav-item` by its `data-section` -- `SettingsFrame`'s own contract
+ *  (`settings-frame.test.tsx`), reused across the cases below. */
+function clickProjectSection(id: string): void {
+  const item = screen.getAllByTestId('settings-nav-item').find((el) => el.getAttribute('data-section') === id)
+  if (item === undefined) throw new Error(`no settings-nav-item for section ${JSON.stringify(id)}`)
+  fireEvent.click(item)
+}
+
 describe('ProjectSettingsClient', () => {
   // M57 t8 fix round 1, ruling T8-5: Goal/Runtime keep drawing their OWN `ui/Panel` card (their
   // components are untouched), so this section wraps them bare -- no second card recipe of its
   // own. Permissions/Danger have no inner `Panel` to double up with, so THEY keep the section's
   // card recipe and name themselves with an `<h2>` instead.
-  it('renders the four sections in order, one card each', () => {
+  //
+  // M61 R12/Task 9: the five sections used to all stack in one scroll; `SettingsFrame` shows one
+  // at a time now, mounted on demand -- Goal first (the nav's own order, brief-stated: goal,
+  // runbook, runtime, permissions, danger).
+  it('mounts one section at a time, Goal first, one card', () => {
     render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
-    const sectionIds = [...document.querySelectorAll('section[id]')].map((section) => section.id)
-    expect(sectionIds).toEqual(['goal', 'runtime', 'permissions', 'danger'])
+    expect(screen.getByTestId('settings-goal')).toBeTruthy()
     // `Panel` renders `PanelHeader` → `SectionLabel` as its first child when it has a title.
-    const panelTitles = screen.getAllByTestId('panel').map((p) => p.firstElementChild?.textContent?.trim().toLowerCase())
-    expect(panelTitles).toEqual(['goal', 'runtime'])
-    expect(document.getElementById('permissions')?.querySelector('h2')?.textContent).toBe('Permissions')
-    expect(document.getElementById('danger')?.querySelector('h2')?.textContent).toBe('Danger zone')
+    expect(screen.getAllByTestId('panel').map((p) => p.firstElementChild?.textContent?.trim().toLowerCase())).toEqual(['goal'])
+    expect(screen.queryByTestId('settings-runbook')).toBeNull()
+    expect(screen.queryByTestId('settings-runtime')).toBeNull()
+    expect(screen.queryByTestId('settings-permissions')).toBeNull()
+    expect(screen.queryByTestId('settings-danger')).toBeNull()
+  })
+
+  it('switches sections on nav click, one mounted at a time, and names Permissions/Danger with an <h2>', () => {
+    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
+
+    clickProjectSection('permissions')
+    expect(screen.getByTestId('settings-permissions')).toBeTruthy()
+    expect(screen.queryByTestId('settings-goal')).toBeNull()
+    expect(screen.getByTestId('settings-permissions').querySelector('h2')?.textContent).toBe('Permissions')
+
+    clickProjectSection('danger')
+    expect(screen.getByTestId('settings-danger')).toBeTruthy()
+    expect(screen.queryByTestId('settings-permissions')).toBeNull()
+    expect(screen.getByTestId('settings-danger').querySelector('h2')?.textContent).toBe('Danger zone')
+  })
+
+  // M61 R7/Task 6: `RunbookPanel`'s own eleven testids are untouched (`runbook-panel.test.tsx`
+  // covers them); this proves the prop this page hands it actually reaches it.
+  it('renders the adopted runbook when the page loads one, and nothing when it loads none', () => {
+    const { rerender } = render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} initialSection="runbook" />)
+    expect(screen.queryByTestId('runbook-panel')).toBeNull()
+
+    rerender(
+      <ProjectSettingsClient
+        settings={settings()}
+        shellFacts={shellFacts()}
+        initialSection="runbook"
+        runbook={{
+          adopted: { key: 'feature-delivery', name: 'Feature delivery', description: 'd', stageCount: 1, source: 'seed', why: null },
+          currentStage: 'design',
+          stages: [{ key: 'design', title: 'Design', objective: 'Decide', state: 'active', taskCount: 1, capabilities: [] }],
+          recommendations: [],
+          all: [],
+          pendingDecision: null,
+        }}
+      />,
+    )
+    expect(screen.getByTestId('runbook-name').textContent).toBe('Feature delivery')
   })
 
   it("shows the three limits read-only in the sidebar's old format", () => {
-    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
+    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} initialSection="runtime" />)
     expect(screen.getByTestId('runtime-concurrency').textContent).toBe('3')
     expect(screen.getByTestId('runtime-timeout').textContent).toBe('30m')
     expect(screen.getByTestId('runtime-attempts').textContent).toBe('5')
@@ -198,20 +255,27 @@ describe('ProjectSettingsClient', () => {
   })
 
   it('scopes the permission matrix to this workspace', () => {
-    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
+    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} initialSection="permissions" />)
     expect(screen.getAllByTestId(/^permission-matrix-/).length).toBe(1)
   })
 
-  // M57 R15: the sticky in-page nav, one anchor per section, the danger link in the blocked tone.
-  it('offers a sticky in-page nav to the four sections, with Danger zone in the blocked tone', () => {
+  // M57 R15: the two-column split is `SettingsFrame` now (Task 9) -- one `settings-nav-item` per
+  // section instead of a sticky anchor, `?section=` instead of a scroll position.
+  it('offers a settings-nav to the five sections, in the brief-stated order', () => {
     render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
-    const links = screen.getAllByRole('link').filter((link) => link.getAttribute('href')?.startsWith('#') === true)
-    expect(links.map((link) => link.getAttribute('href'))).toEqual(['#goal', '#runtime', '#permissions', '#danger'])
-    expect(links[3]?.className).toContain('text-s-blocked')
-    expect(document.getElementById('goal')).toBeTruthy()
-    expect(document.getElementById('runtime')).toBeTruthy()
-    expect(document.getElementById('permissions')).toBeTruthy()
-    expect(document.getElementById('danger')).toBeTruthy()
+    const items = screen.getAllByTestId('settings-nav-item')
+    expect(items.map((item) => item.getAttribute('data-section'))).toEqual(['goal', 'runbook', 'runtime', 'permissions', 'danger'])
+    expect(items.map((item) => item.textContent)).toEqual(['Goal', 'Runbook', 'Runtime', 'Permissions', 'Danger zone'])
+    expect(items[0]?.getAttribute('aria-current')).toBe('page')
+  })
+
+  it('?section= picks the initial section, and clicking writes it back through the router', () => {
+    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} initialSection="danger" />)
+    expect(screen.getByTestId('settings-danger')).toBeTruthy()
+
+    clickProjectSection('runtime')
+    expect(screen.getByTestId('settings-runtime')).toBeTruthy()
+    expect(replace).toHaveBeenCalledWith('/w/w1/settings?section=runtime', { scroll: false })
   })
 
   it('sets the goal then refreshes the route instead of waiting for a stream', async () => {
@@ -238,7 +302,7 @@ describe('ProjectSettingsClient', () => {
   })
 
   it('carries the emergency stop in the danger zone', () => {
-    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
+    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} initialSection="danger" />)
     expect(screen.getByTestId('emergency-stop')).toBeTruthy()
   })
 
@@ -246,10 +310,12 @@ describe('ProjectSettingsClient', () => {
     // Ported from `overview-components.test.tsx`'s pre-M24 runtime-panel remount coverage (M15
     // spec §3 B4) -- there is no stream feeding this tab any more, so the mechanism this now
     // tests is `ProjectSettingsClient`'s own `key=` on `RuntimePanel`, not a wake-up event.
-    const { rerender } = render(<ProjectSettingsClient settings={settings({ budgetUsd: 20 })} shellFacts={shellFacts()} />)
+    const { rerender } = render(
+      <ProjectSettingsClient settings={settings({ budgetUsd: 20 })} shellFacts={shellFacts()} initialSection="runtime" />,
+    )
     expect((screen.getByLabelText('workspace budget') as HTMLInputElement).value).toBe('20')
 
-    rerender(<ProjectSettingsClient settings={settings({ budgetUsd: 35 })} shellFacts={shellFacts()} />)
+    rerender(<ProjectSettingsClient settings={settings({ budgetUsd: 35 })} shellFacts={shellFacts()} initialSection="runtime" />)
 
     expect((screen.getByLabelText('workspace budget') as HTMLInputElement).value).toBe('35')
   })
@@ -273,7 +339,7 @@ describe('ProjectSettingsClient', () => {
   // M27 §3.4: the archive confirm's text is fully composed from the footprint -- no counting in
   // the component itself, `DangerConfirm`'s own contract (spec §6).
   it('opens an archive confirm naming the footprint; confirming POSTs archive and leaves for Projects', async () => {
-    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
+    render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} initialSection="danger" />)
     fireEvent.click(screen.getByTestId('archive-project'))
 
     expect(screen.getByTestId('archive-project-confirm').textContent).toBe(
@@ -289,7 +355,7 @@ describe('ProjectSettingsClient', () => {
   })
 
   it('an archived project shows restore instead of archive, with no confirm, and hides the stop', async () => {
-    render(<ProjectSettingsClient settings={settings({ archived: true })} shellFacts={shellFacts()} />)
+    render(<ProjectSettingsClient settings={settings({ archived: true })} shellFacts={shellFacts()} initialSection="danger" />)
     expect(screen.queryByTestId('emergency-stop')).toBeNull()
     expect(screen.queryByTestId('archive-project')).toBeNull()
 
@@ -303,7 +369,7 @@ describe('ProjectSettingsClient', () => {
 
   it('shows a restore refusal in restore-project-error, without refreshing', async () => {
     vi.mocked(sendControl).mockResolvedValueOnce('project w1 is not archived')
-    render(<ProjectSettingsClient settings={settings({ archived: true })} shellFacts={shellFacts()} />)
+    render(<ProjectSettingsClient settings={settings({ archived: true })} shellFacts={shellFacts()} initialSection="danger" />)
 
     await act(async () => {
       fireEvent.click(screen.getByTestId('restore-project'))
@@ -316,16 +382,21 @@ describe('ProjectSettingsClient', () => {
 
 // M44 erratum E25 / M45 R5: the one page frame reaches this page too. `flush`, so it brings its
 // landmark and its `page-shell` marker and none of its padding -- the shell itself is still
-// untouched by this page's OWN layout, which M57 t8 changed from a single stacked column to the
-// README's `180px minmax(0,760px)` split with its own gutters (`gate:m14-fidelity`'s numbers for
-// THIS page are Task 9's to regenerate, not this test's to keep frozen).
+// untouched by this page's OWN layout, which Task 9 changed from the sticky-anchor
+// `180px minmax(0,760px)` split to `SettingsFrame`'s own two-column grid (its own
+// `settings-frame.test.tsx` covers the frame's own contract; this only pins that the shell still
+// wraps it flush -- `gate:m14-fidelity`'s numbers for THIS page were already Task 9's to
+// regenerate, not this test's to keep frozen).
 describe('ProjectSettingsClient (M44 E25 / M45 R5)', () => {
   it('renders inside the one page shell, with its own two-column layout', () => {
     render(<ProjectSettingsClient settings={settings()} shellFacts={shellFacts()} />)
     const shell = screen.getByTestId('page-shell')
     expect(shell.className).not.toContain('p-3')
-    expect(shell.querySelector(':scope > div')?.className).toBe(
-      'grid grid-cols-[180px_minmax(0,760px)] items-start gap-7 px-[24px] py-[22px]',
+    // M61 Task 10: `PageShell`'s `children` render inside their own `flex min-h-0 flex-1
+    // flex-col` body wrapper now, one level deeper than the shell's own root -- this page's
+    // two-column grid is that wrapper's own child.
+    expect(shell.querySelector(':scope > div > div')?.className).toBe(
+      'grid min-h-0 flex-1 grid-cols-[180px_minmax(0,760px)] gap-[var(--gap-3)] p-[var(--gap-3)]',
     )
   })
 })

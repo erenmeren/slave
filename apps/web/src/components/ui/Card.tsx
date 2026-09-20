@@ -1,6 +1,7 @@
 /**
- * The handoff card surface (spec §3): `bg-bg-2`, radius 8, hover border. Renders as a `<button>`
- * when `onClick` is given and a plain `<div>` otherwise.
+ * The handoff card surface (spec §3, M61 R16): `bg-card`, radius-surface (12px, up from the old
+ * 8px `rounded-card`), hover border. Renders as a `<button>` when `onClick` is given and a plain
+ * `<div>` otherwise.
  *
  * M44 R3 widens it with `className`, `testId` and a `data` bag so a caller can extend the surface
  * and label it -- the three things `SlaveCard.tsx` names in its own docblock as the reason it is
@@ -25,8 +26,8 @@ export function Card({
   readonly data?: Readonly<Record<`data-${string}`, string>>
   readonly children: React.ReactNode
 }): React.JSX.Element {
-  const surface = selected ? 'border-line-hover bg-bg-selected' : 'border-line bg-bg-2 hover:border-line-hover'
-  const classes = `flex w-full flex-col gap-2 rounded-card border p-3 text-left transition-colors ${surface} ${className ?? ''}`.trim()
+  const surface = selected ? 'border-line2 bg-sel' : 'border-line bg-card hover:border-line2'
+  const classes = `flex w-full flex-col gap-2 rounded-surface border p-3 text-left transition-colors ${surface} ${className ?? ''}`.trim()
 
   if (onClick !== undefined) {
     return (

@@ -10,6 +10,7 @@ import { TaskList } from '../src/components/TaskList.js'
 import { TasksClient } from '../src/components/TasksClient.js'
 import { REFETCH_DEBOUNCE_MS } from '../src/hooks/useWorkspaceStream.js'
 import { publishStreamState } from '../src/hooks/useStreamState.js'
+import { ModeProvider, useMode } from '../src/components/mode/ModeProvider.js'
 import { RightPanel } from '../src/components/shell/RightPanel.js'
 import { RightPanelProvider } from '../src/components/shell/RightPanelProvider.js'
 import type { TaskBoardItem, TasksSnapshot } from '../src/server/tasks.js'
@@ -19,13 +20,29 @@ vi.mock('../src/hooks/useStreamState', () => ({ publishStreamState: vi.fn() }))
 /** Every page client in the shell runs inside the root layout's providers, and beside the SLOT
  *  those providers feed. A test that renders one bare is rendering a tree that does not exist --
  *  `useRightPanel` says so by throwing, and a selected task or worker would have nowhere to be
- *  drawn (M57 R8: the page mirrors its selection into the slot, it no longer draws the panel). */
+ *  drawn (M57 R8: the page mirrors its selection into the slot, it no longer draws the panel).
+ *  `ModeProvider` joins the two (M61 R9): `TasksClient` reads `useMode()` now, to thread
+ *  `isDeveloper` into the panel it opens, and `useMode()` throws with no provider ancestor.
+ *  `ModeProbe` is in the tree for any case that needs to flip modes; every existing case that
+ *  never touches it renders exactly as before (default, unstored mode is `simple`). */
+function ModeProbe(): React.JSX.Element {
+  const { setMode } = useMode()
+  return (
+    <button type="button" data-testid="mode-probe" onClick={() => setMode('developer')}>
+      developer
+    </button>
+  )
+}
+
 function renderInShell(ui: React.ReactElement): ReturnType<typeof render> {
   return render(
-    <RightPanelProvider>
-      {ui}
-      <RightPanel title="Supervisor">{null}</RightPanel>
-    </RightPanelProvider>,
+    <ModeProvider>
+      <ModeProbe />
+      <RightPanelProvider>
+        {ui}
+        <RightPanel title="Supervisor">{null}</RightPanel>
+      </RightPanelProvider>
+    </ModeProvider>,
   )
 }
 
@@ -101,6 +118,10 @@ beforeEach(() => {
     vi.fn(async () => new Response(JSON.stringify(snapshot([])), { status: 200 })),
   )
   routerRefresh.mockClear()
+  // `ModeProvider` mutates `document.documentElement` (M61 R1) -- reset between tests the same
+  // way `mode.test.tsx`/`team-tab.test.tsx` do, so a `ModeProbe` click in one test cannot leave
+  // developer mode's attribute standing for the next one.
+  document.documentElement.removeAttribute('data-mode')
 })
 
 afterEach(() => {
@@ -1182,17 +1203,75 @@ describe('TasksClient', () => {
   })
 })
 
-// M44 erratum E25 / M45 R5: the one page frame reaches the Tasks board too. `flush`, so it brings
-// its landmark and its `page-shell` marker and none of its padding -- the board's own five-column
-// grid (M57 R10) is what a future `gate:m14-fidelity` pass measures.
-describe('TasksClient (M44 E25 / M45 R5)', () => {
-  it('renders inside the one page shell, with the board grid its own five-column recipe', () => {
+// M61 R9/Task 7: `PageShell` is gone -- the board scrolls inside its own `board-scroll` region now
+// (the page itself never scrolls, M61 R4), and the five-column grid widened to 220px minimums.
+describe('TasksClient (M61 R9: scrolls inside, not the page)', () => {
+  it('renders no page-shell landmark any more', () => {
     renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({})])} />)
-    const shell = screen.getByTestId('page-shell')
-    expect(shell.className).not.toContain('p-3')
-    expect(shell.querySelector('.grid')?.className).toBe(
-      'grid gap-3 overflow-x-auto p-[16px_24px_24px] [grid-template-columns:repeat(5,minmax(172px,1fr))] items-start',
+    expect(screen.queryByTestId('page-shell')).toBeNull()
+  })
+
+  it('wraps the board in a horizontal ScrollArea with the five-column 220px recipe', () => {
+    renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({})])} />)
+    const boardScroll = screen.getByTestId('board-scroll')
+    expect(boardScroll.getAttribute('data-scroll-axis')).toBe('x')
+    expect(boardScroll.querySelector('.grid')?.className).toContain(
+      '[grid-template-columns:repeat(5,minmax(220px,1fr))]',
     )
+  })
+
+  it('wraps the List view in a ScrollArea too', () => {
+    renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({})])} />)
+    fireEvent.click(screen.getByTestId('task-view-list'))
+    expect(screen.getByTestId('task-list').closest('[data-testid="scroll-area"]')).toBeTruthy()
+  })
+
+  // Each column scrolls on its own (`column-scroll`) rather than growing the whole board past the
+  // frame -- the same fix `ActivityClient`'s family rail needed (ruling T8-4).
+  it('gives every column its own column-scroll region', () => {
+    renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({})])} />)
+    expect(screen.getAllByTestId('column-scroll')).toHaveLength(5)
+  })
+})
+
+// M61 R9/Task 7: the panel's raw run/attempt/artifact details render only in developer mode.
+// Fix round 1, Ruling 7: Cost is the one raw group that is NOT gated -- it stays visible in
+// simple mode, in its own spot between Verification and Worktree, while the other seven do not.
+describe('TaskDetailPanel details -- developer mode only (M61 R9)', () => {
+  it('renders no task-details section in simple mode, but keeps the ungated Cost group', () => {
+    renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', description: 'The full description' })])} />)
+    fireEvent.click(screen.getByText('Add the thing'))
+    expect(screen.getByText('The full description')).toBeTruthy()
+    expect(screen.queryByTestId('task-details')).toBeNull()
+    const groups = screen.getAllByTestId('details-group').map((el) => el.getAttribute('data-group'))
+    expect(groups).toEqual(['cost'])
+  })
+
+  it('renders task-details once the mode flips to developer', () => {
+    renderInShell(<TasksClient workspaceId="w1" initial={snapshot([task({ id: 't1', description: 'The full description' })])} />)
+    fireEvent.click(screen.getByTestId('mode-probe'))
+    fireEvent.click(screen.getByText('Add the thing'))
+    const details = screen.getByTestId('task-details')
+    expect(within(details).getAllByTestId('details-group').length).toBeGreaterThan(0)
+    // The Handoff group is not a raw detail (M48 R7) and is never gated -- confirmed absent here
+    // simply because this fixture's task carries none, not because the gate hid it.
+  })
+
+  // `TaskDetailPanel` defaults `isDeveloper` to `true` when the prop is omitted entirely -- every
+  // pre-existing direct render of it (`tasks-components.test.tsx`'s own many `TaskDetailPanel`
+  // cases below, and every other file that renders it bare) keeps seeing the details section.
+  it('defaults to showing the details section when isDeveloper is not passed at all', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({})} onClose={() => {}} />)
+    expect(screen.getByTestId('task-details')).toBeTruthy()
+  })
+
+  it('hides task-details when isDeveloper is explicitly false, but shows Cost and hides Run/Events', () => {
+    render(<TaskDetailPanel workspaceGoalVersion={0} workspaceId="w1" task={task({})} isDeveloper={false} onClose={() => {}} />)
+    expect(screen.queryByTestId('task-details')).toBeNull()
+    const groups = screen.getAllByTestId('details-group').map((el) => el.getAttribute('data-group'))
+    expect(groups).toContain('cost')
+    expect(groups).not.toContain('run')
+    expect(groups).not.toContain('events')
   })
 })
 
