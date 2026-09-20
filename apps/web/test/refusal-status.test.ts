@@ -101,6 +101,9 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   attachment_kind_not_allowed: true,
   attachment_path_refused: true,
   inbox_write_failed: true,
+  // Supervisor chat R2: the turn exists and is not waiting for a reply. 409, like every other
+  // "the row is in the wrong state" kind.
+  message_not_answering: true,
   invalid_draft: true,
   parent_not_found: true,
   path_not_empty: true,

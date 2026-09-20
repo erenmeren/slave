@@ -355,6 +355,10 @@ export type ControlRefusal =
   | { readonly kind: 'attachment_too_large'; readonly name: string; readonly bytes: number; readonly limit: number }
   | { readonly kind: 'attachment_kind_not_allowed'; readonly name: string; readonly extension: string }
   | { readonly kind: 'attachment_path_refused'; readonly name: string }
+  /** Supervisor chat R2: a reply was recorded against a turn that is not waiting for one -- a TTL
+   *  reclaim that raced the call still in flight, or a second record of a settled turn. Nothing is
+   *  written; the row keeps the reply it already has. */
+  | { readonly kind: 'message_not_answering'; readonly messageId: string; readonly status: string }
   /** Supervisor chat R3/R6: the files were validated and the repository would not take them -- a
    *  disk that is full, a `git commit` that failed, a checkout somebody is holding. `reason` is the
    *  error's own message, because there is nothing this system can say about it that is truer. The
@@ -795,6 +799,8 @@ export function refusalText(refusal: ControlRefusal): string {
       )
     case 'attachment_path_refused':
       return `"${refusal.name}" is a path rather than a file name; rename it and attach it again`
+    case 'message_not_answering':
+      return `this turn is ${refusal.status}, not waiting for a reply; nothing was recorded`
     case 'inbox_write_failed':
       return `${refusal.path} could not be written to the repository: ${refusal.reason}`
     case 'invalid_draft':

@@ -67,15 +67,62 @@ import type { RunId } from '@slave-of-ai/domain'
  * into it, and the repo-path assertion is about the RUN.
  */
 export function runDirPathFor(runId: RunId): string {
+  return join(stateRoot(), 'runs', runId)
+}
+
+/**
+ * THE THREE-STEP STATE-ROOT RULE, spelt once (F R7).
+ *
+ * `$SLAVEOFAI_STATE_DIR`, else `$XDG_STATE_HOME/slaveofai`, else `~/.local/state/slaveofai`. It
+ * was inline in {@link runDirPathFor} until a Supervisor chat turn needed a scratch directory of
+ * its own; two copies of a rule about WHERE this installation keeps its state is exactly the kind
+ * of thing that drifts once and is wrong forever.
+ */
+function stateRoot(): string {
   const stateDir = process.env['SLAVEOFAI_STATE_DIR']
   const xdgStateHome = process.env['XDG_STATE_HOME']
-  const stateRoot =
-    stateDir !== undefined && stateDir !== ''
-      ? stateDir
-      : xdgStateHome !== undefined && xdgStateHome !== ''
-        ? join(xdgStateHome, 'slaveofai')
-        : join(homedir(), '.local', 'state', 'slaveofai')
-  return join(stateRoot, 'runs', runId)
+  return stateDir !== undefined && stateDir !== ''
+    ? stateDir
+    : xdgStateHome !== undefined && xdgStateHome !== ''
+      ? join(xdgStateHome, 'slaveofai')
+      : join(homedir(), '.local', 'state', 'slaveofai')
+}
+
+/**
+ * Where ONE Supervisor chat turn's scratch files live (F R7), created 0700.
+ *
+ * A read-only turn is armed like a run: a `permissions.json` the gate reads, and a token whose
+ * hash is in it. So it gets a run's kind of directory -- outside the repository, under the same
+ * state root, mode 0700 -- in a sibling of `runs/` rather than inside it, because a chat turn is
+ * not a run: it has no `SlaveRun` row, no pause flag, no broker channel and nothing to resume.
+ *
+ * Keyed on the MESSAGE, which is unique and is what a person looking at a stuck turn has in hand.
+ * A turn reclaimed after its TTL reuses the directory and rewrites the file, which is right: the
+ * verdict is rewritten at every start, exactly as a run's is, and never merged.
+ *
+ * The repo-path preflight is {@link runFilePaths}' and for its reason: a turn whose repository is
+ * missing is a broken turn whether or not its scratch directory lives there, and `statSync`
+ * answers immediately where a recursive `mkdirSync` under a pseudo-filesystem can hang forever.
+ */
+export function chatTurnFilePaths(repoPath: string, messageId: string): { turnDir: string } {
+  let root
+  try {
+    root = statSync(repoPath)
+  } catch (error) {
+    throw new Error(
+      `chatTurnFilePaths: cannot stat repo path ${repoPath} (turn ${messageId}): ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  if (!root.isDirectory()) throw new Error(`chatTurnFilePaths: repo path is not a directory: ${repoPath} (turn ${messageId})`)
+  const dir = join(stateRoot(), 'chat-turns', messageId)
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 })
+  } catch (error) {
+    throw new Error(
+      `chatTurnFilePaths: cannot create turn dir ${dir}: ${error instanceof Error ? error.message : String(error)}`,
+    )
+  }
+  return { turnDir: dir }
 }
 
 export function runFilePaths(repoPath: string, runId: RunId): { runDir: string; pauseFlagPath: string } {
