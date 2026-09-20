@@ -138,8 +138,8 @@ pending list the command strip's needs-you bar reads, and its composer is the sa
 new event type.
 
 Its scope line carries the project's one autonomy switch (`supervisor-autonomy`, label **act on its
-own**), which PUTs `/api/w/:id/supervisor` and moves `Workspace.supervisorAutonomy` between
-`propose` and `act` — the same setting Project Settings → runtime shows beside **merge approved work
+own**), which PATCHes `/api/w/:id/supervisor/settings` and moves `Workspace.supervisorAutonomy`
+between `propose` and `act` — the same setting Project Settings → runtime shows beside **merge approved work
 automatically**. It belongs on the scope line rather than in Settings alone because it is the one
 thing that changes what every decision card below it means: under `act` the cards are a record of
 what was done, and only an escalation is still a question.

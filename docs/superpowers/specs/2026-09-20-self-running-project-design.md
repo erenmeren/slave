@@ -328,12 +328,17 @@ and then held that situation key behind the pending row for as long as the escal
 pass reads a world that knows what this one did. The condition is exact rather than broad: while a
 workspace is halted the only things `tierOf` applies are the halt's own remedies.
 
-**E13 — an autonomous grant says who made it (Task 8).** R3 says the grant is recorded as
-`by: 'supervisor'`. `setSlavePermission` appended `actor: 'human'` with `by: null` for every caller,
-which was true while `request_permission` — always `proposed` — was the only way in; the grant a
-`retry_task` carries under `act` has no approver, and the timeline said a person granted network
-access to a worker on a quiet afternoon. `origin` travels with the retry, and the event says `system`
-/ `by: 'supervisor'`. An approved proposal is unchanged: the approver is the granter.
+**E13 — an autonomous grant says who made it, in BOTH arms (Task 8; widened at the final review).**
+R3 says the grant is recorded as `by: 'supervisor'`. `setSlavePermission` appended `actor: 'human'`
+with `by: null` for every caller, which was true while `request_permission` — always `proposed` —
+was the only way in; the grant a `retry_task` carries under `act` has no approver, and the timeline
+said a person granted network access to a worker on a quiet afternoon. `origin` travels with the
+retry, and the event says `system` / `by: 'supervisor'`. An approved proposal is unchanged: the
+approver is the granter. The final review found the other half of the same sentence: R1 made `act`
+apply everything the halted checks do not demote, so `request_permission` STOPPED being
+proposal-only — and that arm went on passing no `origin`, writing `actor: 'human'`, `by: null` for
+a grant a tick made by itself. Both arms pass `origin` now, and the reading "the only way here is a
+person approving" is gone from the comment beside it.
 
 **E14 — the hour rule reads two different clocks (Task 8, open).** `candidates` measures
 `world.now - world.haltClearedAt` against the tick's clock and `carryOut` measures
@@ -352,3 +357,43 @@ ever names a refused tool. That is enough for the case this milestone was writte
 backend task that declares `needs: ["run_commands"]` and is refused it — it reads as `unknown` and
 gets a bare retry. FOLLOW-UP: one field on `SupervisorTask`, one column in the loader's task query,
 and pass it through `readTaskFailure`; the rule and its tests already exist.
+
+**E16 — the autonomy switch is a PATCH to `/supervisor/settings`, not a PUT to `/supervisor`
+(final review).** R1 says "the web PUT `/api/w/:id/supervisor` accepts it". What Task 7 built, and
+what `SupervisorThreadPanel` and `RuntimePanel` both call, is `PATCH /api/w/:id/supervisor/settings`
+— `/api/w/:id/supervisor` is the panel's own GET (the view it reads the switch's current value
+off), and PATCH is the verb for replacing one field of a settings row that has several, which is
+the idiom M37 t4 set for exactly this. `docs/ia.md` named R1's route rather than the built one and
+now names the built one. No code moved: the deviation is recorded, not corrected.
+
+**E17 — an operator's `deny` wins everywhere, and a retry a person approved is a retry (final
+review).** Two rulings the fix wave wrote down, both about the same question — whose decision is
+on the row.
+
+*The deny.* `setSlavePermission` is an UPSERT, so every path that grants flipped a stored `deny`
+to `allow` and appended an event saying the Supervisor did it. A `deny` row is the one state in the
+permission matrix that is a person's decision rather than an absence (M52 R1's three states), and
+R5's own sentence about task grants — "an explicit `deny` row still wins" — was true of the
+dispatch and of nothing else. Now: `retryTask` reads the row first and, on a `deny`, performs the
+retry WITHOUT the grant and records `grant: { …, refused: 'denied_by_operator' }` on
+`task.unblocked`; `carryOut`'s `request_permission` arm refuses `permission_denied_by_operator`,
+because that action IS the grant and has nothing left to do; and `candidates` skips the grant
+clause when the world happens to carry the seat's `deniedKinds` (it is loaded only under
+`asksForCapabilities`, so control is where the rule is enforced and the menu is only kept tidy).
+The retry's grant is also bounded to `TASK_NEEDS` now, like the dispatch it stands in for: a
+decision row naming `read_secret` is refused `invalid_task_need`.
+
+*The approved retry.* `retryAnswered` (E5's evidence pair) required `decision.status === 'applied'`.
+`approveDecision` claims a pending row `approved` and then calls `applyDecision`, which rewrites the
+status only when the verb refused — so a retry a PERSON approved is an `approved` row, and
+`clear_halt` was unreachable under `propose`, the mode where every one of these actions is a
+proposal. Both statuses count now.
+
+**E18 — `clear_halt` re-reads WHICH halt at apply time (final review).** R4 names the breaker and
+erratum E11 says budget and emergency-stop halts propose everything, and both were read as being
+about the OFFER. The apply is a second moment: a proposal made on a breaker halt can be approved
+after somebody has hit the emergency stop, and approving it retracted the stop. `carryOut` reads
+`Workspace.haltedReason` and refuses `halt_not_breaker` for any stored reason that is not the
+breaker's — a stored reason is by definition not the breaker's, which derives its halt from the
+failure streak and writes no column (`haltOf`), so the derived case this action exists for is
+untouched.

@@ -824,8 +824,15 @@ scheduling has stopped.
 before this switch existed still does — the Supervisor applies only the routine actions below and
 puts everything else in front of you. Under `act` it carries out whatever it decides, and the only
 thing that still waits for a person is an escalation: a situation whose catalogue held nothing but
-"a human decides". A project you describe in the chat on Home starts on `act`; `create-workspace`
-starts on `propose`. Move it with the CLI or the switch on the Supervisor panel's scope line:
+"a human decides". **Read that literally before you turn it on**: under `act` the Supervisor may
+grant any of the six permissions after a worker has been refused one three times — including
+reading a secret and deploying a release — and `raise_max_attempts` can add an attempt every time
+the cooldown is up, so the project's budget guardrail is the backstop rather than your approval.
+**One thing it will never do is overturn you**: an operation you have explicitly *denied* a worker
+in the permissions matrix stays denied — the grant is skipped, a retry that needed it goes out
+without it and says so, and a proposal to grant it is refused rather than applied. A project you
+describe in the chat on Home starts on `act`; `create-workspace` starts on `propose`. Move it with
+the CLI or the switch on the Supervisor panel's scope line:
 
 ```bash
 npm run orchestrator -- set-supervisor --workspace <id> --autonomy act     # or propose
@@ -858,8 +865,14 @@ Out of that come three actions the rules did not have before:
 - **retry the task** — a `failed` task back to `rework` with its attempts reset, which is the one
   exit from a status nothing else in this product could leave. When the diagnosis names a refused
   operation the task needed, the same decision **grants it first**, to the worker whose run met the
-  wall: one row that says both what was granted and why. Two retries is the ceiling; the third time
-  a person is asked, with the whole history in the summary.
+  wall: one row that says both what was granted and why — and only one of the two operations a
+  plan may ask for (`network_fetch`, `run_commands`), never a secret or a deploy. Two retries is
+  the ceiling; the third time a person is asked, with the whole history in the summary. You have
+  the same verb by hand:
+
+  ```bash
+  npm run orchestrator -- retry-task --task <id> [--grant network_fetch] [--reason "<text>"]
+  ```
 - **retry the review** — a task parked at the review cap by an infrastructure failure (a diff too
   big to read, a vendor CLI that would not start) goes back to `reviewing` rather than to rework.
   The reviewer never judged the work, so another review costs a review attempt and no rework.
