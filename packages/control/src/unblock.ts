@@ -139,6 +139,11 @@ export async function unblockTask(
   // that undoes itself on the very next tick, which is exactly the invert-in-one-tick failure this
   // function's own doc comment refuses for `ready`. A fresh implementation run is the only thing
   // that resets that count, and `rework` is how one is started.
+  //
+  // The window is the LATER of the implementation run and `Task.reviewWindowFrom`, spelled exactly
+  // as `dispatchReview` spells it (fix round 1): this reading and that one are about the same
+  // task and the same cap, and two different windows would have this verb send a task to
+  // `reviewing` that the next tick parks, or to `rework` when a review was still owed it.
   const reviewBudgetSpent = async (): Promise<boolean> => {
     const latestImpl = await prisma.slaveRun.findFirst({
       where: { taskId, kind: 'implementation' },
@@ -146,8 +151,9 @@ export async function unblockTask(
       select: { startedAt: true },
     })
     if (latestImpl === null) return true
+    const windowFrom = new Date(Math.max(latestImpl.startedAt.getTime(), task.reviewWindowFrom?.getTime() ?? 0))
     const attempts = await prisma.slaveRun.count({
-      where: { taskId, kind: 'review', startedAt: { gt: latestImpl.startedAt } },
+      where: { taskId, kind: 'review', startedAt: { gt: windowFrom } },
     })
     return attempts >= REVIEW_RETRY_CAP
   }

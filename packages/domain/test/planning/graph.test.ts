@@ -323,4 +323,26 @@ describe('parsePlanGraph -- needs (E R5)', () => {
   it('exposes the closed list itself, so no caller has to spell the two words again', () => {
     expect(TASK_NEEDS).toEqual(['network_fetch', 'run_commands'])
   })
+
+  // Fix round 1: a planner asked for an optional field answers it two ways, and erratum E18 made
+  // `null` mean the same as omitting it for `handoff` and `stage`. `needs` follows that precedent
+  // rather than failing the shape -- a shape failure is what makes the parser run an earlier draft.
+  it('reads a null needs as absent, exactly as a null handoff and a null stage are', () => {
+    const parsed = parsePlanGraph(graph(null))
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.tasks[0]?.needs).toEqual([])
+    expect(parsed.value.droppedNeeds).toBeUndefined()
+  })
+
+  // Fix round 1: two needs is the whole vocabulary, so a cap is pointless -- but a planner that
+  // writes one twice must not put it on the row twice, because `requiredPermissions` is a set in
+  // everything but its type.
+  it('dedupes what the planner repeated, on both the kept side and the dropped one', () => {
+    const parsed = parsePlanGraph(graph(['network_fetch', 'network_fetch', 'sudo', 'sudo']))
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.tasks[0]?.needs).toEqual(['network_fetch'])
+    expect(parsed.value.droppedNeeds).toEqual({ k: ['sudo'] })
+  })
 })

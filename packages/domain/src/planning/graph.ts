@@ -78,6 +78,34 @@ function isTaskNeed(value: string): value is TaskNeed {
   return (TASK_NEEDS as readonly string[]).includes(value)
 }
 
+/**
+ * One task's needs, split into what this system has words for and what it does not (E R5).
+ *
+ * DEDUPED across both halves by one `seen` set (fix round 1): `Task.requiredPermissions` is a set
+ * in everything but its column type, so a planner that wrote `network_fetch` twice must not grant
+ * it twice, and a report naming the same invented word three times is noise rather than a finding.
+ * No cap is needed beyond this -- once bounded to {@link TASK_NEEDS} the kept list cannot exceed
+ * two -- which is why `needs` has no equivalent of {@link MAX_TASK_CAPABILITIES}.
+ *
+ * Shared by {@link validateStructure} (which reports the dropped half) and {@link normalisePlanTask}
+ * (which keeps the other), so a first plan and a re-plan's `add` list cannot bound them differently.
+ */
+function partitionNeeds(needs: readonly string[] | null | undefined): {
+  readonly kept: readonly TaskNeed[]
+  readonly dropped: readonly string[]
+} {
+  const seen = new Set<string>()
+  const kept: TaskNeed[] = []
+  const dropped: string[] = []
+  for (const need of needs ?? []) {
+    if (seen.has(need)) continue
+    seen.add(need)
+    if (isTaskNeed(need)) kept.push(need)
+    else dropped.push(need)
+  }
+  return { kept, dropped: dropped.toSorted() }
+}
+
 export interface PlanGraph {
   readonly tasks: readonly PlanTask[]
   /**
@@ -119,7 +147,12 @@ const planTaskSchema = z.object({
   // a shape violation makes `parsePlanGraph` fall back to an EARLIER candidate object in the same
   // message, so a planner that invented a word would have an already-revised draft executed on its
   // behalf. {@link validateStructure} drops the unknown values and reports them instead.
-  needs: z.array(z.string().min(1)).default([]),
+  //
+  // `.nullish()`, not `.default([])` (fix round 1): `handoff` and `stage` learnt this from erratum
+  // E18 -- a planner asked for an optional field answers it two ways, by omitting it and by writing
+  // `null`, and a schema that accepts only the first FAILS THE SHAPE on the second. `null` means
+  // absent; {@link normalisePlanTask} normalises it to the empty list.
+  needs: z.array(z.string().min(1)).nullish(),
 })
 
 /** How many capabilities one task may ask for. A task naming eleven has not been decomposed --
@@ -219,8 +252,8 @@ function validateStructure(graph: PlanGraph, stageKeys: readonly string[]): Resu
   // plan event reports the same thing however the planner ordered them.
   const droppedNeeds: Record<string, readonly string[]> = {}
   for (const task of graph.tasks) {
-    const unknown = (task.needs ?? []).filter((need) => !isTaskNeed(need))
-    if (unknown.length > 0) droppedNeeds[task.key] = [...unknown].toSorted()
+    const { dropped } = partitionNeeds(task.needs)
+    if (dropped.length > 0) droppedNeeds[task.key] = dropped
   }
 
   return ok({
@@ -240,11 +273,12 @@ export function normalisePlanTask(task: PlanTask): PlanTask {
   const { handoff, stage, needs, ...rest } = task
   return {
     ...rest,
-    // E R5: the needs are FILTERED here rather than in `validateStructure` alone, so a delta's
-    // `add` list -- which reuses this function and never sees that validator -- cannot carry a word
+    // E R5: the needs are BOUNDED here rather than in `validateStructure` alone, so a delta's `add`
+    // list -- which reuses this function and never sees that validator -- cannot carry a word
     // outside the closed list onto a `Task` row either. The dropped values are reported by
-    // `validateStructure`, which is the one caller with a plan event to report them on.
-    needs: (needs ?? []).filter(isTaskNeed),
+    // `validateStructure`, which is the one caller with a plan event to report them on. A `null`
+    // here is the planner saying "no needs", exactly as it is for `handoff` and `stage` above.
+    needs: partitionNeeds(needs).kept,
     ...(handoff == null ? {} : { handoff: handoffContractSchema.parse(handoff) }),
     ...(stage == null ? {} : { stage }),
   }

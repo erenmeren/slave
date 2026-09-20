@@ -176,6 +176,14 @@ describe('REPLAN_INSTRUCTIONS', () => {
     expect(REPLAN_INSTRUCTIONS).toContain('"keep"')
   })
 
+  // E R5, fix round 1: a re-plan adds tasks like any other plan, and a manager who is not shown
+  // the field cannot ask for the permission the work needs.
+  it('shows the needs field and says what the two words mean', () => {
+    expect(REPLAN_INSTRUCTIONS).toContain('"needs":[]')
+    expect(REPLAN_INSTRUCTIONS).toContain('"needs": ["network_fetch"]')
+    expect(REPLAN_INSTRUCTIONS).toContain('"run_commands"')
+  })
+
   it('separates its two halves with ONE blank line', () => {
     // Final review, Minor 7: two consecutive empty strings joined with '\n' render as a triple
     // newline, a gap nothing in the prompt means -- every other section boundary this codebase

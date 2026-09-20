@@ -694,6 +694,11 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
             handoff:
               planTask.handoff === undefined ? Prisma.DbNull : (planTask.handoff as unknown as Prisma.InputJsonValue),
             stage: planTask.stage ?? null,
+            // E R5, fix round 1: a task a re-plan adds is a task like any other, and the needs it
+            // carries are already bounded to the closed list by `normalisePlanTask` -- the same
+            // normalisation `concludePlanning`'s graph went through. A re-plan that added the
+            // research task and not its permission would be the very failure R5 exists to stop.
+            requiredPermissions: [...(planTask.needs ?? [])],
             goalVersion: version,
           },
         })

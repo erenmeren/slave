@@ -7,6 +7,7 @@ import {
   MCP_TOOL_PREFIX,
   PERMISSION_KINDS,
   PERMISSION_RUN_KINDS,
+  TASK_NEEDS,
   type PermissionKind,
   type PermissionProvider,
   type PermissionRunKind,
@@ -298,5 +299,20 @@ describe('writePermissionsFile: the task’s own needs (E R5)', () => {
     expect(write([], 'claude_code', 'implementation', ['launch nukes']).verdict).toEqual(
       write([], 'claude_code', 'implementation').verdict,
     )
+  })
+
+  // Fix round 1: the bound is TASK_NEEDS, not PERMISSION_KINDS. A plan may ask for the two kinds a
+  // plan can know about in advance; `read_secret` and `deploy_release` are a person's decision
+  // about a worker, and a graph that named one must not be able to grant it to itself.
+  it('bounds the needs to the closed list a plan may ask for, not to the six kinds', () => {
+    for (const kind of PERMISSION_KINDS.filter((k) => !(TASK_NEEDS as readonly string[]).includes(k))) {
+      expect(write([], 'claude_code', 'implementation', [kind]).verdict, kind).toEqual(
+        write([], 'claude_code', 'implementation').verdict,
+      )
+    }
+    // …and the two it does carry still arrive.
+    for (const need of TASK_NEEDS) {
+      expect(write([], 'claude_code', 'implementation', [need]).verdict.grants, need).toContain(need)
+    }
   })
 })

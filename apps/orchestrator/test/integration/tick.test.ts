@@ -952,22 +952,58 @@ describe('tick', () => {
     expect((await prisma.task.findFirstOrThrow()).branch).toBe(branchAfterFirst)
   })
 
-  it("escalates leftovers that are not this task's own previous attempt", async (): Promise<void> => {
-    // A `ready` task -- never provisioned -- with a directory sitting at its worktree path. That
-    // is wreckage §7.4 preserved for an operator, not a rework, and handing it to a slave would
-    // give the run someone else's tree.
-    mkdirSync(join(fixture.repoPath, '.slaveofai', 'worktrees', keyOf(fixture.taskId)), {
-      recursive: true,
+  // R6's second sentence, fix round 1: "a worktree whose branch is gone is removed and
+  // re-provisioned". A directory with no branch behind it cannot be a completed provision -- there
+  // is no commit in it to preserve and nothing for §7.4 to show an operator -- and parking the
+  // task on it burns an attempt on wreckage. The by-hand retry on 2026-09-20 died here.
+  it('clears a stale worktree directory with no branch and provisions a fresh one', async (): Promise<void> => {
+    const worktreePath = join(fixture.repoPath, '.slaveofai', 'worktrees', keyOf(fixture.taskId))
+    mkdirSync(worktreePath, { recursive: true })
+    writeFileSync(join(worktreePath, 'leftover.txt'), 'from a half-finished provision\n')
+
+    const report = await tick(deps)
+
+    expect(report.started).toHaveLength(1)
+    const run = await prisma.slaveRun.findFirstOrThrow()
+    expect(run.status).not.toBe('failed')
+    // The fresh tree is a real worktree at the same path, and the stale content is gone.
+    expect(run.worktreePath).toBe(worktreePath)
+    expect(existsSync(join(worktreePath, 'leftover.txt'))).toBe(false)
+    expect(existsSync(join(worktreePath, 'README.md'))).toBe(true)
+    // And the repair cost NOTHING: parking the task charged it an attempt for wreckage it did not
+    // make, which is the whole difference between the old behaviour and this one.
+    const task = await prisma.task.findFirstOrThrow()
+    expect(task.attempt).toBe(0)
+  })
+
+  // The mirror image: the branch survived a removal that took the directory with it. Re-provisioning
+  // from that branch is the adopt semantics the `both` case already has -- the branch is derived
+  // from this task's own key, so it can belong to nothing else.
+  it('re-provisions onto a leftover branch whose directory is gone', async (): Promise<void> => {
+    await tick(deps)
+    await drainPumps()
+    const first = await prisma.task.findFirstOrThrow()
+    const branch = first.branch ?? ''
+    const worktreePath = join(fixture.repoPath, '.slaveofai', 'worktrees', keyOf(fixture.taskId))
+    // Exactly the residue of a half-finished removal: the directory taken away (and git's metadata
+    // with it), the branch still there.
+    git(['worktree', 'remove', '--force', worktreePath], fixture.repoPath)
+    expect(existsSync(worktreePath)).toBe(false)
+    await prisma.slaveRun.deleteMany({})
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { status: 'ready', activeRunId: null },
     })
 
     const report = await tick(deps)
 
-    expect(report.started).toEqual([])
+    expect(report.started).toHaveLength(1)
     const run = await prisma.slaveRun.findFirstOrThrow()
-    expect(run.status).toBe('failed')
-    const task = await prisma.task.findFirstOrThrow()
-    expect(task.attempt).toBe(1)
-    expect(await eventTypesFor(fixture.workspaceId)).toContain('run.failed')
+    expect(run.status).not.toBe('failed')
+    expect(run.worktreePath).toBe(worktreePath)
+    // The SAME branch, not a second one: the work that branch holds is this task's own.
+    expect((await prisma.task.findFirstOrThrow()).branch).toBe(branch)
+    expect(git(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath)).toBe(branch)
   })
 
   it('refuses to adopt a valid worktree for a task that is not reworking', async (): Promise<void> => {

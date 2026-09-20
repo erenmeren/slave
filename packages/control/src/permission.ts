@@ -5,12 +5,14 @@ import {
   MCP_TOOL_PREFIX,
   PERMISSION_KINDS,
   PERMISSION_LABEL,
+  TASK_NEEDS,
   TOOL_VOCABULARY,
   type PermissionKind,
   type PermissionProvider,
   type PermissionRowInput,
   type PermissionRunKind,
   type Result,
+  type TaskNeed,
   err,
   grantsFor,
   ok,
@@ -74,8 +76,11 @@ export function writePermissionsFile(
   const rows = input.rows.filter((row): row is PermissionRowInput =>
     (PERMISSION_KINDS as readonly string[]).includes(row.kind),
   )
-  const taskGrants = (input.taskGrants ?? []).filter((kind): kind is PermissionKind =>
-    (PERMISSION_KINDS as readonly string[]).includes(kind),
+  // Bounded to TASK_NEEDS, not to the six kinds (fix round 1): a plan may ask for the two a plan
+  // can know about in advance, and `read_secret`/`deploy_release` are a person's decision about a
+  // worker. A graph that named one must not be able to grant it to itself through this parameter.
+  const taskGrants = (input.taskGrants ?? []).filter((kind): kind is TaskNeed =>
+    (TASK_NEEDS as readonly string[]).includes(kind),
   )
   const body = {
     version: 2,

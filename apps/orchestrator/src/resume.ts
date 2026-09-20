@@ -53,7 +53,11 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
   // whatever the slave's permission rows say NOW -- not what they said at the original dispatch.
   const run = await prisma.slaveRun.findUniqueOrThrow({
     where: { id: options.runId },
-    include: { slave: { include: { team: true, permissions: true } } },
+    // `task` alongside (E R5, fix round 1): the rewrite below is the WHOLE verdict, and a rewrite
+    // that forgot the plan's half would hand a granted worker back a denial it had already been
+    // granted past -- granted at dispatch, denied on the way back in, for no decision anybody took.
+    // Nullable for `slave -> team`'s own reason: a planning run has no `Task` row.
+    include: { slave: { include: { team: true, permissions: true } }, task: { select: { requiredPermissions: true } } },
   })
 
   // Thrown, not refused: by the time this runs the claim has already flipped the run to `resuming`,
@@ -96,6 +100,10 @@ export async function executeResume(options: ExecuteResumeOptions): Promise<void
     runKind: run.kind,
     runId: run.id,
     runToken,
+    // Passed for every kind, not only implementation: `resolveGrants` is the one place that decides
+    // a plan speaks for implementation runs alone, and a second copy of that rule here is a second
+    // chance for the two to disagree. A review run's verdict is byte-identical with and without it.
+    taskGrants: run.task?.requiredPermissions ?? [],
   })
 
   // The checkpoint is the whole point of `resume`'s signature: this process may never have called

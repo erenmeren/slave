@@ -230,6 +230,36 @@ describe('executing a resume intent from the daemon', () => {
     expect(row.runTokenHash).toBe(after.tokenHash)
   }, 60_000)
 
+  // E R5, fix round 1: a run pauses for a question, a steer or the breaker, and every pause is
+  // followed by a rewrite of the whole verdict. A rewrite that forgot the PLAN's half would hand
+  // the worker back a denial it had already been granted past -- granted at dispatch, denied on
+  // the way back in, for no decision anybody took.
+  it("keeps the task's own needs across a resume (E R5)", async (): Promise<void> => {
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { requiredPermissions: ['network_fetch'] } })
+    const runId = await pauseARun()
+    const checkpointBefore = await prisma.checkpoint.findUniqueOrThrow({ where: { runId } })
+    const permissionsPath = join(dirname(checkpointBefore.pauseFlagPath), 'permissions.json')
+    interface Verdict {
+      readonly grants: readonly string[]
+      readonly allow: readonly { readonly tool: string; readonly kind: string }[]
+    }
+    // Present at dispatch, which is what makes losing it on the way back a regression rather than
+    // a feature that was never there.
+    const before = JSON.parse(readFileSync(permissionsPath, 'utf8')) as Verdict
+    expect(before.grants).toContain('network_fetch')
+
+    expect((await requestResume(runId, MARKER, 'web')).ok).toBe(true)
+    await tick({
+      workspaceId: brandWorkspaceId(fixture.workspaceId),
+      registry: singleAdapterRegistry(fakeAdapter('env-echo')),
+    })
+    await drainPumps()
+
+    const after = JSON.parse(readFileSync(permissionsPath, 'utf8')) as Verdict
+    expect(after.grants).toEqual(['read_repo', 'write_repo', 'run_commands', 'network_fetch'])
+    expect(after.allow.map((entry) => entry.tool)).toContain('WebFetch')
+  }, 60_000)
+
   it('leaves nothing to do on the tick after the one that claimed the intent', async (): Promise<void> => {
     const runId = await pauseARun()
     await requestResume(runId, MARKER, 'web')

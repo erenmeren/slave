@@ -1701,6 +1701,28 @@ describe('a re-plan', () => {
     return run.id
   }
 
+  // E R5, fix round 1: a task a re-plan adds is a task like any other. A board grown by a re-plan
+  // whose research task carried no permission would fail exactly as the first-plan one did.
+  it('writes the needs of a task a re-plan adds, bounded to the closed list', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const runId = await seedConcludedReplan(
+      fixture,
+      `{"add":[{"key":"docs","title":"Document the new endpoint","description":"write it","role":"backend","dependsOn":[],"needs":["network_fetch","sudo"]}],"cancel":[],"keep":["${existing.id}"]}`,
+      [existing.id],
+    )
+
+    await concludePlanning(brandRunId(runId))
+
+    const added = await prisma.task.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, title: 'Document the new endpoint' },
+    })
+    // `sudo` never reaches the row: `normalisePlanTask` bounds a delta's needs to the same closed
+    // list a first plan's are bounded to.
+    expect(added.requiredPermissions).toEqual(['network_fetch'])
+  })
+
   it('routes on the recorded manifest, and lets an addition depend on a task already on the board', async (): Promise<void> => {
     const fixture = await boardAt(1)
     expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)

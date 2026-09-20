@@ -39,6 +39,7 @@ async function makeBlockedTask(
     readonly activeRunId?: string | null
     readonly branch?: string | null
     readonly lastRejectionReason?: string | null
+    readonly reviewWindowFrom?: Date | null
   } = {},
 ): Promise<{ readonly id: string }> {
   const task = await prisma.task.create({
@@ -53,6 +54,7 @@ async function makeBlockedTask(
       activeRunId: overrides.activeRunId ?? null,
       branch: overrides.branch === undefined ? 'slaveofai/T-abcd1234-add-the-thing' : overrides.branch,
       lastRejectionReason: overrides.lastRejectionReason ?? null,
+      reviewWindowFrom: overrides.reviewWindowFrom ?? null,
     },
   })
   return { id: task.id }
@@ -380,6 +382,33 @@ describe('unblockTask', () => {
 
     expect(result).toEqual({ ok: true, value: { status: 'rework' } })
     expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('rework')
+  })
+
+  // Fix round 1: the budget reading and `dispatchReview`'s own count have to agree, or the two
+  // disagree about the same task. Both now count from the LATER of the implementation run and the
+  // retry window, so a task whose window was stamped after its failed reviews has a budget again.
+  it('counts the review budget from reviewWindowFrom, so a stamped task goes back to reviewing', async (): Promise<void> => {
+    const slave = await makeSlave(workspaceId)
+    const impl = new Date(Date.now() - 60_000)
+    const task = await makeBlockedTask(workspaceId, {
+      attempt: 1,
+      maxAttempts: 3,
+      reviewWindowFrom: new Date(impl.getTime() + 30_000),
+    })
+    await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId: slave.id, kind: 'implementation', status: 'succeeded', startedAt: impl },
+    })
+    for (let i = 0; i < REVIEW_RETRY_CAP; i += 1) {
+      await prisma.slaveRun.create({
+        data: { taskId: task.id, slaveId: slave.id, kind: 'review', status: 'failed', startedAt: new Date(impl.getTime() + 1_000 * (i + 1)) },
+      })
+    }
+
+    // No `retryReview`: this is the ORDINARY unblock, reading the same window `dispatchReview`
+    // will read a moment later. Every review run is older than the stamp, so the budget is whole.
+    const result = await unblockTask(task.id)
+
+    expect(result).toEqual({ ok: true, value: { status: 'reviewing' } })
   })
 
   it('still sends a task blocked under an implementation run to rework', async (): Promise<void> => {
