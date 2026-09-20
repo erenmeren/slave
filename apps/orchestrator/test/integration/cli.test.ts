@@ -1555,6 +1555,48 @@ describe('the orchestrator CLI', () => {
       expect(again.stdout).toContain('0 worker(s)')
     }, 60_000)
 
+    // Catalogue capability mapping (2026-09-20), R7: the CLI face of `mapTemplateCapabilities`
+    // (Task 5), run through the built CLI against the fake claude -- `SLAVEOFAI_CLAUDE_ARGS`
+    // answers a mapping prompt with `qa.exploratory` for every persona id it carries.
+    it('capabilities map --dry-run prints one line per persona and writes nothing', async (): Promise<void> => {
+      await runCli(['capabilities', 'sync'])
+      await prisma.slaveTemplate.create({
+        data: {
+          name: 'Dry Run Persona',
+          role: 'engineering',
+          description: 'x',
+          active: true,
+          profileSpec: { ...emptyProfileSpec(), summary: 's', identity: 'i', capabilities: ['Explores the product by hand'] } as unknown as object,
+        },
+      })
+      const result = await runCli(['capabilities', 'map', '--dry-run'])
+      expect(result.code).toBe(0)
+      expect(result.stdout).toContain('Dry Run Persona: qa.exploratory')
+      const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { name: 'Dry Run Persona' } })
+      expect(row.mappedCapabilityKeys).toEqual([])
+      expect(row.capabilityMappingHash).toBeNull()
+    }, 60_000)
+
+    it('capabilities map writes the mapping and reports it as JSON', async (): Promise<void> => {
+      await runCli(['capabilities', 'sync'])
+      await prisma.slaveTemplate.create({
+        data: {
+          name: 'Mapped Persona',
+          role: 'engineering',
+          description: 'x',
+          active: true,
+          profileSpec: { ...emptyProfileSpec(), summary: 's', identity: 'i', capabilities: ['Explores the product by hand'] } as unknown as object,
+        },
+      })
+      const result = await runCli(['capabilities', 'map', '--max-batches', '1'])
+      expect(result.code).toBe(0)
+      const report = JSON.parse(result.stdout.trim().split('\n').at(-1) ?? '{}') as { mapped: number; calls: number }
+      expect(report).toMatchObject({ calls: 1, mapped: 1 })
+      const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { name: 'Mapped Persona' } })
+      expect(row.mappedCapabilityKeys).toEqual(['qa.exploratory'])
+      expect(row.capabilityKeys).toEqual(['qa.exploratory'])
+    }, 60_000)
+
     it('hires a specialist once and reuses it the second time', async (): Promise<void> => {
       const template = await prisma.slaveTemplate.create({
         data: { name: `Security Reviewer ${String(Date.now())}`, role: 'security', capabilityKeys: ['security.application'] },

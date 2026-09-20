@@ -151,6 +151,15 @@
 //                  Two workers share the `backend` role in that story and
 //                  exactly one of them may stop to ask, which is what the
 //                  discriminator is for.
+//   R7's CAPABILITY MAP arm (2026-09-20) sits ONLY inside the `complete` name, not in every
+//   prompt-sniffing mode above: `capabilities map` (`apps/orchestrator/src/cli.ts`) reaches the
+//   model through the same `decideWithModel` seam a Supervisor decision does, and every CLI
+//   integration test asks for it through `runCli`'s one fixed `SLAVEOFAI_CLAUDE_ARGS`, `--fixture
+//   complete` -- there is no flow mode of its own to carry it. A prompt containing the literal
+//   `"personas"` (`CAPABILITY_MAP_ANSWER_MARKER`, which `buildCapabilityMappingPrompt` always
+//   emits) is answered with the one key `qa.exploratory` for every `persona id: <id>` line the
+//   prompt carries -- synthetic, `env-echo`'s reason: no fixture recorded in advance could name
+//   back an arbitrary batch's own ids.
 //   anything else  replays `fixtures/<name>.ndjson` verbatim, exit 0 -- real
 //                  captures show process exit code 0 even for hook-crash,
 //                  hook-deny, and permission-denied runs, so the fake matches
@@ -272,6 +281,49 @@ async function promptText() {
   let text = ''
   for await (const chunk of process.stdin) text += chunk
   return text
+}
+
+/**
+ * R7 (2026-09-20): `capabilities map`'s model call, recognised by the one literal
+ * `buildCapabilityMappingPrompt` guarantees -- the envelope key `"personas"`. Answers every
+ * `persona id: <id>` line the prompt carries with the one key `qa.exploratory`, the checked-in
+ * taxonomy's own entry for "explores the product by hand", which is the sentence every CLI test
+ * that reaches this arm gives its persona. Wired only into the `complete` name (see the header
+ * comment) rather than every prompt-sniffing mode: the CLI's own tests never route this call
+ * through a flow mode.
+ */
+async function capabilityMapArm(prompt) {
+  if (!prompt.includes('"personas"')) return false
+  const ids = [...prompt.matchAll(/^persona id: (.+)$/gmu)].map((m) => m[1])
+  const sessionId = 'fake-session-capability-map'
+  const text = JSON.stringify({ personas: ids.map((id) => ({ id, keys: ['qa.exploratory'] })) })
+  await writeLines([
+    JSON.stringify({ type: 'system', subtype: 'init', cwd: process.cwd(), session_id: sessionId, model: 'fake-claude', permissionMode: 'bypassPermissions' }),
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        model: 'fake-claude',
+        id: 'msg_fake_capability_map',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text }],
+      },
+      session_id: sessionId,
+    }),
+    JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      terminal_reason: 'completed',
+      stop_reason: 'end_turn',
+      num_turns: 1,
+      total_cost_usd: 0.01,
+      permission_denials: [],
+      session_id: sessionId,
+      result: text,
+    }),
+  ])
+  process.exit(0)
 }
 
 /**
@@ -1032,6 +1084,13 @@ async function main() {
     writeFileSync(path.join(process.cwd(), 'm8a-work.txt'), `${prompt.slice(0, 80)}\n`)
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '-m', 'fake work'], { cwd: process.cwd() })
+    await replayFixture('complete')
+    return
+  }
+
+  if (fixtureName === 'complete') {
+    const prompt = await promptText()
+    if (await capabilityMapArm(prompt)) return
     await replayFixture('complete')
     return
   }
