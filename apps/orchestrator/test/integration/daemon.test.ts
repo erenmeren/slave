@@ -1,8 +1,9 @@
+import { resetCapabilityMappingTickForTests, syncCapabilityTaxonomy, type ModelDecider } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { emptyProfileSpec, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import type { AdapterRegistry } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { DAEMON_DISCOVERY_MS, runDaemon, servingLine } from '../../src/daemon.js'
+import { DAEMON_DISCOVERY_MS, runDaemon, servingLine, type DaemonDeps } from '../../src/daemon.js'
 import { resetTickObservation } from '../../src/sweep.js'
 
 /** Nothing in this file dispatches. A registry that throws is the assertion. */
@@ -39,6 +40,11 @@ describe('runDaemon serving every project', () => {
 
   beforeEach(async (): Promise<void> => {
     resetTickObservation()
+    // The capability-mapping tick keeps PROCESS-WIDE state: a quiet window opened by a pass that
+    // found nothing stale, and at most one call in flight. Untouched, the "nothing to map" passes
+    // of the tests above would silence the two mapping tests below for a minute, and a call
+    // started by one test would write into a table the next one has just truncated.
+    await resetCapabilityMappingTickForTests()
     // `SlaveTemplate` and `Person` are added for Catalog Person Pool (Task 2): no other test in
     // this file touches either, so truncating both here alongside everything already emptied
     // costs nothing and gives the startup-hook tests below a clean pool to reconcile into.
@@ -59,7 +65,12 @@ describe('runDaemon serving every project', () => {
   })
 
   /** Starts a daemon and returns once its first serving line has been printed. */
-  async function start(workspaceIds: 'all' | string): Promise<() => string> {
+  async function start(
+    workspaceIds: 'all' | string,
+    /** What this test needs the daemon BUILT with -- a decider, say. Everything else is the same
+     *  daemon every case above runs, so a case that passes nothing is byte-identical to before. */
+    overrides: Partial<Pick<DaemonDeps, 'modelDecider' | 'supervisorModel'>> = {},
+  ): Promise<() => string> {
     const captured = captureStdout()
     output = captured
     let release = (): void => {}
@@ -73,6 +84,7 @@ describe('runDaemon serving every project', () => {
       periodMs: 200,
       discoveryMs: 300,
       until: gate,
+      ...overrides,
     })
     await until(() => captured.text().includes('serving'))
     return captured.text
@@ -211,6 +223,41 @@ describe('runDaemon serving every project', () => {
     stop()
     await finished
     expect(process.listenerCount('SIGTERM')).toBe(before)
+  })
+
+  // The detached mapping call and the shutdown drain had no test at the DAEMON's level: the tick's
+  // own tests call `tickCapabilityMapping` directly, which proves neither that a pass reaches it
+  // with a decider nor that the call -- which settles long after that pass returned -- is waited
+  // for before Prisma is disconnected. One case covers all three: the pass starts the call, the
+  // call writes its own line, and the row is written by the time the daemon has stopped.
+  it('maps a stale persona with the decider it was built with, prints the pass line and drains the call on shutdown', async (): Promise<void> => {
+    await syncCapabilityTaxonomy()
+    const template = await prisma.slaveTemplate.create({
+      data: { name: 'Mapped By The Daemon', role: 'engineering', description: 'x', active: true, profileSpec: { ...emptyProfileSpec(), summary: 's', identity: 'i', capabilities: ['hand testing'] } as unknown as object },
+    })
+    // Scripted in-process, not the fake CLI: this test is about the daemon's own wiring, and a
+    // decider is exactly one function. It answers every `persona id:` line the prompt carries, so
+    // it cannot accidentally agree with a batch it was not actually shown.
+    const decider: ModelDecider = async (input) => ({
+      kind: 'answer',
+      text: JSON.stringify({
+        personas: [...input.prompt.matchAll(/^persona id: (.+)$/gmu)].map((match) => ({ id: match[1] as string, keys: ['qa.exploratory'] })),
+      }),
+      costUsd: 0.01,
+      tokens: null,
+      numTurns: 1,
+    })
+
+    const text = await start('all', { modelDecider: decider })
+    // The DETACHED call's own line (it is written where the call settles, long after the pass that
+    // started it returned), not the `{ capabilityMapping }` line the pass itself prints.
+    await until(() => text().includes('"capabilityMappingPass"'))
+    stop()
+    await finished
+
+    const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: template.id } })
+    expect(row.capabilityMappingHash).not.toBeNull()
+    expect(row.mappedCapabilityKeys).toEqual(['qa.exploratory'])
   })
 
   it('prints a capabilityMapping line when a persona is stale and no decider is configured', async (): Promise<void> => {
