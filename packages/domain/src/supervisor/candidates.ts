@@ -177,9 +177,13 @@ function retryOffer(
       }
     case 'lost':
       return {
-        // "steer: " is the prefix the run context reads (Task 4): a retry that begins by telling
-        // the worker what the last run did, rather than a silent second run with the same
-        // information the first one had.
+        // "steer: " is a LABEL for this side of the line -- the panel and the decision row, which
+        // say what kind of remedy was chosen. CONTROL STRIPS THE PREFIX BEFORE IT REACHES THE
+        // WORKER (`retryTask`'s `workerNote`, Task 4 fix round 1): the prompt that carries the note
+        // already frames it ("A previous attempt was rejected. Address this before anything
+        // else:"), so the label after that framing would be machinery in an instruction. What the
+        // retry is FOR is unchanged: it begins by telling the worker what the last run did, rather
+        // than being a silent second run with the same information the first one had.
         action: retry(
           'steer: The last run went round in circles and was stopped. Do not repeat what it tried; say in one ' +
             'paragraph what you are stuck on, then change approach.',

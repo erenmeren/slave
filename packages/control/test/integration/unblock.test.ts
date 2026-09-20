@@ -494,6 +494,44 @@ describe('retryTask', () => {
     expect(event?.payload).toMatchObject({ grant: { slaveId: slave.id, permissionKind: 'network_fetch' } })
   })
 
+  // Fix round 1, Important 1: `failTask` stores WHY the task failed in the same column, and a
+  // retry that carries no note of its own (Task 6's CLI and web callers) must not delete it.
+  it('keeps the failure note when the retry carries no reason of its own', async (): Promise<void> => {
+    const task = await makeFailedTask()
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).lastRejectionReason).toBe(
+      'the last run was refused the network',
+    )
+
+    expect((await retryTask(task.id)).ok).toBe(true)
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).lastRejectionReason).toBe(
+      'the last run was refused the network',
+    )
+  })
+
+  it('replaces the failure note when the retry carries one', async (): Promise<void> => {
+    const task = await makeFailedTask()
+
+    expect((await retryTask(task.id, { reason: 'Do not try the deploy again.' })).ok).toBe(true)
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).lastRejectionReason).toBe(
+      'Do not try the deploy again.',
+    )
+  })
+
+  // Fix round 1, Important 2: `candidates.ts` labels its steer remedy `steer: …` for the panel
+  // and the decision row; the WORKER must never read the label. The prompt already says "A previous
+  // attempt was rejected. Address this before anything else:" -- "steer: " after that is machinery.
+  it('strips the steer label before the note reaches the worker', async (): Promise<void> => {
+    const task = await makeFailedTask()
+
+    expect((await retryTask(task.id, { reason: 'steer: keep to the brief' })).ok).toBe(true)
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).lastRejectionReason).toBe(
+      'keep to the brief',
+    )
+  })
+
   it('stamps the envelope actor system when the Supervisor is the one retrying', async (): Promise<void> => {
     const task = await makeFailedTask()
 
@@ -502,7 +540,7 @@ describe('retryTask', () => {
     expect((await unblockedEvents())[0]?.actor).toBe('system')
   })
 
-  it.each(['ready', 'running', 'reviewing', 'blocked', 'done', 'cancelled'] as const)(
+  it.each(['ready', 'running', 'reviewing', 'rework', 'blocked', 'done', 'cancelled'] as const)(
     'refuses a task that is %s, not failed, and touches nothing',
     async (status): Promise<void> => {
       const task = await prisma.task.create({

@@ -229,9 +229,30 @@ export interface RetryTaskInput {
    * prompt reads "A previous attempt was rejected. Address this before anything else: <note>".
    * Nothing else in the product writes a note a retried run can read, and a retry that arrives
    * without one is the coin toss this milestone exists to stop.
+   *
+   * ABSENT IS NOT EMPTY (fix round 1, Important 1). Leaving it out keeps whatever the column
+   * already holds -- which for a failed task is the note `failTask`, `verify.ts` or the review
+   * wrote about WHY it failed, the one thing the next run most needs to read. A caller with no
+   * note of its own (Task 6's CLI and web retries) must not delete the pipeline's.
    */
   readonly reason?: string | undefined
 }
+
+/**
+ * The note as the WORKER will read it (fix round 1, Important 2).
+ *
+ * `candidates.ts`' `lost` remedy prefixes its sentence with `steer: ` -- a LABEL, for the panel and
+ * the decision row, which say what kind of remedy was chosen. The prompt around the note already
+ * supplies the framing ("A previous attempt was rejected. Address this before anything else:"), so
+ * the label after it is machinery leaking into an instruction. The domain keeps the prefix, because
+ * that is where it means something; control strips it, because this is where the text crosses over
+ * into a worker's prompt.
+ *
+ * Nothing else is touched: the sentence itself is system-authored (a constant with the run's own
+ * recorded reason interpolated), and rewriting a word of it here would make the decision row claim
+ * one thing and the worker receive another.
+ */
+const workerNote = (reason: string): string => reason.replace(/^steer:\s*/u, '')
 
 /**
  * E R3: the exit from `failed` -- the one status this product had no verb for.
@@ -263,6 +284,16 @@ export interface RetryTaskInput {
  * describes it. The EXISTING event, not a new one: a task leaving a park is `task.unblocked`
  * whichever park it left, and the payload's `reason` says which -- a reader asking "when did this
  * task start moving again" must not have to know there are two verbs.
+ *
+ * THE GRANT AND THE MOVE ARE NOT ONE TRANSACTION, and the direction that leaves is the deliberate
+ * one (fix round 1, minor): `setSlavePermission` commits on its own before the task is claimed, so
+ * a transaction that then ROLLS BACK -- a lost race with a concurrent `failTask`, a database error
+ * -- leaves a worker holding a permission a person can see (it wrote a `slave.permission_changed`
+ * with the approver on it) and a task that did not move. The reverse pairing would be worse in kind
+ * rather than in degree: a task retried into the very wall the grant was for, failing again for a
+ * reason the decision had already answered, which is the loop this milestone exists to break. A
+ * stray allow is visible, revocable by `clearSlavePermission`, and grants nothing that was not just
+ * decided; a retry without its remedy is a run's worth of spend and a second identical failure.
  */
 export async function retryTask(
   taskId: string,
@@ -316,7 +347,10 @@ export async function retryTask(
         // `increment`, not the number this call read: the counter is the row's, and two retries
         // that somehow raced must not both write "1".
         retries: { increment: 1 },
-        lastRejectionReason: input.reason ?? null,
+        // Only when the caller brought one (fix round 1, Important 1): `null` here would erase the
+        // failure note the pipeline wrote, which is the note the rework run reads. Stripped of the
+        // `steer: ` label the domain puts on it for its own surfaces (Important 2).
+        ...(input.reason === undefined ? {} : { lastRejectionReason: workerNote(input.reason) }),
       },
     })
     return { ok: true as const, retries: current.retries + 1, maxAttempts: current.maxAttempts }

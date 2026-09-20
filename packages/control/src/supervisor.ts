@@ -1245,8 +1245,10 @@ export async function setSupervisorSettings(
   const profileMoved = profile !== undefined && profile !== workspace.supervisorProfile
   // E R1, and the same rule as the two above: a re-save of the switch it already carries writes
   // nothing and says nothing, so the timeline does not fill with re-saves of an unchanged form.
-  const autonomy = patch.autonomy
-  const autonomyMoved = autonomy !== undefined && autonomy !== workspace.supervisorAutonomy
+  // `undefined` when the patch did not carry it OR carried the value already stored, so the one
+  // constant is the whole test -- there is no second state where it is defined and did not move.
+  const autonomy = patch.autonomy !== undefined && patch.autonomy !== workspace.supervisorAutonomy ? patch.autonomy : undefined
+  const autonomyMoved = autonomy !== undefined
   if (!enabledMoved && !profileMoved && !autonomyMoved) return ok(undefined)
 
   await prisma.workspace.update({
@@ -1254,7 +1256,7 @@ export async function setSupervisorSettings(
     data: {
       ...(enabledMoved ? { supervisorEnabled: enabled } : {}),
       ...(profileMoved ? { supervisorProfile: nextProfile ?? null } : {}),
-      ...(autonomyMoved && autonomy !== undefined ? { supervisorAutonomy: autonomy } : {}),
+      ...(autonomyMoved ? { supervisorAutonomy: autonomy } : {}),
     },
   })
 
@@ -1288,7 +1290,7 @@ export async function setSupervisorSettings(
       type: 'workspace.settings_changed',
       workspaceId,
       actor: 'human',
-      payload: { field: 'supervisorAutonomy', from: workspace.supervisorAutonomy, to: autonomy ?? null },
+      payload: { field: 'supervisorAutonomy', from: workspace.supervisorAutonomy, to: autonomy },
       userId: principal?.userId ?? null,
     })
   }
