@@ -33,7 +33,7 @@ import {
   type ProfileSpec,
   type Result,
 } from '@slave-of-ai/domain'
-import { listCapabilities, syncCapabilityTaxonomy } from './capability.js'
+import { effectiveCapabilityKeys, listCapabilities, syncCapabilityTaxonomy } from './capability.js'
 import { writeTemplateDuplicates } from './duplicates.js'
 import { isUniqueConstraintViolation } from './prisma-errors.js'
 import type { ControlRefusal } from './refusal.js'
@@ -518,7 +518,8 @@ async function importRow(
               profile,
               profileSha256: goalSha256(profile),
               profileSpec: upstream as unknown as Prisma.InputJsonValue,
-              capabilityKeys: [...capabilityKeys],
+              // A new row has no mapping yet (Task 4, R6): the effective set is the exact half alone.
+              capabilityKeys: effectiveCapabilityKeys(capabilityKeys, []),
               unresolvedCapabilities: [...unresolvedCapabilities],
               // M55 R2: inert unless the operator asked otherwise, on the row and only on CREATE.
               active: input.activate === true,
@@ -610,7 +611,7 @@ async function importRow(
             profile: structuredProfile,
             profileSha256: goalSha256(structuredProfile),
             profileSpec: upstream as unknown as Prisma.InputJsonValue,
-            capabilityKeys: [...capabilityKeys],
+            capabilityKeys: effectiveCapabilityKeys(capabilityKeys, existing.mappedCapabilityKeys),
             unresolvedCapabilities: [...unresolvedCapabilities],
             // M55: the row is being structured for the first time, so it is also being given its
             // four derived columns for the first time. `active` is NOT here -- an import never
@@ -672,7 +673,7 @@ async function importRow(
           // Recomputed from the NEW upstream spec, which is the point: a persona that gained a
           // capability bullet gains the key, and one whose bullet the taxonomy has since learned
           // stops being unresolved.
-          capabilityKeys: [...capabilityKeys],
+          capabilityKeys: effectiveCapabilityKeys(capabilityKeys, existing.mappedCapabilityKeys),
           unresolvedCapabilities: [...unresolvedCapabilities],
           ...updatedDerived,
           description: draft.description,

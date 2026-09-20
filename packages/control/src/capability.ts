@@ -97,6 +97,17 @@ function sameStringSet(current: readonly string[], desired: readonly string[]): 
   return current.every((value) => want.has(value))
 }
 
+/**
+ * Catalogue capability mapping (2026-09-20), R3: the EFFECTIVE capability set of a template --
+ * what the exact matcher found by word, plus what a model mapped -- deduplicated and key
+ * ascending, so two writers producing the same set produce the same array. Every writer of
+ * `SlaveTemplate.capabilityKeys` goes through this: the three import sites, the reconcile pass and
+ * the mapping pass. Readers keep reading `capabilityKeys` and see both halves.
+ */
+export function effectiveCapabilityKeys(exact: readonly string[], mapped: readonly string[]): string[] {
+  return [...new Set([...exact, ...mapped])].toSorted()
+}
+
 /** What one {@link reconcileTemplateCapabilities} pass did. */
 export interface CapabilityReconcileReport {
   /** How many templates carried a PARSEABLE `profileSpec` and were actually re-derived. A
@@ -154,7 +165,7 @@ export interface CapabilityReconcileReport {
 export async function reconcileTemplateCapabilities(): Promise<CapabilityReconcileReport> {
   const taxonomy = await listCapabilities()
   const rows = await prisma.slaveTemplate.findMany({
-    select: { id: true, profileSpec: true, capabilityKeys: true, unresolvedCapabilities: true },
+    select: { id: true, profileSpec: true, capabilityKeys: true, unresolvedCapabilities: true, mappedCapabilityKeys: true },
     orderBy: { id: 'asc' },
   })
 
@@ -183,10 +194,11 @@ export async function reconcileTemplateCapabilities(): Promise<CapabilityReconci
       else resolvedValues.add(value)
     }
 
-    if (sameStringSet(row.capabilityKeys, keys) && sameStringSet(row.unresolvedCapabilities, unresolved)) continue
+    const effective = effectiveCapabilityKeys(keys, row.mappedCapabilityKeys)
+    if (sameStringSet(row.capabilityKeys, effective) && sameStringSet(row.unresolvedCapabilities, unresolved)) continue
     await prisma.slaveTemplate.update({
       where: { id: row.id },
-      data: { capabilityKeys: [...keys], unresolvedCapabilities: [...unresolved] },
+      data: { capabilityKeys: effective, unresolvedCapabilities: [...unresolved] },
     })
     updated += 1
   }

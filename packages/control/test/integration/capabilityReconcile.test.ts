@@ -253,4 +253,32 @@ describe('reconcileTemplateCapabilities (Catalog Person Pool Task 3)', () => {
     expect(report.updated).toBe(0)
     expect((await templateRow(id)).capabilityKeys).toEqual(['backend.api-design', 'review.code-review'])
   })
+
+  it('keeps a model-mapped key in capabilityKeys when it re-derives the exact half (mapping R3)', async (): Promise<void> => {
+    const id = await structuredTemplate('Mapped Persona', ['CI/CD Excellence'], { capabilityKeys: [] })
+    await prisma.slaveTemplate.update({
+      where: { id },
+      data: { mappedCapabilityKeys: ['operations.ci-cd'], capabilityMappingHash: 'h', capabilityMappedAt: new Date() },
+    })
+
+    const report = await reconcileTemplateCapabilities()
+
+    expect(report.updated).toBe(1)
+    const row = await templateRow(id)
+    expect(row.capabilityKeys).toEqual(['operations.ci-cd'])
+    // R2: the exact matcher still reports the sentence as unresolved by word.
+    expect(row.unresolvedCapabilities).toEqual(['CI/CD Excellence'])
+  })
+
+  it('writes the union key ascending, with the exact half and the mapped half deduplicated', async (): Promise<void> => {
+    const id = await structuredTemplate('Both Halves', ['ci/cd', 'monitoring'], { capabilityKeys: [] })
+    await prisma.slaveTemplate.update({
+      where: { id },
+      data: { mappedCapabilityKeys: ['qa.test-automation', 'operations.ci-cd'], capabilityMappingHash: 'h' },
+    })
+
+    await reconcileTemplateCapabilities()
+
+    expect((await templateRow(id)).capabilityKeys).toEqual(['operations.ci-cd', 'operations.observability', 'qa.test-automation'])
+  })
 })
