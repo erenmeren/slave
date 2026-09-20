@@ -896,8 +896,10 @@ describe('mapTemplateCapabilities', () => {
 
   it('batches by batchSize, stops at maxBatches, and survives a failed batch in the middle', async (): Promise<void> => {
     for (const name of ['A', 'B', 'C', 'D', 'E']) await structured(name, [name.toLowerCase()])
+    // Batches are cut in id order, and ids are uuids -- which two personas land in the failed
+    // batch is not knowable, so the scripted answer covers everyone and the assertions count.
     let n = 0
-    const inner = scripted({ A: ['qa.exploratory'], B: ['qa.exploratory'], E: ['qa.exploratory'] })
+    const inner = scripted({ A: ['qa.exploratory'], B: ['qa.exploratory'], C: ['qa.exploratory'], D: ['qa.exploratory'], E: ['qa.exploratory'] })
     const decider: ModelDecider = async (input) => {
       n += 1
       if (n === 2) return { kind: 'answer', text: 'garbage', costUsd: 0.01, tokens: null, numTurns: 1 }
@@ -905,7 +907,7 @@ describe('mapTemplateCapabilities', () => {
     }
     const report = await mapTemplateCapabilities({ decider, model: 'm', only: 'stale', dryRun: false, batchSize: 2, maxBatches: 3 })
     expect(report).toMatchObject({ calls: 3, failedBatches: 1, mapped: 3 })
-    expect((await countStaleTemplateMappings()).stale).toBe(2) // C and D, from the failed batch
+    expect((await countStaleTemplateMappings()).stale).toBe(2) // the two personas of the failed batch
   })
 
   it('reconcile after a mapping keeps the mapped keys, and the pool carries the union', async (): Promise<void> => {
