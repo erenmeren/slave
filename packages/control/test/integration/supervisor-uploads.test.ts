@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
@@ -69,6 +69,20 @@ describe('storeSupervisorUploads', () => {
     expect(await gitIn(repoPath, 'log', '--pretty=%s')).toBe('inbox: Competitor Brief.md, screenshot.PNG')
     expect(await gitIn(repoPath, 'log', '-1', '--pretty=%an <%ae>')).toBe('Slave of AI <orchestrator@slaveofai.local>')
     expect(await gitIn(repoPath, 'status', '--porcelain')).toBe('')
+  })
+
+  it('commits ONLY the inbox, leaving whatever the operator had staged where it was', async (): Promise<void> => {
+    // A checkout is a person's workspace. A bare `git commit` after `git add` would sweep their
+    // staged work into a commit called "inbox:", which is why the commit names its paths.
+    writeFileSync(join(repoPath, 'THEIRS.md'), 'half-finished\n')
+    await gitIn(repoPath, 'add', '--', 'THEIRS.md')
+
+    const stored = await storeSupervisorUploads(workspaceId, [{ name: 'brief.md', bytes: bytes('x') }], undefined, AT)
+    expect(stored.ok).toBe(true)
+
+    expect(await gitIn(repoPath, 'log', '-1', '--pretty=%s')).toBe('inbox: brief.md')
+    expect(await gitIn(repoPath, 'show', '--name-only', '--pretty=format:', 'HEAD')).toBe('docs/inbox/2026-09-20-brief.md')
+    expect(await gitIn(repoPath, 'status', '--porcelain')).toBe('A  THEIRS.md')
   })
 
   it('gives each extension its kind: text, image, binary', async (): Promise<void> => {

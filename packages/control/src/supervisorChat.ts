@@ -3,6 +3,8 @@ import {
   ATTACHMENT_KIND_BY_EXTENSION,
   CHAT_HISTORY_MAX,
   CHAT_MESSAGE_MAX_CHARS,
+  TIERS,
+  actionSchema,
   err,
   ok,
   type Action,
@@ -113,15 +115,21 @@ function parseAttachments(value: Prisma.JsonValue | null): readonly ChatAttachme
   })
 }
 
-/** A stored `actions` column, read back on the same terms. `null` is the ordinary state. */
+/** A stored `actions` column, read back on the same terms -- and the ACTION through the domain's
+ *  own `actionSchema`, never cast: this column is read back months later, and a row written by a
+ *  build whose catalogue has since changed must degrade to "this entry is not readable" rather
+ *  than reach the panel as a shape it will render wrong. `null` is the ordinary state. */
 function parseActions(value: Prisma.JsonValue | null): readonly SupervisorMessageAction[] | null {
   if (value === null || !Array.isArray(value)) return null
   return value.flatMap((raw): readonly SupervisorMessageAction[] => {
     if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return []
     const row = raw as Record<string, unknown>
-    if (typeof row['decisionId'] !== 'string' || typeof row['tier'] !== 'string') return []
-    if (row['action'] === null || typeof row['action'] !== 'object') return []
-    return [{ action: row['action'] as Action, decisionId: row['decisionId'], tier: row['tier'] as Tier }]
+    const tier = row['tier']
+    if (typeof row['decisionId'] !== 'string' || typeof tier !== 'string') return []
+    if (!(TIERS as readonly string[]).includes(tier)) return []
+    const action = actionSchema.safeParse(row['action'])
+    if (!action.success) return []
+    return [{ action: action.data, decisionId: row['decisionId'], tier: tier as Tier }]
   })
 }
 
@@ -205,8 +213,9 @@ export async function sendSupervisorMessage(
     if (!attachment.path.startsWith(`${INBOX_DIR}/`) || attachment.path.includes('..')) {
       return err({ kind: 'attachment_path_refused', name: attachment.name })
     }
-    if (ATTACHMENT_KIND_BY_EXTENSION[attachment.path.split('.').pop()?.toLowerCase() ?? ''] === undefined) {
-      return err({ kind: 'attachment_kind_not_allowed', name: attachment.name, extension: '' })
+    const extension = attachment.path.slice(attachment.path.lastIndexOf('.') + 1).toLowerCase()
+    if (ATTACHMENT_KIND_BY_EXTENSION[extension] === undefined) {
+      return err({ kind: 'attachment_kind_not_allowed', name: attachment.name, extension })
     }
   }
 

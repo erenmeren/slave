@@ -201,14 +201,22 @@ export async function storeSupervisorUploads(
     })
   }
 
+  const paths = attachments.map((attachment) => attachment.path)
   try {
     await mkdir(inboxPath, { recursive: true })
-    for (const [index, file] of files.entries()) {
-      // `attachments[index]` is the row built for exactly this file, one loop above.
-      await writeFile(join(repoPath, ...(attachments[index]?.path ?? '').split('/')), file.bytes)
-    }
-    await gitIn(repoPath, 'add', '--', ...attachments.map((attachment) => attachment.path))
-    await gitIn(repoPath, 'commit', '-m', `inbox: ${files.map((file) => file.name).join(', ')}`)
+    // Zipped rather than indexed: `attachments` was built from `files` one loop above, in order,
+    // and pairing them here is what makes that true by construction instead of by a subscript.
+    await Promise.all(
+      attachments.map(async (attachment, index) =>
+        writeFile(join(repoPath, ...attachment.path.split('/')), files[index]?.bytes ?? Buffer.alloc(0)),
+      ),
+    )
+    await gitIn(repoPath, 'add', '--', ...paths)
+    // SCOPED to these paths (`-- <paths>`), never a bare `commit`: the repository is an operator's
+    // checkout, and a bare commit would sweep whatever they had staged into a commit called
+    // "inbox:". The `add` above is still needed -- git will not commit a pathspec it has never
+    // seen -- and the two together commit exactly these files and nothing else.
+    await gitIn(repoPath, 'commit', '-m', `inbox: ${files.map((file) => file.name).join(', ')}`, '--', ...paths)
   } catch (error) {
     return err({
       kind: 'inbox_write_failed',
@@ -255,7 +263,8 @@ export async function appendPlannerNote(
     // and extended without it in one call either way.
     await writeFile(notesPath, `${head}- ${dateStamp(at)} — ${note}\n`, { flag: 'a' })
     await gitIn(repoPath, 'add', '--', PLANNER_NOTES_PATH)
-    await gitIn(repoPath, 'commit', '-m', 'inbox: planner note')
+    // Scoped, for `storeSupervisorUploads`' reason: an operator's staged work is theirs.
+    await gitIn(repoPath, 'commit', '-m', 'inbox: planner note', '--', PLANNER_NOTES_PATH)
   } catch (error) {
     return err({
       kind: 'inbox_write_failed',
