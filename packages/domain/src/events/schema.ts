@@ -394,9 +394,15 @@ export const executionEventSchema = z.discriminatedUnion('type', [
      * is what widened `from`/`to` to booleans. `supervisorProfile` never carries its TEXT -- the
      * persona can be long and is the model's instructions, so the payload carries its sha256 (or
      * `null` for cleared), the same shape `slave.profile_changed` uses.
+     *
+     * E R1 adds `supervisorAutonomy` for the same reason M38 added the other two rather than
+     * minting an event of its own: it is project configuration, it moves through the same verb
+     * (`setSupervisorSettings`), and `from`/`to` carry its two words. WITHOUT this member
+     * `appendEvent` would refuse the append outright -- it throws on a payload the domain cannot
+     * parse -- so the switch could be written and never recorded.
      */
     payload: z.object({
-      field: z.enum(['provider', 'budgetUsd', 'supervisorEnabled', 'supervisorProfile']),
+      field: z.enum(['provider', 'budgetUsd', 'supervisorEnabled', 'supervisorProfile', 'supervisorAutonomy']),
       from: z.union([z.string(), z.number(), z.boolean(), z.null()]),
       to: z.union([z.string(), z.number(), z.boolean(), z.null()]),
     }),

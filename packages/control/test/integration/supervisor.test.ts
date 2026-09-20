@@ -7,6 +7,7 @@ import {
   ANSWER_MAX_CHARS,
   COOLDOWN_MS,
   DECISION_RETENTION_MS,
+  HALT_CLEAR_INTERVAL_MS,
   MEMORY_CANDIDATE_STALE_MS,
   PENDING_TTL_MS,
   PROFILE_MAX_CHARS,
@@ -2025,6 +2026,23 @@ describe('setSupervisorSettings', () => {
     expect(await settingsEvents()).toHaveLength(0)
   })
 
+  // E R1: the one switch. A project starts at `propose` -- today's behaviour -- and this is the
+  // only verb that moves it.
+  it('switches the project to act, emitting settings_changed for supervisorAutonomy', async () => {
+    expect((await setSupervisorSettings(f.workspaceId, { autonomy: 'act' }, { userId: f.userId })).ok).toBe(true)
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).supervisorAutonomy).toBe('act')
+
+    const events = await settingsEvents()
+    expect(events).toHaveLength(1)
+    expect(events[0]?.actor).toBe('human')
+    expect(events[0]?.payload).toEqual({ field: 'supervisorAutonomy', from: 'propose', to: 'act' })
+  })
+
+  it('emits nothing when the autonomy it is asked for is the autonomy it already has', async () => {
+    expect((await setSupervisorSettings(f.workspaceId, { autonomy: 'propose' })).ok).toBe(true)
+    expect(await settingsEvents()).toHaveLength(0)
+  })
+
   it('emits one event per field that actually moved, and nothing when nothing did', async () => {
     expect((await setSupervisorSettings(f.workspaceId, { enabled: false, profile: 'be terse' })).ok).toBe(true)
     expect(await settingsEvents()).toHaveLength(2)
@@ -2340,5 +2358,173 @@ describe('applyDecision -- the M48 runbook action', () => {
     expect(row.status).toBe('failed')
     expect(row.failureReason).toContain('feature-delivery')
     expect(await eventsOfType('supervisor_failed')).toHaveLength(1)
+  })
+})
+
+/**
+ * E R3/R4 (self-running-project Task 4): the three arms this milestone adds to `carryOut`, each
+ * through an EXISTING control verb and each on a real row -- nothing here is mocked.
+ */
+describe('applyDecision -- the diagnosed remedies (E R3/R4)', () => {
+  let f: Fixture
+  beforeEach(async () => {
+    await reset()
+    f = await seed()
+  })
+
+  const failedSituation = (taskId: string): Situation => ({
+    kind: 'task_failed',
+    subjectId: taskId,
+    summary: 'the task failed and three others are waiting on it',
+    facts: { taskId, retries: 0, dependents: 3 },
+  })
+
+  const haltedSituation = (workspaceId: string): Situation => ({
+    kind: 'workspace_halted',
+    subjectId: workspaceId,
+    summary: 'the breaker stopped this project',
+    facts: { reason: 'circuit_breaker' },
+  })
+
+  const failTheTask = async (): Promise<void> => {
+    await prisma.task.update({
+      where: { id: f.taskId },
+      data: { status: 'failed', attempt: 3, activeRunId: null, retries: 0 },
+    })
+  }
+
+  it('retry_task puts the failed task back to rework on fresh attempts, with the grant it named', async () => {
+    await failTheTask()
+    const decision = await record(
+      f,
+      {
+        kind: 'retry_task',
+        taskId: f.taskId,
+        title: 'Add the thing',
+        reason: 'The last run was refused ‘Fetch over the network’.',
+        grant: { slaveId: f.slaveId, permissionKind: 'network_fetch' },
+      },
+      'applied',
+      { situation: failedSituation(f.taskId) },
+    )
+
+    expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })
+    expect(task.status).toBe('rework')
+    expect(task.attempt).toBe(0)
+    expect(task.retries).toBe(1)
+    expect(task.lastRejectionReason).toBe('The last run was refused ‘Fetch over the network’.')
+    expect(
+      (await prisma.slavePermission.findFirstOrThrow({ where: { slaveId: f.slaveId, kind: 'network_fetch' } })).mode,
+    ).toBe('allow')
+
+    const [unblocked] = await eventsOfType('task_unblocked')
+    expect(unblocked?.actor).toBe('system')
+    expect(unblocked?.payload).toMatchObject({ status: 'rework', attempt: 0, retries: 1, reason: 'retry_task' })
+    const [applied] = await eventsOfType('supervisor_applied')
+    expect(applied?.payload).toEqual({ decisionId: decision.id, action: { kind: 'retry_task' } })
+  })
+
+  it('retry_task on a task that is no longer failed is a failed decision, not a crashed pass', async () => {
+    const decision = await record(
+      f,
+      { kind: 'retry_task', taskId: f.taskId, title: 'Add the thing', reason: 'it broke' },
+      'applied',
+      { situation: failedSituation(f.taskId) },
+    )
+
+    const result = await applyDecision(decision.id, 'system')
+    expect(result.ok).toBe(false)
+    expect(result.ok ? null : result.error.kind).toBe('task_not_failed')
+    expect((await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })).status).toBe('failed')
+    expect(await eventsOfType('supervisor_failed')).toHaveLength(1)
+  })
+
+  it('retry_review sends the blocked task back to reviewing and stamps the review window', async () => {
+    const decision = await record(
+      f,
+      { kind: 'retry_review', taskId: f.taskId, title: 'Add the thing', reason: 'the reviewer never reached a verdict' },
+      'applied',
+    )
+
+    expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
+
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: f.taskId } })
+    expect(task.status).toBe('reviewing')
+    expect(task.reviewWindowFrom).not.toBeNull()
+    const [unblocked] = await eventsOfType('task_unblocked')
+    expect(unblocked?.actor).toBe('system')
+    expect(unblocked?.payload).toMatchObject({ status: 'reviewing', reason: 'retry_review' })
+  })
+
+  it('clear_halt retracts a breaker halt and stamps when it was cleared', async () => {
+    await prisma.workspace.update({
+      where: { id: f.workspaceId },
+      data: { haltedReason: 'circuit_breaker', haltedAt: new Date(), haltClearedAt: null },
+    })
+    const decision = await record(
+      f,
+      { kind: 'clear_halt', workspaceId: f.workspaceId, reason: '"Add the thing" has been retried and has not failed again.' },
+      'applied',
+      { subjectId: f.workspaceId, situation: haltedSituation(f.workspaceId) },
+    )
+
+    expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
+
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })
+    expect(workspace.haltedReason).toBeNull()
+    expect(workspace.haltedAt).toBeNull()
+    expect(workspace.haltClearedAt).not.toBeNull()
+    const [applied] = await eventsOfType('supervisor_applied')
+    expect(applied?.payload).toEqual({ decisionId: decision.id, action: { kind: 'clear_halt' } })
+  })
+
+  it('clear_halt is refused inside the hour since the last clear, and the halt stands', async () => {
+    const clearedAt = new Date(Date.now() - 10 * 60_000)
+    await prisma.workspace.update({
+      where: { id: f.workspaceId },
+      data: { haltedReason: 'circuit_breaker', haltedAt: new Date(), haltClearedAt: clearedAt },
+    })
+    const decision = await record(
+      f,
+      { kind: 'clear_halt', workspaceId: f.workspaceId, reason: 'the runaway has been answered' },
+      'applied',
+      { subjectId: f.workspaceId, situation: haltedSituation(f.workspaceId) },
+    )
+
+    const result = await applyDecision(decision.id, 'system')
+    expect(result.ok).toBe(false)
+    expect(result.ok ? null : result.error.kind).toBe('halt_recently_cleared')
+
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })
+    expect(workspace.haltedReason).toBe('circuit_breaker')
+    expect(workspace.haltClearedAt?.getTime()).toBe(clearedAt.getTime())
+    const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })
+    expect(row.status).toBe('failed')
+    expect(row.failureReason).toContain('hour')
+    const [failed] = await eventsOfType('supervisor_failed')
+    expect(failed?.payload).toMatchObject({ decisionId: decision.id, action: { kind: 'clear_halt' } })
+    expect(await eventsOfType('supervisor_applied')).toHaveLength(0)
+  })
+
+  it('clear_halt an hour and a minute after the last clear goes through', async () => {
+    await prisma.workspace.update({
+      where: { id: f.workspaceId },
+      data: {
+        haltedReason: 'circuit_breaker',
+        haltedAt: new Date(),
+        haltClearedAt: new Date(Date.now() - HALT_CLEAR_INTERVAL_MS - 60_000),
+      },
+    })
+    const decision = await record(
+      f,
+      { kind: 'clear_halt', workspaceId: f.workspaceId, reason: 'the runaway has been answered' },
+      'applied',
+      { subjectId: f.workspaceId, situation: haltedSituation(f.workspaceId) },
+    )
+
+    expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).haltedReason).toBeNull()
   })
 })

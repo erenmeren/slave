@@ -31,6 +31,11 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   task_not_blocked: true,
   task_run_active: true,
   attempt_ceiling_reached: true,
+  // E R3/R4: the three the self-running project added. None ends in `_not_found` -- the task or
+  // the project exists and the request does not make sense against it -- so all three answer 409.
+  task_not_failed: true,
+  retry_ceiling_reached: true,
+  halt_recently_cleared: true,
   self_dependency: true,
   duplicate_dependency: true,
   cross_workspace: true,

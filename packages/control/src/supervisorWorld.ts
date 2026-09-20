@@ -31,6 +31,7 @@ import {
   type SupervisorStaffingPreference,
   type SupervisorTask,
   type SupervisorWorld,
+  type TaskFailure,
   type BreakerTripKind,
   type RunStatus,
   type TaskStatusName,
@@ -312,6 +313,10 @@ interface TaskRow {
   /** M48 R2: the runbook stage the plan stamped on this task, or null -- which is what every task
    *  planned before this milestone, and every hand-made one, carries. */
   readonly stage: string | null
+  /** E R3: how many times `retryTask` has already put this task back from `failed`. A column and
+   *  not a count over the log: it survives pruning, and it is the counter the retry ceiling is
+   *  measured on. */
+  readonly retries: number
 }
 
 /**
@@ -343,6 +348,7 @@ async function loadTaskRows(tx: Prisma.TransactionClient, workspaceId: string): 
       t."createdAt",
       t."goalVersion",
       t.stage,
+      t.retries,
       (SELECT COUNT(*)::int FROM "TaskDependency" td WHERE td."dependsOnTaskId" = t.id) AS dependents,
       NOT EXISTS (
         SELECT 1
@@ -408,6 +414,138 @@ async function loadLatestGuardrails(
     ORDER BY e."taskId", e.seq DESC
   `
   return new Map(rows.flatMap((row) => (row.guardrail === null ? [] : [[row.taskId, row.guardrail] as const])))
+}
+
+/**
+ * The newest `run.failed` per task (E R2) -- WHY the work stopped, which is what a remedy is chosen
+ * from rather than guessed at.
+ *
+ * The `DISTINCT ON` idiom {@link loadLatestGuardrails} uses, over the same log, ordered by `seq`
+ * for the same reason: `ts` is a wall clock two appends can share, `seq` is the order they actually
+ * happened in. Bounded to the caller's task ids, which is what makes it an index probe on
+ * `(workspaceId, taskId, seq)` rather than a scan of every event the project has written.
+ *
+ * JOINED to `SlaveRun` for one column, `kind`: the Supervisor's reading of a failure turns on
+ * whether a REVIEW broke or the work did (a broken reviewer is retried, broken work is reworked),
+ * and the event does not carry it. The join is also the bound that drops a `run.failed` with no run
+ * behind it -- there is none the pipeline writes, and a row that cannot say which kind of run it
+ * was is a fact the domain could not act on. The `RunKind` enum has exactly the three members
+ * `TaskFailure.runKind` names, which is what makes the cast below a projection rather than a guess
+ * -- a fourth kind would have to be added to that type here as well as in the schema.
+ *
+ * `slaveId` comes off the EVENT, not off the run: it is the same worker either way, and the event
+ * is where the pipeline records it. It is the whole reason a `retry_task` can bundle a grant --
+ * `world.denials` and `world.runs` hold only LIVE runs, so a failed task's worker is in neither.
+ *
+ * A row missing the reason or the kind is dropped whole rather than half-carried, for
+ * {@link loadLatestBreakerTrips}'s reason: `TaskFailure` requires both, and half a failure in front
+ * of the Supervisor is a remedy chosen from a sentence nobody wrote.
+ */
+async function loadLatestFailures(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  taskIds: readonly string[],
+): Promise<ReadonlyMap<string, TaskFailure>> {
+  const rows = await tx.$queryRaw<
+    {
+      readonly taskId: string
+      readonly reason: string | null
+      readonly runKind: string | null
+      readonly ts: Date
+      readonly slaveId: string | null
+    }[]
+  >`
+    SELECT DISTINCT ON (e."taskId")
+           e."taskId" AS "taskId",
+           e.payload->>'reason' AS reason,
+           r.kind::text AS "runKind",
+           e.ts AS ts,
+           e."slaveId" AS "slaveId"
+    FROM "ExecutionEvent" e
+    JOIN "SlaveRun" r ON r.id = e."runId"
+    WHERE e."workspaceId" = ${workspaceId}
+      AND e."taskId" = ANY(${[...taskIds]}::text[])
+      AND e.type::text = 'run.failed'
+    ORDER BY e."taskId", e.seq DESC
+  `
+  return new Map(
+    rows.flatMap((row) =>
+      row.reason === null || row.runKind === null
+        ? []
+        : [
+            [
+              row.taskId,
+              {
+                runKind: row.runKind as TaskFailure['runKind'],
+                reason: row.reason,
+                at: row.ts.getTime(),
+                slaveId: row.slaveId,
+              },
+            ] as const,
+          ],
+    ),
+  )
+}
+
+/**
+ * Every operation each task's runs have been REFUSED (E R2), distinct, across all of them.
+ *
+ * Deliberately NOT {@link loadDenials}' window. That one answers "which worker is standing at a
+ * wall right now", so it is bounded to live runs and the last 30 minutes and feeds
+ * `permission_blocked`; this one answers "what was this work refused while it was being done",
+ * which is a fact about the TASK and survives the run that met it -- a failed task's refusal is in
+ * no live run by definition, and that is precisely the case R2 exists for.
+ *
+ * `array_agg(DISTINCT ...)` rather than the rows: the only reader asks whether a kind is in the
+ * list, and a project whose research task met the same wall two hundred times would otherwise carry
+ * two hundred copies of one word into the prompt.
+ */
+async function loadDeniedCapabilities(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  taskIds: readonly string[],
+): Promise<ReadonlyMap<string, readonly string[]>> {
+  const rows = await tx.$queryRaw<{ readonly taskId: string; readonly kinds: readonly string[] }[]>`
+    SELECT e."taskId" AS "taskId", array_agg(DISTINCT e.payload->>'capability') AS kinds
+    FROM "ExecutionEvent" e
+    WHERE e."workspaceId" = ${workspaceId}
+      AND e."taskId" = ANY(${[...taskIds]}::text[])
+      AND e.type::text = 'run.tool_denied'
+      AND e.payload->>'capability' IS NOT NULL
+    GROUP BY e."taskId"
+  `
+  return new Map(rows.map((row) => [row.taskId, row.kinds] as const))
+}
+
+/**
+ * How many IMPLEMENTATION runs each task has actually lost (E R2).
+ *
+ * The coarse count beside {@link loadLatestFailures}' newest one: "this has failed four times" is a
+ * different reading from "this is why it failed last", and the rules use both. Off `SlaveRun`
+ * rather than the log, because the run table is the ledger of runs and a pruned event would
+ * otherwise make a long-failing task look fresh.
+ *
+ * Review runs are not counted: a review that fails has judged nothing, and counting it would make a
+ * task whose reviewer kept breaking look like work that keeps being wrong -- the exact confusion
+ * `retry_review` exists to undo.
+ *
+ * The workspace bound is the caller's task ids, which came from `loadTaskRows(workspaceId)` --
+ * `SlaveRun` carries no workspace of its own, and a run reaches a project through its task or its
+ * worker. Same rows either way; this is the one the table can be read by.
+ */
+async function loadFailureCounts(
+  tx: Prisma.TransactionClient,
+  taskIds: readonly string[],
+): Promise<ReadonlyMap<string, number>> {
+  const rows = await tx.$queryRaw<{ readonly taskId: string; readonly count: number }[]>`
+    SELECT r."taskId" AS "taskId", COUNT(*)::int AS count
+    FROM "SlaveRun" r
+    WHERE r."taskId" = ANY(${[...taskIds]}::text[])
+      AND r.kind::text = 'implementation'
+      AND r.status::text = 'failed'
+    GROUP BY r."taskId"
+  `
+  return new Map(rows.map((row) => [row.taskId, row.count] as const))
 }
 
 /**
@@ -789,6 +927,10 @@ export async function loadSupervisorWorld(
           goalVersion: true,
           supervisorEnabled: true,
           supervisorProfile: true,
+          // E R1/R4: the one switch, and the stamp the once-an-hour rule for `clear_halt` is
+          // measured from -- the same column an operator's own `clear-halt` writes.
+          supervisorAutonomy: true,
+          haltClearedAt: true,
           runbookId: true,
         },
       })
@@ -797,6 +939,15 @@ export async function loadSupervisorWorld(
       const taskIds = taskRows.map((row) => row.id)
       const statusSince = await loadStatusSince(tx, workspaceId, taskIds)
       const guardrails = await loadLatestGuardrails(tx, workspaceId, taskIds)
+
+      // E R2: the three facts a stuck task's remedy is chosen from. Three bounded reads for the
+      // whole board, on the same ids and inside the same snapshot as everything above, never one
+      // per task -- and ungated, unlike the staffing reads: `deniedKinds` is read for a RUNNING
+      // task's steer text as well as for a failed one's grant, so a gate on "something is stuck"
+      // would answer the wrong question on the tick where it matters.
+      const failures = await loadLatestFailures(tx, workspaceId, taskIds)
+      const deniedCapabilities = await loadDeniedCapabilities(tx, workspaceId, taskIds)
+      const failureCounts = await loadFailureCounts(tx, taskIds)
 
       // M51 R3 / plan erratum E9: the workspace's NON-TERMINAL runs, the first run-derived rows the
       // world has ever carried. `slave -> team -> workspaceId`, not `task`, because a `planning` run
@@ -1060,18 +1211,18 @@ export async function loadSupervisorWorld(
           // what a runbook is. Null whenever the task has no stage, the workspace has no runbook,
           // or that stage sets no escalation -- all three are ordinary.
           stageEscalation: row.stage === null ? null : (escalationByStage.get(row.stage) ?? null),
-          // R2/R3: self-running-project Task 4 loads these off `run.failed`/`run.tool_denied` and
-          // `Task.retries`. Defaulted to "never failed, never denied, never retried" here so this
-          // loader compiles ahead of that read.
+          // R2/R3: the newest `run.failed` with the kind of run behind it, every capability this
+          // task's runs have been refused, how many implementation runs it has lost, and how many
+          // remedies have already been spent on it. Absent for a task that has never failed, which
+          // is every task on a healthy board.
           //
-          // `TaskFailure.slaveId` is part of that read (Task 3 fix round 1, Important 1): it is the
-          // `slaveId` of the `run.failed` event the reason came from, and it is the ONLY place a
-          // `retry_task` grant can find the worker to grant to -- `denials` below is loaded from
-          // LIVE runs, so a failed task's own refusal is never in it.
-          latestFailure: null,
-          deniedKinds: [],
-          failureCount: 0,
-          retries: 0,
+          // `TaskFailure.slaveId` is the `slaveId` of the `run.failed` event the reason came from,
+          // and it is the ONLY place a `retry_task` grant can find the worker to grant to --
+          // `denials` below is loaded from LIVE runs, so a failed task's own refusal is never in it.
+          latestFailure: failures.get(row.id) ?? null,
+          deniedKinds: deniedCapabilities.get(row.id) ?? [],
+          failureCount: failureCounts.get(row.id) ?? 0,
+          retries: row.retries,
         })
       }
 
@@ -1119,18 +1270,16 @@ export async function loadSupervisorWorld(
 
       const world: SupervisorWorld = {
         workspaceId: workspace.id,
-        // R1: self-running-project Task 4 selects `Workspace.supervisorAutonomy` on the read above
-        // and reads it here. Defaulted to `propose` -- today's behaviour -- so this loader compiles
-        // ahead of that read and every existing caller keeps meaning exactly what it always meant.
-        autonomy: 'propose',
+        // R1: the one switch, straight off the column. `propose` is the default every existing
+        // project carries, so nothing changes for a project nobody has switched.
+        autonomy: workspace.supervisorAutonomy,
         now: now.getTime(),
         goal: workspace.goal,
         goalVersion: workspace.goalVersion,
         halted: haltOf(snapshot),
-        // R4: the stamp the once-an-hour rule reads. Task 4 selects `Workspace.haltClearedAt` on
-        // the read above and passes it here; null until then, which is the state of a workspace
-        // whose halt has never been cleared and leaves every existing caller meaning what it meant.
-        haltClearedAt: null,
+        // R4: the stamp the once-an-hour rule reads -- epoch ms, like every other time in the
+        // world. Null on a project whose halt has never been cleared, by anybody.
+        haltClearedAt: workspace.haltClearedAt?.getTime() ?? null,
         // The same comparison `evaluateGuardrails` makes, on the same total: an UNBUDGETED
         // workspace (`budgetUsd` null) is never exhausted, however much it has spent. Kept as its
         // own field rather than folded into `halted` because the two answer different questions --

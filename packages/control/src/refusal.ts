@@ -88,6 +88,29 @@ export type ControlRefusal =
    * here rather than left to repeat the trip.
    */
   | { readonly kind: 'attempt_ceiling_reached'; readonly taskId: string; readonly attempt: number; readonly maxAttempts: number }
+  /**
+   * E R3: `retryTask` on a task that is not `failed`. The mirror of `task_not_blocked` for the
+   * other terminal park: `unblockTask` is the exit from `blocked` and this is the exit from
+   * `failed`, and neither verb touches the status the other one is for.
+   */
+  | { readonly kind: 'task_not_failed'; readonly taskId: string; readonly status: string }
+  /**
+   * E R3: `retryTask` on a task the Supervisor has already put back `RETRIES_MAX` times. Counted on
+   * `Task.retries`, NOT on `Task.attempt` -- the retry resets the attempts, and the whole point of
+   * the second counter is that "we have tried remedies twice" survives that reset. The third time
+   * the finding is that the remedies are not working, and `escalate_to_human` is what the rules
+   * offer instead (`candidates.ts`).
+   */
+  | { readonly kind: 'retry_ceiling_reached'; readonly taskId: string; readonly retries: number; readonly limit: number }
+  /**
+   * E R4: `clear_halt` inside `HALT_CLEAR_INTERVAL_MS` of the last clear -- whoever made it, the
+   * Supervisor or an operator's own `clear-halt`, since both write the same stamp.
+   *
+   * Checked here as well as in `candidates.ts` (which does not OFFER the action inside the window)
+   * because a proposal can be approved by a person an hour after it was made: the offer and the
+   * apply are two moments, and the bound is on the apply.
+   */
+  | { readonly kind: 'halt_recently_cleared'; readonly workspaceId: string; readonly clearedAt: string }
   | { readonly kind: 'self_dependency'; readonly taskId: string }
   | { readonly kind: 'duplicate_dependency'; readonly taskId: string; readonly dependsOnTaskId: string }
   /**
@@ -558,6 +581,19 @@ export function refusalText(refusal: ControlRefusal): string {
         `task ${refusal.taskId} is at its attempt ceiling (${refusal.attempt}/${refusal.maxAttempts}); ` +
         `unblocking it as-is would only fail it again. Raise the ceiling by exactly one with: ` +
         `unblock-task --task ${refusal.taskId} --allow-another-attempt`
+      )
+    case 'task_not_failed':
+      return `task ${refusal.taskId} is ${refusal.status}; only a failed task can be retried`
+    case 'retry_ceiling_reached':
+      return (
+        `task ${refusal.taskId} has already been retried ${String(refusal.retries)} times ` +
+        `(the limit is ${String(refusal.limit)}); two remedies that did not work is the finding, not a reason ` +
+        `for a third. Take it from here by hand, or fail it with: fail-task --task ${refusal.taskId}`
+      )
+    case 'halt_recently_cleared':
+      return (
+        `this project's halt was already cleared at ${refusal.clearedAt}; it is cleared at most once an hour, ` +
+        'so a second runaway inside that hour is a person’s call'
       )
     case 'self_dependency':
       return `task ${refusal.taskId} cannot depend on itself`
