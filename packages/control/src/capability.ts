@@ -91,7 +91,7 @@ export async function syncCapabilityTaxonomy(): Promise<{ readonly created: numb
  *  restated here because the two columns it compares (`Person.capabilities`, one array) are not
  *  the two this function compares (`SlaveTemplate.capabilityKeys` AND
  *  `.unresolvedCapabilities`, two arrays; Task 3). */
-function sameStringSet(current: readonly string[], desired: readonly string[]): boolean {
+export function sameStringSet(current: readonly string[], desired: readonly string[]): boolean {
   if (current.length !== desired.length) return false
   const want = new Set(desired)
   return current.every((value) => want.has(value))

@@ -5,22 +5,27 @@ import {
   buildCapabilityMappingPrompt,
   capabilityMappingHash,
   mappableSentences,
+  normaliseCapabilities,
   parseCapabilityMappingAnswer,
   profileSpecSchema,
   type CapabilityMappingPersona,
   type CapabilityRecord,
 } from '@slave-of-ai/domain'
-import { effectiveCapabilityKeys, listCapabilities } from './capability.js'
+import { effectiveCapabilityKeys, listCapabilities, sameStringSet } from './capability.js'
 import { syncPersonPool, type PersonPoolSyncReport } from './personPool.js'
-import type { ModelDecider } from './simulation/llm.js'
+import type { ModelDecider, ModelOutcome } from './simulation/llm.js'
 
 /**
  * Catalogue capability mapping (2026-09-20), R6: the ONE verb that asks a model which taxonomy
  * keys a persona provides, in batches, and writes the answer beside the exact matcher's keys.
  *
- * Money discipline, in order: the hash (R4) decides whether a call is owed at all; the batch
- * bounds the prompt; the per-call cap bounds the call; one transaction per batch bounds what a
- * bad answer can touch. A batch that fails -- no JSON, an isolation breach, a spawn failure --
+ * Money discipline, in order: the hash (R4) decides whether a call is owed at all; ACTIVE
+ * templates only (fix round 1) -- an inactive template can never be proposed by
+ * `hire_from_catalog`, so paying to map it is waste; the batch bounds the prompt; the per-call cap
+ * bounds the call; one transaction per batch bounds what a bad answer can touch. When a template
+ * is later activated its hash is still whatever it was (possibly null), so it is simply stale (or
+ * new) the next time this pass runs -- no separate "activated" bookkeeping is needed. A batch that
+ * fails -- no JSON, an isolation breach, a spawn failure, a write that throws mid-transaction --
  * leaves its rows exactly as they were, so the next pass retries them, and never stops the
  * batches after it.
  */
@@ -67,11 +72,11 @@ interface Candidate {
   readonly exactKeys: readonly string[]
 }
 
-/** R4: every structured template with at least one mappable sentence, with today's hash beside
- *  the stored one. Read once per pass, id ascending, so a batch boundary is deterministic. */
+/** R4: every ACTIVE, structured template with at least one mappable sentence, with today's hash
+ *  beside the stored one. Read once per pass, id ascending, so a batch boundary is deterministic. */
 async function loadCandidates(taxonomy: readonly CapabilityRecord[]): Promise<readonly Candidate[]> {
   const rows = await prisma.slaveTemplate.findMany({
-    where: { profileSpec: { not: Prisma.DbNull } },
+    where: { active: true, profileSpec: { not: Prisma.DbNull } },
     select: {
       id: true,
       name: true,
@@ -80,7 +85,6 @@ async function loadCandidates(taxonomy: readonly CapabilityRecord[]): Promise<re
       capabilityKeys: true,
       mappedCapabilityKeys: true,
       capabilityMappingHash: true,
-      unresolvedCapabilities: true,
     },
     orderBy: { id: 'asc' },
   })
@@ -97,10 +101,13 @@ async function loadCandidates(taxonomy: readonly CapabilityRecord[]): Promise<re
       identity: spec.data.identity,
       capabilities: spec.data.capabilities,
     }
-    // The EXACT half is what the row's current effective set holds minus the mapped half -- the
-    // matcher's own output is not stored on its own, and re-running it here would couple this
-    // pass to `normaliseCapabilities`. Subtracting is exact because both halves are sets.
-    const exactKeys = row.capabilityKeys.filter((key) => !row.mappedCapabilityKeys.includes(key))
+    // The EXACT half is recomputed fresh against the LIVE taxonomy (`reconcileTemplateCapabilities`
+    // does the same, in this package) rather than subtracted from the stored columns -- a key the
+    // exact matcher finds AND the model also chose lives in BOTH `capabilityKeys` and
+    // `mappedCapabilityKeys`; subtracting would zero it out the moment a later re-map dropped it
+    // from the model's own answer, losing a key the persona still states by word (fix round 1,
+    // Important 1).
+    const exactKeys = normaliseCapabilities(spec.data.capabilities, taxonomy).keys
     candidates.push({
       persona,
       hash: capabilityMappingHash(persona, taxonomy),
@@ -118,15 +125,18 @@ export async function countStaleTemplateMappings(): Promise<{ readonly considere
   return { considered: candidates.length, stale: candidates.filter((c) => c.hash !== c.storedHash).length }
 }
 
-function sameSet(a: readonly string[], b: readonly string[]): boolean {
-  return a.length === b.length && [...a].toSorted().every((v, i) => v === [...b].toSorted()[i])
+/** A finite positive integer, or the fallback -- guards `batchSize`/`maxBatches` against a caller
+ *  passing `NaN`, `0`, a negative number or a fraction (fix round 1, minors). */
+function positiveIntOr<T>(value: number | undefined, fallback: T): number | T {
+  return value !== undefined && Number.isInteger(value) && value > 0 ? value : fallback
 }
 
 export async function mapTemplateCapabilities(input: MapTemplateCapabilitiesInput): Promise<CapabilityMappingReport> {
   const taxonomy = await listCapabilities()
   const candidates = await loadCandidates(taxonomy)
   const due = input.only === 'all' ? candidates : candidates.filter((c) => c.hash !== c.storedHash)
-  const batchSize = Math.max(1, input.batchSize ?? CAPABILITY_MAP_BATCH_SIZE)
+  const batchSize = positiveIntOr(input.batchSize, CAPABILITY_MAP_BATCH_SIZE)
+  const maxBatches = positiveIntOr(input.maxBatches, undefined)
   const cap = input.maxBudgetUsdPerCall ?? CAPABILITY_MAP_PER_CALL_CAP_USD
 
   let calls = 0
@@ -141,11 +151,11 @@ export async function mapTemplateCapabilities(input: MapTemplateCapabilitiesInpu
   let wrote = false
 
   for (let start = 0; start < due.length; start += batchSize) {
-    if (input.maxBatches !== undefined && calls >= input.maxBatches) break
+    if (maxBatches !== undefined && calls >= maxBatches) break
     const batch = due.slice(start, start + batchSize)
     const prompt = buildCapabilityMappingPrompt(batch.map((c) => c.persona), taxonomy)
     calls += 1
-    let outcome
+    let outcome: ModelOutcome
     try {
       outcome = await input.decider({ model: input.model, prompt, maxBudgetUsd: cap })
     } catch {
@@ -165,7 +175,11 @@ export async function mapTemplateCapabilities(input: MapTemplateCapabilitiesInpu
     }
     const byId = new Map(parsed.map((r) => [r.id, r] as const))
     const now = new Date()
+    // Classified BEFORE the dryRun branch (fix round 1, minors) so `mapped`/`unchanged`/`rows`
+    // mean the same thing whether or not this call actually writes: `rows` holds only the
+    // personas that would be (or were) written, never one already exactly what is stored.
     const writes: { candidate: Candidate; keys: readonly string[]; dropped: readonly string[] }[] = []
+    let batchUnchanged = 0
     for (const candidate of batch) {
       const result = byId.get(candidate.persona.id)
       if (result === undefined) {
@@ -173,6 +187,11 @@ export async function mapTemplateCapabilities(input: MapTemplateCapabilitiesInpu
         continue
       }
       droppedKeys += result.dropped.length
+      const same = sameStringSet(candidate.storedMapped, result.keys) && candidate.storedHash === candidate.hash
+      if (same) {
+        batchUnchanged += 1
+        continue
+      }
       writes.push({ candidate, keys: result.keys, dropped: result.dropped })
     }
     for (const write of writes) {
@@ -180,28 +199,40 @@ export async function mapTemplateCapabilities(input: MapTemplateCapabilitiesInpu
     }
     if (input.dryRun) {
       mapped += writes.length
+      unchanged += batchUnchanged
       continue
     }
-    await prisma.$transaction(async (tx) => {
-      for (const { candidate, keys } of writes) {
-        const same = sameSet(candidate.storedMapped, keys) && candidate.storedHash === candidate.hash
-        if (same) {
-          unchanged += 1
-          continue
+    // The counters below are LOCAL to this batch and folded into the running totals only once the
+    // transaction resolves (fix round 1, Important 2): a thrown `tx.slaveTemplate.update` -- a
+    // concurrent delete of a template mid-batch, say -- rolls the whole batch back, and the
+    // rejection must not leave the closure's increments behind, must not stop the batches after
+    // it, and must not stop `syncPersonPool()` from running off whatever earlier batches DID
+    // commit.
+    let batchMapped = 0
+    let batchWrote = false
+    try {
+      await prisma.$transaction(async (tx) => {
+        for (const { candidate, keys } of writes) {
+          await tx.slaveTemplate.update({
+            where: { id: candidate.persona.id },
+            data: {
+              mappedCapabilityKeys: [...keys],
+              capabilityMappingHash: candidate.hash,
+              capabilityMappedAt: now,
+              capabilityKeys: effectiveCapabilityKeys(candidate.exactKeys, keys),
+            },
+          })
+          batchMapped += 1
+          batchWrote = true
         }
-        await tx.slaveTemplate.update({
-          where: { id: candidate.persona.id },
-          data: {
-            mappedCapabilityKeys: [...keys],
-            capabilityMappingHash: candidate.hash,
-            capabilityMappedAt: now,
-            capabilityKeys: effectiveCapabilityKeys(candidate.exactKeys, keys),
-          },
-        })
-        mapped += 1
-        wrote = true
-      }
-    })
+      })
+    } catch {
+      failedBatches += 1
+      continue
+    }
+    mapped += batchMapped
+    unchanged += batchUnchanged
+    if (batchWrote) wrote = true
   }
 
   const pool = wrote ? await syncPersonPool() : null
