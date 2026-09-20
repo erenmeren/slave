@@ -85,8 +85,8 @@ hand on 2026-09-20 and the research seat was granted `network_fetch` by hand; bo
 `tierOf` changes in one place: after the `escalate_to_human`, `no_action` and halted checks (which
 keep their order and meaning), **when `world.autonomy === 'act'` every remaining action is
 `applied`**. `escalate_to_human` stays escalated (a person is asked only when the candidate set
-holds nothing else, §R3), and a halted workspace still forces proposals — except the one action R4
-adds for the halt itself. Under `propose` nothing changes. `setSupervisorSettings` gains
+holds nothing else, §R3), and a halted workspace still forces proposals — except the actions R4
+adds for the halt itself (E11: `clear_halt` and the `retry_task` its evidence is made of). Under `propose` nothing changes. `setSupervisorSettings` gains
 `autonomy?: 'propose' | 'act'` and emits `workspace.settings_changed` with field
 `supervisorAutonomy`; the CLI's `supervisor` verb gains `--autonomy propose|act`; the web PUT
 `/api/w/:id/supervisor` accepts it; the panel's scope line gains the switch (`data-testid="supervisor-autonomy"`,
@@ -191,7 +191,7 @@ event type are unchanged. New event types: none — `supervisor.applied`/`failed
 | clear halt (new, circuit breaker only) | proposed | applied, once per hour |
 | answer a worker's question | proposed → `answerTier` | applied when the draft cites its sources, else proposed |
 | escalate to human | escalated | escalated |
-| anything while halted (except clear halt) | proposed | proposed |
+| anything while halted (except the halt's own remedies, E11) | proposed | proposed |
 
 ## 3. The diagnosis, spelled out
 
@@ -245,4 +245,96 @@ to the breaker's thresholds or to what counts as a failure.
 
 ## 7. Errata
 
-None yet.
+Written at Task 8, which is where the whole path was driven end to end for the first time. Each
+names the task that found it.
+
+**E1 — `task_failed` is extended, not new (Task 3).** R3 calls the situation new; `observe` has
+raised it since M38 for a `failed` task with dependents. Task 3 extended the existing predicate with
+the new facts rather than adding a second kind that would have fired beside it.
+
+**E2 — R6 is satisfied by the status a retry writes (Task 5).** `retry_task` sets `rework`, and
+`acquireWorktree` already adopts an existing worktree for a rework run — so "retried tasks adopt
+their worktree" needed no new branch in `startRun`. Its second sentence did need one: a worktree
+DIRECTORY with no branch behind it is now removed inside the worktrees dir, pruned and re-provisioned,
+and a branch whose directory is gone is reattached.
+
+**E3 — `TaskFailure.at` is epoch ms, and there is a fourth field (Task 2/3).** R2 spells `at` as a
+string; it is a number, like every other time in `SupervisorWorld` (`statusSince`, `now`,
+`haltClearedAt`), so the rules compare it without parsing. `slaveId` joined the shape in Task 3's fix
+round: it is the only place a `retry_task` grant can find the worker to grant to, because
+`world.denials` and `world.runs` hold only LIVE runs and a failed task's refused run is in neither.
+
+**E4 — a refusal beats an infrastructure marker (Task 3).** §3's table does not order its rows, and a
+real failure line carries both ("the run's output stream ended…" on a run that was refused the web).
+`readFailure` reads `denied_tool` first: a gate really did turn this worker away from something the
+work needs, and the remedy names it, while an infrastructure string can ride along with anything —
+including the message a refused run writes on its way out.
+
+**E5 — `clear_halt` requires an APPLIED `retry_task` newer than the task's latest failure (Task 3).**
+R4 says "the newest failed task now has a `retry_task` decision applied"; the first implementation
+read the task's STATUS instead, and `releaseTaskAfterFailure` writes `rework` — so a retry that had
+failed again looked exactly like a cause that had been addressed, and the breaker became an hourly
+speed bump in front of a runaway. The evidence is a pair now: an applied `retry_task` for that task,
+and no failure on it since that decision was made.
+
+**E6 — control strips the `steer: ` label before the worker sees it (Task 4).** The `lost` reading's
+retry reason begins `steer: ` so the panel and the decision row can say what kind of remedy was
+chosen. `retryTask` strips the prefix before storing it on `Task.lastRejectionReason`: the prompt
+that carries the note already frames it, and the label after that framing would be machinery in an
+instruction.
+
+**E7 — `needs` is nullish-tolerant, deduped and bounded, and a re-plan writes it too (Task 5).** R5
+gives the closed list and `validateStructure`'s drop; the parser also reads an absent or null `needs`
+as `[]` and bounds what one task may ask for, and `replan.ts` writes `requiredPermissions` for the
+tasks a delta adds — without that line, a task the planner added on the second pass would silently
+carry none.
+
+**E8 — the `workspace.settings_changed` field enum gained two members (Task 4/6).** R1 and R7 say the
+verbs emit that event with fields `supervisorAutonomy` and `autoMerge`; the event schema's field enum
+is closed, so `appendEvent` refused both until the two were added to it.
+
+**E9 — `supervisor.applied`/`failed` carry the WHOLE action (Task 8).** R8 asks the feed to say what
+the Supervisor did, and `applyDecision` appended `{ kind }` alone — so every sentence degraded to
+"the Supervisor retried a task". Both arms carry the action now (`.passthrough()` over the kind
+enum, so a row written before this still parses), and `verbPhrase` reads the title, the worker's name
+and the operation's label off it. `supervisor.decided`/`proposed` still carry the kind alone: they
+are read beside the decision row their `decisionId` points at.
+
+**E10 — `task.unblocked` carries the retry's own facts (Task 8).** `retryTask` has written `reason`,
+`retries` and `grant` on the row since Task 4, and the typed event stripped all three — `z.object`
+drops what its shape does not name. All three are optional on the arm now; an ordinary human unblock
+carries none of them.
+
+**E11 — a halt does not demote `retry_task` under `act` (Task 8).** R4 makes `clear_halt` the one
+exception to "a halted workspace still forces proposals", and it was one action short: `clear_halt`
+is offered only once a `retry_task` has been APPLIED to the task the breaker counted (E5), so a halt
+that demoted the retry made its own remedy unreachable without a person. On the project this
+milestone was written for — a research task refused the web, three failed runs, the breaker down —
+`act` escalated twice and moved nothing. The pair travels together now. Nothing else joins them, and
+what the two have in common is the line: NEITHER STARTS ANYTHING, because nothing is scheduled while
+a workspace is halted. §2's last row reads "anything while halted (except the halt's own two
+remedies)".
+
+**E12 — the pass that answers a halt's cause does not also escalate the halt (Task 8).** R4's "applied
+in the same pass or the previous one" could not happen in the same pass: `workspace_halted` is the
+last kind `observe` emits, and its catalogue is built from a world read before the pass applied
+anything — so a pass that had just retried the breaker's own task still found no evidence, escalated,
+and then held that situation key behind the pending row for as long as the escalation lived
+(`filterFresh`). `supervise` skips the halt in a pass that has already applied something; the next
+pass reads a world that knows what this one did. The condition is exact rather than broad: while a
+workspace is halted the only things `tierOf` applies are the halt's own remedies.
+
+**E13 — an autonomous grant says who made it (Task 8).** R3 says the grant is recorded as
+`by: 'supervisor'`. `setSlavePermission` appended `actor: 'human'` with `by: null` for every caller,
+which was true while `request_permission` — always `proposed` — was the only way in; the grant a
+`retry_task` carries under `act` has no approver, and the timeline said a person granted network
+access to a worker on a quiet afternoon. `origin` travels with the retry, and the event says `system`
+/ `by: 'supervisor'`. An approved proposal is unchanged: the approver is the granter.
+
+**E14 — the hour rule reads two different clocks (Task 8, open).** `candidates` measures
+`world.now - world.haltClearedAt` against the tick's clock and `carryOut` measures
+`Date.now() - haltClearedAt`, and `clearHalt` stamps `new Date()`. In production these are the same
+instant and the rule behaves as R4 states; under a test clock they are not, which is why the
+end-to-end test sets `haltClearedAt` explicitly for its third pass rather than relying on what the
+second one stamped. Left as it is: threading the tick's clock through `clearHalt` touches the
+operator's own verb for a difference no production path can observe.

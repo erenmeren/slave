@@ -76,7 +76,7 @@ CLI:
 ```bash
 npm run orchestrator -- create-workspace --name <name> --repo /abs/path/to/repo \
   --verify "npm test" [--verify "<cmd>" ...] [--setup "<cmd>" ...] \
-  [--base main] [--budget <usd> | --no-budget] [--provider claude_code|cursor]
+  [--base main] [--budget <usd> | --no-budget] [--provider claude_code|cursor] [--auto-merge]
 ```
 
 `--repo` must be an absolute path to a git working tree, `--base` an existing branch, and at least
@@ -87,12 +87,18 @@ orchestrator keeps its worktrees and logs under `<repo>/.slaveofai/` and gitigno
 verify commands pass — that is the only thing `done` means. Whether its code has actually reached
 your base branch is a separate fact, `Task.integratedAt`.
 
-**In practice, every workspace is hand-merge.** `autoMerge` defaults to `false` in the schema, and
-nothing in this codebase ever sets it `true`: `create-workspace` has no flag for it,
-`adopt-simulation` writes `false` explicitly and refuses to carry over a prior `true` (a project
-that had it on loses it, on purpose), and there is no web setting or other CLI verb that turns it
-on. So this is not one policy among two — it is the only one you will hit unless you reach into the
-database by hand. Every task merges by hand: `done` leaves the branch and worktree sitting there for
+**Auto-merge is a switch, and which way it starts depends on where the project came from.** A
+project you describe in the chat on Home starts with it **on**; `create-workspace` starts with it
+**off** unless you pass `--auto-merge`; `adopt-simulation` writes `false` explicitly and refuses to
+carry over a prior `true`. Either way you can move it whenever you like:
+
+```bash
+npm run orchestrator -- set-auto-merge --workspace <id> --on   # or --off
+```
+
+or from Project Settings → runtime, where it is a toggle beside the concurrency and attempt limits.
+
+**With it off**, every task merges by hand: `done` leaves the branch and worktree sitting there for
 you and `integratedAt` stays null. Any task depending on one that is `done` but not yet integrated
 waits — the scheduler will not provision it from a base branch that does not yet have its
 dependency's commits on it. Merge the branch yourself, then say so:
@@ -104,14 +110,13 @@ npm run orchestrator -- confirm-integration --task <id>
 and its dependents become schedulable on the next tick. Expect to run this after every task your
 dependency graph has downstream work waiting on.
 
-`autoMerge = true` exists in the schema and is exercised by tests and simulation gates, and would
-skip the step above by merging (and stamping `integratedAt`) the moment a task's review is
-approved — but nothing ships a way to turn it on for a real workspace, so treat it as a future
-switch rather than a normal mode. One consequence worth knowing if you ever do flip it (by hand, in
-the database) on a workspace with history: turning `autoMerge` on does not retroactively stamp
-anything. Tasks that already reached `done` by hand merge keep `integratedAt` null — correct, since
-no merge happened through the new path — and stay unstamped, still blocking their dependents, until
-you run `confirm-integration` on each of them once.
+**With it on**, the branch is merged and `integratedAt` stamped the moment a task's review is
+approved, and you run nothing. One consequence worth knowing if you flip it on for a project with
+history: turning `autoMerge` on does not retroactively stamp anything. Tasks that already reached
+`done` by hand merge keep `integratedAt` null — correct, since no merge happened through the new
+path — and stay unstamped, still blocking their dependents, until you run `confirm-integration` on
+each of them once. `set-auto-merge --on` prints how many such tasks the project has, so you know
+what is still waiting.
 
 Staff it and give the team something to do:
 
@@ -815,18 +820,55 @@ one addressed to a role nobody holds; a startable task whose required role has n
 that has been done but unmerged for six hours with dependents waiting; and a project whose
 scheduling has stopped.
 
-**Two tiers, fixed in code.** Routine actions apply immediately: sending a task parked *by the
-review retry cap* back to `rework` while it still has attempts, re-addressing an unanswered
-question to somebody who can answer it, and sending an answer it can *prove* (see below).
-Everything else is a proposal that waits for you — raising an attempt cap, writing a worker's
-runtime roles, declaring a task failed, and **unblocking a task that anything else parked**. That
-last one is the rule worth knowing: `blocked` means a human has to look at this,
-and two of the ways a task gets there are deliberate (a cancelled run, a worktree the daemon
-refused to adopt), so the review cap is the one park the Supervisor knows a safe exit from. While
-the project is **halted** every action is a proposal — a guardrail has already said this project
-should not be moving, so the Supervisor may say what it would do and nothing more. "Halted" here
-means an emergency stop, a spent budget or a tripped circuit breaker; a project merely at its
-concurrency cap is busy, not stuck, and nothing is frozen for it.
+**One switch decides whether it proposes or acts.** Under `propose` — what every project created
+before this switch existed still does — the Supervisor applies only the routine actions below and
+puts everything else in front of you. Under `act` it carries out whatever it decides, and the only
+thing that still waits for a person is an escalation: a situation whose catalogue held nothing but
+"a human decides". A project you describe in the chat on Home starts on `act`; `create-workspace`
+starts on `propose`. Move it with the CLI or the switch on the Supervisor panel's scope line:
+
+```bash
+npm run orchestrator -- set-supervisor --workspace <id> --autonomy act     # or propose
+```
+
+**Two tiers, fixed in code.** Under `propose`, routine actions apply immediately: sending a task
+parked *by the review retry cap* back to `rework` while it still has attempts, re-addressing an
+unanswered question to somebody who can answer it, and sending an answer it can *prove* (see
+below). Everything else is a proposal that waits for you — raising an attempt cap, writing a
+worker's runtime roles, declaring a task failed, granting a permission, hiring anybody, and
+**unblocking a task that anything else parked**. That last one is the rule worth knowing: `blocked`
+means a human has to look at this, and two of the ways a task gets there are deliberate (a
+cancelled run, a worktree the daemon refused to adopt), so the review cap is the one park the
+Supervisor knows a safe exit from. While the project is **halted** every action is a proposal,
+whichever way the switch is set — a guardrail has already said this project should not be moving,
+so the Supervisor may say what it would do and nothing more. The two exceptions, and only under
+`act`, are the halt's own remedies below: retrying the task the breaker counted, and clearing the
+halt once that retry has landed. Neither starts anything — nothing is scheduled while a project is
+halted — which is what makes them safe to apply in a state where hiring somebody would not be. "Halted" here means an emergency stop, a spent budget or a tripped circuit breaker;
+a project merely at its concurrency cap is busy, not stuck, and nothing is frozen for it.
+
+**A remedy is chosen from the failure, not guessed.** When a task fails, the Supervisor reads *why*
+before it picks anything: the reason the run recorded, the operations that run was refused, how
+many implementation runs the task has lost, and how many remedies have already been spent on it.
+Out of that come three actions the rules did not have before:
+
+- **retry the task** — a `failed` task back to `rework` with its attempts reset, which is the one
+  exit from a status nothing else in this product could leave. When the diagnosis names a refused
+  operation the task needed, the same decision **grants it first**, to the worker whose run met the
+  wall: one row that says both what was granted and why. Two retries is the ceiling; the third time
+  a person is asked, with the whole history in the summary.
+- **retry the review** — a task parked at the review cap by an infrastructure failure (a diff too
+  big to read, a vendor CLI that would not start) goes back to `reviewing` rather than to rework.
+  The reviewer never judged the work, so another review costs a review attempt and no rework.
+- **clear the halt** — a *circuit-breaker* halt whose cause has been answered is retracted, at most
+  once an hour. "Answered" is exact: a retry was applied to the task the breaker counted, and that
+  task has not failed since. A budget halt and an emergency stop are never cleared this way — the
+  first is money and the second is a person.
+
+**What a task is allowed to touch.** The planner writes a task's `needs` — `network_fetch`,
+`run_commands` — beside its capabilities, and the dispatch adds them to that run's permissions for
+**implementation runs only** (a review judges, it does not fetch). So a research task can reach the
+web without anybody granting it by hand, and an explicit `deny` on the worker still wins.
 
 **The model picks, the rules offer.** Where a model is wired and the budget allows it, the
 Supervisor asks for an *index into the catalogue* and a rationale — it can never add an action,
@@ -892,7 +934,10 @@ and calls nobody at all.
 **Approve** / **Reject** (with an optional reason) — then the recent decisions with their tier,
 status, who decided (model or rules) and the rationale, and finally a switch that turns the
 Supervisor down to report-only and a box for its own profile (its persona and house rules, which
-go into the decision prompt). The five `supervisor.*` events have their own cards on Activity.
+go into the decision prompt). The panel's scope line carries the **act on its own** switch. The
+five `supervisor.*` events have their own cards on Activity, and what the Supervisor actually did
+— "retried *Read the market*", "granted network access to Ash", "cleared the halt" — is a line in
+Home's feed as it happens.
 
 **From the shell:**
 
@@ -906,6 +951,8 @@ npm run orchestrator -- reject-decision --id <id> [--reason <text>]
 npm run orchestrator -- reassign-question --message <id> --to <slaveId> [--by <name>]
 npm run orchestrator -- set-supervisor --workspace <id> (--enable | --disable)
 npm run orchestrator -- set-supervisor --workspace <id> (--profile-file <path> | --clear-profile)
+npm run orchestrator -- set-supervisor --workspace <id> --autonomy (propose | act)
+npm run orchestrator -- set-auto-merge --workspace <id> (--on | --off)
 ```
 
 `supervise` is the one command that spends on a model call by hand; the daemon's own pass does the
