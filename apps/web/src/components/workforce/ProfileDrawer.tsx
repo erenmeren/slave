@@ -94,6 +94,10 @@ const fromText = (field: ProfileSpecField, text: string): string | string[] =>
         .map((line) => line.trim())
         .filter((line) => line !== '')
 
+/** Fix round 1, minor: a stable default for `mappedCapabilityKeys`, so a caller that never passes
+ *  it does not hand the `resolved` memo a fresh `[]` -- and therefore a fresh `Set` -- every render. */
+const NO_MAPPED: readonly string[] = []
+
 /**
  * One template's specialist profile, opened from a catalog row (M46 R6).
  *
@@ -119,7 +123,7 @@ export function ProfileDrawer({
   templateId,
   name,
   capabilityKeys,
-  mappedCapabilityKeys = [],
+  mappedCapabilityKeys = NO_MAPPED,
   capabilityMapping = 'none',
   taxonomy,
   defaultSkillIds = [],
@@ -139,9 +143,12 @@ export function ProfileDrawer({
    *  these is a MEMBERSHIP test, not a position: a mapped key is not necessarily last. */
   readonly mappedCapabilityKeys?: readonly string[]
   /** R4's staleness, already decided by the read model so this drawer never has to hash anything
-   *  itself. `'none'` is "never mapped", not "mapped zero keys" -- the line this renders below the
-   *  chips says which. */
-  readonly capabilityMapping?: 'mapped' | 'stale' | 'none'
+   *  itself. `'none'` is "never mapped", not "mapped zero keys". `'inactive'` (fix round 1, I1) is
+   *  "never mapped, AND the pass would skip it anyway" -- the pass and `capabilities map` both
+   *  only consider `active: true` rows, so an inactive, never-mapped row needs its own line rather
+   *  than promising a re-map that will not happen until it is activated. The line this renders
+   *  below the chips says which. */
+  readonly capabilityMapping?: 'mapped' | 'stale' | 'none' | 'inactive'
   readonly taxonomy: readonly CapabilityRecord[]
   readonly defaultSkillIds?: readonly string[]
   readonly hiredCount?: number
@@ -394,21 +401,29 @@ export function ProfileDrawer({
             {group === 'capabilities' && (capabilityKeys.length > 0 || capabilityMapping !== 'mapped') && (
               <div data-testid="profile-capability-keys" className="flex flex-col gap-1">
                 <span className="text-[10px] uppercase tracking-wide text-text-3">Matchable capabilities</span>
-                <CapabilityChips capabilities={resolved} max={resolved.length} />
+                {/* Fix round 1, I3: `CapabilityChips` prints "no capabilities recorded" for an
+                  * EMPTY list, which is true for the persona's real bullets but says the opposite
+                  * thing sitting under "Matchable capabilities" when this block is showing only
+                  * because the mapping line below has something to say. Rendered only when there is
+                  * a chip to show; the header and the mapping line stand on their own otherwise. */}
+                {resolved.length > 0 && <CapabilityChips capabilities={resolved} max={resolved.length} />}
                 {unresolved.length > 0 && (
                   <span data-testid="profile-capabilities-unresolved" className="text-[11px] text-text-3">
                     not in the taxonomy — `capabilities add` to make them matchable: {unresolved.join(', ')}
                   </span>
                 )}
                 {/* R8: which chips were matched by the persona's own words and which were chosen by
-                  * a model, and whether the mapping the model half depends on is missing or stale --
-                  * the provenance a chip alone cannot say (it is on `data-provenance`, not text). */}
+                  * a model, and whether the mapping the model half depends on is missing, stale, or
+                  * waiting on the row being activated -- the provenance a chip alone cannot say (it
+                  * is on `data-provenance`, not text). */}
                 <span data-testid="profile-capability-mapping" className="text-[11px] text-text-3">
                   {capabilityMapping === 'stale'
                     ? 'mapping is stale — the daemon re-maps it on its next pass, or run `capabilities map`'
-                    : capabilityMapping === 'none'
-                      ? 'not yet mapped — the daemon maps it on its next pass, or run `capabilities map`'
-                      : "matched keys come from the persona's own words; mapped keys were chosen by a model"}
+                    : capabilityMapping === 'inactive'
+                      ? 'not mapped while inactive — activate it and the daemon maps it on its next pass'
+                      : capabilityMapping === 'none'
+                        ? 'not yet mapped — the daemon maps it on its next pass, or run `capabilities map`'
+                        : "matched keys come from the persona's own words; mapped keys were chosen or confirmed by a model"}
                 </span>
               </div>
             )}

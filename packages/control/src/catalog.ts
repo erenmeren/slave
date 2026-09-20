@@ -999,12 +999,18 @@ function catalogRowOf(
   // itself hashed. Checking against `effective` would call a row stale the instant an operator
   // overrode a field the pass never read, which is not what went stale. False for a row that is
   // not structured, or whose sentences are all blank -- the pass never mapped it, so there is
-  // nothing to be stale.
+  // nothing to be stale. `template.active` too (fix round 1, I1): the pass and `capabilities map`
+  // both skip an inactive row (Task 5's "active-only mapping"), so an inactive row's stored hash
+  // is never refreshed and would read "stale" forever for a reason that is not staleness.
   const capabilityMappingStale =
+    template.active &&
     spec.success &&
     mappableSentences(spec.data.capabilities).length > 0 &&
     template.capabilityMappingHash !==
-      capabilityMappingHash({ summary: spec.data.summary, identity: spec.data.identity, capabilities: spec.data.capabilities }, taxonomy)
+      capabilityMappingHash(
+        { summary: spec.data.summary, identity: spec.data.identity, capabilities: spec.data.capabilities },
+        taxonomy,
+      )
   return {
     id: template.id,
     name: template.name,

@@ -32,11 +32,29 @@ const HEADER = ['Name', 'Division', 'Summary', 'Capabilities', 'Source', 'Defaul
 /** How many capability chips fit a row before the rest becomes a count. */
 const CHIPS = 3
 
-/** R8 (2026-09-20 catalogue capability mapping): what the drawer's mapping line says, off the
- *  SAME two fields every `setOpen` site below reads off a row -- one place, so the three sites
- *  (the row, its name button, and a duplicate pair's "open the other one") cannot disagree. */
-const capabilityMappingOf = (row: CatalogRowView): 'mapped' | 'stale' | 'none' =>
-  row.capabilityMappingStale ? 'stale' : row.capabilityMappedAt === null ? 'none' : 'mapped'
+/**
+ * R8 (2026-09-20 catalogue capability mapping): what the drawer's mapping line says, off the SAME
+ * fields the two row-click `setOpen` sites below read off a row -- one place, so they cannot
+ * disagree. (The THIRD `setOpen` site, `onOpenTemplate`, does not call this -- fix round 1, I4 --
+ * because it does not know the OTHER template's mapping state; see the comment there.)
+ *
+ * Four states, in this precedence order (fix round 1, I1):
+ * 1. never mapped AND inactive -- the pass and `capabilities map` both skip an inactive row, so
+ *    promising a re-map "on its next pass" would be a promise that pass never keeps until somebody
+ *    activates the row first.
+ * 2. never mapped (active or not) -- "not yet mapped", never "stale": a null `capabilityMappedAt`
+ *    trivially disagrees with any computed hash, and that disagreement is not what "stale" means.
+ * 3. `capabilityMappingStale` (the read model already checked `active` before setting this).
+ * 4. otherwise mapped and current.
+ */
+const capabilityMappingOf = (row: CatalogRowView): 'mapped' | 'stale' | 'none' | 'inactive' =>
+  !row.active && row.capabilityMappedAt === null
+    ? 'inactive'
+    : row.capabilityMappedAt === null
+      ? 'none'
+      : row.capabilityMappingStale
+        ? 'stale'
+        : 'mapped'
 
 /**
  * The Workforce Catalog (M46 R6): every template a company can be staffed from, searchable and
@@ -87,7 +105,7 @@ export function WorkforceCatalog({
     readonly capabilityKeys: readonly string[]
     /** R8: the half of `capabilityKeys` a model chose, and whether that mapping is current. */
     readonly mappedCapabilityKeys: readonly string[]
-    readonly capabilityMapping: 'mapped' | 'stale' | 'none'
+    readonly capabilityMapping: 'mapped' | 'stale' | 'none' | 'inactive'
     readonly defaultSkillIds: readonly string[]
     readonly hiredCount: number
   } | null>(null)
@@ -388,15 +406,24 @@ export function WorkforceCatalog({
           /* M55 R6: the drawer's Duplicates group names the other template as a BUTTON that opens
            * ITS drawer. The keys come off the loaded page when the row is on it; a row that is not
            * (the pair points past the first hundred) opens with none, and the drawer's "Matchable
-           * capabilities" block simply does not render -- everything else in it is fetched by id. */
+           * capabilities" block simply does not render -- everything else in it is fetched by id.
+           *
+           * Fix round 1, I4: `capabilityMapping` is hardcoded `'mapped'` and `mappedCapabilityKeys`
+           * empty here -- NOT `capabilityMappingOf(candidate)` -- because this path does not know
+           * the OTHER template's mapping state. `candidate` is this page's OWN filtered/paged read;
+           * the pair's other side is commonly not on it, and even when it happens to be, treating
+           * that as authoritative would be the same "row it has not loaded" problem one click later.
+           * `'mapped'` keeps the guard (`capabilityKeys.length > 0 || capabilityMapping !== 'mapped'`)
+           * riding on `capabilityKeys` alone, same as every row before R8 touched that guard: the
+           * block renders when there are keys to show and stays hidden otherwise. */
           onOpenTemplate={(id, name) => {
             const candidate = page.rows.find((row) => row.id === id)
             setOpen({
               id,
               name,
               capabilityKeys: candidate?.capabilityKeys ?? [],
-              mappedCapabilityKeys: candidate?.mappedCapabilityKeys ?? [],
-              capabilityMapping: candidate === undefined ? 'none' : capabilityMappingOf(candidate),
+              mappedCapabilityKeys: [],
+              capabilityMapping: 'mapped',
               defaultSkillIds: candidate?.defaultSkillIds ?? [],
               hiredCount: candidate?.hiredCount ?? 0,
             })
