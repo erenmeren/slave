@@ -8,6 +8,7 @@ import { recommendRunbooks } from '../runbook/recommend.js'
 import { TERMINAL } from '../task/state.js'
 import { isStaffableTask } from './candidates.js'
 import {
+  boundReason,
   COOLDOWN_BY_KIND,
   COOLDOWN_MS,
   INTEGRATED_STALE_MS,
@@ -98,6 +99,15 @@ function questionFacts(question: SupervisorQuestion, world: SupervisorWorld): Si
   }
 }
 
+/** R3: what broke last, as a sentence appended to a stuck task's summary -- so the escalation a
+ *  person reads says WHY, rather than sending them to the run log to find out. Empty for a task
+ *  that has never failed, which is what keeps every summary that had no failure behind it saying
+ *  exactly what it always said. */
+function failureSentence(task: SupervisorTask): string {
+  if (task.latestFailure === null) return ''
+  return ` The last run failed: ${boundReason(task.latestFailure.reason)}.`
+}
+
 function taskFacts(task: SupervisorTask): Situation['facts'] {
   return {
     taskId: task.id,
@@ -108,7 +118,28 @@ function taskFacts(task: SupervisorTask): Situation['facts'] {
     requiredRole: task.requiredRole,
     dependents: task.dependents,
     latestGuardrail: task.latestGuardrail,
+    // R2/R3: the facts a remedy is CHOSEN from (`readFailure`), carried onto every task situation
+    // rather than onto `task_failed` alone -- `review_cap_blocked` reads the same reason to tell a
+    // reviewer that never reached a verdict from one that judged the work and said no.
+    //
+    // Flat scalars, because that is what a fact is (`situationSchema`): the failure is spread into
+    // three fields rather than nested, and the refused kinds are ONE string. A reader splits it on
+    // the comma; a kind can never contain one (`PERMISSION_KINDS`).
+    latestFailureReason: task.latestFailure === null ? null : boundReason(task.latestFailure.reason),
+    latestFailureKind: task.latestFailure?.runKind ?? null,
+    latestFailureAt: task.latestFailure?.at ?? null,
+    deniedKinds: task.deniedKinds.join(','),
+    failureCount: task.failureCount,
+    retries: task.retries,
   }
+}
+
+/** The operations this worker has been refused lately, in {@link PERMISSION_KINDS}' own order.
+ *  A denial of something nobody can grant is dropped, exactly as `permission_blocked` drops it. */
+function deniedFor(world: SupervisorWorld, slaveId: string): readonly PermissionKind[] {
+  return PERMISSION_KINDS.filter((kind) =>
+    world.denials.some((denial) => denial.slaveId === slaveId && denial.kind === kind),
+  )
 }
 
 /** Within a kind, subject id ascending -- the tiebreak that makes {@link observe} deterministic. */
@@ -194,7 +225,12 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
         add({
           kind: 'task_blocked_human',
           subjectId: task.id,
-          summary: `Task "${task.title}" is blocked and nothing but a human decision moves it (attempt ${task.attempt} of ${task.maxAttempts}).`,
+          // R3: the reason rides on the summary because the summary is what `escalate_to_human`
+          // carries -- a person asked to look at a parked task should not have to go and find the
+          // run that parked it.
+          summary:
+            `Task "${task.title}" is blocked and nothing but a human decision moves it ` +
+            `(attempt ${task.attempt} of ${task.maxAttempts}).${failureSentence(task)}`,
           facts: taskFacts(task),
         })
       }
@@ -209,8 +245,11 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
         // Plan erratum E6: the runbook stage's escalation sentence, appended here because a
         // `task_failed` situation is DERIVED on every tick -- `rejectTask` has nowhere to write it,
         // and `candidates` already builds `escalate_to_human` out of this summary.
+        // R3 puts the failure reason in front of the stage sentence: what broke is the fact, and
+        // the escalation sentence is the instruction that follows from it.
         summary:
           `Task "${task.title}" failed and ${task.dependents} task(s) depend on it.` +
+          failureSentence(task) +
           (task.stageEscalation === null ? '' : ` ${task.stageEscalation}`),
         facts: { ...taskFacts(task), ...(task.stage === null ? {} : { stage: task.stage }) },
       })
@@ -319,6 +358,7 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
     if (run.trip === null || run.detail === null || run.count === null) continue
     if (run.breakerSteers >= run.breakerTrips) continue
     if (run.breakerSteers >= STEERS_PER_RUN_MAX) continue
+    const denied = deniedFor(world, run.slaveId)
     add({
       kind: 'run_looping',
       subjectId: run.id,
@@ -334,6 +374,13 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
         count: run.count,
         level: run.breakerLevel,
         steers: run.breakerSteers,
+        // R3: the walls THIS worker keeps meeting, so `candidates` can put them in the steer --
+        // a run going in circles is very often a run trying the one thing it is not allowed to do.
+        // Only the kinds a person could actually grant (a pre-M52 row spells `'run tests'`, an
+        // ungoverned tool spells `ungoverned_tool`), in the vocabulary's own order rather than the
+        // loader's, and ABSENT rather than empty when nothing has been refused -- the `stage` fact
+        // on a `task_failed` situation is the same shape, for the same reason.
+        ...(denied.length === 0 ? {} : { deniedKinds: denied.join(',') }),
       },
     })
   }

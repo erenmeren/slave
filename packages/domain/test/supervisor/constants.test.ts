@@ -3,9 +3,12 @@ import {
   ANSWER_MAX_CHARS,
   COOLDOWN_MS,
   DECISION_RETENTION_MS,
+  FAILURE_REASON_MAX_CHARS,
+  HALT_CLEAR_INTERVAL_MS,
   INTEGRATED_STALE_MS,
   PENDING_TTL_MS,
   PRUNE_BATCH,
+  RETRIES_MAX,
   RUN_PROMPT_MAX_CHARS,
   SOURCES_MAX,
   SOURCE_QUOTE_MAX_CHARS,
@@ -42,5 +45,14 @@ describe('supervisor constants', () => {
     expect(SOURCES_MAX).toBe(8)
     expect(DECISION_RETENTION_MS).toBe(30 * 24 * 60 * 60 * 1000)
     expect(PRUNE_BATCH).toBe(500)
+  })
+
+  // R3/R4: the diagnosed remedies' own three. `HALT_CLEAR_INTERVAL_MS` is the one a slipped unit
+  // would cost real money -- an hour spelt in minutes would let a breaker halt be cleared sixty
+  // times an hour, which is the runaway the breaker exists to stop.
+  it('are the retry ceiling, the reason cap and the halt-clearing interval the spec specifies', () => {
+    expect(RETRIES_MAX).toBe(2)
+    expect(FAILURE_REASON_MAX_CHARS).toBe(300)
+    expect(HALT_CLEAR_INTERVAL_MS).toBe(60 * 60 * 1000)
   })
 })

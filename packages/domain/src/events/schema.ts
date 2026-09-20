@@ -57,7 +57,16 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('task.created'),
     payload: z.object({ title: z.string(), goalVersion: z.number().int().nonnegative().nullable().optional() }),
   }),
-  z.object({ ...envelope, type: z.literal('task.started'), payload: z.object({ title: z.string() }) }),
+  // E R5: `grants` is what the run was given beyond the baseline -- the needs the PLANNER wrote on
+  // the task, snapshotted into the run's `permissions.json` at this same moment. OPTIONAL, like
+  // every other widening of an existing arm in this file: `packages/events/src/read.ts` THROWS on a
+  // row it cannot parse, so a required field would make every `task.started` written before this
+  // milestone unreadable. Absent means "the empty list"; every writer sets it.
+  z.object({
+    ...envelope,
+    type: z.literal('task.started'),
+    payload: z.object({ title: z.string(), grants: z.array(z.string().min(1)).optional() }),
+  }),
   z.object({ ...envelope, type: z.literal('task.done'), payload: z.object({ branch: z.string() }) }),
   z.object({
     ...envelope,
@@ -302,6 +311,12 @@ export const executionEventSchema = z.discriminatedUnion('type', [
        *  silently ignored vocabulary is how an operator concludes the feature does not work.
        *  Optional: every event written before M47 has none. */
       droppedCapabilities: z.array(z.string().min(1)).optional(),
+      /** E R5: needs the planner asked for that `TASK_NEEDS` does not have, per task key. Dropped
+       *  from the task and recorded here for `droppedCapabilities`' own reason -- a silently
+       *  ignored vocabulary is how an operator concludes the feature does not work. Optional:
+       *  absent when every need was one of the two, and on every event written before this
+       *  milestone. */
+      droppedNeeds: z.record(z.string().min(1), z.array(z.string().min(1))).optional(),
       /** M48 R2: the adopted runbook and how far this plan covers it. Absent when no runbook is
        *  adopted, and on every event written before M48. */
       runbook: runbookAdherence.optional(),
@@ -394,9 +409,19 @@ export const executionEventSchema = z.discriminatedUnion('type', [
      * is what widened `from`/`to` to booleans. `supervisorProfile` never carries its TEXT -- the
      * persona can be long and is the model's instructions, so the payload carries its sha256 (or
      * `null` for cleared), the same shape `slave.profile_changed` uses.
+     *
+     * E R1 adds `supervisorAutonomy` for the same reason M38 added the other two rather than
+     * minting an event of its own: it is project configuration, it moves through the same verb
+     * (`setSupervisorSettings`), and `from`/`to` carry its two words. WITHOUT this member
+     * `appendEvent` would refuse the append outright -- it throws on a payload the domain cannot
+     * parse -- so the switch could be written and never recorded.
+     *
+     * E R7 adds `autoMerge` on the same terms: the column existed from M8a and no verb could write
+     * it, so `setWorkspaceIntegration` is the first writer and this is where its move is recorded.
+     * `from`/`to` are the two booleans.
      */
     payload: z.object({
-      field: z.enum(['provider', 'budgetUsd', 'supervisorEnabled', 'supervisorProfile']),
+      field: z.enum(['provider', 'budgetUsd', 'supervisorEnabled', 'supervisorProfile', 'supervisorAutonomy', 'autoMerge']),
       from: z.union([z.string(), z.number(), z.boolean(), z.null()]),
       to: z.union([z.string(), z.number(), z.boolean(), z.null()]),
     }),
@@ -495,6 +520,37 @@ export const executionEventSchema = z.discriminatedUnion('type', [
        *  was parked while it was under review. Optional on read: every row written before M42
        *  records the two counters and nothing else. */
       status: z.enum(['rework', 'reviewing']).optional(),
+      /**
+       * E R3 (Task 8, erratum E10): WHICH remedy moved this task, how many remedies it has had, and
+       * the grant that rode along with this one.
+       *
+       * `retryTask` and the review retry (`packages/control/src/unblock.ts`) have written all three
+       * since Task 4 and this shape stripped them -- the row in the log carried the whole decision
+       * and every reader of the PARSED event saw two counters. `reason` is the Supervisor's own
+       * action kind (`retry_task`, `retry_review`), which is what tells two otherwise identical
+       * unblocks a month apart apart; `retries` is `Task.retries` AFTER the write, the counter the
+       * ceiling is measured against; `grant` is the permission the diagnosis named, so a reader
+       * can see the whole remedy without the `SupervisorDecision` row beside it.
+       *
+       * `grant.refused` is the final review's (Important 2): a remedy the rules named and control
+       * did not carry out, because a person had already refused that worker that operation. The
+       * task still moved -- that is why this event exists at all -- and the row says the grant did
+       * not, so a reader of two identical-looking retries can tell the one that met the same wall
+       * again from the one that did not. ABSENT means the grant went through, which is what every
+       * row written before this says.
+       *
+       * All optional, like every other widening of an existing arm in this file: an ordinary
+       * human unblock carries none of them, and neither does a row written before this milestone.
+       */
+      reason: z.string().min(1).optional(),
+      retries: z.number().int().nonnegative().optional(),
+      grant: z
+        .object({
+          slaveId: z.string().min(1),
+          permissionKind: z.string().min(1),
+          refused: z.literal('denied_by_operator').optional(),
+        })
+        .optional(),
     }),
   }),
   // M38 t1: the five events the Supervisor's control verbs write (spec section 2). All appended by
@@ -510,9 +566,12 @@ export const executionEventSchema = z.discriminatedUnion('type', [
   // so a new situation or action becomes writable to the timeline the moment the rules can produce
   // it -- and a value the rules can NEVER produce can never be appended.
   //
-  // `action` carries the kind only, not its parameters: the whole `Action` (with its task/slave/
-  // message ids) is already on the `SupervisorDecision` row this event's `decisionId` points at,
-  // and duplicating it here would give a reader two copies to disagree about.
+  // On these two -- `supervisor.decided` and `supervisor.proposed` -- `action` carries the kind
+  // only, not its parameters: the whole `Action` (with its task/slave/message ids) is already on
+  // the `SupervisorDecision` row this event's `decisionId` points at, and duplicating it here would
+  // give a reader two copies to disagree about. Both are read by surfaces that open that row.
+  // `supervisor.applied`/`failed` are the exception and say why on their own arms (E R8): the FEED
+  // reads them, and a feed row is a sentence, not a link to a decision.
   z.object({
     ...envelope,
     type: z.literal('supervisor.decided'),
@@ -540,10 +599,23 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     }),
   }),
   // The action actually reached the world through a control verb.
+  //
+  // E R8 (Task 8, erratum E9): the WHOLE action, not the kind alone. The two events above are
+  // about a decision a reader can open (`decisionId` points at the row, and the panel prints it);
+  // these two are what the FEED says the Supervisor did, and "the Supervisor retried a task" is not
+  // a sentence about anything. `applyDecision` writes the action it carried out, and
+  // `apps/web/src/lib/happening.ts` reads the title, the name and the label off it.
+  //
+  // `.passthrough()` rather than `actionSchema`: the kind stays the gate -- an action no rule can
+  // produce is still unappendable -- while the fields belong to the action's own schema, which
+  // polices them where the decision row is read. A stricter arm here would also make every
+  // `supervisor.applied` written before this milestone (kind only, and `materialise_company_worker`
+  // rows from before M58's migration) unparseable, and `packages/events/src/read.ts` THROWS on a
+  // row it cannot parse -- taking the activity stream down over an event about the past.
   z.object({
     ...envelope,
     type: z.literal('supervisor.applied'),
-    payload: z.object({ decisionId: z.string().min(1), action: z.object({ kind: z.enum(ACTION_KINDS) }) }),
+    payload: z.object({ decisionId: z.string().min(1), action: z.object({ kind: z.enum(ACTION_KINDS) }).passthrough() }),
   }),
   // A `pending` decision left that state. `reason` is the rejecting human's words where there are
   // any, and null otherwise -- an approval and an expiry both carry none.
@@ -563,7 +635,9 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('supervisor.failed'),
     payload: z.object({
       decisionId: z.string().min(1),
-      action: z.object({ kind: z.enum(ACTION_KINDS) }),
+      // The whole action, for `supervisor.applied`'s reason directly above: the feed says what the
+      // Supervisor could NOT do, and that sentence names the same things.
+      action: z.object({ kind: z.enum(ACTION_KINDS) }).passthrough(),
       reason: z.string().min(1),
     }),
   }),
@@ -722,7 +796,10 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     ...envelope,
     type: z.literal('permission.changed'),
     /**
-     * M52 R5: a person granted, refused or revoked one operation for one worker.
+     * M52 R5: a person -- or, since E R3, the Supervisor itself -- granted, refused or revoked one
+     * operation for one worker. `by` carries the granter's `User.id`, or the literal `'supervisor'`
+     * for the grant a `retry_task` bundles under `act` (spec erratum E13), or null for a path with
+     * neither: the CLI's own verb, and every row written before M52.
      *
      * A new type rather than `org.changed { entity: 'permission' }`: `org.changed`'s `field` union
      * is spelled in four places (M50 erratum E11) and its payload has no room for the from/to/by

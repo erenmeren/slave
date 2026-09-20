@@ -18,6 +18,30 @@ import type { SituationKind } from './situations.js'
  */
 export type TaskStatusName = TaskStatus
 
+/**
+ * R2: the newest `run.failed` on a task, among the task's runs -- what a stuck-task remedy is
+ * chosen FROM rather than guessed at (Task 3). `at` is epoch ms, the world's own convention.
+ */
+export interface TaskFailure {
+  readonly runKind: 'implementation' | 'review' | 'planning'
+  readonly reason: string
+  readonly at: number
+  /**
+   * WHO ran it -- the `slaveId` of the run that failed, or null when the event did not record one
+   * (fix round 1, Important 1).
+   *
+   * The whole reason it is here: a `retry_task` that bundles a permission grant has to name the
+   * worker the grant is for, and there is nowhere else in the world to find it.
+   * {@link SupervisorWorld.runs} holds only NON-TERMINAL runs, so a failed task has none there,
+   * and {@link SupervisorWorld.denials} is loaded from those same live runs -- so a task whose
+   * refused run has ended is in neither. The failure fact is per TASK, which is what makes the
+   * pairing exact: this task's newest failure was this worker's run.
+   *
+   * LOADER CONTRACT: the `slaveId` of the `run.failed` event {@link reason} came from (Task 4).
+   */
+  readonly slaveId: string | null
+}
+
 /** A task, flattened to the facts a situation predicate actually reads. */
 export interface SupervisorTask {
   readonly id: string
@@ -88,6 +112,23 @@ export interface SupervisorTask {
    *  through `Workspace.runbookId`, so `observe` can append it to a `task_failed` summary without
    *  knowing what a runbook is. */
   readonly stageEscalation: string | null
+  /** R2: the newest `run.failed` among this task's runs, or null for a task that has never
+   *  failed. What a `task_failed`/`task_blocked_human` remedy is chosen from (Task 3's
+   *  `retry_task`/`escalate_to_human` split) rather than guessed at. */
+  readonly latestFailure: TaskFailure | null
+  /** R2: the distinct `capability` values of `run.tool_denied` events across this task's runs --
+   *  EMPTY unless something has actually been refused, the same reading {@link SupervisorDenial}
+   *  gives the workspace as a whole. Read by Task 3's cause-remedy bundling: a kind in here that
+   *  the task's `requiredPermissions` would have granted carries a `request_permission` alongside
+   *  the retry. */
+  readonly deniedKinds: readonly string[]
+  /** R2: failed IMPLEMENTATION runs on this task -- a coarser count than {@link latestFailure},
+   *  which is only the newest. Zero for a task that has never failed. */
+  readonly failureCount: number
+  /** R3: how many times `retry_task` has already been carried out on this task. A task retried
+   *  twice this way is not retried a third time (Task 3): the candidate set becomes
+   *  `escalate_to_human` only. `Task.retries` verbatim. */
+  readonly retries: number
 }
 
 export interface SupervisorSlave {
@@ -372,6 +413,14 @@ export interface SupervisorProfileEvidence extends RankEvidence {
  */
 export interface SupervisorWorld {
   readonly workspaceId: string
+  /**
+   * R1: the one switch. `propose` is today's behaviour -- every situation's tier is the per-kind
+   * rule below. `act` makes `tierOf` apply everything the escalate/noop/halted checks do not
+   * already answer, whatever situation offered it and whatever the action itself is; a workspace
+   * setting can only turn the Supervisor OFF (widen what a human must approve), never grant it
+   * anything the rules below do not already allow under `propose`.
+   */
+  readonly autonomy: 'propose' | 'act'
   /** Epoch ms. Passed in, never read from the clock -- every staleness predicate is a function
    *  of this, which is what makes `observe` testable and a decision reproducible. */
   readonly now: number
@@ -381,6 +430,17 @@ export interface SupervisorWorld {
   readonly goalVersion: number
   /** Non-null while the budget/failure guardrail has halted scheduling. */
   readonly halted: { readonly reason: string } | null
+  /**
+   * R4: epoch ms of `Workspace.haltClearedAt` -- when this workspace's halt was last retracted, by
+   * an operator's `clear-halt` or by the Supervisor's own `clear_halt`. Null on a workspace whose
+   * halt has never been cleared.
+   *
+   * Read by exactly one rule: the `clear_halt` candidate is not offered again inside
+   * `HALT_CLEAR_INTERVAL_MS` of it. The world carries the STAMP rather than the answer
+   * because `carryOut` re-checks the same window at apply time (a proposal can be approved an hour
+   * after it was made) and the two must be reading one fact.
+   */
+  readonly haltClearedAt: number | null
   readonly budgetExhausted: boolean
   readonly tasks: readonly SupervisorTask[]
   readonly slaves: readonly SupervisorSlave[]

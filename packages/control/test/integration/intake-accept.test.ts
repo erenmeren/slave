@@ -62,6 +62,8 @@ const draftFor = (repo: string, name: string): IntakeDraft => ({
   setupCommands: [],
   budgetUsd: 20,
   provider: null,
+  autoMerge: true,
+  autonomy: 'act',
   team: [],
 })
 
@@ -107,6 +109,38 @@ describe('acceptIntake', () => {
       'set_goal:done',
       'mark_created:done',
     ])
+  })
+
+  /**
+   * E R7/R1: the two switches the card carries land on the row the project runs by. They default
+   * ON in the draft schema, so a project created from a conversation merges approved work and lets
+   * its Supervisor act -- `createWorkspace`'s own defaults (the Prisma column's `false` and
+   * `propose`) are what a project created from the CLI or the form still gets.
+   */
+  it('carries the card s two switches onto the project: auto-merge on, Supervisor acting', async (): Promise<void> => {
+    const repo = makeRepo()
+    const id = await opened(`the repository is at ${repo}`)
+
+    const accepted = await acceptIntake(id, draftFor(repo, 'Autonomous'))
+
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: accepted.value.workspaceId } })
+    expect(workspace.autoMerge).toBe(true)
+    expect(workspace.supervisorAutonomy).toBe('act')
+  })
+
+  it('carries an unchecked card through too: the person said no to both', async (): Promise<void> => {
+    const repo = makeRepo()
+    const id = await opened(`the repository is at ${repo}`)
+
+    const accepted = await acceptIntake(id, { ...draftFor(repo, 'By Hand'), autoMerge: false, autonomy: 'propose' })
+
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+    const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: accepted.value.workspaceId } })
+    expect(workspace.autoMerge).toBe(false)
+    expect(workspace.supervisorAutonomy).toBe('propose')
   })
 
   it('stages seats onto functional departments derived from each template s primary role, not a catch-all named after the project (Task 4)', async (): Promise<void> => {
@@ -404,6 +438,8 @@ describe('acceptIntake', () => {
       setupCommands: [],
       budgetUsd: null,
       provider: null,
+      autoMerge: true,
+      autonomy: 'act',
       team: [],
     }
     const accepted = await acceptIntake(id, draft)
@@ -439,6 +475,8 @@ describe('acceptIntake', () => {
       setupCommands: [],
       budgetUsd: null,
       provider: null,
+      autoMerge: true,
+      autonomy: 'act',
       team: [],
     }
     const accepted = await acceptIntake(id, draft)
@@ -484,6 +522,8 @@ describe('acceptIntake', () => {
       setupCommands: [],
       budgetUsd: null,
       provider: null,
+      autoMerge: true,
+      autonomy: 'act',
       team: [],
     }
     const accepted = await acceptIntake(id, draft)

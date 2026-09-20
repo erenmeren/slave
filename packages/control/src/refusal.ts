@@ -88,6 +88,57 @@ export type ControlRefusal =
    * here rather than left to repeat the trip.
    */
   | { readonly kind: 'attempt_ceiling_reached'; readonly taskId: string; readonly attempt: number; readonly maxAttempts: number }
+  /**
+   * E R3: `retryTask` on a task that is not `failed`. The mirror of `task_not_blocked` for the
+   * other terminal park: `unblockTask` is the exit from `blocked` and this is the exit from
+   * `failed`, and neither verb touches the status the other one is for.
+   */
+  | { readonly kind: 'task_not_failed'; readonly taskId: string; readonly status: string }
+  /**
+   * E R3: `retryTask` on a task the Supervisor has already put back `RETRIES_MAX` times. Counted on
+   * `Task.retries`, NOT on `Task.attempt` -- the retry resets the attempts, and the whole point of
+   * the second counter is that "we have tried remedies twice" survives that reset. The third time
+   * the finding is that the remedies are not working, and `escalate_to_human` is what the rules
+   * offer instead (`candidates.ts`).
+   */
+  | { readonly kind: 'retry_ceiling_reached'; readonly taskId: string; readonly retries: number; readonly limit: number }
+  /**
+   * E R4: `clear_halt` inside `HALT_CLEAR_INTERVAL_MS` of the last clear -- whoever made it, the
+   * Supervisor or an operator's own `clear-halt`, since both write the same stamp.
+   *
+   * Checked here as well as in `candidates.ts` (which does not OFFER the action inside the window)
+   * because a proposal can be approved by a person an hour after it was made: the offer and the
+   * apply are two moments, and the bound is on the apply.
+   */
+  | { readonly kind: 'halt_recently_cleared'; readonly workspaceId: string; readonly clearedAt: string }
+  /**
+   * Final review, Important 2: the grant a `retry_task` carries names an operation a plan may not
+   * ask for. `TASK_NEEDS` is the bound -- `network_fetch` and `run_commands`, the two a plan can
+   * know about in advance -- and `writePermissionsFile` has held the dispatch to it since Task 5.
+   * The retry's grant is the OTHER door into the same room and was held to nothing but the six
+   * kinds, so a decision row naming `read_secret` or `deploy_release` would have granted it.
+   */
+  | { readonly kind: 'invalid_task_need'; readonly permissionKind: string }
+  /**
+   * Final review, Important 2: `request_permission` on a worker an operator has explicitly
+   * REFUSED this operation. A stored `deny` row is a person's own decision, and the Supervisor
+   * points at walls rather than removing the ones somebody put up on purpose.
+   *
+   * The mirror of what `retryTask` does with the same fact, and the difference is what the two
+   * verbs are for: a retry has work to get moving and goes out without its grant, while this
+   * action IS the grant and has nothing left to do.
+   */
+  | { readonly kind: 'permission_denied_by_operator'; readonly slaveId: string; readonly permissionKind: string }
+  /**
+   * Final review, Important 4: `clear_halt` on a workspace whose stored halt is not the breaker's.
+   * R4 says budget halts are never cleared by the Supervisor and erratum E11 says the same of an
+   * emergency stop -- the money is gone, or a person has their hand on the switch.
+   *
+   * `candidates.ts` reads the reason off the situation and offers the action for `circuit_breaker`
+   * alone; this reads the WORKSPACE at apply time, because a proposal can be approved long after
+   * the situation it was made on, and a person may have hit the stop in between.
+   */
+  | { readonly kind: 'halt_not_breaker'; readonly workspaceId: string; readonly reason: string }
   | { readonly kind: 'self_dependency'; readonly taskId: string }
   | { readonly kind: 'duplicate_dependency'; readonly taskId: string; readonly dependsOnTaskId: string }
   /**
@@ -558,6 +609,37 @@ export function refusalText(refusal: ControlRefusal): string {
         `task ${refusal.taskId} is at its attempt ceiling (${refusal.attempt}/${refusal.maxAttempts}); ` +
         `unblocking it as-is would only fail it again. Raise the ceiling by exactly one with: ` +
         `unblock-task --task ${refusal.taskId} --allow-another-attempt`
+      )
+    case 'task_not_failed':
+      return `task ${refusal.taskId} is ${refusal.status}; only a failed task can be retried`
+    case 'retry_ceiling_reached':
+      return (
+        `task ${refusal.taskId} has already been retried ${String(refusal.retries)} times ` +
+        `(the limit is ${String(refusal.limit)}); two remedies that did not work is the finding, not a reason ` +
+        `for a third. Take it from here by hand, or fail it with: fail-task --task ${refusal.taskId}`
+      )
+    case 'halt_recently_cleared':
+      return (
+        `this project's halt was already cleared at ${refusal.clearedAt}; it is cleared at most once an hour, ` +
+        'so a second runaway inside that hour is a person’s call'
+      )
+    case 'invalid_task_need':
+      return (
+        `a retry may not grant ‘${refusal.permissionKind}’: a remedy grants only what a plan can ask ` +
+        'for on a task’s behalf (reading the web, running commands). Everything else is a decision about a ' +
+        'worker, and a person makes it'
+      )
+    case 'permission_denied_by_operator':
+      return (
+        `worker ${refusal.slaveId} has been explicitly refused ‘${refusal.permissionKind}’ by a person; ` +
+        'the Supervisor does not overturn that. Change the row in the worker’s permissions first if the ' +
+        'refusal no longer stands'
+      )
+    case 'halt_not_breaker':
+      return (
+        `this project is halted by ${refusal.reason}, not by the circuit breaker; only a breaker halt is ` +
+        'retracted without a person -- a spent budget is money and an emergency stop is somebody’s hand on ' +
+        'the switch'
       )
     case 'self_dependency':
       return `task ${refusal.taskId} cannot depend on itself`

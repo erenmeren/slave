@@ -49,6 +49,15 @@
 //      stuck task, and `review_cap_blocked` is observed before `task_blocked_human` in
 //      `SITUATION_KINDS` order, so that pass provably looked at the re-parked one first) -- and no
 //      second row exists for its key.
+//   6. The switch: a failed task comes back on its own (E R1/R3/R4). A SECOND workspace, this one
+//      with `supervisorAutonomy: 'act'`, holding the 2026-09-20 scenario fact for fact: a research
+//      task `failed` with work waiting on it, refused `network_fetch`, and a circuit-breaker halt
+//      DERIVED from three concluded failures. Its own daemon diagnoses the refusal, grants the
+//      operation, puts the task back to `rework`, retracts the halt on the next pass and DISPATCHES
+//      the task -- a real implementation run on the research seat, whose own `permissions.json`
+//      carries the operation the Supervisor granted. No proposal, no escalation, nothing resolved by
+//      a user, and a log that says `system` / `by: 'supervisor'` rather than naming a person who was
+//      never asked.
 //
 // Shape borrowed from `gate-m37-run-context.mjs` (temp git repo + `prisma.workspace.create` setup,
 // `preflightCleanup()`/`dumpGateRows()`/`fail()`/`waitUntil()`, the daemon lifecycle and its
@@ -59,7 +68,7 @@
 // itself writes.
 
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -68,7 +77,8 @@ import { loopbackChildEnv } from './lib/child-env.mjs'
 import { findRealDaemonPids } from './lib/daemon-process.mjs'
 import { prisma } from '../packages/db/dist/client.js'
 import { appendEvent } from '../packages/events/dist/index.js'
-import { isAlive } from '../packages/control/dist/index.js'
+import { isAlive, runDirPathFor } from '../packages/control/dist/index.js'
+import { permissionsFilePathFor } from '../packages/providers/dist/index.js'
 
 const POLL_INTERVAL_MS = 50
 const DAEMON_PERIOD_MS = 500
@@ -90,6 +100,13 @@ const WORKSPACE_NAME = 'M38 Gate Project'
 const REVIEWED_TASK_TITLE = 'M38 Gate Reviewed Task'
 const CAPPED_TASK_TITLE = 'M38 Gate Capped Task'
 const PARKED_TASK_TITLE = 'M38 Gate Parked Task'
+/** Stage 6's own project (E R1): a SECOND workspace, because the switch this milestone adds is a
+ *  per-project setting and stages 1-5 are the measurement of what `propose` does. Mixing the two
+ *  into one row would make every assertion above depend on which stage had last written the
+ *  column. */
+const ACT_WORKSPACE_NAME = 'M38 Gate Autonomous Project'
+const ACT_TASK_TITLE = 'M38 Gate Research Task'
+const ACT_DEPENDENT_TITLE = 'M38 Gate Positioning Task'
 
 /** The cost the `supervisor-decision` fixture reports for one call (`total_cost_usd`). */
 const FIXTURE_DECISION_COST_USD = 0.01
@@ -123,35 +140,38 @@ function makeRepo() {
  *  RunContext and -- since M38 -- SupervisorDecision. This gate creates no org rows and no skill
  *  rows, so there is nothing else of its own anywhere in the database. */
 async function preflightCleanup() {
-  const stale = await prisma.workspace.findUnique({ where: { name: WORKSPACE_NAME } })
-  if (stale === null) return
-  console.log(`preflight: removing a leftover ${WORKSPACE_NAME} (${stale.id}) from an earlier interrupted run`)
-  await prisma.executionEvent.deleteMany({ where: { workspaceId: stale.id } }).catch(() => {})
-  await prisma.workspace.delete({ where: { id: stale.id } }).catch(() => {})
+  for (const name of [WORKSPACE_NAME, ACT_WORKSPACE_NAME]) {
+    const stale = await prisma.workspace.findUnique({ where: { name } })
+    if (stale === null) continue
+    console.log(`preflight: removing a leftover ${name} (${stale.id}) from an earlier interrupted run`)
+    await prisma.executionEvent.deleteMany({ where: { workspaceId: stale.id } }).catch(() => {})
+    await prisma.workspace.delete({ where: { id: stale.id } }).catch(() => {})
+  }
 }
 
 let exitCode = 1
 let repoPath = null
 let workspaceId = null
+/** Stage 6's project and its repository -- null until the stage builds them, and torn down beside
+ *  the first pair in the same FK order. */
+let actRepoPath = null
+let actWorkspaceId = null
 /** Every daemon this gate has ever spawned, in order -- the `finally` block kills whichever of them
  *  is somehow still alive, not just the last one. */
 const daemons = []
 
 /** Every row this gate could have written, for a FAIL's diagnostic dump. BigInt `seq` stringified. */
 async function dumpGateRows() {
-  const workspace =
-    workspaceId === null
-      ? null
-      : await prisma.workspace.findUnique({
-          where: { id: workspaceId },
-          include: { tasks: true, teams: { include: { slaves: { include: { runs: true } } } } },
-        })
-  const events =
-    workspaceId === null ? [] : await prisma.executionEvent.findMany({ where: { workspaceId }, orderBy: { seq: 'asc' } })
-  const decisions =
-    workspaceId === null
-      ? []
-      : await prisma.supervisorDecision.findMany({ where: { workspaceId }, orderBy: { createdAt: 'asc' } })
+  const ids = [workspaceId, actWorkspaceId].filter((id) => id !== null)
+  const workspace = await prisma.workspace.findMany({
+    where: { id: { in: ids } },
+    include: { tasks: true, teams: { include: { slaves: { include: { runs: true, permissions: true } } } } },
+  })
+  const events = await prisma.executionEvent.findMany({ where: { workspaceId: { in: ids } }, orderBy: { seq: 'asc' } })
+  const decisions = await prisma.supervisorDecision.findMany({
+    where: { workspaceId: { in: ids } },
+    orderBy: { createdAt: 'asc' },
+  })
   const daemonTails = daemons.map((d) => ({
     label: d.label,
     pid: d.proc.pid ?? null,
@@ -293,9 +313,10 @@ try {
     }
   }
 
-  /** The real daemon, in the background -- the same thing an operator leaves running. */
-  function spawnDaemon(label) {
-    const proc = spawn('node', [ORCHESTRATOR_CLI, 'daemon', '--workspace', workspaceId, '--period', String(DAEMON_PERIOD_MS)], {
+  /** The real daemon, in the background -- the same thing an operator leaves running. `target` is
+   *  the project it ticks: stage 6 runs its own, on the workspace whose switch is on. */
+  function spawnDaemon(label, target = workspaceId) {
+    const proc = spawn('node', [ORCHESTRATOR_CLI, 'daemon', '--workspace', target, '--period', String(DAEMON_PERIOD_MS)], {
       cwd: repoRoot,
       env: childEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -746,11 +767,321 @@ try {
     await fail(`by the end of the gate, ${String(spendersAtTheEnd.length)} post-halt decision(s) had called a model`)
   }
 
+  // ================= Stage 6: the switch -- a failed task comes back on its own ===================
+  //
+  // E R1/R3/R4, and the one stage that is about the milestone's own motivating project: a research
+  // task refused `network_fetch` three runs in a row, `failed` with work waiting on it, and the
+  // circuit breaker holding the whole workspace still. Everything a person did by hand on
+  // 2026-09-20 -- grant the operation, put the task back, clear the halt -- happens here with
+  // nobody asked, because this project's `supervisorAutonomy` is `act`.
+  //
+  // ITS OWN WORKSPACE, for the reason the constant says: the switch is per project, stages 1-5
+  // measure `propose`, and stage 3's escalation is still pending in front of a person on that one.
+  // Its own daemon follows from that -- the daemon ticks one project.
+  //
+  // THE HALT IS DERIVED, never written: `Workspace.haltedReason` stays null and `evaluateGuardrails`
+  // reads the streak off three concluded `failed` runs, which is how a breaker halt actually
+  // arrives. Nothing here fakes the state the stage measures the exit from.
+
+  await stopDaemon(daemons[daemons.length - 1])
+
+  actRepoPath = makeRepo()
+  const actWorkspace = await prisma.workspace.create({
+    data: {
+      name: ACT_WORKSPACE_NAME,
+      repoPath: actRepoPath,
+      baseBranch: 'main',
+      autoMerge: false,
+      verifyCommands: ['true'],
+      setupCommands: [],
+      maxAttempts: 5,
+      supervisorAutonomy: 'act',
+    },
+  })
+  actWorkspaceId = actWorkspace.id
+  console.log(
+    `workspace ${actWorkspaceId} (${ACT_WORKSPACE_NAME}), repo ${actRepoPath}, ` +
+      `supervisorAutonomy ${actWorkspace.supervisorAutonomy}, haltedReason ${JSON.stringify(actWorkspace.haltedReason)}, ` +
+      `consecutiveFailureLimit ${String(actWorkspace.consecutiveFailureLimit)}`,
+  )
+  if (actWorkspace.supervisorAutonomy !== 'act') await fail('the stage 6 workspace did not keep the autonomy it was created with')
+  await prisma.providerConfiguration.create({ data: { workspaceId: actWorkspaceId, kind: 'claude_code', settings: {} } })
+
+  const actTeam = await prisma.team.create({ data: { workspaceId: actWorkspaceId, name: 'Growth' } })
+  // A research seat with NO `network_fetch` row of its own -- the operation is baseline for nothing
+  // (`BASELINE_GRANTS`), which is exactly why its runs were refused it.
+  const researcher = await prisma.slave.create({
+    data: {
+      teamId: actTeam.id,
+      role: 'Researcher',
+      runtimeRoles: ['research'],
+      personId: (
+        await prisma.person.upsert({
+          where: { name: 'Ash' },
+          create: { name: 'Ash' },
+          update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null },
+        })
+      ).id,
+    },
+  })
+  const grantsBefore = await prisma.slavePermission.findMany({ where: { slaveId: researcher.id } })
+  console.log(`slave ${researcher.id} "Ash": runtimeRoles ${JSON.stringify(researcher.runtimeRoles)}, permission rows ${JSON.stringify(grantsBefore)}`)
+  if (grantsBefore.length > 0) await fail('the research seat starts with a permission row, so the grant below would prove nothing')
+
+  const researchTask = await prisma.task.create({
+    data: {
+      workspaceId: actWorkspaceId,
+      title: ACT_TASK_TITLE,
+      description: 'Find out who else sells this. Driven by scripts/gate-m38-supervisor.mjs.',
+      status: 'failed',
+      requiredRole: 'research',
+      attempt: 5,
+      maxAttempts: 5,
+    },
+  })
+  // The dependent is what makes a failed task everybody's problem rather than its own: `observe`
+  // raises `task_failed` only for a task something else is waiting on.
+  const dependentTask = await prisma.task.create({
+    data: {
+      workspaceId: actWorkspaceId,
+      title: ACT_DEPENDENT_TITLE,
+      description: 'Write the positioning from what the research found.',
+      status: 'backlog',
+      requiredRole: 'research',
+      maxAttempts: 5,
+    },
+  })
+  await prisma.taskDependency.create({ data: { taskId: dependentTask.id, dependsOnTaskId: researchTask.id } })
+
+  // Three concluded failures in a row, newest last -- `workspaceStats` counts the streak off
+  // `SlaveRun` and `evaluateGuardrails` trips the breaker at `consecutiveFailureLimit`.
+  let deniedRunId = null
+  for (const minutesAgo of [30, 20, 10]) {
+    const at = new Date(Date.now() - minutesAgo * 60_000)
+    const run = await prisma.slaveRun.create({
+      data: {
+        taskId: researchTask.id,
+        slaveId: researcher.id,
+        kind: 'implementation',
+        status: 'failed',
+        startedAt: new Date(at.getTime() - 5 * 60_000),
+        endedAt: at,
+        terminalAt: at,
+      },
+    })
+    deniedRunId = run.id
+  }
+  // Both halves of the diagnosis, on the newest run and through the one write gate: the refusal
+  // that stopped the work, and the line the run died on. The reason matches the LOST marker too,
+  // and the refusal still wins (erratum E4) -- which is what makes the remedy a grant rather than
+  // a steer.
+  await appendEvent({
+    type: 'run.tool_denied',
+    workspaceId: actWorkspaceId,
+    taskId: researchTask.id,
+    slaveId: researcher.id,
+    runId: deniedRunId,
+    actor: 'slave',
+    payload: { tool: 'WebFetch', capability: 'network_fetch', toolUseId: 'gate-m38-denied' },
+  })
+  await appendEvent({
+    type: 'run.failed',
+    workspaceId: actWorkspaceId,
+    taskId: researchTask.id,
+    slaveId: researcher.id,
+    runId: deniedRunId,
+    actor: 'system',
+    payload: { reason: "the run's output stream ended without a terminal result" },
+  })
+  console.log(
+    `research task ${researchTask.id} (failed, attempt 5 of 5, ${String(1)} dependent), three failed runs, ` +
+      `the newest (${deniedRunId}) refused network_fetch`,
+  )
+
+  spawnDaemon('daemon-3', actWorkspaceId)
+
+  const grantRow = await waitUntil('the Supervisor to grant the operation its own diagnosis named', SUPERVISOR_TIMEOUT_MS, async (note) => {
+    const row = await prisma.slavePermission.findFirst({ where: { slaveId: researcher.id, kind: 'network_fetch' } })
+    note(row === null ? 'no permission row for the research seat yet' : `permission row is ${row.mode}`)
+    return row
+  })
+  console.log(`permission row: ${JSON.stringify(grantRow)}`)
+  if (grantRow.mode !== 'allow') await fail(`the research seat's network_fetch row is ${grantRow.mode}, expected allow`)
+  if (grantRow.grantedBy !== null) await fail(`the grant names a user (${String(grantRow.grantedBy)}) -- nobody was asked for it`)
+
+  const movedTask = await waitUntil('the failed task to be moving again', SUPERVISOR_TIMEOUT_MS, async (note) => {
+    const row = await prisma.task.findUniqueOrThrow({ where: { id: researchTask.id } })
+    note(`research task is ${row.status}, retries ${String(row.retries)}`)
+    return row.status === 'failed' ? null : row
+  })
+  console.log(
+    `research task after the retry: status ${movedTask.status}, attempt ${String(movedTask.attempt)}, retries ${String(movedTask.retries)}, ` +
+      `lastRejectionReason ${JSON.stringify(movedTask.lastRejectionReason)}`,
+  )
+  // `rework` the instant the retry lands, `running` (or past it) the instant the halt goes and the
+  // scheduler picks it up -- both are the same statement: a status nothing in this product could
+  // leave has been left, without a person.
+  if (!['rework', 'running', 'reviewing', 'done'].includes(movedTask.status)) {
+    await fail(`the research task is ${movedTask.status}, expected rework or running`)
+  }
+  if (movedTask.retries !== 1) await fail(`the research task records ${String(movedTask.retries)} retries, expected exactly 1`)
+  if (movedTask.lastRejectionReason === null) {
+    await fail('the retried task carries no note for the next run -- the diagnosis was not written down')
+  }
+
+  const clearedWorkspace = await waitUntil('the halt to be retracted', SUPERVISOR_TIMEOUT_MS, async (note) => {
+    const row = await prisma.workspace.findUniqueOrThrow({ where: { id: actWorkspaceId } })
+    note(`haltClearedAt ${String(row.haltClearedAt)}`)
+    return row.haltClearedAt === null ? null : row
+  })
+  console.log(
+    `workspace after the halt was cleared: haltClearedAt ${clearedWorkspace.haltClearedAt.toISOString()}, ` +
+      `haltedReason ${JSON.stringify(clearedWorkspace.haltedReason)}`,
+  )
+
+  // THE POINT OF THE WHOLE STAGE (fix round 1, Important 3). Everything above is rows moving; this
+  // is the project actually working again. The halt is what stopped `decide()` from scheduling
+  // anything, so a run for this task -- the one that was `failed` and terminal a moment ago -- is
+  // the only evidence that clearing it accomplished something. `startedAt` desc rather than the
+  // three seeded failures: those are the streak the breaker counted.
+  const restartedRun = await waitUntil('a run to start for the task that was failed', DISPATCH_TIMEOUT_MS, async (note) => {
+    const run = await prisma.slaveRun.findFirst({
+      where: { taskId: researchTask.id, startedAt: { gt: clearedWorkspace.haltClearedAt } },
+      orderBy: { startedAt: 'desc' },
+    })
+    note(run === null ? 'no run started since the halt was cleared' : `run ${run.id} is ${run.status}`)
+    return run
+  })
+  console.log(
+    `run ${restartedRun.id} started for the retried task: kind ${restartedRun.kind}, status ${restartedRun.status}, ` +
+      `slave ${restartedRun.slaveId}`,
+  )
+  if (restartedRun.kind !== 'implementation') {
+    await fail(`the run started for the retried task is a ${restartedRun.kind} run, expected implementation`)
+  }
+  if (restartedRun.slaveId !== researcher.id) {
+    await fail(`the run was staffed onto ${restartedRun.slaveId}, expected the research seat ${researcher.id}`)
+  }
+  // And it runs WITH the operation the Supervisor granted. `writePermissionsFile` snapshots the
+  // resolved grants into the run's own directory at dispatch (`gate-m52-broker.mjs`'s own reading of
+  // the same file), so this is the verdict the worker is actually governed by -- not the row the
+  // grant was written to. The file lands in the same write as the dispatch, so it is already there
+  // by the time the run row is visible; it is waited for rather than read once, for the reason every
+  // other two-write pair in this gate is.
+  const permissionsPath = permissionsFilePathFor(runDirPathFor(restartedRun.id))
+  const verdict = await waitUntil(`the run's permissions.json at ${permissionsPath}`, SUPERVISOR_TIMEOUT_MS, async (note) => {
+    if (!existsSync(permissionsPath)) {
+      note('the run row exists, its permission snapshot has not been written yet')
+      return null
+    }
+    return JSON.parse(readFileSync(permissionsPath, 'utf8'))
+  })
+  console.log(`the run's permissions.json: version ${String(verdict.version)}, grants ${JSON.stringify(verdict.grants)}`)
+  if (!Array.isArray(verdict.grants) || !verdict.grants.includes('network_fetch')) {
+    await fail(
+      `the dispatched run's permissions.json grants ${JSON.stringify(verdict.grants)} -- the operation the Supervisor ` +
+        'granted is not among them, so the retry would meet the same wall',
+    )
+  }
+
+  // Frozen before it is counted: the assertions below are about everything this project decided,
+  // and a tick in flight would be a row appearing between two reads of the same table.
+  await stopDaemon(daemons[daemons.length - 1])
+
+  const actDecisions = await prisma.supervisorDecision.findMany({ where: { workspaceId: actWorkspaceId }, orderBy: { createdAt: 'asc' } })
+  console.log(`every decision the autonomous project made (${String(actDecisions.length)}):\n  ${actDecisions.map(describeDecision).join('\n  ')}`)
+
+  const retryDecision = actDecisions.find((row) => row.action.kind === 'retry_task')
+  if (retryDecision === undefined) await fail('no retry_task decision was made about the failed task')
+  if (retryDecision.situationKind !== 'task_failed' || retryDecision.subjectId !== researchTask.id) {
+    await fail(`the retry_task decision is ${retryDecision.situationKind} on ${retryDecision.subjectId}, expected task_failed on ${researchTask.id}`)
+  }
+  if (retryDecision.tier !== 'applied' || retryDecision.status !== 'applied') {
+    await fail(`the retry_task decision is tier ${retryDecision.tier} / ${retryDecision.status}, expected applied / applied`)
+  }
+  // The grant rides ON the decision: one row a person can read months later says both what was
+  // granted and to whom, rather than a permission that appeared beside a retry.
+  if (retryDecision.action.grant?.permissionKind !== 'network_fetch' || retryDecision.action.grant?.slaveId !== researcher.id) {
+    await fail(`the retry_task decision carries grant ${JSON.stringify(retryDecision.action.grant)}, expected network_fetch for ${researcher.id}`)
+  }
+  // A halted workspace is never thought about with money (stage 3's rule, on the other switch):
+  // the rules carried the whole remedy here, and the catalogue is what made that safe.
+  if (retryDecision.modelCalled !== false || retryDecision.decidedBy !== 'rules') {
+    await fail(`the retry_task decision says decidedBy ${retryDecision.decidedBy} / modelCalled ${String(retryDecision.modelCalled)}, expected rules / false`)
+  }
+
+  const clearDecision = actDecisions.find((row) => row.action.kind === 'clear_halt')
+  if (clearDecision === undefined) await fail('no clear_halt decision was made, though the halt was retracted')
+  if (clearDecision.tier !== 'applied' || clearDecision.status !== 'applied') {
+    await fail(`the clear_halt decision is tier ${clearDecision.tier} / ${clearDecision.status}, expected applied / applied`)
+  }
+  if (clearDecision.situation.facts.reason !== 'circuit_breaker') {
+    await fail(`the clear_halt decision was made on a "${String(clearDecision.situation.facts.reason)}" halt, expected circuit_breaker`)
+  }
+  if (new Date(clearDecision.createdAt).getTime() < new Date(retryDecision.createdAt).getTime()) {
+    await fail('the halt was cleared before the retry that answers it -- R4 requires the cause to be addressed first')
+  }
+
+  // NO HUMAN VERB, said three ways. Nothing was left in front of a person, nothing was resolved by
+  // one, and nothing this project did is recorded against a user.
+  const waiting = actDecisions.filter((row) => row.status === 'pending')
+  if (waiting.length > 0) await fail(`${String(waiting.length)} decision(s) are waiting on a person: ${waiting.map(describeDecision).join('; ')}`)
+  const escalations = actDecisions.filter((row) => row.tier === 'escalated')
+  if (escalations.length > 0) await fail(`${String(escalations.length)} escalation(s) were raised: ${escalations.map(describeDecision).join('; ')}`)
+  const answered = actDecisions.filter((row) => row.resolvedByUserId !== null)
+  if (answered.length > 0) await fail(`${String(answered.length)} decision(s) were answered by a user: ${answered.map(describeDecision).join('; ')}`)
+
+  // And the LOG names the machine, which is the same claim stage 2 makes about an unblock. The
+  // grant is the one that used to lie: `setSlavePermission` appended `actor: 'human'` for every
+  // caller, so an autonomous grant read as a person's decision (erratum E13).
+  const unblockedHere = await prisma.executionEvent.findFirst({
+    where: { workspaceId: actWorkspaceId, taskId: researchTask.id, type: 'task_unblocked' },
+    orderBy: { seq: 'desc' },
+  })
+  console.log(`task.unblocked event: actor ${String(unblockedHere?.actor)}, payload ${JSON.stringify(unblockedHere?.payload)}`)
+  if (unblockedHere === null || unblockedHere.actor !== 'system') {
+    await fail(`the task.unblocked envelope says actor ${String(unblockedHere?.actor)}, expected system`)
+  }
+  if (unblockedHere.payload.reason !== 'retry_task' || unblockedHere.payload.retries !== 1) {
+    await fail(`the task.unblocked payload is ${JSON.stringify(unblockedHere.payload)}, expected reason retry_task and retries 1`)
+  }
+  const permissionEvent = await prisma.executionEvent.findFirst({
+    where: { workspaceId: actWorkspaceId, type: 'permission_changed' },
+    orderBy: { seq: 'desc' },
+  })
+  console.log(`permission.changed event: actor ${String(permissionEvent?.actor)}, payload ${JSON.stringify(permissionEvent?.payload)}`)
+  if (permissionEvent === null || permissionEvent.actor !== 'system' || permissionEvent.payload.by !== 'supervisor') {
+    await fail(
+      `the permission.changed event says actor ${String(permissionEvent?.actor)} / by ${String(permissionEvent?.payload?.by)}, ` +
+        'expected system / supervisor -- nobody granted this by hand',
+    )
+  }
+  // R8: the feed row a person reads on Home. The whole action rides on the payload, so the sentence
+  // can name the task rather than saying "the Supervisor retried a task".
+  const appliedEvent = await prisma.executionEvent.findFirst({
+    where: { workspaceId: actWorkspaceId, type: 'supervisor_applied' },
+    orderBy: { seq: 'asc' },
+  })
+  console.log(`supervisor.applied event: ${JSON.stringify(appliedEvent?.payload)}`)
+  if (appliedEvent?.payload?.action?.title !== ACT_TASK_TITLE) {
+    await fail(
+      `the supervisor.applied payload carries ${JSON.stringify(appliedEvent?.payload?.action)}, expected the whole action ` +
+        `including the title "${ACT_TASK_TITLE}"`,
+    )
+  }
+
+  console.log(
+    'stage 6 complete: a project with the switch on diagnosed its own dead end, granted the operation the diagnosis named, ' +
+      'put a `failed` task back on the board, retracted the breaker halt its failures had raised and is running the work ' +
+      'again with that operation in its own permission snapshot -- and not one of those five things waited for a person',
+  )
+
   console.log(
     'PASS: the Supervisor watched a real workspace through a real daemon -- proposed the staffing it could not do by itself and ' +
       'waited for a human, took the one routine action it is trusted with and signed it as the machine, escalated a workspace ' +
       'whose money was gone without spending a cent to decide that, previewed itself without writing a row, and refused to ' +
-      'decide the same stuck thing twice',
+      'decide the same stuck thing twice -- and, on a project whose switch is on, got a dead task moving again and took the ' +
+      'breaker halt off without asking anybody for anything',
   )
   exitCode = 0
 } finally {
@@ -762,9 +1093,10 @@ try {
       if (!state.exited) state.proc.kill('SIGKILL')
     }
   }
-  if (workspaceId !== null) {
+  for (const id of [workspaceId, actWorkspaceId]) {
+    if (id === null) continue
     // Vendor children BEFORE the rows they are named on, `gate-m13-runtime`'s rule.
-    const runs = await prisma.slaveRun.findMany({ where: { slave: { team: { workspaceId } } }, select: { pid: true } }).catch(() => [])
+    const runs = await prisma.slaveRun.findMany({ where: { slave: { team: { workspaceId: id } } }, select: { pid: true } }).catch(() => [])
     for (const run of runs) {
       if (run.pid === null || !isAlive(run.pid)) continue
       try {
@@ -773,11 +1105,13 @@ try {
         // Already gone.
       }
     }
-    await prisma.executionEvent.deleteMany({ where: { workspaceId } }).catch(() => {})
+    await prisma.executionEvent.deleteMany({ where: { workspaceId: id } }).catch(() => {})
     // Cascades Team/Slave/Task/SlaveRun/RunContext and SupervisorDecision.
-    await prisma.workspace.delete({ where: { id: workspaceId } }).catch(() => {})
+    await prisma.workspace.delete({ where: { id } }).catch(() => {})
   }
-  if (repoPath !== null) rmSync(repoPath, { recursive: true, force: true })
+  for (const dir of [repoPath, actRepoPath]) {
+    if (dir !== null) rmSync(dir, { recursive: true, force: true })
+  }
   await prisma.$disconnect()
 }
 

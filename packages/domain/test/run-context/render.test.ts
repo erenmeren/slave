@@ -115,8 +115,12 @@ describe('renderRunContext', () => {
         '',
         '',
         'Your final message must contain exactly one JSON object and nothing else on its line:',
-        '{"tasks":[{"key":"short-unique-key","title":"...","description":"...","role":"backend","dependsOn":["other-key"]}]}',
+        '{"tasks":[{"key":"short-unique-key","title":"...","description":"...","role":"backend","dependsOn":["other-key"],"needs":[]}]}',
         'Between 1 and 20 tasks. Keys are plan-local. dependsOn lists keys, no cycles.',
+        // E R5: the one line this milestone adds, and the field it adds to the shape above. A
+        // permission nobody asks for is a permission nobody grants -- the planner is the one who
+        // knows a task has to read the web, and until now nothing invited it to say so.
+        'A task that must read the web carries "needs": ["network_fetch"]; one that must run commands beyond the repository\'s own scripts carries "run_commands"; most tasks carry neither.',
       ].join('\n'),
     )
     // The deviation, spelled out: the pre-M37 source is this text with `above` replaced by `below`,

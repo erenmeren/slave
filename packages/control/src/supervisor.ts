@@ -4,7 +4,9 @@ import {
   ANSWER_MAX_CHARS,
   COOLDOWN_MS,
   DECISION_RETENTION_MS,
+  HALT_CLEAR_INTERVAL_MS,
   PENDING_TTL_MS,
+  PERMISSION_KINDS,
   PROFILE_MAX_CHARS,
   PRUNE_BATCH,
   actionSchema,
@@ -18,6 +20,7 @@ import {
   type Decider,
   type DecisionStatus,
   type Draft,
+  type PermissionKind,
   type Result,
   type Situation,
   type SituationKind,
@@ -28,6 +31,7 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import { steerRun } from './breaker.js'
 import { hireFromTemplate, seatMember, mergeRuntimeRoles } from './capability.js'
+import { clearHalt } from './emergency.js'
 import { releasePerson } from './persons.js'
 import { discardStaleCandidates, recordMemory } from './memory.js'
 import { answerQuestion, reassignQuestion } from './messaging.js'
@@ -37,7 +41,7 @@ import type { Principal } from './principal.js'
 import { refusalText, type ControlRefusal } from './refusal.js'
 import { adoptRunbook } from './runbook.js'
 import { cancelTask, failTask } from './task.js'
-import { unblockTask } from './unblock.js'
+import { retryTask, unblockTask } from './unblock.js'
 
 /**
  * The name the Supervisor acts under inside a verb's PAYLOAD (`setRuntimeRoles`'s `actor`).
@@ -340,7 +344,7 @@ export async function applyDecision(
       type: 'supervisor.failed',
       workspaceId: row.workspaceId,
       actor: 'system',
-      payload: { decisionId, action: { kind: action.kind }, reason },
+      payload: { decisionId, action, reason },
       userId: principal?.userId ?? null,
     })
     return outcome
@@ -351,7 +355,7 @@ export async function applyDecision(
     type: 'supervisor.applied',
     workspaceId: row.workspaceId,
     actor: 'system',
-    payload: { decisionId, action: { kind: action.kind } },
+    payload: { decisionId, action },
     userId: principal?.userId ?? null,
   })
   return ok(undefined)
@@ -530,17 +534,115 @@ async function carryOut(
           reason: error instanceof Error ? error.message : String(error),
         })
       }
-    case 'request_permission':
-      // M52 R5. `tierOf` pins this to `proposed` on every branch, so the only way here is a human
-      // approving the proposal -- which is the whole ruling: the Supervisor may point at a wall,
-      // and only a person moves it. `setSlavePermission` re-validates the kind against
-      // `PERMISSION_KINDS` and re-reads the worker, so a proposal that waited a day and named a
-      // worker who has since been released is refused rather than written.
+    case 'request_permission': {
+      // M52 R5. `setSlavePermission` re-validates the kind against `PERMISSION_KINDS` and re-reads
+      // the worker, so a proposal that waited a day and named a worker who has since been released
+      // is refused rather than written.
       //
-      // THE APPROVER IS THE GRANTER: `principal`, not `origin`, and not the Supervisor. The event
-      // `setSlavePermission` appends records `by` as the PERSON who approved this decision, which is
-      // the true answer to "who granted this" -- the Supervisor only ever asked.
-      return reached(await setSlavePermission(action.slaveId, action.permissionKind, 'allow', principal))
+      // AN OPERATOR'S `deny` IS NEVER OVERTURNED (final review, Important 2). `setSlavePermission`
+      // is an upsert, and without this read an approved proposal -- or, under `act`, a decision
+      // nobody approved -- flipped a person's explicit refusal to `allow`. A `deny` row is the one
+      // thing in the permission matrix that is a decision rather than an absence, and the verb
+      // whose job is to POINT at a wall has nothing to do when a person built it on purpose.
+      // `Action.permissionKind` is a `string` -- the stored row is whatever the rules wrote a year
+      // ago -- so the vocabulary check comes first and a word it does not hold falls straight
+      // through to `setSlavePermission`, which is where `invalid_tool` is decided and always was.
+      const asked = action.permissionKind
+      const denied = (PERMISSION_KINDS as readonly string[]).includes(asked)
+        ? await prisma.slavePermission.findUnique({
+            where: { slaveId_kind: { slaveId: action.slaveId, kind: asked as PermissionKind } },
+            select: { mode: true },
+          })
+        : null
+      if (denied?.mode === 'deny') {
+        return err({
+          kind: 'permission_denied_by_operator',
+          slaveId: action.slaveId,
+          permissionKind: action.permissionKind,
+        })
+      }
+      // WHO GRANTED IT, in both of this arm's two cases (spec erratum E13, extended by the final
+      // review's Important 3). `tierOf` pinned this action to `proposed` on every branch until R1
+      // made `act` apply everything the halted checks do not demote -- so the old reading, "the
+      // only way here is a person approving", stopped being true and the `origin` this function
+      // was already handed stopped being passed on. An approved proposal still records the
+      // APPROVER as the granter: `principal` lands on the row and in the event, and that is the
+      // true answer to "who granted this" -- the Supervisor only ever asked. A tick under `act`
+      // has no approver, so `origin` carries `system` / `by: 'supervisor'` exactly as the grant a
+      // `retry_task` bundles does, rather than naming a person who was never asked.
+      return reached(
+        await setSlavePermission(action.slaveId, action.permissionKind, 'allow', principal, { origin }),
+      )
+    }
+    case 'retry_task':
+      // E R3: the exit from `failed`, the one status nothing in this product could leave. ONE
+      // decision, TWO verbs, in that order: `retryTask` grants the permission the diagnosis named
+      // before it moves the task, so a grant that is refused leaves the task failed rather than
+      // retried into the same wall.
+      //
+      // WHO GRANTED IT is the one place this differs from the `request_permission` arm above
+      // (spec erratum E13). That arm is always reached through a person's approval, so the approver
+      // is the granter. This one is applied by a tick under `act` with nobody to approve it, so
+      // `origin` travels with the grant and the `permission.changed` it appends says `system` /
+      // `by: 'supervisor'`. A human approving this same decision passes a `principal`, and the
+      // event names them, exactly as it always did.
+      //
+      // `action.reason` is the note the next run READS -- it lands on `Task.lastRejectionReason`,
+      // which `runContext` renders on the implementation order, and a `rework` run is an
+      // implementation run. It was written by `candidates.ts` from the task's own facts, which is
+      // what lets `tierOf` apply this under `act`: no model's words reach the worker.
+      return reached(
+        await retryTask(action.taskId, { grant: action.grant, reason: action.reason }, principal, { origin }),
+      )
+    case 'retry_review':
+      // E R3: the SAME verb the routine unblock uses, told where to send it. The reviewer never
+      // judged this work -- its run broke -- so the attempts the cap counted were not reviews, and
+      // another review costs one review attempt and no rework. `reviewWindowFrom` is stamped in the
+      // same write, which is what stops `dispatchReview` re-parking it on the next tick (Task 5).
+      return reached(await unblockTask(action.taskId, { retryReview: true, origin }, principal))
+    case 'clear_halt': {
+      // E R4: the one halt the Supervisor may retract, and the bound it is retracted under.
+      //
+      // `candidates.ts` already refuses to OFFER this inside the hour, and this is the second half
+      // of the same rule rather than a duplicate of it: an offer and an apply are two moments, a
+      // proposal can be approved by a person long after it was made, and the window is a bound on
+      // SPEND at the moment the project starts running again. Both read the same column, so they
+      // cannot disagree.
+      //
+      // WHICH HALT IT IS, re-read at apply time (final review, Important 4). The rules offer this
+      // for `circuit_breaker` alone, and that was taken to be the whole guard -- but the offer and
+      // the apply are two moments, and between them a person can hit the emergency stop on a
+      // project whose breaker proposal is still pending. Approving it then retracted the stop.
+      //
+      // A STORED reason is the test, because the breaker's is not stored: `haltOf` derives
+      // `circuit_breaker` from the failure streak while `Workspace.haltedReason` stays null
+      // (`supervisorWorld.ts`), and the column is only ever written by an emergency stop, a pause
+      // gate, a verify halt or a merge halt -- every one of them somebody or something else's
+      // decision that this project should not be moving. So anything stored that is not the
+      // breaker's own name is refused, and `clearHalt` keeps its idempotence for the derived case
+      // it was written for.
+      const workspace = await prisma.workspace.findUnique({
+        where: { id: action.workspaceId },
+        select: { haltClearedAt: true, haltedReason: true },
+      })
+      if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId: action.workspaceId })
+      if (workspace.haltedReason !== null && workspace.haltedReason !== 'circuit_breaker') {
+        return err({
+          kind: 'halt_not_breaker',
+          workspaceId: action.workspaceId,
+          reason: workspace.haltedReason,
+        })
+      }
+      const clearedAt = workspace.haltClearedAt
+      if (clearedAt !== null && Date.now() - clearedAt.getTime() < HALT_CLEAR_INTERVAL_MS) {
+        return err({
+          kind: 'halt_recently_cleared',
+          workspaceId: action.workspaceId,
+          clearedAt: clearedAt.toISOString(),
+        })
+      }
+      return reached(await clearHalt(action.workspaceId))
+    }
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')
@@ -1158,12 +1260,22 @@ function parsedOrThrow<T>(
  */
 export async function setSupervisorSettings(
   workspaceId: string,
-  patch: { readonly enabled?: boolean; readonly profile?: string | null },
+  patch: {
+    readonly enabled?: boolean
+    readonly profile?: string | null
+    /**
+     * E R1: the one switch. `propose` is today's behaviour -- the Supervisor records a decision and
+     * a person approves it -- and `act` makes `tierOf` apply everything the escalate/noop/halted
+     * checks do not already answer. It does not WIDEN what the Supervisor may do: the per-kind
+     * rules are code and this only says whether their verdict waits for a person.
+     */
+    readonly autonomy?: 'propose' | 'act'
+  },
   principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   const workspace = await prisma.workspace.findUnique({
     where: { id: workspaceId },
-    select: { supervisorEnabled: true, supervisorProfile: true },
+    select: { supervisorEnabled: true, supervisorProfile: true, supervisorAutonomy: true },
   })
   if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
 
@@ -1182,13 +1294,20 @@ export async function setSupervisorSettings(
   // `null` is a real new value here (the profile was cleared), so "moved" cannot be `!== undefined`
   // on the value alone -- it is whether the field was in the patch AND differs from what is stored.
   const profileMoved = profile !== undefined && profile !== workspace.supervisorProfile
-  if (!enabledMoved && !profileMoved) return ok(undefined)
+  // E R1, and the same rule as the two above: a re-save of the switch it already carries writes
+  // nothing and says nothing, so the timeline does not fill with re-saves of an unchanged form.
+  // `undefined` when the patch did not carry it OR carried the value already stored, so the one
+  // constant is the whole test -- there is no second state where it is defined and did not move.
+  const autonomy = patch.autonomy !== undefined && patch.autonomy !== workspace.supervisorAutonomy ? patch.autonomy : undefined
+  const autonomyMoved = autonomy !== undefined
+  if (!enabledMoved && !profileMoved && !autonomyMoved) return ok(undefined)
 
   await prisma.workspace.update({
     where: { id: workspaceId },
     data: {
       ...(enabledMoved ? { supervisorEnabled: enabled } : {}),
       ...(profileMoved ? { supervisorProfile: nextProfile ?? null } : {}),
+      ...(autonomyMoved ? { supervisorAutonomy: autonomy } : {}),
     },
   })
 
@@ -1211,6 +1330,18 @@ export async function setSupervisorSettings(
         from: workspace.supervisorProfile === null ? null : sha256(workspace.supervisorProfile),
         to: nextProfile === null || nextProfile === undefined ? null : sha256(nextProfile),
       },
+      userId: principal?.userId ?? null,
+    })
+  }
+  if (autonomyMoved) {
+    // The EXISTING event, like `supervisorEnabled` before it (M38 t2): this is project
+    // configuration, it moves through the same kind of verb, and an operator reading "what changed
+    // about this project" wants one stream.
+    await appendEvent({
+      type: 'workspace.settings_changed',
+      workspaceId,
+      actor: 'human',
+      payload: { field: 'supervisorAutonomy', from: workspace.supervisorAutonomy, to: autonomy },
       userId: principal?.userId ?? null,
     })
   }

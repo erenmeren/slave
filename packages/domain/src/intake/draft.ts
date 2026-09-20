@@ -73,6 +73,25 @@ export const intakeDraftSchema = z.object({
   // a Float column is a guardrail that is silently inert -- `setWorkspaceBudget`'s own reasoning.
   budgetUsd: z.number().finite().nonnegative().nullable(),
   provider: z.enum(PROVIDER_KINDS).nullable(),
+  /**
+   * E R7/R1: the two switches a new project starts with, and the only two fields on this draft the
+   * MODEL is never asked for -- the prompt does not mention them, because "merge approved work
+   * automatically" and "let the Supervisor act" are the person's call, made on the card with two
+   * checkboxes.
+   *
+   * Both default ON, which is the opposite of what the columns default to (`autoMerge false`,
+   * `supervisorAutonomy propose`) and deliberately so: a project created from a CONVERSATION was
+   * asked for by somebody who described an outcome, not a workflow, and a project that stops at
+   * every merge and every decision is not the thing they asked for. A project created from the CLI
+   * or the form keeps today's behaviour, because nothing there passes these.
+   *
+   * `.default()` rather than a required field for a reason that outlives this milestone: every
+   * draft already stored on an `Intake` row was written without them, and `parseDraft` reads a
+   * draft that will not parse as NO draft at all -- so a required field would have emptied the card
+   * of every conversation open when this shipped.
+   */
+  autoMerge: z.boolean().default(true),
+  autonomy: z.enum(['propose', 'act']).default('act'),
   team: z.array(intakeSeatSchema).max(12),
 })
   // The requirement the field's own `min(1)` used to carry, narrowed to the case it is true of.

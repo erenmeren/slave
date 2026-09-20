@@ -27,8 +27,10 @@ describe('parsePlanDelta', () => {
       ok: true,
       value: {
         // `capabilities: []` is M47 R3's default: a delta written before this milestone parses
-        // unchanged and reads back as "this task asked for no capabilities".
-        add: [{ key: 'docs', title: 'Document the endpoint', description: 'Write the API doc.', role: 'backend', dependsOn: [], capabilities: [] }],
+        // unchanged and reads back as "this task asked for no capabilities". `needs: []` is E R5's,
+        // and reads the same way -- `normalisePlanTask` is shared with the first-plan path, so an
+        // added task is bounded to the closed list here exactly as one in a first plan is.
+        add: [{ key: 'docs', title: 'Document the endpoint', description: 'Write the API doc.', role: 'backend', dependsOn: [], capabilities: [], needs: [] }],
         cancel: ['task-1'],
         keep: ['task-2'],
       },
@@ -172,6 +174,14 @@ describe('REPLAN_INSTRUCTIONS', () => {
     expect(REPLAN_INSTRUCTIONS).toContain('"add"')
     expect(REPLAN_INSTRUCTIONS).toContain('"cancel"')
     expect(REPLAN_INSTRUCTIONS).toContain('"keep"')
+  })
+
+  // E R5, fix round 1: a re-plan adds tasks like any other plan, and a manager who is not shown
+  // the field cannot ask for the permission the work needs.
+  it('shows the needs field and says what the two words mean', () => {
+    expect(REPLAN_INSTRUCTIONS).toContain('"needs":[]')
+    expect(REPLAN_INSTRUCTIONS).toContain('"needs": ["network_fetch"]')
+    expect(REPLAN_INSTRUCTIONS).toContain('"run_commands"')
   })
 
   it('separates its two halves with ONE blank line', () => {

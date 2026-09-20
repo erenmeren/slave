@@ -16,6 +16,41 @@ import type { SupervisorQuestion, SupervisorSlave, SupervisorWorld } from './wor
 const ROUTINELY_UNBLOCKABLE: SituationKind = 'review_cap_blocked'
 
 /**
+ * The two actions a CIRCUIT-BREAKER halt does not demote under `act` (R4, Task 8 erratum E11).
+ *
+ * R4 gave the breaker halt a remedy and made `clear_halt` the exception to "a halt forces a
+ * proposal". It was one action short, and the milestone's own motivating case is what proved it:
+ * `clear_halt` is offered only once a `retry_task` has been APPLIED to the task that kept failing
+ * (`candidates.retryAnswered`, the temporal link Task 3's fix round restored), and a halt that
+ * demotes `retry_task` to a proposal means that evidence can never exist without a person. Under
+ * `act`, on the exact project this milestone was written for -- a research task refused the web,
+ * three failed runs, the breaker down -- the Supervisor escalated twice and moved nothing.
+ *
+ * So the pair travels together: the remedy and the retraction it depends on. Nothing else joins
+ * them, and the line that keeps this from widening is what the two have in common -- NEITHER
+ * STARTS ANYTHING. `decide()` schedules no run while the workspace is halted, so a task put back
+ * to `rework` sits exactly where a proposal would have left it until the halt goes; a grant that
+ * rides along is one `act` already lets the Supervisor make (`retry_task`'s own tier, below); and
+ * `clear_halt` is bounded to once an hour by `candidates` and by `carryOut` both. Everything that
+ * hires, spends, rewrites a roster or declares work dead stays `proposed` while the workspace is
+ * stopped, exactly as the halt rule has always said.
+ */
+const HALT_REMEDIES: readonly Action['kind'][] = ['clear_halt', 'retry_task']
+
+/**
+ * The ONE halt the pair above is for (fix round 1, Important 2).
+ *
+ * The exception is about the BREAKER, not about halts: R4 says so of `clear_halt` in as many
+ * words -- "budget halts are never cleared by the Supervisor" -- and the argument that makes
+ * `retry_task` safe beside it is the breaker's own. A `budget_exhausted` halt means the money is
+ * gone, and a retry queued against it is work that will start the moment somebody raises the
+ * budget, decided while the project was not allowed to think; an `emergency_stop` is a person with
+ * their hand on the switch, and the Supervisor moving a task under it is exactly the thing that
+ * button exists to prevent. Both propose everything, as they always have.
+ */
+const BREAKER_HALT = 'circuit_breaker'
+
+/**
  * What would happen if this action were chosen for this SITUATION (M38 section 3, "tiers are fixed
  * in code"). Pure and total: the model never sees this function, and a workspace setting can only
  * turn the Supervisor OFF, never widen what it may do by itself.
@@ -27,9 +62,10 @@ const ROUTINELY_UNBLOCKABLE: SituationKind = 'review_cap_blocked'
  *
  * - `escalate_to_human` is always `escalated` and `no_action` always `noop` -- neither touches the
  *   world, so a halt cannot make either riskier than it already is.
- * - While the workspace is HALTED, every other action is `proposed`. A halt means a guardrail has
- *   already decided this workspace should not be moving; the Supervisor may still say what it
- *   would do, but a human has to be the one who does it.
+ * - While the workspace is HALTED, every other action is `proposed` -- except {@link HALT_REMEDIES}
+ *   under `act` on a {@link BREAKER_HALT}, the pair that exists to end that one halt. A halt means a
+ *   guardrail has already decided this workspace should not be moving; the Supervisor may still say
+ *   what it would do, but a human has to be the one who does it.
  * - Otherwise: routine actions (`unblock_task` on a `review_cap_blocked` task -- attempts remain,
  *   that is why `candidates` offers `raise_max_attempts` instead when they do not -- and a
  *   `reassign_question` whose target {@link mayAnswer} the question) apply immediately. Everything
@@ -44,7 +80,18 @@ const ROUTINELY_UNBLOCKABLE: SituationKind = 'review_cap_blocked'
 export function tierOf(action: Action, world: SupervisorWorld, situationKind: SituationKind): Tier {
   if (action.kind === 'escalate_to_human') return 'escalated'
   if (action.kind === 'no_action') return 'noop'
-  if (world.halted !== null) return 'proposed'
+  // R4: a halt still forces a proposal for everything -- except the two actions that exist to end a
+  // BREAKER halt ({@link HALT_REMEDIES}, {@link BREAKER_HALT}). Both are applied under `act` there;
+  // every other kind, under any halt, `act` or not, is `proposed` while the workspace is halted.
+  if (world.halted !== null) {
+    return world.autonomy === 'act' && world.halted.reason === BREAKER_HALT && HALT_REMEDIES.includes(action.kind)
+      ? 'applied'
+      : 'proposed'
+  }
+  // R1: the switch. A person who turned autonomy on gets every routine and non-routine action
+  // applied; only the escalation stays a question. The halted rule above still wins, except for
+  // the two actions that exist to end a breaker halt ({@link HALT_REMEDIES}).
+  if (world.autonomy === 'act') return 'applied'
   switch (action.kind) {
     case 'unblock_task':
       return situationKind === ROUTINELY_UNBLOCKABLE ? 'applied' : 'proposed'
@@ -116,6 +163,12 @@ export function tierOf(action: Action, world: SupervisorWorld, situationKind: Si
     // M49 R2: a worker's own report is evidence until somebody decides it is not, and a tick that
     // withdrew five of them by itself would be the Supervisor editing the record.
     case 'discard_stale_candidates':
+    // R3/R4 (Task 3 wires the candidates): under `propose`, none of the three is routine -- a
+    // retry spends an attempt or a review slot, and clearing a halt is the one thing `propose`
+    // never lets the Supervisor do by itself. `act` already returned above.
+    case 'retry_task':
+    case 'retry_review':
+    case 'clear_halt':
       return 'proposed'
   }
 }

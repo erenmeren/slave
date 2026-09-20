@@ -571,6 +571,35 @@ describe('parseExecutionEvent', () => {
     if (result.ok) expect(result.value.type).toBe('supervisor.applied')
   })
 
+  // E R8 (Task 8, erratum E9). `applyDecision` writes the WHOLE action now -- the feed says what
+  // the Supervisor DID ("retried ‘Read the market’"), and a kind alone cannot name a task
+  // or a worker. The arm passes the rest of the action through rather than re-declaring every
+  // field: the action's own shape is `actionSchema`'s to police, this one only promises that the
+  // kind is a kind the rules can produce -- and a row written before this milestone, which carries
+  // exactly that and nothing else, still parses.
+  it('keeps the whole action on supervisor.applied, and still parses one carrying only the kind', () => {
+    const whole = parseExecutionEvent({
+      ...BASE,
+      type: 'supervisor.applied',
+      payload: {
+        decisionId: 'd-1',
+        action: { kind: 'retry_task', taskId: 't1', title: 'Read the market', reason: 'the last run was refused it' },
+      },
+    })
+    expect(whole.ok).toBe(true)
+    if (whole.ok && whole.value.type === 'supervisor.applied') {
+      expect(whole.value.payload.action['title']).toBe('Read the market')
+      expect(whole.value.payload.action['taskId']).toBe('t1')
+    }
+    expect(
+      parseExecutionEvent({ ...BASE, type: 'supervisor.applied', payload: { decisionId: 'd-1', action: { kind: 'clear_halt' } } }).ok,
+    ).toBe(true)
+    // The kind is still the gate: an action no rule can produce is not appendable.
+    expect(
+      parseExecutionEvent({ ...BASE, type: 'supervisor.applied', payload: { decisionId: 'd-1', action: { kind: 'delete_everything' } } }).ok,
+    ).toBe(false)
+  })
+
   it.each([['approved'], ['rejected'], ['expired']])('accepts a supervisor.resolved event with outcome %s', (outcome) => {
     const result = parseExecutionEvent({
       ...BASE,
@@ -602,6 +631,22 @@ describe('parseExecutionEvent', () => {
     expect(result.ok).toBe(true)
     if (result.ok && result.value.type === 'supervisor.failed') {
       expect(result.value.payload.reason).toBe('task_not_failable')
+    }
+  })
+
+  it('keeps the whole action on supervisor.failed too, so the feed can name what could not be done', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'supervisor.failed',
+      payload: {
+        decisionId: 'd-1',
+        action: { kind: 'retry_task', taskId: 't1', title: 'Read the market', reason: 'it broke' },
+        reason: 'task_not_failed',
+      },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'supervisor.failed') {
+      expect(result.value.payload.action['title']).toBe('Read the market')
     }
   })
 
@@ -855,6 +900,34 @@ describe('parseExecutionEvent', () => {
     expect(
       parseExecutionEvent({ ...BASE, actor: 'human', type: 'task.unblocked', taskId: 't1', payload: { attempt: 1, maxAttempts: 3 } }).ok,
     ).toBe(true)
+  })
+
+  // E R3 (Task 8, erratum E10). `retryTask` and the review retry have written these three since
+  // Task 4 and the typed event STRIPPED all of them -- `z.object` drops what its shape does not
+  // name, so the row in the database carried the whole remedy and every reader of the parsed event
+  // saw two counters. Optional, like every other widening in this file: a `task.unblocked` written
+  // before this milestone has none of them.
+  it('keeps the retry facts -- which remedy, how many, and the grant that rode with it (E R3)', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      actor: 'system',
+      type: 'task.unblocked',
+      taskId: 't1',
+      payload: {
+        attempt: 0,
+        maxAttempts: 3,
+        status: 'rework',
+        retries: 1,
+        reason: 'retry_task',
+        grant: { slaveId: 's1', permissionKind: 'network_fetch' },
+      },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'task.unblocked') {
+      expect(result.value.payload.retries).toBe(1)
+      expect(result.value.payload.reason).toBe('retry_task')
+      expect(result.value.payload.grant).toEqual({ slaveId: 's1', permissionKind: 'network_fetch' })
+    }
   })
 })
 

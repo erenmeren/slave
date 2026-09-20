@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { join, resolve, sep } from 'node:path'
 import { gitIn, ORCHESTRATOR_GIT_IDENTITY } from '@slave-of-ai/control'
 import {
   COMMAND_OUTPUT_LIMIT,
@@ -103,13 +103,15 @@ export class WorktreeExistsError extends Error {
     /**
      * Which half is there, as a field rather than as wording inside `message`.
      *
-     * The caller's two cases live exactly here. `both` is the shape this task's own previous
+     * The caller's three cases live exactly here. `both` is the shape this task's own previous
      * attempt leaves: directory and branch, matching, which is what a task returning from
-     * `rework` finds and the only case where adopting is defensible. `directory` alone is a
+     * `rework` finds and the only case where ADOPTING is defensible. `directory` alone is a
      * stray tree with nothing behind it and `branch` alone is the residue of a half-finished
-     * removal -- neither is something a completed provision produced, so neither is safe to
-     * adopt. Collapsing them (by short-circuiting the second check) would hand the caller the
-     * adoptable case and the wreckage under one name.
+     * removal -- neither is something a completed provision produced, so neither is adopted:
+     * since E R6 the caller REPAIRS them instead, through {@link discardStaleWorktree} and
+     * {@link reattachWorktree}, which is a different decision from handing a worker a tree.
+     * Collapsing them (by short-circuiting the second check) would hand the caller the adoptable
+     * case and the wreckage under one name.
      */
     readonly reason: 'directory' | 'branch' | 'both',
   ) {
@@ -273,6 +275,92 @@ export async function adoptWorktree(input: AdoptWorktreeInput): Promise<Worktree
         'adopting it would hand the run a branch that belongs to something else',
     )
   }
+
+  const timeoutMs = input.setupTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS
+  for (const command of input.setupCommands) {
+    const outcome = await runShellCommand({ command, cwd: path, timeoutMs, env: setupEnv() })
+    if (outcome.timedOut || outcome.signal !== null || outcome.code !== 0) {
+      throw new Error(`setup ${commandFailure(command, timeoutMs, outcome).message}`)
+    }
+  }
+
+  return { path, branch: input.branch, headCommit: await gitIn(path, 'rev-parse', 'HEAD') }
+}
+
+/**
+ * Throws away a worktree DIRECTORY that has no branch behind it, so the task can be provisioned
+ * again (spec E R6, fix round 1).
+ *
+ * The half-state this repairs is `WorktreeExistsError`'s `directory`: a path where a worktree
+ * belongs, with nothing checked out on the branch that path's name implies. It cannot be a
+ * completed provision -- `worktree add -b` makes the branch first (see {@link provisionWorktree}'s
+ * own note on why the collision is checked before the add) -- so there is no committed work in it
+ * to preserve and nothing for §7.4 to show an operator. Parking the task on it burns an attempt on
+ * wreckage, which is exactly how the by-hand retry on 2026-09-20 died.
+ *
+ * The path is DERIVED here, from {@link WORKTREE_ROOT} and a key this module re-validates, and
+ * then checked to be inside the worktrees directory before anything is removed. Nothing recursive
+ * is ever run against a path a caller handed in: this function takes a key, not a path, precisely
+ * so there is no argument that could name the repository root.
+ *
+ * `git worktree prune` afterwards, not before: removing the directory is what makes the metadata
+ * entry (if any) stale, and prune is git's own verb for exactly that -- it drops registrations
+ * whose directories are gone and touches no branch and no file.
+ *
+ * IT SAYS SO FIRST (final review, Minor 5). A recursive remove is the loudest thing this module
+ * does and it happened silently, inside a retry a person did not ask for -- so an operator
+ * wondering where a half-finished tree went had nothing but the absence to read. One line on
+ * stderr, the daemon's own channel for what it is about to do, naming the path before it goes.
+ */
+export async function discardStaleWorktree(input: {
+  readonly repoPath: string
+  readonly taskKey: string
+}): Promise<void> {
+  if (!SAFE_SEGMENT.test(input.taskKey)) {
+    throw new Error(`taskKey must match ${String(SAFE_SEGMENT)} to be safe as a path segment, got: ${input.taskKey}`)
+  }
+  const repoPath = resolve(input.repoPath)
+  const root = join(repoPath, WORKTREE_ROOT)
+  const path = join(root, input.taskKey)
+  // Belt and braces over the check above: `join` collapses `..`, so this is what would actually
+  // catch a key that escaped the pattern. A removal outside the worktrees directory is a bug in
+  // this module, and it refuses rather than deletes.
+  if (!path.startsWith(root + sep)) {
+    throw new Error(`refusing to remove ${path}: it is not inside ${root}`)
+  }
+  process.stderr.write(`discarding a worktree directory with no branch behind it: ${path}\n`)
+  rmSync(path, { recursive: true, force: true })
+  await gitIn(repoPath, 'worktree', 'prune')
+}
+
+/**
+ * Puts a worktree back on a BRANCH that outlived its directory (spec E R6, fix round 1).
+ *
+ * The mirror image of {@link discardStaleWorktree}: `WorktreeExistsError`'s `branch` is the residue
+ * of a half-finished removal -- a directory taken away (by an operator, a `git clean -fdx`, a
+ * reboot that emptied a tmpfs) with the branch it was checked out on still there. The branch is
+ * derived from the task's own key, so it can belong to nothing else, and it is where that attempt's
+ * work lives: re-attaching to it is the same judgement {@link adoptWorktree} makes about `both`,
+ * and refusing costs the task an attempt for a state nobody chose.
+ *
+ * `adoptWorktree` cannot serve this case -- it verifies against `git worktree list`, and a
+ * registration is precisely what is missing here -- so this adds the worktree rather than taking
+ * one over: `worktree add <path> <branch>`, with no `-b`, which is the one form that checks out an
+ * existing branch.
+ *
+ * Setup runs again for {@link AdoptWorktreeInput}`.setupCommands`' reason: a tree with no
+ * `node_modules` fails verify for reasons that have nothing to do with the work.
+ */
+export async function reattachWorktree(input: AdoptWorktreeInput): Promise<WorktreeHandle> {
+  const repoPath = resolve(input.repoPath)
+  ensureIgnored(repoPath)
+  const path = join(repoPath, WORKTREE_ROOT, input.taskKey)
+
+  // A directory that is gone may still be REGISTERED (`.git/worktrees/<key>/`), and `worktree add`
+  // refuses a path git still believes in. Prune is git's verb for that and drops only entries whose
+  // directories no longer exist -- never a branch, never a file.
+  await gitIn(repoPath, 'worktree', 'prune')
+  await gitIn(repoPath, 'worktree', 'add', path, input.branch)
 
   const timeoutMs = input.setupTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS
   for (const command of input.setupCommands) {

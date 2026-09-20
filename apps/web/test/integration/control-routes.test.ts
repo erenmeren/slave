@@ -1112,7 +1112,7 @@ describe('the control routes', () => {
       expect(body.pending[0].rationale).toBe('Nobody can review, and Alex is idle.')
       expect(body.pending[0].situation.summary).toContain('no worker holds the reviewer role')
       expect(body.recent.map((d: { id: string }) => d.id)).toEqual([decisionId])
-      expect(body.settings).toEqual({ enabled: true, profile: null })
+      expect(body.settings).toEqual({ enabled: true, profile: null, autonomy: 'propose' })
     })
 
     // M39 §6: the mailbox block. The panel reads the questions off the SAME world the report is
@@ -1267,6 +1267,19 @@ describe('the control routes', () => {
       const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })
       expect(workspace.supervisorEnabled).toBe(false)
       expect((await patchSettings('00000000-0000-4000-8000-000000000000', { enabled: false })).status).toBe(404)
+    })
+
+    it('moves the autonomy switch, and 400s a word that is not one of the two', async (): Promise<void> => {
+      // E R1: the same PATCH the Supervisor panel and the Settings panel both dial. The verb is
+      // what refuses a workspace that does not exist; the schema is what refuses a third word.
+      expect((await patchSettings(fixture.workspace.id, { autonomy: 'act' })).status).toBe(200)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })).supervisorAutonomy).toBe('act')
+
+      expect((await patchSettings(fixture.workspace.id, { autonomy: 'whenever' })).status).toBe(400)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })).supervisorAutonomy).toBe('act')
+
+      expect((await patchSettings(fixture.workspace.id, { autonomy: 'propose' })).status).toBe(200)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })).supervisorAutonomy).toBe('propose')
     })
 
     it('409s a profile over the cap with profile_too_long', async (): Promise<void> => {

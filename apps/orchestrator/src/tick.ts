@@ -46,7 +46,14 @@ import { noteTickRan } from './sweep.js'
 import { releaseTaskAfterFailure, type TaskRelease } from './taskRelease.js'
 import { verifyConcludedRun } from './verify.js'
 import { loadWorld } from './world.js'
-import { WorktreeExistsError, adoptWorktree, provisionWorktree, type WorktreeHandle } from './worktree.js'
+import {
+  WorktreeExistsError,
+  adoptWorktree,
+  discardStaleWorktree,
+  provisionWorktree,
+  reattachWorktree,
+  type WorktreeHandle,
+} from './worktree.js'
 
 export interface TickDeps {
   readonly workspaceId: WorkspaceId
@@ -177,13 +184,25 @@ export function emailLocalPart(slave: { readonly id: string; readonly name: stri
 
 /**
  * Provisions the task's worktree, adopting the one its own previous attempt left when that is what
- * the leftovers are.
+ * the leftovers are -- and repairing the two half-states that are not leftovers at all.
  *
- * Adopt requires all three: the refusal is a `WorktreeExistsError`, both halves are present, and
- * the task is in `rework`. That combination is the only one that means "this task's last run left
- * this here". A stray directory, an orphaned branch, or a `ready` task that should never have had a
- * worktree at all is wreckage §7.4 preserved deliberately for an operator, and handing it to an
- * slave gives the run someone else's tree.
+ * One branch per `WorktreeExistsError.reason`, because the three mean different things:
+ *
+ * - `both` -- directory and branch, matching. This is what a task's own previous attempt leaves,
+ *   and it is ADOPTED only for a task in `rework`. A `ready` task with a complete worktree is
+ *   state nobody can account for: §7.4 preserved it for an operator, and handing it to a worker
+ *   would give the run someone else's tree. Unchanged.
+ * - `directory` -- a path with no branch behind it, which no completed provision can produce
+ *   (`worktree add -b` makes the branch first). Nothing committed is in it, so it is REMOVED and
+ *   the task provisioned afresh (spec E R6's second sentence, fix round 1). Parking the task
+ *   instead spends an attempt on wreckage, which is how the by-hand retry on 2026-09-20 died.
+ * - `branch` -- the residue of a half-finished removal, with this attempt's work still on the
+ *   branch. The worktree is RE-ATTACHED to it, which is `both`'s judgement applied to the half
+ *   that survived: the branch name is derived from this task's own key and can belong to nothing
+ *   else.
+ *
+ * Neither repair depends on `isRework`, deliberately: neither half-state is something an operator
+ * was meant to be shown, and both leave the task exactly where a first provision would have.
  */
 async function acquireWorktree(input: {
   readonly repoPath: string
@@ -203,12 +222,33 @@ async function acquireWorktree(input: {
       setupCommands: input.setupCommands,
     })
   } catch (error) {
-    const adoptable = error instanceof WorktreeExistsError && error.reason === 'both' && input.isRework
-    if (!adoptable) throw error
-    return adoptWorktree({
+    if (!(error instanceof WorktreeExistsError)) throw error
+    if (error.reason === 'both') {
+      if (!input.isRework) throw error
+      return adoptWorktree({
+        repoPath: input.repoPath,
+        taskKey: input.taskKey,
+        branch: input.branch,
+        setupCommands: input.setupCommands,
+      })
+    }
+    if (error.reason === 'directory') {
+      await discardStaleWorktree({ repoPath: input.repoPath, taskKey: input.taskKey })
+      return provisionWorktree({
+        repoPath: input.repoPath,
+        baseBranch: input.baseBranch,
+        taskKey: input.taskKey,
+        slug: input.slug,
+        setupCommands: input.setupCommands,
+      })
+    }
+    // `error.branch`, not `input.branch`: they are the same string by construction -- both are
+    // `slaveofai/<taskKey>-<slug>` off the same two values -- and taking it from the refusal means
+    // this re-attaches to the branch that was actually FOUND rather than to one re-derived here.
+    return reattachWorktree({
       repoPath: input.repoPath,
       taskKey: input.taskKey,
-      branch: input.branch,
+      branch: error.branch,
       setupCommands: input.setupCommands,
     })
   }
@@ -618,7 +658,10 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
     slaveId: slave.id,
     runId: run.id,
     actor: 'system',
-    payload: { title: task.title },
+    // E R5: `grants` is what the PLAN asked for on this task's behalf, written beside the title so
+    // a person reading the timeline can see a permission that no person granted. The verdict the
+    // gate reads is written from the same column a few lines below.
+    payload: { title: task.title, grants: [...task.requiredPermissions] },
   })
 
   // Declared outside the `try` so the catch can tell "never spawned" from "spawned, then something
@@ -715,6 +758,10 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
       runKind: 'implementation',
       runId: run.id,
       runToken,
+      // E R5: the task's own needs, read off the row the planner wrote them on. They are added to
+      // the baseline for an implementation run and an explicit `deny` still beats them
+      // (`resolveGrants`), so this widens what a run may do without overruling anybody.
+      taskGrants: task.requiredPermissions,
     })
 
     // M37 Task 2: the one builder. Everything this run is told -- who the slave is, who else is

@@ -401,6 +401,73 @@ describe('dispatchReviews', () => {
     expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBe(2)
   })
 
+  // E R3: `retry_review` stamps `Task.reviewWindowFrom`, and the cap counts from THAT rather than
+  // from the implementation run. Without it a task whose reviewer died twice on infrastructure is
+  // parked forever: the two dead runs are still newer than the implementation, so the cap stays
+  // spent and the remedy the Supervisor just applied can never be tried.
+  it('counts review attempts from reviewWindowFrom, so a stamped task is reviewed again', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture)
+    await addReviewer()
+
+    const latestImpl = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'implementation' } })
+    const after = (offsetMs: number): Date => new Date(latestImpl.startedAt.getTime() + offsetMs)
+    const reviewer = await prisma.slave.findFirstOrThrow({ where: { runtimeRoles: { has: 'reviewer' } } })
+    for (const offset of [1_000, 3_000]) {
+      await prisma.slaveRun.create({
+        data: {
+          taskId: fixture.taskId,
+          slaveId: reviewer.id,
+          kind: 'review',
+          status: 'failed',
+          startedAt: after(offset),
+          terminalAt: after(offset + 1_000),
+          endedAt: after(offset + 1_000),
+        },
+      })
+    }
+    // The stamp the remedy leaves: every attempt before it is water under the bridge.
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { reviewWindowFrom: after(5_000) } })
+
+    const started = await dispatchReviews(reviewDeps)
+
+    expect(started).toHaveLength(1)
+    expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBe(3)
+    await drainPumps()
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(task.status).not.toBe('blocked')
+  }, 60_000)
+
+  it('keeps counting from the implementation run when the window is OLDER than it', async (): Promise<void> => {
+    const reviewDeps = await seedReviewingTask(fixture)
+    await addReviewer()
+
+    const latestImpl = await prisma.slaveRun.findFirstOrThrow({ where: { kind: 'implementation' } })
+    const after = (offsetMs: number): Date => new Date(latestImpl.startedAt.getTime() + offsetMs)
+    const reviewer = await prisma.slave.findFirstOrThrow({ where: { runtimeRoles: { has: 'reviewer' } } })
+    for (const offset of [1_000, 3_000]) {
+      await prisma.slaveRun.create({
+        data: {
+          taskId: fixture.taskId,
+          slaveId: reviewer.id,
+          kind: 'review',
+          status: 'failed',
+          startedAt: after(offset),
+          terminalAt: after(offset + 1_000),
+          endedAt: after(offset + 1_000),
+        },
+      })
+    }
+    // A stamp from a remedy applied BEFORE this implementation ran says nothing about these two
+    // attempts: the later of the two boundaries is the window, so the cap is still spent.
+    await prisma.task.update({
+      where: { id: fixture.taskId },
+      data: { reviewWindowFrom: new Date(latestImpl.startedAt.getTime() - 60_000) },
+    })
+
+    expect(await dispatchReviews(reviewDeps)).toEqual([])
+    expect(await prisma.slaveRun.count({ where: { kind: 'review' } })).toBe(2)
+  })
+
   it('concludes the run failed instead of throwing when the diff itself cannot be produced', async (): Promise<void> => {
     const reviewDeps = await seedReviewingTask(fixture)
     const team = await prisma.team.findFirstOrThrow()

@@ -5,10 +5,18 @@ import { profileKeyOf } from '../evidence/derive.js'
 import { PERMISSION_KINDS, PERMISSION_LABEL, type PermissionKind } from '../permission/kinds.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
 import type { Action, Candidate } from './actions.js'
+import { boundReason, HALT_CLEAR_INTERVAL_MS, RETRIES_MAX } from './constants.js'
+import { readFailure, type FailureDiagnosis } from './diagnosis.js'
 import { rosterCapabilities, staffableSlaves } from './observe.js'
 import { mayAnswer, tierOf } from './policy.js'
 import type { Situation, SituationKind } from './situations.js'
-import type { SupervisorQuestion, SupervisorSlave, SupervisorTask, SupervisorWorld } from './world.js'
+import type {
+  SupervisorQuestion,
+  SupervisorSlave,
+  SupervisorTask,
+  SupervisorWorld,
+  TaskStatusName,
+} from './world.js'
 
 /**
  * How many staffing offers one situation may carry. Three is a list a human can read in a glance
@@ -43,6 +51,255 @@ export function permissionWhyFor(kind: PermissionKind, count: number): string {
 /** The task a task-shaped situation is about, if the world still has it. */
 function subjectTask(situation: Situation, world: SupervisorWorld): SupervisorTask | undefined {
   return world.tasks.find((task) => task.id === situation.subjectId)
+}
+
+/**
+ * What the world says about this task's newest failure (spec §3), read through one function so the
+ * `task_failed` arm and the `review_cap_blocked` arm cannot disagree about one row.
+ *
+ * `requiredPermissions` is ALWAYS EMPTY, and spec erratum E15 is where that is written down:
+ * Task 5 put `requiredPermissions` on `Task` and on the dispatch, and nothing ever put it on
+ * `SupervisorTask`, so §3's first diagnosis clause -- "a kind the task's needs would have granted"
+ * -- cannot fire and the ROLE rule in {@link readFailure} is the whole of what names a refused
+ * tool. That covers the case this milestone started from (research work refused the web, with a
+ * planner that named no needs at all) and misses the other one: a backend task that DECLARES
+ * `needs: ["run_commands"]` and is refused it reads as `unknown`. Closing it is a loader field and
+ * a world field; the follow-up is booked on E15 rather than guessed at here.
+ */
+function readTaskFailure(task: SupervisorTask): FailureDiagnosis {
+  return readFailure({
+    reason: task.latestFailure?.reason ?? null,
+    deniedKinds: task.deniedKinds,
+    // See above: the world does not carry the column. `[]` is also the honest state of every task
+    // planned before it existed.
+    requiredPermissions: [],
+    requiredRole: task.requiredRole,
+  })
+}
+
+/**
+ * The worker a refused operation would be granted to, and its name when the world still holds it.
+ *
+ * The task's OWN failure fact first, and that is the only exact answer there is: `latestFailure`
+ * and `deniedKinds` are both per task, so "this task's newest failure was this worker's run, and
+ * this task was refused this kind" pairs the two without guessing. Nothing else in the world can:
+ * {@link SupervisorWorld.runs} holds only non-terminal runs, so a failed task has none there, and
+ * `world.denials` is loaded FROM those same live runs (`loadDenials` filters by live run ids), so
+ * a task whose refused run has ended is in neither (fix round 1, Important 1).
+ *
+ * The denials are still consulted after it, for the one case they do cover: a task that failed
+ * while another run of the same worker is still going, and any world whose loader filled them and
+ * not the failure's `slaveId`. There, the worker refused this kind most often is the one the
+ * failure is about, ties on the lowest slave id so two passes over one world make one offer, and a
+ * worker the world no longer holds (or has released) is skipped -- the grant would name a row
+ * `carryOut` cannot write.
+ *
+ * The NAME is null when the roster no longer holds the worker. The grant is still offered: the
+ * failure fact says that worker ran this task, and `applyDecision` re-reads the row and refuses
+ * `slave_not_found` if it is really gone -- which is the `assign_capability` precedent (`policy.ts`)
+ * rather than a candidate withheld over a roster a caller might not have filled.
+ */
+function deniedWorker(
+  task: SupervisorTask,
+  permissionKind: string,
+  world: SupervisorWorld,
+): { readonly slaveId: string; readonly name: string | null } | undefined {
+  const nameOf = (slaveId: string): string | null => world.slaves.find((one) => one.id === slaveId)?.name ?? null
+  const ran = task.latestFailure?.slaveId ?? null
+  if (ran !== null && task.deniedKinds.includes(permissionKind)) return { slaveId: ran, name: nameOf(ran) }
+  const refused = world.denials
+    .filter((denial) => denial.kind === permissionKind)
+    .toSorted((a, b) => (a.count === b.count ? a.slaveId.localeCompare(b.slaveId) : b.count - a.count))
+  for (const denial of refused) {
+    const worker = world.slaves.find((one) => one.id === denial.slaveId && !one.released)
+    if (worker !== undefined) return { slaveId: worker.id, name: worker.name }
+  }
+  return undefined
+}
+
+/**
+ * Has an operator already REFUSED this worker this operation (final review, Important 2)?
+ *
+ * The ruling is one line -- a stored `deny` row wins everywhere -- and this is the half of it the
+ * rules can see. `SupervisorSlave.deniedKinds` is the seat's `deny` rows and only those
+ * (`loadDeniedKinds`), so a `true` here is an operator's own decision about this worker and a
+ * grant on top of it would be the Supervisor overruling a person.
+ *
+ * FALSE IS NOT "nothing is denied". The loader fills `deniedKinds` only when the board actually
+ * asks for a capability (`asksForCapabilities`, `supervisorWorld.ts`), because the ranker's
+ * permission step is the only other reader; on every other pass every seat's list is empty. So
+ * this skips the grant when the world HAPPENS to know, and `retryTask` refuses the grant on its
+ * own re-read when it does not -- control is where the rule is enforced, and this is where it is
+ * kept off the menu so a person is not shown an offer that will be half-refused.
+ */
+function operatorRefused(world: SupervisorWorld, slaveId: string, kind: string): boolean {
+  const seat = world.slaves.find((one) => one.id === slaveId)
+  return seat !== undefined && (seat.deniedKinds as readonly string[]).includes(kind)
+}
+
+/** The words for an operation, and the key itself for anything the vocabulary does not hold -- a
+ *  pre-M52 denial row spells `'run tests'`, and a sentence a person reads must still say
+ *  something. */
+function permissionLabelOf(kind: string): string {
+  return isPermissionKind(kind) ? PERMISSION_LABEL[kind] : kind
+}
+
+/** What broke last, bounded for the two places it is printed, or null for a task that has never
+ *  failed (a `failed` task always has, but the world is the world and nothing here guesses). */
+function failureReasonOf(task: SupervisorTask): string | null {
+  return task.latestFailure === null ? null : boundReason(task.latestFailure.reason)
+}
+
+/**
+ * The ONE remedy the diagnosis names for a failed task (R3), or nothing when the rules have run
+ * out of readings to act on -- in which case the two last resorts are the whole catalogue.
+ *
+ * Every `reason` here is SYSTEM-AUTHORED: a constant with the task's own title, the vocabulary's
+ * own label and the run's own recorded reason interpolated into it. No model's words reach it,
+ * which is what lets `tierOf` apply it under `act` (the `steer_run` ruling, `policy.ts`).
+ */
+function retryOffer(
+  task: SupervisorTask,
+  world: SupervisorWorld,
+): { readonly action: Action; readonly why: string } | undefined {
+  const { reading, deniedKind } = readTaskFailure(task)
+  const failure = failureReasonOf(task)
+  const retry = (reason: string, grant?: { readonly slaveId: string; readonly permissionKind: string }): Action =>
+    grant === undefined
+      ? { kind: 'retry_task', taskId: task.id, title: task.title, reason }
+      : { kind: 'retry_task', taskId: task.id, title: task.title, reason, grant }
+
+  switch (reading) {
+    case 'denied_tool': {
+      const kind = deniedKind ?? ''
+      const label = permissionLabelOf(kind)
+      const worker = deniedWorker(task, kind, world)
+      const reason = `The last run was refused \u2018${label}\u2019, which this work cannot be done without.`
+      if (worker === undefined) {
+        return {
+          action: retry(reason),
+          why:
+            `This work was refused \u2018${label}\u2019 and stopped there. Nothing in the world says which ` +
+            'worker met that wall, so the retry goes out on its own and the refusal will be on the task again ' +
+            'if it is still the one in the way.',
+        }
+      }
+      // An operator's own `deny` is never overturned (final review, Important 2). The retry still
+      // goes out -- the work may yet get further, and refusing to try is a decision the rules do
+      // not get to make -- but it goes out BARE, and the sentence says why so a person reading the
+      // offer is not left wondering where the grant went.
+      if (operatorRefused(world, worker.slaveId, kind)) {
+        return {
+          action: retry(reason),
+          why:
+            `${worker.name ?? 'The worker that ran it'} was refused \u2018${label}\u2019, and a person has ` +
+            'already decided this worker may not have it. The retry goes out without a grant: the refusal stands ' +
+            'until whoever made it changes their mind.',
+        }
+      }
+      return {
+        action: retry(reason, { slaveId: worker.slaveId, permissionKind: kind }),
+        why:
+          `${worker.name ?? 'The worker that ran it'} was refused \u2018${label}\u2019 and the work stopped ` +
+          'there. One decision grants it and starts the task again; nothing else about the task changes, and ' +
+          'the grant is recorded against this decision rather than handed out quietly.',
+      }
+    }
+    case 'infrastructure':
+      return {
+        action: retry(`The run broke before the work was judged: ${failure ?? 'no reason was recorded'}.`),
+        why:
+          'Nothing about the work was decided -- the run itself broke -- so starting the same task again is ' +
+          'the whole remedy, and it costs one attempt.',
+      }
+    case 'lost':
+      return {
+        // "steer: " is a LABEL for this side of the line -- the panel and the decision row, which
+        // say what kind of remedy was chosen. CONTROL STRIPS THE PREFIX BEFORE IT REACHES THE
+        // WORKER (`retryTask`'s `workerNote`, Task 4 fix round 1): the prompt that carries the note
+        // already frames it ("A previous attempt was rejected. Address this before anything
+        // else:"), so the label after that framing would be machinery in an instruction. What the
+        // retry is FOR is unchanged: it begins by telling the worker what the last run did, rather
+        // than being a silent second run with the same information the first one had.
+        action: retry(
+          'steer: The last run went round in circles and was stopped. Do not repeat what it tried; say in one ' +
+            'paragraph what you are stuck on, then change approach.',
+        ),
+        why:
+          'The worker went round in circles and nothing was refused it, so the retry starts by telling it so ' +
+          '-- in the system\u2019s own words, which is the only kind of sentence that is ever put in front of a run.',
+      }
+    case 'rejected':
+      // A reviewer judged the work and said no: the retry is a second attempt at the WORK, and it
+      // is the only one the rules make without a person, whatever the ceiling allows.
+      if (task.retries > 0) return undefined
+      return {
+        action: retry(`The review rejected the last attempt: ${failure ?? 'no reason was recorded'}.`),
+        why:
+          'A reviewer judged this work and said no, so this is a second attempt at the work rather than a ' +
+          'repeat of a broken run -- and it is the last one the rules offer before a person is asked.',
+      }
+    case 'unknown':
+      if (task.retries > 0) return undefined
+      return {
+        action: retry(`The last run failed: ${failure ?? 'no reason was recorded'}.`),
+        why:
+          'Nothing on the row reads as a cause, so the rules try the task once -- and exactly once. A second ' +
+          'retry of a failure nobody can read is a loop, and the escalation is what follows it.',
+      }
+  }
+}
+
+/** R4: the three states that mean a task is MOVING. Half of the evidence that a breaker halt's
+ *  cause was addressed -- a `failed` or `blocked` task is a retry that went nowhere, and a `done`
+ *  one is not evidence that anything is running again. */
+const HALT_CAUSE_ADDRESSED: readonly TaskStatusName[] = ['rework', 'running', 'reviewing']
+
+/**
+ * R4's temporal link, restored from data the world already carries (fix round 1, Important 2).
+ *
+ * The status alone was not evidence of anything: `releaseTaskAfterFailure` writes `rework`, so a
+ * retry that FAILED AGAIN left the task sitting in exactly the state this was reading as "the
+ * cause was addressed" -- and the breaker, whose whole job is to stop a runaway, became an hourly
+ * speed bump in front of one.
+ *
+ * So the evidence is a pair: a `retry_task` decision that was actually CARRIED OUT on this task,
+ * and no failure on the task SINCE that decision was made. `latestFailure.at` is the newest
+ * failure there is, so "older than the decision" is "the retry has not failed yet" -- either it is
+ * still running or it has got past the point that kept tripping the breaker. A task that has never
+ * failed at all passes trivially, which is the same statement with nothing to compare against.
+ *
+ * TWO STATUSES MEAN "it ran" (final review, Important 1). `applied` is the tick's own -- a decision
+ * born under `act` and carried out in the same breath. `approved` is a PERSON's: `approveDecision`
+ * claims the row `approved` and then calls `applyDecision`, which rewrites the status only when
+ * the verb REFUSED (to `failed`), so a row still reading `approved` is a retry that went through.
+ * Reading `applied` alone made the whole remedy unreachable under `propose`, which is the mode
+ * this clause matters most in: there the retry is a proposal, a person approves it, and the halt
+ * it was the cause of could then never be offered a clear.
+ */
+function retryAnswered(task: SupervisorTask, world: SupervisorWorld): boolean {
+  if (!HALT_CAUSE_ADDRESSED.includes(task.status)) return false
+  return world.decisions.some(
+    (decision) =>
+      decision.actionKind === 'retry_task' &&
+      (decision.status === 'applied' || decision.status === 'approved') &&
+      decision.subjectId === task.id &&
+      (task.latestFailure === null || task.latestFailure.at < decision.createdAt),
+  )
+}
+
+/**
+ * R3: the steer sentence, plus the walls this worker keeps meeting.
+ *
+ * Still no model's words: {@link steerTextFor} is a constant with one integer in it and the labels
+ * come from {@link PERMISSION_LABEL}, so this whole string is source code and a counted fact. The
+ * KEY never reaches the prompt, for the same reason the trip's `detail` does not -- an identifier
+ * in a worker’s prompt is `docs/ia.md` rule 3 broken where nobody would look for it.
+ */
+function steerTextWith(base: string, deniedKinds: readonly PermissionKind[]): string {
+  if (deniedKinds.length === 0) return base
+  const labels = deniedKinds.map((kind) => `\u2018${PERMISSION_LABEL[kind]}\u2019`).join(', ')
+  return `${base} You are being denied ${labels}: do not call them again.`
 }
 
 /**
@@ -321,6 +578,26 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
     case 'task_blocked_human': {
       const task = subjectTask(situation, world)
       if (task !== undefined) {
+        // R3: the review cap counts ATTEMPTS, and an attempt whose run broke never judged the work
+        // at all -- so the first offer for a cap park behind an infrastructure failure is another
+        // REVIEW rather than rework. Only for `review_cap_blocked`: `task_blocked_human` shares
+        // this arm, and nothing says the park a person made had anything to do with a review.
+        if (situation.kind === 'review_cap_blocked' && readTaskFailure(task).reading === 'infrastructure') {
+          offers.push(
+            candidate(
+              {
+                kind: 'retry_review',
+                taskId: task.id,
+                title: task.title,
+                reason: `The reviewer never reached a verdict: ${failureReasonOf(task) ?? 'no reason was recorded'}.`,
+              },
+              world,
+              situation.kind,
+              'The reviewer never judged this work -- its run broke -- so the attempts the cap counted were not ' +
+                'reviews. Sending it back through review costs one review attempt and no rework.',
+            ),
+          )
+        }
         // One exit, two spellings: below the cap `unblockTask` alone is enough and is routine; at
         // or past it the cap has to move first, which is a risk a human signs off on.
         offers.push(
@@ -368,11 +645,23 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
       break
     }
 
-    case 'task_failed':
-      // Deliberately no verb: nothing in the control layer re-opens a `failed` task, and inventing
-      // one here would be the Supervisor doing work rather than deciding (spec section 1). A human
-      // re-plans the dead end.
+    case 'task_failed': {
+      // R3. Until this milestone this arm offered nothing -- "no verb re-opens a `failed` task" --
+      // and `retry_task` is that verb. What is offered is chosen from the task's own facts
+      // ({@link readTaskFailure}), never guessed, and three clauses say when nothing is:
+      //   - the world moved between `observe` and here and the task is gone (every other arm's
+      //     shape: no offer against a row that is not there).
+      //   - the task is at the retry CEILING. Two remedies have been tried and the third would be
+      //     the same remedy again; "remedies are not working" is the finding, and the escalation
+      //     below carries the last failure because `observe` put it in the summary.
+      //   - the reading names no remedy on a task that has already been retried once
+      //     ({@link retryOffer} returns nothing for a rejection or an unreadable failure then).
+      const task = subjectTask(situation, world)
+      if (task === undefined || task.retries >= RETRIES_MAX) break
+      const remedy = retryOffer(task, world)
+      if (remedy !== undefined) offers.push(candidate(remedy.action, world, situation.kind, remedy.why))
       break
+    }
 
     case 'no_reviewer':
     case 'no_planner':
@@ -507,7 +796,15 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
               // `steerTextFor` interpolates the trip's COUNT and nothing else: `detail` is an
               // identifier (a `toolName:argsHash`, an error class), and a hash in a worker's prompt
               // is `docs/ia.md` rule 3 broken in the one place nobody would look for it.
-              text: steerTextFor({ kind: run.trip, count: run.count, detail: run.detail }),
+              // R3: plus the walls this worker keeps meeting, off the situation's own facts --
+              // `observe` filtered them to the kinds a person could actually grant and put them in
+              // the vocabulary's order, so this only has to read them back.
+              text: steerTextWith(
+                steerTextFor({ kind: run.trip, count: run.count, detail: run.detail }),
+                String(situation.facts['deniedKinds'] ?? '')
+                  .split(',')
+                  .filter(isPermissionKind),
+              ),
             },
             world,
             situation.kind,
@@ -548,10 +845,49 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
     }
 
     case 'done_not_integrated_stale':
-    case 'workspace_halted':
-      // Neither has a safe automatic exit: a merge is a human's call, and a halt is a guardrail's
-      // verdict the Supervisor must not overturn.
+      // No safe automatic exit: a merge is a human's call.
       break
+
+    case 'workspace_halted': {
+      // R4: the ONE halt the Supervisor may retract, and three clauses that say when:
+      //   - the breaker is what halted it. `budget_exhausted` is money and `emergency_stop` is a
+      //     person; clearing either would be the Supervisor overruling somebody. The reason is read
+      //     off the situation's own facts, which is where `observe` put it.
+      //   - the cause was ADDRESSED, in {@link retryAnswered}'s exact sense: a `retry_task` that
+      //     was applied to a task that is moving now and has not failed since. Without the "since"
+      //     the halt would be cleared straight back into the failures that tripped it.
+      //   - the hour has passed. `haltClearedAt` is the same stamp an operator's own `clear-halt`
+      //     writes, so a second runaway inside the hour stops here and is escalated -- and
+      //     `carryOut` checks the same window again at apply time (Task 4), because a proposal can
+      //     be approved long after it was made.
+      if (situation.facts['reason'] !== 'circuit_breaker') break
+      // The FRESHEST such task, ties on id: the reason names one task by title, and which one it
+      // names must not depend on the order a loader happened to return the board in.
+      const addressed = world.tasks
+        .filter((one) => retryAnswered(one, world))
+        .toSorted((a, b) =>
+          b.statusSince === a.statusSince ? a.id.localeCompare(b.id) : b.statusSince - a.statusSince,
+        )[0]
+      if (addressed === undefined) break
+      if (world.haltClearedAt !== null && world.now - world.haltClearedAt < HALT_CLEAR_INTERVAL_MS) break
+      offers.push(
+        candidate(
+          {
+            kind: 'clear_halt',
+            workspaceId: world.workspaceId,
+            reason:
+              `"${addressed.title}" has been retried since the breaker tripped and has not failed again, ` +
+              'so the failures it counted have been answered.',
+          },
+          world,
+          situation.kind,
+          'The breaker stops a runaway, and the runaway has been answered: the work that kept failing is moving ' +
+            'again. Until the halt goes nothing starts, so nobody -- person or Supervisor -- finds out whether the ' +
+            'remedy worked. It is cleared at most once an hour, so a second runaway stops here.',
+        ),
+      )
+      break
+    }
   }
 
   offers.push(

@@ -18,6 +18,10 @@ export interface ProjectSettings {
     readonly maxConcurrentRuns: number
     readonly runTimeoutMs: number
     readonly maxAttempts: number
+    /** E R7: whether an approved review merges the branch, or leaves it to a person. */
+    readonly autoMerge: boolean
+    /** E R1: whether the Supervisor's decisions wait for a person, or are carried out. */
+    readonly supervisorAutonomy: 'propose' | 'act'
     readonly haltedReason: string | null
     /** M27 §3.3: `Workspace.archivedAt !== null`. `ProjectSettingsClient`'s danger zone shows
      *  Restore instead of Archive when this is true. */
@@ -58,6 +62,8 @@ export async function buildProjectSettings(workspaceId: string): Promise<Project
       maxConcurrentRuns: workspace.maxConcurrentRuns,
       runTimeoutMs: workspace.runTimeoutMs,
       maxAttempts: workspace.maxAttempts,
+      autoMerge: workspace.autoMerge,
+      supervisorAutonomy: workspace.supervisorAutonomy,
       haltedReason: workspace.haltedReason,
       archived: workspace.archivedAt !== null,
     },

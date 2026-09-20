@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parsePlanGraph } from '../../src/planning/graph.js'
+import { TASK_NEEDS, parsePlanGraph } from '../../src/planning/graph.js'
 
 describe('parsePlanGraph', () => {
   it('(a) parses a bare valid 3-task graph with a chain; dependsOn is defaulted for the root', () => {
@@ -272,5 +272,77 @@ describe('handoff and stage (M48 R2)', () => {
     expect(parsed.ok).toBe(false)
     if (parsed.ok) return
     expect(parsed.error).toContain('task "k" has a handoff that is not a contract')
+  })
+})
+
+/**
+ * The needs a task carries (E R5). A CLOSED list, and unknown values are DROPPED rather than
+ * refused: `needs` is a hint about permissions, not the plan's structure, and a plan thrown away
+ * over a word the planner invented would cost a whole planning run for a field the board does not
+ * depend on -- the same judgement `droppedCapabilities` already makes about a key the taxonomy
+ * does not have.
+ */
+describe('parsePlanGraph -- needs (E R5)', () => {
+  const graph = (needs: unknown): string =>
+    JSON.stringify({ tasks: [{ key: 'k', title: 'Research the market', description: 'd', role: 'research', needs }] })
+
+  it('accepts the two needs the list has, in the order the planner wrote them', () => {
+    const parsed = parsePlanGraph(graph(['network_fetch', 'run_commands']))
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.tasks[0]?.needs).toEqual(['network_fetch', 'run_commands'])
+    expect(parsed.value.droppedNeeds).toBeUndefined()
+  })
+
+  it('reads a task with no needs as a task that needs nothing, and every pre-E fixture still parses', () => {
+    const parsed = parsePlanGraph(
+      JSON.stringify({ tasks: [{ key: 'k', title: 't', description: 'd', role: 'dev' }] }),
+    )
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.tasks[0]?.needs).toEqual([])
+    expect(parsed.value.droppedNeeds).toBeUndefined()
+  })
+
+  it('DROPS a need the list does not have and reports it under the task key, keeping the ones it does', () => {
+    const parsed = parsePlanGraph(graph(['network_fetch', 'sudo', 'delete_the_database']))
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.tasks[0]?.needs).toEqual(['network_fetch'])
+    expect(parsed.value.droppedNeeds).toEqual({ k: ['delete_the_database', 'sudo'] })
+  })
+
+  it('does not refuse a graph whose every need is unknown -- the task lands, needing nothing', () => {
+    const parsed = parsePlanGraph(graph(['root']))
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.tasks[0]?.needs).toEqual([])
+    expect(parsed.value.droppedNeeds).toEqual({ k: ['root'] })
+  })
+
+  it('exposes the closed list itself, so no caller has to spell the two words again', () => {
+    expect(TASK_NEEDS).toEqual(['network_fetch', 'run_commands'])
+  })
+
+  // Fix round 1: a planner asked for an optional field answers it two ways, and erratum E18 made
+  // `null` mean the same as omitting it for `handoff` and `stage`. `needs` follows that precedent
+  // rather than failing the shape -- a shape failure is what makes the parser run an earlier draft.
+  it('reads a null needs as absent, exactly as a null handoff and a null stage are', () => {
+    const parsed = parsePlanGraph(graph(null))
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.tasks[0]?.needs).toEqual([])
+    expect(parsed.value.droppedNeeds).toBeUndefined()
+  })
+
+  // Fix round 1: two needs is the whole vocabulary, so a cap is pointless -- but a planner that
+  // writes one twice must not put it on the row twice, because `requiredPermissions` is a set in
+  // everything but its type.
+  it('dedupes what the planner repeated, on both the kept side and the dropped one', () => {
+    const parsed = parsePlanGraph(graph(['network_fetch', 'network_fetch', 'sudo', 'sudo']))
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    expect(parsed.value.tasks[0]?.needs).toEqual(['network_fetch'])
+    expect(parsed.value.droppedNeeds).toEqual({ k: ['sudo'] })
   })
 })

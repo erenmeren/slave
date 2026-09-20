@@ -4,7 +4,14 @@ import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { SETUP_OUTPUT_LIMIT, WorktreeExistsError, adoptWorktree, provisionWorktree } from '../../src/worktree.js'
+import {
+  SETUP_OUTPUT_LIMIT,
+  WorktreeExistsError,
+  adoptWorktree,
+  discardStaleWorktree,
+  provisionWorktree,
+  reattachWorktree,
+} from '../../src/worktree.js'
 
 function run(command: string, args: readonly string[], cwd: string): string {
   return execFileSync(command, [...args], { cwd, encoding: 'utf8' }).trim()
@@ -455,5 +462,90 @@ describe('provisionWorktree', () => {
     const wt = await provisionWorktree({ ...base, repoPath: relative(process.cwd(), repoPath) })
 
     expect(isAbsolute(wt.path)).toBe(true)
+  })
+})
+
+/**
+ * The two half-state repairs E R6 asks for (fix round 1). `acquireWorktree` decides WHICH applies;
+ * these prove what each one does, and -- for the removal -- what it refuses to do.
+ */
+describe('repairing a half-provisioned worktree (E R6)', () => {
+  let repoPath: string
+
+  beforeEach((): void => {
+    repoPath = makeRepo()
+  })
+
+  afterEach((): void => {
+    rmSync(repoPath, { recursive: true, force: true })
+  })
+
+  it('removes a stale directory and leaves the task provisionable again', async (): Promise<void> => {
+    const stale = join(repoPath, '.slaveofai', 'worktrees', 'TASK-001')
+    mkdirSync(stale, { recursive: true })
+    writeFileSync(join(stale, 'leftover.txt'), 'half a provision\n')
+    const branchesBefore = branches(repoPath)
+
+    await discardStaleWorktree({ repoPath, taskKey: 'TASK-001' })
+
+    expect(existsSync(stale)).toBe(false)
+    // Nothing else moved: prune drops registrations whose directories are gone and touches no
+    // branch and no file.
+    expect(branches(repoPath)).toEqual(branchesBefore)
+    const wt = await provisionWorktree({
+      repoPath,
+      baseBranch: 'main',
+      taskKey: 'TASK-001',
+      slug: 'add-thing',
+      setupCommands: [],
+    })
+    expect(wt.path).toBe(stale)
+    expect(existsSync(join(stale, 'README.md'))).toBe(true)
+  })
+
+  // The riskiest line in the repair is a recursive removal, so the guard around it is pinned
+  // rather than trusted. The function takes a KEY, never a path: this is the only shape of input
+  // that could name anything outside the worktrees directory, and it is refused before the `rm`.
+  it('refuses a key that would take the removal out of the worktrees directory', async (): Promise<void> => {
+    const outside = join(repoPath, 'README.md')
+
+    await expect(discardStaleWorktree({ repoPath, taskKey: '../../..' })).rejects.toThrow(/taskKey/)
+    await expect(discardStaleWorktree({ repoPath, taskKey: 'ok/../../../../tmp/pwned' })).rejects.toThrow(/taskKey/)
+
+    expect(existsSync(outside)).toBe(true)
+    expect(existsSync(repoPath)).toBe(true)
+  })
+
+  it('re-attaches a worktree to a branch whose directory is gone, and re-runs setup there', async (): Promise<void> => {
+    const first = await provisionWorktree({
+      repoPath,
+      baseBranch: 'main',
+      taskKey: 'TASK-001',
+      slug: 'add-thing',
+      setupCommands: [],
+    })
+    writeFileSync(join(first.path, 'WORK_IN_PROGRESS'), 'the attempt that was interrupted\n')
+    run('git', ['-C', first.path, 'add', '-A'], repoPath)
+    run('git', ['-C', first.path, 'commit', '-q', '-m', 'work in progress'], repoPath)
+    const onBranch = headOf(repoPath, first.branch)
+    // The residue of a half-finished removal: directory gone, branch still there.
+    run('git', ['worktree', 'remove', '--force', first.path], repoPath)
+    expect(existsSync(first.path)).toBe(false)
+
+    const again = await reattachWorktree({
+      repoPath,
+      taskKey: 'TASK-001',
+      branch: first.branch,
+      setupCommands: [`echo ran > ${join(repoPath, 'setup-log')}`],
+    })
+
+    expect(again.path).toBe(first.path)
+    expect(again.branch).toBe(first.branch)
+    // The WORK is what makes re-attaching worth doing: the commit that branch holds is there.
+    expect(again.headCommit).toBe(onBranch)
+    expect(existsSync(join(again.path, 'WORK_IN_PROGRESS'))).toBe(true)
+    // Setup re-ran, for `adoptWorktree`'s own reason: a tree with no dependencies fails verify for
+    // reasons that have nothing to do with the work.
+    expect(readFileSync(join(repoPath, 'setup-log'), 'utf8')).toBe('ran\n')
   })
 })

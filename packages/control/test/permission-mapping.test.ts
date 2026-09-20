@@ -7,6 +7,7 @@ import {
   MCP_TOOL_PREFIX,
   PERMISSION_KINDS,
   PERMISSION_RUN_KINDS,
+  TASK_NEEDS,
   type PermissionKind,
   type PermissionProvider,
   type PermissionRunKind,
@@ -87,9 +88,10 @@ function write(
   rows: readonly { readonly kind: string; readonly mode: 'allow' | 'deny' }[],
   provider: PermissionProvider,
   runKind: PermissionRunKind = 'implementation',
+  taskGrants?: readonly string[],
 ): { readonly verdict: Verdict; readonly path: string } {
   const runDir = mkdtempSync(join(tmpdir(), 'slaveofai-permissions-v2-'))
-  const path = writePermissionsFile(runDir, { rows, provider, runKind, runId: 'run-1', runToken: TOKEN })
+  const path = writePermissionsFile(runDir, { rows, provider, runKind, runId: 'run-1', runToken: TOKEN, taskGrants })
   return { verdict: JSON.parse(readFileSync(path, 'utf8')) as Verdict, path }
 }
 
@@ -263,5 +265,54 @@ describe('the shell twin', () => {
   it('the shell helper spells the deny prefix exactly as the TS constant', () => {
     const lib = readFileSync('scripts/lib/permissions.sh', 'utf8')
     expect(lib).toContain(PERMISSION_DENY_REASON_PREFIX)
+  })
+})
+
+/**
+ * What the PLAN asked for reaches the file (E R5). The needs the planner wrote on the task are a
+ * fourth input to the verdict, and they travel the same way the rows do: filtered to the six kinds
+ * at this boundary, resolved by the domain, and written into both halves of the file -- `grants`,
+ * which is what the gate decides MCP names by, and `allow`, which is the readable list of tools.
+ */
+describe('writePermissionsFile: the task’s own needs (E R5)', () => {
+  it('puts a task grant on both halves of an implementation run’s verdict', () => {
+    const { verdict } = write([], 'claude_code', 'implementation', ['network_fetch'])
+    expect(verdict.grants).toEqual(['read_repo', 'write_repo', 'run_commands', 'network_fetch'])
+    expect(verdict.allow.map((entry) => entry.tool)).toContain('WebFetch')
+  })
+
+  it('leaves a review run exactly as it was -- a reviewer judges a diff, it does not fetch', () => {
+    expect(write([], 'claude_code', 'review', ['network_fetch']).verdict).toEqual(
+      write([], 'claude_code', 'review').verdict,
+    )
+  })
+
+  it('lets a person’s deny row beat the plan', () => {
+    const { verdict } = write([{ kind: 'network_fetch', mode: 'deny' }], 'claude_code', 'implementation', [
+      'network_fetch',
+    ])
+    expect(verdict.grants).not.toContain('network_fetch')
+    expect(verdict.allow.map((entry) => entry.tool)).not.toContain('WebFetch')
+  })
+
+  it('skips a need that is not one of the six, exactly as it skips a row whose kind is not', () => {
+    expect(write([], 'claude_code', 'implementation', ['launch nukes']).verdict).toEqual(
+      write([], 'claude_code', 'implementation').verdict,
+    )
+  })
+
+  // Fix round 1: the bound is TASK_NEEDS, not PERMISSION_KINDS. A plan may ask for the two kinds a
+  // plan can know about in advance; `read_secret` and `deploy_release` are a person's decision
+  // about a worker, and a graph that named one must not be able to grant it to itself.
+  it('bounds the needs to the closed list a plan may ask for, not to the six kinds', () => {
+    for (const kind of PERMISSION_KINDS.filter((k) => !(TASK_NEEDS as readonly string[]).includes(k))) {
+      expect(write([], 'claude_code', 'implementation', [kind]).verdict, kind).toEqual(
+        write([], 'claude_code', 'implementation').verdict,
+      )
+    }
+    // …and the two it does carry still arrive.
+    for (const need of TASK_NEEDS) {
+      expect(write([], 'claude_code', 'implementation', [need]).verdict.grants, need).toContain(need)
+    }
   })
 })

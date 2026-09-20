@@ -1,9 +1,18 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { decide, DEFAULT_GUARDRAIL_LIMITS, REVIEW_RETRY_CAP, slaveId, taskId, type SchedulableTask, type World } from '@slave-of-ai/domain'
+import {
+  decide,
+  DEFAULT_GUARDRAIL_LIMITS,
+  RETRIES_MAX,
+  REVIEW_RETRY_CAP,
+  slaveId,
+  taskId,
+  type SchedulableTask,
+  type World,
+} from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { refusalText } from '../../src/refusal.js'
 import { requestStop } from '../../src/stop.js'
-import { unblockTask } from '../../src/unblock.js'
+import { retryTask, unblockTask } from '../../src/unblock.js'
 
 interface Fixture {
   readonly workspaceId: string
@@ -30,6 +39,7 @@ async function makeBlockedTask(
     readonly activeRunId?: string | null
     readonly branch?: string | null
     readonly lastRejectionReason?: string | null
+    readonly reviewWindowFrom?: Date | null
   } = {},
 ): Promise<{ readonly id: string }> {
   const task = await prisma.task.create({
@@ -44,6 +54,7 @@ async function makeBlockedTask(
       activeRunId: overrides.activeRunId ?? null,
       branch: overrides.branch === undefined ? 'slaveofai/T-abcd1234-add-the-thing' : overrides.branch,
       lastRejectionReason: overrides.lastRejectionReason ?? null,
+      reviewWindowFrom: overrides.reviewWindowFrom ?? null,
     },
   })
   return { id: task.id }
@@ -373,6 +384,33 @@ describe('unblockTask', () => {
     expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('rework')
   })
 
+  // Fix round 1: the budget reading and `dispatchReview`'s own count have to agree, or the two
+  // disagree about the same task. Both now count from the LATER of the implementation run and the
+  // retry window, so a task whose window was stamped after its failed reviews has a budget again.
+  it('counts the review budget from reviewWindowFrom, so a stamped task goes back to reviewing', async (): Promise<void> => {
+    const slave = await makeSlave(workspaceId)
+    const impl = new Date(Date.now() - 60_000)
+    const task = await makeBlockedTask(workspaceId, {
+      attempt: 1,
+      maxAttempts: 3,
+      reviewWindowFrom: new Date(impl.getTime() + 30_000),
+    })
+    await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId: slave.id, kind: 'implementation', status: 'succeeded', startedAt: impl },
+    })
+    for (let i = 0; i < REVIEW_RETRY_CAP; i += 1) {
+      await prisma.slaveRun.create({
+        data: { taskId: task.id, slaveId: slave.id, kind: 'review', status: 'failed', startedAt: new Date(impl.getTime() + 1_000 * (i + 1)) },
+      })
+    }
+
+    // No `retryReview`: this is the ORDINARY unblock, reading the same window `dispatchReview`
+    // will read a moment later. Every review run is older than the stamp, so the budget is whole.
+    const result = await unblockTask(task.id)
+
+    expect(result).toEqual({ ok: true, value: { status: 'reviewing' } })
+  })
+
   it('still sends a task blocked under an implementation run to rework', async (): Promise<void> => {
     const slave = await makeSlave(workspaceId)
     const task = await makeBlockedTask(workspaceId, { attempt: 1, maxAttempts: 3 })
@@ -402,5 +440,344 @@ describe('unblockTask', () => {
     const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
     expect(after.maxAttempts).toBe(5)
     expect(after.attempt).toBe(5)
+  })
+})
+
+/**
+ * E R3 (self-running-project Task 4): the exit a `failed` task never had.
+ *
+ * `failed` is terminal everywhere else in the product -- `unblockTask` above will not touch it --
+ * and this is the one verb that moves it, on its own attempts, at most twice. `rework` and never
+ * `ready`, for `unblockTask`'s own reason: a retried task's worktree and branch are still on disk
+ * from the run that failed, and `rework` is what tells `acquireWorktree` to adopt them.
+ */
+describe('retryTask', () => {
+  let workspaceId: string
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlavePermission", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+    ;({ workspaceId } = await seed())
+  })
+
+  const makeFailedTask = async (
+    overrides: { readonly attempt?: number; readonly retries?: number; readonly activeRunId?: string | null } = {},
+  ): Promise<{ readonly id: string }> =>
+    prisma.task.create({
+      data: {
+        workspaceId,
+        title: 'Read the docs',
+        description: 'find out how the api works',
+        status: 'failed',
+        requiredRole: 'backend',
+        attempt: overrides.attempt ?? 3,
+        maxAttempts: 3,
+        retries: overrides.retries ?? 0,
+        activeRunId: overrides.activeRunId ?? null,
+        branch: 'slaveofai/T-abcd1234-read-the-docs',
+        lastRejectionReason: 'the last run was refused the network',
+      },
+    })
+
+  const unblockedEvents = () =>
+    prisma.executionEvent.findMany({ where: { workspaceId, type: 'task_unblocked' }, orderBy: { seq: 'asc' } })
+
+  it('puts a failed task back to rework on fresh attempts, counts the retry and carries the steer note', async (): Promise<void> => {
+    const task = await makeFailedTask({ attempt: 3, retries: 0 })
+
+    const result = await retryTask(task.id, { reason: 'The last run was refused ‘Fetch over the network’.' })
+    expect(result.ok).toBe(true)
+
+    const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    // `rework`, not `ready`: the worktree the failed run left behind is adopted rather than fought.
+    expect(after.status).toBe('rework')
+    expect(after.attempt).toBe(0)
+    expect(after.activeRunId).toBeNull()
+    expect(after.retries).toBe(1)
+    expect(after.maxAttempts).toBe(3)
+    // The note the next run actually reads: `runContext`'s `rejection` section is on the
+    // implementation order, and a rework run is an implementation run.
+    expect(after.lastRejectionReason).toBe('The last run was refused ‘Fetch over the network’.')
+    expect(schedulable(after)).toBe(true)
+
+    const [event] = await unblockedEvents()
+    expect(event?.actor).toBe('human')
+    expect(event?.payload).toMatchObject({ status: 'rework', attempt: 0, retries: 1, reason: 'retry_task' })
+  })
+
+  it('grants the permission the diagnosis named BEFORE it moves the task, and says so in the event', async (): Promise<void> => {
+    const slave = await makeSlave(workspaceId)
+    const task = await makeFailedTask()
+
+    const result = await retryTask(task.id, {
+      grant: { slaveId: slave.id, permissionKind: 'network_fetch' },
+      reason: 'The last run was refused the network.',
+    })
+    expect(result.ok).toBe(true)
+
+    const permission = await prisma.slavePermission.findFirstOrThrow({ where: { slaveId: slave.id, kind: 'network_fetch' } })
+    expect(permission.mode).toBe('allow')
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('rework')
+    const [event] = await unblockedEvents()
+    expect(event?.payload).toMatchObject({ grant: { slaveId: slave.id, permissionKind: 'network_fetch' } })
+  })
+
+  // Fix round 1, Important 1: `failTask` stores WHY the task failed in the same column, and a
+  // retry that carries no note of its own (Task 6's CLI and web callers) must not delete it.
+  it('keeps the failure note when the retry carries no reason of its own', async (): Promise<void> => {
+    const task = await makeFailedTask()
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).lastRejectionReason).toBe(
+      'the last run was refused the network',
+    )
+
+    expect((await retryTask(task.id)).ok).toBe(true)
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).lastRejectionReason).toBe(
+      'the last run was refused the network',
+    )
+  })
+
+  it('replaces the failure note when the retry carries one', async (): Promise<void> => {
+    const task = await makeFailedTask()
+
+    expect((await retryTask(task.id, { reason: 'Do not try the deploy again.' })).ok).toBe(true)
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).lastRejectionReason).toBe(
+      'Do not try the deploy again.',
+    )
+  })
+
+  // Fix round 1, Important 2: `candidates.ts` labels its steer remedy `steer: …` for the panel
+  // and the decision row; the WORKER must never read the label. The prompt already says "A previous
+  // attempt was rejected. Address this before anything else:" -- "steer: " after that is machinery.
+  it('strips the steer label before the note reaches the worker', async (): Promise<void> => {
+    const task = await makeFailedTask()
+
+    expect((await retryTask(task.id, { reason: 'steer: keep to the brief' })).ok).toBe(true)
+
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).lastRejectionReason).toBe(
+      'keep to the brief',
+    )
+  })
+
+  it('stamps the envelope actor system when the Supervisor is the one retrying', async (): Promise<void> => {
+    const task = await makeFailedTask()
+
+    expect((await retryTask(task.id, {}, undefined, { origin: 'system' })).ok).toBe(true)
+
+    expect((await unblockedEvents())[0]?.actor).toBe('system')
+  })
+
+  it.each(['ready', 'running', 'reviewing', 'rework', 'blocked', 'done', 'cancelled'] as const)(
+    'refuses a task that is %s, not failed, and touches nothing',
+    async (status): Promise<void> => {
+      const task = await prisma.task.create({
+        data: { workspaceId, title: 'Add the thing', description: 'make it work', status, maxAttempts: 3 },
+      })
+
+      const result = await retryTask(task.id)
+      expect(result.ok).toBe(false)
+      if (result.ok) throw new Error('expected a refusal')
+      expect(result.error).toEqual({ kind: 'task_not_failed', taskId: task.id, status })
+      expect(refusalText(result.error)).toContain('only a failed task can be retried')
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).status).toBe(status)
+      expect(await unblockedEvents()).toHaveLength(0)
+    },
+  )
+
+  it('refuses a task that does not exist', async (): Promise<void> => {
+    const result = await retryTask('does-not-exist')
+    expect(result.ok).toBe(false)
+    expect(result.ok ? null : result.error).toEqual({ kind: 'task_not_found', taskId: 'does-not-exist' })
+  })
+
+  it('refuses a third retry: two remedies that did not work is the finding, not a reason for a third', async (): Promise<void> => {
+    const task = await makeFailedTask({ retries: RETRIES_MAX })
+
+    const result = await retryTask(task.id)
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.error).toEqual({ kind: 'retry_ceiling_reached', taskId: task.id, retries: RETRIES_MAX, limit: RETRIES_MAX })
+    expect(refusalText(result.error)).toContain('retried')
+
+    const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(after.status).toBe('failed')
+    expect(after.retries).toBe(RETRIES_MAX)
+    expect(await unblockedEvents()).toHaveLength(0)
+  })
+
+  it('a grant that is refused aborts the retry: the task is left exactly as it was', async (): Promise<void> => {
+    const task = await makeFailedTask()
+
+    const result = await retryTask(task.id, { grant: { slaveId: 'nobody', permissionKind: 'network_fetch' } })
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected a refusal')
+    expect(result.error).toEqual({ kind: 'slave_not_found', slaveId: 'nobody' })
+
+    const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(after.status).toBe('failed')
+    expect(after.attempt).toBe(3)
+    expect(after.retries).toBe(0)
+    expect(await unblockedEvents()).toHaveLength(0)
+  })
+
+  // Final review, Minor 3: the bound is `TASK_NEEDS`, not the six kinds. A remedy's grant stands in
+  // for the `needs` a planner could have written, and the dispatch has been held to those two since
+  // Task 5 -- this is the other door into the same room. A word the vocabulary does not hold and a
+  // real permission a plan may not ask for are refused alike, before anything is written.
+  it('refuses a grant of anything outside TASK_NEEDS, and writes no permission row', async (): Promise<void> => {
+    const slave = await makeSlave(workspaceId)
+    const task = await makeFailedTask()
+
+    for (const permissionKind of ['sudo_everything', 'read_secret', 'deploy_release']) {
+      const result = await retryTask(task.id, { grant: { slaveId: slave.id, permissionKind } })
+      expect(result.ok, permissionKind).toBe(false)
+      if (result.ok) throw new Error('expected a refusal')
+      expect(result.error).toEqual({ kind: 'invalid_task_need', permissionKind })
+      expect(refusalText(result.error)).toContain('a plan can ask')
+    }
+    expect(await prisma.slavePermission.count()).toBe(0)
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('failed')
+    expect(await unblockedEvents()).toHaveLength(0)
+  })
+
+  it('both kinds a plan may ask for are granted', async (): Promise<void> => {
+    const slave = await makeSlave(workspaceId)
+    for (const permissionKind of ['network_fetch', 'run_commands'] as const) {
+      const task = await makeFailedTask()
+      expect((await retryTask(task.id, { grant: { slaveId: slave.id, permissionKind } })).ok, permissionKind).toBe(true)
+      const row = await prisma.slavePermission.findFirstOrThrow({ where: { slaveId: slave.id, kind: permissionKind } })
+      expect(row.mode).toBe('allow')
+    }
+  })
+
+  /**
+   * Final review, Important 2: an operator's `deny` row is a person's own decision about this
+   * worker, and `setSlavePermission` is an upsert -- so without the read this flipped it to `allow`
+   * and wrote an event saying the Supervisor did.
+   *
+   * The task still moves. The refusal was one wall and the retry may get further than it did, so
+   * refusing the whole remedy would leave a `failed` task nothing in the product can shift over a
+   * grant it never needed to have. What the event carries is that the grant did not happen.
+   */
+  it('does NOT overturn a deny an operator wrote: the task is retried and the row stands', async (): Promise<void> => {
+    const slave = await makeSlave(workspaceId)
+    await prisma.slavePermission.create({
+      data: { slaveId: slave.id, kind: 'network_fetch', mode: 'deny', grantedBy: null },
+    })
+    const task = await makeFailedTask()
+
+    const result = await retryTask(
+      task.id,
+      { grant: { slaveId: slave.id, permissionKind: 'network_fetch' }, reason: 'The last run was refused the network.' },
+      undefined,
+      { origin: 'system' },
+    )
+    expect(result.ok).toBe(true)
+
+    // The remedy's OTHER half went through: the task is out of `failed` and schedulable again.
+    const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(after.status).toBe('rework')
+    expect(after.retries).toBe(1)
+
+    // The person's decision is untouched, and nothing claims to have changed it.
+    const row = await prisma.slavePermission.findUniqueOrThrow({
+      where: { slaveId_kind: { slaveId: slave.id, kind: 'network_fetch' } },
+    })
+    expect(row.mode).toBe('deny')
+    expect(
+      await prisma.executionEvent.findMany({ where: { workspaceId, type: 'permission_changed' } }),
+    ).toHaveLength(0)
+
+    // And the row in the log says the remedy was half-applied rather than leaving a reader to
+    // wonder why the same wall came back.
+    const [event] = await unblockedEvents()
+    expect(event?.payload).toMatchObject({
+      grant: { slaveId: slave.id, permissionKind: 'network_fetch', refused: 'denied_by_operator' },
+    })
+  })
+
+  it('grants over an ALLOW row and over no row at all, which are not a person saying no', async (): Promise<void> => {
+    const slave = await makeSlave(workspaceId)
+    await prisma.slavePermission.create({
+      data: { slaveId: slave.id, kind: 'network_fetch', mode: 'allow', grantedBy: null },
+    })
+    const task = await makeFailedTask()
+
+    expect((await retryTask(task.id, { grant: { slaveId: slave.id, permissionKind: 'network_fetch' } })).ok).toBe(true)
+    const [event] = await unblockedEvents()
+    // No `refused` key: absent is what "the grant went through" has always looked like.
+    expect(event?.payload).toMatchObject({ grant: { slaveId: slave.id, permissionKind: 'network_fetch' } })
+    expect((event?.payload as { grant?: { refused?: string } }).grant?.refused).toBeUndefined()
+  })
+
+  it('two concurrent retries: exactly one claims, the loser is refused task_not_failed', async (): Promise<void> => {
+    const task = await makeFailedTask()
+
+    const [a, b] = await Promise.all([retryTask(task.id), retryTask(task.id)])
+    const outcomes = [a, b]
+    expect(outcomes.filter((r) => r.ok)).toHaveLength(1)
+    expect(outcomes.find((r) => !r.ok)?.ok === false ? 'refused' : null).toBe('refused')
+
+    const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(after.retries).toBe(1)
+    expect(await unblockedEvents()).toHaveLength(1)
+  })
+})
+
+/**
+ * E R3 (self-running-project Task 4): the second destination for a `review_cap_blocked` park, for
+ * the case the cap counted attempts that never judged anything -- a reviewer whose run broke.
+ */
+describe('unblockTask -- retryReview', () => {
+  let workspaceId: string
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Approval", "SlaveMessage", "Artifact", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace" RESTART IDENTITY CASCADE',
+    )
+    ;({ workspaceId } = await seed())
+  })
+
+  it('sends a blocked task back to reviewing and stamps the window the next review counts from', async (): Promise<void> => {
+    const slave = await makeSlave(workspaceId)
+    const task = await makeBlockedTask(workspaceId, { attempt: 1, maxAttempts: 3 })
+    // The state the cap park leaves: one implementation run and REVIEW_RETRY_CAP review runs after
+    // it, so an ordinary unblock would pick `rework` -- the review budget is spent.
+    const impl = new Date(Date.now() - 60_000)
+    await prisma.slaveRun.create({
+      data: { taskId: task.id, slaveId: slave.id, kind: 'implementation', status: 'succeeded', startedAt: impl },
+    })
+    for (let i = 0; i < REVIEW_RETRY_CAP; i += 1) {
+      await prisma.slaveRun.create({
+        data: { taskId: task.id, slaveId: slave.id, kind: 'review', status: 'failed', startedAt: new Date(impl.getTime() + 1_000 * (i + 1)) },
+      })
+    }
+
+    const before = Date.now()
+    const result = await unblockTask(task.id, { retryReview: true })
+
+    expect(result).toEqual({ ok: true, value: { status: 'reviewing' } })
+    const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(after.status).toBe('reviewing')
+    // No implementation attempt is spent: nobody has judged this work wrong.
+    expect(after.attempt).toBe(1)
+    expect(after.maxAttempts).toBe(3)
+    expect(after.reviewWindowFrom?.getTime() ?? 0).toBeGreaterThanOrEqual(before)
+
+    const [event] = await prisma.executionEvent.findMany({ where: { taskId: task.id, type: 'task_unblocked' } })
+    expect(event?.payload).toMatchObject({ status: 'reviewing', reason: 'retry_review' })
+  })
+
+  it('refuses a task that is not blocked, and stamps no window', async (): Promise<void> => {
+    const task = await prisma.task.create({
+      data: { workspaceId, title: 'Add the thing', description: 'make it work', status: 'reviewing', maxAttempts: 3 },
+    })
+
+    const result = await unblockTask(task.id, { retryReview: true })
+    expect(result.ok).toBe(false)
+    expect(result.ok ? null : result.error).toEqual({ kind: 'task_not_blocked', taskId: task.id, status: 'reviewing' })
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).reviewWindowFrom).toBeNull()
   })
 })

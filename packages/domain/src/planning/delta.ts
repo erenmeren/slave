@@ -176,9 +176,10 @@ export const REPLAN_INSTRUCTIONS = [
   'Read the repository for context, but do NOT modify, create, or commit any file.',
   '',
   'Your final message must contain exactly one JSON object and nothing else on its line:',
-  '{"add":[{"key":"short-unique-key","title":"...","description":"...","role":"backend","dependsOn":["other-key-or-existing-task-id"]}],"cancel":["<task id to cancel>"],"keep":["<task id to keep>"]}',
+  '{"add":[{"key":"short-unique-key","title":"...","description":"...","role":"backend","dependsOn":["other-key-or-existing-task-id"],"needs":[]}],"cancel":["<task id to cancel>"],"keep":["<task id to keep>"]}',
   'All three arrays may be empty. At most 20 additions. Keys are plan-local, must not repeat, and must not be an id already on the board.',
   'dependsOn may name another new key or an existing task id, and must not form a cycle.',
+  'A task that must read the web carries "needs": ["network_fetch"]; one that must run commands beyond the repository\'s own scripts carries "run_commands"; most tasks carry neither.',
   'Put a task id in "cancel" only when the new GOAL no longer needs that work, and in "keep" when it still does. A task you do not mention is kept, and a task must not be in both.',
   'You never cancel work that is running or done: a cancellation of anything but a backlog, ready or blocked task is dropped, and every cancellation you ask for is a proposal a human approves.',
 ].join('\n')

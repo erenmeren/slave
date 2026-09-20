@@ -92,7 +92,9 @@ const MODE_WORD: Record<'allow' | 'deny' | 'unset', string> = {
  *  `PermissionMatrix` has drawn since M14 -- one vocabulary, two surfaces. */
 function glyphFor(grant: SlaveGrant): 'allow' | 'deny' | 'unset' {
   if (grant.mode === 'deny') return 'deny'
-  return grant.mode === 'allow' || grant.source === 'baseline' ? 'allow' : 'unset'
+  // `task` beside `baseline` for that docstring's own reason (E R5): both mean the run really may
+  // do it, with nobody having decided anything about the worker.
+  return grant.mode === 'allow' || grant.source === 'baseline' || grant.source === 'task' ? 'allow' : 'unset'
 }
 
 /**
@@ -149,6 +151,11 @@ function sourceSentence(grant: SlaveGrant, runKind: PermissionRunKind): string {
       return `Refused by ${granterName(grant)} on ${onDate(grant.at)}${brokered}`
     case 'never':
       return `Never granted${brokered}`
+    // E R5. Unreachable from THIS panel -- it describes the seat, and a task grant is a fact about
+    // one run -- but the union is the union: the arm exists so a surface that ever does pass a
+    // run's task needs prints a sentence rather than nothing.
+    case 'task':
+      return `Asked for by the task's plan${brokered}`
   }
 }
 

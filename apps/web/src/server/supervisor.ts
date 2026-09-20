@@ -23,7 +23,10 @@ export interface SupervisorView {
    *  drafted answer's proposal row shows the question of. Straight off the world the report was
    *  computed from, so the two cannot disagree about what is outstanding. */
   readonly questions: readonly SupervisorQuestionView[]
-  readonly settings: { readonly enabled: boolean; readonly profile: string | null }
+  // R1/R8 (Task 7): `autonomy` off `loaded.settings` -- straight off the workspace row the report
+  // was computed from, so the panel's switch and the report it sits beside can never disagree
+  // about which mode the project is in.
+  readonly settings: { readonly enabled: boolean; readonly profile: string | null; readonly autonomy: 'propose' | 'act' }
   /**
    * The titles of the tasks on this project's board, by id (M40 §6) -- what a `cancel_task`
    * proposal's sentence names instead of a raw uuid. "cancel task 3f8a…: the re-plan for goal v2 no

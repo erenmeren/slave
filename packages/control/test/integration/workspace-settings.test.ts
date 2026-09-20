@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { prisma } from '@slave-of-ai/db/client'
 import { refusalText } from '../../src/refusal.js'
-import { setWorkspaceBudget, setWorkspaceProvider } from '../../src/workspace.js'
+import { setWorkspaceBudget, setWorkspaceIntegration, setWorkspaceProvider } from '../../src/workspace.js'
 import { workspaceDefaultProvider } from '../../src/runtime.js'
 
 // A real directory, not a placeholder (M23 G3): runFilePaths' statSync preflight refuses a repo path that does not exist, and a reboot clears /tmp -- the trap emergency.test.ts fell into at ce48adc.
@@ -155,6 +155,77 @@ describe('the workspace settings verbs', () => {
       // reach the configuration by setting the provider first and the budget second.
       await setWorkspaceBudget(fixture.workspace.id, 20)
       expect((await setWorkspaceProvider(fixture.workspace.id, 'cursor')).ok).toBe(true)
+    })
+  })
+  /**
+   * E R7: the verb behind the switch nothing used to be able to write. Its `unintegratedDone`
+   * count is the README's caveat made countable -- turning auto-merge on does not retroactively
+   * stamp anything, so the tasks that reached `done` by hand merge stay unstamped and keep
+   * blocking their dependents until `confirm-integration` is run on each of them once.
+   */
+  describe('setWorkspaceIntegration', () => {
+    const doneTask = (integratedAt: Date | null): Promise<unknown> =>
+      prisma.task.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          title: 'Add the thing',
+          description: 'make it work',
+          status: 'done',
+          maxAttempts: 3,
+          integratedAt,
+        },
+      })
+
+    it('turns the switch on and off, and records both ends of the move', async (): Promise<void> => {
+      const on = await setWorkspaceIntegration(fixture.workspace.id, { autoMerge: true })
+      expect(on.ok).toBe(true)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })).autoMerge).toBe(true)
+
+      const off = await setWorkspaceIntegration(fixture.workspace.id, { autoMerge: false })
+      expect(off.ok).toBe(true)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })).autoMerge).toBe(false)
+
+      const events = await prisma.executionEvent.findMany({
+        where: { workspaceId: fixture.workspace.id, type: 'workspace_settings_changed' },
+        orderBy: { seq: 'asc' },
+      })
+      expect(events.map((event) => event.payload)).toEqual([
+        { field: 'autoMerge', from: false, to: true },
+        { field: 'autoMerge', from: true, to: false },
+      ])
+      expect(events[0]?.actor).toBe('human')
+    })
+
+    it('counts the done tasks nobody stamped, which the flip does not stamp either', async (): Promise<void> => {
+      await doneTask(null)
+      await doneTask(null)
+      await doneTask(new Date())
+
+      const result = await setWorkspaceIntegration(fixture.workspace.id, { autoMerge: true })
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.unintegratedDone).toBe(2)
+      // The caveat itself: nothing was stamped by the flip.
+      expect(await prisma.task.count({ where: { workspaceId: fixture.workspace.id, integratedAt: null } })).toBe(2)
+    })
+
+    it('counts zero on a project whose done work is all integrated', async (): Promise<void> => {
+      await doneTask(new Date())
+
+      const result = await setWorkspaceIntegration(fixture.workspace.id, { autoMerge: true })
+
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.value.unintegratedDone).toBe(0)
+    })
+
+    it('refuses an unknown workspace, writing nothing', async (): Promise<void> => {
+      const result = await setWorkspaceIntegration('00000000-0000-0000-0000-000000000000', { autoMerge: true })
+
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.error.kind).toBe('workspace_not_found')
+      expect(await prisma.executionEvent.count({ where: { type: 'workspace_settings_changed' } })).toBe(0)
     })
   })
 })

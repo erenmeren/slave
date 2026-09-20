@@ -248,6 +248,9 @@ interface ReviewableTask {
   readonly title: string
   readonly description: string
   readonly branch: string | null
+  /** E R3: the moment a remedy declared the review attempts so far spent. `null` on every task
+   *  nothing has retried, which is every task before this milestone. */
+  readonly reviewWindowFrom: Date | null
 }
 
 /**
@@ -289,8 +292,16 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     return null
   }
 
+  // E R3: the window is the LATER of the two boundaries. The implementation run is the ordinary
+  // one -- a fresh implementation is fresh work to judge -- and `reviewWindowFrom` is the stamp
+  // `retry_review` leaves when the Supervisor decides the reviewer, not the work, is what failed.
+  // Without it that remedy could never take effect: the dead review runs are still newer than the
+  // implementation, so the cap would stay spent and the task would be parked again on the very
+  // next pass. Older than the implementation run it changes nothing, which is what a stamp from a
+  // remedy applied before this implementation ran should do.
+  const windowFrom = new Date(Math.max(latestImpl.startedAt.getTime(), task.reviewWindowFrom?.getTime() ?? 0))
   const reviewAttempts = await prisma.slaveRun.count({
-    where: { taskId: task.id, kind: 'review', startedAt: { gt: latestImpl.startedAt } },
+    where: { taskId: task.id, kind: 'review', startedAt: { gt: windowFrom } },
   })
   // The cap is reached, not merely one review failing: a single failed review already leaves the
   // task in `reviewing` for the next attempt (`concludeReview`'s invalid-verdict branch, deliberately
@@ -298,7 +309,8 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
   // that the same implementation has now had `REVIEW_RETRY_CAP` review runs in a row that could not
   // even produce a parseable verdict for it -- a rejected review moves the task to `rework` and
   // starts a fresh implementation run, which resets this count (it is scoped to `startedAt: { gt:
-  // latestImpl.startedAt }`), so reaching the cap here specifically means the *reviewer* keeps
+  // windowFrom }`, and a fresh implementation moves that boundary), so reaching the cap here
+  // specifically means the *reviewer* keeps
   // failing to say anything usable, not that the *implementation* is bad.
   //
   // Parked `blocked`, not `failed` and not `rework`: `failed` reads as "the work failed", which is

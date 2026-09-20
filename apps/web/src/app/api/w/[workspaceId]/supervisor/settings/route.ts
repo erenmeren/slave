@@ -18,13 +18,22 @@ export const dynamic = 'force-dynamic'
 const bodySchema = z.object({
   enabled: z.boolean().optional(),
   profile: z.string().nullable().optional(),
+  /**
+   * E R1: the third setting, and the only one with a vocabulary -- `propose` is today's behaviour
+   * (the Supervisor records a decision and a person approves it) and `act` carries out what the
+   * per-kind rules already decided. A third word is a 400 HERE rather than a refusal from the verb,
+   * because it is the shape of the request that is wrong, not the state of the project.
+   */
+  autonomy: z.enum(['propose', 'act']).optional(),
 })
 
-const BODY_ERROR = 'the body must be { "enabled"?: boolean, "profile"?: string | null }'
+const BODY_ERROR =
+  'the body must be { "enabled"?: boolean, "profile"?: string | null, "autonomy"?: "propose" | "act" }'
 
 /**
- * The two Supervisor settings a project may change (M38 §6): whether the Supervisor decides at all,
- * and the persona/house rules its decision prompt carries.
+ * The Supervisor settings a project may change (M38 §6, E R1): whether the Supervisor decides at
+ * all, the persona/house rules its decision prompt carries, and whether what it decides waits for a
+ * person or is carried out.
  *
  * PATCH, because each write replaces ONE field of a workspace that has many -- the same reason the
  * slave profile and runtime-role routes are PATCHes. `workspaceControlResponse` gives the 404 for
@@ -50,6 +59,7 @@ export async function PATCH(
   const patch = {
     ...(body.data.enabled === undefined ? {} : { enabled: body.data.enabled }),
     ...(body.data.profile === undefined ? {} : { profile: body.data.profile }),
+    ...(body.data.autonomy === undefined ? {} : { autonomy: body.data.autonomy }),
   }
 
   return workspaceControlResponse(workspaceId, () =>

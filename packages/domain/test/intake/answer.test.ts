@@ -27,6 +27,8 @@ const draft: IntakeDraft = {
   setupCommands: [],
   budgetUsd: 20,
   provider: null,
+  autoMerge: true,
+  autonomy: 'act',
   team: [],
 }
 

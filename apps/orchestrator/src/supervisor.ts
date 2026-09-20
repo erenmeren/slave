@@ -223,6 +223,22 @@ export async function supervise(deps: SuperviseDeps): Promise<SuperviseReport> {
   let drafted = 0
 
   for (const situation of situations) {
+    // E R4 ("a `retry_task` applied in the same pass or the previous one"), Task 8 erratum E12.
+    //
+    // `workspace_halted` is the LAST kind in `SITUATION_KINDS`, so by the time this pass reaches it
+    // every remedy it was going to apply has been applied -- and `candidates` cannot see any of
+    // them. Its catalogue is built from `world.decisions` and `world.tasks`, both read before the
+    // first verb ran, so a pass that has just put the breaker's own failed task back to `rework`
+    // would still find no evidence the cause was addressed, escalate the halt to a person, and then
+    // -- because `filterFresh` holds a key with an open decision -- keep that escalation in front of
+    // the halt for as long as it lives. The self-running project would stop one step from running.
+    //
+    // So the halt is left for the NEXT pass, which reads a world that includes what this one did.
+    // The condition is tighter than it looks: while a workspace is halted, `tierOf` applies nothing
+    // but the halt's own two remedies, so `applied > 0` HERE means precisely "this pass retried the
+    // task the breaker counted". A halt is not urgent within one tick, and nothing else observes it.
+    if (situation.kind === 'workspace_halted' && applied > 0) continue
+
     const catalogue = candidates(situation, world)
     let choice: Choice | null = null
 

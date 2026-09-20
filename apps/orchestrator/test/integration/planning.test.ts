@@ -849,6 +849,63 @@ describe('concludePlanning', () => {
     expect((event.payload as { droppedCapabilities?: string[] }).droppedCapabilities).toEqual(['nope.nothing'])
   })
 
+  // E R5: the permission a task needs is a fact the PLANNER knows and nobody was asking it for.
+  // The needs it writes land on the row `startRun` reads at dispatch, so a research task that must
+  // read the web arrives with the grant rather than failing three times for the want of it.
+  describe('the needs a task carries (E R5)', () => {
+    it('writes the needs onto the row, and nothing about them onto the plan event', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      await concludeGraph(fixture, {
+        tasks: [
+          {
+            key: 'a',
+            title: 'Research the competitors',
+            description: 'Read what the market does.',
+            role: 'backend',
+            needs: ['network_fetch'],
+            dependsOn: [],
+          },
+          { key: 'b', title: 'Write it up', description: 'A memo.', role: 'backend', dependsOn: ['a'] },
+        ],
+      })
+
+      const research = await prisma.task.findFirstOrThrow({ where: { title: 'Research the competitors' } })
+      expect(research.requiredPermissions).toEqual(['network_fetch'])
+      // A task that asked for nothing needs nothing -- the column's default, written explicitly.
+      const memo = await prisma.task.findFirstOrThrow({ where: { title: 'Write it up' } })
+      expect(memo.requiredPermissions).toEqual([])
+      const event = await prisma.executionEvent.findFirstOrThrow({
+        where: { workspaceId: fixture.workspaceId, type: 'workspace_plan_created' },
+      })
+      expect((event.payload as { droppedNeeds?: unknown }).droppedNeeds).toBeUndefined()
+    })
+
+    it('drops a need the list does not have, records it on the plan event, and still builds the board', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      await concludeGraph(fixture, {
+        tasks: [
+          {
+            key: 'a',
+            title: 'Research the competitors',
+            description: 'Read what the market does.',
+            role: 'backend',
+            needs: ['network_fetch', 'sudo'],
+            dependsOn: [],
+          },
+        ],
+      })
+
+      const task = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+      expect(task.requiredPermissions).toEqual(['network_fetch'])
+      const event = await prisma.executionEvent.findFirstOrThrow({
+        where: { workspaceId: fixture.workspaceId, type: 'workspace_plan_created' },
+      })
+      expect((event.payload as { droppedNeeds?: Record<string, string[]> }).droppedNeeds).toEqual({ a: ['sudo'] })
+    })
+  })
+
   // Task 5: a board may never be created with a role nobody on the project can serve. Prompt
   // guidance (`runContext.ts`'s `rolesSection`) is not enforcement -- a model can still ignore it
   // and write a role no seat carries -- so conclusion re-checks LIVE staffing before a single Task
@@ -1643,6 +1700,28 @@ describe('a re-plan', () => {
     })
     return run.id
   }
+
+  // E R5, fix round 1: a task a re-plan adds is a task like any other. A board grown by a re-plan
+  // whose research task carried no permission would fail exactly as the first-plan one did.
+  it('writes the needs of a task a re-plan adds, bounded to the closed list', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const runId = await seedConcludedReplan(
+      fixture,
+      `{"add":[{"key":"docs","title":"Document the new endpoint","description":"write it","role":"backend","dependsOn":[],"needs":["network_fetch","sudo"]}],"cancel":[],"keep":["${existing.id}"]}`,
+      [existing.id],
+    )
+
+    await concludePlanning(brandRunId(runId))
+
+    const added = await prisma.task.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, title: 'Document the new endpoint' },
+    })
+    // `sudo` never reaches the row: `normalisePlanTask` bounds a delta's needs to the same closed
+    // list a first plan's are bounded to.
+    expect(added.requiredPermissions).toEqual(['network_fetch'])
+  })
 
   it('routes on the recorded manifest, and lets an addition depend on a task already on the board', async (): Promise<void> => {
     const fixture = await boardAt(1)

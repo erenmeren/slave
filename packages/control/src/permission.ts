@@ -5,12 +5,14 @@ import {
   MCP_TOOL_PREFIX,
   PERMISSION_KINDS,
   PERMISSION_LABEL,
+  TASK_NEEDS,
   TOOL_VOCABULARY,
   type PermissionKind,
   type PermissionProvider,
   type PermissionRowInput,
   type PermissionRunKind,
   type Result,
+  type TaskNeed,
   err,
   grantsFor,
   ok,
@@ -63,21 +65,35 @@ export function writePermissionsFile(
     /** The PLAINTEXT token this spawn will put in the child's environment. Only its hash is written
      *  here; the plaintext is never persisted anywhere (M52 R4, plan erratum E7). */
     readonly runToken: string
+    /** E R5: the needs the PLANNER wrote on this run's task (`Task.requiredPermissions`), which
+     *  `resolveGrants` adds to the baseline on an implementation run and ignores on every other.
+     *  `string[]`, like `rows`, because the caller reads it straight off a Prisma row -- it is
+     *  filtered to the six kinds here, at the one boundary that already does that for the rows. */
+    readonly taskGrants?: readonly string[] | undefined
   },
 ): string {
   const permissionsFilePath = permissionsFilePathFor(runDir)
   const rows = input.rows.filter((row): row is PermissionRowInput =>
     (PERMISSION_KINDS as readonly string[]).includes(row.kind),
   )
+  // Bounded to TASK_NEEDS, not to the six kinds (fix round 1): a plan may ask for the two a plan
+  // can know about in advance, and `read_secret`/`deploy_release` are a person's decision about a
+  // worker. A graph that named one must not be able to grant it to itself through this parameter.
+  const taskGrants = (input.taskGrants ?? []).filter((kind): kind is TaskNeed =>
+    (TASK_NEEDS as readonly string[]).includes(kind),
+  )
   const body = {
     version: 2,
     runId: input.runId,
     tokenHash: runTokenHash(input.runToken),
     enforce: ENFORCE_BY_PROVIDER[input.provider],
-    grants: grantsFor(rows, input.runKind)
-      .filter((grant) => grant.source === 'baseline' || grant.source === 'granted')
+    grants: grantsFor(rows, input.runKind, taskGrants)
+      // `'task'` beside the two (E R5): a kind the plan asked for is one this run HAS, and `grants`
+      // is the half of the file the gate decides every `mcp__*` name by -- a task grant missing
+      // from it would open the two names `allow` can spell and nothing else.
+      .filter((grant) => grant.source === 'baseline' || grant.source === 'granted' || grant.source === 'task')
       .map((grant) => grant.kind),
-    allow: resolveGrants(rows, input.provider, input.runKind),
+    allow: resolveGrants(rows, input.provider, input.runKind, taskGrants),
     vocabulary: TOOL_VOCABULARY[input.provider],
     // The name families the vocabulary cannot enumerate. ONE entry today, spelled from the domain's
     // own constant rather than as a literal, so a second prefix rule lands here by construction.
@@ -135,16 +151,19 @@ async function slaveForPermission(
  * is written at all in that case, so the original granter keeps the row: `grantedBy` answers "who
  * decided this", not "who last looked at it".
  *
- * `actor: 'human'` unconditionally, with no `origin` parameter (the shape `setSlaveLifecycle` has).
- * There is no automatic path to this verb: the Supervisor's `request_permission` is always
- * `proposed`, so `carryOut` reaches it only on the far side of a person's approval, and the approver
- * is the granter.
+ * `origin` is `setSlaveLifecycle`'s shape, and E R3 is what made it necessary (Task 8, erratum E13).
+ * `request_permission` is still always `proposed`, so THAT path reaches here only on the far side of
+ * a person's approval and the approver is the granter -- but a `retry_task` under `act` carries the
+ * grant the diagnosis named, and nobody approves it. Appending `actor: 'human'` with `by: null` for
+ * that one would say a person granted network access to a worker on a quiet afternoon, which is the
+ * opposite of what happened. `'system'` names the machine and `by` says which machine.
  */
 export async function setSlavePermission(
   slaveId: string,
   kind: string,
   mode: 'allow' | 'deny',
   principal?: Principal,
+  opts: { readonly origin?: 'human' | 'system' } = {},
 ): Promise<Result<void, ControlRefusal>> {
   // `invalid_tool` keeps its NAME (plan erratum E11): renaming a refusal kind costs three homes to
   // rename a word no surface prints. Its payload field stays `tool` and now carries the offered
@@ -170,7 +189,7 @@ export async function setSlavePermission(
     update: { mode, grantedBy: principal?.userId ?? null, grantedAt: new Date() },
     create: { slaveId, kind: kind as PermissionKind, mode, grantedBy: principal?.userId ?? null },
   })
-  await appendPermissionChanged(slaveId, slave, kind as PermissionKind, from, mode, principal)
+  await appendPermissionChanged(slaveId, slave, kind as PermissionKind, from, mode, principal, opts.origin)
   return ok(undefined)
 }
 
@@ -216,12 +235,13 @@ async function appendPermissionChanged(
   from: 'allow' | 'deny' | null,
   to: 'allow' | 'deny' | null,
   principal: Principal | undefined,
+  origin: 'human' | 'system' = 'human',
 ): Promise<void> {
   await appendEvent({
     type: 'permission.changed',
     workspaceId: slave.workspaceId,
     slaveId,
-    actor: 'human',
+    actor: origin,
     payload: {
       slaveId,
       name: slave.name,
@@ -232,7 +252,10 @@ async function appendPermissionChanged(
       kindLabel: PERMISSION_LABEL[kind],
       from,
       to,
-      by: principal?.userId ?? null,
+      // The PERSON when there is one; the Supervisor's own name when there is not (spec R3, "the
+      // grant is recorded as by: 'supervisor'"). Null stays what it always was: a path with no
+      // principal and no origin -- the CLI's own `permission` verb, and every row before M52.
+      by: principal?.userId ?? (origin === 'system' ? 'supervisor' : null),
     },
     userId: principal?.userId ?? null,
   })

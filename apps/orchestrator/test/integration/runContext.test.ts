@@ -622,6 +622,13 @@ describe('buildRunContext', () => {
       expect(prompt).toContain('"task graph"')
       expect(prompt).not.toContain('"verdict"')
       expect(prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
+      // E R5: the planner is told it may say what a task NEEDS, in the same breath as the JSON
+      // shape it must answer in -- a permission nobody asks for is a permission nobody grants.
+      expect(prompt).toContain('"needs":[]')
+      expect(prompt).toContain(
+        'A task that must read the web carries "needs": ["network_fetch"]; one that must run ' +
+          'commands beyond the repository\'s own scripts carries "run_commands"; most tasks carry neither.',
+      )
       // `capabilities` is present whenever the taxonomy table has rows, which it does here (M47
       // E3). Since M48 the last planning section is the PROCESS -- here `handoff_protocol`, this
       // workspace having adopted no runbook -- and the trailer follows it.

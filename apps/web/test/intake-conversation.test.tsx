@@ -39,6 +39,8 @@ const DRAFT = {
   setupCommands: [],
   budgetUsd: 20,
   provider: null,
+  autoMerge: true,
+  autonomy: 'act',
   team: [{ templateId: 't1', runtimeRoles: ['backend', 'manager'] }],
 }
 
@@ -317,6 +319,37 @@ describe('IntakeConversation', () => {
     render(<IntakeConversation onClose={vi.fn()} />)
     await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
     expect((screen.getByTestId('intake-create') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  /**
+   * E R7/R1 §4: the card's two switches. Both arrive checked -- the draft schema defaults them on
+   * -- so a project created from a conversation merges its approved work and lets its Supervisor
+   * act unless the person says otherwise, and what they leave the boxes at is what is posted.
+   */
+  it('shows both switches checked, and posts what the person leaves them at', async (): Promise<void> => {
+    const fetchMock = stubFetch([view({ status: 'drafted', draft: DRAFT, facts: FACTS })])
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+
+    expect((screen.getByTestId('intake-auto-merge') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByTestId('intake-autonomy') as HTMLInputElement).checked).toBe(true)
+
+    fireEvent.click(screen.getByTestId('intake-auto-merge'))
+    fireEvent.click(screen.getByTestId('intake-autonomy'))
+    expect((screen.getByTestId('intake-auto-merge') as HTMLInputElement).checked).toBe(false)
+    expect((screen.getByTestId('intake-autonomy') as HTMLInputElement).checked).toBe(false)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('intake-create'))
+    })
+
+    const accept = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/accept'))
+    const posted = JSON.parse(String((accept?.[1] as { body: string }).body)).draft as {
+      autoMerge: boolean
+      autonomy: string
+    }
+    expect(posted.autoMerge).toBe(false)
+    expect(posted.autonomy).toBe('propose')
   })
 
   it('posts the EDITED draft and lands on the project', async (): Promise<void> => {

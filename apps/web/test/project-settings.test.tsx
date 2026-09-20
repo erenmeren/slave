@@ -39,7 +39,7 @@ describe('RuntimePanel', () => {
   const limits = { maxConcurrentRuns: 3, runTimeoutMs: 1_800_000, maxAttempts: 5 }
 
   it('PUTs the chosen provider', async (): Promise<void> => {
-    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} />)
+    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="propose" />)
 
     await act(async () => {
       fireEvent.change(screen.getByLabelText('workspace provider'), { target: { value: 'cursor' } })
@@ -50,7 +50,7 @@ describe('RuntimePanel', () => {
   })
 
   it('sends an explicit null when the operator picks (none)', async (): Promise<void> => {
-    render(<RuntimePanel workspaceId="w1" provider="cursor" budgetUsd={null} costBlindBudgeted={false} limits={limits} />)
+    render(<RuntimePanel workspaceId="w1" provider="cursor" budgetUsd={null} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="propose" />)
 
     await act(async () => {
       fireEvent.change(screen.getByLabelText('workspace provider'), { target: { value: '' } })
@@ -61,7 +61,7 @@ describe('RuntimePanel', () => {
   })
 
   it('PUTs the typed budget', async (): Promise<void> => {
-    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} />)
+    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="propose" />)
 
     await act(async () => {
       fireEvent.change(screen.getByLabelText('workspace budget'), { target: { value: '35.5' } })
@@ -74,7 +74,7 @@ describe('RuntimePanel', () => {
   it('submits a budget of zero as the number zero, never as null', async (): Promise<void> => {
     // Decision 11's edge: `0` is a real ceiling ("this workspace may spend nothing"), and a panel
     // that coalesced it to null would silently turn the strictest budget into no budget at all.
-    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} />)
+    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="propose" />)
 
     await act(async () => {
       fireEvent.change(screen.getByLabelText('workspace budget'), { target: { value: '0' } })
@@ -85,7 +85,7 @@ describe('RuntimePanel', () => {
   })
 
   it('the not-budgeted checkbox disables the input and submits null', async (): Promise<void> => {
-    render(<RuntimePanel workspaceId="w1" provider="cursor" budgetUsd={20} costBlindBudgeted={true} limits={limits} />)
+    render(<RuntimePanel workspaceId="w1" provider="cursor" budgetUsd={20} costBlindBudgeted={true} limits={limits} autoMerge={false} autonomy="propose" />)
 
     await act(async () => {
       fireEvent.click(screen.getByLabelText('not budgeted'))
@@ -102,7 +102,7 @@ describe('RuntimePanel', () => {
 
   it('a 409 keeps the operator input and shows the refusal verbatim', async (): Promise<void> => {
     vi.mocked(sendControl).mockResolvedValueOnce('a budget must be a non-negative amount or absent')
-    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} />)
+    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="propose" />)
 
     await act(async () => {
       fireEvent.change(screen.getByLabelText('workspace budget'), { target: { value: '-3' } })
@@ -117,21 +117,65 @@ describe('RuntimePanel', () => {
   it('warns only for the cost-blind-and-budgeted combination', (): void => {
     const warning = /this provider reports no cost; a budgeted workspace will refuse it at dispatch/i
     const { rerender } = render(
-      <RuntimePanel workspaceId="w1" provider="cursor" budgetUsd={20} costBlindBudgeted={true} limits={limits} />,
+      <RuntimePanel workspaceId="w1" provider="cursor" budgetUsd={20} costBlindBudgeted={true} limits={limits} autoMerge={false} autonomy="propose" />,
     )
     expect(screen.getByText(warning)).toBeTruthy()
 
     // Same cost-blind provider, no budget: nothing to warn about.
-    rerender(<RuntimePanel workspaceId="w1" provider="cursor" budgetUsd={null} costBlindBudgeted={false} limits={limits} />)
+    rerender(<RuntimePanel workspaceId="w1" provider="cursor" budgetUsd={null} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="propose" />)
     expect(screen.queryByText(warning)).toBeNull()
 
     // Budgeted, but on a runtime that reports cost.
-    rerender(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} />)
+    rerender(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="propose" />)
     expect(screen.queryByText(warning)).toBeNull()
   })
 
+  /**
+   * E R7/R1 §4: the two switches, editable, under the read-only limits. They are checkboxes rather
+   * than a form with a button -- there is nothing to type, so a flip IS the instruction, and the
+   * panel's own `submit` posts it and refreshes.
+   */
+  it('renders both switches from the project s saved values', () => {
+    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} autoMerge={true} autonomy="act" />)
+    expect((screen.getByTestId('runtime-auto-merge') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByTestId('runtime-autonomy') as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('PUTs the auto-merge switch to the integration route', async (): Promise<void> => {
+    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="propose" />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('runtime-auto-merge'))
+    })
+
+    expect(sendControl).toHaveBeenCalledWith('/api/w/w1/integration', { method: 'PUT', body: { autoMerge: true } })
+  })
+
+  it('PATCHes the autonomy switch to the supervisor settings route, in its two words', async (): Promise<void> => {
+    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="act" />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('runtime-autonomy'))
+    })
+
+    expect(sendControl).toHaveBeenCalledWith('/api/w/w1/supervisor/settings', { method: 'PATCH', body: { autonomy: 'propose' } })
+  })
+
+  it('a refused switch shows the refusal and leaves the checkbox where the server has it', async (): Promise<void> => {
+    vi.mocked(sendControl).mockResolvedValueOnce('no workspace with id w1')
+    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="propose" />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('runtime-auto-merge'))
+    })
+
+    expect(screen.getByRole('alert').textContent).toContain('no workspace with id w1')
+    // M11's rule: the server's next snapshot is what moves this checkbox, and the write was refused.
+    expect((screen.getByTestId('runtime-auto-merge') as HTMLInputElement).checked).toBe(false)
+  })
+
   it('shows the three limits read-only, in the sidebar\'s old format', () => {
-    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} />)
+    render(<RuntimePanel workspaceId="w1" provider="claude_code" budgetUsd={20} costBlindBudgeted={false} limits={limits} autoMerge={false} autonomy="propose" />)
     expect(screen.getByTestId('runtime-concurrency').textContent).toBe('3')
     expect(screen.getByTestId('runtime-timeout').textContent).toBe('30m')
     expect(screen.getByTestId('runtime-attempts').textContent).toBe('5')
@@ -160,6 +204,8 @@ function settings(over: Partial<ProjectSettings['workspace']> = {}): ProjectSett
       maxConcurrentRuns: 3,
       runTimeoutMs: 1_800_000,
       maxAttempts: 5,
+      autoMerge: false,
+      supervisorAutonomy: 'propose',
       haltedReason: null,
       archived: false,
       ...over,
@@ -318,6 +364,30 @@ describe('ProjectSettingsClient', () => {
     rerender(<ProjectSettingsClient settings={settings({ budgetUsd: 35 })} shellFacts={shellFacts()} initialSection="runtime" />)
 
     expect((screen.getByLabelText('workspace budget') as HTMLInputElement).value).toBe('35')
+  })
+
+  // Task 6 review, "Also": `autoMerge`/`supervisorAutonomy` came OFF the remount `key` -- the two
+  // switches are prop-driven (`checked={autoMerge}`/`checked={autonomy === 'act'}`, no local
+  // state of their own), so a flip of either must not remount the panel and discard whatever an
+  // operator was mid-typing into the provider or budget fields above them.
+  it('does not discard an unsaved runtime draft when only autoMerge or the autonomy switch changes', () => {
+    const { rerender } = render(
+      <ProjectSettingsClient settings={settings({ budgetUsd: 20 })} shellFacts={shellFacts()} initialSection="runtime" />,
+    )
+    fireEvent.change(screen.getByLabelText('workspace budget'), { target: { value: '99' } })
+    expect((screen.getByLabelText('workspace budget') as HTMLInputElement).value).toBe('99')
+
+    rerender(
+      <ProjectSettingsClient
+        settings={settings({ budgetUsd: 20, autoMerge: true, supervisorAutonomy: 'act' })}
+        shellFacts={shellFacts()}
+        initialSection="runtime"
+      />,
+    )
+
+    expect((screen.getByLabelText('workspace budget') as HTMLInputElement).value).toBe('99')
+    expect((screen.getByTestId('runtime-auto-merge') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByTestId('runtime-autonomy') as HTMLInputElement).checked).toBe(true)
   })
 
   // M24 final review, Important 1: the Settings tab published nothing, so the project header and

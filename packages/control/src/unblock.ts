@@ -1,6 +1,7 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { REVIEW_RETRY_CAP, type Result, err, ok } from '@slave-of-ai/domain'
+import { RETRIES_MAX, REVIEW_RETRY_CAP, TASK_NEEDS, type Result, type TaskNeed, err, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import { setSlavePermission } from './permission.js'
 import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
 
@@ -19,6 +20,23 @@ export interface UnblockTaskInput {
    * `supervisor` member, and the `SupervisorDecision` row is where that authorship is recorded.
    */
   readonly origin?: 'human' | 'system'
+  /**
+   * E R3: send the task back to REVIEW rather than to rework, and stamp the window the next review
+   * counts its attempts from (`Task.reviewWindowFrom`).
+   *
+   * The one case the ordinary destination gets wrong. `dispatchReview` parks a task `blocked` when
+   * `REVIEW_RETRY_CAP` review runs have happened since the latest implementation run -- and when
+   * those runs FAILED on infrastructure (a diff too large to read, a spawn that never happened, an
+   * adapter refusal) not one of them judged the work. The default rule below reads the spent budget
+   * and picks `rework`, which spends an implementation attempt re-doing work nobody found fault
+   * with. The stamp is what makes `reviewing` stick: Task 5 makes `dispatchReview` count review
+   * runs since this moment rather than since the implementation run, so the cap starts again.
+   *
+   * The diagnosis behind it is the domain's (`readTaskFailure` on `SupervisorTask.latestFailure`),
+   * never this verb's: an operator or the Supervisor asks for it, and what arrives here is the
+   * decision.
+   */
+  readonly retryReview?: boolean
 }
 
 /**
@@ -121,6 +139,11 @@ export async function unblockTask(
   // that undoes itself on the very next tick, which is exactly the invert-in-one-tick failure this
   // function's own doc comment refuses for `ready`. A fresh implementation run is the only thing
   // that resets that count, and `rework` is how one is started.
+  //
+  // The window is the LATER of the implementation run and `Task.reviewWindowFrom`, spelled exactly
+  // as `dispatchReview` spells it (fix round 1): this reading and that one are about the same
+  // task and the same cap, and two different windows would have this verb send a task to
+  // `reviewing` that the next tick parks, or to `rework` when a review was still owed it.
   const reviewBudgetSpent = async (): Promise<boolean> => {
     const latestImpl = await prisma.slaveRun.findFirst({
       where: { taskId, kind: 'implementation' },
@@ -128,14 +151,21 @@ export async function unblockTask(
       select: { startedAt: true },
     })
     if (latestImpl === null) return true
+    const windowFrom = new Date(Math.max(latestImpl.startedAt.getTime(), task.reviewWindowFrom?.getTime() ?? 0))
     const attempts = await prisma.slaveRun.count({
-      where: { taskId, kind: 'review', startedAt: { gt: latestImpl.startedAt } },
+      where: { taskId, kind: 'review', startedAt: { gt: windowFrom } },
     })
     return attempts >= REVIEW_RETRY_CAP
   }
 
+  // E R3: the caller asking for another REVIEW overrides both readings above. Deliberately not
+  // "and only if the budget is not spent": a cap-spent budget is the exact state this input exists
+  // for, and `reviewWindowFrom` below is what stops the re-park the budget check is guarding
+  // against. The diagnosis that the reviewer never judged anything was made before the call.
   const status: 'rework' | 'reviewing' =
-    latestRun?.kind === 'review' && !(await reviewBudgetSpent()) ? 'reviewing' : 'rework'
+    input.retryReview === true || (latestRun?.kind === 'review' && !(await reviewBudgetSpent()))
+      ? 'reviewing'
+      : 'rework'
 
   // The ceiling governs IMPLEMENTATION attempts, and the `reviewing` path spends none: the next run
   // this task gets is a review run, bounded by REVIEW_RETRY_CAP rather than by `maxAttempts`.
@@ -147,9 +177,14 @@ export async function unblockTask(
   }
   const maxAttempts = atCeiling ? task.attempt + 1 : task.maxAttempts
 
+  // E R3: the stamp rides on the SAME write that moves the status, so a task can never be
+  // `reviewing` on a retry without the window the next review counts from. Only on the retry path:
+  // an ordinary unblock to `reviewing` is the M42 case, where the budget was never spent and the
+  // count since the implementation run is still the honest one.
+  const retryReview = input.retryReview === true && status === 'reviewing'
   const claimed = await prisma.task.updateMany({
     where: { id: taskId, status: 'blocked', activeRunId: null },
-    data: { status, maxAttempts },
+    data: { status, maxAttempts, ...(retryReview ? { reviewWindowFrom: new Date() } : {}) },
   })
   if (claimed.count === 0) {
     // Lost a race -- another call (or, in principle, some other writer) moved this task between
@@ -165,8 +200,235 @@ export async function unblockTask(
     workspaceId: task.workspaceId,
     taskId,
     actor: input.origin ?? 'human',
-    payload: { attempt: task.attempt, maxAttempts, status },
+    // `attempt` and `maxAttempts` on every one of them, whatever the destination: the event schema
+    // requires both (`packages/domain/src/events/schema.ts`) and `appendEvent` THROWS on a payload
+    // the domain cannot parse. `reason` is the E R3 addition -- WHY this task left `blocked`, which
+    // is the one thing a reader of two identical unblocks a month apart cannot otherwise tell.
+    payload: {
+      attempt: task.attempt,
+      maxAttempts,
+      status,
+      ...(retryReview ? { reason: 'retry_review' } : {}),
+    },
     userId: principal?.userId ?? null,
   })
   return ok({ status })
+}
+
+/** What a retry may carry beyond the task itself (E R3). */
+export interface RetryTaskInput {
+  /**
+   * The cause remedy the diagnosis named, applied BEFORE the task moves: a permission this
+   * worker was refused on the run that failed, granted so the next run does not meet the same wall.
+   *
+   * One decision, two verbs, in order -- and the order is the whole of it. A grant that is refused
+   * (a worker who has since been released, an operation the vocabulary does not hold) leaves the
+   * task exactly as it was, which is a retry that never happened rather than one that will fail
+   * again for the reason the grant was for.
+   *
+   * TWO BOUNDS ON IT, both from the final review (Important 2, Minor 3). `permissionKind` must be
+   * one of {@link TASK_NEEDS} -- what a PLAN may ask for on a task's behalf, which is what this
+   * grant is standing in for; `read_secret` and `deploy_release` are a person's decision about a
+   * worker and a remedy does not get to make it. And an operator's own `deny` row wins: the retry
+   * still goes out, without the grant, and the event says so.
+   */
+  readonly grant?: { readonly slaveId: string; readonly permissionKind: string } | undefined
+  /**
+   * The steer note for the next run, written onto `Task.lastRejectionReason`.
+   *
+   * That column is the worker-facing channel: `runContext`'s `rejection` section renders it on the
+   * IMPLEMENTATION order, and a `rework` run is an implementation run -- so a retried task's next
+   * prompt reads "A previous attempt was rejected. Address this before anything else: <note>".
+   * Nothing else in the product writes a note a retried run can read, and a retry that arrives
+   * without one is the coin toss this milestone exists to stop.
+   *
+   * ABSENT IS NOT EMPTY (fix round 1, Important 1). Leaving it out keeps whatever the column
+   * already holds -- which for a failed task is the note `failTask`, `verify.ts` or the review
+   * wrote about WHY it failed, the one thing the next run most needs to read. A caller with no
+   * note of its own (Task 6's CLI and web retries) must not delete the pipeline's.
+   */
+  readonly reason?: string | undefined
+}
+
+/**
+ * The note as the WORKER will read it (fix round 1, Important 2).
+ *
+ * `candidates.ts`' `lost` remedy prefixes its sentence with `steer: ` -- a LABEL, for the panel and
+ * the decision row, which say what kind of remedy was chosen. The prompt around the note already
+ * supplies the framing ("A previous attempt was rejected. Address this before anything else:"), so
+ * the label after it is machinery leaking into an instruction. The domain keeps the prefix, because
+ * that is where it means something; control strips it, because this is where the text crosses over
+ * into a worker's prompt.
+ *
+ * Nothing else is touched: the sentence itself is system-authored (a constant with the run's own
+ * recorded reason interpolated), and rewriting a word of it here would make the decision row claim
+ * one thing and the worker receive another.
+ */
+const workerNote = (reason: string): string => reason.replace(/^steer:\s*/u, '')
+
+/** Narrowed rather than merely checked, so the Prisma read below takes the kind without a cast:
+ *  {@link TASK_NEEDS} is a subset of the permission vocabulary by construction. */
+const isTaskNeed = (value: string): value is TaskNeed => (TASK_NEEDS as readonly string[]).includes(value)
+
+/**
+ * E R3: the exit from `failed` -- the one status this product had no verb for.
+ *
+ * `failed` is terminal everywhere else (`docs/domain-model.md`): `unblockTask` above refuses it,
+ * the scheduler never starts it, and until this milestone the only way out was an operator editing
+ * the row. That was the maratus project's 2026-09-20 dead end -- a research task whose three runs
+ * were refused the network ended `failed`, and nothing in the product could put it back.
+ *
+ * What it does, and what it deliberately does not:
+ * - `rework`, NEVER `ready`, for {@link unblockTask}'s own reason: the run that failed left this
+ *   task's worktree and branch on disk, and `rework` is what tells `tick.ts`'s `acquireWorktree` to
+ *   ADOPT them instead of refusing them as someone else's wreckage.
+ * - `attempt: 0`. A retry is a fresh set of attempts, which is what makes it different from
+ *   `unblockTask`'s `rework` (that one preserves the count, because the work was parked rather than
+ *   spent). The ledger of "how many times has a remedy been tried" moves to `Task.retries`, which
+ *   this increments and nothing resets.
+ * - `activeRunId: null`, because a failed task's run is over and a stale claim would stop the next
+ *   dispatch.
+ * - `maxAttempts` untouched: the ceiling is the project's setting, not something a retry may raise.
+ *   `unblockTask`'s `allowAnotherAttempt` is the verb for that, and it is a different decision.
+ *
+ * At most {@link RETRIES_MAX} times. The third time, the finding is that the remedies are not
+ * working, and `candidates.ts` offers `escalate_to_human` alone -- so this refusal is the belt to
+ * that rule's braces, for the decision recorded before the counter reached the ceiling and approved
+ * after.
+ *
+ * `origin` is the `task.unblocked` envelope actor, exactly as {@link UnblockTaskInput.origin}
+ * describes it. The EXISTING event, not a new one: a task leaving a park is `task.unblocked`
+ * whichever park it left, and the payload's `reason` says which -- a reader asking "when did this
+ * task start moving again" must not have to know there are two verbs.
+ *
+ * THE GRANT AND THE MOVE ARE NOT ONE TRANSACTION, and the direction that leaves is the deliberate
+ * one (fix round 1, minor): `setSlavePermission` commits on its own before the task is claimed, so
+ * a transaction that then ROLLS BACK -- a lost race with a concurrent `failTask`, a database error
+ * -- leaves a worker holding a permission a person can see (it wrote a `slave.permission_changed`
+ * with the approver on it) and a task that did not move. The reverse pairing would be worse in kind
+ * rather than in degree: a task retried into the very wall the grant was for, failing again for a
+ * reason the decision had already answered, which is the loop this milestone exists to break. A
+ * stray allow is visible, revocable by `clearSlavePermission`, and grants nothing that was not just
+ * decided; a retry without its remedy is a run's worth of spend and a second identical failure.
+ */
+export async function retryTask(
+  taskId: string,
+  input: RetryTaskInput = {},
+  principal?: Principal,
+  opts: { readonly origin?: 'human' | 'system' } = {},
+): Promise<Result<{ readonly status: 'rework'; readonly retries: number }, ControlRefusal>> {
+  const task = await prisma.task.findUnique({ where: { id: taskId } })
+  if (task === null) return err({ kind: 'task_not_found', taskId })
+  if (task.status !== 'failed') return err({ kind: 'task_not_failed', taskId, status: task.status })
+  if (task.retries >= RETRIES_MAX) {
+    return err({ kind: 'retry_ceiling_reached', taskId, retries: task.retries, limit: RETRIES_MAX })
+  }
+
+  // FIRST, and outside the transaction below, so a refusal here is a retry that never happened.
+  // `setSlavePermission` re-validates the kind against `PERMISSION_KINDS` and re-reads the worker,
+  // so a decision that waited a day and names a worker who has since been released is refused
+  // rather than written. THE APPROVER IS THE GRANTER when there IS one, as in `carryOut`'s
+  // `request_permission` arm: `principal` lands on the row and in the event. Under `act` there is
+  // none -- see the `origin` below.
+  //
+  // What became of the grant travels onto the event with it: `null` for a retry that carried none
+  // or one that went through, and `'denied_by_operator'` for the one case below in which the task
+  // moves and the grant does not.
+  let refused: 'denied_by_operator' | null = null
+  if (input.grant !== undefined) {
+    const { slaveId, permissionKind } = input.grant
+    // The bound a plan is held to, held to here as well (final review, Minor 3). A remedy's grant
+    // stands in for the `needs` the planner could have written, and `writePermissionsFile` has
+    // filtered the dispatch to `TASK_NEEDS` since Task 5 -- this is the other door into the same
+    // room, and until now the only thing between a decision row naming `read_secret` and a written
+    // `allow` was that no rule in `candidates.ts` produces one.
+    if (!isTaskNeed(permissionKind)) return err({ kind: 'invalid_task_need', permissionKind })
+    // AN OPERATOR'S `deny` IS NEVER OVERTURNED (final review, Important 2). `setSlavePermission`
+    // is an upsert, so this would have flipped a person's explicit refusal to `allow` and written
+    // an event saying the Supervisor did -- the one thing the permission matrix exists to make
+    // impossible. The read is not a race guard: two writers are the matrix's own concurrency story
+    // (`priorMode`), and what matters is that the decision the rules made an hour ago does not win
+    // over the decision a person made since.
+    //
+    // The RETRY still goes out. The work may get further than it did -- the refusal was one wall,
+    // not necessarily the only thing left -- and the event carries `refused` so a reader can see
+    // the remedy was half-applied rather than wonder why the same failure came back.
+    const stored = await prisma.slavePermission.findUnique({
+      where: { slaveId_kind: { slaveId, kind: permissionKind } },
+      select: { mode: true },
+    })
+    if (stored?.mode === 'deny') refused = 'denied_by_operator'
+    else {
+      // `origin` travels with it (Task 8, erratum E13): under `act` nobody approved this, so the
+      // `permission.changed` it appends must say `system` / `by: 'supervisor'` rather than name a
+      // person who was never asked. An approved proposal passes `origin: 'human'` and a `principal`,
+      // and the event says what it always said.
+      const granted = await setSlavePermission(slaveId, permissionKind, 'allow', principal, {
+        origin: opts.origin ?? 'human',
+      })
+      if (!granted.ok) return granted
+    }
+  }
+
+  // One locked transaction for the re-check and the write (`failTask`'s idiom): `SELECT ... FOR
+  // UPDATE` serialises this against a concurrent retry or a `failTask`, so the status the check
+  // reads is the status the update writes over. Every refusal inside is reached BEFORE anything is
+  // written -- a refusal after a write would have to throw, or Prisma commits that write.
+  const outcome = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Task" WHERE id = ${taskId} FOR UPDATE`
+    const current = await tx.task.findUnique({
+      where: { id: taskId },
+      select: { status: true, retries: true, maxAttempts: true },
+    })
+    if (current === null) return { ok: false as const, error: { kind: 'task_not_found', taskId } as ControlRefusal }
+    if (current.status !== 'failed') {
+      return { ok: false as const, error: { kind: 'task_not_failed', taskId, status: current.status } as ControlRefusal }
+    }
+    if (current.retries >= RETRIES_MAX) {
+      return {
+        ok: false as const,
+        error: { kind: 'retry_ceiling_reached', taskId, retries: current.retries, limit: RETRIES_MAX } as ControlRefusal,
+      }
+    }
+    await tx.task.update({
+      where: { id: taskId },
+      data: {
+        status: 'rework',
+        attempt: 0,
+        activeRunId: null,
+        // `increment`, not the number this call read: the counter is the row's, and two retries
+        // that somehow raced must not both write "1".
+        retries: { increment: 1 },
+        // Only when the caller brought one (fix round 1, Important 1): `null` here would erase the
+        // failure note the pipeline wrote, which is the note the rework run reads. Stripped of the
+        // `steer: ` label the domain puts on it for its own surfaces (Important 2).
+        ...(input.reason === undefined ? {} : { lastRejectionReason: workerNote(input.reason) }),
+      },
+    })
+    return { ok: true as const, retries: current.retries + 1, maxAttempts: current.maxAttempts }
+  })
+  if (!outcome.ok) return err(outcome.error)
+
+  await appendEvent({
+    type: 'task.unblocked',
+    workspaceId: task.workspaceId,
+    taskId,
+    actor: opts.origin ?? 'human',
+    // `attempt`/`maxAttempts` because the event schema requires them (see {@link unblockTask}); the
+    // rest is what this milestone added -- which park was left, how many remedies have been spent,
+    // and the grant that rode along, so a reader of the row months later can see the whole decision
+    // without the `SupervisorDecision` beside it.
+    payload: {
+      attempt: 0,
+      maxAttempts: outcome.maxAttempts,
+      status: 'rework',
+      retries: outcome.retries,
+      reason: 'retry_task',
+      ...(input.grant === undefined
+        ? {}
+        : { grant: refused === null ? input.grant : { ...input.grant, refused } }),
+    },
+    userId: principal?.userId ?? null,
+  })
+  return ok({ status: 'rework', retries: outcome.retries })
 }

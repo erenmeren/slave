@@ -9,6 +9,8 @@ import {
   THREAD_BODY_MAX_CHARS,
   THREAD_MESSAGES_MAX,
   observe,
+  type SupervisorTask,
+  type SupervisorWorld,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -48,6 +50,10 @@ async function seed(
     readonly goalVersion?: number
     readonly haltedReason?: string
     readonly budgetUsd?: number | null
+    /** E R1: the one switch, read straight off the column by the loader (Task 4). */
+    readonly supervisorAutonomy?: 'propose' | 'act'
+    /** E R4: when this project's halt was last retracted -- the stamp the once-an-hour rule reads. */
+    readonly haltClearedAt?: Date
   } = {},
 ): Promise<Fixture> {
   const workspace = await prisma.workspace.create({
@@ -60,6 +66,8 @@ async function seed(
       ...(data.goalVersion === undefined ? {} : { goalVersion: data.goalVersion }),
       ...(data.haltedReason === undefined ? {} : { haltedReason: data.haltedReason, haltedAt: NOW }),
       ...(data.budgetUsd === undefined ? {} : { budgetUsd: data.budgetUsd }),
+      ...(data.supervisorAutonomy === undefined ? {} : { supervisorAutonomy: data.supervisorAutonomy }),
+      ...(data.haltClearedAt === undefined ? {} : { haltClearedAt: data.haltClearedAt }),
     },
   })
   const team = await prisma.team.create({ data: { workspaceId: workspace.id, name: 'Engineering' } })
@@ -78,6 +86,8 @@ async function makeTask(
     readonly requiredCapabilities?: readonly string[]
     readonly stage?: string
     readonly handoff?: Prisma.InputJsonValue
+    /** E R3: how many times `retryTask` has already put this task back. */
+    readonly retries?: number
   },
 ): Promise<string> {
   const task = await prisma.task.create({
@@ -89,6 +99,7 @@ async function makeTask(
       requiredRole: data.requiredRole === undefined ? 'backend' : data.requiredRole,
       maxAttempts: 3,
       attempt: 1,
+      ...(data.retries === undefined ? {} : { retries: data.retries }),
       ...(data.integratedAt === undefined ? {} : { integratedAt: data.integratedAt }),
       ...(data.createdAt === undefined ? {} : { createdAt: data.createdAt }),
       ...(data.goalVersion === undefined ? {} : { goalVersion: data.goalVersion }),
@@ -768,7 +779,7 @@ describe('loadSupervisorWorld', () => {
     expect(world.goal).toBe('ship checkout')
     expect(world.halted).toEqual({ reason: 'budget_exhausted' })
     expect(world.budgetExhausted).toBe(true)
-    expect(settings).toEqual({ enabled: false, profile: 'be conservative' })
+    expect(settings).toEqual({ enabled: false, profile: 'be conservative', autonomy: 'propose' })
   })
 
   it('leaves an unbudgeted workspace unexhausted however much it spent', async (): Promise<void> => {
@@ -1548,5 +1559,166 @@ describe('the world M53 hands the ranker (R8, R9, R10, errata E7/E8)', () => {
   it('reads no denials query at all when the workspace holds no `SlavePermission` row', async (): Promise<void> => {
     const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
     for (const slave of world.slaves) expect(slave.deniedKinds).toEqual([])
+  })
+})
+
+/**
+ * E R1/R2/R3/R4 (self-running-project Task 4): the facts a stuck task's remedy is chosen FROM, and
+ * the two workspace switches beside them.
+ *
+ * A real clock rather than this file's fixed `NOW`, for the denials suite's reason: `appendEvent`
+ * stamps `ts` itself, and the `at` these cases assert on is the event's own stamp read back.
+ */
+describe('loadSupervisorWorld -- the failure facts (E R2/R3)', () => {
+  beforeEach(reset)
+
+  async function worker(fixture: Fixture, name: string): Promise<string> {
+    const slave = await prisma.slave.create({
+      data: {
+        teamId: fixture.teamId,
+        role: 'Senior Engineer',
+        runtimeRoles: ['backend'],
+        personId: (await prisma.person.create({ data: { name } })).id,
+      },
+    })
+    return slave.id
+  }
+
+  async function failedRun(
+    fixture: Fixture,
+    input: { readonly taskId: string; readonly slaveId: string; readonly kind: 'implementation' | 'review'; readonly reason: string },
+  ): Promise<{ readonly runId: string; readonly at: number }> {
+    const run = await prisma.slaveRun.create({
+      data: { taskId: input.taskId, slaveId: input.slaveId, kind: input.kind, status: 'failed' },
+    })
+    const event = await appendEvent({
+      type: 'run.failed',
+      workspaceId: fixture.workspaceId,
+      taskId: input.taskId,
+      slaveId: input.slaveId,
+      runId: run.id,
+      actor: 'system',
+      payload: { reason: input.reason },
+    })
+    // The parsed event carries `ts` as an ISO string; the world carries epoch ms.
+    return { runId: run.id, at: new Date(event.ts).getTime() }
+  }
+
+  const denyTool = async (
+    fixture: Fixture,
+    input: { readonly taskId: string; readonly slaveId: string; readonly runId: string; readonly capability: string },
+  ): Promise<void> => {
+    await appendEvent({
+      type: 'run.tool_denied',
+      workspaceId: fixture.workspaceId,
+      taskId: input.taskId,
+      slaveId: input.slaveId,
+      runId: input.runId,
+      actor: 'slave',
+      payload: { tool: 'WebFetch', capability: input.capability, toolUseId: `tu-${input.capability}-${String(Math.random()).slice(2)}` },
+    })
+  }
+
+  const taskIn = (world: SupervisorWorld, id: string): SupervisorTask | undefined =>
+    world.tasks.find((task) => task.id === id)
+
+  it('carries the NEWEST run.failed per task: its reason, the kind of run that failed, when, and who ran it', async (): Promise<void> => {
+    const fixture = await seed()
+    const alex = await worker(fixture, 'Alex')
+    const robin = await worker(fixture, 'Robin')
+    const taskId = await makeTask(fixture, { title: 'the audit', status: 'blocked', retries: 1 })
+    await failedRun(fixture, { taskId, slaveId: alex, kind: 'implementation', reason: 'behavioural_loop' })
+    const newest = await failedRun(fixture, { taskId, slaveId: robin, kind: 'review', reason: 'the diff could not be read' })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+
+    expect(taskIn(world, taskId)?.latestFailure).toEqual({
+      runKind: 'review',
+      reason: 'the diff could not be read',
+      at: newest.at,
+      // The whole reason the column is on the fact: a `retry_task` that bundles a grant has to name
+      // the worker the grant is for, and a failed task's run is in neither `runs` nor `denials`.
+      slaveId: robin,
+    })
+    expect(taskIn(world, taskId)?.retries).toBe(1)
+  })
+
+  it('carries the distinct capabilities the task has been refused across ALL its runs, including ended ones', async (): Promise<void> => {
+    const fixture = await seed()
+    const alex = await worker(fixture, 'Alex')
+    const taskId = await makeTask(fixture, { title: 'the research', status: 'failed' })
+    const first = await failedRun(fixture, { taskId, slaveId: alex, kind: 'implementation', reason: 'run_timeout' })
+    await denyTool(fixture, { taskId, slaveId: alex, runId: first.runId, capability: 'network_fetch' })
+    await denyTool(fixture, { taskId, slaveId: alex, runId: first.runId, capability: 'network_fetch' })
+    await denyTool(fixture, { taskId, slaveId: alex, runId: first.runId, capability: 'deploy_release' })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+
+    expect([...(taskIn(world, taskId)?.deniedKinds ?? [])].sort()).toEqual(['deploy_release', 'network_fetch'])
+    // And the WORKSPACE's own denial list stays empty: that one is bounded to LIVE runs by design
+    // (M52 R5), so a task whose refused run has ended is in the task fact and nowhere else.
+    expect(world.denials).toEqual([])
+  })
+
+  it('counts failed IMPLEMENTATION runs per task, and no other kind', async (): Promise<void> => {
+    const fixture = await seed()
+    const alex = await worker(fixture, 'Alex')
+    const taskId = await makeTask(fixture, { title: 'the research', status: 'failed' })
+    const other = await makeTask(fixture, { title: 'the audit', status: 'ready' })
+    await failedRun(fixture, { taskId, slaveId: alex, kind: 'implementation', reason: 'run_timeout' })
+    await failedRun(fixture, { taskId, slaveId: alex, kind: 'implementation', reason: 'behavioural_loop' })
+    await failedRun(fixture, { taskId, slaveId: alex, kind: 'review', reason: 'no verdict' })
+    await prisma.slaveRun.create({ data: { taskId, slaveId: alex, kind: 'implementation', status: 'succeeded' } })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+
+    expect(taskIn(world, taskId)?.failureCount).toBe(2)
+    expect(taskIn(world, other)?.failureCount).toBe(0)
+  })
+
+  it('reports a task that has never failed as never failed, never refused, never retried', async (): Promise<void> => {
+    const fixture = await seed()
+    const taskId = await makeTask(fixture, { title: 'untouched', status: 'ready' })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+
+    expect(taskIn(world, taskId)).toMatchObject({ latestFailure: null, deniedKinds: [], failureCount: 0, retries: 0 })
+  })
+
+  it('never carries another project’s failure onto this project’s task', async (): Promise<void> => {
+    const mine = await seed()
+    const theirs = await seed()
+    const alex = await worker(mine, 'Alex')
+    const stranger = await worker(theirs, 'Sam')
+    const myTask = await makeTask(mine, { title: 'mine', status: 'failed' })
+    const theirTask = await makeTask(theirs, { title: 'theirs', status: 'failed' })
+    await failedRun(mine, { taskId: myTask, slaveId: alex, kind: 'implementation', reason: 'mine broke' })
+    const theirRun = await failedRun(theirs, { taskId: theirTask, slaveId: stranger, kind: 'implementation', reason: 'theirs broke' })
+    await denyTool(theirs, { taskId: theirTask, slaveId: stranger, runId: theirRun.runId, capability: 'network_fetch' })
+
+    const { world } = await loadSupervisorWorld(mine.workspaceId, new Date())
+
+    expect(world.tasks.map((task) => task.id)).toEqual([myTask])
+    expect(taskIn(world, myTask)?.latestFailure?.reason).toBe('mine broke')
+    expect(taskIn(world, myTask)?.deniedKinds).toEqual([])
+  })
+
+  it('reads the autonomy switch and the halt-cleared stamp off the workspace', async (): Promise<void> => {
+    const clearedAt = new Date('2026-09-20T09:00:00.000Z')
+    const fixture = await seed({ supervisorAutonomy: 'act', haltClearedAt: clearedAt })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+
+    expect(world.autonomy).toBe('act')
+    expect(world.haltClearedAt).toBe(clearedAt.getTime())
+  })
+
+  it('reads propose and a null stamp for a project nobody has switched or cleared', async (): Promise<void> => {
+    const fixture = await seed()
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+
+    expect(world.autonomy).toBe('propose')
+    expect(world.haltClearedAt).toBeNull()
   })
 })

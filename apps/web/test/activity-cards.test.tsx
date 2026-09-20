@@ -344,6 +344,26 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('permission-changed-by').textContent).not.toContain('u-9f3c')
   })
 
+  // E R3 / spec erratum E13: the grant a `retry_task` carries under `act` has no approver, so `by`
+  // is the Supervisor's own name rather than a user id. Nothing in the page's `users` listing will
+  // ever resolve it, and the branch above would have reported a deleted account for a decision no
+  // person ever made.
+  it('permission.changed names the Supervisor when the Supervisor granted it, not a missing person', () => {
+    const Card = ACTIVITY_CARDS['permission.changed']
+    const event = baseEvent('permission.changed', {
+      slaveId: 'ag-1',
+      name: 'Ash',
+      kind: 'network_fetch',
+      kindLabel: 'Fetch over the network',
+      from: null,
+      to: 'allow',
+      by: 'supervisor',
+    })
+    render(<Card event={event} {...CARD_PROPS} userName={null} />)
+    expect(screen.getByTestId('permission-changed-by').textContent).toBe(' \u00b7 by the Supervisor')
+    expect(screen.getByTestId('permission-changed-by').textContent).not.toContain('no longer on record')
+  })
+
   it('permission.changed names nobody when nobody was named -- the CLI carries no principal', () => {
     const Card = ACTIVITY_CARDS['permission.changed']
     const event = baseEvent('permission.changed', {
@@ -541,6 +561,27 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('settings-from').textContent).toBe('none')
     expect(screen.getByTestId('settings-to').textContent).toBe('abcdef01\u2026')
     expect(screen.getByTestId('settings-to').textContent).not.toBe(sha256)
+  })
+
+  // Task 6 review, "Also": `SettingsField` widened to the two switches R1/R7 added --
+  // `workspace.settings_changed` names the Supervisor's autonomy and auto-merge exactly the way
+  // it already names the switch and the profile above.
+  it('workspace.settings_changed names the autonomy switch, in its own two words', () => {
+    const Card = ACTIVITY_CARDS['workspace.settings_changed']
+    const event = baseEvent('workspace.settings_changed', { field: 'supervisorAutonomy', from: 'propose', to: 'act' })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('Supervisor autonomy')
+    expect(screen.getByTestId('settings-from').textContent).toBe('propose')
+    expect(screen.getByTestId('settings-to').textContent).toBe('act')
+  })
+
+  it('workspace.settings_changed says on and off for auto-merge', () => {
+    const Card = ACTIVITY_CARDS['workspace.settings_changed']
+    const event = baseEvent('workspace.settings_changed', { field: 'autoMerge', from: false, to: true })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('Auto-merge')
+    expect(screen.getByTestId('settings-from').textContent).toBe('off')
+    expect(screen.getByTestId('settings-to').textContent).toBe('on')
   })
 
   // M38 t5: the five `supervisor.*` cards, replacing Task 1's honest placeholders. Each says what

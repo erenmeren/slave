@@ -1,9 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { COOLDOWN_MS, INTEGRATED_STALE_MS, WAITING_STALE_MS } from '../../src/supervisor/constants.js'
+import {
+  COOLDOWN_MS,
+  FAILURE_REASON_MAX_CHARS,
+  INTEGRATED_STALE_MS,
+  WAITING_STALE_MS,
+} from '../../src/supervisor/constants.js'
 import { filterFresh, observe, staffableSlaves } from '../../src/supervisor/observe.js'
 import { SITUATION_KINDS, situationSchema, type SituationKind } from '../../src/supervisor/situations.js'
 import type { SupervisorDecisionRecord } from '../../src/supervisor/world.js'
-import { NOW, TAXONOMY, decision, keys, question, runbook, slave, supervisorRun, task, world } from './fixtures.js'
+import {
+  NOW,
+  TAXONOMY,
+  decision,
+  keys,
+  question,
+  runbook,
+  slave,
+  supervisorRun,
+  task,
+  taskFailure,
+  world,
+} from './fixtures.js'
 
 describe('observe -- no_reviewer', () => {
   it('reports it when a task is reviewing and no slave holds reviewer', () => {
@@ -74,6 +91,95 @@ describe('observe -- task_failed', () => {
 
   it('stays silent for a failed task nothing depends on', () => {
     expect(observe(world({ tasks: [task({ status: 'failed', dependents: 0 })] }))).toEqual([])
+  })
+
+  // R2/R3: the facts a remedy is CHOSEN from rather than guessed at. `taskFacts` carries them onto
+  // every task situation, so `review_cap_blocked` and `task_blocked_human` get them too.
+  it('carries the latest failure, the refused kinds, the failure count and the retries', () => {
+    const w = world({
+      tasks: [
+        task({
+          status: 'failed',
+          dependents: 1,
+          latestFailure: taskFailure({ runKind: 'implementation', reason: 'spawn ENOENT', at: NOW - 60_000 }),
+          deniedKinds: ['network_fetch', 'read_secret'],
+          failureCount: 3,
+          retries: 1,
+        }),
+      ],
+    })
+    expect(observe(w)[0]?.facts).toMatchObject({
+      latestFailureReason: 'spawn ENOENT',
+      latestFailureKind: 'implementation',
+      latestFailureAt: NOW - 60_000,
+      // Facts are flat scalars (`situationSchema`), so the list is one string.
+      deniedKinds: 'network_fetch,read_secret',
+      failureCount: 3,
+      retries: 1,
+    })
+  })
+
+  it('carries nulls and an empty list for a task that has never failed', () => {
+    const w = world({ tasks: [task({ status: 'failed', dependents: 1 })] })
+    expect(observe(w)[0]?.facts).toMatchObject({
+      latestFailureReason: null,
+      latestFailureKind: null,
+      latestFailureAt: null,
+      deniedKinds: '',
+      failureCount: 0,
+      retries: 0,
+    })
+  })
+
+  // R3: the summary is what `escalate_to_human` carries, and a person reading "this failed twice"
+  // with no reason on the row has to go and find the run themselves.
+  it('puts the failure reason in the summary, before the stage sentence', () => {
+    const w = world({
+      tasks: [
+        task({
+          status: 'failed',
+          dependents: 2,
+          stage: 'verify',
+          stageEscalation: 'Page the release steward.',
+          latestFailure: taskFailure({ reason: 'stdout maxBuffer length exceeded' }),
+        }),
+      ],
+    })
+    expect(observe(w)[0]?.summary).toBe(
+      'Task "Add the thing" failed and 2 task(s) depend on it. The last run failed: stdout maxBuffer length exceeded. Page the release steward.',
+    )
+  })
+
+  it('bounds the reason it puts in the summary -- a failure may carry a whole stderr dump', () => {
+    const reason = 'x'.repeat(FAILURE_REASON_MAX_CHARS + 500)
+    const w = world({
+      tasks: [task({ status: 'failed', dependents: 1, latestFailure: taskFailure({ reason, at: NOW }) })],
+    })
+    const summary = observe(w)[0]?.summary ?? ''
+    expect(summary.length).toBeLessThan(FAILURE_REASON_MAX_CHARS + 200)
+    expect(summary).toContain('…')
+  })
+})
+
+describe('observe -- the blocked task says what broke (R3)', () => {
+  it('puts the failure reason in a task_blocked_human summary', () => {
+    const w = world({
+      tasks: [
+        task({
+          status: 'blocked',
+          latestFailure: taskFailure({ reason: 'the review rejected the change' }),
+        }),
+      ],
+    })
+    expect(observe(w)[0]?.summary).toBe(
+      'Task "Add the thing" is blocked and nothing but a human decision moves it (attempt 1 of 3). The last run failed: the review rejected the change.',
+    )
+  })
+
+  it('says exactly what it always said when nothing has failed', () => {
+    expect(observe(world({ tasks: [task({ status: 'blocked' })] }))[0]?.summary).toBe(
+      'Task "Add the thing" is blocked and nothing but a human decision moves it (attempt 1 of 3).',
+    )
   })
 })
 
@@ -668,6 +774,27 @@ describe('run_looping (M51 R3)', () => {
       level: 'steered',
       steers: 0,
     })
+  })
+
+  // R3: the walls THIS worker keeps meeting, so the steer can name them. Absent when there are
+  // none, exactly as `stage` is on a `task_failed` fact set -- a fact carried as an empty string
+  // would be a fact about nothing.
+  it('carries the kinds this worker is being refused, and none when it is being refused nothing', () => {
+    const w = world({
+      runs: [looping],
+      denials: [
+        { slaveId: 'slave-1', kind: 'network_fetch', count: 2, latestRunId: 'run-1' },
+        { slaveId: 'slave-1', kind: 'run_commands', count: 1, latestRunId: 'run-1' },
+        // Another worker's wall, and a kind nobody can grant: neither is this run's business.
+        { slaveId: 'slave-2', kind: 'read_secret', count: 2, latestRunId: 'run-4' },
+        { slaveId: 'slave-1', kind: 'ungoverned_tool', count: 2, latestRunId: 'run-1' },
+      ],
+    })
+    const [found] = observe(w).filter((s) => s.kind === 'run_looping')
+    // The vocabulary's own order, not the loader's: two passes over one world say it the same way.
+    expect(found?.facts['deniedKinds']).toBe('run_commands,network_fetch')
+    const [none] = observe(world({ runs: [looping] })).filter((s) => s.kind === 'run_looping')
+    expect(none?.facts['deniedKinds']).toBeUndefined()
   })
 
   it('never raises for a healthy run, however busy it is', () => {

@@ -151,11 +151,19 @@ export function ProjectSettingsClient({
           {section === 'runtime' && (
             <section data-testid="settings-runtime">
               <RuntimePanel
+                // Task 6 review, "Also": `autoMerge`/`supervisorAutonomy` do NOT join the key --
+                // unlike the provider select and the budget field, the two switches are PROP-DRIVEN
+                // (`checked={autoMerge}`/`checked={autonomy === 'act'}`, no draft state of their
+                // own), so the next snapshot already moves them with no remount. Keying on them too
+                // would remount the panel on every flip and discard whatever an operator had
+                // mid-typed into the provider or budget fields above.
                 key={`${workspace.provider ?? ''}|${workspace.budgetUsd ?? ''}`}
                 workspaceId={workspace.id}
                 provider={workspace.provider}
                 budgetUsd={workspace.budgetUsd}
                 costBlindBudgeted={workspace.costBlindBudgeted}
+                autoMerge={workspace.autoMerge}
+                autonomy={workspace.supervisorAutonomy}
                 limits={{ maxConcurrentRuns: workspace.maxConcurrentRuns, runTimeoutMs: workspace.runTimeoutMs, maxAttempts: workspace.maxAttempts }}
               />
             </section>

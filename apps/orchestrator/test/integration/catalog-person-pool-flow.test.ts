@@ -188,6 +188,8 @@ describe('Catalog Person Pool: end-to-end proof (Task 6)', () => {
           setupCommands: [],
           budgetUsd: null,
           provider: 'claude_code',
+          autoMerge: true,
+          autonomy: 'act',
           team: [
             { templateId: backendId, runtimeRoles: ['backend'] },
             { templateId: designId, runtimeRoles: ['design'] },
