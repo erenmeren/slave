@@ -18,7 +18,28 @@ import type { ModelDecider } from './simulation/llm.js'
  * Without a decider it reports and starts nothing: a daemon built without one silently leaving
  * every persona unmapped is exactly the failure an operator cannot diagnose from outside (the
  * `tickIntakes` precedent).
+ *
+ * WHAT A PASS COSTS (final review, I2). Two things keep a once-a-second question cheap. First,
+ * `countStaleTemplateMappings()` has its own lean read: the persona, the hash, and none of the
+ * per-row `normaliseCapabilities` work a real pass needs. Second, the QUIET WINDOW below: a
+ * catalogue that is fully mapped answers "nothing stale" forever, and asking the database again
+ * every second for {@link CAPABILITY_MAP_QUIET_MS} tells nobody anything new.
  */
+
+/**
+ * How long a pass that found NOTHING stale may skip counting again.
+ *
+ * A time window rather than a memo of what changed, because `SlaveTemplate` carries no `updatedAt`
+ * column to compare against: there is nothing cheap to ask that would say "something moved". The
+ * whole cost of being wrong is latency -- an import or an activation that lands one second into
+ * the window waits out the rest of it before its first batch is mapped -- and a minute is far
+ * below the time a fresh catalogue takes to map anyway (one batch per pass).
+ */
+export const CAPABILITY_MAP_QUIET_MS = 60_000
+
+/** When this process may next count. Zero means "on the next pass". Module-level for `inFlight`'s
+ *  own reason: the pass that learns there is nothing to do is not the pass that acts on it. */
+let quietUntil = 0
 
 /**
  * The one mapping call this process has started and not yet finished, or null when none is out.
@@ -44,6 +65,15 @@ export async function drainCapabilityMappingCalls(): Promise<void> {
   while (inFlight !== null) await inFlight
 }
 
+/** Forgets the quiet window and waits for any call still out, so one test's "nothing is stale"
+ *  cannot silence the next test's stale row for a minute. Module state is process-wide and every
+ *  test in a file shares it; this is the `beforeEach` hook that makes each one start from the same
+ *  place. */
+export async function resetCapabilityMappingTickForTests(): Promise<void> {
+  quietUntil = 0
+  await drainCapabilityMappingCalls()
+}
+
 export interface TickCapabilityMappingReport {
   readonly skippedNoDecider: boolean
   readonly skippedInFlight: boolean
@@ -64,11 +94,15 @@ function startCapabilityMappingCall(decider: ModelDecider, model: string): void 
   const settled = (async (): Promise<void> => {
     try {
       const report = await mapTemplateCapabilities({ decider, model, only: 'stale', dryRun: false, maxBatches: 1 })
-      // Mirrors how the intake records its call (`./intakeTick.ts`): the pass that started this
-      // call returned long before it settled, so this is the only place its numbers still reach an
-      // operator.
-      console.log(
-        JSON.stringify({
+      // THE ONE PLACE this package writes to a stream, and the reason is the detachment. The rule
+      // (`./catalog.ts`, `onProgress`) is that control decides and writes while the caller prints,
+      // and every other pass obeys it by RETURNING its numbers -- the daemon prints the
+      // `{ capabilityMapping }` line off what `tickCapabilityMapping` returned. This call settles
+      // long after that pass returned, so there is no caller left to hand the numbers to: the line
+      // is written here or it is written nowhere. `process.stdout.write` and not `console.log`
+      // (final review, M1) so the stream is named rather than inherited, one line, one newline.
+      process.stdout.write(
+        `${JSON.stringify({
           capabilityMappingPass: {
             calls: report.calls,
             mapped: report.mapped,
@@ -78,10 +112,10 @@ function startCapabilityMappingCall(decider: ModelDecider, model: string): void 
             costUsd: report.costUsd,
             unmeasuredCalls: report.unmeasuredCalls,
           },
-        }),
+        })}\n`,
       )
     } catch (error) {
-      console.warn(`[capabilityMapping] ${error instanceof Error ? error.message : String(error)}`)
+      process.stderr.write(`[capabilityMapping] ${error instanceof Error ? error.message : String(error)}\n`)
     }
   })()
   inFlight = settled.finally((): void => {
@@ -93,16 +127,28 @@ export async function tickCapabilityMapping(input: {
   readonly model: string
   readonly modelDecider?: ModelDecider
 }): Promise<TickCapabilityMappingReport> {
+  // The quiet window, before anything is read (final review, I2): the last count found nothing
+  // stale and less than {@link CAPABILITY_MAP_QUIET_MS} has passed, so this pass asks the database
+  // nothing at all. `stale: 0` is what the count it is standing in for said; a row imported or
+  // activated inside the window is mapped when the window closes, not sooner.
+  if (Date.now() < quietUntil) {
+    return { skippedNoDecider: input.modelDecider === undefined, skippedInFlight: false, started: false, stale: 0 }
+  }
   if (input.modelDecider === undefined) {
     const { stale } = await countStaleTemplateMappings()
+    if (stale === 0) quietUntil = Date.now() + CAPABILITY_MAP_QUIET_MS
     return { skippedNoDecider: true, skippedInFlight: false, started: false, stale }
   }
   if (inFlight !== null) {
+    // No window is opened here however this count comes out: a call is out, and the pass that
+    // sees it settle must count for real -- that is the pass which learns whether the batch it
+    // just paid for left anything behind.
     const { stale } = await countStaleTemplateMappings()
     return { skippedNoDecider: false, skippedInFlight: true, started: false, stale }
   }
   const { stale } = await countStaleTemplateMappings()
   if (stale === 0) {
+    quietUntil = Date.now() + CAPABILITY_MAP_QUIET_MS
     return { skippedNoDecider: false, skippedInFlight: false, started: false, stale: 0 }
   }
   startCapabilityMappingCall(input.modelDecider, input.model)

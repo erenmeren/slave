@@ -119,10 +119,43 @@ async function loadCandidates(taxonomy: readonly CapabilityRecord[]): Promise<re
   return candidates
 }
 
+/**
+ * How many ACTIVE mappable templates there are and how many of them owe a call -- the daemon's
+ * question, asked once a second, forever.
+ *
+ * Its OWN read rather than `loadCandidates` (final review, I2): deciding staleness needs the
+ * persona and the hash and nothing else, while a pass also needs the name, the role, the stored
+ * keys and `normaliseCapabilities` over every capability sentence against the whole taxonomy --
+ * the expensive half, and pure waste at 1 Hz for a catalogue that is already mapped. The two must
+ * agree on WHICH rows are candidates, so both spell the same three conditions: active, structured,
+ * at least one mappable sentence. `tickCapabilityMapping` then keeps even this read off most
+ * passes (its quiet window).
+ */
 export async function countStaleTemplateMappings(): Promise<{ readonly considered: number; readonly stale: number }> {
   const taxonomy = await listCapabilities()
-  const candidates = await loadCandidates(taxonomy)
-  return { considered: candidates.length, stale: candidates.filter((c) => c.hash !== c.storedHash).length }
+  const rows = await prisma.slaveTemplate.findMany({
+    where: { active: true, profileSpec: { not: Prisma.DbNull } },
+    select: { id: true, name: true, role: true, profileSpec: true, capabilityMappingHash: true },
+    orderBy: { id: 'asc' },
+  })
+  let considered = 0
+  let stale = 0
+  for (const row of rows) {
+    const spec = profileSpecSchema.safeParse(row.profileSpec)
+    if (!spec.success) continue
+    if (mappableSentences(spec.data.capabilities).length === 0) continue
+    considered += 1
+    const persona: CapabilityMappingPersona = {
+      id: row.id,
+      name: row.name,
+      runtimeRole: spec.data.runtimeRole || row.role,
+      summary: spec.data.summary,
+      identity: spec.data.identity,
+      capabilities: spec.data.capabilities,
+    }
+    if (capabilityMappingHash(persona, taxonomy) !== row.capabilityMappingHash) stale += 1
+  }
+  return { considered, stale }
 }
 
 /** A finite positive integer, or the fallback -- guards `batchSize`/`maxBatches` against a caller
@@ -179,21 +212,23 @@ export async function mapTemplateCapabilities(input: MapTemplateCapabilitiesInpu
     // mean the same thing whether or not this call actually writes: `rows` holds only the
     // personas that would be (or were) written, never one already exactly what is stored.
     //
-    // Every number this classification produces -- `batchMapped`/`batchUnchanged`/`batchDropped`/
-    // `batchRows`/`batchWrote` -- is a BATCH-LOCAL, folded into the running totals only once this
-    // batch's outcome is known (immediately under `dryRun`, since nothing is attempted; after the
-    // transaction resolves otherwise, fix round 2): a batch whose transaction throws is rolled
-    // back in the database, and must be rolled back in the report too -- `rows` must not claim a
-    // persona was written, and `droppedKeys` must not count keys from an answer this pass never
-    // actually acted on.
+    // THE RULE, without exception (fix round 2, final review M2): every counter and every row a
+    // batch produces -- `batchMapped`/`batchUnchanged`/`batchAbsent`/`batchDropped`/`batchRows`/
+    // `batchWrote` -- is BATCH-LOCAL, and is folded into the running totals only once this batch's
+    // outcome is known: immediately under `dryRun`, since nothing is attempted there; after the
+    // transaction resolves otherwise. A batch whose transaction throws is rolled back in the
+    // database and must be rolled back in the report too -- `rows` must not claim a persona was
+    // written, `droppedKeys` must not count keys from an answer this pass never acted on, and
+    // `absent` must not report on an answer whose batch was abandoned.
     const writes: { candidate: Candidate; keys: readonly string[]; dropped: readonly string[] }[] = []
     const batchRows: CapabilityMappingRow[] = []
     let batchUnchanged = 0
+    let batchAbsent = 0
     let batchDropped = 0
     for (const candidate of batch) {
       const result = byId.get(candidate.persona.id)
       if (result === undefined) {
-        absent += 1
+        batchAbsent += 1
         continue
       }
       batchDropped += result.dropped.length
@@ -208,6 +243,7 @@ export async function mapTemplateCapabilities(input: MapTemplateCapabilitiesInpu
     if (input.dryRun) {
       mapped += writes.length
       unchanged += batchUnchanged
+      absent += batchAbsent
       droppedKeys += batchDropped
       rows.push(...batchRows)
       continue
@@ -223,6 +259,12 @@ export async function mapTemplateCapabilities(input: MapTemplateCapabilitiesInpu
     try {
       await prisma.$transaction(async (tx) => {
         for (const { candidate, keys } of writes) {
+          // `unresolvedCapabilities` is deliberately NOT rewritten here (R2, final review M5).
+          // This pass only ever ADDS what a model read into the two columns below; the sentences
+          // the exact matcher could not place are the matcher's own record, and a mapping call
+          // that emptied it would erase the evidence for a synonym an operator has yet to add.
+          // `capabilities reconcile` is where both columns are re-derived from the profileSpec
+          // together and re-converge.
           await tx.slaveTemplate.update({
             where: { id: candidate.persona.id },
             data: {
@@ -242,6 +284,7 @@ export async function mapTemplateCapabilities(input: MapTemplateCapabilitiesInpu
     }
     mapped += batchMapped
     unchanged += batchUnchanged
+    absent += batchAbsent
     droppedKeys += batchDropped
     rows.push(...batchRows)
     if (batchWrote) wrote = true
