@@ -25,10 +25,10 @@ describe('happeningSentence', () => {
   })
 
   // R8: the feed says what the Supervisor did. `supervisor.applied`'s real payload is
-  // `{ decisionId, action: { kind } }` -- `carryOut`'s caller never widens it past the kind -- so
-  // `verbPhrase` reads whatever fields a caller happened to give it and falls back to a bare
-  // sentence when the ones a phrase wants are not there, exactly as `supervisor.decided`'s own
-  // `summary` fallback already does above.
+  // `{ decisionId, action }` with the whole action on it (Task 8, erratum E9), and `verbPhrase`
+  // still reads each field defensively: a row written before that widening carries the kind alone,
+  // and the sentence falls back to a bare one exactly as `supervisor.decided`'s own `summary`
+  // fallback does above.
   it('names the six autonomous verbs supervisor.applied carries out', () => {
     expect(happeningSentence('supervisor.applied', { action: { kind: 'retry_task', title: 'Checkout form' } }, names)).toBe(
       'The Supervisor retried "Checkout form"',
@@ -55,6 +55,29 @@ describe('happeningSentence', () => {
     expect(happeningSentence('supervisor.applied', { action: { kind: 'steer_run' } }, names)).toBe(
       'The Supervisor steered a worker',
     )
+  })
+
+  // The payload `applyDecision` actually appends, field for field (Task 8, erratum E9) -- the
+  // whole `retry_task` action the rules built, grant and reason and all, rather than the two keys
+  // a phrase happens to want. The row this renders is the one a person reads on Home after the
+  // Supervisor has got a failed task moving again without them.
+  it('says what the Supervisor did from the whole action applyDecision appends', () => {
+    expect(
+      happeningSentence(
+        'supervisor.applied',
+        {
+          decisionId: 'd-1',
+          action: {
+            kind: 'retry_task',
+            taskId: 't-1',
+            title: 'Research the market',
+            reason: 'The last run was refused ‘Fetch over the network’.',
+            grant: { slaveId: 's-1', permissionKind: 'network_fetch' },
+          },
+        },
+        names,
+      ),
+    ).toBe('The Supervisor retried "Research the market"')
   })
 
   it('falls back to naming the kind for a supervisor.applied action outside the autonomous six', () => {

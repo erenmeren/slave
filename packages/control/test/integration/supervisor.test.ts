@@ -572,7 +572,7 @@ describe('applyDecision', () => {
     expect(unblocked?.actor).toBe('system')
     const [applied] = await eventsOfType('supervisor_applied')
     expect(applied?.actor).toBe('system')
-    expect(applied?.payload).toEqual({ decisionId: decision.id, action: { kind: 'unblock_task' } })
+    expect(applied?.payload).toEqual({ decisionId: decision.id, action: { kind: 'unblock_task', taskId: f.taskId } })
   })
 
   // M50 R3. The fifteenth arm, and the one the milestone is named for: `tierOf` makes it `applied`,
@@ -647,7 +647,10 @@ describe('applyDecision', () => {
     expect(after.queuedMessage).toBe(text)
     expect(after.breakerSteers).toBe(1)
     const [applied] = await eventsOfType('supervisor_applied')
-    expect(applied?.payload).toEqual({ decisionId: decision.id, action: { kind: 'steer_run' } })
+    expect(applied?.payload).toEqual({
+      decisionId: decision.id,
+      action: { kind: 'steer_run', runId: run.id, slaveId: f.slaveId, text },
+    })
     rmSync(repoPath, { recursive: true, force: true })
   })
 
@@ -1048,7 +1051,10 @@ describe('applyDecision', () => {
     expect(sent?.actor).toBe('system')
     expect(sent?.payload).toMatchObject({ answeredBy: 'supervisor' })
     const [applied] = await eventsOfType('supervisor_applied')
-    expect(applied?.payload).toEqual({ decisionId: decision.id, action: { kind: 'answer_question' } })
+    expect(applied?.payload).toEqual({
+      decisionId: decision.id,
+      action: { kind: 'answer_question', messageId: asked.questionId },
+    })
   })
 
   it('answer_question sends the human EDIT when there is one, never the model text beside it', async () => {
@@ -1150,7 +1156,10 @@ describe('applyDecision', () => {
       actor: 'supervisor',
     })
     const [applied] = await eventsOfType('supervisor_applied')
-    expect(applied?.payload).toEqual({ decisionId: decision.id, action: { kind: 'reassign_question' } })
+    expect(applied?.payload).toEqual({
+      decisionId: decision.id,
+      action: { kind: 'reassign_question', messageId: asked.questionId, toSlaveId: f.slaveId },
+    })
   })
 
   it('reassign_question to a worker who cannot answer is a failed row carrying the refusal', async () => {
@@ -1201,7 +1210,7 @@ describe('applyDecision', () => {
     expect(failed?.actor).toBe('system')
     expect(failed?.payload).toEqual({
       decisionId: decision.id,
-      action: { kind: 'unblock_task' },
+      action: { kind: 'unblock_task', taskId: f.taskId },
       reason: refusalText(result.error),
     })
     expect(await eventsOfType('supervisor_applied')).toHaveLength(0)
@@ -2422,8 +2431,20 @@ describe('applyDecision -- the diagnosed remedies (E R3/R4)', () => {
     const [unblocked] = await eventsOfType('task_unblocked')
     expect(unblocked?.actor).toBe('system')
     expect(unblocked?.payload).toMatchObject({ status: 'rework', attempt: 0, retries: 1, reason: 'retry_task' })
+    // Task 8 (erratum E9): the WHOLE action, not the kind alone. Home's feed says "The Supervisor
+    // retried ‘Add the thing’" off exactly this payload, and the grant beside it is what
+    // makes the row a remedy rather than a repeat -- neither survives an append that carries a kind.
     const [applied] = await eventsOfType('supervisor_applied')
-    expect(applied?.payload).toEqual({ decisionId: decision.id, action: { kind: 'retry_task' } })
+    expect(applied?.payload).toEqual({
+      decisionId: decision.id,
+      action: {
+        kind: 'retry_task',
+        taskId: f.taskId,
+        title: 'Add the thing',
+        reason: 'The last run was refused ‘Fetch over the network’.',
+        grant: { slaveId: f.slaveId, permissionKind: 'network_fetch' },
+      },
+    })
   })
 
   it('retry_task on a task that is no longer failed is a failed decision, not a crashed pass', async () => {
@@ -2477,7 +2498,14 @@ describe('applyDecision -- the diagnosed remedies (E R3/R4)', () => {
     expect(workspace.haltedAt).toBeNull()
     expect(workspace.haltClearedAt).not.toBeNull()
     const [applied] = await eventsOfType('supervisor_applied')
-    expect(applied?.payload).toEqual({ decisionId: decision.id, action: { kind: 'clear_halt' } })
+    expect(applied?.payload).toEqual({
+      decisionId: decision.id,
+      action: {
+        kind: 'clear_halt',
+        workspaceId: f.workspaceId,
+        reason: '"Add the thing" has been retried and has not failed again.',
+      },
+    })
   })
 
   it('clear_halt is refused inside the hour since the last clear, and the halt stands', async () => {

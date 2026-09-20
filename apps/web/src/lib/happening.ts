@@ -48,10 +48,11 @@ export const HAPPENING_TYPES: readonly DomainEventType[] = [
  * words; anything else names the kind rather than inventing a sentence for it.
  *
  * Reads off `p.action` rather than taking the action as its own argument: `supervisor.applied`'s
- * real payload (`applyDecision`, `packages/control/src/supervisor.ts`) is `{ decisionId, action: {
- * kind } }` -- only the kind survives the append, so every other field here is read with `str`,
- * which is `null` for a caller that never gave it one, and this degrades to the bare kind rather
- * than printing "undefined".
+ * real payload (`applyDecision`, `packages/control/src/supervisor.ts`) is `{ decisionId, action }`
+ * with the WHOLE action on it since Task 8 (erratum E9), and every field here is still read with
+ * `str` -- which is `null` for a caller that never gave it one -- because a row written before
+ * that carries the kind alone, and a sentence about the past must degrade to the bare kind rather
+ * than print "undefined".
  */
 function verbPhrase(p: Record<string, unknown>): string {
   const action = p['action']

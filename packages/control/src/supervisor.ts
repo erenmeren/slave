@@ -342,7 +342,7 @@ export async function applyDecision(
       type: 'supervisor.failed',
       workspaceId: row.workspaceId,
       actor: 'system',
-      payload: { decisionId, action: { kind: action.kind }, reason },
+      payload: { decisionId, action, reason },
       userId: principal?.userId ?? null,
     })
     return outcome
@@ -353,7 +353,7 @@ export async function applyDecision(
     type: 'supervisor.applied',
     workspaceId: row.workspaceId,
     actor: 'system',
-    payload: { decisionId, action: { kind: action.kind } },
+    payload: { decisionId, action },
     userId: principal?.userId ?? null,
   })
   return ok(undefined)
