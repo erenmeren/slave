@@ -118,6 +118,7 @@ import {
   setGoal,
   setPassword,
   setSupervisorSettings,
+  setWorkspaceIntegration,
   describeSync,
   DEFAULT_MAX_MODEL_CALLS,
   simulationStatus,
@@ -321,11 +322,15 @@ const USAGE = `usage: orchestrator <command> [options]
                                        never recorded, and it starts nothing.
   create-workspace --name <n> --repo <abs path> [--base main] --verify "<cmd>" [--verify "<cmd>" ...]
                    [--setup "<cmd>" ...] [--budget <usd> | --no-budget] [--provider claude_code|cursor]
+                   [--auto-merge]
                                        attach an existing local clone as a workspace. The path
                                        must be absolute and a git work tree, the base branch must
                                        exist, and at least one verify command is required -- a
                                        workspace with none can never reach done. --verify and
                                        --setup repeat, one command each, run in the order given.
+                                       --auto-merge starts the project merging its own approved
+                                       work; without it every task merges by hand (set-auto-merge
+                                       changes it later either way).
   archive-workspace --workspace <id>   archive a project: every row stays, nothing runs until
                                        restore-workspace. Refused while a run is live.
   restore-workspace --workspace <id>   bring an archived project back
@@ -574,11 +579,22 @@ const USAGE = `usage: orchestrator <command> [options]
                                        a human says no to a pending proposal: its action never
                                        reaches the world. --reason is kept with the decision.
   set-supervisor --workspace <id> [--enable | --disable]
-                 [--profile-file <path> | --clear-profile]
+                 [--profile-file <path> | --clear-profile] [--autonomy propose|act]
                                        switch a workspace's Supervisor on or off, and/or set (from
                                        a file) or clear its persona/house-rules profile. Refused
                                        with no flag at all, with both --enable and --disable, or
                                        with both --profile-file and --clear-profile.
+                                       --autonomy act carries out what it decides instead of
+                                       proposing it; escalations still wait for you, and a halted
+                                       project still only proposes. --autonomy propose is the
+                                       default and today's behaviour.
+  set-auto-merge --workspace <id> --on | --off
+                                       whether an approved review merges the branch and stamps the
+                                       task integrated (--on), or leaves both to you (--off, the
+                                       default for every project not created from a conversation).
+                                       Turning it on stamps nothing that is already done: work
+                                       merged by hand stays unstamped and still needs
+                                       confirm-integration once, and the command says how much.
 
   delete-slave --slave <id> [--yes]    delete the PERSON sitting in this seat, and every other
                                        project they are on. Omit --yes to see how many projects
@@ -817,6 +833,12 @@ const VALUELESS: ReadonlySet<string> = new Set([
   'yes',
   // R7: capabilities map --all --dry-run otherwise swallows --dry-run as --all's own value.
   'all',
+  // E R7: `create-workspace --auto-merge --verify "npm test"` otherwise records the workspace's
+  // only verify FLAG as --auto-merge's value, and `set-auto-merge --on --workspace <id>` records
+  // the workspace flag as --on's. Both are bare switches whose presence is the whole instruction.
+  'auto-merge',
+  'on',
+  'off',
 ])
 
 /**
@@ -1605,6 +1627,12 @@ export async function main(argv: readonly string[]): Promise<number> {
               workspace.haltedReason === null
                 ? null
                 : { reason: workspace.haltedReason, since: workspace.haltedAt },
+            // E R7/R1 §4: the two switches, beside the halt, because they are what an operator
+            // asks about next -- is this project merging its own approved work, and may its
+            // Supervisor carry out what it decides. Both are one word of JSON and neither needs a
+            // second command to read.
+            autoMerge: workspace.autoMerge,
+            autonomy: workspace.supervisorAutonomy,
             runs: runs.map((run) => ({
               id: run.id,
               status: run.status,
@@ -2305,6 +2333,10 @@ export async function main(argv: readonly string[]): Promise<number> {
         setupCommands: flagList(flags, 'setup'),
         ...(budgetUsd === undefined ? {} : { budgetUsd }),
         ...(flagText(flags, 'provider') !== undefined ? { provider: flagText(flags, 'provider') as ProviderKind } : {}),
+        // E R7: `'auto-merge' in flags`, the same bare-flag idiom `--no-budget` above uses. Absent,
+        // nothing is passed at all and the column's `false` stands -- a project created from the
+        // CLI stays hand-merge unless the operator asks for the other thing.
+        ...('auto-merge' in flags ? { autoMerge: true } : {}),
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`workspace ${result.value.id} created\n`)
@@ -3304,8 +3336,15 @@ export async function main(argv: readonly string[]): Promise<number> {
       const profileFile = flagText(flags, 'profile-file')
       const clearProfile = 'clear-profile' in flags
       if (profileFile !== undefined && clearProfile) throw new Error('exactly one of --profile-file or --clear-profile is allowed, not both')
-      if (!enableFlag && !disableFlag && profileFile === undefined && !clearProfile) {
-        throw new Error('one of --enable, --disable, --profile-file or --clear-profile is required')
+      // E R1. Checked HERE rather than passed through: `setSupervisorSettings` takes the union, so
+      // a typo would reach Prisma as an unknown enum member and come back as a stack trace about a
+      // column. The two words are the whole vocabulary and the operator gets told so.
+      const autonomy = flagText(flags, 'autonomy')
+      if (autonomy !== undefined && autonomy !== 'propose' && autonomy !== 'act') {
+        throw new Error('--autonomy must be propose or act')
+      }
+      if (!enableFlag && !disableFlag && profileFile === undefined && !clearProfile && autonomy === undefined) {
+        throw new Error('one of --enable, --disable, --profile-file, --clear-profile or --autonomy is required')
       }
 
       const result = await setSupervisorSettings(workspaceId, {
@@ -3313,9 +3352,41 @@ export async function main(argv: readonly string[]): Promise<number> {
         ...(disableFlag ? { enabled: false } : {}),
         ...(profileFile !== undefined ? { profile: readFileSync(profileFile, 'utf8') } : {}),
         ...(clearProfile ? { profile: null } : {}),
+        ...(autonomy === undefined ? {} : { autonomy }),
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`supervisor settings updated on ${workspaceId}\n`)
+      return 0
+    }
+
+    // E R7: the switch `Workspace.autoMerge` never had. `merge.ts` has read the column since M8a;
+    // until now the only way to move it was an UPDATE typed into psql by hand.
+    case 'set-auto-merge': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      // The `--enable`/`--disable` idiom of `set-supervisor` above, for the same reason: both are
+      // bare flags, and presence -- not a value -- is the instruction.
+      const on = 'on' in flags
+      const off = 'off' in flags
+      if (on && off) throw new Error('--on and --off are exclusive')
+      if (!on && !off) throw new Error('one of --on or --off is required')
+
+      const result = await setWorkspaceIntegration(workspaceId, { autoMerge: on })
+      if (!result.ok) throw new Error(refusalText(result.error))
+      process.stdout.write(
+        on
+          ? `auto-merge is on for ${workspaceId}: an approved review now merges the branch and stamps the task integrated\n`
+          : `auto-merge is off for ${workspaceId}: a done task leaves its branch for you, and confirm-integration is what unblocks its dependents\n`,
+      )
+      // The README's caveat, said where it applies. Turning the switch on stamps NOTHING: work that
+      // reached done through a hand merge keeps `integratedAt` null, correct because no merge
+      // happened through the new path, and goes on blocking its dependents until each one is
+      // confirmed once.
+      if (on && result.value.unintegratedDone > 0) {
+        process.stdout.write(
+          'this stamps nothing that is already done -- run confirm-integration --task <id> once on each to unblock ' +
+            `its dependents; still unstamped here: ${plural(result.value.unintegratedDone, 'task')}\n`,
+        )
+      }
       return 0
     }
 

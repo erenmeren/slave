@@ -415,9 +415,13 @@ export const executionEventSchema = z.discriminatedUnion('type', [
      * (`setSupervisorSettings`), and `from`/`to` carry its two words. WITHOUT this member
      * `appendEvent` would refuse the append outright -- it throws on a payload the domain cannot
      * parse -- so the switch could be written and never recorded.
+     *
+     * E R7 adds `autoMerge` on the same terms: the column existed from M8a and no verb could write
+     * it, so `setWorkspaceIntegration` is the first writer and this is where its move is recorded.
+     * `from`/`to` are the two booleans.
      */
     payload: z.object({
-      field: z.enum(['provider', 'budgetUsd', 'supervisorEnabled', 'supervisorProfile', 'supervisorAutonomy']),
+      field: z.enum(['provider', 'budgetUsd', 'supervisorEnabled', 'supervisorProfile', 'supervisorAutonomy', 'autoMerge']),
       from: z.union([z.string(), z.number(), z.boolean(), z.null()]),
       to: z.union([z.string(), z.number(), z.boolean(), z.null()]),
     }),

@@ -117,6 +117,55 @@ export async function setWorkspaceBudget(
   return ok(undefined)
 }
 
+/**
+ * Turns the project's auto-merge switch on or off (E R7).
+ *
+ * `Workspace.autoMerge` has existed since M8a and NO verb could write it: `merge.ts` reads it after
+ * a review is approved and either merges the branch and stamps `Task.integratedAt`, or leaves both
+ * to a person. So the column was a policy nobody could choose -- every project was hand-merge
+ * unless somebody edited the database. This is the chooser.
+ *
+ * The returned `unintegratedDone` is the README's caveat made countable: turning the switch ON does
+ * not retroactively stamp anything. Tasks that already reached `done` through a hand merge keep
+ * `integratedAt: null` -- correct, because no merge happened through the new path -- and they go on
+ * blocking their dependents until `confirmIntegration` is run on each of them once. The count is
+ * what lets the CLI say so at the moment the switch is flipped, where somebody is reading; the
+ * count is taken for both directions and simply ignored by a caller turning the switch off.
+ *
+ * No transaction and no lock: this is one boolean on one row, and two operators racing to set it
+ * leave it at whatever the last writer said -- which is what "the last person to flip a switch
+ * wins" means. The pair that needed serialising was `setWorkspaceProvider`'s delete-then-insert.
+ *
+ * Deliberately NOT refused for a halted or archived project: the web route answers `archived`
+ * before the verb runs (`workspaceControlResponse`), and a halted project is one where changing how
+ * finished work integrates is a reasonable thing to do while it is stopped.
+ */
+export async function setWorkspaceIntegration(
+  workspaceId: string,
+  settings: { readonly autoMerge: boolean },
+  principal?: Principal,
+): Promise<Result<{ readonly unintegratedDone: number }, ControlRefusal>> {
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { id: true, autoMerge: true },
+  })
+  if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
+
+  await prisma.workspace.update({ where: { id: workspaceId }, data: { autoMerge: settings.autoMerge } })
+  // The exact set `confirmIntegration` exists for: reviewed, verified, and still not on the base
+  // branch. Counted AFTER the write, because the write stamps nothing -- that is the point.
+  const unintegratedDone = await prisma.task.count({ where: { workspaceId, status: 'done', integratedAt: null } })
+
+  await appendEvent({
+    type: 'workspace.settings_changed',
+    workspaceId,
+    actor: 'human',
+    payload: { field: 'autoMerge', from: workspace.autoMerge, to: settings.autoMerge },
+    userId: principal?.userId ?? null,
+  })
+  return ok({ unintegratedDone })
+}
+
 export interface CreateWorkspaceInput {
   readonly name: string
   readonly repoPath: string
@@ -125,6 +174,15 @@ export interface CreateWorkspaceInput {
   readonly setupCommands?: readonly string[]
   readonly budgetUsd?: number | null
   readonly provider?: ProviderKind | null
+  /**
+   * E R7/R1: the two switches a project may be BORN with, both optional and both absent from every
+   * caller but `acceptIntake`. Omitted, the columns' own defaults stand -- `autoMerge false`,
+   * `supervisorAutonomy propose` -- so a project created from the CLI or the form still merges by
+   * hand and still asks before the Supervisor acts. A project created from a conversation carries
+   * the card's two checkboxes, which default on (`intakeDraftSchema`).
+   */
+  readonly autoMerge?: boolean
+  readonly supervisorAutonomy?: 'propose' | 'act'
 }
 
 let probe: GitProbe = realGitProbe
@@ -179,6 +237,11 @@ export async function createWorkspace(
           verifyCommands,
           setupCommands: cleanCommands(input.setupCommands),
           ...(budgetUsd === undefined ? {} : { budgetUsd }),
+          // Spread, not `autoMerge: input.autoMerge ?? false`: restating a column's default in
+          // TypeScript is how the two drift apart, and "the caller said nothing" has exactly one
+          // right answer here -- let Postgres answer it.
+          ...(input.autoMerge === undefined ? {} : { autoMerge: input.autoMerge }),
+          ...(input.supervisorAutonomy === undefined ? {} : { supervisorAutonomy: input.supervisorAutonomy }),
         },
       })
       if (provider !== null) {

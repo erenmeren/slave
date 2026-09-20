@@ -1030,6 +1030,23 @@ describe('the orchestrator CLI', () => {
     expect(status.halt?.reason).toContain('PreToolUse:Write')
   })
 
+  /** E R7/R1 §4: the two switches a person is most likely to ask about are in the JSON they
+   *  already read, beside the halt -- "is this project merging its own work, and is its Supervisor
+   *  allowed to act". */
+  it('prints the auto-merge and autonomy switches', async (): Promise<void> => {
+    await prisma.workspace.update({
+      where: { id: fixture.workspaceId },
+      data: { autoMerge: true, supervisorAutonomy: 'act' },
+    })
+
+    const result = await runCli(['status'])
+
+    expect(result.code).toBe(0)
+    const status = JSON.parse(result.stdout) as { autoMerge: boolean; autonomy: string }
+    expect(status.autoMerge).toBe(true)
+    expect(status.autonomy).toBe('act')
+  })
+
   it('refuses a workspace-scoped command when the workspace is ambiguous', async (): Promise<void> => {
     await seed({ name: 'Other Workspace' })
 
@@ -2187,6 +2204,29 @@ describe('the orchestrator CLI', () => {
       expect(result.stderr).toContain('at least one verify command is required')
     })
 
+    it('leaves auto-merge off unless --auto-merge is given, and turns it on when it is', async () => {
+      // E R7: hand-merge stays the default for a project created from the CLI. The bare flag is in
+      // `VALUELESS`, so `--auto-merge --verify true` cannot swallow the next flag as its value.
+      const byHand = await runCli(['create-workspace', '--name', 'By Hand', '--repo', makeRepo(), '--verify', 'true'])
+      expect(byHand.code).toBe(0)
+      expect((await prisma.workspace.findFirstOrThrow({ where: { name: 'By Hand' } })).autoMerge).toBe(false)
+
+      const automatic = await runCli([
+        'create-workspace',
+        '--name',
+        'Automatic',
+        '--repo',
+        makeRepo(),
+        '--auto-merge',
+        '--verify',
+        'true',
+      ])
+      expect(automatic.code).toBe(0)
+      const row = await prisma.workspace.findFirstOrThrow({ where: { name: 'Automatic' } })
+      expect(row.autoMerge).toBe(true)
+      expect(row.verifyCommands).toEqual(['true'])
+    })
+
     it('--no-budget stores null', async () => {
       const result = await runCli(['create-workspace', '--name', 'Free', '--repo', makeRepo(), '--verify', 'true', '--no-budget'])
       expect(result.code).toBe(0)
@@ -3244,11 +3284,65 @@ describe('the orchestrator CLI', () => {
       expect(workspace.supervisorProfile).toBeNull()
     })
 
+    it('set-supervisor --autonomy act lets the Supervisor carry out what it decides', async (): Promise<void> => {
+      const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--autonomy', 'act'])
+
+      expect(result.code).toBe(0)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).supervisorAutonomy).toBe('act')
+
+      const back = await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--autonomy', 'propose'])
+      expect(back.code).toBe(0)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).supervisorAutonomy).toBe('propose')
+    })
+
+    it('refuses an autonomy that is not one of the two words, writing nothing', async (): Promise<void> => {
+      const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--autonomy', 'whenever'])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toMatch(/--autonomy must be propose or act/)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).supervisorAutonomy).toBe('propose')
+    })
+
+    it('set-auto-merge --on and --off write the switch', async (): Promise<void> => {
+      const on = await runCli(['set-auto-merge', '--workspace', fixture.workspaceId, '--on'])
+      expect(on.code).toBe(0)
+      expect(on.stdout).toContain('auto-merge is on')
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).autoMerge).toBe(true)
+
+      const off = await runCli(['set-auto-merge', '--workspace', fixture.workspaceId, '--off'])
+      expect(off.code).toBe(0)
+      expect(off.stdout).toContain('auto-merge is off')
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).autoMerge).toBe(false)
+    })
+
+    it('set-auto-merge --on says what the flip does NOT do to work that is already done', async (): Promise<void> => {
+      // The README's caveat, printed where it is needed: turning the switch on stamps nothing, so
+      // the tasks that reached `done` by hand merge stay unstamped and keep blocking dependents.
+      await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'done', integratedAt: null } })
+
+      const result = await runCli(['set-auto-merge', '--workspace', fixture.workspaceId, '--on'])
+
+      expect(result.code).toBe(0)
+      expect(result.stdout).toMatch(/1 task/)
+      expect(result.stdout).toContain('confirm-integration')
+    })
+
+    it('refuses set-auto-merge with no switch, and with both', async (): Promise<void> => {
+      const neither = await runCli(['set-auto-merge', '--workspace', fixture.workspaceId])
+      expect(neither.code).not.toBe(0)
+      expect(neither.stderr).toMatch(/one of --on or --off is required/)
+
+      const both = await runCli(['set-auto-merge', '--workspace', fixture.workspaceId, '--on=1', '--off=1'])
+      expect(both.code).not.toBe(0)
+      expect(both.stderr).toMatch(/--on and --off are exclusive/)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).autoMerge).toBe(false)
+    })
+
     it('refuses set-supervisor with no flag at all', async (): Promise<void> => {
       const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId])
 
       expect(result.code).not.toBe(0)
-      expect(result.stderr).toMatch(/one of --enable, --disable, --profile-file or --clear-profile is required/)
+      expect(result.stderr).toMatch(/one of --enable, --disable, --profile-file, --clear-profile or --autonomy is required/)
     })
 
     it('refuses set-supervisor given both --profile-file and --clear-profile', async (): Promise<void> => {

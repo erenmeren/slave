@@ -481,6 +481,33 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
             </label>
           </div>
 
+          {/* E R7/R1 §4: the two switches a project is born with, both on -- `intakeDraftSchema`
+            * defaults them, so an untouched card creates a project that merges its own approved
+            * work and lets its Supervisor carry out what it decides. Unticking either is the
+            * person saying otherwise, and what the boxes read is what `acceptIntake` writes. */}
+          <div className="flex flex-col gap-1">
+            <label className="flex items-center gap-1.5 text-[12.5px]">
+              <input
+                type="checkbox"
+                data-testid="intake-auto-merge"
+                aria-label="merge approved work automatically"
+                checked={edited.autoMerge}
+                onChange={(event) => setEdited({ ...edited, autoMerge: event.target.checked })}
+              />
+              <span className="text-text-1">merge approved work automatically</span>
+            </label>
+            <label className="flex items-center gap-1.5 text-[12.5px]">
+              <input
+                type="checkbox"
+                data-testid="intake-autonomy"
+                aria-label="act on its own"
+                checked={edited.autonomy === 'act'}
+                onChange={(event) => setEdited({ ...edited, autonomy: event.target.checked ? 'act' : 'propose' })}
+              />
+              <span className="text-text-1">act on its own</span>
+            </label>
+          </div>
+
           {edited.team.length > 0 && (
             <div className="flex flex-wrap gap-1">
               {edited.team.map((seat, index) => (

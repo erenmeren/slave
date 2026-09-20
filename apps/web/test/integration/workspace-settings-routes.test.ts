@@ -2,6 +2,7 @@ import { prisma } from '@slave-of-ai/db/client'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { PUT as providerPUT } from '../../src/app/api/w/[workspaceId]/provider/route.js'
 import { PUT as budgetPUT } from '../../src/app/api/w/[workspaceId]/budget/route.js'
+import { PUT as integrationPUT } from '../../src/app/api/w/[workspaceId]/integration/route.js'
 
 interface Fixture {
   readonly workspaceId: string
@@ -131,6 +132,34 @@ describe('the workspace settings routes', () => {
 
     it('404s for an unknown workspace', async (): Promise<void> => {
       const response = await budgetPUT(jsonRequest({ budgetUsd: 10 }), params('00000000-0000-0000-0000-000000000000'))
+      expect(response.status).toBe(404)
+    })
+  })
+
+  /** E R7: the switch the Settings panel flips. `{ autoMerge: boolean }` and nothing else -- the
+   *  route's whole job is the boolean, and the count the verb returns is for the CLI, which can
+   *  print the caveat where somebody is reading a terminal. */
+  describe('PUT /api/w/[workspaceId]/integration', () => {
+    it('turns auto-merge on, then off, and returns 200 both times', async (): Promise<void> => {
+      const on = await integrationPUT(jsonRequest({ autoMerge: true }), params(fixture.workspaceId))
+      expect(on.status).toBe(200)
+      expect(await on.json()).toEqual({ ok: true })
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).autoMerge).toBe(true)
+
+      const off = await integrationPUT(jsonRequest({ autoMerge: false }), params(fixture.workspaceId))
+      expect(off.status).toBe(200)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).autoMerge).toBe(false)
+    })
+
+    it('400s a missing key, a non-boolean and an unparseable body', async (): Promise<void> => {
+      expect((await integrationPUT(jsonRequest({}), params(fixture.workspaceId))).status).toBe(400)
+      expect((await integrationPUT(jsonRequest({ autoMerge: 'yes' }), params(fixture.workspaceId))).status).toBe(400)
+      expect((await integrationPUT(malformedRequest(), params(fixture.workspaceId))).status).toBe(400)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).autoMerge).toBe(false)
+    })
+
+    it('404s for an unknown workspace', async (): Promise<void> => {
+      const response = await integrationPUT(jsonRequest({ autoMerge: true }), params('00000000-0000-0000-0000-000000000000'))
       expect(response.status).toBe(404)
     })
   })

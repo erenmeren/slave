@@ -48,6 +48,30 @@ describe('createWorkspace', () => {
     expect(await prisma.providerConfiguration.count({ where: { workspaceId: result.value.id } })).toBe(0)
   })
 
+  /**
+   * E R7/R1. The two switches are OPTIONAL input, and a caller that names neither gets the column
+   * defaults -- `autoMerge` false, `supervisorAutonomy` propose -- which is what the CLI and the
+   * project form still create. Only a conversation's card asks for them (its draft defaults both
+   * on), so "a project created from the CLI keeps hand-merge" stays true.
+   */
+  it('leaves both switches at the column defaults when the caller names neither', async () => {
+    const result = await createWorkspace(valid(repo()))
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const row = await prisma.workspace.findUniqueOrThrow({ where: { id: result.value.id } })
+    expect(row.autoMerge).toBe(false)
+    expect(row.supervisorAutonomy).toBe('propose')
+  })
+
+  it('writes both switches when the caller asks for them', async () => {
+    const result = await createWorkspace({ ...valid(repo()), autoMerge: true, supervisorAutonomy: 'act' })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const row = await prisma.workspace.findUniqueOrThrow({ where: { id: result.value.id } })
+    expect(row.autoMerge).toBe(true)
+    expect(row.supervisorAutonomy).toBe('act')
+  })
+
   it.each([
     ['relative path', (d: string) => ({ ...valid(d), repoPath: 'repo' }), 'repo_path_not_absolute'],
     ['missing dir', (d: string) => ({ ...valid(d), repoPath: join(d, 'nope') }), 'repo_not_found'],

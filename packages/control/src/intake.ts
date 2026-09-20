@@ -720,6 +720,12 @@ export async function acceptIntake(
           setupCommands: [...draft.setupCommands],
           budgetUsd: draft.budgetUsd,
           provider: draft.provider,
+          // E R7/R1: the card's two checkboxes, which default ON in `intakeDraftSchema`. A project
+          // asked for in a conversation is asked for by somebody who described an outcome, so it
+          // merges its own approved work and its Supervisor carries out what it decides -- unless
+          // the person unticked either box before pressing the button.
+          autoMerge: draft.autoMerge,
+          supervisorAutonomy: draft.autonomy,
         },
         principal,
         { intakeId },

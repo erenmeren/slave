@@ -10,6 +10,8 @@ const draft: IntakeDraft = {
   setupCommands: [],
   budgetUsd: 20,
   provider: null,
+  autoMerge: true,
+  autonomy: 'act',
   team: [{ templateId: 't1', runtimeRoles: ['backend', 'manager'] }],
 }
 
@@ -64,6 +66,35 @@ describe('IntakeDraft', () => {
     expect(intakeDraftSchema.safeParse({ ...draft, budgetUsd: -1 }).success).toBe(false)
     expect(intakeDraftSchema.safeParse({ ...draft, budgetUsd: Number.POSITIVE_INFINITY }).success).toBe(false)
     expect(intakeDraftSchema.safeParse({ ...draft, budgetUsd: null }).success).toBe(true)
+  })
+
+  /**
+   * E R7/R1: the two switches a new project starts with. They are the PERSON's choice, not the
+   * model's -- nothing in the prompt asks for them -- so both carry a default, and a draft that
+   * says nothing about either parses into one that says "merge approved work" and "act on its
+   * own". A missing default would have made every stored draft written before this milestone
+   * unparseable, which reads back as "no draft at all" (`parseDraft`).
+   */
+  it('defaults both switches on for a draft that names neither', () => {
+    const { autoMerge: _autoMerge, autonomy: _autonomy, ...without } = draft
+    const parsed = intakeDraftSchema.safeParse(without)
+    expect(parsed.success).toBe(true)
+    if (!parsed.success) return
+    expect(parsed.data.autoMerge).toBe(true)
+    expect(parsed.data.autonomy).toBe('act')
+  })
+
+  it('keeps what the person chose: both switches off the default', () => {
+    const parsed = intakeDraftSchema.safeParse({ ...draft, autoMerge: false, autonomy: 'propose' })
+    expect(parsed.success).toBe(true)
+    if (!parsed.success) return
+    expect(parsed.data.autoMerge).toBe(false)
+    expect(parsed.data.autonomy).toBe('propose')
+  })
+
+  it('refuses an autonomy that is not one of the two words', () => {
+    expect(intakeDraftSchema.safeParse({ ...draft, autonomy: 'whenever' }).success).toBe(false)
+    expect(intakeDraftSchema.safeParse({ ...draft, autoMerge: 'yes' }).success).toBe(false)
   })
 
   it('accepts an empty team -- "I will staff it myself" is a real answer (R13)', () => {

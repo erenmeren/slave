@@ -151,11 +151,17 @@ export function ProjectSettingsClient({
           {section === 'runtime' && (
             <section data-testid="settings-runtime">
               <RuntimePanel
-                key={`${workspace.provider ?? ''}|${workspace.budgetUsd ?? ''}`}
+                // E R7/R1: the two switches join the key. The panel keeps no local state for
+                // them -- a flip is written and the page refreshed -- so a remount on the new
+                // snapshot is what moves the checkbox, exactly as it is for the provider and the
+                // budget.
+                key={`${workspace.provider ?? ''}|${workspace.budgetUsd ?? ''}|${String(workspace.autoMerge)}|${workspace.supervisorAutonomy}`}
                 workspaceId={workspace.id}
                 provider={workspace.provider}
                 budgetUsd={workspace.budgetUsd}
                 costBlindBudgeted={workspace.costBlindBudgeted}
+                autoMerge={workspace.autoMerge}
+                autonomy={workspace.supervisorAutonomy}
                 limits={{ maxConcurrentRuns: workspace.maxConcurrentRuns, runTimeoutMs: workspace.runTimeoutMs, maxAttempts: workspace.maxAttempts }}
               />
             </section>
