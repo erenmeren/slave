@@ -601,10 +601,15 @@ every one of them names the runtime role it projects to.
 
 ```bash
 npm run orchestrator -- capabilities list
-npm run orchestrator -- capabilities add --key legal.contracts --label "Contract review" --role legal
+npm run orchestrator -- capabilities add --key legal.billing --label "Legal billing" --role legal
 npm run orchestrator -- set-capabilities --slave <id> --capabilities backend.api-design,security.application
 npm run orchestrator -- capabilities backfill --workspace <id>
 ```
+
+`npm run orchestrator -- capabilities map` asks the model which taxonomy keys each persona
+provides, from its own capability sentences, and stores them beside the exact matches; the daemon
+does the same for stale personas one batch per pass, so a fresh import needs no extra command.
+`--dry-run` prints what would be written.
 
 **Existing projects: run `capabilities backfill` once.** Every worker created before this existed
 has an empty capability set, and the cheapest way to fill a gap — somebody already here who can do

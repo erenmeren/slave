@@ -351,4 +351,39 @@ pruned by the mapping (R2).
 
 ## 6. Errata
 
-None yet.
+E1 (T1): `capability.test.ts`'s "operator adds a brand-new key" fixture used `legal.contracts`,
+which is now a seed key; the fixture was renamed to `legal.playbook`, and the README's example was
+changed for the same reason.
+
+E2 (T5): the exact half is recomputed in `loadCandidates` with `normaliseCapabilities` rather than
+derived by subtracting `mappedCapabilityKeys` from `capabilityKeys` — subtracting would have lost a
+key that belongs in both halves on a re-map that dropped it.
+
+E3 (T5): `rows` and `droppedKeys` are batch-local counters folded into the running totals only after
+each batch's transaction commits; a thrown transaction counts that batch as failed and does not stop
+later batches from running.
+
+E4 (T5): only ACTIVE structured templates are mapped (an inactive persona cannot be hired, so
+mapping it spends for nothing; once activated it is stale and the daemon maps it); `dryRun`
+classifies before deciding, so `rows`/`mapped`/`unchanged` mean what a real run would do; a
+non-integer `batchSize` or `maxBatches` falls back to its default.
+
+E5 (T6): `all` joined the CLI's valueless flag set so `--all --dry-run` parses, and the fake CLI's
+mapping arm is wired in the `complete` mode only.
+
+E6 (T7): the daemon's mapping call is detached, like the intake's (a module-level in-flight promise,
+drained by `drainCapabilityMappingCalls()` at shutdown); `tickCapabilityMapping` returns
+`{ skippedNoDecider, skippedInFlight, started, stale }`, and the detached call logs its own
+`{ capabilityMappingPass }` line when it settles — R7's "one batch per pass" still holds, but the
+pass itself never waits on the call.
+
+E7 (T8): the drawer has four states with precedence inactive (never mapped) → none (never mapped) →
+stale → mapped; `capabilityMappingStale` includes `active`; `capabilityMappedAt` crosses to the
+client as an ISO string like the other two dates; chips render only when there is at least one key,
+so "no capabilities recorded" never prints above the persona's bullets.
+
+E8 (T1, surfaced by T9's ladder): R1 grows the seed to 111 rows, past `runContext.ts`'s
+`CAPABILITY_KEYS_IN_PROMPT` (80) — a constant no task touches. A planning prompt built off the real
+taxonomy is now genuinely capped, so `runContext.test.ts`'s "shows a planning run the taxonomy
+keys" test (pre-existing, not part of this plan) asserted a key and a `capped: false` that no
+longer held; it was updated to a key that still sorts inside the first 80 and to `capped: true`.
