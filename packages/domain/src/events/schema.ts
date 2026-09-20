@@ -57,7 +57,16 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('task.created'),
     payload: z.object({ title: z.string(), goalVersion: z.number().int().nonnegative().nullable().optional() }),
   }),
-  z.object({ ...envelope, type: z.literal('task.started'), payload: z.object({ title: z.string() }) }),
+  // E R5: `grants` is what the run was given beyond the baseline -- the needs the PLANNER wrote on
+  // the task, snapshotted into the run's `permissions.json` at this same moment. OPTIONAL, like
+  // every other widening of an existing arm in this file: `packages/events/src/read.ts` THROWS on a
+  // row it cannot parse, so a required field would make every `task.started` written before this
+  // milestone unreadable. Absent means "the empty list"; every writer sets it.
+  z.object({
+    ...envelope,
+    type: z.literal('task.started'),
+    payload: z.object({ title: z.string(), grants: z.array(z.string().min(1)).optional() }),
+  }),
   z.object({ ...envelope, type: z.literal('task.done'), payload: z.object({ branch: z.string() }) }),
   z.object({
     ...envelope,
@@ -302,6 +311,12 @@ export const executionEventSchema = z.discriminatedUnion('type', [
        *  silently ignored vocabulary is how an operator concludes the feature does not work.
        *  Optional: every event written before M47 has none. */
       droppedCapabilities: z.array(z.string().min(1)).optional(),
+      /** E R5: needs the planner asked for that `TASK_NEEDS` does not have, per task key. Dropped
+       *  from the task and recorded here for `droppedCapabilities`' own reason -- a silently
+       *  ignored vocabulary is how an operator concludes the feature does not work. Optional:
+       *  absent when every need was one of the two, and on every event written before this
+       *  milestone. */
+      droppedNeeds: z.record(z.string().min(1), z.array(z.string().min(1))).optional(),
       /** M48 R2: the adopted runbook and how far this plan covers it. Absent when no runbook is
        *  adopted, and on every event written before M48. */
       runbook: runbookAdherence.optional(),

@@ -17,8 +17,12 @@ export interface PermissionRowInput {
   readonly grantedAt?: string | null
 }
 
-/** Where a kind's effective answer CAME FROM (M52 R7) -- computed, never stored. */
-export type GrantSource = 'baseline' | 'granted' | 'refused' | 'never'
+/** Where a kind's effective answer CAME FROM (M52 R7) -- computed, never stored.
+ *
+ *  `task` joined the four in E R5: nobody decided anything about this worker, and the run has the
+ *  kind because the PLAN said the task needs it. It is a fact about one run rather than about the
+ *  seat, so it never appears on a surface that is describing the worker in general. */
+export type GrantSource = 'baseline' | 'granted' | 'refused' | 'never' | 'task'
 
 /** One resolved allow-list entry: a vendor tool, and the operation that put it there. The `kind`
  *  rides along because the gate has to be able to say WHY, and because `permissions.json` is read
@@ -49,6 +53,12 @@ function isPermissionKind(value: string): value is PermissionKind {
  *   hand-written row; a row from a database a future version wrote) is skipped rather than trusted,
  *   which under default-deny is the safe direction.
  *
+ * `taskGrants` (E R5) is the fourth input and the only one that is not about the worker: the needs
+ * the PLANNER wrote on this task, which the dispatch snapshots into the run's verdict. They are
+ * added to the baseline for an IMPLEMENTATION run only -- a review judges a diff and a planner
+ * writes a graph, neither fetches -- and a `deny` row still beats them, because a person who
+ * refused a kind for this worker refused it for every run the worker takes, whatever a plan asks.
+ *
  * Pure, and in `packages/domain` rather than `packages/control` (plan erratum E12): the Settings
  * matrix and the worker panel need the same rule, and a `'use client'` component may not import
  * `@slave-of-ai/control` -- that barrel re-exports `@slave-of-ai/providers`, which imports
@@ -58,9 +68,11 @@ export function resolveGrants(
   rows: readonly PermissionRowInput[],
   provider: PermissionProvider,
   runKind: PermissionRunKind,
+  taskGrants: readonly PermissionKind[] = [],
 ): readonly ResolvedGrant[] {
   const denied = new Set<PermissionKind>()
   const allowed = new Set<PermissionKind>(BASELINE_GRANTS[runKind])
+  for (const kind of taskGrantsFor(runKind, taskGrants)) allowed.add(kind)
   for (const row of rows) {
     if (!isPermissionKind(row.kind)) continue
     if (row.mode === 'deny') denied.add(row.kind)
@@ -72,6 +84,16 @@ export function resolveGrants(
     for (const tool of TOOLS_BY_KIND[kind][provider]) out.push({ tool, kind })
   }
   return out
+}
+
+/** The task's needs, as the two resolvers below may use them (E R5): the plan's ask counts on an
+ *  implementation run and on no other. One definition, so the two cannot disagree about which run
+ *  kinds a plan may speak for. */
+function taskGrantsFor(
+  runKind: PermissionRunKind,
+  taskGrants: readonly PermissionKind[],
+): readonly PermissionKind[] {
+  return runKind === 'implementation' ? taskGrants : []
 }
 
 /** One kind's effective answer, and where it came from. */
@@ -102,6 +124,7 @@ export interface KindGrant {
 export function grantsFor(
   rows: readonly PermissionRowInput[],
   runKind: PermissionRunKind,
+  taskGrants: readonly PermissionKind[] = [],
 ): readonly KindGrant[] {
   const byKind = new Map<PermissionKind, PermissionRowInput>()
   for (const row of rows) {
@@ -112,13 +135,17 @@ export function grantsFor(
     if (existing === undefined || row.mode === 'deny') byKind.set(row.kind, row)
   }
   const baseline = new Set<PermissionKind>(BASELINE_GRANTS[runKind])
+  const fromTask = new Set<PermissionKind>(taskGrantsFor(runKind, taskGrants))
   return PERMISSION_KINDS.map((kind): KindGrant => {
     const row = byKind.get(kind)
     if (row === undefined) {
       return {
         kind,
         mode: null,
-        source: baseline.has(kind) ? 'baseline' : 'never',
+        // The baseline is read FIRST: a plan asking for something the run kind already carries
+        // decided nothing, and calling that `task` would credit the planner for the toolbox every
+        // implementation run has always had.
+        source: baseline.has(kind) ? 'baseline' : fromTask.has(kind) ? 'task' : 'never',
         by: null,
         at: null,
       }

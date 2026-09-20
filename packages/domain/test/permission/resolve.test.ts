@@ -256,3 +256,71 @@ describe('grantsFor', () => {
     }
   })
 })
+
+/**
+ * A task's own needs (E R5). The planner is the one who knows a task has to read the web, and
+ * nobody was asking it -- three research runs failed on a permission a plan could have carried.
+ *
+ * IMPLEMENTATION ONLY, and a `deny` row still wins: a review judges a diff, it does not fetch, and
+ * a person who refused a kind for this worker refused it for every run that worker takes.
+ */
+describe('resolveGrants -- task grants (E R5)', () => {
+  const toolsOf = (grants: readonly { readonly tool: string }[]): readonly string[] => grants.map((g) => g.tool)
+
+  it('adds the task grant to an implementation run that nobody decided anything about', () => {
+    const allowed = toolsOf(resolveGrants([], 'claude_code', 'implementation', ['network_fetch']))
+    expect(allowed).toContain('WebFetch')
+    expect(allowed).toContain('WebSearch')
+    // …and the baseline is still there beside it, not replaced by it.
+    expect(allowed).toContain('Read')
+    expect(allowed).toContain('Bash')
+  })
+
+  it('ignores the task grant on a review run and on a planning run -- a reviewer judges, it does not fetch', () => {
+    expect(toolsOf(resolveGrants([], 'claude_code', 'review', ['network_fetch']))).not.toContain('WebFetch')
+    expect(toolsOf(resolveGrants([], 'claude_code', 'planning', ['network_fetch']))).not.toContain('WebFetch')
+    // The run is otherwise untouched: a review still has its own baseline.
+    expect(toolsOf(resolveGrants([], 'claude_code', 'review', ['network_fetch']))).toEqual(
+      toolsOf(resolveGrants([], 'claude_code', 'review')),
+    )
+  })
+
+  it('lets an explicit deny row beat the task grant, whatever the plan asked for', () => {
+    const allowed = toolsOf(
+      resolveGrants([{ kind: 'network_fetch', mode: 'deny' }], 'claude_code', 'implementation', ['network_fetch']),
+    )
+    expect(allowed).not.toContain('WebFetch')
+    expect(allowed).not.toContain('WebSearch')
+  })
+
+  it('changes nothing when the task needs a kind the baseline already grants', () => {
+    expect(resolveGrants([], 'claude_code', 'implementation', ['run_commands'])).toEqual(
+      resolveGrants([], 'claude_code', 'implementation'),
+    )
+  })
+
+  it('reports a task grant as its own SOURCE, so a surface can say the plan asked for it', () => {
+    const row = grantsFor([], 'implementation', ['network_fetch']).find((entry) => entry.kind === 'network_fetch')
+    expect(row).toEqual({ kind: 'network_fetch', mode: null, source: 'task', by: null, at: null })
+    // Not on a review run, for `resolveGrants`' own reason.
+    expect(grantsFor([], 'review', ['network_fetch']).find((entry) => entry.kind === 'network_fetch')?.source).toBe(
+      'never',
+    )
+    // A person's decision still outranks it in both directions.
+    expect(
+      grantsFor([{ kind: 'network_fetch', mode: 'deny' }], 'implementation', ['network_fetch']).find(
+        (entry) => entry.kind === 'network_fetch',
+      )?.source,
+    ).toBe('refused')
+    expect(
+      grantsFor([{ kind: 'network_fetch', mode: 'allow' }], 'implementation', ['network_fetch']).find(
+        (entry) => entry.kind === 'network_fetch',
+      )?.source,
+    ).toBe('granted')
+    // A kind the baseline already gives reads as `baseline`, not as `task`: the plan asking for
+    // something it already had did not decide anything.
+    expect(
+      grantsFor([], 'implementation', ['run_commands']).find((entry) => entry.kind === 'run_commands')?.source,
+    ).toBe('baseline')
+  })
+})

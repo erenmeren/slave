@@ -27,8 +27,10 @@ describe('parsePlanDelta', () => {
       ok: true,
       value: {
         // `capabilities: []` is M47 R3's default: a delta written before this milestone parses
-        // unchanged and reads back as "this task asked for no capabilities".
-        add: [{ key: 'docs', title: 'Document the endpoint', description: 'Write the API doc.', role: 'backend', dependsOn: [], capabilities: [] }],
+        // unchanged and reads back as "this task asked for no capabilities". `needs: []` is E R5's,
+        // and reads the same way -- `normalisePlanTask` is shared with the first-plan path, so an
+        // added task is bounded to the closed list here exactly as one in a first plan is.
+        add: [{ key: 'docs', title: 'Document the endpoint', description: 'Write the API doc.', role: 'backend', dependsOn: [], capabilities: [], needs: [] }],
         cancel: ['task-1'],
         keep: ['task-2'],
       },

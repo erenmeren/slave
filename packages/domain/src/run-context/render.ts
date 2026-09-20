@@ -77,6 +77,11 @@ export const REVIEW_VERDICT_INSTRUCTIONS = [
  * the same fake selects the review arm on that literal, and a planning prompt carrying it would be
  * misrouted to the review fixture.
  *
+ * NO LONGER byte-identical to that source as of E R5: the shape line gained `"needs":[]` and one
+ * sentence was appended telling the planner what the field is for (spec R5). The trailer is a
+ * PROMPT, not a fixture -- what is pinned about it is the two routing literals below and the
+ * deviation named next, both of which the appended line leaves untouched.
+ *
  * **The one word that is NOT verbatim** (spec erratum E6, final review): `below` is `above` here.
  * `buildPlanningPrompt` put the goal after this text; {@link SECTION_ORDER}`.planning` puts the
  * `planning_goal` section BEFORE the trailer, so a prompt still saying "the GOAL below" would end
@@ -88,8 +93,9 @@ export const PLANNING_GRAPH_INSTRUCTIONS = [
   '',
   '',
   'Your final message must contain exactly one JSON object and nothing else on its line:',
-  '{"tasks":[{"key":"short-unique-key","title":"...","description":"...","role":"backend","dependsOn":["other-key"]}]}',
+  '{"tasks":[{"key":"short-unique-key","title":"...","description":"...","role":"backend","dependsOn":["other-key"],"needs":[]}]}',
   'Between 1 and 20 tasks. Keys are plan-local. dependsOn lists keys, no cycles.',
+  'A task that must read the web carries "needs": ["network_fetch"]; one that must run commands beyond the repository\'s own scripts carries "run_commands"; most tasks carry neither.',
 ].join('\n')
 
 /**

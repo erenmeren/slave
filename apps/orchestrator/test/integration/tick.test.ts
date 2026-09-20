@@ -16,6 +16,7 @@ import {
 import {
   ClaudeCodeAdapter,
   buildRegistry,
+  permissionsFilePathFor,
   type AdapterRegistry,
   type SlaveRuntimeAdapter,
   type StartRunInput,
@@ -429,6 +430,48 @@ describe('tick', () => {
     // is no longer a permissive state at all -- it stops the run.
     expect(written.version).toBe(2)
     expect(written.grants).toEqual(['read_repo', 'write_repo', 'run_commands'])
+  })
+
+  // E R5: the PLAN is allowed to say what a task needs, and the run it starts is given it. The
+  // research task that failed three times on 2026-09-20 was denied a tool the planner could have
+  // asked for -- this is that ask, arriving at the gate's own file.
+  it("carries the task's own needs into the run's verdict (E R5)", async (): Promise<void> => {
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { requiredPermissions: ['network_fetch'] } })
+
+    await tick(deps)
+
+    const run = await prisma.slaveRun.findFirstOrThrow()
+    const { runDir } = runFilePaths(fixture.repoPath, brandRunId(run.id))
+    const written = JSON.parse(readFileSync(permissionsFilePathFor(runDir), 'utf8')) as {
+      grants: readonly string[]
+      allow: readonly { tool: string; kind: string }[]
+    }
+    // Both halves of the verdict: `grants` is what the gate decides an MCP name by, `allow` is the
+    // readable list of tool names the shell matches first.
+    expect(written.grants).toEqual(['read_repo', 'write_repo', 'run_commands', 'network_fetch'])
+    const allowed = written.allow.map((entry) => entry.tool)
+    expect(allowed).toContain('WebFetch')
+    expect(allowed).toContain('WebSearch')
+    // And the event says what the run was given, so a person reading the timeline can see the
+    // grant that a plan -- not a person -- asked for.
+    const started = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, type: 'task_started' },
+    })
+    expect((started.payload as { grants?: string[] }).grants).toEqual(['network_fetch'])
+  })
+
+  it('leaves the verdict alone for a task that needs nothing, and says so on task.started', async (): Promise<void> => {
+    await tick(deps)
+
+    const run = await prisma.slaveRun.findFirstOrThrow()
+    const { runDir } = runFilePaths(fixture.repoPath, brandRunId(run.id))
+    const written = JSON.parse(readFileSync(permissionsFilePathFor(runDir), 'utf8')) as { grants: readonly string[] }
+    expect(written.grants).toEqual(['read_repo', 'write_repo', 'run_commands'])
+    const started = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, type: 'task_started' },
+    })
+    expect((started.payload as { title: string; grants?: string[] }).title).toBe('Add the thing')
+    expect((started.payload as { grants?: string[] }).grants).toEqual([])
   })
 
   it('emits guardrail.tripped and starts nothing when decide halts', async (): Promise<void> => {

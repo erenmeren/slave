@@ -1,5 +1,8 @@
 import { z } from 'zod'
 import { CAPABILITY_KEY_PATTERN } from '../capability/taxonomy.js'
+// TYPE-ONLY, and deliberately so: it pins {@link TASK_NEEDS} to the permission vocabulary without
+// making this pure shape parser depend on the matrix at runtime.
+import type { PermissionKind } from '../permission/kinds.js'
 import { handoffContractSchema, type HandoffContract } from '../handoff/contract.js'
 import { jsonObjectsLastToFirst } from '../json/last-object.js'
 import { err, ok, type Result } from '../result.js'
@@ -40,11 +43,52 @@ export interface PlanTask {
    *  Checked against the adopted runbook's stage keys in {@link validateStructure}, which takes
    *  them as an argument (plan erratum E1). */
   readonly stage?: string | undefined
+  /**
+   * E R5: the permissions this task's work needs, from {@link TASK_NEEDS} and nothing else.
+   *
+   * OPTIONAL at the type for `capabilities`' back-compat reason (the JSON carries `.default([])`,
+   * so it is always an array after a parse): every fixture and every plan written before this
+   * milestone reads back as a task that needs nothing, which is exactly what it meant.
+   *
+   * A HINT, not structure. A value outside the list is DROPPED rather than refused -- see
+   * {@link PlanGraph.droppedNeeds} -- because the board does not depend on this field and a whole
+   * planning run thrown away over a word the planner invented would cost far more than the
+   * permission it was asking for.
+   */
+  readonly needs?: readonly TaskNeed[] | undefined
   readonly dependsOn: readonly string[]
+}
+
+/**
+ * The permissions a plan may ask for on a task's behalf (E R5). A CLOSED list, and deliberately
+ * the two kinds a plan can actually know about in advance: reading the web, and running commands
+ * beyond the repository's own scripts. The other four are a person's decision about a worker, not
+ * a property of the work.
+ *
+ * Spelled here rather than derived from `PERMISSION_KINDS`, because it is a SUBSET chosen for what
+ * a plan can know -- and pinned to that vocabulary by the `satisfies` below, which is a type-only
+ * dependency and compiles away: a word this list carries that the matrix does not have would be a
+ * red build rather than a grant nothing can resolve.
+ */
+export const TASK_NEEDS = ['network_fetch', 'run_commands'] as const satisfies readonly PermissionKind[]
+
+export type TaskNeed = (typeof TASK_NEEDS)[number]
+
+function isTaskNeed(value: string): value is TaskNeed {
+  return (TASK_NEEDS as readonly string[]).includes(value)
 }
 
 export interface PlanGraph {
   readonly tasks: readonly PlanTask[]
+  /**
+   * E R5: needs the planner wrote that {@link TASK_NEEDS} does not have, per task key, sorted.
+   *
+   * The sibling of `concludePlanning`'s `droppedCapabilities`, and reported for the same reason: a
+   * silently ignored vocabulary is how an operator concludes the feature does not work. ABSENT
+   * when nothing was dropped, so a plan written in the two words this system has carries no field
+   * about it at all.
+   */
+  readonly droppedNeeds?: Readonly<Record<string, readonly string[]>> | undefined
 }
 
 const planTaskSchema = z.object({
@@ -71,6 +115,11 @@ const planTaskSchema = z.object({
   // an earlier draft, silently. `null` means absent; {@link validateStructure} normalises it away.
   handoff: z.record(z.string(), z.unknown()).nullish(),
   stage: z.string().min(1).nullish(),
+  // A plain string array, never `z.enum(TASK_NEEDS)`, for the looseness every field above it keeps:
+  // a shape violation makes `parsePlanGraph` fall back to an EARLIER candidate object in the same
+  // message, so a planner that invented a word would have an already-revised draft executed on its
+  // behalf. {@link validateStructure} drops the unknown values and reports them instead.
+  needs: z.array(z.string().min(1)).default([]),
 })
 
 /** How many capabilities one task may ask for. A task naming eleven has not been decomposed --
@@ -165,7 +214,19 @@ function validateStructure(graph: PlanGraph, stageKeys: readonly string[]): Resu
   // the column -- a value every reader then has to tell apart from an absent contract -- while a
   // `null` reaching `Task.stage` would be a stage named nothing. `undefined` is the one spelling of
   // "the planner did not ask for this".
-  return ok({ tasks: graph.tasks.map(normalisePlanTask) })
+  //
+  // E R5: the needs are partitioned rather than checked. Collected per task key and SORTED, so the
+  // plan event reports the same thing however the planner ordered them.
+  const droppedNeeds: Record<string, readonly string[]> = {}
+  for (const task of graph.tasks) {
+    const unknown = (task.needs ?? []).filter((need) => !isTaskNeed(need))
+    if (unknown.length > 0) droppedNeeds[task.key] = [...unknown].toSorted()
+  }
+
+  return ok({
+    tasks: graph.tasks.map(normalisePlanTask),
+    ...(Object.keys(droppedNeeds).length === 0 ? {} : { droppedNeeds }),
+  })
 }
 
 /**
@@ -176,9 +237,14 @@ function validateStructure(graph: PlanGraph, stageKeys: readonly string[]): Resu
  * list, and the two must not drift -- exactly as {@link findCycle} is exported for that one caller.
  */
 export function normalisePlanTask(task: PlanTask): PlanTask {
-  const { handoff, stage, ...rest } = task
+  const { handoff, stage, needs, ...rest } = task
   return {
     ...rest,
+    // E R5: the needs are FILTERED here rather than in `validateStructure` alone, so a delta's
+    // `add` list -- which reuses this function and never sees that validator -- cannot carry a word
+    // outside the closed list onto a `Task` row either. The dropped values are reported by
+    // `validateStructure`, which is the one caller with a plan event to report them on.
+    needs: (needs ?? []).filter(isTaskNeed),
     ...(handoff == null ? {} : { handoff: handoffContractSchema.parse(handoff) }),
     ...(stage == null ? {} : { stage }),
   }

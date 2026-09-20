@@ -63,21 +63,32 @@ export function writePermissionsFile(
     /** The PLAINTEXT token this spawn will put in the child's environment. Only its hash is written
      *  here; the plaintext is never persisted anywhere (M52 R4, plan erratum E7). */
     readonly runToken: string
+    /** E R5: the needs the PLANNER wrote on this run's task (`Task.requiredPermissions`), which
+     *  `resolveGrants` adds to the baseline on an implementation run and ignores on every other.
+     *  `string[]`, like `rows`, because the caller reads it straight off a Prisma row -- it is
+     *  filtered to the six kinds here, at the one boundary that already does that for the rows. */
+    readonly taskGrants?: readonly string[] | undefined
   },
 ): string {
   const permissionsFilePath = permissionsFilePathFor(runDir)
   const rows = input.rows.filter((row): row is PermissionRowInput =>
     (PERMISSION_KINDS as readonly string[]).includes(row.kind),
   )
+  const taskGrants = (input.taskGrants ?? []).filter((kind): kind is PermissionKind =>
+    (PERMISSION_KINDS as readonly string[]).includes(kind),
+  )
   const body = {
     version: 2,
     runId: input.runId,
     tokenHash: runTokenHash(input.runToken),
     enforce: ENFORCE_BY_PROVIDER[input.provider],
-    grants: grantsFor(rows, input.runKind)
-      .filter((grant) => grant.source === 'baseline' || grant.source === 'granted')
+    grants: grantsFor(rows, input.runKind, taskGrants)
+      // `'task'` beside the two (E R5): a kind the plan asked for is one this run HAS, and `grants`
+      // is the half of the file the gate decides every `mcp__*` name by -- a task grant missing
+      // from it would open the two names `allow` can spell and nothing else.
+      .filter((grant) => grant.source === 'baseline' || grant.source === 'granted' || grant.source === 'task')
       .map((grant) => grant.kind),
-    allow: resolveGrants(rows, input.provider, input.runKind),
+    allow: resolveGrants(rows, input.provider, input.runKind, taskGrants),
     vocabulary: TOOL_VOCABULARY[input.provider],
     // The name families the vocabulary cannot enumerate. ONE entry today, spelled from the domain's
     // own constant rather than as a literal, so a second prefix rule lands here by construction.

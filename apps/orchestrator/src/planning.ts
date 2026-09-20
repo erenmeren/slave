@@ -221,6 +221,12 @@ export async function concludePlanning(runId: RunId): Promise<void> {
           handoff:
             planTask.handoff === undefined ? Prisma.DbNull : (planTask.handoff as unknown as Prisma.InputJsonValue),
           stage: planTask.stage ?? null,
+          // E R5: the permissions this work needs, as the PLANNER asked for them. `startRun` reads
+          // this column at dispatch and snapshots it into the run's own `permissions.json`, so a
+          // task that must read the web arrives with the grant instead of being denied three times
+          // for the want of an ask nobody made. Already bounded to the closed list by
+          // `parsePlanGraph` -- a word outside it was dropped and reported on the plan event below.
+          requiredPermissions: [...(planTask.needs ?? [])],
           // M40 §1: which requirement produced this task. `workspace.goalVersion` IS the version
           // of the `goal` this run was given (Task 3 adds the delta re-plan, where the version a
           // task is stamped with is the one the re-plan derived from rather than simply the
@@ -281,6 +287,10 @@ export async function concludePlanning(runId: RunId): Promise<void> {
       // operator concludes the feature does not work. Absent when nothing was dropped, so a plan
       // written entirely in the taxonomy's words carries no field about it at all.
       ...(dropped.size === 0 ? {} : { droppedCapabilities: [...dropped].toSorted() }),
+      // E R5, and the same judgement one line up: a need outside the closed list is dropped rather
+      // than refused, and a drop nobody reports is a feature an operator concludes does not work.
+      // `parsePlanGraph` did the dropping; this only carries its report onto the event.
+      ...(parsed.value.droppedNeeds === undefined ? {} : { droppedNeeds: parsed.value.droppedNeeds }),
       // R2: the measured adherence. SOFT -- `stagesMissing` is a report, never a refusal. Absent
       // entirely when no runbook is adopted, exactly as `droppedCapabilities` is absent when
       // nothing was dropped.

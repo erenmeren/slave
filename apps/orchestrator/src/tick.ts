@@ -618,7 +618,10 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
     slaveId: slave.id,
     runId: run.id,
     actor: 'system',
-    payload: { title: task.title },
+    // E R5: `grants` is what the PLAN asked for on this task's behalf, written beside the title so
+    // a person reading the timeline can see a permission that no person granted. The verdict the
+    // gate reads is written from the same column a few lines below.
+    payload: { title: task.title, grants: [...task.requiredPermissions] },
   })
 
   // Declared outside the `try` so the catch can tell "never spawned" from "spawned, then something
@@ -715,6 +718,10 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
       runKind: 'implementation',
       runId: run.id,
       runToken,
+      // E R5: the task's own needs, read off the row the planner wrote them on. They are added to
+      // the baseline for an implementation run and an explicit `deny` still beats them
+      // (`resolveGrants`), so this widens what a run may do without overruling anybody.
+      taskGrants: task.requiredPermissions,
     })
 
     // M37 Task 2: the one builder. Everything this run is told -- who the slave is, who else is
