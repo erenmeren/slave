@@ -366,6 +366,30 @@ describe('ProjectSettingsClient', () => {
     expect((screen.getByLabelText('workspace budget') as HTMLInputElement).value).toBe('35')
   })
 
+  // Task 6 review, "Also": `autoMerge`/`supervisorAutonomy` came OFF the remount `key` -- the two
+  // switches are prop-driven (`checked={autoMerge}`/`checked={autonomy === 'act'}`, no local
+  // state of their own), so a flip of either must not remount the panel and discard whatever an
+  // operator was mid-typing into the provider or budget fields above them.
+  it('does not discard an unsaved runtime draft when only autoMerge or the autonomy switch changes', () => {
+    const { rerender } = render(
+      <ProjectSettingsClient settings={settings({ budgetUsd: 20 })} shellFacts={shellFacts()} initialSection="runtime" />,
+    )
+    fireEvent.change(screen.getByLabelText('workspace budget'), { target: { value: '99' } })
+    expect((screen.getByLabelText('workspace budget') as HTMLInputElement).value).toBe('99')
+
+    rerender(
+      <ProjectSettingsClient
+        settings={settings({ budgetUsd: 20, autoMerge: true, supervisorAutonomy: 'act' })}
+        shellFacts={shellFacts()}
+        initialSection="runtime"
+      />,
+    )
+
+    expect((screen.getByLabelText('workspace budget') as HTMLInputElement).value).toBe('99')
+    expect((screen.getByTestId('runtime-auto-merge') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByTestId('runtime-autonomy') as HTMLInputElement).checked).toBe(true)
+  })
+
   // M24 final review, Important 1: the Settings tab published nothing, so the project header and
   // tab strip fell back to the layout's entry-time snapshot on this one tab.
   it('publishes ShellFacts on mount, as the four page clients do', () => {

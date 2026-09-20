@@ -151,11 +151,13 @@ export function ProjectSettingsClient({
           {section === 'runtime' && (
             <section data-testid="settings-runtime">
               <RuntimePanel
-                // E R7/R1: the two switches join the key. The panel keeps no local state for
-                // them -- a flip is written and the page refreshed -- so a remount on the new
-                // snapshot is what moves the checkbox, exactly as it is for the provider and the
-                // budget.
-                key={`${workspace.provider ?? ''}|${workspace.budgetUsd ?? ''}|${String(workspace.autoMerge)}|${workspace.supervisorAutonomy}`}
+                // Task 6 review, "Also": `autoMerge`/`supervisorAutonomy` do NOT join the key --
+                // unlike the provider select and the budget field, the two switches are PROP-DRIVEN
+                // (`checked={autoMerge}`/`checked={autonomy === 'act'}`, no draft state of their
+                // own), so the next snapshot already moves them with no remount. Keying on them too
+                // would remount the panel on every flip and discard whatever an operator had
+                // mid-typed into the provider or budget fields above.
+                key={`${workspace.provider ?? ''}|${workspace.budgetUsd ?? ''}`}
                 workspaceId={workspace.id}
                 provider={workspace.provider}
                 budgetUsd={workspace.budgetUsd}

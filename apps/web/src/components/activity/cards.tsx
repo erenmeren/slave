@@ -730,15 +730,20 @@ function WorkspaceCompanyAssignedCard(props: ActivityCardProps): ReactElement {
 // this event covers carry different shapes, and `null` is a REAL value on both -- "no provider
 // configured" and "this workspace is not budgeted" -- so it is rendered as a word rather than
 // hidden behind a falsy check that would also swallow a budget of `0`.
-type SettingsField = 'provider' | 'budgetUsd' | 'supervisorEnabled' | 'supervisorProfile'
+type SettingsField = 'provider' | 'budgetUsd' | 'supervisorEnabled' | 'supervisorProfile' | 'supervisorAutonomy' | 'autoMerge'
 
 /** M38 t2 widened this event to the Supervisor's two settings, so the label is a table rather
- *  than the ternary it was while there were only two fields. */
+ *  than the ternary it was while there were only two fields. Task 6 review, "Also": `supervisorAutonomy`
+ *  (R1) and `autoMerge` (R7) join it -- a `workspace.settings_changed` row for either now names
+ *  the switch, rather than falling through to the `?? 'settings changed'` a field this table has
+ *  never heard of gets. */
 const SETTINGS_LABEL: Record<SettingsField, string> = {
   provider: 'provider changed',
   budgetUsd: 'budget changed',
   supervisorEnabled: 'supervisor switched',
   supervisorProfile: 'supervisor profile changed',
+  supervisorAutonomy: 'Supervisor autonomy',
+  autoMerge: 'Auto-merge',
 }
 
 function WorkspaceSettingsChangedCard(props: ActivityCardProps): ReactElement {
@@ -760,10 +765,12 @@ function WorkspaceSettingsChangedCard(props: ActivityCardProps): ReactElement {
 
 /** `null` is a state an operator chose, not a missing field, so it gets a name of its own. */
 function settingValue(field: SettingsField, value: string | number | boolean | null): string {
-  if (field === 'supervisorEnabled') return value === true ? 'on' : 'off'
+  if (field === 'supervisorEnabled' || field === 'autoMerge') return value === true ? 'on' : 'off'
   // A profile is carried as a sha256, never as its text (M38 t2) -- the first eight characters are
   // enough to tell two versions apart, which is all this card is for.
   if (field === 'supervisorProfile') return value === null ? 'none' : `${String(value).slice(0, 8)}\u2026`
+  // Already a word (`propose`/`act`) -- `setSupervisorSettings` writes nothing else here.
+  if (field === 'supervisorAutonomy') return String(value)
   if (value === null) return field === 'provider' ? 'none' : 'no budget'
   return field === 'budgetUsd' ? `$${String(value)}` : String(value)
 }

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { SITUATION_LABEL } from '@slave-of-ai/domain'
-import { postControl, postJson } from '../../lib/postControl'
+import { postControl, postJson, sendControl } from '../../lib/postControl'
 import { useShellFacts } from '../../hooks/useShellFacts'
 import type { SupervisorThread } from '../../server/supervisorThreads'
 import { Kbd } from '../ui/Kbd'
@@ -168,6 +168,12 @@ export function SupervisorThreadPanel({
   const [errorText, setErrorText] = useState<string | null>(null)
   /** The SUCCESS line `gate-m45` stage 5 waits for after a send (spec erratum E17). */
   const [resultText, setResultText] = useState<string | null>(null)
+  // R1/R8 (Task 7): the scope line's own switch. `null` until the view answers once -- `useShellFacts`
+  // carries none of the Supervisor's settings (`hooks/useShellFacts.ts`'s own `sameFacts` list), so
+  // this panel reads them off `GET /api/w/:id/supervisor` itself rather than growing a field onto a
+  // store every OTHER workspace page publishes to.
+  const [autonomy, setAutonomy] = useState<'propose' | 'act' | null>(null)
+  const [autonomyPending, setAutonomyPending] = useState(false)
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -179,11 +185,37 @@ export function SupervisorThreadPanel({
     }
   }, [workspaceId])
 
+  const loadSettings = useCallback(async (): Promise<void> => {
+    try {
+      const response = await fetch(`/api/w/${workspaceId}/supervisor`)
+      if (response.ok) {
+        const view = (await response.json()) as { settings?: { autonomy?: 'propose' | 'act' } }
+        if (view.settings?.autonomy !== undefined) setAutonomy(view.settings.autonomy)
+      }
+    } catch {
+      // Same rule as `load` above: leave the switch where it was rather than blank it.
+    }
+  }, [workspaceId])
+
   // Two triggers, both existing: the workspace changed, or its stream woke the shell up. No
   // `EventSource` of this panel's own -- `hooks/useShellFacts.ts:18-24` is the rule.
   useEffect((): void => {
     void load()
   }, [load, facts])
+
+  useEffect((): void => {
+    void loadSettings()
+  }, [loadSettings])
+
+  const toggleAutonomy = async (checked: boolean): Promise<void> => {
+    setAutonomyPending(true)
+    const error = await sendControl(`/api/w/${workspaceId}/supervisor/settings`, {
+      method: 'PATCH',
+      body: { autonomy: checked ? 'act' : 'propose' },
+    })
+    setAutonomyPending(false)
+    if (error === null) await loadSettings()
+  }
 
   const thread = useMemo(
     () => threads.find((candidate) => candidate.id === selectedId) ?? threads[0] ?? null,
@@ -285,9 +317,25 @@ export function SupervisorThreadPanel({
 
       {/* R14/I3 (final-review wave): the scope line, promoted from the composer's footer to the
         * panel's own subtitle -- it is a fact about the WHOLE conversation ("who this thread is
-        * with"), not a note that belongs beside the send button. */}
-      <div className="flex-none px-[16px] py-[6px] text-[11.5px] text-t3">
-        Scope: <b className="font-medium text-t2">{facts?.workspace.name ?? 'this project'}</b>
+        * with"), not a note that belongs beside the send button. R1/R8 (Task 7) adds the autonomy
+        * switch beside it -- the same fact `RuntimePanel`'s `runtime-autonomy` checkbox writes,
+        * reachable from the conversation an operator is already reading rather than only from
+        * Settings. */}
+      <div className="flex flex-none items-center justify-between gap-2 px-[16px] py-[6px] text-[11.5px] text-t3">
+        <span>
+          Scope: <b className="font-medium text-t2">{facts?.workspace.name ?? 'this project'}</b>
+        </span>
+        <label className="flex items-center gap-1.5">
+          <input
+            type="checkbox"
+            data-testid="supervisor-autonomy"
+            aria-label="act on its own"
+            checked={autonomy === 'act'}
+            onChange={(event) => void toggleAutonomy(event.target.checked)}
+            disabled={autonomyPending || autonomy === null}
+          />
+          act on its own
+        </label>
       </div>
 
       {historyOpen && (

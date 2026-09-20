@@ -779,7 +779,7 @@ describe('loadSupervisorWorld', () => {
     expect(world.goal).toBe('ship checkout')
     expect(world.halted).toEqual({ reason: 'budget_exhausted' })
     expect(world.budgetExhausted).toBe(true)
-    expect(settings).toEqual({ enabled: false, profile: 'be conservative' })
+    expect(settings).toEqual({ enabled: false, profile: 'be conservative', autonomy: 'propose' })
   })
 
   it('leaves an unbudgeted workspace unexhausted however much it spent', async (): Promise<void> => {

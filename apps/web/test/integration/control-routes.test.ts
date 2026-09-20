@@ -1112,7 +1112,7 @@ describe('the control routes', () => {
       expect(body.pending[0].rationale).toBe('Nobody can review, and Alex is idle.')
       expect(body.pending[0].situation.summary).toContain('no worker holds the reviewer role')
       expect(body.recent.map((d: { id: string }) => d.id)).toEqual([decisionId])
-      expect(body.settings).toEqual({ enabled: true, profile: null })
+      expect(body.settings).toEqual({ enabled: true, profile: null, autonomy: 'propose' })
     })
 
     // M39 §6: the mailbox block. The panel reads the questions off the SAME world the report is

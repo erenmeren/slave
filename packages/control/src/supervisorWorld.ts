@@ -89,7 +89,10 @@ function haltOf(snapshot: WorkspaceStatsSnapshot): { readonly reason: string } |
  */
 export interface LoadedSupervisorWorld {
   readonly world: SupervisorWorld
-  readonly settings: { readonly enabled: boolean; readonly profile: string | null }
+  // R1/R8 (Task 7): `autonomy` joins the pair -- the panel's switch and a `workspace.settings_changed`
+  // row already read this off the workspace row directly; this is the one place a WORLD READER gets
+  // it without a second query, off the same `Workspace` row `world.autonomy` itself came from.
+  readonly settings: { readonly enabled: boolean; readonly profile: string | null; readonly autonomy: 'propose' | 'act' }
 }
 
 /** The taxonomy, key ascending -- the same order `listCapabilities` returns, because the domain's
@@ -876,22 +879,26 @@ function actionKindOf(action: unknown): ActionKind {
 }
 
 /**
- * Just the two Supervisor settings, in one indexed read (fix round 1).
+ * Just the three Supervisor settings, in one indexed read (fix round 1; `autonomy` joined the
+ * pair in Task 7 so `buildSupervisorView`'s settings stay exactly this function's answer --
+ * `gate-surface-parity`'s own assertion).
  *
  * `null` means there is no such project. The caller that matters is `supervise()`, which asks this
  * BEFORE {@link loadSupervisorWorld}: a switched-off Supervisor must not pay for a world it will
  * never look at, and on a daemon that is a dozen queries a second, forever, for a project whose
- * operator has explicitly said "report only". `loadSupervisorWorld` reads the same two columns off
+ * operator has explicitly said "report only". `loadSupervisorWorld` reads the same three columns off
  * the same row it already fetches, so nothing is read twice on the path that does proceed.
  */
 export async function supervisorSettings(
   workspaceId: string,
-): Promise<{ readonly enabled: boolean; readonly profile: string | null } | null> {
+): Promise<{ readonly enabled: boolean; readonly profile: string | null; readonly autonomy: 'propose' | 'act' } | null> {
   const row = await prisma.workspace.findUnique({
     where: { id: workspaceId },
-    select: { supervisorEnabled: true, supervisorProfile: true },
+    select: { supervisorEnabled: true, supervisorProfile: true, supervisorAutonomy: true },
   })
-  return row === null ? null : { enabled: row.supervisorEnabled, profile: row.supervisorProfile }
+  return row === null
+    ? null
+    : { enabled: row.supervisorEnabled, profile: row.supervisorProfile, autonomy: row.supervisorAutonomy }
 }
 
 /**
@@ -1356,7 +1363,11 @@ export async function loadSupervisorWorld(
 
       return {
         world,
-        settings: { enabled: workspace.supervisorEnabled, profile: workspace.supervisorProfile },
+        settings: {
+          enabled: workspace.supervisorEnabled,
+          profile: workspace.supervisorProfile,
+          autonomy: workspace.supervisorAutonomy,
+        },
       }
     },
     { isolationLevel: 'RepeatableRead', timeout: 15_000, maxWait: 5_000 },

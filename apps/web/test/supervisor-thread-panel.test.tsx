@@ -43,6 +43,12 @@ let fetchMock: ReturnType<typeof vi.fn>
 beforeEach((): void => {
   fetchMock = vi.fn(async (url: string) => {
     if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
+    // The view's own GET (`/api/w/:id/supervisor`, no further path) -- what the scope line's
+    // autonomy switch reads on mount. Matched by suffix rather than `includes('/supervisor')`,
+    // which would also catch `/supervisor/threads` and the settings/decisions routes below.
+    if (url.endsWith('/supervisor')) {
+      return new Response(JSON.stringify({ settings: { enabled: true, profile: null, autonomy: 'propose' } }), { status: 200 })
+    }
     return new Response(JSON.stringify({ ok: true, version: 3 }), { status: 200 })
   })
   vi.stubGlobal('fetch', fetchMock)
@@ -273,5 +279,56 @@ describe('the Supervisor panel', () => {
     const composer = screen.getByTestId('supervisor-composer')
     expect(composer.querySelector('kbd')).toBeTruthy()
     expect(composer.querySelector('kbd')?.textContent).toBe('⏎')
+  })
+
+  // R1/R8 (Task 7): the autonomy switch, on the scope line -- the same setting `RuntimePanel`'s
+  // own `runtime-autonomy` checkbox writes, read here off the view this panel fetches once on
+  // mount rather than off `useShellFacts` (mocked to `null` in this file; it carries none of the
+  // Supervisor's own settings).
+  it('renders the autonomy switch off the view, PATCHes it on toggle, and disables it while the request is in flight', async (): Promise<void> => {
+    let currentAutonomy: 'propose' | 'act' = 'propose'
+    let resolvePatch: (() => void) | null = null
+    fetchMock.mockImplementation(async (url: string, init?: { method?: string; body?: string }) => {
+      if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
+      if (url.endsWith('/supervisor/settings')) {
+        return new Promise<Response>((resolve) => {
+          resolvePatch = () => {
+            const body = JSON.parse(init?.body ?? '{}') as { autonomy?: 'propose' | 'act' }
+            if (body.autonomy !== undefined) currentAutonomy = body.autonomy
+            resolve(new Response('{}', { status: 200 }))
+          }
+        })
+      }
+      if (url.endsWith('/supervisor')) {
+        return new Response(JSON.stringify({ settings: { enabled: true, profile: null, autonomy: currentAutonomy } }), {
+          status: 200,
+        })
+      }
+      return new Response('{}', { status: 200 })
+    })
+
+    render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
+    const toggle = await screen.findByTestId('supervisor-autonomy')
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(false))
+
+    fireEvent.click(toggle)
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/w/w1/supervisor/settings',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ autonomy: 'act' }) }),
+    )
+    expect((screen.getByTestId('supervisor-autonomy') as HTMLInputElement).disabled).toBe(true)
+
+    await act(async (): Promise<void> => {
+      resolvePatch?.()
+    })
+
+    await waitFor(() => expect((screen.getByTestId('supervisor-autonomy') as HTMLInputElement).checked).toBe(true))
+    expect((screen.getByTestId('supervisor-autonomy') as HTMLInputElement).disabled).toBe(false)
+  })
+
+  it('labels the autonomy switch "act on its own"', async (): Promise<void> => {
+    render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
+    const toggle = await screen.findByTestId('supervisor-autonomy')
+    expect(screen.getByLabelText('act on its own')).toBe(toggle)
   })
 })

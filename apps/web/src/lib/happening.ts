@@ -36,15 +36,62 @@ const str = (p: Record<string, unknown>, k: string): string | null => (typeof p[
  *    real names -- reviews are a `task.*` event, not their own `review.*` namespace.
  */
 export const HAPPENING_TYPES: readonly DomainEventType[] = [
-  'workspace.goal_set', 'supervisor.proposed', 'supervisor.decided', 'task.created', 'task.started',
+  'workspace.goal_set', 'supervisor.proposed', 'supervisor.decided', 'supervisor.applied', 'supervisor.failed',
+  'task.created', 'task.started',
   'task.done', 'task.verify_passed', 'guardrail.tripped', 'run.started', 'run.succeeded', 'run.failed',
   'task.integrated', 'task.review_approved', 'task.review_rejected',
 ]
+
+/**
+ * The Supervisor's own catalogue kind, said the way a person reads it (R8) -- the six kinds `act`
+ * actually carries out on its own without an escalation (spec §2's "applied" column) get their own
+ * words; anything else names the kind rather than inventing a sentence for it.
+ *
+ * Reads off `p.action` rather than taking the action as its own argument: `supervisor.applied`'s
+ * real payload (`applyDecision`, `packages/control/src/supervisor.ts`) is `{ decisionId, action: {
+ * kind } }` -- only the kind survives the append, so every other field here is read with `str`,
+ * which is `null` for a caller that never gave it one, and this degrades to the bare kind rather
+ * than printing "undefined".
+ */
+function verbPhrase(p: Record<string, unknown>): string {
+  const action = p['action']
+  const fields = action !== null && typeof action === 'object' ? (action as Record<string, unknown>) : {}
+  const kind = str(fields, 'kind')
+  switch (kind) {
+    case 'retry_task': {
+      const title = str(fields, 'title')
+      return title === null ? 'retried a task' : `retried "${title}"`
+    }
+    case 'retry_review': {
+      const title = str(fields, 'title')
+      return title === null ? 'sent a task back to review' : `sent "${title}" back to review`
+    }
+    case 'clear_halt':
+      return 'cleared the halt'
+    case 'request_permission': {
+      const kindLabel = str(fields, 'kindLabel')
+      const name = str(fields, 'name')
+      return kindLabel === null || name === null ? 'granted a permission' : `granted ${kindLabel} to ${name}`
+    }
+    case 'hire_from_catalog': {
+      const name = str(fields, 'name')
+      return name === null ? 'hired someone' : `hired ${name}`
+    }
+    case 'unblock_task':
+      return 'unblocked a task'
+    case 'steer_run':
+      return 'steered a worker'
+    default:
+      return `applied ${kind ?? 'something'}`
+  }
+}
 
 const SENTENCE: Partial<Record<DomainEventType, (p: Record<string, unknown>, n: HappeningNames) => string>> = {
   'workspace.goal_set': (p) => `You asked for: ${str(p, 'request') ?? str(p, 'goal') ?? 'a new goal'}`,
   'supervisor.proposed': (p) => `The Supervisor proposed: ${str(p, 'summary') ?? 'a change'}`,
   'supervisor.decided': (p) => `The Supervisor decided: ${str(p, 'summary') ?? str(p, 'decision') ?? 'something'}`,
+  'supervisor.applied': (p) => `The Supervisor ${verbPhrase(p)}`,
+  'supervisor.failed': (p) => `The Supervisor could not ${verbPhrase(p)}: ${str(p, 'reason') ?? 'unknown'}`,
   'task.created': (_p, n) => `${quoted(n)} was added to the board`,
   'task.started': (_p, n) => `${who(n)} picked up ${quoted(n)}`,
   'task.done': (_p, n) => `${who(n)} finished ${quoted(n)}`,

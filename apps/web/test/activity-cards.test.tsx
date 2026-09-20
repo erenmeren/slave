@@ -543,6 +543,27 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('settings-to').textContent).not.toBe(sha256)
   })
 
+  // Task 6 review, "Also": `SettingsField` widened to the two switches R1/R7 added --
+  // `workspace.settings_changed` names the Supervisor's autonomy and auto-merge exactly the way
+  // it already names the switch and the profile above.
+  it('workspace.settings_changed names the autonomy switch, in its own two words', () => {
+    const Card = ACTIVITY_CARDS['workspace.settings_changed']
+    const event = baseEvent('workspace.settings_changed', { field: 'supervisorAutonomy', from: 'propose', to: 'act' })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('Supervisor autonomy')
+    expect(screen.getByTestId('settings-from').textContent).toBe('propose')
+    expect(screen.getByTestId('settings-to').textContent).toBe('act')
+  })
+
+  it('workspace.settings_changed says on and off for auto-merge', () => {
+    const Card = ACTIVITY_CARDS['workspace.settings_changed']
+    const event = baseEvent('workspace.settings_changed', { field: 'autoMerge', from: false, to: true })
+    render(<Card event={event} {...CARD_PROPS} />)
+    expect(screen.getByTestId('transition-label').textContent).toBe('Auto-merge')
+    expect(screen.getByTestId('settings-from').textContent).toBe('off')
+    expect(screen.getByTestId('settings-to').textContent).toBe('on')
+  })
+
   // M38 t5: the five `supervisor.*` cards, replacing Task 1's honest placeholders. Each says what
   // its own payload carries and nothing it does not -- the panel is where a decision's full
   // rationale lives; the timeline's job is to make a decision findable and its shape readable.
