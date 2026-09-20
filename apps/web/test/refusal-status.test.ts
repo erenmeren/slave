@@ -92,6 +92,15 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   intake_already_created: true,
   intake_budget_exhausted: true,
   invalid_message: true,
+  // Supervisor chat R6: the five an ATTACHMENT can be refused by. None ends in `_not_found` and
+  // none should: the project and its repository are both there, and each says the request itself
+  // cannot be carried out as written -- too many files, one too large, an extension nothing here
+  // can read, a name that is a path, or a repository that would not take the commit. 409 each.
+  too_many_attachments: true,
+  attachment_too_large: true,
+  attachment_kind_not_allowed: true,
+  attachment_path_refused: true,
+  inbox_write_failed: true,
   invalid_draft: true,
   parent_not_found: true,
   path_not_empty: true,

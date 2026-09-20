@@ -4,7 +4,7 @@ import { PROFILE_MAX_CHARS } from '../run-context/profile.js'
 import { neutraliseMarkers } from '../run-context/render.js'
 import { ACTION_KINDS, actionSchema, type Action, type ActionKind } from './actions.js'
 import { sourceSchema, type SourceCitation } from './answerPrompt.js'
-import { ANSWER_MAX_CHARS, SOURCES_MAX } from './constants.js'
+import { ANSWER_MAX_CHARS, SOURCES_MAX, type AttachmentKind } from './constants.js'
 import { PROFILE_HEADING, cap, firstJsonObject, workspaceLines } from './prompt.js'
 import type { ChatSourceContext } from './sourced.js'
 import type { SupervisorWorld } from './world.js'
@@ -57,7 +57,9 @@ export interface ChatAttachment {
   readonly path: string
   readonly name: string
   readonly bytes: number
-  readonly kind: 'text' | 'image' | 'binary'
+  /** The three the allow-list projects to ({@link ATTACHMENT_KIND_BY_EXTENSION}), which is the one
+   *  place an extension becomes a kind. */
+  readonly kind: AttachmentKind
   readonly text?: string
 }
 

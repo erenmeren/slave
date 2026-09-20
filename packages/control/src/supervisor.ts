@@ -33,6 +33,7 @@ import type { ProviderKind } from '@slave-of-ai/providers'
 import { steerRun } from './breaker.js'
 import { hireFromTemplate, seatMember, mergeRuntimeRoles } from './capability.js'
 import { clearHalt } from './emergency.js'
+import { requestChange } from './goal.js'
 import { releasePerson } from './persons.js'
 import { discardStaleCandidates, recordMemory } from './memory.js'
 import { answerQuestion, reassignQuestion } from './messaging.js'
@@ -43,6 +44,7 @@ import type { Principal } from './principal.js'
 import { refusalText, type ControlRefusal } from './refusal.js'
 import { adoptRunbook } from './runbook.js'
 import { MODEL_ID_PATTERN, MODEL_SHAPE_DETAIL } from './staffing.js'
+import { appendPlannerNote } from './supervisorUploads.js'
 import { cancelTask, failTask } from './task.js'
 import { retryTask, unblockTask } from './unblock.js'
 
@@ -646,6 +648,25 @@ async function carryOut(
       }
       return reached(await clearHalt(action.workspaceId))
     }
+    case 'request_goal_change':
+      // Supervisor chat R3: the verb the composer called directly until now, reached by typing a
+      // sentence instead of opening a form. `requestChange` AMENDS the standing goal and M40's
+      // trigger re-plans it on the next tick -- nothing here writes a goal, which is the whole of
+      // why the action carries the person's REQUEST rather than a replacement document.
+      //
+      // No `origin`: `ExternalOrigin` is provenance for something OUTSIDE this installation (a
+      // GitHub issue, a commit), and `externalOriginSchema` will not parse anything else. A
+      // request made in the conversation came from the person who owns the project, which is what
+      // `GoalVersion.request` already records and what the version's own `setByUserId` names.
+      return reached(await requestChange(decision.workspaceId, action.request, principal))
+    case 'note_for_planner':
+      // Supervisor chat R3: a dated line in `docs/inbox/NOTES.md`, committed. The one arm whose
+      // effect is a FILE, and `appendPlannerNote` owns every part of that -- the heading a new file
+      // is born with, the append, the commit with the orchestrator's identity, and the refusal
+      // (`inbox_write_failed`) for a repository that would not take it. Returned rather than
+      // thrown, like every other arm: a disk that is full is a `failed` decision a person can read,
+      // not a crashed pass.
+      return reached(await appendPlannerNote(decision.workspaceId, action.text))
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

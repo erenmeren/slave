@@ -8,6 +8,7 @@
  * will actually raise it.
  */
 import {
+  ATTACHMENT_KIND_BY_EXTENSION,
   BROKER_REFUSAL_LABEL,
   EXTERNAL_SOURCE_LABEL,
   type BrokerRefusalReason,
@@ -338,8 +339,27 @@ export type ControlRefusal =
   /** M59 R12: the conversation has used its `INTAKE_MAX_MODEL_CALLS` turns. Not an error about the
    *  person and the sentence says so -- the form is still there, pre-filled. */
   | { readonly kind: 'intake_budget_exhausted'; readonly intakeId: string; readonly calls: number }
-  /** M59 R6: a blank message, or one past `INTAKE_MESSAGE_MAX_CHARS`. */
+  /** M59 R6: a blank message, or one past `INTAKE_MESSAGE_MAX_CHARS`. Supervisor chat R1 reuses it
+   *  for a chat message past `CHAT_MESSAGE_MAX_CHARS` and for a blank note for the planner: it is
+   *  the same fact about the same kind of input, and a new kind would cost three homes to say it. */
   | { readonly kind: 'invalid_message'; readonly reason: string }
+  /**
+   * Supervisor chat R6: the four ways a set of attachments is refused, decided BEFORE anything is
+   * written so a request with one bad file writes none of them.
+   *
+   * `attachment_path_refused` is the name that is a PATH rather than a name. It is a refusal and
+   * never a rename, which is the whole of the decision: a person whose upload was refused can
+   * rename it, and a person whose upload was silently renamed cannot tell it happened.
+   */
+  | { readonly kind: 'too_many_attachments'; readonly limit: number; readonly count: number }
+  | { readonly kind: 'attachment_too_large'; readonly name: string; readonly bytes: number; readonly limit: number }
+  | { readonly kind: 'attachment_kind_not_allowed'; readonly name: string; readonly extension: string }
+  | { readonly kind: 'attachment_path_refused'; readonly name: string }
+  /** Supervisor chat R3/R6: the files were validated and the repository would not take them -- a
+   *  disk that is full, a `git commit` that failed, a checkout somebody is holding. `reason` is the
+   *  error's own message, because there is nothing this system can say about it that is truer. The
+   *  files may be on disk and uncommitted when this is returned; `git status` is where they are. */
+  | { readonly kind: 'inbox_write_failed'; readonly path: string; readonly reason: string }
   /** M59 R8/R10: the edited draft does not parse, or claims something the facts do not support. */
   | { readonly kind: 'invalid_draft'; readonly detail: string }
   /** M59 R7: `initRepository`'s parent directory does not exist. It creates ONE directory, never a
@@ -759,6 +779,24 @@ export function refusalText(refusal: ControlRefusal): string {
       return `this conversation has used its ${plural(refusal.calls, 'model call')}; finish it on the form instead`
     case 'invalid_message':
       return refusal.reason
+    case 'too_many_attachments':
+      return `at most ${plural(refusal.limit, 'file')} can be attached to one message; this request had ${String(refusal.count)}`
+    case 'attachment_too_large':
+      return (
+        `${refusal.name} is ${String(refusal.bytes)} bytes; an attachment may be at most ` +
+        `${String(refusal.limit)}. Put it in the repository and name its path instead`
+      )
+    case 'attachment_kind_not_allowed':
+      // The LIST, not the one extension: a person told "exe is not allowed" has to guess what is,
+      // and the answer is short enough to print.
+      return (
+        `${refusal.name} is a ${refusal.extension === '' ? 'file with no extension' : `.${refusal.extension} file`}, ` +
+        `which cannot be attached. These can be: ${Object.keys(ATTACHMENT_KIND_BY_EXTENSION).join(', ')}`
+      )
+    case 'attachment_path_refused':
+      return `"${refusal.name}" is a path rather than a file name; rename it and attach it again`
+    case 'inbox_write_failed':
+      return `${refusal.path} could not be written to the repository: ${refusal.reason}`
     case 'invalid_draft':
       return `these project details cannot be used: ${refusal.detail}`
     case 'parent_not_found':
