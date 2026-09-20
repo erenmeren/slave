@@ -1,5 +1,5 @@
 import { hostname } from 'node:os'
-import { describeSync, drainIntakeCalls, drainModelCalls, reconcileTemplateCapabilities, syncSkillCatalog, tickCapabilityMapping, tickIntakes, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
+import { describeSync, drainCapabilityMappingCalls, drainIntakeCalls, drainModelCalls, reconcileTemplateCapabilities, syncSkillCatalog, tickCapabilityMapping, tickIntakes, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { BROKER_TIMEOUT_MS, SUPERVISOR_DEFAULT_MODEL, workspaceId as brandWorkspaceId, type WorkspaceId } from '@slave-of-ai/domain'
 import { subscribeEvents, type EventSubscription } from '@slave-of-ai/events'
@@ -521,11 +521,15 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
 
       // Catalogue capability mapping (2026-09-20), R7: one batch of stale personas per pass,
       // beside the intakes and for the same reason -- a persona belongs to no workspace.
+      // DETACHED (fix round 1), following the intake precedent exactly (M59 R14): one batch is a
+      // model round-trip plus a transaction, and awaiting it inline here would delay
+      // `tickSimulations` and `tickIntakes` behind somebody else's mapping call on every pass that
+      // has a batch to map.
       const capabilityMapping = await tickCapabilityMapping({
         model: deps.supervisorModel ?? SUPERVISOR_DEFAULT_MODEL,
         ...(deps.modelDecider !== undefined ? { modelDecider: deps.modelDecider } : {}),
       })
-      if (capabilityMapping.calls > 0 || (capabilityMapping.skippedNoDecider && capabilityMapping.stale > 0)) {
+      if (capabilityMapping.started || (capabilityMapping.skippedNoDecider && capabilityMapping.stale > 0)) {
         process.stdout.write(`${JSON.stringify({ capabilityMapping })}\n`)
       }
     } catch (error) {
@@ -628,11 +632,13 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
       process.stderr.write(`[daemon] subscription close failed: ${String(error)}\n`)
     }
     await drainPumps()
-    // M32 item 2 and M59 R14: both are database writes for calls the account has already been
-    // billed for (spec §2.6), so disconnecting Prisma out from under one would lose exactly the
-    // record that must not be lost. No new call can start behind these: every coalescer is stopped.
+    // M32 item 2, M59 R14 and R7 (fix round 1): each is a database write for calls the account has
+    // already been billed for (spec §2.6), so disconnecting Prisma out from under one would lose
+    // exactly the record that must not be lost. No new call can start behind these: every
+    // coalescer is stopped.
     await drainModelCalls()
     await drainIntakeCalls()
+    await drainCapabilityMappingCalls()
     await prisma.$disconnect()
     process.stdout.write('daemon stopped\n')
   }

@@ -220,7 +220,7 @@ describe('runDaemon serving every project', () => {
     const text = await start('all')
     await until(() => text().includes('"capabilityMapping"'))
     const line = text().split('\n').find((l) => l.includes('"capabilityMapping"')) ?? ''
-    expect(JSON.parse(line)).toMatchObject({ capabilityMapping: { skippedNoDecider: true, stale: 1 } })
+    expect(JSON.parse(line)).toMatchObject({ capabilityMapping: { skippedNoDecider: true, started: false, stale: 1 } })
   })
 })
 
