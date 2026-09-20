@@ -42,7 +42,8 @@ export type DecisionToolMode = 'none' | 'read-only'
  */
 const READ_ONLY_TOOLS = ['Read', 'Glob', 'Grep'] as const
 
-export interface ModelDecisionInput {
+/** Everything both modes need, and nothing either mode may do without. */
+interface ModelDecisionCall {
   readonly command: string
   readonly extraArgs?: readonly string[]
   readonly model: string
@@ -56,29 +57,67 @@ export interface ModelDecisionInput {
    */
   readonly hookPath: string
   readonly timeoutMs?: number
-  /** Defaults to `'none'`. See {@link DecisionToolMode}. */
-  readonly tools?: DecisionToolMode
-  /**
-   * Where the child runs. Honoured only under `'read-only'`, where it is the repository the model
-   * is being let into; a text-only turn always runs in the per-call temp directory, which is the
-   * whole of what it is allowed to see.
-   */
-  readonly cwd?: string
-  /**
-   * The verdict the gate reads (`SLAVEOFAI_PERMISSIONS_FILE`). WRITTEN BY THE CALLER, never here:
-   * which operations a turn may have is the control layer's decision, and this function's job is
-   * to put the file the caller wrote in front of the gate the caller named.
-   */
-  readonly permissionsFilePath?: string
-  /**
-   * The plaintext of the token whose sha256 that permissions file carries as `tokenHash` (M52 R4).
-   *
-   * Not optional in practice, whatever its `?` says: `read_permission_verdict`
-   * (`scripts/lib/permissions.sh`) compares the two and FAILS CLOSED when they do not pair, so a
-   * permissions file handed to a child that holds no token denies the very `Read` this mode exists
-   * for. The caller mints one, hashes it into the file, and passes the plaintext here.
-   */
-  readonly runToken?: string
+}
+
+/**
+ * A DISCRIMINATED UNION on `tools`, not one interface with four optional fields (fix round 1, I1).
+ *
+ * The read-only arm needs all three of `cwd`, `permissionsFilePath` and `runToken`, and each
+ * omission fails in a different quiet way rather than loudly: no `cwd` and the model reads the
+ * temp directory instead of the repository and truthfully reports it found nothing; no
+ * `permissionsFilePath` and the gate sees an ungoverned run and ALLOWS every tool it was spawned
+ * with; no `runToken` and the identity check fails closed and refuses the `Read` the mode exists
+ * for. Optional fields made all three of those a caller's oversight; the union makes them a
+ * compile error, and {@link requireReadOnlyInputs} makes them an exception for a caller that casts.
+ *
+ * The text-only arm keeps every field it ever had and names the other three as `undefined`, so
+ * passing a `cwd` to a turn that ignores one is refused rather than silently dropped.
+ */
+export type ModelDecisionInput =
+  | (ModelDecisionCall & {
+      readonly tools?: 'none'
+      readonly cwd?: undefined
+      readonly permissionsFilePath?: undefined
+      readonly runToken?: undefined
+    })
+  | (ModelDecisionCall & {
+      readonly tools: 'read-only'
+      /** The repository the model is being let into: where a path the person attached resolves. */
+      readonly cwd: string
+      /**
+       * The verdict the gate reads (`SLAVEOFAI_PERMISSIONS_FILE`). WRITTEN BY THE CALLER, never
+       * here: which operations a turn may have is the control layer's decision, and this
+       * function's job is to put the file the caller wrote in front of the gate the caller named.
+       */
+      readonly permissionsFilePath: string
+      /**
+       * The plaintext of the token whose sha256 that permissions file carries as `tokenHash`
+       * (M52 R4). `read_permission_verdict` (`scripts/lib/permissions.sh`) compares the two and
+       * FAILS CLOSED when they do not pair, so the file and the token travel together or not at
+       * all. The caller mints one, hashes it into the file, and passes the plaintext here.
+       */
+      readonly runToken: string
+    })
+
+/**
+ * The same three requirements at RUNTIME, for a caller that casts (fix round 1, I1) -- a JS caller,
+ * a value that arrived as `unknown`, an `as ModelDecisionInput` written to silence the union. It
+ * throws BEFORE the pre-flight and before `mkdtemp`, so a refused call spawns nothing and leaves
+ * nothing behind, and it names the field that is missing rather than failing later as a model that
+ * read nothing or a gate that allowed everything.
+ */
+function requireReadOnlyInputs(input: ModelDecisionInput): void {
+  const missing = (['cwd', 'permissionsFilePath', 'runToken'] as const).filter(
+    (field) => typeof input[field] !== 'string' || input[field] === '',
+  )
+  if (missing.length > 0) {
+    throw new Error(
+      `decideWithModel: tools: 'read-only' requires ${missing.join(', ')}. A read-only turn opens a ` +
+        'file in the repository under the run gate, so it needs the repository (cwd), the verdict ' +
+        'the gate reads (permissionsFilePath) and the token that verdict is about (runToken). ' +
+        'Without all three the call either reads nothing or is gated by nothing.',
+    )
+  }
 }
 
 /**
@@ -142,11 +181,14 @@ export function decisionArgs(input: {
  */
 export function buildDecisionEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
+    // FIRST, so the four names below always win (fix round 1, M6). Spread last, an `extra` holding
+    // a `PATH` -- from a caller that built it out of something it read -- would replace the one
+    // this function is responsible for, and the allow list would stop being an allow list.
+    ...extra,
     PATH: process.env['PATH'] ?? '',
     HOME: process.env['HOME'] ?? '',
     LANG: process.env['LANG'] ?? 'C.UTF-8',
     TERM: 'dumb',
-    ...extra,
   }
 }
 
@@ -204,6 +246,7 @@ export async function preflightDenyAll(input: { readonly hookPath: string }): Pr
 
 export async function decideWithModel(input: ModelDecisionInput): Promise<ModelDecisionOutcome> {
   const readOnly = input.tools === 'read-only'
+  if (readOnly) requireReadOnlyInputs(input)
   // TWO PRE-FLIGHTS, ONE PER CONTRACT, and they are each other's opposite (F R7).
   //
   // `preflightDenyAll` asserts the hook denies with the pause flag present AND absent -- right for
@@ -224,13 +267,11 @@ export async function decideWithModel(input: ModelDecisionInput): Promise<ModelD
   try {
     const settingsPath = join(dir, 'settings.json')
     writeSettingsFile({ settingsPath, hookPath: input.hookPath })
+    // `input.permissionsFilePath` and `input.runToken` are strings on this arm of the union and
+    // have been checked at runtime as well, so there is nothing conditional left to spread.
     const env = buildDecisionEnv(
-      readOnly
-        ? decisionGateEnv({
-            dir,
-            ...(input.permissionsFilePath !== undefined ? { permissionsFilePath: input.permissionsFilePath } : {}),
-            ...(input.runToken !== undefined ? { runToken: input.runToken } : {}),
-          })
+      input.tools === 'read-only'
+        ? decisionGateEnv({ dir, permissionsFilePath: input.permissionsFilePath, runToken: input.runToken })
         : {},
     )
     const child = spawn(
@@ -244,7 +285,7 @@ export async function decideWithModel(input: ModelDecisionInput): Promise<ModelD
       }),
       // The repository under `read-only`, so a path the person attached resolves; the throwaway
       // directory otherwise, which is the whole of a text-only turn's world.
-      { cwd: readOnly ? (input.cwd ?? dir) : dir, env, stdio: ['pipe', 'pipe', 'pipe'] },
+      { cwd: input.tools === 'read-only' ? input.cwd : dir, env, stdio: ['pipe', 'pipe', 'pipe'] },
     )
     // ONE reader and ONE verdict for both runtimes (`runtime/decision-stream.ts`):
     // `collectDecisionStream` ends the child's stdin -- absorbing the EPIPE a child that exited

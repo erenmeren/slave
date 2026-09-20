@@ -18,7 +18,7 @@ afterEach(async () => {
 
 /** A directory of this test's own, removed after it. */
 async function scratchDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'slaveofai-cursor-decision-test-'))
+  const dir = await mkdtemp(join(tmpdir(), 'slaveofai-testscratch-'))
   scratch.push(dir)
   return dir
 }
@@ -71,6 +71,17 @@ describe('decideWithCursor (fake print-mode CLI)', () => {
   it('fails with a reason on a stream that ends with no result line', async () => {
     const outcome = await decideWithCursor({ ...base, extraArgs: [FAKE, '--fixture', 'noresult'] })
     expect(outcome).toMatchObject({ kind: 'failed', reason: expect.stringMatching(/without a result line/), costUsd: null })
+  })
+
+  it('fails with the runtime\'s own sentence when the result line is an error, and never calls it an answer', async () => {
+    const outcome = await decideWithCursor({ ...base, extraArgs: [FAKE, '--fixture', 'error'] })
+    expect(outcome.kind).toBe('failed')
+    if (outcome.kind !== 'failed') return
+    // BOTH halves, as on the Claude side: the category this runtime reports (`subtype`) and the
+    // sentence it wrote, which is the only part that says whether waiting would help.
+    expect(outcome.reason).toContain('error')
+    expect(outcome.reason).toContain('could not be completed')
+    expect(outcome.costUsd).toBeNull()
   })
 
   it('fails with a reason on a timeout', async () => {

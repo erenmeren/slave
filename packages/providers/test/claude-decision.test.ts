@@ -18,7 +18,7 @@ afterEach(async () => {
 })
 
 async function scratchDir(): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'slaveofai-decision-test-'))
+  const dir = await mkdtemp(join(tmpdir(), 'slaveofai-testscratch-'))
   scratch.push(dir)
   return dir
 }
@@ -70,6 +70,11 @@ describe('buildDecisionEnv', () => {
     expect(Object.keys(buildDecisionEnv()).sort()).toEqual(['HOME', 'LANG', 'PATH', 'TERM'])
     delete process.env['DATABASE_URL']
     delete process.env['SLAVEOFAI_TEST_LEAK']
+  })
+  it('lets nothing in `extra` overwrite one of the four -- an allow list a caller can replace is not one', () => {
+    const env = buildDecisionEnv({ PATH: '/tmp/evil', SLAVEOFAI_PAUSE_FLAG: '/run/pause.flag' })
+    expect(env['PATH']).toBe(process.env['PATH'] ?? '')
+    expect(env['SLAVEOFAI_PAUSE_FLAG']).toBe('/run/pause.flag')
   })
 })
 
@@ -158,7 +163,7 @@ describe('decideWithModel in read-only tool mode (F R7)', () => {
     readonly settings: { readonly hooks?: unknown } | null
   }
 
-  async function readOnlyCall(overrides: Record<string, unknown> = {}): Promise<ChildDump> {
+  async function readOnlyCall(): Promise<ChildDump> {
     const dir = await scratchDir()
     const repoPath = join(dir, 'repo')
     await mkdir(repoPath)
@@ -171,7 +176,6 @@ describe('decideWithModel in read-only tool mode (F R7)', () => {
       permissionsFilePath: join(dir, 'permissions.json'),
       runToken: 'a'.repeat(64),
       extraArgs: [FAKE, '--fixture', 'env-echo', '--env-out', dumpPath],
-      ...overrides,
     })
     expect(outcome.kind).toBe('answer')
     return JSON.parse((await readFile(dumpPath, 'utf8')).trim()) as ChildDump
@@ -187,10 +191,48 @@ describe('decideWithModel in read-only tool mode (F R7)', () => {
   })
 
   it('refuses a hook that never allows, because a run gate that cannot discriminate gates nothing', async () => {
+    const dir = await scratchDir()
     await expect(
-      decideWithModel({ ...base, tools: 'read-only', cwd: tmpdir(), extraArgs: [FAKE, '--fixture', 'env-echo'] }),
+      decideWithModel({
+        ...base,
+        tools: 'read-only',
+        cwd: dir,
+        permissionsFilePath: join(dir, 'permissions.json'),
+        runToken: 'a'.repeat(64),
+        extraArgs: [FAKE, '--fixture', 'env-echo'],
+      }),
     ).rejects.toThrow(/did not allow/)
   })
+
+  // The three gate inputs are required by the TYPE (`ModelDecisionInput` is a union on `tools`, so
+  // each of these three calls is a compile error without its cast) and again at RUNTIME, for the
+  // caller that casts anyway -- a JS caller, a value that arrived as `unknown`. Each omission fails
+  // quietly and differently if it is not caught: no `cwd` reads the temp directory and reports
+  // finding nothing, no `permissionsFilePath` leaves the gate seeing an ungoverned run and allowing
+  // every tool, no `runToken` fails the identity check closed and refuses the Read.
+  for (const missing of ['cwd', 'permissionsFilePath', 'runToken'] as const) {
+    it(`refuses a read-only call with no ${missing}, before anything is spawned`, async () => {
+      const dir = await scratchDir()
+      const complete = {
+        ...base,
+        hookPath: PAUSE_GATE,
+        tools: 'read-only' as const,
+        cwd: dir,
+        permissionsFilePath: join(dir, 'permissions.json'),
+        runToken: 'a'.repeat(64),
+        extraArgs: [FAKE, '--fixture', 'env-echo'],
+      }
+      const { [missing]: _dropped, ...incomplete } = complete
+      const before = (await readdir(tmpdir())).filter((name) => name.startsWith('slaveofai-decision-')).length
+      await expect(decideWithModel(incomplete as unknown as Parameters<typeof decideWithModel>[0])).rejects.toThrow(
+        new RegExp(`read-only.*${missing}`, 'su'),
+      )
+      // Thrown before the pre-flight and before `mkdtemp`: a refused call spawns nothing and
+      // leaves nothing behind.
+      const after = (await readdir(tmpdir())).filter((name) => name.startsWith('slaveofai-decision-')).length
+      expect(after).toBe(before)
+    })
+  }
 
   it('spawns in the repository, with the permissions file, its token, and a pause flag that does not exist', async () => {
     process.env['DATABASE_URL'] = 'postgres://should-not-leak'
@@ -246,6 +288,8 @@ describe('decideWithModel in read-only tool mode (F R7)', () => {
       hookPath: PAUSE_GATE,
       tools: 'read-only',
       cwd: dir,
+      permissionsFilePath: join(dir, 'permissions.json'),
+      runToken: 'a'.repeat(64),
       extraArgs: [FAKE, '--fixture', 'permission-matrix-deny'],
     })
     expect(breach.kind).toBe('isolation_breach')

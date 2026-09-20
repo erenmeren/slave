@@ -4,11 +4,14 @@
 // job, and it is deliberately a separate file: a run replays a recorded NDJSON fixture of a whole
 // working session, while a decision call is three or four lines and has no session at all.
 //
-// EVERY LINE SHAPE HERE IS COPIED FROM A REAL CALL, not from vendor documentation: the spike at
-// `.superpowers/sdd/2026-09-20-supervisor-chat/cursor-print-spike.jsonl` recorded
+// EVERY LINE SHAPE HERE IS COPIED FROM A REAL RECORDING, not from vendor documentation: the spike
+// at `.superpowers/sdd/2026-09-20-supervisor-chat/cursor-print-spike.jsonl` recorded
 // `cursor-agent --print --output-format stream-json --trust --force --model auto "<prompt>"` and
 // its seven lines are `system/init`, `user`, three `thinking` deltas, `assistant`, `result`
-// (spec §4 erratum E1). The two facts that cost something if forgotten:
+// (spec §4 erratum E1); the `tool_call` line comes from the run recording
+// (`test/fixtures/cursor/cursor-run.ndjson` line 7). TWO SHAPES ARE NOT MEASURED and say so where
+// they are defined: a FAILED print-mode `result` line (no failing call was ever recorded) and a
+// tool call made during print mode specifically. The two facts that cost something if forgotten:
 //
 //  - The terminal `result` line carries `usage` and NO cost field of any name. A decision made on
 //    this runtime is therefore unmeasured, and `costUsd` is `null` rather than `0`.
@@ -17,13 +20,17 @@
 //    shape would look correct until the first real call.
 //
 // Modes (`--fixture <name>`, default `answer`):
-//   answer    init, one assistant line carrying the reply envelope, a success result. The shape
-//             every other test is written against.
+//   answer    the spike's whole shape: `system/init`, the `user` echo, a `thinking` delta and its
+//             `thinking/completed`, one assistant line carrying the reply envelope, and a success
+//             `result`. Every line the real call produced, so the parser meets each of them.
 //   preface   `answer` with the measured vendor preface in front of the envelope.
-//   breach    a `tool_call` line BEFORE the assistant line. A decision call is spawned with a gate
-//             that denies every tool, so a tool call in this stream means the gate was defeated:
-//             `decideWithCursor` must report `isolation_breach` and not the answer.
-//   noresult  init and the assistant line, then exit 0 with no `result` line at all.
+//   breach    `answer` with a `tool_call` line BEFORE the assistant line. A decision call is
+//             spawned with a gate that denies every tool, so a tool call in this stream means the
+//             gate was defeated: `decideWithCursor` must report `isolation_breach`, not an answer.
+//   error     a FAILED call: `subtype: 'error'`, `is_error: true`, and the runtime's own sentence
+//             in `result` -- which is the one shape where that field is an explanation rather than
+//             the answer. Never an `answer` outcome.
+//   noresult  everything but the `result` line, then exit 0.
 //   hang      writes nothing and never exits on its own -- the timeout path.
 //
 // `--dump <path>` writes this process's own cwd, argv, environment and the two run files it was
@@ -70,6 +77,26 @@ const init = {
   permissionMode: 'default',
 }
 
+// The prompt echoed back. `parseCursorLine` recognises it and has no decision for it; it is here
+// so that "recognised and ignored" is exercised rather than assumed.
+const user = {
+  type: 'user',
+  message: { role: 'user', content: [{ type: 'text', text: args.at(-1) ?? '' }] },
+  session_id: sessionId,
+}
+
+// Reasoning, streamed token by token and closed by its own line. Deliberately NOT mapped to `text`
+// by the parser -- an answer buried under its own deliberation is not an answer -- and a stream
+// that carries them must still come back as one clean reply.
+const thinkingDelta = {
+  type: 'thinking',
+  subtype: 'delta',
+  text: 'The user wants a single-word',
+  session_id: sessionId,
+  timestamp_ms: 1789939657484,
+}
+const thinkingDone = { type: 'thinking', subtype: 'completed', session_id: sessionId, timestamp_ms: 1789939658061 }
+
 const assistant = {
   type: 'assistant',
   message: { role: 'assistant', content: [{ type: 'text', text }] },
@@ -104,6 +131,22 @@ const result = {
   request_id: 'fake-request-1',
   // No cost field of any kind, exactly as measured. A `usage` object is not a price.
   usage: { inputTokens: 20948, outputTokens: 83, cacheReadTokens: 2304, cacheWriteTokens: 0 },
+}
+
+// A failed call. The SHAPE is the success line's, with the two fields inverted and `result`
+// carrying the runtime's sentence instead of the answer -- `subtype` is the only reason this
+// runtime reports, so it is what a failure reason is built from. NOT measured: no failing print-mode
+// call was recorded (spec §4, E1's closing paragraph), so this is the honest minimum rather than a
+// transcript, and no test asserts on wording the vendor owns.
+const errorResult = {
+  type: 'result',
+  subtype: 'error',
+  duration_ms: 812,
+  is_error: true,
+  result: 'the request could not be completed',
+  session_id: sessionId,
+  request_id: 'fake-request-2',
+  usage: { inputTokens: 20948, outputTokens: 0, cacheReadTokens: 2304, cacheWriteTokens: 0 },
 }
 
 const dumpPath = flagValue('--dump')
@@ -141,10 +184,11 @@ if (fixture === 'hang') {
   // Never exits on its own: the caller's timeout is what ends this process.
   setInterval(() => {}, 60_000)
 } else {
-  const lines = [init]
+  const lines = [init, user, thinkingDelta, thinkingDone]
   if (fixture === 'breach') lines.push(toolCall)
   lines.push(assistant)
-  if (fixture !== 'noresult') lines.push(result)
+  if (fixture === 'error') lines.push(errorResult)
+  else if (fixture !== 'noresult') lines.push(result)
   for (const line of lines) process.stdout.write(`${JSON.stringify(line)}\n`)
   process.exit(0)
 }

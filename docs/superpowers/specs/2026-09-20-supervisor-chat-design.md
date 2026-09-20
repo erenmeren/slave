@@ -225,3 +225,22 @@ Not measured, and deliberately not guessed at: whether a denied tool call in pri
 same `tool_call`/`completed` lines a run does (the decision call's gate denies everything, and a tool
 call of ANY shape in this stream is already an `isolation_breach`), and what a failed print-mode call
 (`is_error: true`) puts in `result`.
+
+**E2 — Two things R5 and R7 do NOT buy, said out loud (task 3 review, 2026-09-20).**
+
+1. **`read_repo` is a grant by KIND, not by path.** The permissions file the read-only turn is
+   armed with governs which TOOLS may be called (`scripts/lib/permissions.sh` resolves a tool to a
+   `PermissionKind` and asks whether that kind is granted); it has no notion of a path. So a turn
+   granted `read_repo` may `Read` **any file the daemon's own user can read**, not only the image
+   the person attached and not only files under `cwd`. What narrows it is the prompt and the cwd,
+   which are guidance, not a boundary. The boundary that would hold — a separate uid or a sandbox —
+   is the one M52 already recorded as unbuilt (`scripts/lib/permissions.sh`, "what this file does
+   not protect against"). R7's "so the model can open the image by path and nothing else" is
+   therefore an intent, not an enforcement, and anything that repeats that sentence should say so.
+2. **A Cursor turn can be neither capped nor costed.** `cursor-agent` has no `--max-budget-usd`
+   equivalent, so `decideWithCursor` spawns with no spend cap at all, and its `result` line reports
+   no cost, so nothing can be billed to the workspace afterwards either. The only limits on a
+   Cursor turn are the timeout and the vendor account's own. A project switched to `cursor` in R4's
+   provider setting therefore drops out of the budget guardrail for its Supervisor turns: the
+   conversation's "cost so far" (R8) counts nothing, and `unmeasured` on the message row is the
+   only honest thing the panel can show.
