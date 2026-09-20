@@ -6,6 +6,8 @@ import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import {
   INTAKE_BOOTSTRAP_GOAL_CLAUSE,
   INTAKE_BOOTSTRAP_VERIFY_COMMAND,
+  INTAKE_BOOTSTRAP_VERIFY_SCRIPT,
+  INTAKE_BOOTSTRAP_VERIFY_SCRIPT_PATH,
   INTAKE_CATALOGUE_MAX,
   INTAKE_CLAIM_TTL_MS,
   INTAKE_MAX_MODEL_CALLS,
@@ -489,13 +491,20 @@ async function hasGitIdentity(cwd: string): Promise<boolean> {
  *
  * The README is not decoration: it is what makes the first commit a commit, and `## Goal` is where
  * the goal text lands so a person opening the folder in an editor can see what the project is for.
+ *
+ * `plantGate` (M60 §7b, amended 2026-09-20): when the project's gate is the system's own
+ * `INTAKE_BOOTSTRAP_VERIFY_COMMAND`, the script it names is written here, executable, in the same
+ * first commit -- so the gate passes from the first task and no task has to be spent creating it.
+ * A draft that named its own gate gets no script: nothing would run it.
  */
 export async function initRepository(input: {
   readonly path: string
   readonly name: string
   readonly goal: string
+  readonly plantGate?: boolean
 }): Promise<Result<{ readonly path: string; readonly baseBranch: string }, ControlRefusal>> {
   const { path, name, goal } = input
+  const plantGate = input.plantGate ?? false
   if (!isAbsolute(path)) return err({ kind: 'repo_path_not_absolute', path })
 
   const parent = dirname(path)
@@ -519,7 +528,14 @@ export async function initRepository(input: {
     await mkdir(path, { recursive: true })
     await git(path, ['init', '-q', '-b', 'main'])
     await writeFile(join(path, 'README.md'), `# ${name}\n\n## Goal\n\n${goal}\n`, 'utf8')
-    await git(path, ['add', 'README.md'])
+    const staged = ['README.md']
+    if (plantGate) {
+      const script = join(path, INTAKE_BOOTSTRAP_VERIFY_SCRIPT_PATH)
+      await mkdir(dirname(script), { recursive: true })
+      await writeFile(script, INTAKE_BOOTSTRAP_VERIFY_SCRIPT, { encoding: 'utf8', mode: 0o755 })
+      staged.push(INTAKE_BOOTSTRAP_VERIFY_SCRIPT_PATH)
+    }
+    await git(path, ['add', ...staged])
     const identity = (await hasGitIdentity(path))
       ? []
       : ['-c', `user.name=${FALLBACK_AUTHOR}`, '-c', `user.email=${FALLBACK_EMAIL}`]
@@ -666,7 +682,14 @@ export async function acceptIntake(
       } else {
         const root = await resolveReposRoot()
         const target = draft.repo.path ?? intakeRepositoryPath(root.root, slugify(draft.name))
-        const created = await initRepository({ path: target, name: draft.name, goal: draft.goal })
+        // The gate is planted exactly when it will be the project's gate -- the same condition
+        // `create_workspace` below substitutes `INTAKE_BOOTSTRAP_VERIFY_COMMAND` under.
+        const created = await initRepository({
+          path: target,
+          name: draft.name,
+          goal: draft.goal,
+          plantGate: draft.verifyCommands.length === 0,
+        })
         if (!created.ok) return fail('init_repository', created.error)
         repoPath = created.value.path
         await appendStep(intakeId, { step: 'init_repository', status: 'done', at: now(), detail: created.value.path })
@@ -835,9 +858,8 @@ export async function acceptIntake(
     // 4. set_goal -- with the person's own words as the request.
     currentStep = 'set_goal'
     if (done.get('set_goal') === undefined) {
-      // M60 §7b: when the bootstrap gate was planted, writing the script it names is part of the
-      // work -- the goal is what the planner reads, and a gate nothing is asked to create is one
-      // the first task fails its way through every attempt it has.
+      // M60 §7b: when the bootstrap gate was planted, the goal says so -- the goal is what the
+      // planner reads, and a gate the planner does not know about is one no task extends.
       const goalText =
         draft.verifyCommands.length === 0 ? `${draft.goal}\n${INTAKE_BOOTSTRAP_GOAL_CLAUSE}` : draft.goal
       const goal = await setGoal(workspaceId, goalText, principal, { request: transcriptSummary(intake.messages) })

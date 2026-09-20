@@ -19,7 +19,7 @@ import { ClaudeCodeAdapter, type AdapterRegistry } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { concludePlanning, dispatchPlanning } from '../../src/planning.js'
 import { OUTPUT_CAP, splitRunOutput } from '../../src/runOutput.js'
-import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
+import { activePumpRunIds, drainPumps, tick, type TickDeps } from '../../src/tick.js'
 
 /**
  * M40 t3 fix round 1: a `recordDecision` that THROWS rather than refuses -- a schema violation, an
@@ -237,6 +237,35 @@ describe('dispatchPlanning', () => {
 
     expect(second).toBeNull()
     expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(1)
+  })
+
+  it('(d2) starts nothing while a succeeded planning run is still being concluded by its pump', async (): Promise<void> => {
+    // The window this closes: the pump writes `status: succeeded` on the run row, and the tasks
+    // are written afterwards by `verifyConcludedRun -> concludePlanning` on the same pump chain.
+    // A tick in between sees an empty board and no non-terminal planning run, and started a
+    // second planner (observed 2026-09-20: two graphs for one goal, the second one discarded).
+    // The pump registry outlives the row's status -- `activePumpRunIds` holds the id until the
+    // chain's `finally` -- so the registry is what says "still concluding".
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    const managerId = await addManager(fixture.teamId)
+    const deps = depsFor(fixture.workspaceId)
+
+    const now = new Date()
+    const concluding = await prisma.slaveRun.create({
+      data: { slaveId: managerId, kind: 'planning', status: 'succeeded', startedAt: now, terminalAt: now, endedAt: now },
+    })
+    activePumpRunIds.add(concluding.id)
+    try {
+      expect(await dispatchPlanning(deps)).toBeNull()
+      expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(1)
+    } finally {
+      activePumpRunIds.delete(concluding.id)
+    }
+
+    // Once the chain has let go of the id, the same empty board is planned exactly as before.
+    expect(await dispatchPlanning(deps)).not.toBeNull()
+    expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(2)
   })
 
   it('(e) escalates once with no manager-role slave in the workspace, and starts nothing', async (): Promise<void> => {
