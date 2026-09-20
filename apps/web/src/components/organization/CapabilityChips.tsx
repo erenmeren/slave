@@ -12,7 +12,14 @@ export function CapabilityChips({
   capabilities,
   max = 4,
 }: {
-  readonly capabilities: readonly { readonly key: string; readonly label: string }[]
+  readonly capabilities: readonly {
+    readonly key: string
+    readonly label: string
+    /** 2026-09-20 catalogue capability mapping, R8: which of the two sources chose this key --
+     *  absent for a caller that has no provenance to say, so `data-provenance` renders on neither
+     *  attribute nor value and every other caller is unchanged. */
+    readonly provenance?: 'matched' | 'mapped'
+  }[]
   readonly max?: number
 }): React.JSX.Element {
   if (capabilities.length === 0) {
@@ -25,6 +32,7 @@ export function CapabilityChips({
         <span
           key={capability.key}
           data-testid="capability-chip"
+          data-provenance={capability.provenance}
           title={capability.key}
           className="rounded-pill border border-line2 px-2 py-[2px] text-[12px] text-t2"
         >

@@ -119,13 +119,16 @@ describe('syncCapabilityTaxonomy', () => {
 
 describe('addCapability', () => {
   it('adds an operator key and refuses a malformed one, a duplicate and a blank label', async (): Promise<void> => {
-    const ok = await addCapability({ key: 'legal.contracts', label: 'Contract review', role: 'legal' })
+    // 2026-09-20 catalogue capability mapping, R1: `legal.contracts` is now a seeded row (grown
+    // taxonomy), so the operator key this case adds is `legal.playbook`, a key the seed does not
+    // carry.
+    const ok = await addCapability({ key: 'legal.playbook', label: 'Playbook review', role: 'legal' })
     expect(ok.ok).toBe(true)
-    expect((await listCapabilities()).find((row) => row.key === 'legal.contracts')?.domain).toBe('legal')
+    expect((await listCapabilities()).find((row) => row.key === 'legal.playbook')?.domain).toBe('legal')
 
     for (const bad of [
-      { key: 'Legal.Contracts', label: 'x', role: 'legal' },
-      { key: 'legal.contracts', label: 'x', role: 'legal' },
+      { key: 'Legal.Playbook', label: 'x', role: 'legal' },
+      { key: 'legal.playbook', label: 'x', role: 'legal' },
       { key: 'legal.terms', label: '   ', role: 'legal' },
       { key: 'legal.terms', label: 'x', role: '  ' },
     ]) {

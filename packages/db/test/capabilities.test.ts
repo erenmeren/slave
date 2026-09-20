@@ -9,9 +9,9 @@ import { CAPABILITY_SEED } from '../src/capabilities.js'
  * depend on seed order -- which is the one thing that module promises it does not.
  */
 describe('CAPABILITY_SEED', () => {
-  it('is 48 rows over 13 domains', () => {
-    expect(CAPABILITY_SEED).toHaveLength(48)
-    expect(new Set(CAPABILITY_SEED.map((record) => record.domain)).size).toBe(13)
+  it('is 111 rows over 29 domains', () => {
+    expect(CAPABILITY_SEED).toHaveLength(111)
+    expect(new Set(CAPABILITY_SEED.map((record) => record.domain)).size).toBe(29)
   })
 
   it('has a unique key on every row, in the <domain>.<name> shape', () => {
@@ -167,5 +167,24 @@ describe('CAPABILITY_SEED', () => {
       'Advanced Live Commerce Operations',
       'I have spent my career obsessing over shipping fast, reliable software for teams of every size',
     ])
+  })
+
+  // 2026-09-20 catalogue capability mapping, R1: every new domain projects to its own name, and
+  // paid media is dispatched as marketing -- the planner never asks for "paid-media" as a role.
+  it('projects every new domain to its own name, except paid-media to marketing', () => {
+    for (const record of CAPABILITY_SEED) {
+      if (record.domain === 'paid-media') expect(record.role, record.key).toBe('marketing')
+      else if (['planning', 'review'].includes(record.domain)) continue // manager / reviewer, from M47
+      else expect(record.role, record.key).toBe(record.domain)
+    }
+    expect(CAPABILITY_SEED.some((record) => record.key === 'research.competitive')).toBe(true)
+    expect(CAPABILITY_SEED.some((record) => record.key === 'security.privacy')).toBe(true)
+  })
+
+  // R2: the exact matcher is unchanged. A persona heading still resolves to nothing by word --
+  // that is what the mapping pass exists for -- while a reviewed synonym resolves to one row.
+  it('still resolves nothing for a persona heading, and one row for a reviewed synonym', () => {
+    expect(normaliseCapabilities(['CI/CD Excellence'], CAPABILITY_SEED)).toEqual({ keys: [], unresolved: ['CI/CD Excellence'] })
+    expect(normaliseCapabilities(['competitor analysis'], CAPABILITY_SEED).keys).toEqual(['research.competitive'])
   })
 })

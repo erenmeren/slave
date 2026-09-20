@@ -1022,12 +1022,15 @@ export async function listAllSlaves(options?: { readonly includeArchived?: boole
   return { rows: [...projectRows, ...poolRows], departmentsByWorkspace, templatesByCompany }
 }
 
-/** One catalog row as a `'use client'` component receives it: `WorkforceCatalogRow` with its TWO
+/** One catalog row as a `'use client'` component receives it: `WorkforceCatalogRow` with its THREE
  *  `Date`s turned into ISO strings, `GoalVersionView.createdAt`'s idiom. Every other field is
- *  already JSON, so this is the whole of the crossing. */
-export type CatalogRowView = Omit<WorkforceCatalogRow, 'importedAt' | 'activationChangedAt'> & {
+ *  already JSON, so this is the whole of the crossing. `capabilityMappedAt` joined the other two in
+ *  fix round 1, I2: left out of the `Omit`, it typed as `Date` while `/api/org/catalog` actually
+ *  delivered a string, because JSON has no `Date`. */
+export type CatalogRowView = Omit<WorkforceCatalogRow, 'importedAt' | 'activationChangedAt' | 'capabilityMappedAt'> & {
   readonly importedAt: string | null
   readonly activationChangedAt: string | null
+  readonly capabilityMappedAt: string | null
   /** M58 R25: this persona's DEFAULT skills. Changing the list changes every person hired from it. */
   readonly defaultSkillIds: readonly string[]
   /** How many people were hired from this persona -- the blast radius the Default skills note names. */
@@ -1077,6 +1080,7 @@ function catalogRowViewOf(row: WorkforceCatalogRow): CatalogRowView {
     ...row,
     importedAt: row.importedAt === null ? null : row.importedAt.toISOString(),
     activationChangedAt: row.activationChangedAt === null ? null : row.activationChangedAt.toISOString(),
+    capabilityMappedAt: row.capabilityMappedAt === null ? null : row.capabilityMappedAt.toISOString(),
     defaultSkillIds: [],
     hiredCount: 0,
   }

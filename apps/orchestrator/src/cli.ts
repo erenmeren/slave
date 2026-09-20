@@ -80,6 +80,7 @@ import {
   loadSimulation,
   loadSupervisorWorld,
   mapExternalRepository,
+  mapTemplateCapabilities,
   openIntake,
   pauseSimulation,
   reassignQuestion,
@@ -431,6 +432,14 @@ const USAGE = `usage: orchestrator <command> [options]
                                        right now, and refresh the managed pool from the result.
                                        The operator-recovery verb for a synonym added after a
                                        persona was imported, or a hand-edited profileSpec.
+  capabilities map [--all] [--dry-run] [--batch <n>] [--max-batches <n>]
+                                       ask the model which taxonomy keys each ACTIVE persona
+                                       provides, from its own capability sentences, and write them
+                                       beside the exact matches. Only personas whose sentences or
+                                       the taxonomy changed since their last mapping, unless --all.
+                                       --dry-run prints what would be written and writes nothing.
+                                       It still makes every model call and costs the same as a real
+                                       run; use --max-batches to preview a few.
   capabilities add --key <domain.name> --label <text> --role <r> [--synonyms a,b]
                                        add an operator's own capability. The key's prefix IS its
                                        domain, and --role is the runtime role it projects to.
@@ -806,6 +815,8 @@ const VALUELESS: ReadonlySet<string> = new Set([
   'released',
   // person delete --yes --person <id> otherwise records pool-style swallow: flags.yes='--person'.
   'yes',
+  // R7: capabilities map --all --dry-run otherwise swallows --dry-run as --all's own value.
+  'all',
 ])
 
 /**
@@ -2510,6 +2521,33 @@ export async function main(argv: readonly string[]): Promise<number> {
         process.stdout.write(describeReconcile(await reconcileTemplateCapabilities()))
         return 0
       }
+      if (sub === 'map') {
+        // Catalogue capability mapping (2026-09-20), R7: the CLI face of `mapTemplateCapabilities`
+        // (Task 5). `--dry-run` writes nothing and prints one line per persona `rows` would have
+        // written -- an operator-readable preview before spending a call for real; a real run
+        // prints only the report, `rows` stripped, because a persona-by-persona line is a preview
+        // convenience, not a record of what a real run wrote.
+        const dryRun = 'dry-run' in flags
+        const batch = flagText(flags, 'batch')
+        const maxBatches = flagText(flags, 'max-batches')
+        const report = await mapTemplateCapabilities({
+          decider: buildModelDecider(),
+          model: process.env['SLAVEOFAI_SUPERVISOR_MODEL'] ?? SUPERVISOR_DEFAULT_MODEL,
+          only: 'all' in flags ? 'all' : 'stale',
+          dryRun,
+          ...(batch === undefined ? {} : { batchSize: Number(batch) }),
+          ...(maxBatches === undefined ? {} : { maxBatches: Number(maxBatches) }),
+        })
+        if (dryRun) {
+          for (const row of report.rows) {
+            const dropped = row.dropped.length === 0 ? '' : `  (not keys, dropped: ${row.dropped.join(', ')})`
+            process.stdout.write(`${row.name}: ${row.keys.length === 0 ? '(nothing fits)' : row.keys.join(', ')}${dropped}\n`)
+          }
+        }
+        const { rows: _rows, ...summary } = report
+        process.stdout.write(`${JSON.stringify(summary)}\n`)
+        return 0
+      }
       if (sub === 'add') {
         const result = await addCapability({
           key: requireFlag(flags, 'key'),
@@ -2540,7 +2578,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         }
         return 0
       }
-      throw new Error('capabilities takes sync, reconcile, add, backfill or list')
+      throw new Error('capabilities takes sync, reconcile, map, add, backfill or list')
     }
 
     case 'template': {

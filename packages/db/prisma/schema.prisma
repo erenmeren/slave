@@ -482,6 +482,16 @@ model SlaveTemplate {
   /// The capability sentences that matched no key, verbatim -- what the taxonomy is missing, kept
   /// where an operator can see it. Never matched against anything.
   unresolvedCapabilities String[] @default([])
+  /// 2026-09-20 catalogue capability mapping, R3: the keys a MODEL chose for this persona from
+  /// the taxonomy, kept apart from the exact matcher's keys so a reconcile can re-run the matcher
+  /// without losing them and a drawer can say which is which. `capabilityKeys` above is the
+  /// EFFECTIVE set -- the union of both -- and stays the one column every reader reads.
+  mappedCapabilityKeys   String[]  @default([])
+  /// R4: SHA-256 of the persona's capability sentences, summary, identity and the taxonomy's key
+  /// list at the time of mapping. Differs from the freshly computed value == stale == mapped
+  /// again on the next pass. Null == never mapped.
+  capabilityMappingHash  String?
+  capabilityMappedAt     DateTime?
   /// M55 R2: whether this template is a HIRING CANDIDATE. `false` by default, which is the whole of
   /// "an import produces a library, not a workforce": `importCatalog` creates every row inactive
   /// unless `--activate` was passed, and never writes this column on a row it UPDATES, because

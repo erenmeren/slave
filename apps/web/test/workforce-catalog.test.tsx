@@ -45,6 +45,11 @@ function row(over: Partial<CatalogRowView> = {}): CatalogRowView {
     // M47 R1: the same capabilities resolved to taxonomy keys. Empty here -- these fixtures are
     // M46-era rows, and an unresolved persona bullet is exactly what an empty list means.
     capabilityKeys: [],
+    // R8 (2026-09-20 catalogue capability mapping): a fixture row is unmapped by default -- the
+    // ORDINARY row, since the mapping pass has not touched most of the catalogue yet.
+    mappedCapabilityKeys: [],
+    capabilityMappedAt: null,
+    capabilityMappingStale: false,
     expertise: ['Load-bearing code'],
     recommendedSkills: ['writing-plans'],
     mappingQuality: 'full',
@@ -502,12 +507,100 @@ describe('ProfileDrawer', () => {
     expect(chips[0]?.getAttribute('title')).toBe('security.application')
   })
 
-  // Fix round 1, minor 3: `capabilityKeys: []` is the ORDINARY M46 row -- every legacy persona --
-  // and "no capabilities recorded" above its real capability bullets said the opposite of the truth.
-  it('says nothing about matchable capabilities for a template that has none', async () => {
-    await openDrawer()
+  // R8 (2026-09-20 catalogue capability mapping): each chip says whether it was matched on the
+  // persona's own words or chosen by a model, and a stale mapping says so beside the chips.
+  it('marks each capability chip as matched or mapped, and says when the mapping is stale', async () => {
+    await openDrawer(
+      {},
+      row({
+        capabilityKeys: ['backend.services', 'operations.ci-cd'],
+        mappedCapabilityKeys: ['operations.ci-cd'],
+        // Fix round 1, I2: a string, not a `Date` -- `CatalogRowView.capabilityMappedAt` crosses
+        // the client boundary as ISO already, same as `importedAt` and `activationChangedAt`.
+        capabilityMappedAt: '2026-09-01T00:00:00.000Z',
+        capabilityMappingStale: true,
+      }),
+      TAXONOMY,
+    )
+    const keys = await screen.findByTestId('profile-capability-keys')
+    const chips = within(keys).getAllByTestId('capability-chip')
+    expect(chips.map((chip) => chip.getAttribute('data-provenance'))).toEqual(['matched', 'mapped'])
+    // `.textContent` rather than jest-dom's `toHaveTextContent` -- this repo's vitest setup
+    // carries no jest-dom matchers (`projects-panel.test.tsx` notes the same).
+    expect(within(keys).getByTestId('profile-capability-mapping').textContent).toContain('mapping is stale')
+  })
 
-    expect(screen.queryByTestId('profile-capability-keys')).toBeNull()
+  // Fix round 1, minor: the `'mapped'` branch had no test of its own -- the stale case above
+  // covers `data-provenance` but never a CURRENT mapping, and the explainer copy for a mapped row
+  // (below the chips) went untested.
+  it('says a mapping is current, and marks a key both the matcher and the model picked as mapped', async () => {
+    await openDrawer(
+      {},
+      row({
+        capabilityKeys: ['backend.services', 'operations.ci-cd'],
+        mappedCapabilityKeys: ['operations.ci-cd'],
+        capabilityMappedAt: '2026-09-18T12:00:00.000Z',
+        capabilityMappingStale: false,
+        active: true,
+      }),
+      TAXONOMY,
+    )
+    const keys = await screen.findByTestId('profile-capability-keys')
+    const chips = within(keys).getAllByTestId('capability-chip')
+    expect(chips.map((chip) => chip.getAttribute('data-provenance'))).toEqual(['matched', 'mapped'])
+    expect(within(keys).getByTestId('profile-capability-mapping').textContent).toContain('chosen or confirmed by a model')
+  })
+
+  // Fix round 1, I1: an ACTIVE row with no `capabilityMappedAt` is "not yet mapped" -- the pass
+  // will reach it on its next run. `active: true` here is load-bearing: the base `row()` fixture
+  // is inactive, which is a DIFFERENT state (below) with its own copy.
+  it('says when a persona has not been mapped yet', async () => {
+    await openDrawer(
+      {},
+      row({
+        capabilityKeys: ['backend.services'],
+        mappedCapabilityKeys: [],
+        capabilityMappedAt: null,
+        capabilityMappingStale: false,
+        active: true,
+      }),
+      TAXONOMY,
+    )
+    const keys = await screen.findByTestId('profile-capability-keys')
+    expect(within(keys).getByTestId('profile-capability-mapping').textContent).toContain('not yet mapped')
+  })
+
+  // Fix round 1, I1/minor: the `'inactive'` branch is its OWN state, not a flavour of `'none'` --
+  // the pass and `capabilities map` both skip an inactive row, so this line must not promise a
+  // re-map the daemon will not run until the row is activated.
+  it('says a persona is not mapped while inactive, never that a re-map is coming', async () => {
+    await openDrawer(
+      {},
+      row({
+        capabilityKeys: ['backend.services'],
+        mappedCapabilityKeys: [],
+        capabilityMappedAt: null,
+        capabilityMappingStale: false,
+        active: false,
+      }),
+      TAXONOMY,
+    )
+    const keys = await screen.findByTestId('profile-capability-keys')
+    const line = within(keys).getByTestId('profile-capability-mapping').textContent
+    expect(line).toContain('not mapped while inactive')
+    expect(line).not.toContain('not yet mapped')
+  })
+
+  // Fix round 1, I3: a previous round's regression guard was lost when the block's condition
+  // changed -- `capabilityKeys: []` now renders the block (for the mapping line), and
+  // `CapabilityChips` itself still prints "no capabilities recorded" for an empty list. Restored
+  // here, and renamed to say what this test actually proves now: the block shows with its mapping
+  // line and NO chip-list placeholder, and the persona's own bullets are untouched either way.
+  it('shows the mapping line but never "no capabilities recorded" for a template with no keys', async () => {
+    await openDrawer({}, row({ active: true }), TAXONOMY)
+
+    const keys = screen.getByTestId('profile-capability-keys')
+    expect(within(keys).getByTestId('profile-capability-mapping').textContent).toContain('not yet mapped')
     expect(screen.getByTestId('profile-drawer').textContent).not.toContain('no capabilities recorded')
     // The persona's own bullets are untouched by the guard.
     expect(screen.getByTestId('profile-field-capabilities').textContent).toContain('Design the module boundary')

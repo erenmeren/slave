@@ -161,6 +161,22 @@ describe('importCatalog', () => {
     expect(row.profile).toContain('A rewritten body for the same file.')
   })
 
+  it('keeps the mapped keys and the hash when a persona file changes (mapping R6)', async (): Promise<void> => {
+    await importOne([entry('core-builder', 'Core Builder')])
+    const before = await prisma.slaveTemplate.findUniqueOrThrow({ where: { name: 'Core Builder' } })
+    await prisma.slaveTemplate.update({
+      where: { id: before.id },
+      data: { mappedCapabilityKeys: ['backend.services'], capabilityMappingHash: 'stale-or-not', capabilityMappedAt: new Date() },
+    })
+
+    await importOne([entry('core-builder', 'Core Builder', 'A different body entirely.')])
+
+    const after = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: before.id } })
+    expect(after.mappedCapabilityKeys).toEqual(['backend.services'])
+    expect(after.capabilityMappingHash).toBe('stale-or-not')
+    expect(after.capabilityKeys).toContain('backend.services')
+  })
+
   it('(e) skips locally_edited when an operator wrote the profile since the last import', async (): Promise<void> => {
     const created = await importOne([entry('core-builder', 'Core Builder')])
     expect(created.ok).toBe(true)

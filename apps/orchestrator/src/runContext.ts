@@ -462,10 +462,23 @@ async function replanSection(input: {
   }
 }
 
-/** How many keys a planning prompt is shown. The taxonomy is ~50 rows today and an operator may
- *  add more; a prompt is not the place for an unbounded list, and `capped` on the source is what
- *  tells a reader the planner was shown a subset. */
-const CAPABILITY_KEYS_IN_PROMPT = 80
+/**
+ * How many keys a planning prompt is shown.
+ *
+ * 160 since the catalogue capability mapping's final review (C1). It was 80 -- twice the ~50 rows
+ * the taxonomy held the day it was written -- and R1 grew the seed to 111 rows covering every
+ * catalogue division, so a key-ascending read cut the list at `project-management.agile`: every
+ * `project-management.*`, `qa.*`, `research.*`, `review.*`, `sales.*`, `security.*`,
+ * `spatial-computing.*` and `support.*` key was silently withheld from the planner, including
+ * `qa.test-automation`, the key the mapping spec is motivated by. 160 restores the same 2x
+ * headroom over today's 111, so an operator's own keys still fit before anything is dropped.
+ *
+ * A prompt is still not the place for an unbounded list, and `capped` on the source is what tells
+ * a reader the planner was shown a subset. Keeping a SHARE OF EACH DOMAIN rather than the first N
+ * of a key-ascending read is the honest fix -- it cannot lose a whole domain however the taxonomy
+ * grows -- and is ledgered as a follow-up rather than done here.
+ */
+const CAPABILITY_KEYS_IN_PROMPT = 160
 
 /**
  * The vocabulary a plan may be written in (M47 R3, plan erratum E3).

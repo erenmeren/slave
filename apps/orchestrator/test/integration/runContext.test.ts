@@ -654,16 +654,64 @@ describe('buildRunContext', () => {
         skillRoots: fixture.skillRoots,
       })
 
-      expect(prompt).toContain('- security.application: Application security')
+      // The WHOLE seed reaches the planner: `backend.api-design` sorts near the head of a
+      // key-ascending read and `qa.test-automation` deep in its tail, past the 80 keys the cap
+      // used to stop at -- the exact keys R1's 111-row seed had been withholding until
+      // `CAPABILITY_KEYS_IN_PROMPT` became 160 (capability-mapping spec, errata E8/E15). A key a
+      // planner is never shown is a key no task can ask for, so both ends are pinned here.
+      expect(prompt).toContain('- backend.api-design: API design')
+      expect(prompt).toContain('- qa.test-automation: Test automation')
       expect(prompt.indexOf('CAPABILITIES YOU MAY ASK FOR')).toBeLessThan(prompt.indexOf(PLANNING_GRAPH_INSTRUCTIONS))
       expect(prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
       // The three literals the fake CLI routes on: a planning prompt that carried any of them in
       // THIS section would be answered from the wrong fixture.
       const section = prompt.slice(prompt.indexOf('CAPABILITIES YOU MAY ASK FOR'), prompt.indexOf(PLANNING_GRAPH_INSTRUCTIONS))
       for (const literal of ['"verdict"', '"replan"', '"task graph"']) expect(section).not.toContain(literal)
+      expect(section).not.toContain('further keys are not listed.)')
       expect(manifest.sections).toContainEqual({ kind: 'capabilities', keys: expect.any(Array), capped: false })
       // M48 R4: the process section is the one that now sits last, between the keys and the trailer.
       expect(manifest.sections.at(-1)).toEqual({ kind: 'handoff_protocol' })
+    })
+
+    // The cap itself, on a taxonomy this test grows past it: at 111 seed rows nothing real is
+    // capped any more, and the sentence that admits the planner was shown a subset must still be
+    // provable. `createdBy: 'human'` is what a taxonomy sync refuses to touch -- an operator's own
+    // keys are exactly how a real installation grows past the cap -- and the rows are deleted
+    // again whatever the assertions do, this file sharing its database with every other one.
+    it('says so when the taxonomy is larger than a planning prompt is shown', async () => {
+      await syncCapabilityTaxonomy()
+      const extra = Array.from({ length: 160 }, (_row, index) => `zsynthetic.k${String(index).padStart(3, '0')}`)
+      await prisma.capability.createMany({
+        data: extra.map((key) => ({ key, label: `Synthetic ${key}`, domain: 'zsynthetic', role: 'engineering', createdBy: 'human' })),
+      })
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { goal: 'Ship the checkout redesign' } })
+      const planningRun = await prisma.slaveRun.create({
+        data: { slaveId: fixture.slaveId, status: 'starting', kind: 'planning' },
+      })
+
+      try {
+        const { prompt, manifest } = await buildRunContext({
+          runId: planningRun.id,
+          kind: 'planning',
+          slaveId: fixture.slaveId,
+          workspaceId: fixture.workspaceId,
+          taskId: null,
+          worktreePath: null,
+          provider: 'claude_code',
+          skillRoots: fixture.skillRoots,
+        })
+
+        const section = prompt.slice(prompt.indexOf('CAPABILITIES YOU MAY ASK FOR'), prompt.indexOf(PLANNING_GRAPH_INSTRUCTIONS))
+        // `z` sorts last, so the tail of the synthetic block is what falls off the end.
+        expect(section).toContain('- zsynthetic.k000: Synthetic zsynthetic.k000')
+        expect(section).not.toContain('zsynthetic.k159')
+        expect(section).toContain('further keys are not listed.)')
+        expect(manifest.sections).toContainEqual({ kind: 'capabilities', keys: expect.any(Array), capped: true })
+        const shown = manifest.sections.flatMap((candidate) => (candidate.kind === 'capabilities' ? [candidate.keys] : []))
+        expect(shown[0]).toHaveLength(160)
+      } finally {
+        await prisma.capability.deleteMany({ where: { domain: 'zsynthetic' } })
+      }
     })
 
     // Measured on a real project: the prompt named the keys and then said a task may carry a

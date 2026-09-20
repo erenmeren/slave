@@ -32,6 +32,11 @@ function row(over: Partial<CatalogRowView> = {}): CatalogRowView {
     summary: 'Builds the core module and the tests that hold it up.',
     capabilities: ['Design the module boundary'],
     capabilityKeys: ['backend.services'],
+    // R8 (2026-09-20 catalogue capability mapping): this fixture predates the mapping pass, same
+    // as `capabilityKeys` above -- unmapped, so an ordinary row here means one nothing has touched.
+    mappedCapabilityKeys: [],
+    capabilityMappedAt: null,
+    capabilityMappingStale: false,
     expertise: ['Load-bearing code'],
     recommendedSkills: ['writing-plans'],
     mappingQuality: 'full',

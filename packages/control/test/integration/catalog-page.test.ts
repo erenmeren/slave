@@ -1,6 +1,7 @@
 import { type Prisma, prisma } from '@slave-of-ai/db/client'
-import { catalogSearchText, contentHashOf, emptyProfileSpec, type ProfileSpec } from '@slave-of-ai/domain'
+import { capabilityMappingHash, catalogSearchText, contentHashOf, emptyProfileSpec, type ProfileSpec } from '@slave-of-ai/domain'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { listCapabilities } from '../../src/capability.js'
 import { CATALOG_PAGE_SIZE, listWorkforceCatalog } from '../../src/catalog.js'
 
 const TRUNCATE =
@@ -346,5 +347,68 @@ describe('listWorkforceCatalog: the facets and the row (M55 R3, R6)', () => {
     expect(row?.recommendedSkills).toEqual(['writing-plans'])
     expect(row?.rawOverride).toBe(false)
     expect(row?.catalogSlaveCount).toBe(0)
+  })
+})
+
+/**
+ * R8's read-model half (fix round 1, I5 -- this describe block was the plan-mandated gap the
+ * original round shipped with no test for).
+ *
+ * Each case writes a row through `write()` (which leaves `mappedCapabilityKeys`,
+ * `capabilityMappingHash` and `capabilityMappedAt` at their schema defaults), then stamps the
+ * mapping columns straight through Prisma -- `write()` itself has no input for them, and going
+ * through Prisma the way `capabilities map` would is the one place these columns are actually
+ * written outside this file.
+ */
+describe('listWorkforceCatalog: capability mapping staleness (R8, fix round 1 I5)', () => {
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(TRUNCATE)
+  })
+
+  const mappedAt = new Date('2026-09-18T12:00:00.000Z')
+  // A hash that cannot be the real one, whatever the live taxonomy contains -- the pass stamped
+  // something before the persona's words or the taxonomy's keys changed underneath it.
+  const staleHash = 'stale-hash-from-a-previous-pass'
+
+  it('reads current when the stored hash still agrees with the upstream spec and the LIVE taxonomy', async (): Promise<void> => {
+    const spec = specOf()
+    const id = await write({ name: 'Mapped Row', active: true, spec })
+    const taxonomy = await listCapabilities()
+    const hash = capabilityMappingHash({ summary: spec.summary, identity: spec.identity, capabilities: spec.capabilities }, taxonomy)
+    await prisma.slaveTemplate.update({
+      where: { id },
+      data: { mappedCapabilityKeys: ['backend.services'], capabilityMappingHash: hash, capabilityMappedAt: mappedAt },
+    })
+
+    const row = (await listWorkforceCatalog()).rows[0]
+    expect(row?.capabilityMappingStale).toBe(false)
+    expect(row?.mappedCapabilityKeys).toEqual(['backend.services'])
+    expect(row?.capabilityMappedAt?.toISOString()).toBe(mappedAt.toISOString())
+  })
+
+  it('reads stale when the stored hash disagrees with what the same spec and taxonomy hash now', async (): Promise<void> => {
+    const spec = specOf()
+    const id = await write({ name: 'Stale Row', active: true, spec })
+    await prisma.slaveTemplate.update({
+      where: { id },
+      data: { mappedCapabilityKeys: ['backend.services'], capabilityMappingHash: staleHash, capabilityMappedAt: mappedAt },
+    })
+
+    const row = (await listWorkforceCatalog()).rows[0]
+    expect(row?.capabilityMappingStale).toBe(true)
+    expect(row?.mappedCapabilityKeys).toEqual(['backend.services'])
+    expect(row?.capabilityMappedAt?.toISOString()).toBe(mappedAt.toISOString())
+  })
+
+  it('is never stale for an INACTIVE row -- fix round 1, I1: the pass and `capabilities map` both skip it', async (): Promise<void> => {
+    const spec = specOf()
+    const id = await write({ name: 'Inactive Row', active: false, spec })
+    await prisma.slaveTemplate.update({
+      where: { id },
+      data: { mappedCapabilityKeys: ['backend.services'], capabilityMappingHash: staleHash, capabilityMappedAt: mappedAt },
+    })
+
+    const row = (await listWorkforceCatalog()).rows[0]
+    expect(row?.capabilityMappingStale).toBe(false)
   })
 })
