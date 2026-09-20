@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
+import { emptyProfileSpec, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import type { AdapterRegistry } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DAEMON_DISCOVERY_MS, runDaemon, servingLine } from '../../src/daemon.js'
@@ -211,6 +211,16 @@ describe('runDaemon serving every project', () => {
     stop()
     await finished
     expect(process.listenerCount('SIGTERM')).toBe(before)
+  })
+
+  it('prints a capabilityMapping line when a persona is stale and no decider is configured', async (): Promise<void> => {
+    await prisma.slaveTemplate.create({
+      data: { name: 'Stale Persona', role: 'engineering', description: 'x', active: true, profileSpec: { ...emptyProfileSpec(), summary: 's', identity: 'i', capabilities: ['hand testing'] } as unknown as object },
+    })
+    const text = await start('all')
+    await until(() => text().includes('"capabilityMapping"'))
+    const line = text().split('\n').find((l) => l.includes('"capabilityMapping"')) ?? ''
+    expect(JSON.parse(line)).toMatchObject({ capabilityMapping: { skippedNoDecider: true, stale: 1 } })
   })
 })
 

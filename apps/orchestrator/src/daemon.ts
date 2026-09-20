@@ -1,5 +1,5 @@
 import { hostname } from 'node:os'
-import { describeSync, drainIntakeCalls, drainModelCalls, reconcileTemplateCapabilities, syncSkillCatalog, tickIntakes, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
+import { describeSync, drainIntakeCalls, drainModelCalls, reconcileTemplateCapabilities, syncSkillCatalog, tickCapabilityMapping, tickIntakes, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { BROKER_TIMEOUT_MS, SUPERVISOR_DEFAULT_MODEL, workspaceId as brandWorkspaceId, type WorkspaceId } from '@slave-of-ai/domain'
 import { subscribeEvents, type EventSubscription } from '@slave-of-ai/events'
@@ -517,6 +517,16 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
       // failure an operator cannot diagnose from outside.
       if (intakes.startedModelCalls > 0 || intakes.skippedNoDecider > 0) {
         process.stdout.write(`${JSON.stringify({ intakes })}\n`)
+      }
+
+      // Catalogue capability mapping (2026-09-20), R7: one batch of stale personas per pass,
+      // beside the intakes and for the same reason -- a persona belongs to no workspace.
+      const capabilityMapping = await tickCapabilityMapping({
+        model: deps.supervisorModel ?? SUPERVISOR_DEFAULT_MODEL,
+        ...(deps.modelDecider !== undefined ? { modelDecider: deps.modelDecider } : {}),
+      })
+      if (capabilityMapping.calls > 0 || (capabilityMapping.skippedNoDecider && capabilityMapping.stale > 0)) {
+        process.stdout.write(`${JSON.stringify({ capabilityMapping })}\n`)
       }
     } catch (error) {
       // A failed pass must not take the daemon down: the next one reloads the world from scratch.
