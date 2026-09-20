@@ -320,7 +320,13 @@ export async function retryTask(
   // rather than written. THE APPROVER IS THE GRANTER, as in `carryOut`'s `request_permission` arm:
   // `principal` lands on the row and in the event, and the Supervisor only ever asked.
   if (input.grant !== undefined) {
-    const granted = await setSlavePermission(input.grant.slaveId, input.grant.permissionKind, 'allow', principal)
+    // `origin` travels with it (Task 8, erratum E13): under `act` nobody approved this, so the
+    // `permission.changed` it appends must say `system` / `by: 'supervisor'` rather than name a
+    // person who was never asked. An approved proposal passes `origin: 'human'` and a `principal`,
+    // and the event says what it always said.
+    const granted = await setSlavePermission(input.grant.slaveId, input.grant.permissionKind, 'allow', principal, {
+      origin: opts.origin ?? 'human',
+    })
     if (!granted.ok) return granted
   }
 

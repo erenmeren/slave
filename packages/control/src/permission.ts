@@ -151,16 +151,19 @@ async function slaveForPermission(
  * is written at all in that case, so the original granter keeps the row: `grantedBy` answers "who
  * decided this", not "who last looked at it".
  *
- * `actor: 'human'` unconditionally, with no `origin` parameter (the shape `setSlaveLifecycle` has).
- * There is no automatic path to this verb: the Supervisor's `request_permission` is always
- * `proposed`, so `carryOut` reaches it only on the far side of a person's approval, and the approver
- * is the granter.
+ * `origin` is `setSlaveLifecycle`'s shape, and E R3 is what made it necessary (Task 8, erratum E13).
+ * `request_permission` is still always `proposed`, so THAT path reaches here only on the far side of
+ * a person's approval and the approver is the granter -- but a `retry_task` under `act` carries the
+ * grant the diagnosis named, and nobody approves it. Appending `actor: 'human'` with `by: null` for
+ * that one would say a person granted network access to a worker on a quiet afternoon, which is the
+ * opposite of what happened. `'system'` names the machine and `by` says which machine.
  */
 export async function setSlavePermission(
   slaveId: string,
   kind: string,
   mode: 'allow' | 'deny',
   principal?: Principal,
+  opts: { readonly origin?: 'human' | 'system' } = {},
 ): Promise<Result<void, ControlRefusal>> {
   // `invalid_tool` keeps its NAME (plan erratum E11): renaming a refusal kind costs three homes to
   // rename a word no surface prints. Its payload field stays `tool` and now carries the offered
@@ -186,7 +189,7 @@ export async function setSlavePermission(
     update: { mode, grantedBy: principal?.userId ?? null, grantedAt: new Date() },
     create: { slaveId, kind: kind as PermissionKind, mode, grantedBy: principal?.userId ?? null },
   })
-  await appendPermissionChanged(slaveId, slave, kind as PermissionKind, from, mode, principal)
+  await appendPermissionChanged(slaveId, slave, kind as PermissionKind, from, mode, principal, opts.origin)
   return ok(undefined)
 }
 
@@ -232,12 +235,13 @@ async function appendPermissionChanged(
   from: 'allow' | 'deny' | null,
   to: 'allow' | 'deny' | null,
   principal: Principal | undefined,
+  origin: 'human' | 'system' = 'human',
 ): Promise<void> {
   await appendEvent({
     type: 'permission.changed',
     workspaceId: slave.workspaceId,
     slaveId,
-    actor: 'human',
+    actor: origin,
     payload: {
       slaveId,
       name: slave.name,
@@ -248,7 +252,10 @@ async function appendPermissionChanged(
       kindLabel: PERMISSION_LABEL[kind],
       from,
       to,
-      by: principal?.userId ?? null,
+      // The PERSON when there is one; the Supervisor's own name when there is not (spec R3, "the
+      // grant is recorded as by: 'supervisor'"). Null stays what it always was: a path with no
+      // principal and no origin -- the CLI's own `permission` verb, and every row before M52.
+      by: principal?.userId ?? (origin === 'system' ? 'supervisor' : null),
     },
     userId: principal?.userId ?? null,
   })

@@ -225,17 +225,29 @@ describe('tierOf -- autonomy: act (R1)', () => {
     expect(tierOf(ACTIONS[kind], ACTING, 'review_cap_blocked')).toBe(expected)
   })
 
-  // R4: the halt still wins under `act`, except for the one action that exists to end it.
-  it.each(ACTION_KINDS)('proposes %s under act while halted, except clear_halt', (kind) => {
+  // R4: the halt still wins under `act`, except for the PAIR that exists to end it (Task 8,
+  // erratum E11). `clear_halt` retracts the halt and `retry_task` is the evidence `candidates`
+  // requires before it will offer that -- a halt that demoted the retry made its own remedy
+  // unreachable without a person, which is the deadlock the end-to-end test found.
+  it.each(ACTION_KINDS)('proposes %s under act while halted, except the halt\u2019s own remedies', (kind) => {
     const expected: Tier =
       kind === 'escalate_to_human'
         ? 'escalated'
         : kind === 'no_action'
           ? 'noop'
-          : kind === 'clear_halt'
+          : kind === 'clear_halt' || kind === 'retry_task'
             ? 'applied'
             : 'proposed'
     expect(tierOf(ACTIONS[kind], ACTING_HALTED, 'review_cap_blocked')).toBe(expected)
+  })
+
+  // The line the pair does not cross, said once in its own case: a halted workspace still hires
+  // nobody, raises no cap, sends no review back and grants no permission on its own.
+  it('leaves every other remedy a proposal while halted -- the retry starts nothing, a review run does', () => {
+    expect(tierOf(ACTIONS.retry_review, ACTING_HALTED, 'review_cap_blocked')).toBe('proposed')
+    expect(tierOf(ACTIONS.raise_max_attempts, ACTING_HALTED, 'review_cap_blocked')).toBe('proposed')
+    expect(tierOf(ACTIONS.hire_from_catalog, ACTING_HALTED, 'no_reviewer')).toBe('proposed')
+    expect(tierOf(ACTIONS.request_permission, ACTING_HALTED, 'permission_blocked')).toBe('proposed')
   })
 
   it('does not clear a halt whose reason is not circuit_breaker -- R4 names none of the others', () => {
