@@ -382,8 +382,47 @@ stale → mapped; `capabilityMappingStale` includes `active`; `capabilityMappedA
 client as an ISO string like the other two dates; chips render only when there is at least one key,
 so "no capabilities recorded" never prints above the persona's bullets.
 
-E8 (T1, surfaced by T9's ladder): R1 grows the seed to 111 rows, past `runContext.ts`'s
-`CAPABILITY_KEYS_IN_PROMPT` (80) — a constant no task touches. A planning prompt built off the real
-taxonomy is now genuinely capped, so `runContext.test.ts`'s "shows a planning run the taxonomy
-keys" test (pre-existing, not part of this plan) asserted a key and a `capped: false` that no
-longer held; it was updated to a key that still sorts inside the first 80 and to `capped: true`.
+E8 (T1, surfaced by T9's ladder; corrected by the final review's C1): R1 grew the seed to 111 rows,
+past `runContext.ts`'s `CAPABILITY_KEYS_IN_PROMPT` — then 80, a constant no task touches. Between
+8d8df8b7 (the 111-row seed) and the final review's fix, a key-ascending read cut the planning
+prompt at `project-management.agile`, so every `project-management.*`, `qa.*`, `research.*`,
+`review.*`, `sales.*`, `security.*`, `spatial-computing.*` and `support.*` key was withheld from
+every planner — including `qa.test-automation`, the key this spec's own R1 is motivated by. The
+first response to that was to re-pin the test (a key inside the first 80, `capped: true`), which
+recorded the loss instead of repairing it; the cap is now 160 (E15) and the whole seed reaches the
+planner again.
+
+E9 (T5): `CapabilityMappingReport` carries `rows` — one `{ templateId, name, keys, dropped }` per
+persona that would be, or was, written — which §3 did not spell out: `--dry-run` has to print what
+it would write PER PERSONA, and a report of counts alone could not say it.
+
+E10 (T8): the catalog read model gained `capabilityMappingStale`, computed server-side in
+`catalog.ts` (active + structured + at least one mappable sentence + stored hash ≠ today's). The
+drawer cannot derive it: the hash is over the persona and the LIVE taxonomy, and a client holds
+neither.
+
+E11 (T8): `CapabilityChips` gained an OPTIONAL `provenance` prop rendered as `data-provenance`
+(R8). Optional because the Organization table and the Knowledge surface share this component and
+have no provenance to state; absent, neither the attribute nor a value renders, so every other
+caller is byte-identical to before.
+
+E12 (T5): `sameStringSet` was exported from `capability.ts` and reused by the mapping pass rather
+than re-spelled there — "the stored keys already say this" is one question, and two spellings of
+it would drift into two answers about whether a call is owed.
+
+E13 (T5): `syncPersonPool()` runs only when a batch actually COMMITTED a write (`wrote`). A dry
+run, a pass where every persona was already mapped, and a pass whose every batch failed all leave
+the pool alone; `pool` is `null` in the report and says so.
+
+E14 (final review, I2): `tickCapabilityMapping` keeps a QUIET WINDOW — a pass that counts zero
+stale personas skips counting at all for `CAPABILITY_MAP_QUIET_MS` (60 s), and
+`countStaleTemplateMappings` reads only what staleness needs (no `normaliseCapabilities` per row).
+The daemon asks this question once a second forever, and the full candidate load was ~85 ms of CPU
+per pass for a catalogue with nothing left to map. A time window and not a change-detection memo
+because `SlaveTemplate` has no `updatedAt` column to compare against; the cost of being wrong is
+bounded by that minute of latency before a fresh import starts mapping.
+
+E15 (final review, C1): `CAPABILITY_KEYS_IN_PROMPT` is 160, twice today's 111 rows — the same
+headroom the original 80 gave over the ~50 rows of its day (E8). A cap that keeps a share of each
+DOMAIN rather than the first N of a key-ascending read is the honest fix, and is ledgered as a
+follow-up rather than built here.

@@ -433,11 +433,13 @@ const USAGE = `usage: orchestrator <command> [options]
                                        The operator-recovery verb for a synonym added after a
                                        persona was imported, or a hand-edited profileSpec.
   capabilities map [--all] [--dry-run] [--batch <n>] [--max-batches <n>]
-                                       ask the model which taxonomy keys each persona provides,
-                                       from its own capability sentences, and write them beside
-                                       the exact matches. Only personas whose sentences or the
-                                       taxonomy changed since their last mapping, unless --all.
+                                       ask the model which taxonomy keys each ACTIVE persona
+                                       provides, from its own capability sentences, and write them
+                                       beside the exact matches. Only personas whose sentences or
+                                       the taxonomy changed since their last mapping, unless --all.
                                        --dry-run prints what would be written and writes nothing.
+                                       It still makes every model call and costs the same as a real
+                                       run; use --max-batches to preview a few.
   capabilities add --key <domain.name> --label <text> --role <r> [--synonyms a,b]
                                        add an operator's own capability. The key's prefix IS its
                                        domain, and --role is the runtime role it projects to.

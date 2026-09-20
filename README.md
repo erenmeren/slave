@@ -606,10 +606,16 @@ npm run orchestrator -- set-capabilities --slave <id> --capabilities backend.api
 npm run orchestrator -- capabilities backfill --workspace <id>
 ```
 
-`npm run orchestrator -- capabilities map` asks the model which taxonomy keys each persona
+`npm run orchestrator -- capabilities map` asks the model which taxonomy keys each ACTIVE persona
 provides, from its own capability sentences, and stores them beside the exact matches; the daemon
 does the same for stale personas one batch per pass, so a fresh import needs no extra command.
-`--dry-run` prints what would be written.
+Active only, deliberately: an import creates its rows inactive unless it was given `--activate`,
+and paying to map a persona nobody can hire is paying for nothing — so activate what should be
+hirable first (`template activate`, or the toggle in Workforce) and the mapping follows it. Use
+the verb OR leave it to the daemon, never both at once: the daemon always carries a decider, and
+the two would pay for the same batches twice. `--dry-run` prints what would be written and writes
+nothing, but it still makes every model call and costs the same as a real run; use
+`--max-batches <n>` to preview a few.
 
 **Existing projects: run `capabilities backfill` once.** Every worker created before this existed
 has an empty capability set, and the cheapest way to fill a gap — somebody already here who can do

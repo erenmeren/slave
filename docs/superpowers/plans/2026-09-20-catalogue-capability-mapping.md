@@ -1632,7 +1632,14 @@ Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 
 - [ ] **Step 5: Hand back for the live run (operator step, NOT the implementer's)**
 
-After merge, the operator migrates the development database (`npm run db:migrate`), rebuilds (`npx tsc --build`), runs `npm run orchestrator -- capabilities sync` (carries the 63 rows in), then either restarts the daemon (it maps one batch per pass, ~56 passes) or runs `npm run orchestrator -- capabilities map` once to map the whole catalogue in one sitting (about 56 calls). Then `DevOps Automator` should show `operations.ci-cd` in its drawer as a mapped chip.
+After merge, on the development database:
+
+1. `npm run db:migrate`, then `npx tsc --build`.
+2. `npm run orchestrator -- capabilities sync` — carries the new taxonomy rows in (the seed is 111 rows) and reconciles every template's exact matches against them.
+3. **Activate the personas that should be hirable**, because the mapping pass maps ACTIVE personas only. `importCatalog` creates its rows INACTIVE unless it was given `--activate`, so a catalogue imported without that flag has nothing for the pass to map and both the daemon and the verb will correctly report zero. Activate with `npm run orchestrator -- template activate --template <id>`, or the toggle in Workforce. A row activated later is simply stale the next time the pass runs — no separate bookkeeping.
+4. Then EITHER restart the daemon (it maps one batch of stale personas per pass) OR run `npm run orchestrator -- capabilities map` once to map the active catalogue in one sitting — **never both at once**. The daemon always carries a decider, so a hand-run verb and a running daemon would map the same batches twice and pay for them twice.
+
+Then `DevOps Automator` — once it is active — should show `operations.ci-cd` in its drawer as a mapped chip.
 
 ---
 
