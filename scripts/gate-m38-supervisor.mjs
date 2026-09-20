@@ -53,9 +53,11 @@
 //      with `supervisorAutonomy: 'act'`, holding the 2026-09-20 scenario fact for fact: a research
 //      task `failed` with work waiting on it, refused `network_fetch`, and a circuit-breaker halt
 //      DERIVED from three concluded failures. Its own daemon diagnoses the refusal, grants the
-//      operation, puts the task back to `rework`, retracts the halt on the next pass and schedules
-//      the run -- with no proposal, no escalation, nothing resolved by a user, and a log that says
-//      `system` / `by: 'supervisor'` rather than naming a person who was never asked.
+//      operation, puts the task back to `rework`, retracts the halt on the next pass and DISPATCHES
+//      the task -- a real implementation run on the research seat, whose own `permissions.json`
+//      carries the operation the Supervisor granted. No proposal, no escalation, nothing resolved by
+//      a user, and a log that says `system` / `by: 'supervisor'` rather than naming a person who was
+//      never asked.
 //
 // Shape borrowed from `gate-m37-run-context.mjs` (temp git repo + `prisma.workspace.create` setup,
 // `preflightCleanup()`/`dumpGateRows()`/`fail()`/`waitUntil()`, the daemon lifecycle and its
@@ -66,7 +68,7 @@
 // itself writes.
 
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -75,7 +77,8 @@ import { loopbackChildEnv } from './lib/child-env.mjs'
 import { findRealDaemonPids } from './lib/daemon-process.mjs'
 import { prisma } from '../packages/db/dist/client.js'
 import { appendEvent } from '../packages/events/dist/index.js'
-import { isAlive } from '../packages/control/dist/index.js'
+import { isAlive, runDirPathFor } from '../packages/control/dist/index.js'
+import { permissionsFilePathFor } from '../packages/providers/dist/index.js'
 
 const POLL_INTERVAL_MS = 50
 const DAEMON_PERIOD_MS = 500
@@ -764,7 +767,6 @@ try {
     await fail(`by the end of the gate, ${String(spendersAtTheEnd.length)} post-halt decision(s) had called a model`)
   }
 
-
   // ================= Stage 6: the switch -- a failed task comes back on its own ===================
   //
   // E R1/R3/R4, and the one stage that is about the milestone's own motivating project: a research
@@ -937,6 +939,51 @@ try {
       `haltedReason ${JSON.stringify(clearedWorkspace.haltedReason)}`,
   )
 
+  // THE POINT OF THE WHOLE STAGE (fix round 1, Important 3). Everything above is rows moving; this
+  // is the project actually working again. The halt is what stopped `decide()` from scheduling
+  // anything, so a run for this task -- the one that was `failed` and terminal a moment ago -- is
+  // the only evidence that clearing it accomplished something. `startedAt` desc rather than the
+  // three seeded failures: those are the streak the breaker counted.
+  const restartedRun = await waitUntil('a run to start for the task that was failed', DISPATCH_TIMEOUT_MS, async (note) => {
+    const run = await prisma.slaveRun.findFirst({
+      where: { taskId: researchTask.id, startedAt: { gt: clearedWorkspace.haltClearedAt } },
+      orderBy: { startedAt: 'desc' },
+    })
+    note(run === null ? 'no run started since the halt was cleared' : `run ${run.id} is ${run.status}`)
+    return run
+  })
+  console.log(
+    `run ${restartedRun.id} started for the retried task: kind ${restartedRun.kind}, status ${restartedRun.status}, ` +
+      `slave ${restartedRun.slaveId}`,
+  )
+  if (restartedRun.kind !== 'implementation') {
+    await fail(`the run started for the retried task is a ${restartedRun.kind} run, expected implementation`)
+  }
+  if (restartedRun.slaveId !== researcher.id) {
+    await fail(`the run was staffed onto ${restartedRun.slaveId}, expected the research seat ${researcher.id}`)
+  }
+  // And it runs WITH the operation the Supervisor granted. `writePermissionsFile` snapshots the
+  // resolved grants into the run's own directory at dispatch (`gate-m52-broker.mjs`'s own reading of
+  // the same file), so this is the verdict the worker is actually governed by -- not the row the
+  // grant was written to. The file lands in the same write as the dispatch, so it is already there
+  // by the time the run row is visible; it is waited for rather than read once, for the reason every
+  // other two-write pair in this gate is.
+  const permissionsPath = permissionsFilePathFor(runDirPathFor(restartedRun.id))
+  const verdict = await waitUntil(`the run's permissions.json at ${permissionsPath}`, SUPERVISOR_TIMEOUT_MS, async (note) => {
+    if (!existsSync(permissionsPath)) {
+      note('the run row exists, its permission snapshot has not been written yet')
+      return null
+    }
+    return JSON.parse(readFileSync(permissionsPath, 'utf8'))
+  })
+  console.log(`the run's permissions.json: version ${String(verdict.version)}, grants ${JSON.stringify(verdict.grants)}`)
+  if (!Array.isArray(verdict.grants) || !verdict.grants.includes('network_fetch')) {
+    await fail(
+      `the dispatched run's permissions.json grants ${JSON.stringify(verdict.grants)} -- the operation the Supervisor ` +
+        'granted is not among them, so the retry would meet the same wall',
+    )
+  }
+
   // Frozen before it is counted: the assertions below are about everything this project decided,
   // and a tick in flight would be a row appearing between two reads of the same table.
   await stopDaemon(daemons[daemons.length - 1])
@@ -1025,8 +1072,8 @@ try {
 
   console.log(
     'stage 6 complete: a project with the switch on diagnosed its own dead end, granted the operation the diagnosis named, ' +
-      'put a `failed` task back on the board and retracted the breaker halt its failures had raised -- and not one of those ' +
-      'four things waited for a person',
+      'put a `failed` task back on the board, retracted the breaker halt its failures had raised and is running the work ' +
+      'again with that operation in its own permission snapshot -- and not one of those five things waited for a person',
   )
 
   console.log(

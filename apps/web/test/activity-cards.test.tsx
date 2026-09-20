@@ -344,6 +344,26 @@ describe('targeted card bodies', () => {
     expect(screen.getByTestId('permission-changed-by').textContent).not.toContain('u-9f3c')
   })
 
+  // E R3 / spec erratum E13: the grant a `retry_task` carries under `act` has no approver, so `by`
+  // is the Supervisor's own name rather than a user id. Nothing in the page's `users` listing will
+  // ever resolve it, and the branch above would have reported a deleted account for a decision no
+  // person ever made.
+  it('permission.changed names the Supervisor when the Supervisor granted it, not a missing person', () => {
+    const Card = ACTIVITY_CARDS['permission.changed']
+    const event = baseEvent('permission.changed', {
+      slaveId: 'ag-1',
+      name: 'Ash',
+      kind: 'network_fetch',
+      kindLabel: 'Fetch over the network',
+      from: null,
+      to: 'allow',
+      by: 'supervisor',
+    })
+    render(<Card event={event} {...CARD_PROPS} userName={null} />)
+    expect(screen.getByTestId('permission-changed-by').textContent).toBe(' \u00b7 by the Supervisor')
+    expect(screen.getByTestId('permission-changed-by').textContent).not.toContain('no longer on record')
+  })
+
   it('permission.changed names nobody when nobody was named -- the CLI carries no principal', () => {
     const Card = ACTIVITY_CARDS['permission.changed']
     const event = baseEvent('permission.changed', {

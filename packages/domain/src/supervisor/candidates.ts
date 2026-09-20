@@ -57,17 +57,21 @@ function subjectTask(situation: Situation, world: SupervisorWorld): SupervisorTa
  * What the world says about this task's newest failure (spec §3), read through one function so the
  * `task_failed` arm and the `review_cap_blocked` arm cannot disagree about one row.
  *
- * `requiredPermissions` is EMPTY until Task 5 puts `Task.requiredPermissions` on the world -- so
- * until then the role rule in {@link readFailure} is the whole of what names a refused tool, which
- * is exactly the case this milestone started from: the planner named no needs, and the work was
- * research that cannot be done without the web.
+ * `requiredPermissions` is ALWAYS EMPTY, and spec erratum E15 is where that is written down:
+ * Task 5 put `requiredPermissions` on `Task` and on the dispatch, and nothing ever put it on
+ * `SupervisorTask`, so §3's first diagnosis clause -- "a kind the task's needs would have granted"
+ * -- cannot fire and the ROLE rule in {@link readFailure} is the whole of what names a refused
+ * tool. That covers the case this milestone started from (research work refused the web, with a
+ * planner that named no needs at all) and misses the other one: a backend task that DECLARES
+ * `needs: ["run_commands"]` and is refused it reads as `unknown`. Closing it is a loader field and
+ * a world field; the follow-up is booked on E15 rather than guessed at here.
  */
 function readTaskFailure(task: SupervisorTask): FailureDiagnosis {
   return readFailure({
     reason: task.latestFailure?.reason ?? null,
     deniedKinds: task.deniedKinds,
-    // Task 5 adds the column and the loader reads it; `[]` is also the honest state of every task
-    // planned before it.
+    // See above: the world does not carry the column. `[]` is also the honest state of every task
+    // planned before it existed.
     requiredPermissions: [],
     requiredRole: task.requiredRole,
   })

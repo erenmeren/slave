@@ -16,7 +16,7 @@ import type { SupervisorQuestion, SupervisorSlave, SupervisorWorld } from './wor
 const ROUTINELY_UNBLOCKABLE: SituationKind = 'review_cap_blocked'
 
 /**
- * The two actions a HALT does not demote under `act` (R4, Task 8 erratum E11).
+ * The two actions a CIRCUIT-BREAKER halt does not demote under `act` (R4, Task 8 erratum E11).
  *
  * R4 gave the breaker halt a remedy and made `clear_halt` the exception to "a halt forces a
  * proposal". It was one action short, and the milestone's own motivating case is what proved it:
@@ -38,6 +38,19 @@ const ROUTINELY_UNBLOCKABLE: SituationKind = 'review_cap_blocked'
 const HALT_REMEDIES: readonly Action['kind'][] = ['clear_halt', 'retry_task']
 
 /**
+ * The ONE halt the pair above is for (fix round 1, Important 2).
+ *
+ * The exception is about the BREAKER, not about halts: R4 says so of `clear_halt` in as many
+ * words -- "budget halts are never cleared by the Supervisor" -- and the argument that makes
+ * `retry_task` safe beside it is the breaker's own. A `budget_exhausted` halt means the money is
+ * gone, and a retry queued against it is work that will start the moment somebody raises the
+ * budget, decided while the project was not allowed to think; an `emergency_stop` is a person with
+ * their hand on the switch, and the Supervisor moving a task under it is exactly the thing that
+ * button exists to prevent. Both propose everything, as they always have.
+ */
+const BREAKER_HALT = 'circuit_breaker'
+
+/**
  * What would happen if this action were chosen for this SITUATION (M38 section 3, "tiers are fixed
  * in code"). Pure and total: the model never sees this function, and a workspace setting can only
  * turn the Supervisor OFF, never widen what it may do by itself.
@@ -50,9 +63,9 @@ const HALT_REMEDIES: readonly Action['kind'][] = ['clear_halt', 'retry_task']
  * - `escalate_to_human` is always `escalated` and `no_action` always `noop` -- neither touches the
  *   world, so a halt cannot make either riskier than it already is.
  * - While the workspace is HALTED, every other action is `proposed` -- except {@link HALT_REMEDIES}
- *   under `act`, the pair that exists to end the halt. A halt means a guardrail has already decided
- *   this workspace should not be moving; the Supervisor may still say what it would do, but a human
- *   has to be the one who does it.
+ *   under `act` on a {@link BREAKER_HALT}, the pair that exists to end that one halt. A halt means a
+ *   guardrail has already decided this workspace should not be moving; the Supervisor may still say
+ *   what it would do, but a human has to be the one who does it.
  * - Otherwise: routine actions (`unblock_task` on a `review_cap_blocked` task -- attempts remain,
  *   that is why `candidates` offers `raise_max_attempts` instead when they do not -- and a
  *   `reassign_question` whose target {@link mayAnswer} the question) apply immediately. Everything
@@ -67,15 +80,17 @@ const HALT_REMEDIES: readonly Action['kind'][] = ['clear_halt', 'retry_task']
 export function tierOf(action: Action, world: SupervisorWorld, situationKind: SituationKind): Tier {
   if (action.kind === 'escalate_to_human') return 'escalated'
   if (action.kind === 'no_action') return 'noop'
-  // R4: a halt still forces a proposal for everything -- except the two actions that exist to end
-  // it ({@link HALT_REMEDIES}). Both are applied under `act` even here; every other kind, `act` or
-  // not, is `proposed` while the workspace is halted.
+  // R4: a halt still forces a proposal for everything -- except the two actions that exist to end a
+  // BREAKER halt ({@link HALT_REMEDIES}, {@link BREAKER_HALT}). Both are applied under `act` there;
+  // every other kind, under any halt, `act` or not, is `proposed` while the workspace is halted.
   if (world.halted !== null) {
-    return world.autonomy === 'act' && HALT_REMEDIES.includes(action.kind) ? 'applied' : 'proposed'
+    return world.autonomy === 'act' && world.halted.reason === BREAKER_HALT && HALT_REMEDIES.includes(action.kind)
+      ? 'applied'
+      : 'proposed'
   }
   // R1: the switch. A person who turned autonomy on gets every routine and non-routine action
   // applied; only the escalation stays a question. The halted rule above still wins, except for
-  // the two actions that exist to end a halt ({@link HALT_REMEDIES}).
+  // the two actions that exist to end a breaker halt ({@link HALT_REMEDIES}).
   if (world.autonomy === 'act') return 'applied'
   switch (action.kind) {
     case 'unblock_task':

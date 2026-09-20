@@ -783,7 +783,10 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     ...envelope,
     type: z.literal('permission.changed'),
     /**
-     * M52 R5: a person granted, refused or revoked one operation for one worker.
+     * M52 R5: a person -- or, since E R3, the Supervisor itself -- granted, refused or revoked one
+     * operation for one worker. `by` carries the granter's `User.id`, or the literal `'supervisor'`
+     * for the grant a `retry_task` bundles under `act` (spec erratum E13), or null for a path with
+     * neither: the CLI's own verb, and every row written before M52.
      *
      * A new type rather than `org.changed { entity: 'permission' }`: `org.changed`'s `field` union
      * is spelled in four places (M50 erratum E11) and its payload has no room for the from/to/by

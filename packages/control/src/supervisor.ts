@@ -547,8 +547,14 @@ async function carryOut(
       // E R3: the exit from `failed`, the one status nothing in this product could leave. ONE
       // decision, TWO verbs, in that order: `retryTask` grants the permission the diagnosis named
       // before it moves the task, so a grant that is refused leaves the task failed rather than
-      // retried into the same wall. The approver is the granter (`principal`), exactly as the
-      // `request_permission` arm below states.
+      // retried into the same wall.
+      //
+      // WHO GRANTED IT is the one place this differs from the `request_permission` arm above
+      // (spec erratum E13). That arm is always reached through a person's approval, so the approver
+      // is the granter. This one is applied by a tick under `act` with nobody to approve it, so
+      // `origin` travels with the grant and the `permission.changed` it appends says `system` /
+      // `by: 'supervisor'`. A human approving this same decision passes a `principal`, and the
+      // event names them, exactly as it always did.
       //
       // `action.reason` is the note the next run READS -- it lands on `Task.lastRejectionReason`,
       // which `runContext` renders on the implementation order, and a `rework` run is an

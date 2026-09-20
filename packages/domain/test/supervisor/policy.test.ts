@@ -225,11 +225,12 @@ describe('tierOf -- autonomy: act (R1)', () => {
     expect(tierOf(ACTIONS[kind], ACTING, 'review_cap_blocked')).toBe(expected)
   })
 
-  // R4: the halt still wins under `act`, except for the PAIR that exists to end it (Task 8,
-  // erratum E11). `clear_halt` retracts the halt and `retry_task` is the evidence `candidates`
+  // R4: the halt still wins under `act`, except for the PAIR that exists to end a BREAKER halt
+  // (Task 8, erratum E11). `clear_halt` retracts it and `retry_task` is the evidence `candidates`
   // requires before it will offer that -- a halt that demoted the retry made its own remedy
-  // unreachable without a person, which is the deadlock the end-to-end test found.
-  it.each(ACTION_KINDS)('proposes %s under act while halted, except the halt\u2019s own remedies', (kind) => {
+  // unreachable without a person, which is the deadlock the end-to-end test found. `ACTING_HALTED`
+  // is a `circuit_breaker` halt; the two cases below pin what the other two halts still do.
+  it.each(ACTION_KINDS)('proposes %s under act while the breaker is down, except its own remedies', (kind) => {
     const expected: Tier =
       kind === 'escalate_to_human'
         ? 'escalated'
@@ -250,13 +251,23 @@ describe('tierOf -- autonomy: act (R1)', () => {
     expect(tierOf(ACTIONS.request_permission, ACTING_HALTED, 'permission_blocked')).toBe('proposed')
   })
 
-  it('does not clear a halt whose reason is not circuit_breaker -- R4 names none of the others', () => {
-    // `tierOf` itself does not read the halt reason for `clear_halt` (R4's "once per hour, budget
-    // halts never cleared" throttle is Task 3's `candidates`/`carryOut` territory); this pins what
-    // `tierOf` DOES decide -- applied under `act` whatever the halt says -- so a future change to
-    // the reason-gating does not silently move here instead.
-    const budgetHalted = world({ autonomy: 'act', halted: { reason: 'budget_exhausted' } })
-    expect(tierOf(ACTIONS.clear_halt, budgetHalted, 'workspace_halted')).toBe('applied')
+  // Fix round 1, Important 2: the exception is about the BREAKER, not about halts. R4 says so of
+  // `clear_halt` in as many words ("budget halts are never cleared by the Supervisor"), and the
+  // argument that makes `retry_task` safe beside it is the breaker's own -- a retry queued under a
+  // spent budget is work that starts the moment somebody raises it, and a retry under an emergency
+  // stop is the Supervisor moving a task out from under the person holding the button.
+  it.each([['budget_exhausted'], ['emergency_stop']])(
+    'proposes BOTH remedies under act while the halt is %s -- the exception is the breaker, not the halt',
+    (reason) => {
+      const otherHalt = world({ autonomy: 'act', halted: { reason } })
+      expect(tierOf(ACTIONS.clear_halt, otherHalt, 'workspace_halted')).toBe('proposed')
+      expect(tierOf(ACTIONS.retry_task, otherHalt, 'task_failed')).toBe('proposed')
+    },
+  )
+
+  it('applies both remedies under act while the halt IS the breaker', () => {
+    expect(tierOf(ACTIONS.clear_halt, ACTING_HALTED, 'workspace_halted')).toBe('applied')
+    expect(tierOf(ACTIONS.retry_task, ACTING_HALTED, 'task_failed')).toBe('applied')
   })
 })
 

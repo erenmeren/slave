@@ -86,7 +86,7 @@ hand on 2026-09-20 and the research seat was granted `network_fetch` by hand; bo
 keep their order and meaning), **when `world.autonomy === 'act'` every remaining action is
 `applied`**. `escalate_to_human` stays escalated (a person is asked only when the candidate set
 holds nothing else, §R3), and a halted workspace still forces proposals — except the actions R4
-adds for the halt itself (E11: `clear_halt` and the `retry_task` its evidence is made of). Under `propose` nothing changes. `setSupervisorSettings` gains
+adds for a CIRCUIT-BREAKER halt (E11: `clear_halt` and the `retry_task` its evidence is made of). Under `propose` nothing changes. `setSupervisorSettings` gains
 `autonomy?: 'propose' | 'act'` and emits `workspace.settings_changed` with field
 `supervisorAutonomy`; the CLI's `supervisor` verb gains `--autonomy propose|act`; the web PUT
 `/api/w/:id/supervisor` accepts it; the panel's scope line gains the switch (`data-testid="supervisor-autonomy"`,
@@ -191,7 +191,7 @@ event type are unchanged. New event types: none — `supervisor.applied`/`failed
 | clear halt (new, circuit breaker only) | proposed | applied, once per hour |
 | answer a worker's question | proposed → `answerTier` | applied when the draft cites its sources, else proposed |
 | escalate to human | escalated | escalated |
-| anything while halted (except the halt's own remedies, E11) | proposed | proposed |
+| anything while halted (except the breaker halt's own remedies, E11) | proposed | proposed |
 
 ## 3. The diagnosis, spelled out
 
@@ -305,15 +305,19 @@ are read beside the decision row their `decisionId` points at.
 drops what its shape does not name. All three are optional on the arm now; an ordinary human unblock
 carries none of them.
 
-**E11 — a halt does not demote `retry_task` under `act` (Task 8).** R4 makes `clear_halt` the one
-exception to "a halted workspace still forces proposals", and it was one action short: `clear_halt`
-is offered only once a `retry_task` has been APPLIED to the task the breaker counted (E5), so a halt
-that demoted the retry made its own remedy unreachable without a person. On the project this
-milestone was written for — a research task refused the web, three failed runs, the breaker down —
-`act` escalated twice and moved nothing. The pair travels together now. Nothing else joins them, and
-what the two have in common is the line: NEITHER STARTS ANYTHING, because nothing is scheduled while
-a workspace is halted. §2's last row reads "anything while halted (except the halt's own two
-remedies)".
+**E11 — a CIRCUIT-BREAKER halt does not demote `retry_task` under `act` (Task 8).** R4 makes
+`clear_halt` the one exception to "a halted workspace still forces proposals", and it was one action
+short: `clear_halt` is offered only once a `retry_task` has been APPLIED to the task the breaker
+counted (E5), so a halt that demoted the retry made its own remedy unreachable without a person. On
+the project this milestone was written for — a research task refused the web, three failed runs, the
+breaker down — `act` escalated twice and moved nothing. The pair travels together now. Nothing else
+joins them, and what the two have in common is the line: NEITHER STARTS ANYTHING, because nothing is
+scheduled while a workspace is halted. The exception is about the BREAKER, not about halts (fix
+round 1): R4 says as much of `clear_halt` — "budget halts are never cleared by the Supervisor" — and
+the argument that makes `retry_task` safe beside it is the breaker's own. Under `budget_exhausted`
+the money is gone and a queued retry is work that starts the moment somebody raises the budget;
+under `emergency_stop` a person has their hand on the switch. Both still propose everything. §2's
+last row reads "anything while halted (except the breaker halt's own two remedies)".
 
 **E12 — the pass that answers a halt's cause does not also escalate the halt (Task 8).** R4's "applied
 in the same pass or the previous one" could not happen in the same pass: `workspace_halted` is the
@@ -338,3 +342,13 @@ instant and the rule behaves as R4 states; under a test clock they are not, whic
 end-to-end test sets `haltClearedAt` explicitly for its third pass rather than relying on what the
 second one stamped. Left as it is: threading the tick's clock through `clearHalt` touches the
 operator's own verb for a difference no production path can observe.
+
+**E15 — the world does not carry a task's needs, so §3's first clause is dead (Task 8, open).**
+R5 puts `needs` on the plan graph, `Task.requiredPermissions` and the implementation run's
+permission snapshot, and R3's diagnosis reads "a kind the task's `requiredPermissions` would have
+granted" first. `SupervisorTask` never gained the column: `candidates.readTaskFailure` passes `[]`,
+so only the ROLE clause (research, marketing, sales, paid-media, support, academic + `network_fetch`)
+ever names a refused tool. That is enough for the case this milestone was written for and misses a
+backend task that declares `needs: ["run_commands"]` and is refused it — it reads as `unknown` and
+gets a bare retry. FOLLOW-UP: one field on `SupervisorTask`, one column in the loader's task query,
+and pass it through `readTaskFailure`; the rule and its tests already exist.

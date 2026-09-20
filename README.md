@@ -841,11 +841,14 @@ means a human has to look at this, and two of the ways a task gets there are del
 cancelled run, a worktree the daemon refused to adopt), so the review cap is the one park the
 Supervisor knows a safe exit from. While the project is **halted** every action is a proposal,
 whichever way the switch is set — a guardrail has already said this project should not be moving,
-so the Supervisor may say what it would do and nothing more. The two exceptions, and only under
-`act`, are the halt's own remedies below: retrying the task the breaker counted, and clearing the
-halt once that retry has landed. Neither starts anything — nothing is scheduled while a project is
-halted — which is what makes them safe to apply in a state where hiring somebody would not be. "Halted" here means an emergency stop, a spent budget or a tripped circuit breaker;
-a project merely at its concurrency cap is busy, not stuck, and nothing is frozen for it.
+so the Supervisor may say what it would do and nothing more. The two exceptions, under `act` and
+only when the halt is the **circuit breaker**, are its own remedies below: retrying the task the
+breaker counted, and clearing the halt once that retry has landed. Neither starts anything —
+nothing is scheduled while a project is halted — which is what makes them safe to apply in a state
+where hiring somebody would not be. A spent budget and an emergency stop propose everything, as
+they always have: the money is gone, or a person has their hand on the switch. "Halted" here means
+an emergency stop, a spent budget or a tripped circuit breaker; a project merely at its concurrency
+cap is busy, not stuck, and nothing is frozen for it.
 
 **A remedy is chosen from the failure, not guessed.** When a task fails, the Supervisor reads *why*
 before it picks anything: the reason the run recorded, the operations that run was refused, how
@@ -862,8 +865,8 @@ Out of that come three actions the rules did not have before:
   The reviewer never judged the work, so another review costs a review attempt and no rework.
 - **clear the halt** — a *circuit-breaker* halt whose cause has been answered is retracted, at most
   once an hour. "Answered" is exact: a retry was applied to the task the breaker counted, and that
-  task has not failed since. A budget halt and an emergency stop are never cleared this way — the
-  first is money and the second is a person.
+  task has not failed since, and the next tick schedules the work again. A budget halt and an
+  emergency stop are never cleared this way — the first is money and the second is a person.
 
 **What a task is allowed to touch.** The planner writes a task's `needs` — `network_fetch`,
 `run_commands` — beside its capabilities, and the dispatch adds them to that run's permissions for

@@ -1329,10 +1329,17 @@ function PermissionChangedCard(props: ActivityCardProps): ReactElement {
           * resolved through the page's one `users` listing (`server/activity.ts:224`), never a
           * lookup per card. Until fix round 1 this printed the id itself. A granter whose account
           * was deleted since resolves to nothing, and is said in words; a row written with no
-          * principal at all names nobody, and this span does not render. */}
+          * principal at all names nobody, and this span does not render.
+          *
+          * The one value that is NOT a user id is `'supervisor'` (E R3, spec erratum E13): the
+          * grant a `retry_task` carries under `act` has no approver, so nothing in the `users`
+          * listing will ever resolve it and "a person no longer on record" would report a deleted
+          * account for a decision no person ever made. */}
         {payload.by !== null && (
           <span data-testid="permission-changed-by" title={payload.by}>
-            {` · by ${props.userName ?? 'a person no longer on record'}`}
+            {payload.by === 'supervisor'
+              ? ' \u00b7 by the Supervisor'
+              : ` \u00b7 by ${props.userName ?? 'a person no longer on record'}`}
           </span>
         )}
       </Transition>
