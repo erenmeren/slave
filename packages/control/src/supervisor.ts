@@ -6,6 +6,7 @@ import {
   DECISION_RETENTION_MS,
   HALT_CLEAR_INTERVAL_MS,
   PENDING_TTL_MS,
+  PERMISSION_KINDS,
   PROFILE_MAX_CHARS,
   PRUNE_BATCH,
   actionSchema,
@@ -19,6 +20,7 @@ import {
   type Decider,
   type DecisionStatus,
   type Draft,
+  type PermissionKind,
   type Result,
   type Situation,
   type SituationKind,
@@ -532,17 +534,46 @@ async function carryOut(
           reason: error instanceof Error ? error.message : String(error),
         })
       }
-    case 'request_permission':
-      // M52 R5. `tierOf` pins this to `proposed` on every branch, so the only way here is a human
-      // approving the proposal -- which is the whole ruling: the Supervisor may point at a wall,
-      // and only a person moves it. `setSlavePermission` re-validates the kind against
-      // `PERMISSION_KINDS` and re-reads the worker, so a proposal that waited a day and named a
-      // worker who has since been released is refused rather than written.
+    case 'request_permission': {
+      // M52 R5. `setSlavePermission` re-validates the kind against `PERMISSION_KINDS` and re-reads
+      // the worker, so a proposal that waited a day and named a worker who has since been released
+      // is refused rather than written.
       //
-      // THE APPROVER IS THE GRANTER: `principal`, not `origin`, and not the Supervisor. The event
-      // `setSlavePermission` appends records `by` as the PERSON who approved this decision, which is
-      // the true answer to "who granted this" -- the Supervisor only ever asked.
-      return reached(await setSlavePermission(action.slaveId, action.permissionKind, 'allow', principal))
+      // AN OPERATOR'S `deny` IS NEVER OVERTURNED (final review, Important 2). `setSlavePermission`
+      // is an upsert, and without this read an approved proposal -- or, under `act`, a decision
+      // nobody approved -- flipped a person's explicit refusal to `allow`. A `deny` row is the one
+      // thing in the permission matrix that is a decision rather than an absence, and the verb
+      // whose job is to POINT at a wall has nothing to do when a person built it on purpose.
+      // `Action.permissionKind` is a `string` -- the stored row is whatever the rules wrote a year
+      // ago -- so the vocabulary check comes first and a word it does not hold falls straight
+      // through to `setSlavePermission`, which is where `invalid_tool` is decided and always was.
+      const asked = action.permissionKind
+      const denied = (PERMISSION_KINDS as readonly string[]).includes(asked)
+        ? await prisma.slavePermission.findUnique({
+            where: { slaveId_kind: { slaveId: action.slaveId, kind: asked as PermissionKind } },
+            select: { mode: true },
+          })
+        : null
+      if (denied?.mode === 'deny') {
+        return err({
+          kind: 'permission_denied_by_operator',
+          slaveId: action.slaveId,
+          permissionKind: action.permissionKind,
+        })
+      }
+      // WHO GRANTED IT, in both of this arm's two cases (spec erratum E13, extended by the final
+      // review's Important 3). `tierOf` pinned this action to `proposed` on every branch until R1
+      // made `act` apply everything the halted checks do not demote -- so the old reading, "the
+      // only way here is a person approving", stopped being true and the `origin` this function
+      // was already handed stopped being passed on. An approved proposal still records the
+      // APPROVER as the granter: `principal` lands on the row and in the event, and that is the
+      // true answer to "who granted this" -- the Supervisor only ever asked. A tick under `act`
+      // has no approver, so `origin` carries `system` / `by: 'supervisor'` exactly as the grant a
+      // `retry_task` bundles does, rather than naming a person who was never asked.
+      return reached(
+        await setSlavePermission(action.slaveId, action.permissionKind, 'allow', principal, { origin }),
+      )
+    }
     case 'retry_task':
       // E R3: the exit from `failed`, the one status nothing in this product could leave. ONE
       // decision, TWO verbs, in that order: `retryTask` grants the permission the diagnosis named
@@ -578,16 +609,30 @@ async function carryOut(
       // SPEND at the moment the project starts running again. Both read the same column, so they
       // cannot disagree.
       //
-      // Which halt it is was decided by the rules (only `circuit_breaker` is offered) and is not
-      // re-checked here: `clearHalt` is the operator's own idempotent verb and clearing a halt that
-      // has already gone is a no-op, while re-deriving the reason from a snapshot taken after the
-      // decision was recorded would answer about a different moment than the one the decision was
-      // made in.
+      // WHICH HALT IT IS, re-read at apply time (final review, Important 4). The rules offer this
+      // for `circuit_breaker` alone, and that was taken to be the whole guard -- but the offer and
+      // the apply are two moments, and between them a person can hit the emergency stop on a
+      // project whose breaker proposal is still pending. Approving it then retracted the stop.
+      //
+      // A STORED reason is the test, because the breaker's is not stored: `haltOf` derives
+      // `circuit_breaker` from the failure streak while `Workspace.haltedReason` stays null
+      // (`supervisorWorld.ts`), and the column is only ever written by an emergency stop, a pause
+      // gate, a verify halt or a merge halt -- every one of them somebody or something else's
+      // decision that this project should not be moving. So anything stored that is not the
+      // breaker's own name is refused, and `clearHalt` keeps its idempotence for the derived case
+      // it was written for.
       const workspace = await prisma.workspace.findUnique({
         where: { id: action.workspaceId },
-        select: { haltClearedAt: true },
+        select: { haltClearedAt: true, haltedReason: true },
       })
       if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId: action.workspaceId })
+      if (workspace.haltedReason !== null && workspace.haltedReason !== 'circuit_breaker') {
+        return err({
+          kind: 'halt_not_breaker',
+          workspaceId: action.workspaceId,
+          reason: workspace.haltedReason,
+        })
+      }
       const clearedAt = workspace.haltClearedAt
       if (clearedAt !== null && Date.now() - clearedAt.getTime() < HALT_CLEAR_INTERVAL_MS) {
         return err({

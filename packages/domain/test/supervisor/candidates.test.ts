@@ -220,6 +220,27 @@ describe('candidates -- task_failed remedies (R3)', () => {
     expect(failedOffers(w)[0]?.action).toMatchObject({ grant: { slaveId: 's-2', permissionKind: 'network_fetch' } })
   })
 
+  it('offers the retry WITHOUT the grant when an operator has already refused that worker', () => {
+    // Final review, Important 2: `SupervisorSlave.deniedKinds` is the seat's `deny` rows, which are
+    // a person's own decision about this worker. The remedy is still offered -- the work may get
+    // further -- but nothing on this menu overturns the refusal.
+    const w = world({
+      tasks: [
+        failed({
+          requiredRole: 'research',
+          deniedKinds: ['network_fetch'],
+          latestFailure: taskFailure({ slaveId: 's-2' }),
+        }),
+      ],
+      slaves: [slave({ id: 's-2', name: 'Robin', runtimeRoles: ['research'], deniedKinds: ['network_fetch'] })],
+    })
+    const offers = failedOffers(w)
+    expect(kinds(offers)).toEqual(['retry_task', 'escalate_to_human', 'no_action'])
+    const action = offers[0]?.action
+    expect(action?.kind === 'retry_task' && action.grant).toBeUndefined()
+    expect(offers[0]?.why).toContain('a person has already decided')
+  })
+
   it('applies that retry under act and proposes it under propose', () => {
     const acting = world({
       autonomy: 'act',
@@ -652,12 +673,30 @@ describe('candidates -- clear_halt (R4)', () => {
     expect(kinds(haltOffers(w))).toEqual(['clear_halt', 'escalate_to_human', 'no_action'])
   })
 
+  it('offers it for a retry a PERSON approved, not only one a tick applied', () => {
+    // Final review, Important 1: under `propose` the retry is a proposal, and `approveDecision`
+    // claims the row `approved` before `applyDecision` runs -- which rewrites the status only when
+    // the verb REFUSED. So `approved` is a retry that went through, and reading `applied` alone
+    // made the halt's own remedy unreachable in the mode it matters most in.
+    const w = world({
+      halted: breaker,
+      tasks: [addressed],
+      decisions: [decision({ ...retried, status: 'approved' })],
+    })
+    expect(kinds(haltOffers(w))).toEqual(['clear_halt', 'escalate_to_human', 'no_action'])
+  })
+
   it('offers nothing when no retry was ever applied to the task', () => {
     const moving = world({ halted: breaker, tasks: [addressed], decisions: [] })
     expect(kinds(haltOffers(moving))).toEqual(['escalate_to_human', 'no_action'])
-    // Nor for a retry decision a person has not approved yet, nor one about another task.
+    // Nor for a retry still waiting on a person, nor one about another task.
     const pending = world({ halted: breaker, tasks: [addressed], decisions: [decision({ ...retried, status: 'pending' })] })
     expect(kinds(haltOffers(pending))).toEqual(['escalate_to_human', 'no_action'])
+    // Nor for one a person REFUSED, or one that was carried out and failed on the way.
+    for (const status of ['rejected', 'expired', 'failed'] as const) {
+      const w = world({ halted: breaker, tasks: [addressed], decisions: [decision({ ...retried, status })] })
+      expect(kinds(haltOffers(w)), status).toEqual(['escalate_to_human', 'no_action'])
+    }
     const elsewhere = world({ halted: breaker, tasks: [addressed], decisions: [decision({ ...retried, subjectId: 't4' })] })
     expect(kinds(haltOffers(elsewhere))).toEqual(['escalate_to_human', 'no_action'])
     // Nor for an applied decision that was not a retry.

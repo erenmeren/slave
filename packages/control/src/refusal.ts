@@ -111,6 +111,34 @@ export type ControlRefusal =
    * apply are two moments, and the bound is on the apply.
    */
   | { readonly kind: 'halt_recently_cleared'; readonly workspaceId: string; readonly clearedAt: string }
+  /**
+   * Final review, Important 2: the grant a `retry_task` carries names an operation a plan may not
+   * ask for. `TASK_NEEDS` is the bound -- `network_fetch` and `run_commands`, the two a plan can
+   * know about in advance -- and `writePermissionsFile` has held the dispatch to it since Task 5.
+   * The retry's grant is the OTHER door into the same room and was held to nothing but the six
+   * kinds, so a decision row naming `read_secret` or `deploy_release` would have granted it.
+   */
+  | { readonly kind: 'invalid_task_need'; readonly permissionKind: string }
+  /**
+   * Final review, Important 2: `request_permission` on a worker an operator has explicitly
+   * REFUSED this operation. A stored `deny` row is a person's own decision, and the Supervisor
+   * points at walls rather than removing the ones somebody put up on purpose.
+   *
+   * The mirror of what `retryTask` does with the same fact, and the difference is what the two
+   * verbs are for: a retry has work to get moving and goes out without its grant, while this
+   * action IS the grant and has nothing left to do.
+   */
+  | { readonly kind: 'permission_denied_by_operator'; readonly slaveId: string; readonly permissionKind: string }
+  /**
+   * Final review, Important 4: `clear_halt` on a workspace whose stored halt is not the breaker's.
+   * R4 says budget halts are never cleared by the Supervisor and erratum E11 says the same of an
+   * emergency stop -- the money is gone, or a person has their hand on the switch.
+   *
+   * `candidates.ts` reads the reason off the situation and offers the action for `circuit_breaker`
+   * alone; this reads the WORKSPACE at apply time, because a proposal can be approved long after
+   * the situation it was made on, and a person may have hit the stop in between.
+   */
+  | { readonly kind: 'halt_not_breaker'; readonly workspaceId: string; readonly reason: string }
   | { readonly kind: 'self_dependency'; readonly taskId: string }
   | { readonly kind: 'duplicate_dependency'; readonly taskId: string; readonly dependsOnTaskId: string }
   /**
@@ -594,6 +622,24 @@ export function refusalText(refusal: ControlRefusal): string {
       return (
         `this project's halt was already cleared at ${refusal.clearedAt}; it is cleared at most once an hour, ` +
         'so a second runaway inside that hour is a person’s call'
+      )
+    case 'invalid_task_need':
+      return (
+        `a retry may not grant ‘${refusal.permissionKind}’: a remedy grants only what a plan can ask ` +
+        'for on a task’s behalf (reading the web, running commands). Everything else is a decision about a ' +
+        'worker, and a person makes it'
+      )
+    case 'permission_denied_by_operator':
+      return (
+        `worker ${refusal.slaveId} has been explicitly refused ‘${refusal.permissionKind}’ by a person; ` +
+        'the Supervisor does not overturn that. Change the row in the worker’s permissions first if the ' +
+        'refusal no longer stands'
+      )
+    case 'halt_not_breaker':
+      return (
+        `this project is halted by ${refusal.reason}, not by the circuit breaker; only a breaker halt is ` +
+        'retracted without a person -- a spent budget is money and an emergency stop is somebody’s hand on ' +
+        'the switch'
       )
     case 'self_dependency':
       return `task ${refusal.taskId} cannot depend on itself`

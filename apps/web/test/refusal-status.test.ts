@@ -36,6 +36,13 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   task_not_failed: true,
   retry_ceiling_reached: true,
   halt_recently_cleared: true,
+  // The final review's three, all 409 by the suffix rule and all right to be: the worker, the
+  // task and the project are there, and the request does not make sense against what a person has
+  // already decided about them (an operation a plan may not ask for, a `deny` somebody wrote, a
+  // halt that is not the breaker's).
+  invalid_task_need: true,
+  permission_denied_by_operator: true,
+  halt_not_breaker: true,
   self_dependency: true,
   duplicate_dependency: true,
   cross_workspace: true,

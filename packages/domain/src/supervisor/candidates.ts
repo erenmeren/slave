@@ -117,6 +117,26 @@ function deniedWorker(
   return undefined
 }
 
+/**
+ * Has an operator already REFUSED this worker this operation (final review, Important 2)?
+ *
+ * The ruling is one line -- a stored `deny` row wins everywhere -- and this is the half of it the
+ * rules can see. `SupervisorSlave.deniedKinds` is the seat's `deny` rows and only those
+ * (`loadDeniedKinds`), so a `true` here is an operator's own decision about this worker and a
+ * grant on top of it would be the Supervisor overruling a person.
+ *
+ * FALSE IS NOT "nothing is denied". The loader fills `deniedKinds` only when the board actually
+ * asks for a capability (`asksForCapabilities`, `supervisorWorld.ts`), because the ranker's
+ * permission step is the only other reader; on every other pass every seat's list is empty. So
+ * this skips the grant when the world HAPPENS to know, and `retryTask` refuses the grant on its
+ * own re-read when it does not -- control is where the rule is enforced, and this is where it is
+ * kept off the menu so a person is not shown an offer that will be half-refused.
+ */
+function operatorRefused(world: SupervisorWorld, slaveId: string, kind: string): boolean {
+  const seat = world.slaves.find((one) => one.id === slaveId)
+  return seat !== undefined && (seat.deniedKinds as readonly string[]).includes(kind)
+}
+
 /** The words for an operation, and the key itself for anything the vocabulary does not hold -- a
  *  pre-M52 denial row spells `'run tests'`, and a sentence a person reads must still say
  *  something. */
@@ -162,6 +182,19 @@ function retryOffer(
             `This work was refused \u2018${label}\u2019 and stopped there. Nothing in the world says which ` +
             'worker met that wall, so the retry goes out on its own and the refusal will be on the task again ' +
             'if it is still the one in the way.',
+        }
+      }
+      // An operator's own `deny` is never overturned (final review, Important 2). The retry still
+      // goes out -- the work may yet get further, and refusing to try is a decision the rules do
+      // not get to make -- but it goes out BARE, and the sentence says why so a person reading the
+      // offer is not left wondering where the grant went.
+      if (operatorRefused(world, worker.slaveId, kind)) {
+        return {
+          action: retry(reason),
+          why:
+            `${worker.name ?? 'The worker that ran it'} was refused \u2018${label}\u2019, and a person has ` +
+            'already decided this worker may not have it. The retry goes out without a grant: the refusal stands ' +
+            'until whoever made it changes their mind.',
         }
       }
       return {
@@ -230,18 +263,26 @@ const HALT_CAUSE_ADDRESSED: readonly TaskStatusName[] = ['rework', 'running', 'r
  * cause was addressed" -- and the breaker, whose whole job is to stop a runaway, became an hourly
  * speed bump in front of one.
  *
- * So the evidence is a pair: a `retry_task` decision that was actually APPLIED to this task, and
- * no failure on the task SINCE that decision was made. `latestFailure.at` is the newest failure
- * there is, so "older than the decision" is "the retry has not failed yet" -- either it is still
- * running or it has got past the point that kept tripping the breaker. A task that has never
+ * So the evidence is a pair: a `retry_task` decision that was actually CARRIED OUT on this task,
+ * and no failure on the task SINCE that decision was made. `latestFailure.at` is the newest
+ * failure there is, so "older than the decision" is "the retry has not failed yet" -- either it is
+ * still running or it has got past the point that kept tripping the breaker. A task that has never
  * failed at all passes trivially, which is the same statement with nothing to compare against.
+ *
+ * TWO STATUSES MEAN "it ran" (final review, Important 1). `applied` is the tick's own -- a decision
+ * born under `act` and carried out in the same breath. `approved` is a PERSON's: `approveDecision`
+ * claims the row `approved` and then calls `applyDecision`, which rewrites the status only when
+ * the verb REFUSED (to `failed`), so a row still reading `approved` is a retry that went through.
+ * Reading `applied` alone made the whole remedy unreachable under `propose`, which is the mode
+ * this clause matters most in: there the retry is a proposal, a person approves it, and the halt
+ * it was the cause of could then never be offered a clear.
  */
 function retryAnswered(task: SupervisorTask, world: SupervisorWorld): boolean {
   if (!HALT_CAUSE_ADDRESSED.includes(task.status)) return false
   return world.decisions.some(
     (decision) =>
       decision.actionKind === 'retry_task' &&
-      decision.status === 'applied' &&
+      (decision.status === 'applied' || decision.status === 'approved') &&
       decision.subjectId === task.id &&
       (task.latestFailure === null || task.latestFailure.at < decision.createdAt),
   )

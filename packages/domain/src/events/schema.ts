@@ -532,12 +532,25 @@ export const executionEventSchema = z.discriminatedUnion('type', [
        * ceiling is measured against; `grant` is the permission the diagnosis named, so a reader
        * can see the whole remedy without the `SupervisorDecision` row beside it.
        *
+       * `grant.refused` is the final review's (Important 2): a remedy the rules named and control
+       * did not carry out, because a person had already refused that worker that operation. The
+       * task still moved -- that is why this event exists at all -- and the row says the grant did
+       * not, so a reader of two identical-looking retries can tell the one that met the same wall
+       * again from the one that did not. ABSENT means the grant went through, which is what every
+       * row written before this says.
+       *
        * All optional, like every other widening of an existing arm in this file: an ordinary
        * human unblock carries none of them, and neither does a row written before this milestone.
        */
       reason: z.string().min(1).optional(),
       retries: z.number().int().nonnegative().optional(),
-      grant: z.object({ slaveId: z.string().min(1), permissionKind: z.string().min(1) }).optional(),
+      grant: z
+        .object({
+          slaveId: z.string().min(1),
+          permissionKind: z.string().min(1),
+          refused: z.literal('denied_by_operator').optional(),
+        })
+        .optional(),
     }),
   }),
   // M38 t1: the five events the Supervisor's control verbs write (spec section 2). All appended by

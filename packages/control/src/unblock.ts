@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { RETRIES_MAX, REVIEW_RETRY_CAP, type Result, err, ok } from '@slave-of-ai/domain'
+import { RETRIES_MAX, REVIEW_RETRY_CAP, TASK_NEEDS, type Result, type TaskNeed, err, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { setSlavePermission } from './permission.js'
 import type { Principal } from './principal.js'
@@ -225,6 +225,12 @@ export interface RetryTaskInput {
    * (a worker who has since been released, an operation the vocabulary does not hold) leaves the
    * task exactly as it was, which is a retry that never happened rather than one that will fail
    * again for the reason the grant was for.
+   *
+   * TWO BOUNDS ON IT, both from the final review (Important 2, Minor 3). `permissionKind` must be
+   * one of {@link TASK_NEEDS} -- what a PLAN may ask for on a task's behalf, which is what this
+   * grant is standing in for; `read_secret` and `deploy_release` are a person's decision about a
+   * worker and a remedy does not get to make it. And an operator's own `deny` row wins: the retry
+   * still goes out, without the grant, and the event says so.
    */
   readonly grant?: { readonly slaveId: string; readonly permissionKind: string } | undefined
   /**
@@ -259,6 +265,10 @@ export interface RetryTaskInput {
  * one thing and the worker receive another.
  */
 const workerNote = (reason: string): string => reason.replace(/^steer:\s*/u, '')
+
+/** Narrowed rather than merely checked, so the Prisma read below takes the kind without a cast:
+ *  {@link TASK_NEEDS} is a subset of the permission vocabulary by construction. */
+const isTaskNeed = (value: string): value is TaskNeed => (TASK_NEEDS as readonly string[]).includes(value)
 
 /**
  * E R3: the exit from `failed` -- the one status this product had no verb for.
@@ -320,15 +330,44 @@ export async function retryTask(
   // rather than written. THE APPROVER IS THE GRANTER when there IS one, as in `carryOut`'s
   // `request_permission` arm: `principal` lands on the row and in the event. Under `act` there is
   // none -- see the `origin` below.
+  //
+  // What became of the grant travels onto the event with it: `null` for a retry that carried none
+  // or one that went through, and `'denied_by_operator'` for the one case below in which the task
+  // moves and the grant does not.
+  let refused: 'denied_by_operator' | null = null
   if (input.grant !== undefined) {
-    // `origin` travels with it (Task 8, erratum E13): under `act` nobody approved this, so the
-    // `permission.changed` it appends must say `system` / `by: 'supervisor'` rather than name a
-    // person who was never asked. An approved proposal passes `origin: 'human'` and a `principal`,
-    // and the event says what it always said.
-    const granted = await setSlavePermission(input.grant.slaveId, input.grant.permissionKind, 'allow', principal, {
-      origin: opts.origin ?? 'human',
+    const { slaveId, permissionKind } = input.grant
+    // The bound a plan is held to, held to here as well (final review, Minor 3). A remedy's grant
+    // stands in for the `needs` the planner could have written, and `writePermissionsFile` has
+    // filtered the dispatch to `TASK_NEEDS` since Task 5 -- this is the other door into the same
+    // room, and until now the only thing between a decision row naming `read_secret` and a written
+    // `allow` was that no rule in `candidates.ts` produces one.
+    if (!isTaskNeed(permissionKind)) return err({ kind: 'invalid_task_need', permissionKind })
+    // AN OPERATOR'S `deny` IS NEVER OVERTURNED (final review, Important 2). `setSlavePermission`
+    // is an upsert, so this would have flipped a person's explicit refusal to `allow` and written
+    // an event saying the Supervisor did -- the one thing the permission matrix exists to make
+    // impossible. The read is not a race guard: two writers are the matrix's own concurrency story
+    // (`priorMode`), and what matters is that the decision the rules made an hour ago does not win
+    // over the decision a person made since.
+    //
+    // The RETRY still goes out. The work may get further than it did -- the refusal was one wall,
+    // not necessarily the only thing left -- and the event carries `refused` so a reader can see
+    // the remedy was half-applied rather than wonder why the same failure came back.
+    const stored = await prisma.slavePermission.findUnique({
+      where: { slaveId_kind: { slaveId, kind: permissionKind } },
+      select: { mode: true },
     })
-    if (!granted.ok) return granted
+    if (stored?.mode === 'deny') refused = 'denied_by_operator'
+    else {
+      // `origin` travels with it (Task 8, erratum E13): under `act` nobody approved this, so the
+      // `permission.changed` it appends must say `system` / `by: 'supervisor'` rather than name a
+      // person who was never asked. An approved proposal passes `origin: 'human'` and a `principal`,
+      // and the event says what it always said.
+      const granted = await setSlavePermission(slaveId, permissionKind, 'allow', principal, {
+        origin: opts.origin ?? 'human',
+      })
+      if (!granted.ok) return granted
+    }
   }
 
   // One locked transaction for the re-check and the write (`failTask`'s idiom): `SELECT ... FOR
@@ -385,7 +424,9 @@ export async function retryTask(
       status: 'rework',
       retries: outcome.retries,
       reason: 'retry_task',
-      ...(input.grant === undefined ? {} : { grant: input.grant }),
+      ...(input.grant === undefined
+        ? {}
+        : { grant: refused === null ? input.grant : { ...input.grant, refused } }),
     },
     userId: principal?.userId ?? null,
   })

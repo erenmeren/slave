@@ -622,15 +622,94 @@ describe('retryTask', () => {
     expect(await unblockedEvents()).toHaveLength(0)
   })
 
-  it('a grant of an operation nothing knows is refused, and writes no permission row', async (): Promise<void> => {
+  // Final review, Minor 3: the bound is `TASK_NEEDS`, not the six kinds. A remedy's grant stands in
+  // for the `needs` a planner could have written, and the dispatch has been held to those two since
+  // Task 5 -- this is the other door into the same room. A word the vocabulary does not hold and a
+  // real permission a plan may not ask for are refused alike, before anything is written.
+  it('refuses a grant of anything outside TASK_NEEDS, and writes no permission row', async (): Promise<void> => {
     const slave = await makeSlave(workspaceId)
     const task = await makeFailedTask()
 
-    const result = await retryTask(task.id, { grant: { slaveId: slave.id, permissionKind: 'sudo_everything' } })
-    expect(result.ok).toBe(false)
-    expect(result.ok ? null : result.error.kind).toBe('invalid_tool')
+    for (const permissionKind of ['sudo_everything', 'read_secret', 'deploy_release']) {
+      const result = await retryTask(task.id, { grant: { slaveId: slave.id, permissionKind } })
+      expect(result.ok, permissionKind).toBe(false)
+      if (result.ok) throw new Error('expected a refusal')
+      expect(result.error).toEqual({ kind: 'invalid_task_need', permissionKind })
+      expect(refusalText(result.error)).toContain('a plan can ask')
+    }
     expect(await prisma.slavePermission.count()).toBe(0)
     expect((await prisma.task.findUniqueOrThrow({ where: { id: task.id } })).status).toBe('failed')
+    expect(await unblockedEvents()).toHaveLength(0)
+  })
+
+  it('both kinds a plan may ask for are granted', async (): Promise<void> => {
+    const slave = await makeSlave(workspaceId)
+    for (const permissionKind of ['network_fetch', 'run_commands'] as const) {
+      const task = await makeFailedTask()
+      expect((await retryTask(task.id, { grant: { slaveId: slave.id, permissionKind } })).ok, permissionKind).toBe(true)
+      const row = await prisma.slavePermission.findFirstOrThrow({ where: { slaveId: slave.id, kind: permissionKind } })
+      expect(row.mode).toBe('allow')
+    }
+  })
+
+  /**
+   * Final review, Important 2: an operator's `deny` row is a person's own decision about this
+   * worker, and `setSlavePermission` is an upsert -- so without the read this flipped it to `allow`
+   * and wrote an event saying the Supervisor did.
+   *
+   * The task still moves. The refusal was one wall and the retry may get further than it did, so
+   * refusing the whole remedy would leave a `failed` task nothing in the product can shift over a
+   * grant it never needed to have. What the event carries is that the grant did not happen.
+   */
+  it('does NOT overturn a deny an operator wrote: the task is retried and the row stands', async (): Promise<void> => {
+    const slave = await makeSlave(workspaceId)
+    await prisma.slavePermission.create({
+      data: { slaveId: slave.id, kind: 'network_fetch', mode: 'deny', grantedBy: null },
+    })
+    const task = await makeFailedTask()
+
+    const result = await retryTask(
+      task.id,
+      { grant: { slaveId: slave.id, permissionKind: 'network_fetch' }, reason: 'The last run was refused the network.' },
+      undefined,
+      { origin: 'system' },
+    )
+    expect(result.ok).toBe(true)
+
+    // The remedy's OTHER half went through: the task is out of `failed` and schedulable again.
+    const after = await prisma.task.findUniqueOrThrow({ where: { id: task.id } })
+    expect(after.status).toBe('rework')
+    expect(after.retries).toBe(1)
+
+    // The person's decision is untouched, and nothing claims to have changed it.
+    const row = await prisma.slavePermission.findUniqueOrThrow({
+      where: { slaveId_kind: { slaveId: slave.id, kind: 'network_fetch' } },
+    })
+    expect(row.mode).toBe('deny')
+    expect(
+      await prisma.executionEvent.findMany({ where: { workspaceId, type: 'permission_changed' } }),
+    ).toHaveLength(0)
+
+    // And the row in the log says the remedy was half-applied rather than leaving a reader to
+    // wonder why the same wall came back.
+    const [event] = await unblockedEvents()
+    expect(event?.payload).toMatchObject({
+      grant: { slaveId: slave.id, permissionKind: 'network_fetch', refused: 'denied_by_operator' },
+    })
+  })
+
+  it('grants over an ALLOW row and over no row at all, which are not a person saying no', async (): Promise<void> => {
+    const slave = await makeSlave(workspaceId)
+    await prisma.slavePermission.create({
+      data: { slaveId: slave.id, kind: 'network_fetch', mode: 'allow', grantedBy: null },
+    })
+    const task = await makeFailedTask()
+
+    expect((await retryTask(task.id, { grant: { slaveId: slave.id, permissionKind: 'network_fetch' } })).ok).toBe(true)
+    const [event] = await unblockedEvents()
+    // No `refused` key: absent is what "the grant went through" has always looked like.
+    expect(event?.payload).toMatchObject({ grant: { slaveId: slave.id, permissionKind: 'network_fetch' } })
+    expect((event?.payload as { grant?: { refused?: string } }).grant?.refused).toBeUndefined()
   })
 
   it('two concurrent retries: exactly one claims, the loser is refused task_not_failed', async (): Promise<void> => {
