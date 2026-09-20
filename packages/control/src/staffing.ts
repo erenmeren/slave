@@ -48,7 +48,7 @@ export const MODEL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/-]*$/
  * The RULE in plain words and never the pattern as prose: a regular expression in a sentence is a
  * thing an operator has to decode before they can fix their own typo.
  */
-const MODEL_SHAPE_DETAIL =
+export const MODEL_SHAPE_DETAIL =
   'a model must be one word: a letter or digit, then any of . _ - : @ / — and no spaces'
 
 /** One staffing decision, as every surface reads it -- the LABEL and the template's NAME beside the

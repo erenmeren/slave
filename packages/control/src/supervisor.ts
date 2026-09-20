@@ -29,17 +29,20 @@ import {
   ok,
 } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
+import type { ProviderKind } from '@slave-of-ai/providers'
 import { steerRun } from './breaker.js'
 import { hireFromTemplate, seatMember, mergeRuntimeRoles } from './capability.js'
 import { clearHalt } from './emergency.js'
 import { releasePerson } from './persons.js'
 import { discardStaleCandidates, recordMemory } from './memory.js'
 import { answerQuestion, reassignQuestion } from './messaging.js'
+import { isProviderKind } from './org.js'
 import { setRuntimeRoles } from './profile.js'
 import { setSlavePermission } from './permission.js'
 import type { Principal } from './principal.js'
 import { refusalText, type ControlRefusal } from './refusal.js'
 import { adoptRunbook } from './runbook.js'
+import { MODEL_ID_PATTERN, MODEL_SHAPE_DETAIL } from './staffing.js'
 import { cancelTask, failTask } from './task.js'
 import { retryTask, unblockTask } from './unblock.js'
 
@@ -1253,6 +1256,11 @@ function parsedOrThrow<T>(
  * operator wrote). Trimmed, and an emptied text becomes `null` rather than `''`, exactly as
  * `setProfile` normalises a worker's: "cleared" is a real state and only `null` says it.
  *
+ * `provider`/`model` (F R4) are the pair that says WHICH runtime answers this project's Supervisor
+ * -- decisions, answers and the conversation alike. Both nullable, both meaning "the installation
+ * default" when null, and both validated before anything is written: a patch carrying one good
+ * field and one bad one writes neither.
+ *
  * One `workspace.settings_changed` per field that actually MOVED, and none at all when nothing
  * did, so the timeline does not fill with re-saves of an unchanged form. The profile's event
  * carries a sha256, never the text: the persona can be long, and a hash is what lets a reader
@@ -1270,14 +1278,45 @@ export async function setSupervisorSettings(
      * rules are code and this only says whether their verdict waits for a person.
      */
     readonly autonomy?: 'propose' | 'act'
+    /**
+     * F R4: WHICH runtime answers this project's Supervisor -- every call for the workspace, the
+     * conversation included. `null` is the installation default (`claude_code`), which is what an
+     * unset column has always meant, so clearing is an explicit null rather than an omission.
+     */
+    readonly provider?: ProviderKind | null
+    /** F R4: the model that provider is asked for, or `null` for the installation default
+     *  (`SLAVEOFAI_SUPERVISOR_MODEL`, else `SUPERVISOR_DEFAULT_MODEL`). Held to `MODEL_ID_PATTERN`,
+     *  the same shape check a staffing preference's model passes -- this product does not own the
+     *  list of model names and must not pretend to, but "one word" it can insist on. */
+    readonly model?: string | null
   },
   principal?: Principal,
 ): Promise<Result<void, ControlRefusal>> {
   const workspace = await prisma.workspace.findUnique({
     where: { id: workspaceId },
-    select: { supervisorEnabled: true, supervisorProfile: true, supervisorAutonomy: true },
+    select: {
+      supervisorEnabled: true,
+      supervisorProfile: true,
+      supervisorAutonomy: true,
+      supervisorProvider: true,
+      supervisorModel: true,
+    },
   })
   if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId })
+
+  // BOTH validations before anything is written, and before the "did it move" arithmetic below:
+  // a patch carrying one good field and one bad one must write neither, which is the rule the
+  // profile cap already states for itself.
+  if (patch.provider !== undefined && patch.provider !== null && !isProviderKind(patch.provider)) {
+    return err({ kind: 'invalid_provider', provider: patch.provider })
+  }
+  const model = patch.model === undefined ? undefined : patch.model === null ? null : patch.model.trim()
+  if (model !== undefined && model !== null && model !== '' && !MODEL_ID_PATTERN.test(model)) {
+    return err({ kind: 'invalid_model', detail: MODEL_SHAPE_DETAIL })
+  }
+  // An emptied box clears the override, `profile`'s own normalisation: "cleared" is a real state
+  // and only `null` says it.
+  const nextModel = model === undefined ? undefined : model === '' ? null : model
 
   let profile: string | null | undefined
   if (patch.profile !== undefined) {
@@ -1300,7 +1339,12 @@ export async function setSupervisorSettings(
   // constant is the whole test -- there is no second state where it is defined and did not move.
   const autonomy = patch.autonomy !== undefined && patch.autonomy !== workspace.supervisorAutonomy ? patch.autonomy : undefined
   const autonomyMoved = autonomy !== undefined
-  if (!enabledMoved && !profileMoved && !autonomyMoved) return ok(undefined)
+  // F R4, and `profileMoved`'s rule exactly: `null` is a real new value on both halves (the
+  // override was cleared back to the installation default), so "moved" is "the patch carried it
+  // AND it differs from what is stored".
+  const providerMoved = patch.provider !== undefined && patch.provider !== workspace.supervisorProvider
+  const modelMoved = nextModel !== undefined && nextModel !== workspace.supervisorModel
+  if (!enabledMoved && !profileMoved && !autonomyMoved && !providerMoved && !modelMoved) return ok(undefined)
 
   await prisma.workspace.update({
     where: { id: workspaceId },
@@ -1308,6 +1352,8 @@ export async function setSupervisorSettings(
       ...(enabledMoved ? { supervisorEnabled: enabled } : {}),
       ...(profileMoved ? { supervisorProfile: nextProfile ?? null } : {}),
       ...(autonomyMoved ? { supervisorAutonomy: autonomy } : {}),
+      ...(providerMoved ? { supervisorProvider: patch.provider ?? null } : {}),
+      ...(modelMoved ? { supervisorModel: nextModel ?? null } : {}),
     },
   })
 
@@ -1342,6 +1388,27 @@ export async function setSupervisorSettings(
       workspaceId,
       actor: 'human',
       payload: { field: 'supervisorAutonomy', from: workspace.supervisorAutonomy, to: autonomy },
+      userId: principal?.userId ?? null,
+    })
+  }
+  // The pair, in the order a person sets it: a provider, then the model it is asked for. Two
+  // events rather than one, because a settings_changed is ONE field's move -- which is what lets
+  // the Activity card say "the Supervisor's model changed" without a reader decoding a bag.
+  if (providerMoved) {
+    await appendEvent({
+      type: 'workspace.settings_changed',
+      workspaceId,
+      actor: 'human',
+      payload: { field: 'supervisorProvider', from: workspace.supervisorProvider, to: patch.provider ?? null },
+      userId: principal?.userId ?? null,
+    })
+  }
+  if (modelMoved) {
+    await appendEvent({
+      type: 'workspace.settings_changed',
+      workspaceId,
+      actor: 'human',
+      payload: { field: 'supervisorModel', from: workspace.supervisorModel, to: nextModel ?? null },
       userId: principal?.userId ?? null,
     })
   }
