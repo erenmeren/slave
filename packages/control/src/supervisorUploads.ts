@@ -92,6 +92,24 @@ function isPlainName(name: string): boolean {
   return true
 }
 
+/**
+ * Whether a REPOSITORY-relative path is a file directly under `docs/inbox/` (F R6).
+ *
+ * The one definition, asked twice: `sendSupervisorMessage` asks it of what a caller hands over,
+ * and `readAttachmentText` asks it again of what came back out of the `attachments` Json column
+ * (fix round 1, I4) -- a stored path is not evidence of anything, and the second reader is the one
+ * that would OPEN the file with the daemon's own rights.
+ *
+ * POSIX segments only, because this is a path in a repository rather than on this host: a `\`, a
+ * `..` segment, a leading `/`, or any nesting below the inbox is not one of ours.
+ */
+export function isInboxPath(path: string): boolean {
+  if (!path.startsWith(`${INBOX_DIR}/`)) return false
+  const rest = path.slice(INBOX_DIR.length + 1)
+  if (rest === '' || rest.includes('/') || rest.includes('\\') || rest.includes('\0')) return false
+  return rest !== '.' && rest !== '..'
+}
+
 /** The bytes of one file, as a number the attachment row carries. `Buffer.byteLength` rather than
  *  `.length` so a caller that handed over a string still gets the size the file will have. */
 const sizeOf = (bytes: Buffer): number => Buffer.byteLength(bytes)

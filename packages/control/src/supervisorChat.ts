@@ -14,8 +14,8 @@ import {
 } from '@slave-of-ai/domain'
 import type { ProviderKind } from '@slave-of-ai/providers'
 import type { Principal } from './principal.js'
-import type { ControlRefusal } from './refusal.js'
-import { INBOX_DIR, SUPERVISOR_UPLOAD_MAX_FILES } from './supervisorUploads.js'
+import { refusalText, type ControlRefusal } from './refusal.js'
+import { SUPERVISOR_UPLOAD_MAX_FILES, isInboxPath } from './supervisorUploads.js'
 
 /**
  * How long a claimed turn is held before another daemon may take it (F R2).
@@ -26,6 +26,12 @@ import { INBOX_DIR, SUPERVISOR_UPLOAD_MAX_FILES } from './supervisorUploads.js'
  * in flight is never stolen from the process paying for it.
  */
 export const SUPERVISOR_CHAT_CLAIM_TTL_MS = 5 * 60 * 1000
+
+/** The reason a claimed turn fails when its own rows cannot be read back (fix round 1, M3): a
+ *  placeholder with no human message before it, or a project that vanished between the claim and
+ *  the read. A claim is held for {@link SUPERVISOR_CHAT_CLAIM_TTL_MS}, so dropping such a row
+ *  silently left the panel saying "thinking" for five minutes and then trying again forever. */
+export const TURN_UNREADABLE_REASON = 'turn_unreadable'
 
 /** One line of the conversation as a reader sees it. `createdAt` is an ISO string so a web route
  *  can serialise the view unchanged -- `IntakeMessageView`'s own rule. */
@@ -41,6 +47,10 @@ export interface SupervisorMessageView {
    *  nothing, which is most of them. */
   readonly actions: readonly SupervisorMessageAction[] | null
   readonly modelCostUsd: number | null
+  /** R2's chip: every citation this reply made checked out against what its own prompt rendered,
+   *  and it made at least one. False on a reply that cited nothing -- which is an ordinary reply,
+   *  not a suspect one: this is a conversation, not a sourced answer to a worker. */
+  readonly sourced: boolean
   /** The call happened and nobody could price it (a Cursor turn, erratum E2). NOT the same as a
    *  cost of zero, and the panel must not add it up as one. */
   readonly unmeasured: boolean
@@ -86,6 +96,10 @@ export type SupervisorReplyOutcome =
       readonly kind: 'answered'
       readonly text: string
       readonly actions: readonly SupervisorMessageAction[]
+      /** `isSourced` over the citation check this turn ran (R2). Stored rather than re-derived:
+       *  the feed window and the attachment slices it was checked against are gone by the time
+       *  anybody reads the row. */
+      readonly sourced: boolean
       readonly costUsd: number | null
       readonly unmeasured: boolean
     }
@@ -142,6 +156,7 @@ const viewOf = (row: {
   attachments: Prisma.JsonValue
   actions: Prisma.JsonValue | null
   modelCostUsd: number | null
+  sourced: boolean
   unmeasured: boolean
   failureReason: string | null
   createdAt: Date
@@ -154,6 +169,7 @@ const viewOf = (row: {
   attachments: parseAttachments(row.attachments),
   actions: parseActions(row.actions),
   modelCostUsd: row.modelCostUsd,
+  sourced: row.sourced,
   unmeasured: row.unmeasured,
   failureReason: row.failureReason,
   createdAt: row.createdAt.toISOString(),
@@ -210,9 +226,7 @@ export async function sendSupervisorMessage(
     // and the only thing the prompt promises a worker can open by path. A path from anywhere else
     // arrived through a caller that did not go through the upload verb, and naming an arbitrary
     // file in the repository is not what a person attaching a brief asked for.
-    if (!attachment.path.startsWith(`${INBOX_DIR}/`) || attachment.path.includes('..')) {
-      return err({ kind: 'attachment_path_refused', name: attachment.name })
-    }
+    if (!isInboxPath(attachment.path)) return err({ kind: 'attachment_path_refused', name: attachment.name })
     const extension = attachment.path.slice(attachment.path.lastIndexOf('.') + 1).toLowerCase()
     if (ATTACHMENT_KIND_BY_EXTENSION[extension] === undefined) {
       return err({ kind: 'attachment_kind_not_allowed', name: attachment.name, extension })
@@ -278,7 +292,21 @@ export async function claimSupervisorTurns(input: {
   const turns: ClaimedSupervisorTurn[] = []
   for (const { id } of claimed) {
     const turn = await readClaimedTurn(id)
-    if (turn !== null) turns.push(turn)
+    if (turn !== null) {
+      turns.push(turn)
+      continue
+    }
+    // FAILED, never silently dropped (fix round 1, M3). The claim has already been written, so a
+    // row skipped here is one this pass will not answer and the next pass cannot touch for five
+    // minutes -- and then will skip again, for the same reason, forever. A person watching would
+    // see "thinking" with nothing behind it.
+    const settled = await recordSupervisorReply(id, {
+      kind: 'failed',
+      reason: TURN_UNREADABLE_REASON,
+      costUsd: null,
+      unmeasured: false,
+    })
+    if (!settled.ok) process.stderr.write(`[chat] ${id}: ${refusalText(settled.error)}\n`)
   }
   return turns
 }
@@ -354,6 +382,7 @@ export async function recordSupervisorReply(
         // Omitted rather than written as a JSON null when there is none: the column is nullable
         // and `Prisma.DbNull` would need a value import of `Prisma` this module does not take.
         ...(outcome.kind === 'answered' && outcome.actions.length > 0 ? { actions: asJson(outcome.actions) } : {}),
+        sourced: outcome.kind === 'answered' && outcome.sourced,
         ...(outcome.kind === 'failed' ? { failureReason: outcome.reason } : {}),
         modelCostUsd: outcome.costUsd,
         unmeasured: outcome.unmeasured,

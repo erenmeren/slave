@@ -9,6 +9,7 @@ import {
   SITUATION_LABEL,
   SUPERVISOR_PER_CALL_CAP_USD,
   buildSupervisorChatPrompt,
+  isSourced,
   parseSupervisorReply,
   renderedChatSources,
   tierOf,
@@ -19,9 +20,11 @@ import {
   type SupervisorWorld,
   type Tier,
 } from '@slave-of-ai/domain'
+import { detachedCalls } from './detachedCalls.js'
 import { recentFeed } from './feed.js'
 import { chatTurnFilePaths } from './paths.js'
 import { writePermissionsFile } from './permission.js'
+import { plural } from './plural.js'
 import { refusalText } from './refusal.js'
 import { DEFAULT_MAX_MODEL_CALLS } from './simulation/auto-run.js'
 import type { DeciderRegistry, ModelDecider, ModelOutcome } from './simulation/llm.js'
@@ -32,31 +35,30 @@ import {
   type ClaimedSupervisorTurn,
   type SupervisorMessageAction,
 } from './supervisorChat.js'
+import { isInboxPath } from './supervisorUploads.js'
 import { loadSupervisorWorld } from './supervisorWorld.js'
 
 /**
  * The chat turns this PROCESS has started and not yet recorded, keyed by the placeholder's id.
  *
- * Module-level for `inFlightIntakeCalls`' own reason: it is the daemon process's set, it must
- * survive from one pass to the next -- the pass that starts a call is not the pass that finishes
- * it -- and there is exactly one daemon per process. Two daemons keep their own sets and cannot
- * see each other's; that is not a hole, because the CLAIM is what keeps them off the same row and
- * the set only saves this process from paying twice.
+ * ITS OWN set, from the shared factory (fix round 1, I3): `tickIntakes` keeps a separate one, so
+ * the chat's concurrency cap never counts intake calls and a chat drain never waits for an intake
+ * reply. Everything about why it is this PROCESS's set is in {@link detachedCalls}.
  *
  * The stored promise NEVER rejects: the whole body of {@link startChatTurn} is caught.
  */
-const inFlight = new Map<string, Promise<void>>()
+const calls = detachedCalls()
 
 /** The chat turns whose model call this process started and has not recorded. A copy. */
 export function inFlightSupervisorChat(): ReadonlySet<string> {
-  return new Set(inFlight.keys())
+  return calls.inFlight()
 }
 
 /** Waits for every detached chat turn to finish recording. The daemon awaits this on shutdown:
  *  recording is a database write for a call the account has already been billed for, so
  *  disconnecting Prisma out from under one would lose exactly the row that must not be lost. */
 export async function drainSupervisorChatCalls(): Promise<void> {
-  while (inFlight.size > 0) await Promise.all([...inFlight.values()])
+  await calls.drain()
 }
 
 /** What one pass did. `due` counts the turns waiting for a reply when the pass began -- which is
@@ -72,6 +74,10 @@ export interface TickSupervisorChatReport {
  *  tests and by the gate, and it reaches the panel through `failureReason` where the panel says
  *  what it means. */
 export const NO_DECIDER_REASON = 'no_decider_for_provider'
+
+/** The reason a turn fails when the project has spent its budget (fix round 1, I2b). A word, like
+ *  {@link NO_DECIDER_REASON}, and the panel says what it means. */
+export const BUDGET_EXHAUSTED_REASON = 'budget_exhausted'
 
 /**
  * What is waiting on a PERSON, as sentences the prompt lists under NEEDS YOU (F R2).
@@ -124,6 +130,13 @@ async function readAttachmentText(
   return Promise.all(
     attachments.map(async (attachment): Promise<ChatAttachment> => {
       if (attachment.kind !== 'text') return attachment
+      // THE SAME CHECK `sendSupervisorMessage` APPLIES ON THE WAY IN, applied again on the way out
+      // (fix round 1, I4). `attachments` is a `Json` column: a row written by a future version, a
+      // hand-edited one, or one from a build whose rule differed can carry any path at all, and
+      // this function would have opened it with the daemon's own rights and inlined it into a
+      // prompt. A stored path that is not a file directly under `docs/inbox/` is simply not read,
+      // and the prompt then lists it as one it could not read -- which is true of it.
+      if (!isInboxPath(attachment.path)) return attachment
       try {
         const text = await readFile(join(repoPath, ...attachment.path.split('/')), 'utf8')
         return { ...attachment, text: text.slice(0, CHAT_ATTACHMENT_CHARS) }
@@ -202,19 +215,25 @@ async function readOnlyCall(
  * actions of the SAME kind in one reply still collide, which is right: that is a model repeating
  * itself, and the second is dropped rather than doubled.
  *
- * An action whose decision is REFUSED (a cooldown, a Supervisor switched off) is simply not in the
- * returned list: the reply still reaches the person, and what they see under it is the actions
- * that really became something. A refused APPLY is a `failed` decision row with its reason, which
- * `applyDecision` writes and the panel shows -- the action stays in the list, because it did
- * become a decision.
+ * AN ACTION WHOSE DECISION IS REFUSED GETS A SENTENCE (fix round 1, I1). A cooldown, a Supervisor
+ * switched off, a second action of the same kind in one reply -- each of those means the person
+ * asked for something and it did not happen, and dropping it into stderr left the reply reading as
+ * though it had. The sentence joins the SAME `notes` the parser's dropped-action sentences and the
+ * citation verdict use, so a person reads one list of "what did not happen" under the answer. The
+ * turn still answers: a refusal to record is never a reason to withhold what the model said, and a
+ * person whose Supervisor is switched off may be asking exactly why nothing is happening.
+ *
+ * A refused APPLY is different and keeps its old treatment: it is a `failed` decision row with its
+ * reason, which `applyDecision` writes and the panel shows, so the action stays in the list --
+ * it DID become a decision, and the card a person sees carries the failure.
  */
 async function recordReplyActions(
   turn: ClaimedSupervisorTurn,
   actions: readonly Action[],
   world: SupervisorWorld,
-  now: Date,
-): Promise<readonly SupervisorMessageAction[]> {
+): Promise<{ readonly recorded: readonly SupervisorMessageAction[]; readonly notes: readonly string[] }> {
   const recorded: SupervisorMessageAction[] = []
+  const notes: string[] = []
   for (const action of actions) {
     const tier: Tier = tierOf(action, world, 'operator_request')
     const decision = await recordDecision({
@@ -234,20 +253,24 @@ async function recordReplyActions(
       decidedBy: 'model',
       // The turn's cost belongs to the TURN, not to each action it produced. `modelCalled` is the
       // question "is a model call BILLABLE HERE", not "did a model write this": `workspaceSpend`
-      // charges every `modelCalled` row with no cost at `SUPERVISOR_PER_CALL_CAP_USD`, so `true`
-      // here would add a dollar per action to a project's budget for one call that has already
-      // been paid for and recorded on the `SupervisorMessage` row (`conversationCost`).
-      //
-      // The residual, said out loud: a conversation's spend is therefore in the message rows and
-      // NOT in `workspaceSpend` today. Teaching the budget guardrail to read the conversation is
-      // its own piece of work -- it is a new term in a total three surfaces render -- and it is
-      // not this one.
+      // charges every `modelCalled` row with no cost at `SUPERVISOR_PER_CALL_CAP_USD`, and the
+      // turn's call is already charged there once, on the `SupervisorMessage` row (fix round 1,
+      // I2a). `true` here would bill the same call again, once per action the reply asked for.
       modelCostUsd: null,
       modelCalled: false,
-      now,
+      // A FRESH stamp, not the pass's (fix round 1, M1): this runs after a model call that can
+      // take a minute, and `recordDecision` writes `createdAt` from it -- which is the anchor its
+      // own cooldown is measured from. A decision stamped a minute in the past is a decision
+      // whose cooldown is already a minute spent.
+      now: new Date(),
     })
     if (!decision.ok) {
-      process.stderr.write(`[chat] ${turn.id}: an action was not recorded — ${refusalText(decision.error)}\n`)
+      const reason = refusalText(decision.error)
+      process.stderr.write(`[chat] ${turn.id}: an action was not recorded — ${reason}\n`)
+      // The VERB in the person's words, not the action's `kind`: they asked for a goal change,
+      // not for a `request_goal_change`. `docs/ia.md` rule 3, at the one place the catalogue's
+      // vocabulary would otherwise reach a reply.
+      notes.push(`I could not record ${ASKED_FOR[action.kind]}: ${reason}`)
       continue
     }
     if (decision.value.tier === 'applied') {
@@ -256,7 +279,39 @@ async function recordReplyActions(
     }
     recorded.push({ action, decisionId: decision.value.id, tier: decision.value.tier })
   }
-  return recorded
+  return { recorded, notes }
+}
+
+/**
+ * What the person asked for, per action kind, as a noun phrase that reads after "I could not
+ * record " (fix round 1, I1).
+ *
+ * A total `Record<ActionKind, string>`, so a twenty-third action kind fails the build here rather
+ * than putting `note_for_planner` in front of somebody in a sentence about their own project.
+ */
+const ASKED_FOR: Readonly<Record<Action['kind'], string>> = {
+  unblock_task: 'unblocking that task',
+  raise_max_attempts: 'giving that task another attempt',
+  set_runtime_roles: 'that change to what somebody does here',
+  assign_capability: 'giving somebody that capability',
+  materialise_company_worker: 'seating somebody on this project',
+  hire_from_catalog: 'hiring somebody',
+  adopt_runbook: 'adopting that way of working',
+  answer_question: 'answering that question',
+  reassign_question: 'sending that question to somebody else',
+  mark_task_failed: 'marking that task failed',
+  cancel_task: 'cancelling that task',
+  discard_stale_candidates: 'withdrawing those unchecked reports',
+  release_worker: 'releasing that worker',
+  steer_run: 'steering that run',
+  request_permission: 'asking for that permission',
+  retry_task: 'retrying that task',
+  retry_review: 'sending that task back through review',
+  clear_halt: 'clearing the halt',
+  request_goal_change: 'that change to the goal',
+  note_for_planner: 'that note for the planner',
+  escalate_to_human: 'raising that with a person',
+  no_action: 'doing nothing',
 }
 
 /**
@@ -297,6 +352,19 @@ function startChatTurn(
       }
 
       const { world, settings } = await loadSupervisorWorld(turn.workspaceId, now)
+      // I2b: THE BUDGET GATE, and it is the same one that stops every other Supervisor call --
+      // `world.budgetExhausted` is `workspaceStats`' verdict, which now counts this conversation's
+      // own turns (I2a). A project past its budget does not get to keep talking its way further
+      // past it, and the turn says so rather than going quiet.
+      //
+      // A HALTED project still chats, deliberately: a halt is exactly when a person asks "why is
+      // nothing running?", and the one surface that could answer that is this one. `tierOf` already
+      // refuses to apply anything under a halt, so a conversation on a halted project costs one
+      // call and changes nothing.
+      if (world.budgetExhausted) {
+        await settle(turn.id, { kind: 'failed', reason: BUDGET_EXHAUSTED_REASON, costUsd: null, unmeasured: false })
+        return
+      }
       const [feed, attachments] = await Promise.all([
         recentFeed(turn.workspaceId, CHAT_FEED_MAX),
         readAttachmentText(workspace.repoPath, turn.attachments),
@@ -347,16 +415,18 @@ function startChatTurn(
 
       // `renderedChatSources(input)` and nothing else: a citation may only be checked against what
       // THIS prompt put in front of the model -- the same feed window, the same attachment slices.
-      // The verdict is kept as a SENTENCE on the reply rather than a chip nobody can act on: a
-      // person reading an answer deserves to know the Supervisor quoted something that was not
-      // there.
+      // The verdict is kept BOTH ways (fix round 1, M2): `isSourced` onto the row's own `sourced`
+      // column, which is the chip R2 asks the panel for, and a sentence in the reply when
+      // something was cited and did not check out -- a person reading an answer deserves to know
+      // the Supervisor quoted something that was not there, and a missing chip does not say it.
       const check = verifySources(parsed.sources, null, world, renderedChatSources(input))
-      const actions = await recordReplyActions(turn, parsed.actions, world, now)
+      const { recorded: actions, notes: actionNotes } = await recordReplyActions(turn, parsed.actions, world)
       const notes = [
         ...parsed.dropped,
+        ...actionNotes,
         ...(check.rejected.length === 0
           ? []
-          : [`${String(check.rejected.length)} citation(s) in this answer could not be checked against the record`]),
+          : [`${plural(check.rejected.length, 'citation')} in this answer could not be checked against the record`]),
       ]
       const text = [
         parsed.text,
@@ -368,6 +438,7 @@ function startChatTurn(
         // empty AND asked for nothing gets one honest sentence rather than a blank bubble.
         text: text.trim() === '' && actions.length === 0 ? '(the Supervisor had nothing to say)' : text,
         actions,
+        sourced: isSourced(check),
         costUsd: outcome.costUsd,
         unmeasured,
       })
@@ -382,12 +453,7 @@ function startChatTurn(
       }).catch(() => undefined)
     }
   })()
-  inFlight.set(
-    turn.id,
-    settled.finally((): void => {
-      inFlight.delete(turn.id)
-    }),
-  )
+  calls.start(turn.id, settled)
 }
 
 /** The one place a turn is written down, so every arm above reports its own refusal the same way. */
@@ -420,8 +486,7 @@ export async function tickSupervisorChat(input: {
   readonly maxConcurrentModelCalls?: number
 }): Promise<TickSupervisorChatReport> {
   const due = await prisma.supervisorMessage.count({ where: { status: 'answering' } })
-  const maxConcurrent = input.maxConcurrentModelCalls ?? DEFAULT_MAX_MODEL_CALLS
-  const room = maxConcurrent - inFlight.size
+  const room = calls.room(input.maxConcurrentModelCalls ?? DEFAULT_MAX_MODEL_CALLS)
   if (room <= 0) return { due, startedModelCalls: 0, skippedInFlight: due }
 
   const claimed = await claimSupervisorTurns({ by: input.by, limit: room, now: input.now })
@@ -429,7 +494,7 @@ export async function tickSupervisorChat(input: {
   for (const turn of claimed) {
     // A row this process is already carrying: the claim can return one after a TTL reclaim races
     // its own in-flight call, and paying twice for one message is the thing the set exists to stop.
-    if (inFlight.has(turn.id)) continue
+    if (calls.has(turn.id)) continue
     startChatTurn(turn, input.deciders, input.defaultModel, input.now)
     started += 1
   }

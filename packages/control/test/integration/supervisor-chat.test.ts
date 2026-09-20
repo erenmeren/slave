@@ -3,14 +3,16 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
-import { CHAT_MESSAGE_MAX_CHARS, type ChatAttachment } from '@slave-of-ai/domain'
+import { CHAT_MESSAGE_MAX_CHARS, SUPERVISOR_PER_CALL_CAP_USD, type ChatAttachment } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { recentFeed } from '../../src/feed.js'
 import { refusalText } from '../../src/refusal.js'
 import type { DeciderRegistry, ModelDecider } from '../../src/simulation/llm.js'
+import { workspaceSpend } from '../../src/spend.js'
 import { listDecisions, recordDecision } from '../../src/supervisor.js'
 import {
+  BUDGET_EXHAUSTED_REASON,
   NO_DECIDER_REASON,
   drainSupervisorChatCalls,
   inFlightSupervisorChat,
@@ -18,6 +20,7 @@ import {
 } from '../../src/supervisorChatTick.js'
 import {
   SUPERVISOR_CHAT_CLAIM_TTL_MS,
+  TURN_UNREADABLE_REASON,
   claimSupervisorTurns,
   conversationCost,
   listSupervisorMessages,
@@ -212,6 +215,7 @@ describe('claimSupervisorTurns and recordSupervisorReply', () => {
       kind: 'answered',
       text: 'three tasks are on the board',
       actions: [],
+      sourced: false,
       costUsd: 0.02,
       unmeasured: false,
     })
@@ -245,6 +249,20 @@ describe('claimSupervisorTurns and recordSupervisorReply', () => {
     expect(row.claimedBy).toBe('two')
   })
 
+  // Fix round 1, M3: a claimed row nothing can read must not sit in `answering` forever.
+  it('settles a placeholder with no message before it as failed, rather than dropping it', async (): Promise<void> => {
+    const orphan = await prisma.supervisorMessage.create({
+      data: { workspaceId: f.workspaceId, seq: 0, role: 'supervisor', status: 'answering', text: '' },
+    })
+
+    expect(await claimSupervisorTurns({ by: 'test', limit: 5 })).toEqual([])
+
+    const row = await prisma.supervisorMessage.findUniqueOrThrow({ where: { id: orphan.id } })
+    expect(row.status).toBe('failed')
+    expect(row.failureReason).toBe(TURN_UNREADABLE_REASON)
+    expect(row.claimedAt).toBeNull()
+  })
+
   it('records an answer with its actions, its cost and the released claim', async (): Promise<void> => {
     const { replyId } = await say('add a pricing page')
     await claimSupervisorTurns({ by: 'test', limit: 5 })
@@ -255,6 +273,7 @@ describe('claimSupervisorTurns and recordSupervisorReply', () => {
         kind: 'answered',
         text: 'I have asked for the goal to change.',
         actions: [{ action, decisionId: 'd-1', tier: 'proposed' }],
+        sourced: true,
         costUsd: 0.04,
         unmeasured: false,
       }),
@@ -266,6 +285,7 @@ describe('claimSupervisorTurns and recordSupervisorReply', () => {
       text: 'I have asked for the goal to change.',
       modelCostUsd: 0.04,
       unmeasured: false,
+      sourced: true,
       actions: [{ action, decisionId: 'd-1', tier: 'proposed' }],
     })
     const row = await prisma.supervisorMessage.findUniqueOrThrow({ where: { id: replyId } })
@@ -295,12 +315,13 @@ describe('claimSupervisorTurns and recordSupervisorReply', () => {
 
   it('refuses to record a second reply for a turn that has already settled', async (): Promise<void> => {
     const { replyId } = await say('hello')
-    await recordSupervisorReply(replyId, { kind: 'answered', text: 'first', actions: [], costUsd: 0.01, unmeasured: false })
+    await recordSupervisorReply(replyId, { kind: 'answered', text: 'first', actions: [], sourced: false, costUsd: 0.01, unmeasured: false })
 
     const again = await recordSupervisorReply(replyId, {
       kind: 'answered',
       text: 'second',
       actions: [],
+      sourced: false,
       costUsd: 0.01,
       unmeasured: false,
     })
@@ -311,9 +332,9 @@ describe('claimSupervisorTurns and recordSupervisorReply', () => {
 
   it('adds the conversation up, counting what nobody could price rather than calling it zero', async (): Promise<void> => {
     const one = await say('first')
-    await recordSupervisorReply(one.replyId, { kind: 'answered', text: 'a', actions: [], costUsd: 0.25, unmeasured: false })
+    await recordSupervisorReply(one.replyId, { kind: 'answered', text: 'a', actions: [], sourced: false, costUsd: 0.25, unmeasured: false })
     const two = await say('second')
-    await recordSupervisorReply(two.replyId, { kind: 'answered', text: 'b', actions: [], costUsd: null, unmeasured: true })
+    await recordSupervisorReply(two.replyId, { kind: 'answered', text: 'b', actions: [], sourced: false, costUsd: null, unmeasured: true })
 
     expect(await conversationCost(f.workspaceId)).toEqual({ usd: 0.25, unmeasuredTurns: 1 })
   })
@@ -533,6 +554,170 @@ describe('tickSupervisorChat', () => {
     const rows = await listSupervisorMessages(f.workspaceId)
     expect(rows[1]?.text).toContain('I cannot find that task.')
     expect(rows[1]?.text).toContain('an action named a task that is not on the board: t-99')
+  })
+
+  // Fix round 1, I1: an action the person asked for that could not be recorded is a thing that did
+  // not happen, and the reply must say so rather than reading as though it had.
+  it('says so when an action could not be recorded, and still answers', async (): Promise<void> => {
+    // The Supervisor is switched off, which is exactly when a person asks why nothing is happening
+    // -- so the turn still runs and still answers; only the action cannot be recorded.
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { supervisorEnabled: false } })
+    await say('add a pricing page')
+    await run(
+      registryOf(
+        answering({
+          text: 'I have asked for that.',
+          actions: [{ kind: 'request_goal_change', request: 'Add a pricing page' }],
+          sources: [],
+        }),
+      ),
+    )
+
+    const rows = await listSupervisorMessages(f.workspaceId)
+    expect(rows[1]?.status).toBe('answered')
+    expect(rows[1]?.text).toContain('I have asked for that.')
+    expect(rows[1]?.text).toContain('I could not record that change to the goal')
+    // Nothing became a decision, so nothing is listed under the reply.
+    expect(rows[1]?.actions).toBeNull()
+    expect(await listDecisions(f.workspaceId)).toHaveLength(0)
+  })
+
+  it('notes the second of two actions of the SAME kind, which the situation key cools', async (): Promise<void> => {
+    await say('two notes please')
+    await run(
+      registryOf(
+        answering({
+          text: 'Noted.',
+          actions: [
+            { kind: 'note_for_planner', text: 'the brief is in docs/inbox' },
+            { kind: 'note_for_planner', text: 'and so is the screenshot' },
+          ],
+          sources: [],
+        }),
+      ),
+    )
+
+    expect(await listDecisions(f.workspaceId)).toHaveLength(1)
+    const rows = await listSupervisorMessages(f.workspaceId)
+    expect(rows[1]?.actions).toHaveLength(1)
+    expect(rows[1]?.text).toContain('I could not record that note for the planner')
+  })
+
+  // Fix round 1, I2b: the gate every other Supervisor call already passes through.
+  it('refuses to call a model at all once the project has spent its budget', async (): Promise<void> => {
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { budgetUsd: 1 } })
+    const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: f.workspaceId } })
+    const spender = await prisma.slave.create({
+      data: { teamId: team.id, role: 'Engineer', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Sam' } })).id },
+    })
+    await prisma.slaveRun.create({ data: { slaveId: spender.id, status: 'succeeded', kind: 'implementation', costUsd: 5 } })
+    await say('are we over budget?')
+    const decider = answering({ text: 'never asked', actions: [], sources: [] })
+
+    await run(registryOf(decider))
+
+    expect(decider.calls).toHaveLength(0)
+    const rows = await listSupervisorMessages(f.workspaceId)
+    expect(rows[1]).toMatchObject({ status: 'failed', failureReason: BUDGET_EXHAUSTED_REASON, modelCostUsd: null })
+  })
+
+  it('still answers on a HALTED project, because that is when a person asks why', async (): Promise<void> => {
+    await prisma.workspace.update({
+      where: { id: f.workspaceId },
+      data: { haltedReason: 'emergency stop by meren', haltedAt: new Date() },
+    })
+    await say('why is nothing running?')
+    const decider = answering({ text: 'Somebody hit the stop.', actions: [], sources: [] })
+
+    await run(registryOf(decider))
+
+    expect(decider.calls).toHaveLength(1)
+    expect((await listSupervisorMessages(f.workspaceId))[1]?.status).toBe('answered')
+  })
+
+  // Fix round 1, I2a: a conversation's turns are the budget guardrail's own money now.
+  it('counts its own turns in the project\u2019s spend, an unpriced one at the cap', async (): Promise<void> => {
+    await say('first')
+    await run(registryOf(answering({ text: 'a', actions: [], sources: [] }, 0.25)))
+    await say('second')
+    await run(registryOf(answering({ text: 'b', actions: [], sources: [] }, null)))
+
+    const spend = await workspaceSpend(f.workspaceId)
+    expect(spend.chatMeasuredUsd).toBe(0.25)
+    expect(spend.chatUnmeasuredTurns).toBe(1)
+    expect(spend.spentUsd).toBe(0.25 + SUPERVISOR_PER_CALL_CAP_USD)
+  })
+
+  // Fix round 1, M2: the chip R2 asks the panel for, stored because it cannot be re-derived.
+  it('marks a reply sourced only when every citation it made checked out', async (): Promise<void> => {
+    const created = await appendEvent({
+      type: 'task.created',
+      workspaceId: f.workspaceId,
+      taskId: f.taskId,
+      actor: 'system',
+      payload: { title: 'Checkout form', requiredRole: 'backend' },
+    })
+    await say('what happened?')
+    await run(
+      registryOf(
+        answering({
+          text: 'A task was added.',
+          actions: [],
+          sources: [{ kind: 'feed', ref: String(created.seq), quote: 'was added to the board' }],
+        }),
+      ),
+    )
+    expect((await listSupervisorMessages(f.workspaceId))[1]?.sourced).toBe(true)
+
+    await say('and now?')
+    await run(
+      registryOf(
+        answering({
+          text: 'Something else happened.',
+          actions: [],
+          sources: [{ kind: 'feed', ref: String(created.seq), quote: 'words nobody ever wrote' }],
+        }),
+      ),
+    )
+    const rows = await listSupervisorMessages(f.workspaceId)
+    expect(rows[3]?.sourced).toBe(false)
+    // Fix round 1, M4: and the person is told, in the same list the dropped actions use.
+    expect(rows[3]?.text).toContain('1 citation in this answer could not be checked against the record')
+  })
+
+  // Fix round 1, I4: a stored path is not evidence of anything. Each of these files EXISTS and is
+  // readable by this process -- which is the whole point: without the check the prompt would carry
+  // its contents, because `readFile` would simply have succeeded.
+  it('does not read an attachment whose stored path is not a file in docs/inbox', async (): Promise<void> => {
+    mkdirSync(join(repoPath, 'docs', 'inbox', 'sub'), { recursive: true })
+    writeFileSync(join(repoPath, 'docs/SECRET.md'), 'the passphrase is hunter2')
+    writeFileSync(join(repoPath, 'docs/inbox/sub/SECRET.md'), 'the passphrase is hunter2')
+    writeFileSync(join(repoPath, 'docs/inbox/2026-09-20-brief.md'), 'the passphrase is hunter2')
+
+    for (const path of ['docs/SECRET.md', 'docs/inbox/sub/SECRET.md', 'docs/inbox/../SECRET.md']) {
+      const sent = await sendSupervisorMessage(f.workspaceId, { text: `read ${path}` })
+      if (!sent.ok) throw new Error(refusalText(sent.error))
+      // Written straight onto the column, the way a future version or a hand edit would.
+      await prisma.supervisorMessage.update({
+        where: { id: sent.value.messageId },
+        data: { attachments: [{ path, name: 'brief.md', bytes: 25, kind: 'text' }] },
+      })
+      const decider = answering({ text: 'I could not read it.', actions: [], sources: [] })
+      await run(registryOf(decider))
+
+      expect(decider.calls[0]?.prompt).not.toContain('hunter2')
+      expect(decider.calls[0]?.prompt).toContain('could not be read')
+    }
+
+    // The control: the same bytes, at a path that IS one of ours, are inlined.
+    const ours = await sendSupervisorMessage(f.workspaceId, {
+      text: 'read the brief',
+      attachments: [{ path: 'docs/inbox/2026-09-20-brief.md', name: 'brief.md', bytes: 25, kind: 'text' }],
+    })
+    if (!ours.ok) throw new Error(refusalText(ours.error))
+    const decider = answering({ text: 'Read it.', actions: [], sources: [] })
+    await run(registryOf(decider))
+    expect(decider.calls[0]?.prompt).toContain('hunter2')
   })
 
   it('arms a read-only turn for an image on claude_code, granting read_repo and nothing else', async (): Promise<void> => {

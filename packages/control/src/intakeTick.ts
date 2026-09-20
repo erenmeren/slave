@@ -1,5 +1,6 @@
 import { prisma } from '@slave-of-ai/db/client'
 import { INTAKE_PER_CALL_CAP_USD, buildIntakePrompt, parseIntakeAnswer } from '@slave-of-ai/domain'
+import { detachedCalls } from './detachedCalls.js'
 import { claimIntakes, recordIntakeReply, type ClaimedIntake } from './intake.js'
 import { refusalText } from './refusal.js'
 import { DEFAULT_MAX_MODEL_CALLS } from './simulation/auto-run.js'
@@ -8,26 +9,25 @@ import type { ModelDecider } from './simulation/llm.js'
 /**
  * The intake calls this PROCESS has started and not yet recorded, keyed by intake id.
  *
- * Module-level for `tickSimulations`' own reason (`./simulation/auto-run.ts`): it is the daemon
- * process's set, it must survive from one pass to the next -- the pass that starts a call is not
- * the pass that finishes it -- and there is exactly one daemon per process. Two daemons keep their
- * own sets and cannot see each other's; that is not a hole, because the CLAIM is what keeps them
- * off the same row and the set only saves this process from paying twice.
+ * The set, the room arithmetic and the drain now come from {@link detachedCalls} (fix round 1,
+ * I3): `tickSupervisorChat` needs the identical four things, and the block was copied verbatim
+ * into it -- which is how a fix made here silently is not made there. The reasoning for why it is
+ * this process's own set, and why two daemons keeping separate ones is not a hole, moved with it.
  *
  * The stored promise NEVER rejects: the whole body of {@link startIntakeCall} is caught.
  */
-const inFlight = new Map<string, Promise<void>>()
+const calls = detachedCalls()
 
 /** The intakes whose model call this process started and has not recorded. A copy. */
 export function inFlightIntakeCalls(): ReadonlySet<string> {
-  return new Set(inFlight.keys())
+  return calls.inFlight()
 }
 
 /** Waits for every detached intake call to finish recording. The daemon awaits this on shutdown:
  *  recording is a database write for a call the account has already been billed for, so
  *  disconnecting Prisma out from under one would lose exactly the row that must not be lost. */
 export async function drainIntakeCalls(): Promise<void> {
-  while (inFlight.size > 0) await Promise.all([...inFlight.values()])
+  await calls.drain()
 }
 
 /** What one pass did. `due` counts the conversations waiting for a reply when the pass began --
@@ -104,12 +104,7 @@ function startIntakeCall(intake: ClaimedIntake, decider: ModelDecider, model: st
       }).catch(() => undefined)
     }
   })()
-  inFlight.set(
-    intake.id,
-    settled.finally((): void => {
-      inFlight.delete(intake.id)
-    }),
-  )
+  calls.start(intake.id, settled)
 }
 
 /**
@@ -134,8 +129,7 @@ export async function tickIntakes(input: {
   const decider = input.modelDecider
   if (decider === undefined) return { due, startedModelCalls: 0, skippedNoDecider: due, skippedInFlight: 0 }
 
-  const maxConcurrent = input.maxConcurrentModelCalls ?? DEFAULT_MAX_MODEL_CALLS
-  const room = maxConcurrent - inFlight.size
+  const room = calls.room(input.maxConcurrentModelCalls ?? DEFAULT_MAX_MODEL_CALLS)
   if (room <= 0) return { due, startedModelCalls: 0, skippedNoDecider: 0, skippedInFlight: due }
 
   const claimed = await claimIntakes({ by: input.by, limit: room, now: input.now })
@@ -143,7 +137,7 @@ export async function tickIntakes(input: {
   for (const intake of claimed) {
     // A row this process is already carrying: the claim can return one after a TTL reclaim races
     // its own in-flight call, and paying twice for one message is the thing the set exists to stop.
-    if (inFlight.has(intake.id)) continue
+    if (calls.has(intake.id)) continue
     startIntakeCall(intake, decider, input.model)
     started += 1
   }

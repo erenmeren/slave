@@ -35,7 +35,7 @@ const reset = async (): Promise<void> => {
   // and a `CompanySlave`, both name-unique, so a second run of this file would collide on rows the
   // first left behind. `Capability` stays out -- it is the seeded taxonomy other files read.
   await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SlaveMessage", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "User", "CollaborationHint", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
+    'TRUNCATE TABLE "ExecutionEvent", "SupervisorDecision", "SupervisorMessage", "SlaveMessage", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "User", "CollaborationHint", "CompanyTeamMember", "CompanyTeam", "Company", "SlaveTemplate" RESTART IDENTITY CASCADE',
   )
 }
 
@@ -965,8 +965,43 @@ describe('workspaceSpend', () => {
       // M59 R12: no intake made this project, so its two terms are zero.
       intakeMeasuredUsd: 0,
       intakeUnmeasuredCalls: 0,
+      // F R2: nobody has talked to this project's Supervisor either.
+      chatMeasuredUsd: 0,
+      chatUnmeasuredTurns: 0,
       spentUsd: 1.5 + 0.25 + 2 * SUPERVISOR_PER_CALL_CAP_USD,
     })
+  })
+
+  // F R2 (task 4 fix round 1): a chat turn is a Supervisor model call, so it is this project's
+  // money on exactly the intake's terms -- and `world.budgetExhausted` is this total, which is what
+  // stops a project past its budget being talked further past it one turn at a time.
+  it('adds what talking to the Supervisor cost, charging an unpriced turn at the cap', async (): Promise<void> => {
+    const fixture = await seed()
+    const turn = (seq: number, over: { modelCostUsd?: number | null; unmeasured?: boolean }) =>
+      prisma.supervisorMessage.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          seq,
+          role: seq % 2 === 0 ? 'human' : 'supervisor',
+          status: seq % 2 === 0 ? 'sent' : 'answered',
+          text: 'x',
+          ...over,
+        },
+      })
+    // The person's line costs nothing; the reply carries the money.
+    await turn(0, {})
+    await turn(1, { modelCostUsd: 0.25 })
+    await turn(2, {})
+    // A Cursor turn: the call happened and the vendor reported no price (erratum E2).
+    await turn(3, { modelCostUsd: null, unmeasured: true })
+    await turn(4, {})
+    // A turn nobody has answered yet has no cost and is NOT unmeasured -- it must not be charged.
+    await turn(5, {})
+
+    const spend = await workspaceSpend(fixture.workspaceId)
+    expect(spend.chatMeasuredUsd).toBe(0.25)
+    expect(spend.chatUnmeasuredTurns).toBe(1)
+    expect(spend.spentUsd).toBe(0.25 + SUPERVISOR_PER_CALL_CAP_USD)
   })
 
   it('reports zeros for a workspace that has spent nothing', async (): Promise<void> => {
@@ -977,6 +1012,8 @@ describe('workspaceSpend', () => {
       supervisorUnmeasuredCalls: 0,
       intakeMeasuredUsd: 0,
       intakeUnmeasuredCalls: 0,
+      chatMeasuredUsd: 0,
+      chatUnmeasuredTurns: 0,
       spentUsd: 0,
     })
   })

@@ -1734,6 +1734,10 @@ model SupervisorMessage {
   actions       Json?
   modelCostUsd  Float?
   unmeasured    Boolean                 @default(false)
+  /// R2: every citation this reply made checked out against what its own prompt rendered, and it
+  /// made at least one. Stored rather than re-derived -- the feed window and the attachment slices
+  /// the check ran against are gone by the time anybody reads the row.
+  sourced       Boolean                 @default(false)
   claimedAt     DateTime?
   claimedBy     String?
   failureReason String?
@@ -1742,6 +1746,9 @@ model SupervisorMessage {
 
   @@unique([workspaceId, seq])
   @@index([workspaceId, status])
+  /// What `claimSupervisorTurns` scans -- a GLOBAL pass over `answering` rows whose claim is
+  /// absent or stale, like `tickIntakes`'. The workspace-scoped index above cannot serve it.
+  @@index([status, claimedAt])
 }
 
 /// Who wrote one line of the conversation (F R1).
