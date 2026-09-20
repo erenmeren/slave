@@ -116,6 +116,25 @@ export type Action =
    *  with a reason. NEVER a deletion (R1) and never automatic ({@link tierOf}): withdrawing a
    *  worker's own report is a judgement, and the rows stay in the table either way. */
   | { readonly kind: 'discard_stale_candidates'; readonly workspaceId: string; readonly count: number }
+  /** R3: a `task_failed` task retried on its own attempts, optionally bundled with the cause
+   *  remedy (`grant`) when the diagnosis names one -- a permission `deniedKinds` says would have
+   *  been granted. Task 3 wires the candidate and the verb; the shape lands now so `tierOf` has
+   *  something real to stamp `applied` under `act`. */
+  | {
+      readonly kind: 'retry_task'
+      readonly taskId: string
+      readonly title: string
+      readonly reason: string
+      // `| undefined`, not bare optional, for `exactOptionalPropertyTypes`'s own reason as
+      // `materialise_company_worker.personId` above: zod's `.optional()` produces exactly this type.
+      readonly grant?: { readonly slaveId: string; readonly permissionKind: string } | undefined
+    }
+  /** R3: a `review_cap_blocked` task sent back through review rather than to rework, for an
+   *  infrastructure failure the reviewer never actually judged. */
+  | { readonly kind: 'retry_review'; readonly taskId: string; readonly title: string; readonly reason: string }
+  /** R4: the one remedy for `workspace_halted` -- clears a `circuit_breaker` halt once its cause
+   *  has a `retry_task` decision. */
+  | { readonly kind: 'clear_halt'; readonly workspaceId: string; readonly reason: string }
   /** No verb at all -- a row a human is asked to look at. The always-available last resort. */
   | { readonly kind: 'escalate_to_human'; readonly summary: string }
   /** Deliberately nothing: the situation is real but waiting is the right move. */
@@ -138,6 +157,9 @@ export const ACTION_KINDS = [
   'release_worker',
   'steer_run',
   'request_permission',
+  'retry_task',
+  'retry_review',
+  'clear_halt',
   'escalate_to_human',
   'no_action',
 ] as const
@@ -231,6 +253,24 @@ const actionUnion = z.discriminatedUnion('kind', [
     // Capped where the action is VALIDATED as well as where it is built, for `steer_run.text`'s
     // reason: a stored row is read back and printed, so the bound belongs on the boundary too.
     why: z.string().min(1).max(1000),
+  }),
+  z.object({
+    kind: z.literal('retry_task'),
+    taskId: z.string().min(1),
+    title: z.string().min(1),
+    reason: z.string().min(1),
+    grant: z.object({ slaveId: z.string().min(1), permissionKind: z.string().min(1) }).optional(),
+  }),
+  z.object({
+    kind: z.literal('retry_review'),
+    taskId: z.string().min(1),
+    title: z.string().min(1),
+    reason: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal('clear_halt'),
+    workspaceId: z.string().min(1),
+    reason: z.string().min(1),
   }),
   z.object({ kind: z.literal('escalate_to_human'), summary: z.string().min(1) }),
   z.object({ kind: z.literal('no_action') }),

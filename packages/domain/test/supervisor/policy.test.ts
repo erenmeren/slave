@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { Action, Candidate, Tier } from '../../src/supervisor/actions.js'
+import { ACTION_KINDS, type Action, type Candidate, type Tier } from '../../src/supervisor/actions.js'
 import { answerBar, answerTier, chooseByRules, mayAnswer, tierOf } from '../../src/supervisor/policy.js'
 import { SITUATION_KINDS } from '../../src/supervisor/situations.js'
 import { question, slave, task, world } from './fixtures.js'
@@ -58,6 +58,12 @@ const ACTIONS: Readonly<Record<Action['kind'], Action>> = {
     kindLabel: 'Fetch over the network',
     why: 'because',
   },
+  // R3 (Task 3 wires the candidates): the diagnosed remedies for `task_failed`,
+  // `review_cap_blocked` and `workspace_halted`. Their shapes exist on `Action` from this task
+  // on so `tierOf`'s autonomy switch (R1) has every kind to apply.
+  retry_task: { kind: 'retry_task', taskId: 't1', title: 'Add the thing', reason: 'a permission denial' },
+  retry_review: { kind: 'retry_review', taskId: 't1', title: 'Add the thing', reason: 'maxBuffer exceeded' },
+  clear_halt: { kind: 'clear_halt', workspaceId: 'ws-1', reason: 'the cause was addressed' },
   escalate_to_human: { kind: 'escalate_to_human', summary: 'a human must look' },
   no_action: { kind: 'no_action' },
 }
@@ -200,6 +206,45 @@ describe('tierOf', () => {
       expect(tierOf(ACTIONS.escalate_to_human, RUNNING, kind)).toBe('escalated')
       expect(tierOf(ACTIONS.no_action, RUNNING, kind)).toBe('noop')
     }
+  })
+})
+
+/**
+ * R1 (spec §2, "the autonomy switch, spelled out"): the one setting that turns EVERY remaining
+ * action `applied`, whatever the situation offered it and whatever the action itself is -- only
+ * the escalate/no_action/halted checks above the switch still stand. `ACTION_KINDS` is read
+ * straight off `actions.ts` (rather than hand-copied) so a fourth action added later is a test
+ * that fails to compile until this table names it, not a case this file silently stops covering.
+ */
+describe('tierOf -- autonomy: act (R1)', () => {
+  const ACTING = world({ autonomy: 'act' })
+  const ACTING_HALTED = world({ autonomy: 'act', halted: { reason: 'circuit_breaker' } })
+
+  it.each(ACTION_KINDS)('applies %s under act while the workspace is running', (kind) => {
+    const expected: Tier = kind === 'escalate_to_human' ? 'escalated' : kind === 'no_action' ? 'noop' : 'applied'
+    expect(tierOf(ACTIONS[kind], ACTING, 'review_cap_blocked')).toBe(expected)
+  })
+
+  // R4: the halt still wins under `act`, except for the one action that exists to end it.
+  it.each(ACTION_KINDS)('proposes %s under act while halted, except clear_halt', (kind) => {
+    const expected: Tier =
+      kind === 'escalate_to_human'
+        ? 'escalated'
+        : kind === 'no_action'
+          ? 'noop'
+          : kind === 'clear_halt'
+            ? 'applied'
+            : 'proposed'
+    expect(tierOf(ACTIONS[kind], ACTING_HALTED, 'review_cap_blocked')).toBe(expected)
+  })
+
+  it('does not clear a halt whose reason is not circuit_breaker -- R4 names none of the others', () => {
+    // `tierOf` itself does not read the halt reason for `clear_halt` (R4's "once per hour, budget
+    // halts never cleared" throttle is Task 3's `candidates`/`carryOut` territory); this pins what
+    // `tierOf` DOES decide -- applied under `act` whatever the halt says -- so a future change to
+    // the reason-gating does not silently move here instead.
+    const budgetHalted = world({ autonomy: 'act', halted: { reason: 'budget_exhausted' } })
+    expect(tierOf(ACTIONS.clear_halt, budgetHalted, 'workspace_halted')).toBe('applied')
   })
 })
 

@@ -105,6 +105,15 @@ export function actionText(action: Action, taskTitles: Readonly<Record<string, s
     // which is the same reason `capabilityLabel` rides on `assign_capability` above.
     case 'request_permission':
       return `ask a person to let ${action.name} ${action.kindLabel.toLowerCase()}`
+    // Self-running-project R3: the TITLE is on the action, this function's own reason for every
+    // other action that names a task without a `taskTitles` map to look one up in.
+    case 'retry_task':
+      return `retry "${action.title}": ${action.reason}`
+    case 'retry_review':
+      return `send "${action.title}" back through review: ${action.reason}`
+    // Self-running-project R4: the one remedy for a halted workspace.
+    case 'clear_halt':
+      return `clear the halt on this workspace: ${action.reason}`
     case 'escalate_to_human':
       return `escalate to a human: ${action.summary}`
     case 'no_action':

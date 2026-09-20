@@ -44,7 +44,14 @@ const ROUTINELY_UNBLOCKABLE: SituationKind = 'review_cap_blocked'
 export function tierOf(action: Action, world: SupervisorWorld, situationKind: SituationKind): Tier {
   if (action.kind === 'escalate_to_human') return 'escalated'
   if (action.kind === 'no_action') return 'noop'
-  if (world.halted !== null) return 'proposed'
+  // R4: a halt still forces a proposal for everything -- except the one action that exists to end
+  // it. `clear_halt` is applied under `act` even here; every other kind, `act` or not, is
+  // `proposed` while the workspace is halted.
+  if (world.halted !== null) return action.kind === 'clear_halt' && world.autonomy === 'act' ? 'applied' : 'proposed'
+  // R1: the switch. A person who turned autonomy on gets every routine and non-routine action
+  // applied; only the escalation stays a question. The halted rule above still wins, except for
+  // the one action that exists to end a halt (Task 3 adds it; `clear_halt` is applied under `act`).
+  if (world.autonomy === 'act') return 'applied'
   switch (action.kind) {
     case 'unblock_task':
       return situationKind === ROUTINELY_UNBLOCKABLE ? 'applied' : 'proposed'
@@ -116,6 +123,12 @@ export function tierOf(action: Action, world: SupervisorWorld, situationKind: Si
     // M49 R2: a worker's own report is evidence until somebody decides it is not, and a tick that
     // withdrew five of them by itself would be the Supervisor editing the record.
     case 'discard_stale_candidates':
+    // R3/R4 (Task 3 wires the candidates): under `propose`, none of the three is routine -- a
+    // retry spends an attempt or a review slot, and clearing a halt is the one thing `propose`
+    // never lets the Supervisor do by itself. `act` already returned above.
+    case 'retry_task':
+    case 'retry_review':
+    case 'clear_halt':
       return 'proposed'
   }
 }

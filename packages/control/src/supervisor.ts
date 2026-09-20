@@ -541,6 +541,13 @@ async function carryOut(
       // `setSlavePermission` appends records `by` as the PERSON who approved this decision, which is
       // the true answer to "who granted this" -- the Supervisor only ever asked.
       return reached(await setSlavePermission(action.slaveId, action.permissionKind, 'allow', principal))
+    case 'retry_task':
+    case 'retry_review':
+    case 'clear_halt':
+      // R3/R4: the self-running-project spec's Task 3 wires the candidate that offers these and
+      // the verb that carries them out. Nothing before Task 3 lands can choose one -- `candidates`
+      // never emits it -- so reaching here is a caller bug, not a state this switch answers for.
+      throw new Error(`carryOut: ${action.kind} is not wired yet (self-running-project Task 3)`)
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')

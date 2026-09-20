@@ -58,6 +58,14 @@ export function task(overrides: Partial<SupervisorTask> = {}): SupervisorTask {
     // escalation sentence either.
     stage: null,
     stageEscalation: null,
+    // R2: a task that has never failed and never been denied anything, which is what every
+    // fixture in this file means unless it says otherwise -- a test wanting `task_failed`'s
+    // remedy facts hands the world a `latestFailure`/`deniedKinds`/`failureCount` of its own.
+    latestFailure: null,
+    deniedKinds: [],
+    failureCount: 0,
+    // R3: nobody has retried this task yet.
+    retries: 0,
     ...overrides,
   }
 }
@@ -178,6 +186,9 @@ export function decision(overrides: Partial<SupervisorDecisionRecord> = {}): Sup
 export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld {
   return {
     workspaceId: 'ws-1',
+    // R1: `propose` is today's behaviour and every existing fixture in this directory means
+    // exactly that unless a test says otherwise -- a test about `act` hands the world its own.
+    autonomy: 'propose',
     now: NOW,
     goal: null,
     // 0 is "the goal was never set" (M40 §1), which is what `goal: null` above means.

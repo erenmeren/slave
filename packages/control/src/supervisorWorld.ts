@@ -1060,6 +1060,13 @@ export async function loadSupervisorWorld(
           // what a runbook is. Null whenever the task has no stage, the workspace has no runbook,
           // or that stage sets no escalation -- all three are ordinary.
           stageEscalation: row.stage === null ? null : (escalationByStage.get(row.stage) ?? null),
+          // R2/R3: self-running-project Task 4 loads these off `run.failed`/`run.tool_denied` and
+          // `Task.retries`. Defaulted to "never failed, never denied, never retried" here so this
+          // loader compiles ahead of that read.
+          latestFailure: null,
+          deniedKinds: [],
+          failureCount: 0,
+          retries: 0,
         })
       }
 
@@ -1107,6 +1114,10 @@ export async function loadSupervisorWorld(
 
       const world: SupervisorWorld = {
         workspaceId: workspace.id,
+        // R1: self-running-project Task 4 selects `Workspace.supervisorAutonomy` on the read above
+        // and reads it here. Defaulted to `propose` -- today's behaviour -- so this loader compiles
+        // ahead of that read and every existing caller keeps meaning exactly what it always meant.
+        autonomy: 'propose',
         now: now.getTime(),
         goal: workspace.goal,
         goalVersion: workspace.goalVersion,
