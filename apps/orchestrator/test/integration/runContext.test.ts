@@ -654,14 +654,19 @@ describe('buildRunContext', () => {
         skillRoots: fixture.skillRoots,
       })
 
-      expect(prompt).toContain('- security.application: Application security')
+      // `backend.api-design` predates the capability-mapping plan's R1 and sorts inside the first
+      // 80 keys, unlike `security.application`: the seed is 111 rows since R1 grew it to cover
+      // every catalogue division, past `CAPABILITY_KEYS_IN_PROMPT` (80), so this real-taxonomy run
+      // is genuinely capped now (capability-mapping spec, errata E8).
+      expect(prompt).toContain('- backend.api-design: API design')
       expect(prompt.indexOf('CAPABILITIES YOU MAY ASK FOR')).toBeLessThan(prompt.indexOf(PLANNING_GRAPH_INSTRUCTIONS))
       expect(prompt.endsWith(PLANNING_GRAPH_INSTRUCTIONS)).toBe(true)
       // The three literals the fake CLI routes on: a planning prompt that carried any of them in
       // THIS section would be answered from the wrong fixture.
       const section = prompt.slice(prompt.indexOf('CAPABILITIES YOU MAY ASK FOR'), prompt.indexOf(PLANNING_GRAPH_INSTRUCTIONS))
       for (const literal of ['"verdict"', '"replan"', '"task graph"']) expect(section).not.toContain(literal)
-      expect(manifest.sections).toContainEqual({ kind: 'capabilities', keys: expect.any(Array), capped: false })
+      expect(section).toContain('further keys are not listed.)')
+      expect(manifest.sections).toContainEqual({ kind: 'capabilities', keys: expect.any(Array), capped: true })
       // M48 R4: the process section is the one that now sits last, between the keys and the trailer.
       expect(manifest.sections.at(-1)).toEqual({ kind: 'handoff_protocol' })
     })
