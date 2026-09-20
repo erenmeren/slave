@@ -247,7 +247,7 @@ describe('mapTemplateCapabilities', () => {
     expect(after.mappedCapabilityKeys).toEqual(['qa.exploratory'])
   })
 
-  it('a template deleted mid-batch fails the whole batch, drops the increments, and never stops later batches (Important 2)', async (): Promise<void> => {
+  it('a template deleted mid-batch fails the whole batch, drops the increments, and never stops later batches (Important 2, and round 2: rows/droppedKeys retract too)', async (): Promise<void> => {
     const firstId = await structured('First', ['x'])
     const secondId = await structured('Second', ['y'])
     const decider: ModelDecider = async () => {
@@ -256,9 +256,11 @@ describe('mapTemplateCapabilities', () => {
       await prisma.slaveTemplate.delete({ where: { id: secondId } })
       return {
         kind: 'answer',
+        // `made.up` is not a taxonomy key -- if `droppedKeys` were counted before the rollback
+        // (rather than retracted with it), this batch would report one.
         text: JSON.stringify({
           personas: [
-            { id: firstId, keys: ['qa.exploratory'] },
+            { id: firstId, keys: ['qa.exploratory', 'made.up'] },
             { id: secondId, keys: ['qa.exploratory'] },
           ],
         }),
@@ -268,7 +270,8 @@ describe('mapTemplateCapabilities', () => {
       }
     }
     const report = await mapTemplateCapabilities({ decider, model: 'm', only: 'stale', dryRun: false })
-    expect(report).toMatchObject({ calls: 1, failedBatches: 1, mapped: 0, unchanged: 0 })
+    expect(report).toMatchObject({ calls: 1, failedBatches: 1, mapped: 0, unchanged: 0, droppedKeys: 0 })
+    expect(report.rows).toEqual([])
     const row = await prisma.slaveTemplate.findUniqueOrThrow({ where: { id: firstId } })
     expect(row.capabilityMappingHash).toBeNull()
     expect(row.mappedCapabilityKeys).toEqual([])

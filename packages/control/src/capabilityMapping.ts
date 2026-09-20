@@ -178,28 +178,38 @@ export async function mapTemplateCapabilities(input: MapTemplateCapabilitiesInpu
     // Classified BEFORE the dryRun branch (fix round 1, minors) so `mapped`/`unchanged`/`rows`
     // mean the same thing whether or not this call actually writes: `rows` holds only the
     // personas that would be (or were) written, never one already exactly what is stored.
+    //
+    // Every number this classification produces -- `batchMapped`/`batchUnchanged`/`batchDropped`/
+    // `batchRows`/`batchWrote` -- is a BATCH-LOCAL, folded into the running totals only once this
+    // batch's outcome is known (immediately under `dryRun`, since nothing is attempted; after the
+    // transaction resolves otherwise, fix round 2): a batch whose transaction throws is rolled
+    // back in the database, and must be rolled back in the report too -- `rows` must not claim a
+    // persona was written, and `droppedKeys` must not count keys from an answer this pass never
+    // actually acted on.
     const writes: { candidate: Candidate; keys: readonly string[]; dropped: readonly string[] }[] = []
+    const batchRows: CapabilityMappingRow[] = []
     let batchUnchanged = 0
+    let batchDropped = 0
     for (const candidate of batch) {
       const result = byId.get(candidate.persona.id)
       if (result === undefined) {
         absent += 1
         continue
       }
-      droppedKeys += result.dropped.length
+      batchDropped += result.dropped.length
       const same = sameStringSet(candidate.storedMapped, result.keys) && candidate.storedHash === candidate.hash
       if (same) {
         batchUnchanged += 1
         continue
       }
       writes.push({ candidate, keys: result.keys, dropped: result.dropped })
-    }
-    for (const write of writes) {
-      rows.push({ templateId: write.candidate.persona.id, name: write.candidate.persona.name, keys: write.keys, dropped: write.dropped })
+      batchRows.push({ templateId: candidate.persona.id, name: candidate.persona.name, keys: result.keys, dropped: result.dropped })
     }
     if (input.dryRun) {
       mapped += writes.length
       unchanged += batchUnchanged
+      droppedKeys += batchDropped
+      rows.push(...batchRows)
       continue
     }
     // The counters below are LOCAL to this batch and folded into the running totals only once the
@@ -232,6 +242,8 @@ export async function mapTemplateCapabilities(input: MapTemplateCapabilitiesInpu
     }
     mapped += batchMapped
     unchanged += batchUnchanged
+    droppedKeys += batchDropped
+    rows.push(...batchRows)
     if (batchWrote) wrote = true
   }
 
