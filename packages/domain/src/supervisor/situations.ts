@@ -111,6 +111,20 @@ export const SITUATION_KINDS = [
    */
   'memory_candidates_piling',
   'workspace_halted',
+  /**
+   * Supervisor chat R3: a person asked the Supervisor for something in the conversation, and the
+   * reply proposed an action about it. `subjectId` is the MESSAGE id -- one situation per turn,
+   * so two requests in two messages are two rows and a cooldown over one never silences the other.
+   *
+   * The SECOND kind {@link observe} never emits, and for `stale_task`'s own reason: it is not a
+   * predicate over rows. Nothing about the world says a person wants something; only their message
+   * does, and the turn that read it is what records this.
+   *
+   * Last in the list deliberately: `observe` sorts by this list's index, and a kind it never
+   * produces can only ever be ordered against the ones it does by where a reader would look for
+   * it -- after everything the rules found by themselves.
+   */
+  'operator_request',
 ] as const
 
 export type SituationKind = (typeof SITUATION_KINDS)[number]
@@ -156,8 +170,8 @@ export const situationSchema: z.ZodType<Situation> = z.object({
  * key rendered as prose is the leak M44 closes -- the Supervisor panel's recent-decision rows read
  * `no_reviewer · proposed · pending · by model`.
  *
- * `Record<SituationKind, string>` is load-bearing: an EIGHTEENTH kind fails the build here rather
- * than turning up on the page as an identifier (seventeen as of M52's `permission_blocked`).
+ * `Record<SituationKind, string>` is load-bearing: a NINETEENTH kind fails the build here rather
+ * than turning up on the page as an identifier (eighteen as of the chat's `operator_request`).
  * Each label says what is STUCK, in the words the report already uses; the decision's own
  * `situation.summary` carries the specifics beside it.
  */
@@ -181,4 +195,5 @@ export const SITUATION_LABEL: Record<SituationKind, string> = {
   engagement_over: 'Engagement over',
   memory_candidates_piling: 'Unverified knowledge piling up',
   workspace_halted: 'Project halted',
+  operator_request: 'Something you asked for',
 }

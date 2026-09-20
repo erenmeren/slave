@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { OPERATOR_REQUEST_MAX_CHARS } from './constants.js'
 
 /**
  * Every action the Supervisor may choose (M38 §3). Closed, and rule-built: the model picks an
@@ -135,6 +136,28 @@ export type Action =
   /** R4: the one remedy for `workspace_halted` -- clears a `circuit_breaker` halt once its cause
    *  has a `retry_task` decision. */
   | { readonly kind: 'clear_halt'; readonly workspaceId: string; readonly reason: string }
+  /**
+   * `requestChange`: the person asked, in the conversation, for the project's goal to change
+   * (Supervisor chat R3). What the composer did directly until now -- the same verb, reached by
+   * typing a sentence instead of opening a form.
+   *
+   * `request` is WHAT THEY ASKED FOR in their own terms, not a new goal: `requestChange` opens a
+   * change request a person approves, and a model that wrote the replacement goal itself would be
+   * editing the project's whole point from inside a chat message. ALWAYS a proposal under
+   * `propose` ({@link tierOf}) -- the conversation borrows the Supervisor's authority, it gets
+   * none of its own.
+   */
+  | { readonly kind: 'request_goal_change'; readonly request: string }
+  /**
+   * A dated line appended to `docs/inbox/NOTES.md` in the repository and committed (Supervisor
+   * chat R3): a way to hand the next planner context without changing the goal.
+   *
+   * The one action here whose effect is a FILE. Nothing reads it automatically -- it is read by
+   * whoever plans next, the way a person's note in a repository is -- which is exactly why it is
+   * cheap enough to be offered in a conversation and why it is still never automatic under
+   * `propose`: a commit to the repository is a commit to the repository.
+   */
+  | { readonly kind: 'note_for_planner'; readonly text: string }
   /** No verb at all -- a row a human is asked to look at. The always-available last resort. */
   | { readonly kind: 'escalate_to_human'; readonly summary: string }
   /** Deliberately nothing: the situation is real but waiting is the right move. */
@@ -160,6 +183,8 @@ export const ACTION_KINDS = [
   'retry_task',
   'retry_review',
   'clear_halt',
+  'request_goal_change',
+  'note_for_planner',
   'escalate_to_human',
   'no_action',
 ] as const
@@ -271,6 +296,14 @@ const actionUnion = z.discriminatedUnion('kind', [
     kind: z.literal('clear_halt'),
     workspaceId: z.string().min(1),
     reason: z.string().min(1),
+  }),
+  z.object({
+    kind: z.literal('request_goal_change'),
+    request: z.string().min(1).max(OPERATOR_REQUEST_MAX_CHARS),
+  }),
+  z.object({
+    kind: z.literal('note_for_planner'),
+    text: z.string().min(1).max(OPERATOR_REQUEST_MAX_CHARS),
   }),
   z.object({ kind: z.literal('escalate_to_human'), summary: z.string().min(1) }),
   z.object({ kind: z.literal('no_action') }),

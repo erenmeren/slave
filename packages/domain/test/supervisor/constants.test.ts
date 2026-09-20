@@ -6,6 +6,7 @@ import {
   FAILURE_REASON_MAX_CHARS,
   HALT_CLEAR_INTERVAL_MS,
   INTEGRATED_STALE_MS,
+  OPERATOR_REQUEST_MAX_CHARS,
   PENDING_TTL_MS,
   PRUNE_BATCH,
   RETRIES_MAX,
@@ -45,6 +46,13 @@ describe('supervisor constants', () => {
     expect(SOURCES_MAX).toBe(8)
     expect(DECISION_RETENTION_MS).toBe(30 * 24 * 60 * 60 * 1000)
     expect(PRUNE_BATCH).toBe(500)
+  })
+
+  // Supervisor chat R3: the cap on the two strings a CONVERSATION may put into a stored action.
+  // Nothing in this task reads it either -- `actionSchema` does, at the boundary -- and a cap spelt
+  // in hundreds where thousands were meant would silently refuse every note longer than a sentence.
+  it('is the operator-request cap the spec specifies', () => {
+    expect(OPERATOR_REQUEST_MAX_CHARS).toBe(2000)
   })
 
   // R3/R4: the diagnosed remedies' own three. `HALT_CLEAR_INTERVAL_MS` is the one a slipped unit

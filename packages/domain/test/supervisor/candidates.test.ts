@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { actionSchema, candidateSchema, type Action, type Candidate } from '../../src/supervisor/actions.js'
 import { candidates, isStaffableTask, permissionWhyFor, teamPlanOf } from '../../src/supervisor/candidates.js'
-import { WAITING_STALE_MS } from '../../src/supervisor/constants.js'
+import { OPERATOR_REQUEST_MAX_CHARS, WAITING_STALE_MS } from '../../src/supervisor/constants.js'
 import { observe } from '../../src/supervisor/observe.js'
 import type { Situation } from '../../src/supervisor/situations.js'
 import type { SupervisorTask, SupervisorWorld } from '../../src/supervisor/world.js'
@@ -1229,6 +1229,24 @@ describe('actionSchema reads a stored action back', () => {
     // And each goes through the validator a stored candidate row goes through.
     for (const action of [retry, review, halt]) {
       expect(candidateSchema.safeParse({ action, tier: 'proposed', why: 'the diagnosis names it' }).success).toBe(true)
+    }
+  })
+
+  // Supervisor chat R3: the two the CONVERSATION brought with it. Neither names a row in the
+  // world -- one carries what the person asked for, the other the line a planner reads later --
+  // so the only thing a stored row can be wrong about is the text itself being empty.
+  it('reads the two operator-request actions back, and refuses an empty one', () => {
+    const change = { kind: 'request_goal_change', request: 'invoicing first, then reporting' }
+    expect(actionSchema.safeParse(change)).toMatchObject({ success: true, data: change })
+    const note = { kind: 'note_for_planner', text: 'The second page is the one that is wrong.' }
+    expect(actionSchema.safeParse(note)).toMatchObject({ success: true, data: note })
+    expect(actionSchema.safeParse({ kind: 'request_goal_change', request: '' }).success).toBe(false)
+    expect(actionSchema.safeParse({ kind: 'note_for_planner', text: '' }).success).toBe(false)
+    // Capped where the action is VALIDATED as well as where it is built, the `steer_run.text`
+    // precedent: a stored row is read back, printed and -- for the note -- committed to a file.
+    expect(actionSchema.safeParse({ kind: 'note_for_planner', text: 'x'.repeat(OPERATOR_REQUEST_MAX_CHARS + 1) }).success).toBe(false)
+    for (const action of [change, note]) {
+      expect(candidateSchema.safeParse({ action, tier: 'proposed', why: 'the person asked for it' }).success).toBe(true)
     }
   })
 

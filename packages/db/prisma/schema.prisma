@@ -1687,6 +1687,10 @@ enum SupervisorSituationKind {
   /// M49 R2: unverified observation candidates are piling up on this project.
   memory_candidates_piling
   workspace_halted
+  /// Supervisor chat R3: a person asked for something in the conversation and the reply proposed
+  /// an action about it. The subject is the MESSAGE. The second kind `observe` never produces:
+  /// nothing about the world says a person wants something, only their message does.
+  operator_request
 }
 
 /// What happens to a chosen action -- fixed in code by `tierOf`, never chosen by the model.

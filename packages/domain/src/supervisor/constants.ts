@@ -186,3 +186,16 @@ export function boundReason(reason: string): string {
  * by a person an hour after it was proposed.
  */
 export const HALT_CLEAR_INTERVAL_MS = 3_600_000
+
+/**
+ * How much text one of the two OPERATOR-REQUEST actions may carry (Supervisor chat R3).
+ *
+ * Both are strings a model wrote from what a person typed, and both outlive the turn: a
+ * `request_goal_change.request` becomes a goal-change request a person reads and approves, and a
+ * `note_for_planner.text` is COMMITTED to `docs/inbox/NOTES.md` for the next planner to read. Two
+ * thousand characters is {@link RATIONALE_MAX_CHARS}' own bound -- a paragraph or three, enough to
+ * say what is wanted and not enough to be a document -- and it is applied where the action is
+ * VALIDATED as well as where it is built, the `steer_run.text` precedent: a stored row is read
+ * back, printed and acted on, so the bound belongs on the boundary too.
+ */
+export const OPERATOR_REQUEST_MAX_CHARS = 2000

@@ -64,6 +64,10 @@ const ACTIONS: Readonly<Record<Action['kind'], Action>> = {
   retry_task: { kind: 'retry_task', taskId: 't1', title: 'Add the thing', reason: 'a permission denial' },
   retry_review: { kind: 'retry_review', taskId: 't1', title: 'Add the thing', reason: 'maxBuffer exceeded' },
   clear_halt: { kind: 'clear_halt', workspaceId: 'ws-1', reason: 'the cause was addressed' },
+  // Supervisor chat R3: the two the conversation borrows the Supervisor's authority for. Neither
+  // names a row -- one carries what the person asked for, the other the line the next planner reads.
+  request_goal_change: { kind: 'request_goal_change', request: 'invoicing first, then reporting' },
+  note_for_planner: { kind: 'note_for_planner', text: 'The second page is the one that is wrong.' },
   escalate_to_human: { kind: 'escalate_to_human', summary: 'a human must look' },
   no_action: { kind: 'no_action' },
 }
@@ -108,6 +112,11 @@ describe('tierOf', () => {
     ['steer_run', 'applied', 'proposed'],
     // M52 R5. ALWAYS a proposal: the Supervisor may point at a wall, and only a person moves it.
     ['request_permission', 'proposed', 'proposed'],
+    // Supervisor chat R3: a conversation gets no authority of its own. Both are `proposed` under
+    // `propose`, beside `cancel_task` -- a goal is the project's whole point and a note is a line
+    // committed to the repository, and the switch (R1) is the only thing that applies either.
+    ['request_goal_change', 'proposed', 'proposed'],
+    ['note_for_planner', 'proposed', 'proposed'],
     ['escalate_to_human', 'escalated', 'escalated'],
     ['no_action', 'noop', 'noop'],
   ]

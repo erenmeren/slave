@@ -37,8 +37,8 @@ describe('every union a person reads has a label (M44 R5)', () => {
   // M51 R3: the sixteenth action. `ACTION_KINDS` has no Postgres enum of its own (an `Action` lives
   // inside a JSONB column), so this count is the only thing that notices a kind added to the union
   // and forgotten in the list the event payloads validate against.
-  it('carries the twenty action kinds, `steer_run` among them', () => {
-    expect(ACTION_KINDS).toHaveLength(20)
+  it('carries the twenty-two action kinds, `steer_run` among them', () => {
+    expect(ACTION_KINDS).toHaveLength(22)
     expect(ACTION_KINDS).toContain('steer_run')
   })
 
@@ -60,6 +60,15 @@ describe('every union a person reads has a label (M44 R5)', () => {
     expect(ACTION_KINDS).toContain('retry_task')
     expect(ACTION_KINDS).toContain('retry_review')
     expect(ACTION_KINDS).toContain('clear_halt')
+  })
+
+  // Supervisor chat R3: the eighteenth situation and the two actions that join the catalogue with
+  // it, held by the same coverage check and the same count. The label says what HAPPENED -- a
+  // person asked for something -- rather than naming the conversation it arrived through.
+  it('names the eighteenth situation the way a person says it, and carries its two actions', () => {
+    expect(SITUATION_LABEL.operator_request).toBe('Something you asked for')
+    expect(ACTION_KINDS).toContain('request_goal_change')
+    expect(ACTION_KINDS).toContain('note_for_planner')
   })
 
   it('covers every tier, decision status and decider', () => {
