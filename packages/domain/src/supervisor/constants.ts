@@ -134,3 +134,41 @@ export const MEMORY_CANDIDATE_STALE_MS = 24 * 3_600_000
 /** How many stale candidates make a situation. Below five it is one task nobody finished; at five
  *  it is a habit, and the Supervisor may say so. */
 export const STALE_CANDIDATES_MIN = 5
+
+/**
+ * How many times the Supervisor retries ONE task before it stops trying (R3, spec §3's last row).
+ *
+ * Two, because the two retries are different attempts at different things: the first carries the
+ * remedy the diagnosis named (a grant, a steer, the same run again), and the second is the one
+ * that says whether the remedy worked. A third would be the same remedy a third time -- "remedies
+ * are not working" is itself the finding, and the candidate set becomes `escalate_to_human` alone
+ * with the last failure in the summary.
+ *
+ * Counted on `Task.retries`, which `retryTask` increments -- NOT on `Task.attempt`, which is the
+ * work's own attempt counter and is reset by the retry.
+ */
+export const RETRIES_MAX = 2
+
+/**
+ * How much of a failure reason a situation's summary and a remedy's own reason may carry.
+ *
+ * A `run.failed` reason is whatever the run wrote -- a sentence, or a stderr dump with a stack in
+ * it -- and both places this bounds are read by a person and sent to a model: the summary goes
+ * into the decision prompt and onto the stored row, and the reason rides on the action. Three
+ * hundred characters is {@link SOURCE_QUOTE_MAX_CHARS}' own bound, for the same reason: it is
+ * enough to say what broke and not enough to be a log.
+ */
+export const FAILURE_REASON_MAX_CHARS = 300
+
+/**
+ * How long the Supervisor waits before it may clear the same workspace's halt again (R4).
+ *
+ * One hour, and it is a bound on SPEND rather than on noise: clearing a breaker halt lets the
+ * project start runs again, so a Supervisor that cleared every halt the moment it saw one would
+ * turn the breaker into a speed bump. `Workspace.haltClearedAt` is the stamp -- the same column
+ * `clearHalt` writes, so an operator's own clear starts the hour too -- and the rule is enforced
+ * TWICE: the candidate is not offered inside the window (this file's own rule, `candidates.ts`),
+ * and `carryOut` refuses it inside the window as well (Task 4), because a decision can be approved
+ * by a person an hour after it was proposed.
+ */
+export const HALT_CLEAR_INTERVAL_MS = 3_600_000

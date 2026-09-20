@@ -1122,6 +1122,10 @@ export async function loadSupervisorWorld(
         goal: workspace.goal,
         goalVersion: workspace.goalVersion,
         halted: haltOf(snapshot),
+        // R4: the stamp the once-an-hour rule reads. Task 4 selects `Workspace.haltClearedAt` on
+        // the read above and passes it here; null until then, which is the state of a workspace
+        // whose halt has never been cleared and leaves every existing caller meaning what it meant.
+        haltClearedAt: null,
         // The same comparison `evaluateGuardrails` makes, on the same total: an UNBUDGETED
         // workspace (`budgetUsd` null) is never exhausted, however much it has spent. Kept as its
         // own field rather than folded into `halted` because the two answer different questions --

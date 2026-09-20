@@ -416,6 +416,17 @@ export interface SupervisorWorld {
   readonly goalVersion: number
   /** Non-null while the budget/failure guardrail has halted scheduling. */
   readonly halted: { readonly reason: string } | null
+  /**
+   * R4: epoch ms of `Workspace.haltClearedAt` -- when this workspace's halt was last retracted, by
+   * an operator's `clear-halt` or by the Supervisor's own `clear_halt`. Null on a workspace whose
+   * halt has never been cleared.
+   *
+   * Read by exactly one rule: the `clear_halt` candidate is not offered again inside
+   * `HALT_CLEAR_INTERVAL_MS` of it. The world carries the STAMP rather than the answer
+   * because `carryOut` re-checks the same window at apply time (a proposal can be approved an hour
+   * after it was made) and the two must be reading one fact.
+   */
+  readonly haltClearedAt: number | null
   readonly budgetExhausted: boolean
   readonly tasks: readonly SupervisorTask[]
   readonly slaves: readonly SupervisorSlave[]

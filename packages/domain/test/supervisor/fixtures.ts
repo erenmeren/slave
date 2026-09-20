@@ -194,6 +194,9 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     // 0 is "the goal was never set" (M40 §1), which is what `goal: null` above means.
     goalVersion: 0,
     halted: null,
+    // R4: no halt has ever been cleared here, so the once-an-hour rule only ever decides in a test
+    // that says when the last clear was.
+    haltClearedAt: null,
     budgetExhausted: false,
     tasks: [],
     slaves: [],
