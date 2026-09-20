@@ -29,10 +29,9 @@ import { createRunUnlessArchived } from './runs.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { promote } from './memory.js'
 import { implementerOf, rejectTask, verifyConcludedRun } from './verify.js'
+import { buildReviewDiff } from './reviewDiff.js'
 import { gitIn } from './worktree.js'
 
-/** A single unified diff capped this many characters, past which it is truncated with a marker. */
-const DIFF_CHAR_LIMIT = 60_000
 
 /** Task ids already warned about as unreviewable -- once per daemon lifetime, not once per tick
  *  (M15 spec §3 B5): the seeded `reviewing` fixture task made this line the daemon log's loudest
@@ -501,8 +500,11 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     // (the step-2 null check cannot see that), and a diff failure outside this handler would leave
     // the run wedged non-terminal in `starting` -- counted as live by step 1 on every later tick --
     // while the thrown error aborts the rest of the pass.
-    const rawDiff = await gitIn(workspace.repoPath, 'diff', `${workspace.baseBranch}...${task.branch}`)
-    const diff = rawDiff.length > DIFF_CHAR_LIMIT ? `${rawDiff.slice(0, DIFF_CHAR_LIMIT)}\n[diff truncated]` : rawDiff
+    // Built per file (`reviewDiff.ts`), never as one `git diff` read: a branch carrying screenshots
+    // or generated reports used to overflow the child's stdout buffer before the reviewer was
+    // spawned, and two such failures in a row blocked the task for a human (2026-09-20).
+    const reviewDiff = await buildReviewDiff(workspace.repoPath, workspace.baseBranch, task.branch)
+    const diff = reviewDiff.text
 
     await appendEvent({
       type: 'task.review_started',
@@ -549,7 +551,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
       taskId: task.id,
       worktreePath: latestImpl.worktreePath,
       provider: resolved.provider,
-      reviewDiff: { text: diff, base: workspace.baseBranch, head: task.branch, capped: rawDiff.length > DIFF_CHAR_LIMIT },
+      reviewDiff: { text: diff, base: workspace.baseBranch, head: task.branch, capped: reviewDiff.capped },
     })
 
     handle = await runAdapter.start({
