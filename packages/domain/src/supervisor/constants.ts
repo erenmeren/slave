@@ -161,6 +161,20 @@ export const RETRIES_MAX = 2
 export const FAILURE_REASON_MAX_CHARS = 300
 
 /**
+ * A failure reason, bounded and ellipsised, for the places a person and a model read one: a
+ * situation's summary, a situation's facts and a remedy's own reason (R3).
+ *
+ * Beside the constant rather than in `observe.ts`, where it was first written (fix round 1): both
+ * `observe` and `candidates` bound a reason, `candidates` already imports `observe`, and a
+ * function the two share belongs in the file neither of them is.
+ */
+export function boundReason(reason: string): string {
+  const trimmed = reason.trim()
+  if (trimmed.length <= FAILURE_REASON_MAX_CHARS) return trimmed
+  return `${trimmed.slice(0, FAILURE_REASON_MAX_CHARS)}\u2026`
+}
+
+/**
  * How long the Supervisor waits before it may clear the same workspace's halt again (R4).
  *
  * One hour, and it is a bound on SPEND rather than on noise: clearing a breaker halt lets the

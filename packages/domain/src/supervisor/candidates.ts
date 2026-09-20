@@ -5,9 +5,9 @@ import { profileKeyOf } from '../evidence/derive.js'
 import { PERMISSION_KINDS, PERMISSION_LABEL, type PermissionKind } from '../permission/kinds.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
 import type { Action, Candidate } from './actions.js'
-import { HALT_CLEAR_INTERVAL_MS, RETRIES_MAX } from './constants.js'
+import { boundReason, HALT_CLEAR_INTERVAL_MS, RETRIES_MAX } from './constants.js'
 import { readFailure, type FailureDiagnosis } from './diagnosis.js'
-import { boundReason, rosterCapabilities, staffableSlaves } from './observe.js'
+import { rosterCapabilities, staffableSlaves } from './observe.js'
 import { mayAnswer, tierOf } from './policy.js'
 import type { Situation, SituationKind } from './situations.js'
 import type {
@@ -74,25 +74,41 @@ function readTaskFailure(task: SupervisorTask): FailureDiagnosis {
 }
 
 /**
- * The worker a refused operation would be granted to: the one whose runs kept meeting that wall.
+ * The worker a refused operation would be granted to, and its name when the world still holds it.
  *
- * It is NOT read off the task's own run, and that is not laziness: `SupervisorWorld.runs` holds
- * only NON-terminal runs, so a failed task has none there at all. {@link SupervisorDenial} carries
- * no task id either -- it is one grouped read of `run.tool_denied` per worker per operation over
- * the window -- so the workspace's denials OF THAT KIND are what is left, and the worker refused it
- * most often is the one the failure is about. Ties go to the lowest slave id, so two passes over
- * one world make the same offer.
+ * The task's OWN failure fact first, and that is the only exact answer there is: `latestFailure`
+ * and `deniedKinds` are both per task, so "this task's newest failure was this worker's run, and
+ * this task was refused this kind" pairs the two without guessing. Nothing else in the world can:
+ * {@link SupervisorWorld.runs} holds only non-terminal runs, so a failed task has none there, and
+ * `world.denials` is loaded FROM those same live runs (`loadDenials` filters by live run ids), so
+ * a task whose refused run has ended is in neither (fix round 1, Important 1).
  *
- * A worker the world no longer holds, or one that has been released, is never returned: the grant
- * would name a row `carryOut` cannot write, and the retry goes out without it.
+ * The denials are still consulted after it, for the one case they do cover: a task that failed
+ * while another run of the same worker is still going, and any world whose loader filled them and
+ * not the failure's `slaveId`. There, the worker refused this kind most often is the one the
+ * failure is about, ties on the lowest slave id so two passes over one world make one offer, and a
+ * worker the world no longer holds (or has released) is skipped -- the grant would name a row
+ * `carryOut` cannot write.
+ *
+ * The NAME is null when the roster no longer holds the worker. The grant is still offered: the
+ * failure fact says that worker ran this task, and `applyDecision` re-reads the row and refuses
+ * `slave_not_found` if it is really gone -- which is the `assign_capability` precedent (`policy.ts`)
+ * rather than a candidate withheld over a roster a caller might not have filled.
  */
-function deniedWorker(world: SupervisorWorld, permissionKind: string): SupervisorSlave | undefined {
+function deniedWorker(
+  task: SupervisorTask,
+  permissionKind: string,
+  world: SupervisorWorld,
+): { readonly slaveId: string; readonly name: string | null } | undefined {
+  const nameOf = (slaveId: string): string | null => world.slaves.find((one) => one.id === slaveId)?.name ?? null
+  const ran = task.latestFailure?.slaveId ?? null
+  if (ran !== null && task.deniedKinds.includes(permissionKind)) return { slaveId: ran, name: nameOf(ran) }
   const refused = world.denials
     .filter((denial) => denial.kind === permissionKind)
     .toSorted((a, b) => (a.count === b.count ? a.slaveId.localeCompare(b.slaveId) : b.count - a.count))
   for (const denial of refused) {
     const worker = world.slaves.find((one) => one.id === denial.slaveId && !one.released)
-    if (worker !== undefined) return worker
+    if (worker !== undefined) return { slaveId: worker.id, name: worker.name }
   }
   return undefined
 }
@@ -133,23 +149,23 @@ function retryOffer(
     case 'denied_tool': {
       const kind = deniedKind ?? ''
       const label = permissionLabelOf(kind)
-      const worker = deniedWorker(world, kind)
+      const worker = deniedWorker(task, kind, world)
       const reason = `The last run was refused \u2018${label}\u2019, which this work cannot be done without.`
       if (worker === undefined) {
         return {
           action: retry(reason),
           why:
-            `This work was refused \u2018${label}\u2019 and stopped there. Nobody the project still holds was ` +
-            'refused it, so the retry goes out on its own and the refusal will be on the task again if that ' +
-            'wall is still the one in the way.',
+            `This work was refused \u2018${label}\u2019 and stopped there. Nothing in the world says which ` +
+            'worker met that wall, so the retry goes out on its own and the refusal will be on the task again ' +
+            'if it is still the one in the way.',
         }
       }
       return {
-        action: retry(reason, { slaveId: worker.id, permissionKind: kind }),
+        action: retry(reason, { slaveId: worker.slaveId, permissionKind: kind }),
         why:
-          `${worker.name} was refused \u2018${label}\u2019 and the work stopped there. One decision grants it ` +
-          'and starts the task again; nothing else about the task changes, and the grant is recorded against ' +
-          'this decision rather than handed out quietly.',
+          `${worker.name ?? 'The worker that ran it'} was refused \u2018${label}\u2019 and the work stopped ` +
+          'there. One decision grants it and starts the task again; nothing else about the task changes, and ' +
+          'the grant is recorded against this decision rather than handed out quietly.',
       }
     }
     case 'infrastructure':
@@ -193,10 +209,35 @@ function retryOffer(
   }
 }
 
-/** R4: a task in one of these states, with a retry behind it, is the evidence that the failures
- *  the breaker counted have been ANSWERED -- somebody (or the Supervisor) started the work again
- *  and it is moving. A `failed` or `blocked` retry is a retry that went nowhere. */
+/** R4: the three states that mean a task is MOVING. Half of the evidence that a breaker halt's
+ *  cause was addressed -- a `failed` or `blocked` task is a retry that went nowhere, and a `done`
+ *  one is not evidence that anything is running again. */
 const HALT_CAUSE_ADDRESSED: readonly TaskStatusName[] = ['rework', 'running', 'reviewing']
+
+/**
+ * R4's temporal link, restored from data the world already carries (fix round 1, Important 2).
+ *
+ * The status alone was not evidence of anything: `releaseTaskAfterFailure` writes `rework`, so a
+ * retry that FAILED AGAIN left the task sitting in exactly the state this was reading as "the
+ * cause was addressed" -- and the breaker, whose whole job is to stop a runaway, became an hourly
+ * speed bump in front of one.
+ *
+ * So the evidence is a pair: a `retry_task` decision that was actually APPLIED to this task, and
+ * no failure on the task SINCE that decision was made. `latestFailure.at` is the newest failure
+ * there is, so "older than the decision" is "the retry has not failed yet" -- either it is still
+ * running or it has got past the point that kept tripping the breaker. A task that has never
+ * failed at all passes trivially, which is the same statement with nothing to compare against.
+ */
+function retryAnswered(task: SupervisorTask, world: SupervisorWorld): boolean {
+  if (!HALT_CAUSE_ADDRESSED.includes(task.status)) return false
+  return world.decisions.some(
+    (decision) =>
+      decision.actionKind === 'retry_task' &&
+      decision.status === 'applied' &&
+      decision.subjectId === task.id &&
+      (task.latestFailure === null || task.latestFailure.at < decision.createdAt),
+  )
+}
 
 /**
  * R3: the steer sentence, plus the walls this worker keeps meeting.
@@ -763,9 +804,9 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
       //   - the breaker is what halted it. `budget_exhausted` is money and `emergency_stop` is a
       //     person; clearing either would be the Supervisor overruling somebody. The reason is read
       //     off the situation's own facts, which is where `observe` put it.
-      //   - the cause was ADDRESSED: some task has been retried and is moving again
-      //     ({@link HALT_CAUSE_ADDRESSED}). Without it the halt would be cleared straight back into
-      //     the failures that tripped it.
+      //   - the cause was ADDRESSED, in {@link retryAnswered}'s exact sense: a `retry_task` that
+      //     was applied to a task that is moving now and has not failed since. Without the "since"
+      //     the halt would be cleared straight back into the failures that tripped it.
       //   - the hour has passed. `haltClearedAt` is the same stamp an operator's own `clear-halt`
       //     writes, so a second runaway inside the hour stops here and is escalated -- and
       //     `carryOut` checks the same window again at apply time (Task 4), because a proposal can
@@ -774,8 +815,10 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
       // The FRESHEST such task, ties on id: the reason names one task by title, and which one it
       // names must not depend on the order a loader happened to return the board in.
       const addressed = world.tasks
-        .filter((one) => one.retries > 0 && HALT_CAUSE_ADDRESSED.includes(one.status))
-        .toSorted((a, b) => (b.statusSince === a.statusSince ? a.id.localeCompare(b.id) : b.statusSince - a.statusSince))[0]
+        .filter((one) => retryAnswered(one, world))
+        .toSorted((a, b) =>
+          b.statusSince === a.statusSince ? a.id.localeCompare(b.id) : b.statusSince - a.statusSince,
+        )[0]
       if (addressed === undefined) break
       if (world.haltClearedAt !== null && world.now - world.haltClearedAt < HALT_CLEAR_INTERVAL_MS) break
       offers.push(
@@ -783,7 +826,9 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
           {
             kind: 'clear_halt',
             workspaceId: world.workspaceId,
-            reason: `"${addressed.title}" has been retried since the breaker tripped, so the failures it counted have been answered.`,
+            reason:
+              `"${addressed.title}" has been retried since the breaker tripped and has not failed again, ` +
+              'so the failures it counted have been answered.',
           },
           world,
           situation.kind,

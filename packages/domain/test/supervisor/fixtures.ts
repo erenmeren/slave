@@ -15,6 +15,7 @@ import type {
   SupervisorSlave,
   SupervisorTask,
   SupervisorWorld,
+  TaskFailure,
   ThreadMessage,
 } from '../../src/supervisor/world.js'
 
@@ -66,6 +67,22 @@ export function task(overrides: Partial<SupervisorTask> = {}): SupervisorTask {
     failureCount: 0,
     // R3: nobody has retried this task yet.
     retries: 0,
+    ...overrides,
+  }
+}
+
+/**
+ * One `run.failed` on a task (R2). The default is the emptiest failure that is still a real one:
+ * an implementation run, a reason no rule in `readFailure` matches, and NO worker -- so a test
+ * that wants a grant on the retry has to say whose run was refused rather than getting one by
+ * accident (fix round 1, Important 1).
+ */
+export function taskFailure(overrides: Partial<TaskFailure> = {}): TaskFailure {
+  return {
+    runKind: 'implementation',
+    reason: 'the run ended without finishing the work',
+    at: NOW - 1,
+    slaveId: null,
     ...overrides,
   }
 }

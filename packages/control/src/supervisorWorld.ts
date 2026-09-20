@@ -1063,6 +1063,11 @@ export async function loadSupervisorWorld(
           // R2/R3: self-running-project Task 4 loads these off `run.failed`/`run.tool_denied` and
           // `Task.retries`. Defaulted to "never failed, never denied, never retried" here so this
           // loader compiles ahead of that read.
+          //
+          // `TaskFailure.slaveId` is part of that read (Task 3 fix round 1, Important 1): it is the
+          // `slaveId` of the `run.failed` event the reason came from, and it is the ONLY place a
+          // `retry_task` grant can find the worker to grant to -- `denials` below is loaded from
+          // LIVE runs, so a failed task's own refusal is never in it.
           latestFailure: null,
           deniedKinds: [],
           failureCount: 0,

@@ -93,16 +93,20 @@ describe('readFailure -- the diagnosis table (spec §3)', () => {
     })
   })
 
-  it('reads the infrastructure marker first when a failure carries both signals', () => {
-    // The order IS the table's order (spec §3): a run the system broke never reached the tool it
-    // would have been refused, so the grant would be a remedy for something that did not happen.
+  it('reads the REFUSAL first when a failure carries both signals', () => {
+    // Fix round 1, the controller's ruling: a refusal is the more specific fact -- a gate really
+    // did turn this worker away from something this work needs -- while an infrastructure marker
+    // is a string on a reason line and can ride along with anything, including the message a
+    // refused run wrote on its way out. Reading it first would retry into the same wall.
     const reading = readFailure({
       ...base,
       reason: 'spawn ENOENT',
       deniedKinds: ['network_fetch'],
       requiredPermissions: ['network_fetch'],
     })
-    expect(reading).toEqual({ reading: 'infrastructure', deniedKind: null })
+    expect(reading).toEqual({ reading: 'denied_tool', deniedKind: 'network_fetch' })
+    // And the infrastructure reading is still what is left when nothing was refused.
+    expect(readFailure({ ...base, reason: 'spawn ENOENT' }).reading).toBe('infrastructure')
   })
 
   it('names the kind the task asked for when several were refused', () => {

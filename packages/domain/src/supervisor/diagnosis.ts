@@ -62,10 +62,10 @@ const INFRASTRUCTURE = /maxBuffer|could not be read|spawn|ENOENT|EACCES|adapter|
  *  words the breaker uses for it, and the stream ending with nothing concluded. */
 const LOST = /behavioural_loop|run_timeout|going in circles|output stream ended/iu
 
-/** A reviewer's no. The first alternative is spec §3's own wording ("review verdict rejected") and
- *  the second is what a bare rejection reason looks like on the row; keeping both is keeping the
- *  table's words beside the row's. */
-const REJECTED = /review.*rejected|rejected/iu
+/** A reviewer's no. Spec §3 spells the row "review verdict rejected", which this matches: the
+ *  word IS the signal, and an alternative naming the review as well would match a strict subset of
+ *  what this already matches. */
+const REJECTED = /rejected/iu
 
 /** The one operation a role can imply on its own. */
 const NETWORK_FETCH: PermissionKind = 'network_fetch'
@@ -94,21 +94,25 @@ function deniedKindFor(input: FailureFacts): string | null {
 }
 
 /**
- * Read one failure (spec §3's table, top row first).
+ * Read one failure (spec §3's table).
  *
  * Pure and total: same facts in, same reading out, and a failure it cannot read is `unknown`
- * rather than a best guess. The ORDER is the table's order, and the one place it decides anything
- * is a failure carrying both an infrastructure marker and a refusal: infrastructure wins, because
- * a run that died on a missing binary or a full buffer never reached the tool it would have been
- * refused, and granting a permission for a wall the run never hit is a remedy for something that
- * did not happen. The retry the infrastructure reading offers costs one attempt, and the refusal
- * is still on the task's facts for the pass after it.
+ * rather than a best guess.
+ *
+ * The ORDER decides exactly one thing -- a failure carrying both a refusal and an infrastructure
+ * marker -- and `denied_tool` wins it (fix round 1, the controller's ruling). A refusal is the
+ * MORE SPECIFIC fact: a gate really did turn this worker away from something this work needs, and
+ * the remedy names it. An infrastructure marker is a string on a reason line and can ride along
+ * with anything, including the very message a refused run wrote on its way out; reading it first
+ * would offer a bare retry into the same wall and spend one of the two retries finding that out.
+ * The infrastructure reading is what is left when nothing was refused, which is also the case it
+ * describes.
  */
 export function readFailure(input: FailureFacts): FailureDiagnosis {
   const reason = input.reason ?? ''
-  if (INFRASTRUCTURE.test(reason)) return { reading: 'infrastructure', deniedKind: null }
   const deniedKind = deniedKindFor(input)
   if (deniedKind !== null) return { reading: 'denied_tool', deniedKind }
+  if (INFRASTRUCTURE.test(reason)) return { reading: 'infrastructure', deniedKind: null }
   // "With no denied kind" is the table's own clause, and it is deliberately ANY refusal rather
   // than only the ones above: a worker that kept meeting a wall nothing here can grant may well be
   // going in circles AROUND that wall, and a steer telling it to change approach would be advice

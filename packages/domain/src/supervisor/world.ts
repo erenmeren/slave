@@ -26,6 +26,20 @@ export interface TaskFailure {
   readonly runKind: 'implementation' | 'review' | 'planning'
   readonly reason: string
   readonly at: number
+  /**
+   * WHO ran it -- the `slaveId` of the run that failed, or null when the event did not record one
+   * (fix round 1, Important 1).
+   *
+   * The whole reason it is here: a `retry_task` that bundles a permission grant has to name the
+   * worker the grant is for, and there is nowhere else in the world to find it.
+   * {@link SupervisorWorld.runs} holds only NON-TERMINAL runs, so a failed task has none there,
+   * and {@link SupervisorWorld.denials} is loaded from those same live runs -- so a task whose
+   * refused run has ended is in neither. The failure fact is per TASK, which is what makes the
+   * pairing exact: this task's newest failure was this worker's run.
+   *
+   * LOADER CONTRACT: the `slaveId` of the `run.failed` event {@link reason} came from (Task 4).
+   */
+  readonly slaveId: string | null
 }
 
 /** A task, flattened to the facts a situation predicate actually reads. */

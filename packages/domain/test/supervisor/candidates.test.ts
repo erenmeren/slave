@@ -6,7 +6,18 @@ import { observe } from '../../src/supervisor/observe.js'
 import type { Situation } from '../../src/supervisor/situations.js'
 import type { SupervisorTask, SupervisorWorld } from '../../src/supervisor/world.js'
 import { steerTextFor } from '../../src/breaker/constants.js'
-import { NOW, TAXONOMY, question, runbook, slave, supervisorRun, task, world } from './fixtures.js'
+import {
+  NOW,
+  TAXONOMY,
+  decision,
+  question,
+  runbook,
+  slave,
+  supervisorRun,
+  task,
+  taskFailure,
+  world,
+} from './fixtures.js'
 
 /** The one situation `w` produces, with the candidates the rules offer for it. */
 function offered(w: SupervisorWorld): readonly Candidate[] {
@@ -147,18 +158,21 @@ describe('candidates -- task_failed remedies (R3)', () => {
     return candidates(situation!, w)
   }
 
-  it('offers the retry WITH the grant that would have unstuck it, first', () => {
+  // Fix round 1, Important 1: the LOADER-REACHABLE shape. A failed task's run is terminal, so it
+  // is in neither `world.runs` (non-terminal only) nor `world.denials` (loaded FROM those runs) --
+  // the worker to grant to rides on the task's own failure fact and nowhere else.
+  it('offers the retry WITH the grant, naming the worker whose run was refused', () => {
     const w = world({
       tasks: [
         failed({
           requiredRole: 'research',
           deniedKinds: ['network_fetch'],
-          latestFailure: { runKind: 'implementation', reason: 'the run ended without finishing the work', at: NOW - 1 },
+          latestFailure: taskFailure({ slaveId: 's-2' }),
         }),
       ],
-      // Two below `PERMISSION_TRIP_COUNT`, so this world raises no `permission_blocked` of its own.
-      denials: [{ slaveId: 's7', kind: 'network_fetch', count: 2, latestRunId: 'run-9' }],
-      slaves: [slave({ id: 's7', name: 'Robin', runtimeRoles: ['research'] })],
+      denials: [],
+      runs: [],
+      slaves: [slave({ id: 's-2', name: 'Robin', runtimeRoles: ['research'] })],
     })
     const offers = failedOffers(w)
     expect(kinds(offers)).toEqual(['retry_task', 'escalate_to_human', 'no_action'])
@@ -167,16 +181,49 @@ describe('candidates -- task_failed remedies (R3)', () => {
       taskId: 't1',
       title: 'Add the thing',
       reason: expect.stringContaining('Fetch over the network'),
-      grant: { slaveId: 's7', permissionKind: 'network_fetch' },
+      grant: { slaveId: 's-2', permissionKind: 'network_fetch' },
     })
     // The words, never the key -- the panel prints this sentence (`docs/ia.md` rule 3).
     expect(offers[0]?.action).not.toMatchObject({ reason: expect.stringContaining('network_fetch') })
+    // The worker's name is in the sentence a person judges the offer by.
+    expect(offers[0]?.why).toContain('Robin')
+  })
+
+  it('still names the worker when the failure fact has none and a live run was refused', () => {
+    // The fallback the denials cover: the task failed while another run of the same worker is
+    // still going, so the wall is on `world.denials` even though the failed run is gone. Two
+    // refusals, below `PERMISSION_TRIP_COUNT`, so this world raises no `permission_blocked` of
+    // its own.
+    const w = world({
+      tasks: [failed({ requiredRole: 'research', deniedKinds: ['network_fetch'] })],
+      denials: [
+        { slaveId: 's7', kind: 'network_fetch', count: 2, latestRunId: 'run-9' },
+        { slaveId: 's8', kind: 'network_fetch', count: 1, latestRunId: 'run-8' },
+      ],
+      slaves: [
+        slave({ id: 's7', name: 'Robin', runtimeRoles: ['research'] }),
+        slave({ id: 's8', name: 'Sam', runtimeRoles: ['research'] }),
+      ],
+    })
+    // The worker refused it most often, not the first row the loader returned.
+    expect(failedOffers(w)[0]?.action).toMatchObject({ grant: { slaveId: 's7', permissionKind: 'network_fetch' } })
+  })
+
+  it('offers the grant even when the roster no longer holds that worker', () => {
+    // The failure fact says whose run it was; `applyDecision` re-reads the row and refuses
+    // `slave_not_found` if it is really gone, which is the `assign_capability` precedent.
+    const w = world({
+      tasks: [
+        failed({ requiredRole: 'research', deniedKinds: ['network_fetch'], latestFailure: taskFailure({ slaveId: 's-2' }) }),
+      ],
+    })
+    expect(failedOffers(w)[0]?.action).toMatchObject({ grant: { slaveId: 's-2', permissionKind: 'network_fetch' } })
   })
 
   it('applies that retry under act and proposes it under propose', () => {
     const acting = world({
       autonomy: 'act',
-      tasks: [failed({ latestFailure: { runKind: 'implementation', reason: 'spawn ENOENT', at: NOW - 1 } })],
+      tasks: [failed({ latestFailure: taskFailure({ reason: 'spawn ENOENT' }) })],
     })
     expect(failedOffers(acting)[0]?.tier).toBe('applied')
     expect(failedOffers({ ...acting, autonomy: 'propose' })[0]?.tier).toBe('proposed')
@@ -184,7 +231,7 @@ describe('candidates -- task_failed remedies (R3)', () => {
 
   it('retries WITHOUT a grant when the system is what failed', () => {
     const w = world({
-      tasks: [failed({ latestFailure: { runKind: 'implementation', reason: 'stdout maxBuffer length exceeded', at: NOW - 1 } })],
+      tasks: [failed({ latestFailure: taskFailure({ reason: 'stdout maxBuffer length exceeded' }) })],
     })
     const offers = failedOffers(w)
     expect(kinds(offers)).toEqual(['retry_task', 'escalate_to_human', 'no_action'])
@@ -192,13 +239,14 @@ describe('candidates -- task_failed remedies (R3)', () => {
     expect(action?.kind === 'retry_task' && action.grant).toBeUndefined()
   })
 
-  it('retries without a grant when the world no longer holds the worker that was refused', () => {
+  it('retries without a grant when nothing in the world says which worker met the wall', () => {
     const w = world({
       tasks: [
         failed({
           requiredRole: 'research',
           deniedKinds: ['network_fetch'],
-          latestFailure: { runKind: 'implementation', reason: 'the run ended', at: NOW - 1 },
+          // No `slaveId` on the failure and no denial row: there is nobody to name.
+          latestFailure: taskFailure({ reason: 'the run ended' }),
         }),
       ],
     })
@@ -209,7 +257,7 @@ describe('candidates -- task_failed remedies (R3)', () => {
 
   it('carries a steer reason for a worker that was going in circles', () => {
     const w = world({
-      tasks: [failed({ latestFailure: { runKind: 'implementation', reason: 'guardrail behavioural_loop tripped', at: NOW - 1 } })],
+      tasks: [failed({ latestFailure: taskFailure({ reason: 'guardrail behavioural_loop tripped' }) })],
     })
     const action = failedOffers(w)[0]?.action
     // "steer: " is the prefix the run context reads (Task 4): the retry is not a plain re-run, it
@@ -218,7 +266,7 @@ describe('candidates -- task_failed remedies (R3)', () => {
   })
 
   it('retries a failure it cannot read ONCE, and does not retry it a second time', () => {
-    const unreadable = { runKind: 'implementation' as const, reason: 'the worker gave up', at: NOW - 1 }
+    const unreadable = taskFailure({ reason: 'the worker gave up' })
     const first = world({ tasks: [failed({ latestFailure: unreadable, retries: 0 })] })
     expect(kinds(failedOffers(first))).toEqual(['retry_task', 'escalate_to_human', 'no_action'])
 
@@ -235,7 +283,7 @@ describe('candidates -- task_failed remedies (R3)', () => {
           retries: 1,
           requiredRole: 'research',
           deniedKinds: ['network_fetch'],
-          latestFailure: { runKind: 'implementation', reason: 'the run ended', at: NOW - 1 },
+          latestFailure: taskFailure({ reason: 'the run ended' }),
         }),
       ],
       denials: [{ slaveId: 's7', kind: 'network_fetch', count: 2, latestRunId: 'run-9' }],
@@ -251,7 +299,7 @@ describe('candidates -- task_failed remedies (R3)', () => {
           retries: 2,
           requiredRole: 'research',
           deniedKinds: ['network_fetch'],
-          latestFailure: { runKind: 'implementation', reason: 'the run ended in the same place', at: NOW - 1 },
+          latestFailure: taskFailure({ reason: 'the run ended in the same place' }),
         }),
       ],
       denials: [{ slaveId: 's7', kind: 'network_fetch', count: 2, latestRunId: 'run-9' }],
@@ -276,7 +324,7 @@ describe('candidates -- task_failed remedies (R3)', () => {
         failed({
           requiredRole: 'research',
           deniedKinds: ['network_fetch'],
-          latestFailure: { runKind: 'implementation', reason: 'the run ended', at: NOW - 1 },
+          latestFailure: taskFailure({ reason: 'the run ended' }),
         }),
       ],
       denials: [{ slaveId: 's7', kind: 'network_fetch', count: 2, latestRunId: 'run-9' }],
@@ -295,7 +343,7 @@ describe('candidates -- review_cap_blocked retries the review (R3)', () => {
 
   it('offers retry_review first when the reviewer never reached a verdict', () => {
     const w = world({
-      tasks: [task({ ...capped, latestFailure: { runKind: 'review', reason: 'no valid verdict in the output', at: NOW - 1 } })],
+      tasks: [task({ ...capped, latestFailure: taskFailure({ runKind: 'review', reason: 'no valid verdict in the output' }) })],
     })
     const offers = offered(w)
     expect(kinds(offers)).toEqual(['retry_review', 'unblock_task', 'mark_task_failed', 'escalate_to_human', 'no_action'])
@@ -309,7 +357,7 @@ describe('candidates -- review_cap_blocked retries the review (R3)', () => {
 
   it('keeps the order it always had when the reviewer really did judge the work', () => {
     const w = world({
-      tasks: [task({ ...capped, latestFailure: { runKind: 'review', reason: 'the review rejected the change', at: NOW - 1 } })],
+      tasks: [task({ ...capped, latestFailure: taskFailure({ runKind: 'review', reason: 'the review rejected the change' }) })],
     })
     expect(kinds(offered(w))).toEqual(['unblock_task', 'mark_task_failed', 'escalate_to_human', 'no_action'])
   })
@@ -319,7 +367,7 @@ describe('candidates -- review_cap_blocked retries the review (R3)', () => {
     // had anything to do with a review.
     const w = world({
       tasks: [
-        task({ status: 'blocked', latestFailure: { runKind: 'review', reason: 'no valid verdict in the output', at: NOW - 1 } }),
+        task({ status: 'blocked', latestFailure: taskFailure({ runKind: 'review', reason: 'no valid verdict in the output' }) }),
       ],
     })
     expect(kinds(offered(w))).toEqual(['unblock_task', 'mark_task_failed', 'escalate_to_human', 'no_action'])
@@ -548,9 +596,18 @@ describe('candidates -- the escalate-only situations', () => {
  * halt nobody has addressed is still a person's to look at.
  */
 describe('candidates -- clear_halt (R4)', () => {
-  /** A task the Supervisor has already retried, moving again -- the evidence the cause was
-   *  addressed. `rework`, `running` and `reviewing` are the three states that mean "moving". */
+  /** The task whose retry answered the breaker: it was retried, it is moving, and it has not
+   *  failed since (fix round 1, Important 2 -- the status alone is not evidence of anything,
+   *  because `releaseTaskAfterFailure` writes `rework` for a retry that failed AGAIN). */
   const addressed = task({ id: 't9', title: 'Fetch the report', status: 'rework', retries: 1 })
+  /** The decision that retried it, applied an hour ago. */
+  const retried = decision({
+    situationKind: 'task_failed',
+    subjectId: 't9',
+    actionKind: 'retry_task',
+    status: 'applied',
+    createdAt: NOW - 3_600_000,
+  })
   const breaker = { reason: 'circuit_breaker' }
 
   /** The halt situation's own offers. Not {@link offered}: a board holding a `reviewing` task with
@@ -562,8 +619,8 @@ describe('candidates -- clear_halt (R4)', () => {
     return candidates(situation!, w)
   }
 
-  it('offers clear_halt first once the cause has been retried', () => {
-    const w = world({ halted: breaker, tasks: [addressed] })
+  it('offers clear_halt first once a retry was applied and has not failed since', () => {
+    const w = world({ halted: breaker, tasks: [addressed], decisions: [retried] })
     const offers = haltOffers(w)
     expect(kinds(offers)).toEqual(['clear_halt', 'escalate_to_human', 'no_action'])
     expect(offers[0]?.action).toEqual({
@@ -573,56 +630,85 @@ describe('candidates -- clear_halt (R4)', () => {
     })
   })
 
+  it('does NOT offer it when the retry has already failed again', () => {
+    // The defect this rule exists for: the retry ran, failed, and `releaseTaskAfterFailure` put
+    // the task back in `rework` -- which the status-only predicate read as "the cause was
+    // addressed", turning the breaker into an hourly speed bump in front of a runaway.
+    const w = world({
+      halted: breaker,
+      tasks: [task({ ...addressed, latestFailure: taskFailure({ at: retried.createdAt + 1 }) })],
+      decisions: [retried],
+    })
+    expect(kinds(haltOffers(w))).toEqual(['escalate_to_human', 'no_action'])
+  })
+
+  it('offers it when the only failure on the task is OLDER than the retry', () => {
+    // The ordinary case: the failure is what the retry answered.
+    const w = world({
+      halted: breaker,
+      tasks: [task({ ...addressed, latestFailure: taskFailure({ at: retried.createdAt - 1 }) })],
+      decisions: [retried],
+    })
+    expect(kinds(haltOffers(w))).toEqual(['clear_halt', 'escalate_to_human', 'no_action'])
+  })
+
+  it('offers nothing when no retry was ever applied to the task', () => {
+    const moving = world({ halted: breaker, tasks: [addressed], decisions: [] })
+    expect(kinds(haltOffers(moving))).toEqual(['escalate_to_human', 'no_action'])
+    // Nor for a retry decision a person has not approved yet, nor one about another task.
+    const pending = world({ halted: breaker, tasks: [addressed], decisions: [decision({ ...retried, status: 'pending' })] })
+    expect(kinds(haltOffers(pending))).toEqual(['escalate_to_human', 'no_action'])
+    const elsewhere = world({ halted: breaker, tasks: [addressed], decisions: [decision({ ...retried, subjectId: 't4' })] })
+    expect(kinds(haltOffers(elsewhere))).toEqual(['escalate_to_human', 'no_action'])
+    // Nor for an applied decision that was not a retry.
+    const other = world({ halted: breaker, tasks: [addressed], decisions: [decision({ ...retried, actionKind: 'unblock_task' })] })
+    expect(kinds(haltOffers(other))).toEqual(['escalate_to_human', 'no_action'])
+  })
+
   it('offers it for a task that is running or in review too, and for nothing else', () => {
     for (const status of ['rework', 'running', 'reviewing'] as const) {
-      const w = world({ halted: breaker, tasks: [task({ ...addressed, status })] })
+      const w = world({ halted: breaker, tasks: [task({ ...addressed, status })], decisions: [retried] })
       expect(kinds(haltOffers(w)), status).toEqual(['clear_halt', 'escalate_to_human', 'no_action'])
     }
     for (const status of ['failed', 'blocked', 'done', 'backlog'] as const) {
-      const w = world({ halted: breaker, tasks: [task({ ...addressed, status, dependents: 0 })] })
+      const w = world({
+        halted: breaker,
+        tasks: [task({ ...addressed, status, dependents: 0 })],
+        decisions: [retried],
+      })
       expect(kinds(haltOffers(w)), status).toEqual(['escalate_to_human', 'no_action'])
     }
   })
 
-  it('offers nothing while no task has been retried -- nobody has answered the failures yet', () => {
-    const w = world({ halted: breaker, tasks: [task({ id: 't9', status: 'rework', retries: 0 })] })
-    expect(kinds(haltOffers(w))).toEqual(['escalate_to_human', 'no_action'])
-  })
-
   it('never offers it for a halt the breaker did not cause', () => {
     for (const reason of ['budget_exhausted', 'emergency_stop']) {
-      const w = world({ halted: { reason }, tasks: [addressed] })
+      const w = world({ halted: { reason }, tasks: [addressed], decisions: [retried] })
       expect(kinds(haltOffers(w)), reason).toEqual(['escalate_to_human', 'no_action'])
     }
   })
 
   it('does not offer it again inside the hour, and offers it once the hour is up', () => {
-    const inside = world({ halted: breaker, tasks: [addressed], haltClearedAt: NOW - 3_599_999 })
+    const inside = world({ halted: breaker, tasks: [addressed], decisions: [retried], haltClearedAt: NOW - 3_599_999 })
     expect(kinds(haltOffers(inside))).toEqual(['escalate_to_human', 'no_action'])
     // Exactly an hour is outside the window: the rule is "at most once an hour", so the hour
     // having passed is enough.
-    const exactly = world({ halted: breaker, tasks: [addressed], haltClearedAt: NOW - 3_600_000 })
+    const exactly = world({ halted: breaker, tasks: [addressed], decisions: [retried], haltClearedAt: NOW - 3_600_000 })
     expect(kinds(haltOffers(exactly))).toEqual(['clear_halt', 'escalate_to_human', 'no_action'])
   })
 
   it('is the one action a halt does not demote: applied under act, proposed under propose', () => {
-    const w = world({ halted: breaker, tasks: [addressed] })
+    const w = world({ halted: breaker, tasks: [addressed], decisions: [retried] })
     expect(haltOffers(w)[0]?.tier).toBe('proposed')
     expect(haltOffers({ ...w, autonomy: 'act' })[0]?.tier).toBe('applied')
   })
 
   it('offers candidates that survive candidateSchema', () => {
-    for (const offer of haltOffers(world({ halted: breaker, tasks: [addressed] }))) {
+    for (const offer of haltOffers(world({ halted: breaker, tasks: [addressed], decisions: [retried] }))) {
       expect(candidateSchema.safeParse(offer).success).toBe(true)
     }
   })
 })
 
-/**
- * M40 §3. `stale_task` is the one situation `observe` never produces -- `concludeReplan` records it
- * from a re-plan run's delta -- so every case here builds the {@link Situation} by hand, the way
- * the orchestrator does, rather than through {@link offered}.
- */
 describe('candidates -- stale_task', () => {
   function staleTask(taskId = 't1'): Situation {
     return {

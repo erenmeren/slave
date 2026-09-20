@@ -8,9 +8,9 @@ import { recommendRunbooks } from '../runbook/recommend.js'
 import { TERMINAL } from '../task/state.js'
 import { isStaffableTask } from './candidates.js'
 import {
+  boundReason,
   COOLDOWN_BY_KIND,
   COOLDOWN_MS,
-  FAILURE_REASON_MAX_CHARS,
   INTEGRATED_STALE_MS,
   MANAGER_ROLE,
   MEMORY_CANDIDATE_STALE_MS,
@@ -97,17 +97,6 @@ function questionFacts(question: SupervisorQuestion, world: SupervisorWorld): Si
     holders: question.holders.length,
     waitingMs: world.now - question.createdAt,
   }
-}
-
-/**
- * A failure reason, bounded and ellipsised, for the two places a person and a model read one: a
- * situation's summary and a remedy's own reason (R3). A `run.failed` reason is whatever the run
- * wrote -- a sentence, or a stack -- and neither of those places is a log.
- */
-export function boundReason(reason: string): string {
-  const trimmed = reason.trim()
-  if (trimmed.length <= FAILURE_REASON_MAX_CHARS) return trimmed
-  return `${trimmed.slice(0, FAILURE_REASON_MAX_CHARS)}…`
 }
 
 /** R3: what broke last, as a sentence appended to a stuck task's summary -- so the escalation a

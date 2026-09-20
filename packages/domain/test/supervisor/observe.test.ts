@@ -8,7 +8,19 @@ import {
 import { filterFresh, observe, staffableSlaves } from '../../src/supervisor/observe.js'
 import { SITUATION_KINDS, situationSchema, type SituationKind } from '../../src/supervisor/situations.js'
 import type { SupervisorDecisionRecord } from '../../src/supervisor/world.js'
-import { NOW, TAXONOMY, decision, keys, question, runbook, slave, supervisorRun, task, world } from './fixtures.js'
+import {
+  NOW,
+  TAXONOMY,
+  decision,
+  keys,
+  question,
+  runbook,
+  slave,
+  supervisorRun,
+  task,
+  taskFailure,
+  world,
+} from './fixtures.js'
 
 describe('observe -- no_reviewer', () => {
   it('reports it when a task is reviewing and no slave holds reviewer', () => {
@@ -89,7 +101,7 @@ describe('observe -- task_failed', () => {
         task({
           status: 'failed',
           dependents: 1,
-          latestFailure: { runKind: 'implementation', reason: 'spawn ENOENT', at: NOW - 60_000 },
+          latestFailure: taskFailure({ runKind: 'implementation', reason: 'spawn ENOENT', at: NOW - 60_000 }),
           deniedKinds: ['network_fetch', 'read_secret'],
           failureCount: 3,
           retries: 1,
@@ -129,7 +141,7 @@ describe('observe -- task_failed', () => {
           dependents: 2,
           stage: 'verify',
           stageEscalation: 'Page the release steward.',
-          latestFailure: { runKind: 'implementation', reason: 'stdout maxBuffer length exceeded', at: NOW - 1 },
+          latestFailure: taskFailure({ reason: 'stdout maxBuffer length exceeded' }),
         }),
       ],
     })
@@ -141,7 +153,7 @@ describe('observe -- task_failed', () => {
   it('bounds the reason it puts in the summary -- a failure may carry a whole stderr dump', () => {
     const reason = 'x'.repeat(FAILURE_REASON_MAX_CHARS + 500)
     const w = world({
-      tasks: [task({ status: 'failed', dependents: 1, latestFailure: { runKind: 'implementation', reason, at: NOW } })],
+      tasks: [task({ status: 'failed', dependents: 1, latestFailure: taskFailure({ reason, at: NOW }) })],
     })
     const summary = observe(w)[0]?.summary ?? ''
     expect(summary.length).toBeLessThan(FAILURE_REASON_MAX_CHARS + 200)
@@ -155,7 +167,7 @@ describe('observe -- the blocked task says what broke (R3)', () => {
       tasks: [
         task({
           status: 'blocked',
-          latestFailure: { runKind: 'implementation', reason: 'the review rejected the change', at: NOW - 1 },
+          latestFailure: taskFailure({ reason: 'the review rejected the change' }),
         }),
       ],
     })
