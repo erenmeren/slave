@@ -398,8 +398,9 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
             {gateOptional && edited.verifyCommands.length === 0 ? (
               <p data-testid="intake-verify-bootstrap" className="text-[12.5px] text-text-3">
                 Nothing to run yet. This project starts with{' '}
-                <span className="font-mono text-text-1">{INTAKE_BOOTSTRAP_VERIFY_COMMAND}</span>, and its first task is
-                to write it. Leave this empty unless you already know a command that would pass.
+                <span className="font-mono text-text-1">{INTAKE_BOOTSTRAP_VERIFY_COMMAND}</span>, planted with the
+                repository; every task extends it with the checks for its own work. Leave this empty unless you
+                already know a command that would pass.
               </p>
             ) : null}
             {candidates.map((entry) => (

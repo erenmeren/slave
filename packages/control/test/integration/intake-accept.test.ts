@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
@@ -454,6 +454,41 @@ describe('acceptIntake', () => {
     // The person's own goal is still the goal; the clause is added to it rather than replacing it.
     expect(goal.text).toContain('Redesign the marketing site from scratch')
     expect(goal.text).toContain('scripts/verify.sh')
+
+    // The script the gate names is planted WITH the repository, executable, in the first commit --
+    // not asked of the project as its first task. Asked, the planner made every other task depend
+    // on it (observed 2026-09-20: a research task waiting on a shell script), and a stub cost two
+    // model runs. The clause therefore says the script exists and must be extended, never that it
+    // must be created first.
+    const created = join(root, 'idea-only')
+    const script = join(created, 'scripts', 'verify.sh')
+    expect(existsSync(script)).toBe(true)
+    expect(statSync(script).mode & 0o111).not.toBe(0)
+    expect(execFileSync('bash', [script], { cwd: created, encoding: 'utf8' })).toBeDefined()
+    expect(execFileSync('git', ['-C', created, 'ls-files'], { encoding: 'utf8' }).split('\n')).toContain('scripts/verify.sh')
+    expect(execFileSync('git', ['-C', created, 'status', '--porcelain'], { encoding: 'utf8' })).toBe('')
+    expect(goal.text).toContain('already exists')
+    expect(goal.text).not.toContain('Before anything else')
+  })
+
+  it('plants no script when the draft named its own gate for a new repository', async (): Promise<void> => {
+    const root = mkdtempSync(join(tmpdir(), 'accept-named-new-'))
+    await setInstallationSettings({ reposRoot: root })
+    const id = await opened('I have an idea and no repository')
+    const draft: IntakeDraft = {
+      name: 'Named New',
+      goal: 'A brand new service',
+      repo: { mode: 'new', path: null },
+      baseBranch: 'main',
+      verifyCommands: [{ command: 'npm test', source: 'draft' }],
+      setupCommands: [],
+      budgetUsd: null,
+      provider: null,
+      team: [],
+    }
+    const accepted = await acceptIntake(id, draft)
+    expect(accepted.ok).toBe(true)
+    expect(existsSync(join(root, 'named-new', 'scripts', 'verify.sh'))).toBe(false)
   })
 
   it('leaves a named gate exactly as the draft named it, planting nothing over it', async (): Promise<void> => {

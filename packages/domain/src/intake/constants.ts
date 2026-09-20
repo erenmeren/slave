@@ -127,29 +127,58 @@ export const INTAKE_TRANSCRIPT_MAX_CHARS = 4_000
  * repository, and `acceptIntake` puts THIS in its place.
  *
  * It names the project's own script rather than a stack's test runner because the stack is not
- * known yet either. The script does not exist at creation: {@link INTAKE_BOOTSTRAP_GOAL_CLAUSE} is
- * what puts writing it in the goal, so the project's first task creates it and every task after
- * that is proven by a gate the project itself defined.
+ * known yet either. The script is PLANTED with the repository ({@link INTAKE_BOOTSTRAP_VERIFY_SCRIPT},
+ * in the first commit, executable) rather than asked of the project: asked, the planner made the
+ * whole board wait on it (observed 2026-09-20: a research task depending on a shell script) and a
+ * stub cost an implementation run and a review. {@link INTAKE_BOOTSTRAP_GOAL_CLAUSE} then tells
+ * the planner the gate exists and must be extended, so every task is proven by a gate the project
+ * itself grows.
  *
  * Never empty, whatever the model said: zero commands is `verify_not_configured`, which blocks the
  * task and halts the whole project on its first piece of work (`apps/orchestrator/src/verify.ts`).
  */
 export const INTAKE_BOOTSTRAP_VERIFY_COMMAND = 'bash scripts/verify.sh'
 
+/** Where the planted gate lives, relative to the repository root -- the path
+ *  {@link INTAKE_BOOTSTRAP_VERIFY_COMMAND} runs. */
+export const INTAKE_BOOTSTRAP_VERIFY_SCRIPT_PATH = 'scripts/verify.sh'
+
+/**
+ * The planted gate's body (M60 §7b, amended 2026-09-20). Checks nothing and exits 0, on purpose:
+ * there is no work yet to check. The comment inside is addressed to the worker who opens it -- it
+ * is the one place the rule "extend, never loosen" is stated where the script is edited.
+ *
+ * `cd` to the repository root so a check written as `test -f docs/x.md` means the same thing
+ * whichever directory the gate is run from.
+ */
+export const INTAKE_BOOTSTRAP_VERIFY_SCRIPT = [
+  '#!/usr/bin/env bash',
+  "# This project's verification gate. A task is accepted only when this script exits 0.",
+  '# It starts by checking nothing, because nothing has been built yet. A task that produces',
+  '# work which can honestly be checked extends this script with that check, in the same task.',
+  '# Checks are added, never removed or weakened. Runs from the repository root.',
+  'set -euo pipefail',
+  'cd "$(dirname "${BASH_SOURCE[0]}")/.."',
+  '',
+].join('\n')
+
 /**
  * Appended to the goal of a project created with {@link INTAKE_BOOTSTRAP_VERIFY_COMMAND}, because
- * the goal is what the planner reads: a gate that nothing in the project is asked to create is a
- * gate the first task fails three times over.
+ * the goal is what the planner reads: a gate the planner does not know about is a gate no task
+ * extends, and then the whole project is proven by a script that checks nothing.
  *
- * Spelled as a requirement on the work rather than as a note about the system. The planner turns a
- * goal into tasks, so this has to read as something to DO.
+ * Spelled as a rule about EVERY task rather than as a task of its own. The earlier wording
+ * ("Before anything else, create `scripts/verify.sh`") read as a first task, and the planner
+ * obeyed it: every other task depended on the script, research and design waited on a shell
+ * stub, and the stub cost an implementation run and a review. The script now exists before the
+ * planner is asked anything, so the clause says so and forbids the task it used to create.
  */
 export const INTAKE_BOOTSTRAP_GOAL_CLAUSE = [
   '',
-  'Before anything else, create `scripts/verify.sh`: an executable script that checks this',
-  "project's work and exits non-zero when it is not right. Every task in this project is verified",
-  'by running it, so it must exist and pass before any other work can be accepted. Start it with',
-  'whatever can honestly be checked about the first deliverable and extend it as the project grows.',
+  '`scripts/verify.sh` is this project\'s verification gate: a task is accepted only when it exits',
+  '0. It already exists and checks nothing yet. Every task that produces work which can honestly',
+  'be checked must extend it with that check, in the same task; checks are added, never removed.',
+  'Do not create a task for the script itself, and never make other work wait on it.',
 ].join('\n')
 
 /** How many Agency persona catalogue entries the facts may carry (M59 R6). Three hundred names

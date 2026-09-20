@@ -434,11 +434,20 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   // 3. Skip if a planning run is already live -- the ordinary case on every tick after the first,
   // since a planning run routinely outlives the tick that started it. `slave: { team: { workspaceId } }`,
   // not a task relation: a planning run has no task to scope through.
+  //
+  // "Live" is TWO facts, not one. The row's status is the first: non-terminal means the process is
+  // still running. The pump registry is the second: the pump writes `succeeded` on the row and
+  // only THEN walks `verifyConcludedRun -> concludePlanning`, which is where the tasks are written,
+  // so between those two writes the row is terminal and the board is still empty. A tick in that
+  // window used to read "no live planning, no tasks" and start a second planner for the same goal
+  // (observed 2026-09-20: two graphs, the second discarded by `concludePlanning`'s grown-board
+  // guard, one seat and one planning fee spent for nothing). `activePumpRunIds` holds the id until
+  // the chain's `finally`, conclusion included, so it is the fact that closes the window.
   const livePlanning = await prisma.slaveRun.count({
     where: {
       kind: 'planning',
-      status: { in: [...NON_TERMINAL_RUN_STATUSES] },
       slave: { team: { workspaceId: deps.workspaceId } },
+      OR: [{ status: { in: [...NON_TERMINAL_RUN_STATUSES] } }, { id: { in: [...activePumpRunIds] } }],
     },
   })
   if (livePlanning > 0) return null
