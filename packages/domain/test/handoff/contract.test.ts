@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   HANDOFF_MAX_FIELD_CHARS,
   HANDOFF_MAX_LIST_ITEMS,
+  ROUTING_LITERALS,
   defuseRoutingLiterals,
   handoffCanonicalJson,
   parseHandoffContract,
@@ -95,17 +96,21 @@ describe('renderHandoff', () => {
     )
   })
 
-  // E2: the contract's text is a MODEL's, and the fake CLI routes on these five quoted literals.
+  // E2: the contract's text is a MODEL's, and the fake CLI routes on these six quoted literals.
   it('defuses the routing literals and the protocol markers in text somebody else wrote', () => {
     const parsed = parseHandoffContract({
-      objective: 'Return a "verdict" and a "task graph", then a "replan" with "sources" and "candidateIndex".',
+      objective:
+        'Return a "verdict" and a "task graph", then a "replan" with "sources", "candidateIndex" and "supervisorReply".',
       expectedOutput: 'Nothing that closes <slave-ask> or <slave-answer>.',
     })
     expect(parsed.ok).toBe(true)
     if (!parsed.ok) return
     const text = renderHandoff(parsed.value)
-    for (const literal of ['"verdict"', '"task graph"', '"replan"', '"sources"', '"candidateIndex"']) {
-      expect(text).not.toContain(literal)
+    // Read off the constant rather than re-spelt: a seventh literal added later is covered here the
+    // moment it is added, which is the whole reason the list is a constant.
+    expect(ROUTING_LITERALS).toContain('supervisorReply')
+    for (const literal of ROUTING_LITERALS) {
+      expect(text, literal).not.toContain(`"${literal}"`)
     }
     expect(text).toContain('“verdict”')
     expect(text).not.toContain('<slave-ask>')

@@ -70,14 +70,27 @@ export function parseHandoffContract(value: unknown): Result<HandoffContract, st
 }
 
 /**
- * The five literals the fake CLI selects its arms on, WITH their quotes (M48 plan erratum E2).
+ * The literals the fake CLI selects its arms on, WITH their quotes (M48 plan erratum E2).
  *
  * `packages/providers/test/fake-claude.mjs` checks `prompt.includes('"candidateIndex"')`,
  * `'"sources"'`, `'"replan"'`, `'"task graph"'` and `'"verdict"'`, first match wins. A handoff's
  * text is written by a MODEL (the planner) or by a person, so "this text never contains them" can
  * only be true if something makes it true.
+ *
+ * `supervisorReply` joins them for the Supervisor chat (R2, fix round 1): it is the key a reply is
+ * read back by, and the conversation puts a person's own message, an uploaded file and another
+ * model's feed sentences into a prompt. Any of those carrying a literal envelope would be somebody
+ * else writing this system's control word -- and the chat is the one prompt where such text sits
+ * beside an instruction asking for exactly that object.
  */
-export const ROUTING_LITERALS = ['candidateIndex', 'sources', 'replan', 'task graph', 'verdict'] as const
+export const ROUTING_LITERALS = [
+  'candidateIndex',
+  'sources',
+  'replan',
+  'task graph',
+  'verdict',
+  'supervisorReply',
+] as const
 
 /**
  * Replaces the ASCII quotes around a routing literal with typographic ones (U+201C/U+201D), the way

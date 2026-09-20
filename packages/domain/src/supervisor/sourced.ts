@@ -37,10 +37,15 @@ function normalise(text: string): string {
 /**
  * What a CHAT turn adds to the record a citation may be checked against (Supervisor chat R2).
  *
- * EXACTLY what `buildSupervisorChatPrompt` put in front of the model, handed back at verification
- * time: the feed sentences it was shown and the attachments it was given. A caller that passes a
- * wider feed than the prompt rendered would be letting an answer be built on words the model never
- * saw, which is the one thing this whole file exists to stop.
+ * EXACTLY what `buildSupervisorChatPrompt` put in front of the model, and the only way to build
+ * one is `renderedChatSources(input)` -- the same feed window, the same caps, the same attachment
+ * slices, from the same functions the prompt renders from (fix round 1, I1). A caller that passed
+ * the raw feed or a whole attachment file would be letting a quote verify against words the model
+ * never saw, which is the one thing this whole file exists to stop.
+ *
+ * `attachments` holds only the ones that were INLINED, and each one's `text` is the slice as the
+ * prompt printed it -- capped, and with the markers and routing literals defused, because that is
+ * the text a model copying verbatim would copy.
  */
 export interface ChatSourceContext {
   readonly feed: readonly { readonly seq: number; readonly sentence: string }[]

@@ -1,15 +1,24 @@
 import { z } from 'zod'
+import { defuseRoutingLiterals } from '../handoff/contract.js'
+import { PROFILE_MAX_CHARS } from '../run-context/profile.js'
 import { neutraliseMarkers } from '../run-context/render.js'
 import { ACTION_KINDS, actionSchema, type Action, type ActionKind } from './actions.js'
 import { sourceSchema, type SourceCitation } from './answerPrompt.js'
-import { SOURCES_MAX } from './constants.js'
-import { PROFILE_HEADING, firstJsonObject, workspaceLines } from './prompt.js'
+import { ANSWER_MAX_CHARS, SOURCES_MAX } from './constants.js'
+import { PROFILE_HEADING, cap, firstJsonObject, workspaceLines } from './prompt.js'
+import type { ChatSourceContext } from './sourced.js'
 import type { SupervisorWorld } from './world.js'
 
 /**
  * The literal the reply must be keyed on, the parser reads back ({@link parseSupervisorReply}) and
  * the fake CLI keys its chat arm on -- the same three-way contract `"candidateIndex"` has carried
  * since M38 and `"intakeAnswer"` since M59.
+ *
+ * Because it ROUTES, it is a word no other party may write into this prompt: `supervisorReply` is
+ * in `ROUTING_LITERALS`, and every text the conversation quotes -- the profile, the person's own
+ * message, each history turn, each needs-you line, each feed sentence, each inlined attachment --
+ * goes through {@link safeField} first. The defusing is PER FIELD and never over the whole prompt:
+ * the instruction line below has to keep the live literal, since it is what asks for it.
  */
 export const SUPERVISOR_CHAT_MARKER = '"supervisorReply"'
 
@@ -28,6 +37,12 @@ export const CHAT_ATTACHMENT_CHARS = 20_000
  *  files under it would still be a hundred thousand characters of somebody else's text in one
  *  call, and the total is what actually bounds what a person can spend by dragging files in. */
 export const CHAT_ATTACHMENTS_TOTAL_CHARS = 60_000
+
+/** The longest single message -- the person's own, and each turn of the history -- this prompt
+ *  carries. `INTAKE_MESSAGE_MAX_CHARS`' own number and its own reason: eight thousand characters is
+ *  a long description and a short document, and past it the person is pasting a specification,
+ *  which belongs in the goal or in an attachment where the budgets above can see it. */
+export const CHAT_MESSAGE_MAX_CHARS = 8_000
 
 /**
  * One file a person attached to a message (R6). It lives in the repository, under
@@ -126,10 +141,16 @@ function noneLine(words: string): string {
   return `  ${words}`
 }
 
-/** `text` at most `max` characters. The cap that actually bounds the CALL is applied where the
- *  prompt is built, never trusted from upstream. */
-function cap(text: string, max: number): string {
-  return text.length <= max ? text : text.slice(0, max)
+/**
+ * Another party's text, made safe to quote: the worker-protocol markers neutralised and the
+ * routing literals defused, `renderHandoff`'s own composition.
+ *
+ * Both passes are 1:1 CHARACTER substitutions (`<` becomes `\u2039`, an ASCII quote becomes a
+ * typographic one), so this never changes a length -- which is what lets the attachment budgets
+ * below be counted on the capped text and still describe exactly what the prompt shows.
+ */
+function safeField(text: string): string {
+  return defuseRoutingLiterals(neutraliseMarkers(text))
 }
 
 /** How long ago, in the coarsest unit that is still true. The model is being asked to notice that
@@ -164,35 +185,108 @@ function boardLines(world: SupervisorWorld): readonly string[] {
 }
 
 /**
+ * One attachment, as the prompt decided to show it (fix round 1, I1).
+ *
+ * `slice` is the text that is really inlined, or null when only the path is shown; `why` is what
+ * the by-path line says in its parentheses. ONE computation, two readers -- the prompt renders
+ * from it and {@link renderedChatSources} hands the same slices to `verifySources`, so a budget,
+ * a cap or a defusing can never be applied on one side and not the other.
+ */
+interface InlinedAttachment {
+  readonly attachment: ChatAttachment
+  readonly slice: string | null
+  readonly why: string
+}
+
+/**
+ * Spends the two attachment budgets in the order the person attached the files (R6).
+ *
+ * A file the total no longer has room for is NAMED rather than dropped: "there is a fourth file
+ * and I could not read it" is a true thing to tell a model, and silence about it is not. The three
+ * reasons a file is not inlined are three different facts and get three different sentences -- an
+ * unreadable file blamed on the budget is a lie the model would then reason from.
+ *
+ * An EMPTY text file is inlined, as an empty block: it was read, and it said nothing. That is not
+ * the same as the loader failing to read it, and it costs the budget nothing.
+ */
+function inlineAttachments(attachments: readonly ChatAttachment[]): readonly InlinedAttachment[] {
+  const shown: InlinedAttachment[] = []
+  let spent = 0
+  for (const attachment of attachments) {
+    if (attachment.kind !== 'text') {
+      shown.push({ attachment, slice: null, why: '' })
+      continue
+    }
+    if (attachment.text === undefined) {
+      shown.push({ attachment, slice: null, why: ', could not be read' })
+      continue
+    }
+    const room = Math.min(CHAT_ATTACHMENT_CHARS, CHAT_ATTACHMENTS_TOTAL_CHARS - spent)
+    if (attachment.text !== '' && room === 0) {
+      shown.push({ attachment, slice: null, why: ', not inlined -- the attachment budget is full' })
+      continue
+    }
+    const slice = safeField(cap(attachment.text, room))
+    spent += slice.length
+    shown.push({ attachment, slice, why: '' })
+  }
+  return shown
+}
+
+/** The feed as the prompt shows it: oldest first, the last {@link CHAT_FEED_MAX}, each sentence
+ *  capped and made safe. Ordered here rather than trusted from the caller, so a loader that
+ *  returned the list the other way round cannot change what the model reads. */
+function renderedFeed(feed: ChatTurnInput['feed']): readonly { readonly seq: number; readonly sentence: string }[] {
+  return [...feed]
+    .sort((a, b) => a.seq - b.seq)
+    .slice(-CHAT_FEED_MAX)
+    .map((line) => ({ seq: line.seq, sentence: safeField(cap(line.sentence, ANSWER_MAX_CHARS)) }))
+}
+
+/**
+ * EXACTLY what {@link buildSupervisorChatPrompt} put in front of the model, as the record a
+ * citation may be checked against (fix round 1, I1).
+ *
+ * `verifySources` checks a quote against the source it names, and "the source" here is not the row
+ * in the database -- it is the slice of it this turn rendered. A feed sentence older than the
+ * window was never shown; the tail of an attachment past the budget was never shown; and a quote
+ * from either is a quote from somewhere the model did not read. Both sides call the very same two
+ * functions, which is the only way that stays true as the caps move.
+ *
+ * An attachment that was not inlined is ABSENT: there are no words in it to quote.
+ */
+export function renderedChatSources(input: ChatTurnInput): ChatSourceContext {
+  return {
+    feed: renderedFeed(input.feed),
+    attachments: inlineAttachments(input.attachments).flatMap((shown) =>
+      shown.slice === null ? [] : [{ ...shown.attachment, text: shown.slice }],
+    ),
+  }
+}
+
+/**
  * The ATTACHMENTS section (R6/R7). Text is inlined under its own path; everything else is named
  * by path, kind and size, because a worker can open it later from the same checkout.
- *
- * The two caps are spent in the order the person attached the files, and a file the budget no
- * longer has room for is named rather than dropped: "there is a fourth file and I could not read
- * it" is a true thing to tell a model, and silence about it is not.
  */
-function attachmentLines(attachments: readonly ChatAttachment[], imagesReadable: boolean): readonly string[] {
-  if (attachments.length === 0) return [noneLine('none')]
+function attachmentLines(shown: readonly InlinedAttachment[], imagesReadable: boolean): readonly string[] {
+  if (shown.length === 0) return [noneLine('none')]
   const lines: string[] = []
-  let spent = 0
-  let anyImage = false
-  for (const attachment of attachments) {
-    if (attachment.kind === 'image') anyImage = true
-    const room = Math.min(CHAT_ATTACHMENT_CHARS, CHAT_ATTACHMENTS_TOTAL_CHARS - spent)
-    const body = attachment.kind === 'text' && attachment.text !== undefined ? cap(attachment.text, room) : ''
-    if (body === '') {
-      const why = attachment.kind === 'text' ? ', not inlined -- the attachment budget is full' : ''
+  for (const { attachment, slice, why } of shown) {
+    if (slice === null) {
       lines.push(`  ${attachment.path} (${attachment.kind}, ${String(attachment.bytes)} bytes${why})`)
       continue
     }
-    spent += body.length
-    const truncated = body.length < (attachment.text?.length ?? 0) ? '\n... (truncated)' : ''
-    lines.push(`--- ${attachment.path} ---`, `${body}${truncated}`)
+    // The marker is OUR words, outside the slice: a quote that ran into it would be a quote of a
+    // sentence this system wrote about the file rather than of the file.
+    const truncated = slice.length < (attachment.text?.length ?? 0) ? '\n... (truncated)' : ''
+    lines.push(`--- ${attachment.path} ---`, `${slice}${truncated}`)
   }
   lines.push('', 'Workers can read these by path.')
   // R7: only when the call really runs the read-only tools, and only when there is an image to
   // open. Every other turn is text-only, and a model told otherwise describes a picture it never saw.
-  if (imagesReadable && anyImage) lines.push('You may open an image with Read.')
+  if (imagesReadable && shown.some(({ attachment }) => attachment.kind === 'image')) {
+    lines.push('You may open an image with Read.')
+  }
   return lines
 }
 
@@ -217,6 +311,14 @@ const SPEAKER: Record<ChatTurnInput['history'][number]['role'], string> = {
  * a file somebody uploaded and a feed sentence was written by another model -- and none of it may
  * be able to close a `<slave-ask>`/`<slave-answer>` block. This prompt teaches no markers of its
  * own, so there is nothing the pass can damage.
+ *
+ * On top of that, EVERY such text goes through {@link safeField} individually, which also defuses
+ * the routing literals -- including this prompt's own `"supervisorReply"` (fix round 1, I5). Per
+ * field rather than over the whole prompt, because the instruction line must keep the live
+ * literal. And every one of them is CAPPED where the prompt is built: the message and each history
+ * turn at {@link CHAT_MESSAGE_MAX_CHARS}, a needs-you line and a feed sentence at
+ * `ANSWER_MAX_CHARS` (a sentence longer than an answer is not a sentence), the profile at
+ * `PROFILE_MAX_CHARS`, the attachments at their own two budgets.
  */
 export function buildSupervisorChatPrompt(input: ChatTurnInput): string {
   const { world, profile, needsYou, message, attachments, imagesReadable } = input
@@ -227,9 +329,15 @@ export function buildSupervisorChatPrompt(input: ChatTurnInput): string {
     '',
   ]
 
-  if (profile !== null && profile !== '') blocks.push(PROFILE_HEADING, profile, '')
+  // Capped at the length a profile may be WRITTEN to (`setProfile` refuses more): the bound that
+  // holds the call is applied here rather than trusted from the row, exactly as it is for every
+  // other text below -- a profile stored while the cap was higher is the case M37 §7 names.
+  if (profile !== null && profile !== '') blocks.push(PROFILE_HEADING, safeField(cap(profile, PROFILE_MAX_CHARS)), '')
 
-  const feed = [...input.feed].sort((a, b) => a.seq - b.seq).slice(-CHAT_FEED_MAX)
+  // Both from the SAME functions `renderedChatSources` reads, so what is shown and what may be
+  // quoted are one thing (fix round 1, I1).
+  const feed = renderedFeed(input.feed)
+  const shown = inlineAttachments(attachments)
   const history = input.history.slice(-CHAT_HISTORY_MAX)
 
   blocks.push(
@@ -239,7 +347,9 @@ export function buildSupervisorChatPrompt(input: ChatTurnInput): string {
     ...boardLines(world),
     '',
     'NEEDS YOU',
-    ...(needsYou.length === 0 ? [noneLine('nothing is waiting on a person')] : needsYou.map((line) => `  - ${line}`)),
+    ...(needsYou.length === 0
+      ? [noneLine('nothing is waiting on a person')]
+      : needsYou.map((line) => `  - ${safeField(cap(line, ANSWER_MAX_CHARS))}`)),
     '',
     'RECENT',
     ...(feed.length === 0
@@ -247,11 +357,11 @@ export function buildSupervisorChatPrompt(input: ChatTurnInput): string {
       : feed.map((line) => `  [${String(line.seq)}] ${line.sentence}`)),
     '',
     'ATTACHMENTS',
-    ...attachmentLines(attachments, imagesReadable),
+    ...attachmentLines(shown, imagesReadable),
     '',
     'CONVERSATION',
-    ...history.map((line) => `${SPEAKER[line.role]}: ${line.text}`),
-    `PERSON: ${message}`,
+    ...history.map((line) => `${SPEAKER[line.role]}: ${safeField(cap(line.text, CHAT_MESSAGE_MAX_CHARS))}`),
+    `PERSON: ${safeField(cap(message, CHAT_MESSAGE_MAX_CHARS))}`,
     '',
     'ACTION VOCABULARY',
     'These are the only things you can ask this system to do. Each one names a row by its id, and',
@@ -326,6 +436,10 @@ function notAnAction(raw: unknown): string {
  * time as well as at apply time: `carryOut` refuses a missing row anyway, but a decision card
  * offering to cancel a task that does not exist is a card a person has to read and reject.
  *
+ * Every id an action can carry is checked: `taskId`, `slaveId`, `toSlaveId`, `messageId`, `runId`,
+ * `workspaceId`, a `retry_task.grant`'s own worker, and `hire_from_catalog.engagementTaskId` --
+ * the one task id that is not spelt `taskId`.
+ *
  * The staffing ids (`templateId`, `runbookId`, `personId`) are deliberately NOT checked: the loader
  * fills `pool`, `catalog` and `runbooks` only under a staffing gate, so their absence from this
  * world is not evidence that the row is absent from the database.
@@ -349,6 +463,16 @@ function unknownReference(action: Action, world: SupervisorWorld): string | null
   }
   if ('workspaceId' in action && action.workspaceId !== world.workspaceId) {
     return `an action named a project that is not this one: ${action.workspaceId}`
+  }
+  // The one task id that is not spelt `taskId` (fix round 1, I4): M50's temporary hire names the
+  // ONE assignment it is being brought in for, and `engagement_over` later measures the end of the
+  // engagement against it. A hire against a task that is not on the board is a worker nobody can
+  // ever release.
+  if (action.kind === 'hire_from_catalog' && action.engagementTaskId !== null) {
+    const engagement = action.engagementTaskId
+    if (!world.tasks.some((task) => task.id === engagement)) {
+      return `an action named a task that is not on the board: ${engagement}`
+    }
   }
   // The grant a retry may ride with names a worker of its own (R3), and it is the half of that
   // action that actually changes what somebody may do.

@@ -12,7 +12,7 @@ import {
   SOURCE_QUOTE_MAX_CHARS,
   THREAD_BODY_MAX_CHARS,
 } from './constants.js'
-import { PROFILE_HEADING, firstJsonObject } from './prompt.js'
+import { PROFILE_HEADING, cap, firstJsonObject } from './prompt.js'
 import { boundThread, type SupervisorQuestion, type SupervisorWorld, type ThreadMessage } from './world.js'
 
 /**
@@ -119,14 +119,6 @@ export const draftSchema: z.ZodType<Draft, z.ZodTypeDef, unknown> = z.object({
   editedBody: z.string().max(ANSWER_MAX_CHARS).optional(),
 })
 
-/** `text` at most `max` characters. The loader caps too; this is the cap that actually bounds the
- *  call, applied where the prompt is built rather than trusted from upstream. The question's own
- *  body is capped by the same rule as a thread message's: it IS one, and a worker that pasted a
- *  file into its question must not be able to spend the whole call on it. */
-function cap(text: string, max: number): string {
-  return text.length <= max ? text : text.slice(0, max)
-}
-
 /** A source the loader did not fill says so, in the prompt, in words -- a heading with nothing
  *  under it reads as "there was nothing to say", which is how a model comes to invent one. */
 const NONE = 'none recorded'
@@ -157,7 +149,7 @@ function rosterLines(world: SupervisorWorld): string {
  * under a SOURCE heading is what a quote may be taken from (plan erratum E8).
  *
  * DEFUSED, like every other rendering of a contract (M48 final review, Important 4). A handoff is
- * written by the planner -- a model -- or by a person, and the five `ROUTING_LITERALS` are what the
+ * written by the planner -- a model -- or by a person, and the `ROUTING_LITERALS` are what the
  * fake CLI selects its arm on: an acceptance criterion reading `emit a "candidateIndex"` would send
  * this answer call to the decision fixture and, under a real provider, hand a model the words of
  * another protocol. `runContext.ts`'s `handoff` section has gone through this since M48 t2; this is
