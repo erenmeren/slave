@@ -45,6 +45,11 @@ function row(over: Partial<CatalogRowView> = {}): CatalogRowView {
     // M47 R1: the same capabilities resolved to taxonomy keys. Empty here -- these fixtures are
     // M46-era rows, and an unresolved persona bullet is exactly what an empty list means.
     capabilityKeys: [],
+    // R8 (2026-09-20 catalogue capability mapping): a fixture row is unmapped by default -- the
+    // ORDINARY row, since the mapping pass has not touched most of the catalogue yet.
+    mappedCapabilityKeys: [],
+    capabilityMappedAt: null,
+    capabilityMappingStale: false,
     expertise: ['Load-bearing code'],
     recommendedSkills: ['writing-plans'],
     mappingQuality: 'full',
@@ -502,13 +507,47 @@ describe('ProfileDrawer', () => {
     expect(chips[0]?.getAttribute('title')).toBe('security.application')
   })
 
-  // Fix round 1, minor 3: `capabilityKeys: []` is the ORDINARY M46 row -- every legacy persona --
-  // and "no capabilities recorded" above its real capability bullets said the opposite of the truth.
-  it('says nothing about matchable capabilities for a template that has none', async () => {
+  // R8 (2026-09-20 catalogue capability mapping): each chip says whether it was matched on the
+  // persona's own words or chosen by a model, and a stale mapping says so beside the chips.
+  it('marks each capability chip as matched or mapped, and says when the mapping is stale', async () => {
+    await openDrawer(
+      {},
+      row({
+        capabilityKeys: ['backend.services', 'operations.ci-cd'],
+        mappedCapabilityKeys: ['operations.ci-cd'],
+        capabilityMappedAt: new Date('2026-09-01T00:00:00.000Z'),
+        capabilityMappingStale: true,
+      }),
+      TAXONOMY,
+    )
+    const keys = await screen.findByTestId('profile-capability-keys')
+    const chips = within(keys).getAllByTestId('capability-chip')
+    expect(chips.map((chip) => chip.getAttribute('data-provenance'))).toEqual(['matched', 'mapped'])
+    // `.textContent` rather than jest-dom's `toHaveTextContent` -- this repo's vitest setup
+    // carries no jest-dom matchers (`projects-panel.test.tsx` notes the same).
+    expect(within(keys).getByTestId('profile-capability-mapping').textContent).toContain('mapping is stale')
+  })
+
+  it('says when a persona has not been mapped yet', async () => {
+    await openDrawer(
+      {},
+      row({ capabilityKeys: ['backend.services'], mappedCapabilityKeys: [], capabilityMappedAt: null, capabilityMappingStale: false }),
+      TAXONOMY,
+    )
+    const keys = await screen.findByTestId('profile-capability-keys')
+    expect(within(keys).getByTestId('profile-capability-mapping').textContent).toContain('not yet mapped')
+  })
+
+  // Fix round 1, minor 3: `capabilityKeys: []` is the ORDINARY M46 row -- every legacy persona.
+  // R8 superseded the guard this test proved (2026-09-20 catalogue capability mapping): the block
+  // no longer hides itself just because `capabilityKeys` is empty -- an unmapped row must still
+  // show the "not yet mapped" line, which is the whole point of R8's note, so it now renders here
+  // too and this test's job is to say the persona's own bullets stay untouched by that change.
+  it('says nothing about matchable capabilities for a template that has none, but says it is not yet mapped', async () => {
     await openDrawer()
 
-    expect(screen.queryByTestId('profile-capability-keys')).toBeNull()
-    expect(screen.getByTestId('profile-drawer').textContent).not.toContain('no capabilities recorded')
+    const keys = screen.getByTestId('profile-capability-keys')
+    expect(within(keys).getByTestId('profile-capability-mapping').textContent).toContain('not yet mapped')
     // The persona's own bullets are untouched by the guard.
     expect(screen.getByTestId('profile-field-capabilities').textContent).toContain('Design the module boundary')
   })

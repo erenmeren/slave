@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import type { WorkforceCatalogFilters } from '@slave-of-ai/control'
 import { duplicateBasisLabel, duplicateClassLabel, type CapabilityRecord } from '@slave-of-ai/domain'
-import type { WorkforceCatalogView } from '../../server/org'
+import type { CatalogRowView, WorkforceCatalogView } from '../../server/org'
 import { catalogFilterParams } from '../../lib/catalogFilters'
 import { plural } from '../../lib/plural'
 import { sendControl } from '../../lib/postControl'
@@ -31,6 +31,12 @@ const HEADER = ['Name', 'Division', 'Summary', 'Capabilities', 'Source', 'Defaul
 
 /** How many capability chips fit a row before the rest becomes a count. */
 const CHIPS = 3
+
+/** R8 (2026-09-20 catalogue capability mapping): what the drawer's mapping line says, off the
+ *  SAME two fields every `setOpen` site below reads off a row -- one place, so the three sites
+ *  (the row, its name button, and a duplicate pair's "open the other one") cannot disagree. */
+const capabilityMappingOf = (row: CatalogRowView): 'mapped' | 'stale' | 'none' =>
+  row.capabilityMappingStale ? 'stale' : row.capabilityMappedAt === null ? 'none' : 'mapped'
 
 /**
  * The Workforce Catalog (M46 R6): every template a company can be staffed from, searchable and
@@ -79,6 +85,9 @@ export function WorkforceCatalog({
     readonly id: string
     readonly name: string
     readonly capabilityKeys: readonly string[]
+    /** R8: the half of `capabilityKeys` a model chose, and whether that mapping is current. */
+    readonly mappedCapabilityKeys: readonly string[]
+    readonly capabilityMapping: 'mapped' | 'stale' | 'none'
     readonly defaultSkillIds: readonly string[]
     readonly hiredCount: number
   } | null>(null)
@@ -205,6 +214,8 @@ export function WorkforceCatalog({
                     id: row.id,
                     name: row.name,
                     capabilityKeys: row.capabilityKeys,
+                    mappedCapabilityKeys: row.mappedCapabilityKeys,
+                    capabilityMapping: capabilityMappingOf(row),
                     defaultSkillIds: row.defaultSkillIds,
                     hiredCount: row.hiredCount,
                   })
@@ -222,6 +233,8 @@ export function WorkforceCatalog({
                     id: row.id,
                     name: row.name,
                     capabilityKeys: row.capabilityKeys,
+                    mappedCapabilityKeys: row.mappedCapabilityKeys,
+                    capabilityMapping: capabilityMappingOf(row),
                     defaultSkillIds: row.defaultSkillIds,
                     hiredCount: row.hiredCount,
                   })
@@ -364,6 +377,8 @@ export function WorkforceCatalog({
           templateId={open.id}
           name={open.name}
           capabilityKeys={open.capabilityKeys}
+          mappedCapabilityKeys={open.mappedCapabilityKeys}
+          capabilityMapping={open.capabilityMapping}
           taxonomy={taxonomy}
           defaultSkillIds={page.rows.find((row) => row.id === open.id)?.defaultSkillIds ?? open.defaultSkillIds}
           hiredCount={page.rows.find((row) => row.id === open.id)?.hiredCount ?? open.hiredCount}
@@ -380,6 +395,8 @@ export function WorkforceCatalog({
               id,
               name,
               capabilityKeys: candidate?.capabilityKeys ?? [],
+              mappedCapabilityKeys: candidate?.mappedCapabilityKeys ?? [],
+              capabilityMapping: candidate === undefined ? 'none' : capabilityMappingOf(candidate),
               defaultSkillIds: candidate?.defaultSkillIds ?? [],
               hiredCount: candidate?.hiredCount ?? 0,
             })

@@ -238,6 +238,10 @@ function templateRow(over: Partial<CatalogRowView> = {}): CatalogRowView {
     capabilities: [],
     // M47 R1: the taxonomy keys beside the free text. A hand-made row has none.
     capabilityKeys: [],
+    // R8 (2026-09-20 catalogue capability mapping): a hand-made row has never been mapped either.
+    mappedCapabilityKeys: [],
+    capabilityMappedAt: null,
+    capabilityMappingStale: false,
     expertise: [],
     recommendedSkills: [],
     mappingQuality: null,

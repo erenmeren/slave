@@ -2,12 +2,14 @@ import { type Prisma, prisma } from '@slave-of-ai/db/client'
 import type { ProviderKind } from '@slave-of-ai/providers'
 import {
   bodyBandsOf,
+  capabilityMappingHash,
   catalogSearchText,
   contentHashOf,
   effectiveProfileSpec,
   emptyDuplicateCounts,
   err,
   goalSha256,
+  mappableSentences,
   normalisePersona,
   ok,
   overriddenFields,
@@ -894,6 +896,12 @@ export interface WorkforceCatalogRow {
    *  rather than instead of it -- the free text is what the search box matches and what an
    *  unstructured row shows, and a key is what `formTeam` and a capability filter read. */
   readonly capabilityKeys: readonly string[]
+  /** 2026-09-20 catalogue capability mapping, R8: the half of `capabilityKeys` a MODEL chose. */
+  readonly mappedCapabilityKeys: readonly string[]
+  readonly capabilityMappedAt: Date | null
+  /** R4's staleness, computed here so the drawer can say "stale" without a second read. False
+   *  for a row that can never be mapped (unstructured, or no sentences). */
+  readonly capabilityMappingStale: boolean
   readonly expertise: readonly string[]
   readonly recommendedSkills: readonly string[]
   readonly mappingQuality: MappingQuality | null
@@ -967,6 +975,9 @@ interface CatalogTemplateRow {
   sourceLicense: string | null
   importedAt: Date | null
   capabilityKeys: string[]
+  mappedCapabilityKeys: string[]
+  capabilityMappingHash: string | null
+  capabilityMappedAt: Date | null
   active: boolean
   activationChangedAt: Date | null
   activationChangedBy: string | null
@@ -977,10 +988,23 @@ function catalogRowOf(
   catalogSlaveCount: number,
   rawOverride: boolean,
   duplicate: RowDuplicateRow | null,
+  taxonomy: readonly CapabilityRecord[],
 ): WorkforceCatalogRow {
   const spec = profileSpecSchema.safeParse(template.profileSpec)
   const overrides = profileOverridesSchema.safeParse(template.profileOverrides ?? {})
   const effective = spec.success ? effectiveProfileSpec(spec.data, overrides.success ? overrides.data : {}) : null
+  // R8/R4: staleness is checked against the UPSTREAM spec (`spec.data`), not `effective`. The
+  // mapping pass (Task 5) hashes `profileSpec` -- the persona's own words, before any override is
+  // merged in -- so "does the stored hash still agree" has to be asked of the SAME input the pass
+  // itself hashed. Checking against `effective` would call a row stale the instant an operator
+  // overrode a field the pass never read, which is not what went stale. False for a row that is
+  // not structured, or whose sentences are all blank -- the pass never mapped it, so there is
+  // nothing to be stale.
+  const capabilityMappingStale =
+    spec.success &&
+    mappableSentences(spec.data.capabilities).length > 0 &&
+    template.capabilityMappingHash !==
+      capabilityMappingHash({ summary: spec.data.summary, identity: spec.data.identity, capabilities: spec.data.capabilities }, taxonomy)
   return {
     id: template.id,
     name: template.name,
@@ -1002,6 +1026,9 @@ function catalogRowOf(
     summary: (effective?.summary ?? '') || template.description,
     capabilities: effective?.capabilities ?? [],
     capabilityKeys: template.capabilityKeys,
+    mappedCapabilityKeys: template.mappedCapabilityKeys,
+    capabilityMappedAt: template.capabilityMappedAt,
+    capabilityMappingStale,
     expertise: effective?.expertise ?? [],
     recommendedSkills: effective?.recommendedSkills ?? [],
     mappingQuality: spec.success ? (spec.data.source?.mappingQuality ?? null) : null,
@@ -1110,6 +1137,9 @@ const CATALOG_ROW_SELECT = {
   sourceLicense: true,
   importedAt: true,
   capabilityKeys: true,
+  mappedCapabilityKeys: true,
+  capabilityMappingHash: true,
+  capabilityMappedAt: true,
   active: true,
   activationChangedAt: true,
   activationChangedBy: true,
@@ -1238,7 +1268,7 @@ export async function listWorkforceCatalog(
 ): Promise<WorkforceCatalogPage> {
   const where = catalogWhere(filters)
   const take = Math.max(1, Math.min(options.pageSize ?? CATALOG_PAGE_SIZE, TEMPLATE_PICKER_MAX))
-  const [templates, total, facets] = await Promise.all([
+  const [templates, total, facets, taxonomy] = await Promise.all([
     prisma.slaveTemplate.findMany({
       where,
       select: CATALOG_ROW_SELECT,
@@ -1251,6 +1281,10 @@ export async function listWorkforceCatalog(
     }),
     prisma.slaveTemplate.count({ where }),
     options.facets === false ? Promise.resolve(NO_FACETS) : readCatalogFacets(),
+    // R8: the taxonomy `catalogRowOf` needs to tell a stale mapping from a current one -- the SAME
+    // read `capabilityMappingHash` was computed against, key ascending (`listCapabilities`'s own
+    // order), loaded once per page rather than once per row.
+    listCapabilities(),
   ])
 
   const ids = templates.map((template) => template.id)
@@ -1288,6 +1322,7 @@ export async function listWorkforceCatalog(
       countByTemplate.get(template.id) ?? 0,
       rawByTemplate.get(template.id) ?? false,
       duplicates.get(template.id) ?? null,
+      taxonomy,
     ),
   )
 
