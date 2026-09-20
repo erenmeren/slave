@@ -1,4 +1,5 @@
 import { handoffSourceLines, type Source } from './answerPrompt.js'
+import type { ChatAttachment } from './chatPrompt.js'
 import type { SupervisorQuestion, SupervisorWorld } from './world.js'
 
 /**
@@ -34,12 +35,39 @@ function normalise(text: string): string {
 }
 
 /**
- * The text a source kind names for this question, or null when the record has no such source.
+ * What a CHAT turn adds to the record a citation may be checked against (Supervisor chat R2).
  *
- * `ref` is consulted for `message` only (erratum E1): the other three are single-valued for a
- * question, so a ref the model invented for them is ignored rather than treated as a mismatch.
+ * EXACTLY what `buildSupervisorChatPrompt` put in front of the model, handed back at verification
+ * time: the feed sentences it was shown and the attachments it was given. A caller that passes a
+ * wider feed than the prompt rendered would be letting an answer be built on words the model never
+ * saw, which is the one thing this whole file exists to stop.
  */
-function sourceText(source: Source, question: SupervisorQuestion, world: SupervisorWorld): string | null {
+export interface ChatSourceContext {
+  readonly feed: readonly { readonly seq: number; readonly sentence: string }[]
+  readonly attachments: readonly ChatAttachment[]
+}
+
+/**
+ * The kinds that name ONE row among many, rather than the single-valued source a question has.
+ *
+ * They share a rejection reason: a `ref` that resolves to nothing is `unknown_ref`, because the
+ * model pointed AT something and it was not there -- whether the id was invented, the window has
+ * moved on, or the call carried no such list at all. The other three are `no_such_source`: there
+ * was nothing of that kind to point at in the first place.
+ */
+const REF_ADDRESSED: readonly Source['kind'][] = ['message', 'feed', 'attachment']
+
+/**
+ * The text one of the three QUESTION sources names, or null when the record has no such source.
+ *
+ * `ref` is consulted for `message` only (erratum E1): the other two are single-valued for a
+ * question, so a ref the model invented for them is ignored rather than treated as a mismatch.
+ *
+ * {@link sourceText} is the only caller and routes exactly the three kinds below to it; the
+ * `default` is what a fourth would come to if one ever reached here, and nothing is citable that
+ * this function cannot name a text for.
+ */
+function questionSourceText(source: Source, question: SupervisorQuestion): string | null {
   switch (source.kind) {
     case 'task': {
       // Nulls as empty strings, joined by the newline the prompt showed them across -- so a quote
@@ -54,8 +82,6 @@ function sourceText(source: Source, question: SupervisorQuestion, world: Supervi
       ].join('\n')
       return normalise(text) === '' ? null : text
     }
-    case 'goal':
-      return world.goal === null || normalise(world.goal) === '' ? null : world.goal
     case 'run_context':
       return question.askerRunPrompt === null || normalise(question.askerRunPrompt) === ''
         ? null
@@ -79,17 +105,66 @@ function sourceText(source: Source, question: SupervisorQuestion, world: Supervi
       if (message.senderSlaveId === question.askerSlaveId) return null
       return message.body
     }
+    default:
+      return null
   }
 }
 
 /**
- * Sorts an answer's citations into the ones that check out and the ones that do not (M39 §3).
+ * The text a source kind names for this citation, or null when the record has no such source.
+ *
+ * `question` is NULL on a chat turn (Supervisor chat R2), which has no question at all: the three
+ * kinds that read one resolve to nothing there, and the goal, the feed and the attachments are
+ * what remain citable. `chat` is undefined on the ANSWER path, and the two chat kinds resolve to
+ * nothing there for the same reason -- a call may only be checked against what it actually showed
+ * the model.
+ *
+ * An attachment is citable only when its TEXT was inlined (R6): an image or a binary is named in
+ * the prompt by path and size and nothing else, so there are no words in it a quote could have
+ * been copied from.
+ */
+function sourceText(
+  source: Source,
+  question: SupervisorQuestion | null,
+  world: SupervisorWorld,
+  chat: ChatSourceContext | undefined,
+): string | null {
+  switch (source.kind) {
+    case 'goal':
+      return world.goal === null || normalise(world.goal) === '' ? null : world.goal
+    case 'feed': {
+      if (chat === undefined || source.ref === null) return null
+      const entry = chat.feed.find((line) => String(line.seq) === source.ref)
+      return entry === undefined || normalise(entry.sentence) === '' ? null : entry.sentence
+    }
+    case 'attachment': {
+      if (chat === undefined || source.ref === null) return null
+      const file = chat.attachments.find((attachment) => attachment.path === source.ref)
+      return file?.text === undefined || normalise(file.text) === '' ? null : file.text
+    }
+    // The three a QUESTION supplies. Listed rather than defaulted so the switch stays EXHAUSTIVE:
+    // a seventh `SOURCE_KINDS` member added later fails the build here, instead of quietly
+    // becoming a citation checked against the asker's thread.
+    case 'task':
+    case 'run_context':
+    case 'message':
+      return question === null ? null : questionSourceText(source, question)
+  }
+}
+
+/**
+ * Sorts a model's citations into the ones that check out and the ones that do not (M39 §3).
  *
  * Order is preserved on both sides, so a draft shows a human the model's own citation order rather
  * than a reshuffled one. A missing source is `no_such_source` (the record has no goal, no task, no
- * recorded run context); a `message` citation naming an id that is not in the thread -- or naming
- * none at all -- is `unknown_ref`, since the model pointed at something rather than nothing;
+ * recorded run context); a {@link REF_ADDRESSED} citation naming an id that is not there -- or
+ * naming none at all -- is `unknown_ref`, since the model pointed at something rather than nothing;
  * everything else that fails is `quote_not_found`.
+ *
+ * TWO callers, one rule (Supervisor chat R2). The answer path passes the question it is answering
+ * and no `chat`; a conversation passes `null` and the feed and attachments its prompt showed. Each
+ * call is checked against exactly what it put in front of the model and nothing else, which is why
+ * the other caller's kinds resolve to nothing rather than to somebody else's record.
  *
  * Two classes of `message` ref are rejected on principle rather than for being absent, and both
  * come to the same thing: NOTHING THE ASKER WROTE IS EVIDENCE (errata E4, E8). The question's own
@@ -99,16 +174,17 @@ function sourceText(source: Source, question: SupervisorQuestion, world: Supervi
  */
 export function verifySources(
   sources: readonly Source[],
-  question: SupervisorQuestion,
+  question: SupervisorQuestion | null,
   world: SupervisorWorld,
+  chat?: ChatSourceContext,
 ): SourceCheck {
   const verified: Source[] = []
   const rejected: { source: Source; reason: RejectionReason }[] = []
 
   for (const source of sources) {
-    const text = sourceText(source, question, world)
+    const text = sourceText(source, question, world, chat)
     if (text === null) {
-      rejected.push({ source, reason: source.kind === 'message' ? 'unknown_ref' : 'no_such_source' })
+      rejected.push({ source, reason: REF_ADDRESSED.includes(source.kind) ? 'unknown_ref' : 'no_such_source' })
       continue
     }
     const quote = normalise(source.quote)
