@@ -187,4 +187,41 @@ follow-up), and reading images on Cursor.
 
 ## 4. Errata
 
-None yet.
+**E1 — Cursor's print mode works, and it reports no cost (R5, measured 2026-09-20).** The spike ran
+the installed binary once: `cursor-agent --print --output-format stream-json --trust --force --model
+auto "Reply with the single word OK"`. It answered in 5.3 s and its seven stdout lines are recorded
+verbatim at `.superpowers/sdd/2026-09-20-supervisor-chat/cursor-print-spike.jsonl`. **So Cursor stays
+selectable**: `ProviderSelect` needs no disabled option and R4's registry has both entries.
+
+What the run established, each of which `decideWithCursor` is written against:
+
+- **The line shapes.** `{"type":"system","subtype":"init",...,"session_id":...,"model":"Auto
+  Balance"}`; `{"type":"user",...}` (the prompt echoed back); three `{"type":"thinking","subtype":
+  "delta"|"completed",...}` lines; `{"type":"assistant","message":{"role":"assistant","content":
+  [{"type":"text","text":...}]}}`; and the terminal `{"type":"result","subtype":"success",
+  "duration_ms":5327,"is_error":false,"result":"<the same text>","session_id":...,"request_id":...,
+  "usage":{"inputTokens":20948,"outputTokens":83,"cacheReadTokens":2304,"cacheWriteTokens":0}}`.
+  `parseCursorLine` already reads every one of them, so the decision call reuses it unchanged.
+- **There is NO cost field, under any name.** Not `total_cost_usd`, not `cost`, not a nested one:
+  the result line carries `usage` and nothing else about spend. A `usage` object is not a price, so
+  `costUsd` is `null` and a Cursor turn is `unmeasured` — the intake's honesty rule, not a
+  degradation. `tokens` ARE read (billed input = `inputTokens + cacheReadTokens + cacheWriteTokens`).
+- **`--trust --force` are mandatory and their absence is invisible.** Without them the CLI writes
+  NOTHING to stdout and a "Workspace Trust Required" block to stderr, which reaches a caller as "the
+  process ended without a result line" — a runtime fault rather than a missing flag. They are what
+  `cursorFlags()` already emits for runs, so `decideWithCursor` reuses that function rather than
+  respelling the list.
+- **The assistant text opens with a vendor preface line.** The measured text is
+  `"> Auto routed to Cursor Grok 4.6\n\nOK"`: the model requested was `auto` and the routed model is
+  announced in the answer's own first line. Nothing may assert on that wording — it is the vendor's
+  and it changes with the routing — and nothing needs to: `parseSupervisorReply` reads the FIRST
+  JSON object in the text, so an envelope behind a preface is still an envelope.
+  `test/fake-cursor-print.mjs --fixture preface` reproduces it so that stays true.
+- **`--model auto` is accepted** and the init line reports the pool it routed into (`Auto Balance`),
+  not the model asked for. Wherever a resolved (provider, model) pair is shown, that is the pair
+  this runtime can be held to.
+
+Not measured, and deliberately not guessed at: whether a denied tool call in print mode produces the
+same `tool_call`/`completed` lines a run does (the decision call's gate denies everything, and a tool
+call of ANY shape in this stream is already an `isolation_breach`), and what a failed print-mode call
+(`is_error: true`) puts in `result`.

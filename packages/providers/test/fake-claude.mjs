@@ -574,13 +574,41 @@ async function workFixtureArm() {
  */
 const REDACTED_ENV_NAMES = new Set(['SLAVEOFAI_RUN_TOKEN'])
 
+/**
+ * ARGV and the SETTINGS FILE ride along with the environment (F R7). A spawn is three things --
+ * what it was told (argv), what it was given (env) and what it was pointed at (the settings file
+ * naming the hook) -- and the read-only tool mode changes one of each: `--tools Read,Glob,Grep`,
+ * `SLAVEOFAI_PERMISSIONS_FILE`, and the gate the settings register. Read from inside the child
+ * because the caller deletes its per-call temp directory the moment the call ends, so nothing
+ * outside can read that settings file afterwards. `null` when there is no `--settings` argument or
+ * it does not parse -- a dump is evidence, never an assertion of its own.
+ */
+function settingsFileContents() {
+  const settingsPath = flagValue('--settings')
+  if (settingsPath === undefined) return null
+  try {
+    return JSON.parse(readFileSync(settingsPath, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
 function dumpChildEnv() {
   const out = flagValue('--env-out') ?? process.env.FAKE_ENV_OUT
   if (out === undefined || out === '') return
   const env = Object.fromEntries(
     Object.entries(process.env).map(([name, value]) => [name, REDACTED_ENV_NAMES.has(name) ? '<present>' : value]),
   )
-  appendFileSync(out, `${JSON.stringify({ runId: process.env.SLAVEOFAI_RUN_ID ?? null, cwd: process.cwd(), env })}\n`)
+  appendFileSync(
+    out,
+    `${JSON.stringify({
+      runId: process.env.SLAVEOFAI_RUN_ID ?? null,
+      cwd: process.cwd(),
+      env,
+      argv: args,
+      settings: settingsFileContents(),
+    })}\n`,
+  )
 }
 
 /**
@@ -895,6 +923,11 @@ async function main() {
   }
 
   if (fixtureName === 'env-echo') {
+    // `--env-out` is honoured here too (F R7), not only on the `--work-fixture` arm: a DECISION
+    // call surfaces none of this fixture's result payload -- `decideWithModel` normalizes the line
+    // into `ModelDecisionOutcome` and drops `env`, `cwd` and `argv` -- so the dump file is the only
+    // way a decision's own spawn can be measured from the child. No-op when no path is named.
+    dumpChildEnv()
     // Synthetic by necessity: no real capture carries the child's own
     // process.env, process.cwd(), or process.argv, because nothing about
     // the CLI's stream format ever would. A later task uses this to prove
