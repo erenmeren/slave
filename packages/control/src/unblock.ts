@@ -317,8 +317,9 @@ export async function retryTask(
   // FIRST, and outside the transaction below, so a refusal here is a retry that never happened.
   // `setSlavePermission` re-validates the kind against `PERMISSION_KINDS` and re-reads the worker,
   // so a decision that waited a day and names a worker who has since been released is refused
-  // rather than written. THE APPROVER IS THE GRANTER, as in `carryOut`'s `request_permission` arm:
-  // `principal` lands on the row and in the event, and the Supervisor only ever asked.
+  // rather than written. THE APPROVER IS THE GRANTER when there IS one, as in `carryOut`'s
+  // `request_permission` arm: `principal` lands on the row and in the event. Under `act` there is
+  // none -- see the `origin` below.
   if (input.grant !== undefined) {
     // `origin` travels with it (Task 8, erratum E13): under `act` nobody approved this, so the
     // `permission.changed` it appends must say `system` / `by: 'supervisor'` rather than name a

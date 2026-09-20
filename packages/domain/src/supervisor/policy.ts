@@ -75,7 +75,7 @@ export function tierOf(action: Action, world: SupervisorWorld, situationKind: Si
   }
   // R1: the switch. A person who turned autonomy on gets every routine and non-routine action
   // applied; only the escalation stays a question. The halted rule above still wins, except for
-  // the one action that exists to end a halt (Task 3 adds it; `clear_halt` is applied under `act`).
+  // the two actions that exist to end a halt ({@link HALT_REMEDIES}).
   if (world.autonomy === 'act') return 'applied'
   switch (action.kind) {
     case 'unblock_task':
