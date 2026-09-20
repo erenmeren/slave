@@ -291,6 +291,62 @@ describe('the self-running project, end to end under act', () => {
     expect(all.every((row) => row.status === 'applied')).toBe(true)
   })
 
+  /**
+   * The OTHER half of the switch, and the one the two cases above cannot reach (final review,
+   * recommendation 6): a failed task on a project the breaker never stopped.
+   *
+   * Both cases above run on a halted world, where `supervise` withholds the model seam entirely --
+   * `rulesOnly: true`, no prompt, no call. So every end-to-end assertion this file made about the
+   * MODEL path was made about a pass that never opened it, and the daemon's ordinary shape on
+   * `act` (a decider wired, a budget, nothing halted) had no test of its own. Here the seam is
+   * open, the model is asked, and its answer -- the fake CLI's own `{"candidateIndex": 0}` -- is
+   * what gets carried out.
+   */
+  it('asks the model and carries out its answer on a project the breaker never stopped', async () => {
+    const fixture = await seed()
+    const model = firstCandidate()
+
+    // ONE failed run instead of three: `consecutiveFailureLimit` is 3, so the streak that halted
+    // the other two cases never forms and the project is merely a project with a failed task on it.
+    await prisma.slaveRun.deleteMany({ where: { taskId: fixture.taskId, id: { not: fixture.runId } } })
+
+    const before = await loadSupervisorWorld(fixture.workspaceId, PASS_1)
+    expect(before.world.halted).toBeNull()
+    expect(before.world.autonomy).toBe('act')
+
+    const pass = await supervise({
+      workspaceId: fixture.workspaceId,
+      decider: model.decider,
+      model: 'claude-sonnet-5',
+      now: () => PASS_1,
+    })
+    // The seam was open and it was used: one call, one prompt, and the pass is not rules-only.
+    expect(pass).toMatchObject({ situations: 1, decided: 1, applied: 1, proposed: 0, modelCalls: 1, rulesOnly: false })
+    expect(model.prompts).toHaveLength(1)
+
+    const decision = (await decisions(fixture.workspaceId)).find(
+      (row) => (row.action as { kind?: string }).kind === 'retry_task',
+    )
+    expect(decision?.status).toBe('applied')
+    expect(decision?.tier).toBe('applied')
+    // The MODEL chose it -- `chooseByRules` records `rules`, and that is the distinction this case
+    // exists to make.
+    expect(decision?.decidedBy).toBe('model')
+
+    const retried = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(retried.status).toBe('rework')
+    expect(retried.attempt).toBe(0)
+    expect(retried.retries).toBe(1)
+    expect(
+      (await prisma.slavePermission.findUniqueOrThrow({
+        where: { slaveId_kind: { slaveId: fixture.slaveId, kind: 'network_fetch' } },
+      })).mode,
+    ).toBe('allow')
+    // Nobody was asked anything, and nothing is waiting.
+    const all = await decisions(fixture.workspaceId)
+    expect(all.filter((row) => row.status === 'pending' || row.tier === 'escalated')).toHaveLength(0)
+  })
+
   it('does not clear a second halt inside the hour: the candidate set holds no clear_halt, and a person is asked', async () => {
     const fixture = await seed()
     const model = firstCandidate()
