@@ -209,12 +209,20 @@ export function SupervisorThreadPanel({
 
   const toggleAutonomy = async (checked: boolean): Promise<void> => {
     setAutonomyPending(true)
+    // The last refusal is about the last act, like `answer` below: a band that outlived what it
+    // described reads as being about the switch somebody just flipped.
+    setErrorText(null)
     const error = await sendControl(`/api/w/${workspaceId}/supervisor/settings`, {
       method: 'PATCH',
       body: { autonomy: checked ? 'act' : 'propose' },
     })
     setAutonomyPending(false)
+    // A REFUSAL IS SAID OUT LOUD (final review, Minor 6). It was swallowed: the checkbox sprang
+    // back to where it had been -- `loadSettings` is not called, so the state never moved -- and
+    // the one switch that decides whether this project runs itself silently disagreed with the
+    // person holding it. `errorText` is the panel's own band, which every other refusal here uses.
     if (error === null) await loadSettings()
+    else setErrorText(error)
   }
 
   const thread = useMemo(

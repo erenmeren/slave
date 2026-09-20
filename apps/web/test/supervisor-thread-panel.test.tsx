@@ -326,6 +326,37 @@ describe('the Supervisor panel', () => {
     expect((screen.getByTestId('supervisor-autonomy') as HTMLInputElement).disabled).toBe(false)
   })
 
+  // Final review, Minor 6: the refusal was swallowed. The checkbox sprang back to where it had
+  // been -- the state never moves until `loadSettings` confirms it -- and the one switch that
+  // decides whether this project runs itself disagreed with the person holding it, silently.
+  it('says so when the autonomy PATCH is refused, and leaves the switch where it was', async (): Promise<void> => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
+      if (url.endsWith('/supervisor/settings')) {
+        return new Response(JSON.stringify({ error: 'this project is archived' }), { status: 409 })
+      }
+      if (url.endsWith('/supervisor')) {
+        return new Response(JSON.stringify({ settings: { enabled: true, profile: null, autonomy: 'propose' } }), {
+          status: 200,
+        })
+      }
+      return new Response('{}', { status: 200 })
+    })
+
+    render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
+    const toggle = await screen.findByTestId('supervisor-autonomy')
+    await waitFor(() => expect((toggle as HTMLInputElement).checked).toBe(false))
+
+    await act(async (): Promise<void> => {
+      fireEvent.click(toggle)
+    })
+
+    const band = await screen.findByTestId('supervisor-request-error')
+    expect(band.textContent).toBe('this project is archived')
+    expect((screen.getByTestId('supervisor-autonomy') as HTMLInputElement).checked).toBe(false)
+    expect((screen.getByTestId('supervisor-autonomy') as HTMLInputElement).disabled).toBe(false)
+  })
+
   it('labels the autonomy switch "act on its own"', async (): Promise<void> => {
     render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
     const toggle = await screen.findByTestId('supervisor-autonomy')

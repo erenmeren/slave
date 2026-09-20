@@ -43,20 +43,29 @@ export const HAPPENING_TYPES: readonly DomainEventType[] = [
 ]
 
 /**
- * The Supervisor's own catalogue kind, said the way a person reads it (R8) -- the six kinds `act`
+ * The action off a `supervisor.applied`/`failed` payload, as a bag of fields.
+ *
+ * `supervisor.applied`'s real payload (`applyDecision`, `packages/control/src/supervisor.ts`) is
+ * `{ decisionId, action }` with the WHOLE action on it since Task 8 (erratum E9); a row written
+ * before that widening carries the kind alone, which is why every field below is read with `str`
+ * -- `null` for anything absent, so a sentence about the past degrades to a bare one rather than
+ * printing "undefined".
+ */
+function actionOf(p: Record<string, unknown>): Record<string, unknown> {
+  const action = p['action']
+  return action !== null && typeof action === 'object' ? (action as Record<string, unknown>) : {}
+}
+
+/**
+ * The Supervisor's own catalogue kind, said the way a person reads it (R8) -- the seven kinds `act`
  * actually carries out on its own without an escalation (spec §2's "applied" column) get their own
  * words; anything else names the kind rather than inventing a sentence for it.
  *
- * Reads off `p.action` rather than taking the action as its own argument: `supervisor.applied`'s
- * real payload (`applyDecision`, `packages/control/src/supervisor.ts`) is `{ decisionId, action }`
- * with the WHOLE action on it since Task 8 (erratum E9), and every field here is still read with
- * `str` -- which is `null` for a caller that never gave it one -- because a row written before
- * that carries the kind alone, and a sentence about the past must degrade to the bare kind rather
- * than print "undefined".
+ * PAST TENSE, for the sentence that says a thing happened. The refusal's sentence needs the same
+ * phrases in the INFINITIVE and has its own table below: English does not let one list serve both.
  */
 function verbPhrase(p: Record<string, unknown>): string {
-  const action = p['action']
-  const fields = action !== null && typeof action === 'object' ? (action as Record<string, unknown>) : {}
+  const fields = actionOf(p)
   const kind = str(fields, 'kind')
   switch (kind) {
     case 'retry_task': {
@@ -87,12 +96,53 @@ function verbPhrase(p: Record<string, unknown>): string {
   }
 }
 
+/**
+ * The same seven kinds after "could not" (final review, Minor 1).
+ *
+ * `supervisor.failed` read {@link verbPhrase} and printed "The Supervisor could not retried
+ * \"Checkout form\"" -- the one line on Home a person sees when the Supervisor's own remedy did
+ * not work, in broken English. A verb after "could not" is an infinitive, so the table is a second
+ * table rather than a suffix rule: "retried" -> "retry", "sent ... back" -> "send ... back",
+ * "hired" -> "hire". The fallback keeps its shape -- "apply" is already the infinitive there.
+ */
+function verbInfinitive(p: Record<string, unknown>): string {
+  const fields = actionOf(p)
+  const kind = str(fields, 'kind')
+  switch (kind) {
+    case 'retry_task': {
+      const title = str(fields, 'title')
+      return title === null ? 'retry a task' : `retry "${title}"`
+    }
+    case 'retry_review': {
+      const title = str(fields, 'title')
+      return title === null ? 'send a task back to review' : `send "${title}" back to review`
+    }
+    case 'clear_halt':
+      return 'clear the halt'
+    case 'request_permission': {
+      const kindLabel = str(fields, 'kindLabel')
+      const name = str(fields, 'name')
+      return kindLabel === null || name === null ? 'grant a permission' : `grant ${kindLabel} to ${name}`
+    }
+    case 'hire_from_catalog': {
+      const name = str(fields, 'name')
+      return name === null ? 'hire someone' : `hire ${name}`
+    }
+    case 'unblock_task':
+      return 'unblock a task'
+    case 'steer_run':
+      return 'steer a worker'
+    default:
+      return `apply ${kind ?? 'something'}`
+  }
+}
+
 const SENTENCE: Partial<Record<DomainEventType, (p: Record<string, unknown>, n: HappeningNames) => string>> = {
   'workspace.goal_set': (p) => `You asked for: ${str(p, 'request') ?? str(p, 'goal') ?? 'a new goal'}`,
   'supervisor.proposed': (p) => `The Supervisor proposed: ${str(p, 'summary') ?? 'a change'}`,
   'supervisor.decided': (p) => `The Supervisor decided: ${str(p, 'summary') ?? str(p, 'decision') ?? 'something'}`,
   'supervisor.applied': (p) => `The Supervisor ${verbPhrase(p)}`,
-  'supervisor.failed': (p) => `The Supervisor could not ${verbPhrase(p)}: ${str(p, 'reason') ?? 'unknown'}`,
+  'supervisor.failed': (p) => `The Supervisor could not ${verbInfinitive(p)}: ${str(p, 'reason') ?? 'unknown'}`,
   'task.created': (_p, n) => `${quoted(n)} was added to the board`,
   'task.started': (_p, n) => `${who(n)} picked up ${quoted(n)}`,
   'task.done': (_p, n) => `${who(n)} finished ${quoted(n)}`,

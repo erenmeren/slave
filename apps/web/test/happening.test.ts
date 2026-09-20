@@ -86,17 +86,48 @@ describe('happeningSentence', () => {
     )
   })
 
-  it('names the reason on supervisor.failed, or "unknown" when the payload carries none', () => {
+  // Final review, Minor 1: a verb after "could not" is an infinitive. The applied table is past
+  // tense ("retried"), and reading it here printed "could not retried" on the one line Home shows
+  // a person when the Supervisor's own remedy did not work.
+  it('says the verb in the infinitive on supervisor.failed, and names the reason or "unknown"', () => {
     expect(
       happeningSentence(
         'supervisor.failed',
         { action: { kind: 'retry_task', title: 'Checkout form' }, reason: 'the reviewer role is empty' },
         names,
       ),
-    ).toBe('The Supervisor could not retried "Checkout form": the reviewer role is empty')
+    ).toBe('The Supervisor could not retry "Checkout form": the reviewer role is empty')
     expect(happeningSentence('supervisor.failed', { action: { kind: 'clear_halt' } }, names)).toBe(
-      'The Supervisor could not cleared the halt: unknown',
+      'The Supervisor could not clear the halt: unknown',
     )
+  })
+
+  it('has an infinitive for every kind the applied table has a past tense for', () => {
+    const cases: readonly [Record<string, unknown>, string][] = [
+      [{ kind: 'retry_task', title: 'Checkout form' }, 'The Supervisor could not retry "Checkout form": unknown'],
+      [{ kind: 'retry_task' }, 'The Supervisor could not retry a task: unknown'],
+      [
+        { kind: 'retry_review', title: 'Checkout form' },
+        'The Supervisor could not send "Checkout form" back to review: unknown',
+      ],
+      [{ kind: 'retry_review' }, 'The Supervisor could not send a task back to review: unknown'],
+      [{ kind: 'clear_halt' }, 'The Supervisor could not clear the halt: unknown'],
+      [
+        { kind: 'request_permission', kindLabel: 'network access', name: 'Emma' },
+        'The Supervisor could not grant network access to Emma: unknown',
+      ],
+      [{ kind: 'request_permission' }, 'The Supervisor could not grant a permission: unknown'],
+      [{ kind: 'hire_from_catalog', name: 'Alex' }, 'The Supervisor could not hire Alex: unknown'],
+      [{ kind: 'hire_from_catalog' }, 'The Supervisor could not hire someone: unknown'],
+      [{ kind: 'unblock_task' }, 'The Supervisor could not unblock a task: unknown'],
+      [{ kind: 'steer_run' }, 'The Supervisor could not steer a worker: unknown'],
+      // Outside the table: "apply" is already the infinitive, so the fallback keeps its shape.
+      [{ kind: 'mark_task_failed' }, 'The Supervisor could not apply mark_task_failed: unknown'],
+      [{}, 'The Supervisor could not apply something: unknown'],
+    ]
+    for (const [action, sentence] of cases) {
+      expect(happeningSentence('supervisor.failed', { action }, names)).toBe(sentence)
+    }
   })
 
   it('never leaks a bare event type', () => {
