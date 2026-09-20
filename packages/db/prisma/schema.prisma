@@ -112,6 +112,9 @@ model Workspace {
   /// and same limits as M37's profiles: `PROFILE_MAX_CHARS` on write and `neutraliseMarkers` on
   /// render. Null is the ordinary state -- the rules decide perfectly well without one.
   supervisorProfile String?
+  /// E R1: whether the Supervisor applies its own decisions (`act`) or proposes them for a person
+  /// (`propose`, today's behaviour). One switch per project; `tierOf` reads it.
+  supervisorAutonomy SupervisorAutonomy @default(propose)
   /// M48 R5: the runbook this project has adopted, or null. SetNull: deleting a runbook must not
   /// destroy a project. Adopting after tasks exist is allowed -- the next re-plan sees it.
   runbookId String?
@@ -1057,6 +1060,13 @@ enum MessageKind {
   handoff
 }
 
+/// E R1: whether the Supervisor applies its own decisions (`act`) or proposes them for a person
+/// (`propose`, today's behaviour). One switch per project; `tierOf` reads it.
+enum SupervisorAutonomy {
+  propose
+  act
+}
+
 model Task {
   id                  String     @id @default(uuid())
   workspaceId         String
@@ -1069,6 +1079,14 @@ model Task {
   /// STAFFING key. `requiredRole` above stays the DISPATCH key and is derived from this list when
   /// the planner did not name one, so the scheduler keeps exactly one matching rule.
   requiredCapabilities String[] @default([])
+  /// E R5: what the planner said this task needs beyond the run kind's baseline -- a closed list
+  /// (`network_fetch`, `run_commands`) added to the implementation run's permission snapshot.
+  requiredPermissions String[] @default([])
+  /// E R3: how many times the Supervisor put this task back from `failed`; two is the ceiling.
+  retries             Int      @default(0)
+  /// E R3: when set, review attempts are counted from here rather than from the implementation
+  /// run -- `retry_review`'s stamp after an infrastructure failure spent the review budget.
+  reviewWindowFrom    DateTime?
   /// M48 R1: the typed handoff -- a validated `HandoffContract`. NULL means hand-made or planned
   /// before this milestone, and is never backfilled: inventing a contract for work nobody wrote one
   /// for would be worse than the paragraph it replaces.
