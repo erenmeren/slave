@@ -109,6 +109,57 @@ describe('TaskCard`s origin sentence (M54 R9)', () => {
 // folds) renders only for a developer -- `TaskDetailPanel`'s own explicit `isDeveloper` prop, so
 // every one of this suite's neighbouring `TaskDetailPanel` renders below and elsewhere in the repo
 // -- none of which pass it -- keeps seeing exactly what it always has (the prop defaults to `true`).
+describe('TaskCard when nobody is named on it (H2)', () => {
+  it('says nobody holds this role yet for a task whose role has no holder', () => {
+    // Since H2 a planned task names its holder at creation and the tick names an older board on its
+    // next pass, so a nameless card with a role means one thing: nobody on this project holds it.
+    render(
+      <TaskCard
+        task={task({ assigneeName: null, requiredRole: 'backend' })}
+        workspaceGoalVersion={2}
+        onSelect={() => undefined}
+      />,
+    )
+    expect(screen.getByTestId('task-assignee').textContent).toBe('nobody holds this role yet')
+    expect(screen.queryByTestId('avatar-tile')).toBeNull()
+  })
+
+  it('says not started yet for a task with no role, which no roster gap explains', () => {
+    // A hand-made task that asks for no role at all: nobody is missing from the project, so the
+    // card must not report a staffing gap that does not exist.
+    render(
+      <TaskCard
+        task={task({ assigneeName: null, requiredRole: null })}
+        workspaceGoalVersion={2}
+        onSelect={() => undefined}
+      />,
+    )
+    expect(screen.getByTestId('task-assignee').textContent).toBe('not started yet')
+  })
+
+  it('treats an empty required role as no role at all, the way dispatch does', () => {
+    render(
+      <TaskCard
+        task={task({ assigneeName: null, requiredRole: '' })}
+        workspaceGoalVersion={2}
+        onSelect={() => undefined}
+      />,
+    )
+    expect(screen.getByTestId('task-assignee').textContent).toBe('not started yet')
+  })
+
+  it('names the person when there is one, whatever the role says', () => {
+    render(
+      <TaskCard
+        task={task({ assigneeName: 'Alex Turner', requiredRole: null })}
+        workspaceGoalVersion={2}
+        onSelect={() => undefined}
+      />,
+    )
+    expect(screen.getByTestId('task-assignee').textContent).toBe('Alex Turner')
+  })
+})
+
 describe('TaskDetailPanel — raw details only in developer mode (M61 R9)', () => {
   const run: TaskRunSummary = {
     id: 'r1',

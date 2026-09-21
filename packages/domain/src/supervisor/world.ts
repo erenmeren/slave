@@ -97,12 +97,14 @@ export interface SupervisorTask {
    */
   readonly requiredCapabilities: readonly string[]
   /**
-   * The worker a task is HAND-assigned to (M50 R3), or null.
+   * The worker this task is assigned to (M50 R3), or null when nobody on the project holds the role
+   * it needs.
    *
-   * LOADER CONTRACT: `Task.assigneeId` verbatim. Nothing in the pipeline writes this column -- a run
-   * is linked to its worker through `SlaveRun.slaveId` -- so it is null on every task this product
-   * plans. It is read by exactly one predicate, `engagement_over`, which must not release the only
-   * worker holding a hand-assigned task.
+   * LOADER CONTRACT: `Task.assigneeId` verbatim. Written since H2: planning names the holder of the
+   * task's role when it creates the task, and `startRun` rewrites it to the seat the run went to, so
+   * this is no longer null on every planned task. It is read by exactly one predicate,
+   * `engagement_over`, which must not release the only worker holding an open task -- a clause H2
+   * turned from a quiet one into a live one.
    */
   readonly assigneeId: string | null
   /** M48 R2: the runbook stage this task belongs to, or null for a task planned without one.

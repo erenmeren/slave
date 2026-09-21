@@ -107,6 +107,15 @@ export interface TaskBoardItem {
   readonly attempt: number
   readonly maxAttempts: number
   readonly assigneeName: string | null
+  /**
+   * The role this task needs (`Task.requiredRole`), or null for a hand-made one that asks for none.
+   *
+   * On the DTO for one sentence alone (H2 fix round 1, I1): a card with nobody on it says "nobody
+   * holds this role yet" when there IS a role and "not started yet" when there is not, and the two
+   * are different facts -- one is a hole in the roster, the other is a task nobody has picked up.
+   * Never rendered as a word itself (`docs/ia.md` rule 3).
+   */
+  readonly requiredRole: string | null
   readonly branch: string | null
   readonly lastRejectionReason: string | null
   /**
@@ -252,6 +261,39 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
     }
   }
 
+  // Who did this task's work, or is doing it now: the live run's seat, and once nothing is live the
+  // IMPLEMENTATION run's -- a review run is newer and belongs to the reviewer, and naming them as
+  // the person who did the work is a claim an operator would act on. `implementerOf`
+  // (`apps/orchestrator/src/verify.ts`) settles this the same way, and two surfaces answering "who
+  // did this" differently is worse than either answer.
+  //
+  // One function because the answer is needed TWICE: here, to bound the seat-name read below, and
+  // again per task in the projection.
+  const workerOf = (task: (typeof tasks)[number]): (typeof tasks)[number]['runs'][number] | undefined =>
+    task.runs.find((run) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status)) ??
+    task.runs.find((run) => run.kind === 'implementation')
+
+  // H2: the NAMES of the seats the board's un-run tasks are assigned to. Bounded to the tasks whose
+  // runs cannot answer -- a run's own seat is already joined onto the row -- so this is one read for
+  // the rows that need it and NO query at all for a board where every task has a run behind it. The
+  // same "bound it by what is already in hand" rule `waitingFor` and `stamped` above follow.
+  const unrunSeatIds = [
+    ...new Set(
+      tasks
+        .filter((task) => workerOf(task) === undefined)
+        .map((task) => task.assigneeId)
+        .filter((id): id is string => id !== null),
+    ),
+  ]
+  const assigneeNameBySeat = new Map<string, string>()
+  if (unrunSeatIds.length > 0) {
+    const seats = await prisma.slave.findMany({
+      where: { id: { in: unrunSeatIds } },
+      select: { id: true, person: { select: { name: true } } },
+    })
+    for (const seat of seats) assigneeNameBySeat.set(seat.id, seat.person.name)
+  }
+
   // ONE parse for the whole board: `parseRunbookStages` validates a JSON column, and a task list
   // of thirty would otherwise re-validate it thirty times. A column that will not parse leaves the
   // map empty, which reads as "no title known" -- the same as no runbook at all.
@@ -266,19 +308,20 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
     shellFacts,
     tasks: tasks.map((task) => {
       const liveRun = task.runs.find((run) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status))
-      // Who is on this task: whoever is running it now, and once nothing is, whoever DID the work.
+      // Who is on this task, in three readings, most-recent fact first: whoever is running it now;
+      // once nothing is, whoever DID the work ({@link workerOf} above, which settles both); and
+      // failing both, whoever it was ASSIGNED to.
       //
-      // `Task.assigneeId` is not the answer -- nothing in this product writes that column, it is
-      // there for hand-assignment alone -- so the name is derived from the runs. The live run
-      // cannot be the whole answer either: it goes terminal the moment the work finishes, and a
-      // finished task then read as `unassigned`, which is the one thing the board did know was
-      // false.
+      // `Task.assigneeId` comes LAST, and it is no longer the dead column this comment used to
+      // describe: since H2 planning writes it when it creates the task (`chooseAssignee`), the tick
+      // names a board nobody holds on its next pass, and `startRun` rewrites it to the seat the run
+      // went to -- so a task on the board has a holder before anything has run. It ranks below the
+      // runs because a run is what actually HAPPENED: dispatch may have handed the work to another
+      // holder of the role, and the column can still name whoever was expected to take it.
       //
-      // The IMPLEMENTATION run, not simply the newest one: a review run is newer and belongs to
-      // the reviewer, and naming them as the person who did the work is a claim an operator would
-      // act on. `implementerOf` (`apps/orchestrator/src/verify.ts`) settles this the same way, and
-      // two surfaces answering "who did this" differently is worse than either answer.
-      const worker = liveRun ?? task.runs.find((run) => run.kind === 'implementation')
+      // All three null is now a narrow state: nobody on this project holds the role this task
+      // needs -- or the task names no role at all, which is the other sentence the card has.
+      const worker = workerOf(task)
       return {
         id: task.id,
         title: task.title,
@@ -287,7 +330,11 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         priority: task.priority,
         attempt: task.attempt,
         maxAttempts: task.maxAttempts,
-        assigneeName: worker?.slave.person.name ?? null,
+        assigneeName:
+          worker?.slave.person.name ??
+          (task.assigneeId === null ? null : (assigneeNameBySeat.get(task.assigneeId) ?? null)),
+        // H2 fix round 1, I1: which of the two "nobody" sentences the card may say.
+        requiredRole: task.requiredRole,
         branch: task.branch,
         lastRejectionReason: task.lastRejectionReason,
         goalVersion: task.goalVersion,

@@ -18,6 +18,9 @@ export function taskItem(over: Partial<TaskBoardItem>): TaskBoardItem {
     attempt: 1,
     maxAttempts: 3,
     assigneeName: 'Alex',
+    // H2 fix round 1: required on the DTO. A planned task always names the role it needs, which is
+    // what the card's "nobody holds this role yet" sentence is about.
+    requiredRole: 'backend',
     branch: 'feature/add-the-thing',
     lastRejectionReason: null,
     goalVersion: null,

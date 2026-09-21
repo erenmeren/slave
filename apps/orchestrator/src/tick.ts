@@ -12,6 +12,7 @@ import {
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  chooseAssignee,
   decide,
   evaluateGuardrails,
   runId as brandRunId,
@@ -41,6 +42,7 @@ import { executeResume } from './resume.js'
 import { buildRunContext } from './runContext.js'
 import { createRunUnlessArchived } from './runs.js'
 import { dispatchReviews } from './review.js'
+import { assignableSeatsForWorkspace } from './staffing.js'
 import { NO_SUPERVISION, supervise, type SuperviseReport } from './supervisor.js'
 import { noteTickRan } from './sweep.js'
 import { releaseTaskAfterFailure, type TaskRelease } from './taskRelease.js'
@@ -285,6 +287,10 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
       supervisor: NO_SUPERVISION,
     }
   }
+
+  // Before the world is read, so a pass that names somebody also sees the board it named (H2 fix
+  // round 1, I1). Nothing here decides anything -- `decide()` has never looked at `assigneeId`.
+  await nameWhatNobodyHolds(deps.workspaceId)
 
   const { world, skippedNoRole, unservedRoles, statsSnapshot } = await loadWorld(deps.workspaceId)
   const commands = decide(world)
@@ -589,6 +595,56 @@ async function concludeFailedResume(
 }
 
 /**
+ * Gives the startable tasks nobody holds a holder (H2 fix round 1, I1).
+ *
+ * Assignment happens at creation, but two things reach the board without having been through it: a
+ * board planned before H2 existed, whose rows carry a `requiredRole` and no assignee; and a task
+ * whose role NOBODY held when it was created. So the tick carries a roster change onto the board --
+ * a hire, a `set_runtime_roles`, a seat reopened, a person coming back -- and every such change is
+ * named on the daemon's very next pass rather than waiting for a run to start. That is what
+ * replaces the earlier rule that nothing ever retro-assigns.
+ *
+ * Deliberately narrow, and cheap when there is nothing to do: ONE indexed count-shaped read, and no
+ * roster query at all on the ordinary pass where every startable task already has a holder. Only
+ * `ready`/`rework` -- what `decide()` considers startable -- so it never touches work in flight,
+ * whose holder is the seat its run belongs to; only rows with `assigneeId IS NULL`, so it never
+ * moves a task somebody already holds; and only rows with a `requiredRole`, because a task that
+ * asks for no role says nothing about who could do it and a name invented for it would be a claim
+ * about staffing that nothing supports.
+ *
+ * The writes are batched by holder and re-check `assigneeId IS NULL` and the status under the
+ * update, so a `startRun` claim that lands between the read and the write keeps the column it wrote.
+ */
+async function nameWhatNobodyHolds(workspaceId: WorkspaceId): Promise<void> {
+  const unheld = await prisma.task.findMany({
+    where: { workspaceId, status: { in: ['ready', 'rework'] }, assigneeId: null, requiredRole: { not: null } },
+    select: { id: true, requiredRole: true },
+  })
+  if (unheld.length === 0) return
+
+  const seats = await assignableSeatsForWorkspace(workspaceId)
+  const taskIdsByHolder = new Map<string, string[]>()
+  for (const task of unheld) {
+    if (task.requiredRole === null) continue
+    // Null is the ordinary answer here and not a failure: it is a role nobody on this project holds,
+    // which the Supervisor's `ready_unstaffed` raises with a person rather than the board papering
+    // over. The next pass asks again, so a hire fixes it without anything else happening.
+    const holder = chooseAssignee(task.requiredRole, seats)
+    if (holder === null) continue
+    const waiting = taskIdsByHolder.get(holder)
+    if (waiting === undefined) taskIdsByHolder.set(holder, [task.id])
+    else waiting.push(task.id)
+  }
+
+  for (const [holder, taskIds] of taskIdsByHolder) {
+    await prisma.task.updateMany({
+      where: { id: { in: taskIds }, assigneeId: null, status: { in: ['ready', 'rework'] } },
+      data: { assigneeId: holder },
+    })
+  }
+}
+
+/**
  * Starts one run, or records why it could not start.
  *
  * The `SlaveRun` row is created **before** provisioning, because spec §13 says a provisioning
@@ -642,7 +698,13 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
   // a live daemon, and a mutex in one process says nothing about the other.
   const claimed = await prisma.task.updateMany({
     where: { id: task.id, status: { in: ['ready', 'rework'] } },
-    data: { status: 'running', activeRunId: run.id, branch },
+    // H2: `assigneeId` moves with the claim, in the SAME write, so the column always names whoever
+    // actually has the work. Planning named the holder of the task's role when it created the task;
+    // dispatch may hand it to a different holder -- a hire since, a release, the first free seat of
+    // several -- and a card naming the person who is not running it would be worse than one naming
+    // nobody. Unconditional rather than "only when it differs": one write, and no reading of the old
+    // value to get wrong.
+    data: { status: 'running', activeRunId: run.id, branch, assigneeId: slave.id },
   })
   if (claimed.count === 0) {
     // Lost the race. This is not a failed run -- nothing was attempted -- so it must not leave a

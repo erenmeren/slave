@@ -44,6 +44,24 @@ vi.mock('../../../../packages/control/dist/supervisor.js', async (importOriginal
   }
 })
 
+/**
+ * H2: a role the staffing boundary accepts and no seat actually holds -- the seat that was open when
+ * `staffedRolesForWorkspace` read it, closed by the time the rows are written. The only way to reach
+ * `chooseAssignee`'s `null` arm through `concludePlanning`, since the Task 5 boundary otherwise
+ * refuses such a board before a row exists; the real implementation runs for every role except the
+ * ones a test names in `pretendStaffed`.
+ */
+const { pretendStaffed } = vi.hoisted(() => ({ pretendStaffed: new Set<string>() }))
+vi.mock('../../src/staffing.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/staffing.js')>()
+  return {
+    ...actual,
+    staffedRolesForWorkspace: async (workspaceId: string): Promise<readonly string[]> => [
+      ...new Set([...(await actual.staffedRolesForWorkspace(workspaceId)), ...pretendStaffed]),
+    ],
+  }
+})
+
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
 const FAKE = join(repoRoot, 'packages/providers/test/fake-claude.mjs')
 const REAL_GATE = join(repoRoot, 'scripts/pause-gate.sh')
@@ -487,6 +505,123 @@ describe('concludePlanning', () => {
     const tasks = await prisma.task.findMany({ where: { workspaceId: fixture.workspaceId } })
     expect(tasks.length).toBeGreaterThan(0)
     for (const task of tasks) expect(task.createdByUserId).toBe(user.id)
+  })
+
+  it('gives every task it creates the seat that holds its role, and says so on task.created (H2)', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+    const beryl = await addBackendSlave(fixture.teamId)
+
+    const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
+    expect(runId).not.toBeNull()
+    await drainPumps()
+
+    const tasks = await prisma.task.findMany({ where: { workspaceId: fixture.workspaceId } })
+    expect(tasks).toHaveLength(3)
+    // Every one of these was null before H2, and the board said "unassigned" about work that was
+    // always somebody's: the plan fixture writes `role: 'backend'`, and Beryl is who holds it.
+    for (const task of tasks) expect(task.assigneeId).toBe(beryl)
+
+    const created = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, type: 'task_created' },
+    })
+    expect(created).toHaveLength(3)
+    for (const event of created) expect(event.payload).toMatchObject({ assigneeId: beryl })
+  })
+
+  it('creates the task with nobody on it when no seat holds its role by the time the board is written (H2)', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+    // No `backend` seat at all -- staffing is made to claim one, which is the shape of the race
+    // where the seat closes between the boundary's read and the write. Nobody is invented for it.
+    pretendStaffed.add('backend')
+    try {
+      const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
+      expect(runId).not.toBeNull()
+      await drainPumps()
+
+      const tasks = await prisma.task.findMany({ where: { workspaceId: fixture.workspaceId } })
+      expect(tasks).toHaveLength(3)
+      for (const task of tasks) expect(task.assigneeId).toBeNull()
+
+      const created = await prisma.executionEvent.findMany({
+        where: { workspaceId: fixture.workspaceId, type: 'task_created' },
+      })
+      expect(created).toHaveLength(3)
+      for (const event of created) expect(event.payload).toMatchObject({ assigneeId: null })
+    } finally {
+      pretendStaffed.clear()
+    }
+  })
+
+  it('leaves the task with the busy holder of its role rather than with nobody (H2)', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+    const beryl = await addBackendSlave(fixture.teamId)
+    // Mid-run on something else. A role held only by somebody busy is still a role this project
+    // serves, so the task is theirs and waits for them.
+    await prisma.slaveRun.create({ data: { slaveId: beryl, kind: 'implementation', status: 'working' } })
+
+    const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
+    expect(runId).not.toBeNull()
+    await drainPumps()
+
+    const tasks = await prisma.task.findMany({ where: { workspaceId: fixture.workspaceId } })
+    expect(tasks).toHaveLength(3)
+    for (const task of tasks) expect(task.assigneeId).toBe(beryl)
+  })
+
+  it('passes over a CLOSED seat and a RELEASED person when it names the holder (H2)', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+    // Explicit ids, lowest first: if a closed seat or a released person were still a candidate, the
+    // tie-break would hand every task to one of them, so this cannot pass by luck.
+    const closed = await prisma.slave.create({
+      data: {
+        id: '00000000-0000-4000-8000-000000000001',
+        teamId: fixture.teamId,
+        role: 'backend',
+        runtimeRoles: ['backend'],
+        closedAt: new Date(),
+        personId: (await prisma.person.create({ data: { name: 'Gone Seat' } })).id,
+      },
+    })
+    const released = await prisma.slave.create({
+      data: {
+        id: '00000000-0000-4000-8000-000000000002',
+        teamId: fixture.teamId,
+        role: 'backend',
+        runtimeRoles: ['backend'],
+        personId: (
+          await prisma.person.create({ data: { name: 'Gone Person', releasedAt: new Date(), releaseReason: 'done' } })
+        ).id,
+      },
+    })
+    const open = await prisma.slave.create({
+      data: {
+        id: 'ffffffff-0000-4000-8000-000000000003',
+        teamId: fixture.teamId,
+        role: 'backend',
+        runtimeRoles: ['backend'],
+        personId: (await prisma.person.create({ data: { name: 'Beryl' } })).id,
+      },
+    })
+
+    const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
+    expect(runId).not.toBeNull()
+    await drainPumps()
+
+    const tasks = await prisma.task.findMany({ where: { workspaceId: fixture.workspaceId } })
+    expect(tasks).toHaveLength(3)
+    for (const task of tasks) {
+      expect(task.assigneeId).toBe(open.id)
+      expect(task.assigneeId).not.toBe(closed.id)
+      expect(task.assigneeId).not.toBe(released.id)
+    }
   })
 
   it('(b) a subsequent dispatchPlanning starts nothing once the graph became the board', async (): Promise<void> => {
@@ -1723,6 +1858,39 @@ describe('a re-plan', () => {
     expect(added.requiredPermissions).toEqual(['network_fetch'])
   })
 
+  it('gives a task the delta adds the seat that holds its role, and says so on task.created (H2)', async (): Promise<void> => {
+    const fixture = await boardAt(1)
+    const beryl = await prisma.slave.findFirstOrThrow({
+      where: { team: { workspaceId: fixture.workspaceId }, runtimeRoles: { has: 'backend' } },
+    })
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    const existing = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const runId = await seedConcludedReplan(
+      fixture,
+      `{"add":[{"key":"docs","title":"Document the new endpoint","description":"write it","role":"backend","dependsOn":[]}],"cancel":[],"keep":["${existing.id}"]}`,
+      [existing.id],
+    )
+
+    await concludePlanning(brandRunId(runId))
+
+    // A task a re-plan adds is a task like any other: it arrives with a name on it, by the same
+    // rule and the same reading of the seats as a first plan's.
+    const added = await prisma.task.findFirstOrThrow({
+      where: { workspaceId: fixture.workspaceId, title: 'Document the new endpoint' },
+    })
+    expect(added.assigneeId).toBe(beryl.id)
+
+    const created = await prisma.executionEvent.findMany({
+      where: { workspaceId: fixture.workspaceId, type: 'task_created', taskId: added.id },
+    })
+    expect(created).toHaveLength(1)
+    expect(created[0]?.payload).toMatchObject({ title: 'Document the new endpoint', assigneeId: beryl.id })
+
+    // The task the delta KEPT is untouched -- assignment happens at creation, and a re-plan does
+    // not re-assign a board it did not create.
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: existing.id } })).assigneeId).toBeNull()
+  })
+
   it('routes on the recorded manifest, and lets an addition depend on a task already on the board', async (): Promise<void> => {
     const fixture = await boardAt(1)
     expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
@@ -2219,6 +2387,9 @@ describe('a re-plan', () => {
     expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })).status).toBe('succeeded')
     const added = await prisma.task.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId, title: 'Pick a palette' } })
     expect(added.requiredRole).toBe('design')
+    // H2: and it is THEIRS. A busy holder is still the holder -- the task waits for them rather
+    // than for nobody.
+    expect(added.assigneeId).toBe(busy.id)
   })
 
   it('fails the run and changes no board when the re-plan output carries no valid delta', async (): Promise<void> => {

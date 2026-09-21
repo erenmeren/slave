@@ -1,5 +1,6 @@
 import type { SlaveId, TaskId } from '../ids.js'
 import type { TaskStatus } from '../task/state.js'
+import { holdsRole } from './assign.js'
 import {
   evaluateGuardrails,
   type GuardrailLimits,
@@ -68,7 +69,10 @@ export function decide(world: World): readonly Command[] {
   for (const candidate of candidates) {
     if (slots <= 0) break
 
-    const slave = [...availableSlaves.values()].find((a) => a.runtimeRoles.includes(candidate.requiredRole))
+    // `holdsRole`, not a second copy of the expression (H2): `chooseAssignee` names a task's holder
+    // at creation and this hands the run out, and the two disagreeing about what holding a role
+    // means is a card naming one person while the work goes to another.
+    const slave = [...availableSlaves.values()].find((a) => holdsRole(a, candidate.requiredRole))
     if (slave === undefined) continue
 
     commands.push({ kind: 'start_run', taskId: candidate.id, slaveId: slave.id })

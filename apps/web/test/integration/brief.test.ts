@@ -27,7 +27,7 @@ describe('buildProjectBrief', () => {
     const { workspaceId, slaveId } = fixture
     const task = await seedTask(workspaceId, { title: 'Add Apple Pay', status: 'running' })
     // A worker is on a task because it holds a live RUN on it -- the same fact the Overview's own
-    // slave cards read. `Task.assigneeId` is written by nothing in the pipeline.
+    // slave cards read, and a narrower one than `Task.assigneeId` (written since H2) answers.
     await prisma.slaveRun.create({ data: { slaveId, taskId: task.id, status: 'working' } })
     await appendEvent({ type: 'task.integrated', workspaceId, taskId: task.id, actor: 'system', payload: {} })
     await appendEvent({

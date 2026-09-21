@@ -55,7 +55,15 @@ export const executionEventSchema = z.discriminatedUnion('type', [
   z.object({
     ...envelope,
     type: z.literal('task.created'),
-    payload: z.object({ title: z.string(), goalVersion: z.number().int().nonnegative().nullable().optional() }),
+    payload: z.object({
+      title: z.string(),
+      goalVersion: z.number().int().nonnegative().nullable().optional(),
+      // H2: WHO the task was given to the moment it was created -- the seat holding its
+      // `requiredRole` (`chooseAssignee`), or null when nobody on the project holds that role.
+      // Optional for the reason stated above and null-able for a real state, so the timeline can
+      // show a task arriving with a name on it rather than only the run that started days later.
+      assigneeId: z.string().min(1).nullable().optional(),
+    }),
   }),
   // E R5: `grants` is what the run was given beyond the baseline -- the needs the PLANNER wrote on
   // the task, snapshotted into the run's `permissions.json` at this same moment. OPTIONAL, like

@@ -20,7 +20,8 @@ import type { SlaveLifecycle } from './types.js'
  *
  * `engagementTaskStatus` is the status of the ONE task this worker was brought in for, or null when
  * the worker names no task or the world no longer holds it. `openAssignedTasks` counts the
- * non-terminal tasks whose `assigneeId` is this worker.
+ * non-terminal tasks whose `assigneeId` is this worker -- a count H2 made real, since a planned task
+ * now names its holder from the moment it is created.
  */
 export interface ReleasableWorker {
   readonly lifecycle: SlaveLifecycle
@@ -44,9 +45,9 @@ export interface ReleasableWorker {
  *  - the engagement task must be TERMINAL -- `done`, `failed` or `cancelled`. A failed assignment is
  *    over as surely as a finished one; what is NOT over is one still on the board, and a worker
  *    whose task the world cannot find is not evidence of anything.
- *  - nothing else may be assigned to it. `Task.assigneeId` is written by nobody in the pipeline
- *    today, which makes this clause quiet rather than redundant: a hand-assigned task is a real
- *    row, and releasing the only worker who holds it would strand it.
+ *  - nothing else may be assigned to it. Since H2 this is the clause's working case rather than a
+ *    theoretical one: every planned task names a holder, so a worker with open work assigned to them
+ *    is not offered for release -- releasing the only worker who holds a task would strand it.
  */
 export function isReleasable(worker: ReleasableWorker): boolean {
   if (worker.lifecycle !== 'ephemeral') return false
