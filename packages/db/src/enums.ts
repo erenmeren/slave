@@ -41,6 +41,7 @@ export const EVENT_TYPE_BY_DOMAIN_TYPE = {
   'workspace.plan_created': 'workspace_plan_created',
   'workspace.replan_started': 'workspace_replan_started',
   'workspace.replanned': 'workspace_replanned',
+  'workspace.planning_reset': 'workspace_planning_reset',
   'task.cancelled': 'task_cancelled',
   'workspace.company_assigned': 'workspace_company_assigned',
   'workspace.settings_changed': 'workspace_settings_changed',

@@ -41,6 +41,7 @@ import {
 import { evidenceForProfiles } from './evidence.js'
 import { staleCandidateCount } from './memory.js'
 import { stillPendingQuestion, waitingSenderRunIds } from './messaging.js'
+import { workspaceDefaultProvider } from './runtime.js'
 import { workspaceStats, type WorkspaceStatsSnapshot } from './stats.js'
 
 /**
@@ -804,6 +805,26 @@ function runbookOf(row: {
   }
 }
 
+/**
+ * How far back H4a's one planning-event read scans.
+ *
+ * `workspace.goal_set` and `workspace.planning_reset` are both workspace-LIFETIME events -- one per
+ * goal edit, one per reset -- so the rows that can name the current version are by construction the
+ * newest few, while an unbounded scan would grow with the project's whole history and be paid on
+ * every tick of every unplanned project. `replanIntent`'s `RECENT_EVENTS` is the same number for
+ * the same reason, and the two are deliberately not shared: they bound different reads in different
+ * packages and either may move without the other.
+ */
+const PLANNING_EVENTS_SCANNED = 20
+
+/** The `version` off a `workspace.planning_reset` payload, or null for a row that names none. The
+ *  payload is a `Json` column and a hand-edited one must not throw a whole world load away. */
+function versionOf(payload: unknown): number | null {
+  if (payload === null || typeof payload !== 'object') return null
+  const version = (payload as Record<string, unknown>)['version']
+  return typeof version === 'number' ? version : null
+}
+
 /** A bound, for `CATALOG_ENTRIES_MAX`'s reason: one catalog import translates a persona runbook per
  *  persona, and a Supervisor world is built once a tick. Key ascending, so the same rows come back
  *  in the same order and `recommendRunbooks` is still deterministic when the bound bites. */
@@ -968,6 +989,10 @@ export async function loadSupervisorWorld(
           taskId: true,
           slaveId: true,
           status: true,
+          // H4a: `livePlanning` is projected off this list rather than counted by a query of its
+          // own -- these ARE the workspace's non-terminal runs, so one more selected column
+          // answers "is a planner in flight" for free, on every tick, honestly.
+          kind: true,
           toolCalls: true,
           toolCallCap: true,
           breakerLevel: true,
@@ -1052,6 +1077,69 @@ export async function loadSupervisorWorld(
       const asksForCapabilities = taskRows.some(
         (row) => isStaffableTask(row) && row.requiredCapabilities.length > 0,
       )
+
+      // H4a: the facts `planning_stalled` is decided from, behind the same kind of gate.
+      //
+      // "Nothing on the board came from this goal" is the only state in which any of them can
+      // matter, and it is `observe`'s own predicate read against the rows the loader already has:
+      // an EMPTY board (the first-plan case, `dispatchPlanning`'s `taskCount === 0`), or one whose
+      // highest `goalVersion` is behind the workspace's (`replanIntent`'s `goalMoved`, a hand-made
+      // task counting as 0). A board that IS the plan for this goal is every healthy project on
+      // every tick, and it pays for none of this.
+      //
+      // The row set is the one `observe` will see -- null-role tasks dropped, exactly as the
+      // `tasks` array below drops them -- so the gate and the predicate cannot disagree about
+      // whether a board is empty.
+      const boardRows = taskRows.filter((row) => row.requiredRole !== null)
+      const boardVersion = boardRows.reduce((highest, row) => Math.max(highest, row.goalVersion ?? 0), 0)
+      const couldBeStalled =
+        workspace.goal !== null && (boardRows.length === 0 || workspace.goalVersion > boardVersion)
+
+      // Does this project have a runtime at all? `workspaceDefaultProvider`'s own rule -- exactly
+      // one `ProviderConfiguration` row -- asked through that function rather than re-spelt here,
+      // and asked on `tx` so it is part of the same snapshot as everything beside it.
+      const runtimeConfigured = couldBeStalled ? (await workspaceDefaultProvider(workspaceId, tx)) !== null : true
+
+      // The two event-derived facts, from ONE bounded read: the newest `workspace.goal_set` and
+      // `workspace.planning_reset` rows. Both are workspace-LIFETIME events (one per goal edit, one
+      // per reset), so the ones that can name the current version are by construction the last
+      // written -- `replanIntent`'s own `RECENT_EVENTS` argument, and its own bound.
+      const planningEvents = couldBeStalled
+        ? await tx.executionEvent.findMany({
+            where: { workspaceId, type: { in: ['workspace_goal_set', 'workspace_planning_reset'] } },
+            orderBy: { seq: 'desc' },
+            take: PLANNING_EVENTS_SCANNED,
+            select: { type: true, ts: true, payload: true },
+          })
+        : []
+      // Since the goal was last set OR last reset, whichever is LATER -- `dispatchPlanning`'s own
+      // anchor, widened by the reset the Supervisor's `retry_planning` writes. A project whose goal
+      // was hand-seeded has neither event and counts from the epoch, exactly as the tick does.
+      //
+      // The max by `ts`, not the newest by `seq`: the two agree on every row this product appends,
+      // and "whichever is later" is a claim about TIME, which is the column the run count is then
+      // compared against.
+      const planningSince = new Date(
+        planningEvents.reduce((latest, row) => Math.max(latest, row.ts.getTime()), 0),
+      )
+      // How many times THIS version's cap has already been given back. Read off the payload in JS,
+      // not in the query: `payload.path` on a JSON number is a subtlety `replanIntent` deliberately
+      // does not depend on either.
+      const planningResetsThisVersion = planningEvents.filter(
+        (row) =>
+          row.type === 'workspace_planning_reset' &&
+          versionOf(row.payload) === workspace.goalVersion,
+      ).length
+      const planningFailuresSinceGoal = couldBeStalled
+        ? await tx.slaveRun.count({
+            where: {
+              kind: 'planning',
+              status: 'failed',
+              startedAt: { gt: planningSince },
+              slave: { team: { workspaceId } },
+            },
+          })
+        : 0
 
       // M48 R5. The ADOPTED runbook is read whenever the column is set -- `observe`'s escalation
       // sentence, the panel and `verify` all read the same row. The CATALOGUE is read only when a
@@ -1294,6 +1382,14 @@ export async function loadSupervisorWorld(
         // and a workspace can be halted for a reason that has nothing to do with money.
         budgetExhausted:
           snapshot.limits.budgetUsd !== null && snapshot.stats.spentUsd >= snapshot.limits.budgetUsd,
+        // H4a: the four facts behind `planning_stalled`. Three of them carry their "nothing is
+        // wrong" value for a board that is already the plan for this goal -- the gate above says
+        // why, and the only predicate that reads them is gated on the same question.
+        runtimeConfigured,
+        planningFailuresSinceGoal,
+        planningResetsThisVersion,
+        // Ungated and always honest: projected off `runRows`, which this load already paid for.
+        livePlanning: runRows.some((row) => row.kind === 'planning'),
         tasks,
         slaves,
         // M51 R3 / plan erratum E9: the workspace's non-terminal runs, with the newest

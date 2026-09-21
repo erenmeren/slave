@@ -94,6 +94,8 @@ describe('parseActivityFilters', () => {
       'workspace.created',
       'workspace.goal_set',
       'workspace.plan_created',
+      // H4a: the planning retry cap given back for one goal version, beside the re-plan pair.
+      'workspace.planning_reset',
       'workspace.replan_started',
       'workspace.replanned',
       'workspace.restored',

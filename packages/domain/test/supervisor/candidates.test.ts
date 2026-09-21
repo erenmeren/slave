@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { actionSchema, candidateSchema, type Action, type Candidate } from '../../src/supervisor/actions.js'
 import { candidates, isStaffableTask, permissionWhyFor, teamPlanOf } from '../../src/supervisor/candidates.js'
-import { OPERATOR_REQUEST_MAX_CHARS, WAITING_STALE_MS } from '../../src/supervisor/constants.js'
+import {
+  OPERATOR_REQUEST_MAX_CHARS,
+  SUPERVISOR_DEFAULT_PROVIDER,
+  WAITING_STALE_MS,
+} from '../../src/supervisor/constants.js'
+import { PLANNING_RETRY_CAP } from '../../src/planning/constants.js'
+import { PROVIDER_LABEL } from '../../src/provider/kind.js'
 import { observe } from '../../src/supervisor/observe.js'
 import type { Situation } from '../../src/supervisor/situations.js'
 import type { SupervisorTask, SupervisorWorld } from '../../src/supervisor/world.js'
@@ -450,7 +456,7 @@ describe('candidates -- the staffing situations', () => {
     expect(kinds(offered(w))).toEqual(['escalate_to_human', 'no_action'])
   })
 
-  it('offers manager for no_planner and the required role for ready_unstaffed', () => {
+  it('offers manager for planning_stalled/no_planner and the required role for ready_unstaffed', () => {
     const planner = world({ goal: 'Ship it', slaves: [slave({ id: 's1', role: 'Team Lead', runtimeRoles: ['backend'] })] })
     expect(offered(planner)[0]?.action).toEqual({ kind: 'set_runtime_roles', slaveId: 's1', roles: ['backend', 'manager'] })
 
@@ -459,6 +465,54 @@ describe('candidates -- the staffing situations', () => {
       slaves: [slave({ id: 's1', role: 'Backend Engineer', runtimeRoles: ['backend'] })],
     })
     expect(offered(unstaffed)[0]?.action).toEqual({ kind: 'set_runtime_roles', slaveId: 's1', roles: ['backend', 'frontend'] })
+  })
+})
+
+/**
+ * H4a: the three remedies for planning that cannot start, one per reason.
+ *
+ * Every world here is one the loader could really produce, and each says exactly which of the three
+ * reasons it is about -- the fixture's defaults are "planning is fine", so a case that did not say
+ * so would raise nothing at all.
+ */
+describe('candidates -- planning_stalled (H4a)', () => {
+  const PLANNER = slave({ id: 's1', name: 'Morgan', role: 'Team Lead', runtimeRoles: ['manager'] })
+
+  it('offers the installation default runtime first for no_runtime, then the escalation', () => {
+    const w = world({ goal: 'Ship it', goalVersion: 1, runtimeConfigured: false, slaves: [PLANNER] })
+    const cands = offered(w)
+    expect(kinds(cands)).toEqual(['configure_runtime', 'escalate_to_human', 'no_action'])
+    expect(cands[0]?.action).toEqual({ kind: 'configure_runtime', provider: SUPERVISOR_DEFAULT_PROVIDER })
+    // `docs/ia.md` rule 3: the WORDS for the runtime, never the column value.
+    expect(cands[0]?.why).toContain(PROVIDER_LABEL[SUPERVISOR_DEFAULT_PROVIDER])
+    expect(cands[0]?.why).not.toContain(SUPERVISOR_DEFAULT_PROVIDER)
+  })
+
+  it('offers the staffing path for no_planner, verbatim as the retired kind did', () => {
+    const w = world({ goal: 'Ship it', goalVersion: 1, slaves: [slave({ id: 's1', role: 'Team Lead', runtimeRoles: ['backend'] })] })
+    const cands = offered(w)
+    expect(kinds(cands)).toEqual(['set_runtime_roles', 'escalate_to_human', 'no_action'])
+    expect(cands[0]?.action).toEqual({ kind: 'set_runtime_roles', slaveId: 's1', roles: ['backend', 'manager'] })
+  })
+
+  it('offers retry_planning for cap_spent, and an escalation that names how many attempts failed', () => {
+    const w = world({ goal: 'Ship it', goalVersion: 1, planningFailuresSinceGoal: PLANNING_RETRY_CAP, slaves: [PLANNER] })
+    const cands = offered(w)
+    expect(kinds(cands)).toEqual(['retry_planning', 'escalate_to_human', 'no_action'])
+    expect(cands[0]?.action).toEqual({ kind: 'retry_planning' })
+    const escalation = cands[1]?.action
+    expect(escalation?.kind === 'escalate_to_human' && escalation.summary).toContain(String(PLANNING_RETRY_CAP))
+  })
+
+  it('offers the retry ONCE per goal version: a version already reset escalates instead', () => {
+    const w = world({
+      goal: 'Ship it',
+      goalVersion: 1,
+      planningFailuresSinceGoal: PLANNING_RETRY_CAP,
+      planningResetsThisVersion: 1,
+      slaves: [PLANNER],
+    })
+    expect(kinds(offered(w))).toEqual(['escalate_to_human', 'no_action'])
   })
 })
 

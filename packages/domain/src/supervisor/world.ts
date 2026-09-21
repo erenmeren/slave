@@ -442,6 +442,52 @@ export interface SupervisorWorld {
    */
   readonly haltClearedAt: number | null
   readonly budgetExhausted: boolean
+  /**
+   * H4a: does this project have a runtime at all? EXACTLY ONE `ProviderConfiguration` row, which is
+   * `workspaceDefaultProvider`'s own rule -- none and every model call in the project fails before
+   * it is made, two and there is no resolvable default, and both read as `false` here.
+   *
+   * The fact the 2026-09-21 incident turned on: a project created with no runtime failed planning
+   * twice in the same second, spent its retries and went silent. Nothing in the world said so.
+   *
+   * LOADER CONTRACT: `packages/control/src/supervisorWorld.ts` reads it through
+   * `workspaceDefaultProvider` inside the world's own snapshot.
+   */
+  readonly runtimeConfigured: boolean
+  /**
+   * H4a: how many `planning` runs have FAILED since the latest `workspace.goal_set` or
+   * `workspace.planning_reset` event, whichever is later -- the count `dispatchPlanning` stops at
+   * {@link PLANNING_RETRY_CAP}, read by the one predicate that can say so out loud.
+   *
+   * The reset event is why "whichever is later": `retry_planning` writes one, and from that moment
+   * the cap is counted from zero again -- otherwise the remedy would be spent the instant it was
+   * applied.
+   *
+   * LOADER CONTRACT: 0 unless the board is behind the goal (see {@link livePlanning}); H4b refines
+   * WHICH failures count (a run that died before the model was ever asked is infrastructure, not a
+   * planner that cannot plan).
+   */
+  readonly planningFailuresSinceGoal: number
+  /**
+   * H4a: how many times the planning cap has already been given back for THIS goal version --
+   * `workspace.planning_reset` events whose `version` is {@link goalVersion}.
+   *
+   * Read by `tierOf` and by `candidates`, which between them make the retry a once-per-version
+   * move: the cap exists to stop a planner being asked forever, and a Supervisor that could reset
+   * it on every cooldown would have removed the cap rather than answered it. The second reset for
+   * one goal is a person's call.
+   */
+  readonly planningResetsThisVersion: number
+  /**
+   * H4a: is a `planning` run in flight right now? Planning that is RUNNING is not planning that
+   * cannot start, whatever else is wrong, so this is the precondition on the whole situation.
+   *
+   * LOADER CONTRACT: a non-terminal `planning` run of this workspace. Deliberately one fact where
+   * `dispatchPlanning` reads two -- it also holds an in-process registry of runs whose pump has not
+   * finished concluding, which no loader can see. The window that leaves open is milliseconds wide
+   * and closes by itself: the board stops being empty the moment the graph is written.
+   */
+  readonly livePlanning: boolean
   readonly tasks: readonly SupervisorTask[]
   readonly slaves: readonly SupervisorSlave[]
   /** PENDING questions only. */

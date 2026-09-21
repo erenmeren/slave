@@ -113,6 +113,15 @@ export type ControlRefusal =
    */
   | { readonly kind: 'halt_recently_cleared'; readonly workspaceId: string; readonly clearedAt: string }
   /**
+   * H4a: `retry_planning` on a goal version whose planning cap has already been given back once.
+   *
+   * Checked here as well as in `candidates.ts` (which does not OFFER the action once the version
+   * has a reset) for `halt_recently_cleared`'s exact reason: a proposal can be approved by a person
+   * long after it was made, the offer and the apply are two moments, and the bound is on the apply.
+   * Both read the same events, so the two cannot disagree.
+   */
+  | { readonly kind: 'planning_already_reset'; readonly workspaceId: string; readonly version: number }
+  /**
    * Final review, Important 2: the grant a `retry_task` carries names an operation a plan may not
    * ask for. `TASK_NEEDS` is the bound -- `network_fetch` and `run_commands`, the two a plan can
    * know about in advance -- and `writePermissionsFile` has held the dispatch to it since Task 5.
@@ -646,6 +655,12 @@ export function refusalText(refusal: ControlRefusal): string {
       return (
         `this project's halt was already cleared at ${refusal.clearedAt}; it is cleared at most once an hour, ` +
         'so a second runaway inside that hour is a person’s call'
+      )
+    case 'planning_already_reset':
+      return (
+        `planning for this project's current goal (v${String(refusal.version)}) has already been given its ` +
+        'attempts back once; a second time is a person’s call, because the limit exists to stop a planner ' +
+        'being asked the same thing for ever'
       )
     case 'invalid_task_need':
       return (

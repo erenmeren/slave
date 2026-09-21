@@ -37,8 +37,8 @@ describe('every union a person reads has a label (M44 R5)', () => {
   // M51 R3: the sixteenth action. `ACTION_KINDS` has no Postgres enum of its own (an `Action` lives
   // inside a JSONB column), so this count is the only thing that notices a kind added to the union
   // and forgotten in the list the event payloads validate against.
-  it('carries the twenty-two action kinds, `steer_run` among them', () => {
-    expect(ACTION_KINDS).toHaveLength(22)
+  it('carries the twenty-four action kinds, `steer_run` among them', () => {
+    expect(ACTION_KINDS).toHaveLength(24)
     expect(ACTION_KINDS).toContain('steer_run')
   })
 
@@ -69,6 +69,23 @@ describe('every union a person reads has a label (M44 R5)', () => {
     expect(SITUATION_LABEL.operator_request).toBe('Something you asked for')
     expect(ACTION_KINDS).toContain('request_goal_change')
     expect(ACTION_KINDS).toContain('note_for_planner')
+  })
+
+  // H4a: the nineteenth situation and the two actions that join the catalogue with it, held by the
+  // same coverage check and the same count. The label says what is STUCK in the words a person uses
+  // -- the reason (no runtime, no planner, the retries are gone) rides on the situation's summary.
+  it('names the nineteenth situation the way a person says it, and carries its two actions', () => {
+    expect(SITUATION_LABEL.planning_stalled).toBe('Planning cannot start')
+    expect(ACTION_KINDS).toContain('configure_runtime')
+    expect(ACTION_KINDS).toContain('retry_planning')
+  })
+
+  // H4a: `no_planner` is RETIRED, not removed -- `observe` stops emitting it and a Postgres enum
+  // value is never taken away, so a decision row written before this hotfix still reads back with
+  // the words it was shown under.
+  it('keeps the retired no_planner kind and its label, for the rows that already carry it', () => {
+    expect(SITUATION_KINDS).toContain('no_planner')
+    expect(SITUATION_LABEL.no_planner).toBe('No planner')
   })
 
   it('covers every tier, decision status and decider', () => {

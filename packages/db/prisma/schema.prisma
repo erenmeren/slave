@@ -1657,7 +1657,15 @@ model SupervisorDecision {
 /// `packages/domain/src/supervisor/situations.ts`).
 enum SupervisorSituationKind {
   no_reviewer
+  /// RETIRED by H4a: `observe` no longer emits it and `planning_stalled { reason: no_planner }`
+  /// says the same thing. The VALUE stays for ever -- rows already carry it, and a Postgres enum
+  /// value is never taken away.
   no_planner
+  /// H4a: a goal exists and nothing will ever turn it into tasks -- no runtime is configured, no
+  /// seat holds the manager role, or the planning retries against this goal are spent
+  /// (`facts.reason` says which). The subject is `<workspaceId>:<reason>`, a COMPOUND subject like
+  /// `permission_blocked`'s: one reason planning cannot start, not one project.
+  planning_stalled
   /// M48 R5: a goal exists, the board is empty and no way of working has been chosen. The subject
   /// is the WORKSPACE, not a row in it.
   runbook_recommended
@@ -2046,6 +2054,10 @@ enum EventType {
   /// was proposed for cancellation and what cancellation the status rule refused).
   workspace_replan_started    @map("workspace.replan_started")
   workspace_replanned         @map("workspace.replanned")
+  /// H4a: the planning retry cap given back for one goal version, by the Supervisor's own
+  /// `retry_planning` or by a person approving it. `dispatchPlanning` counts its failures from the
+  /// latest `workspace.goal_set` or this event, whichever is later.
+  workspace_planning_reset    @map("workspace.planning_reset")
   /// M40 §4: `cancelTask` took a `backlog`/`ready`/`blocked` task off the board -- an operator's
   /// own call, or an approved `stale_task` proposal from a re-plan.
   task_cancelled              @map("task.cancelled")

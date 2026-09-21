@@ -6,6 +6,7 @@ import {
   capabilityIndex,
   measureAdherence,
   parsePlanGraph,
+  PLANNING_RETRY_CAP,
   type CapabilityRecord,
   type GuardrailKind,
   type RunId,
@@ -35,10 +36,19 @@ import { createRunUnlessArchived } from './runs.js'
 import { activePumpRunIds, emailLocalPart, pumps, type TickDeps } from './tick.js'
 import { verifyConcludedRun } from './verify.js'
 
-/** How many planning runs may fail against the current goal before dispatch stops trying (spec Decision 8).
- *  Exported since M40 t4 so the CLI's `replan-status` reports the cap the tick actually enforces
- *  rather than a second copy of the number. */
-export const PLANNING_RETRY_CAP = 2
+/**
+ * How many planning runs may fail against the current goal before dispatch stops trying (spec
+ * Decision 8). Exported since M40 t4 so the CLI's `replan-status` reports the cap the tick actually
+ * enforces rather than a second copy of the number.
+ *
+ * MOVED to `packages/domain/src/planning/constants.ts` by H4a and RE-EXPORTED here, so every
+ * existing importer keeps its path: the Supervisor's `observe` raises
+ * `planning_stalled { reason: 'cap_spent' }` at exactly this number, and it lives in a package the
+ * domain can reach. Two copies would let the tick give up at two while the Supervisor waited for
+ * three -- a project gone silent with nothing on any report to say why, which is the whole of what
+ * this hotfix is about.
+ */
+export { PLANNING_RETRY_CAP }
 
 /**
  * Conclude a succeeded planning run: parse the task graph and turn it into the board.

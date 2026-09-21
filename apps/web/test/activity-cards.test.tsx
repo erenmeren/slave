@@ -87,6 +87,7 @@ const PAYLOAD_BY_TYPE: Record<DomainEventType, Record<string, unknown>> = {
     ],
   },
   'workspace.replan_started': { version: 2, runId: 'r1' },
+  'workspace.planning_reset': { version: 2, by: 'supervisor' },
   'workspace.replanned': {
     version: 2,
     runId: 'r1',

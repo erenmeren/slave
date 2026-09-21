@@ -68,6 +68,10 @@ const ACTIONS: Readonly<Record<Action['kind'], Action>> = {
   // names a row -- one carries what the person asked for, the other the line the next planner reads.
   request_goal_change: { kind: 'request_goal_change', request: 'invoicing first, then reporting' },
   note_for_planner: { kind: 'note_for_planner', text: 'The second page is the one that is wrong.' },
+  // H4a: the two remedies for planning that cannot start. `configure_runtime` writes one
+  // configuration row and `retry_planning` one event -- neither names a task or a worker.
+  configure_runtime: { kind: 'configure_runtime', provider: 'claude_code' },
+  retry_planning: { kind: 'retry_planning' },
   escalate_to_human: { kind: 'escalate_to_human', summary: 'a human must look' },
   no_action: { kind: 'no_action' },
 }
@@ -117,6 +121,12 @@ describe('tierOf', () => {
     // committed to the repository, and the switch (R1) is the only thing that applies either.
     ['request_goal_change', 'proposed', 'proposed'],
     ['note_for_planner', 'proposed', 'proposed'],
+    // H4a: `configure_runtime` is the ONE action a halt does not demote -- it writes a
+    // `ProviderConfiguration` row and starts nothing, whatever halted this project. Under
+    // `propose` it is still a proposal, like everything else here.
+    ['configure_runtime', 'proposed', 'proposed'],
+    // H4a: `retry_planning` gives the planner its retries back, which is work -- a halt demotes it.
+    ['retry_planning', 'proposed', 'proposed'],
     ['escalate_to_human', 'escalated', 'escalated'],
     ['no_action', 'noop', 'noop'],
   ]
@@ -245,7 +255,10 @@ describe('tierOf -- autonomy: act (R1)', () => {
         ? 'escalated'
         : kind === 'no_action'
           ? 'noop'
-          : kind === 'clear_halt' || kind === 'retry_task'
+          : // H4a adds a THIRD exception, and on its own argument rather than the breaker's: writing
+            // a runtime configuration row starts nothing under ANY halt, so it is applied here as
+            // well as under a budget halt and an emergency stop (the case below says so).
+            kind === 'clear_halt' || kind === 'retry_task' || kind === 'configure_runtime'
             ? 'applied'
             : 'proposed'
     expect(tierOf(ACTIONS[kind], ACTING_HALTED, 'review_cap_blocked')).toBe(expected)
@@ -277,6 +290,57 @@ describe('tierOf -- autonomy: act (R1)', () => {
   it('applies both remedies under act while the halt IS the breaker', () => {
     expect(tierOf(ACTIONS.clear_halt, ACTING_HALTED, 'workspace_halted')).toBe('applied')
     expect(tierOf(ACTIONS.retry_task, ACTING_HALTED, 'task_failed')).toBe('applied')
+  })
+
+  /**
+   * H4a: `configure_runtime` under EVERY halt, which the breaker pair deliberately is not.
+   *
+   * The pair above is about the breaker because both of its members are about WORK -- a task put
+   * back to rework starts running the moment the halt lifts. This one is about CONFIGURATION: it
+   * writes a `ProviderConfiguration` row, `decide()` schedules nothing while a workspace is halted,
+   * and a project whose money is gone or whose stop button is down is still a project that should
+   * be able to say which runtime it would use. A proposal here is a person asked to confirm that a
+   * project with no runtime at all needs one.
+   */
+  it.each([['circuit_breaker'], ['budget_exhausted'], ['emergency_stop']])(
+    'applies configure_runtime under act while the halt is %s -- it starts nothing',
+    (reason) => {
+      const halted = world({ autonomy: 'act', halted: { reason } })
+      expect(tierOf(ACTIONS.configure_runtime, halted, 'planning_stalled')).toBe('applied')
+      // And the retry is not in that company: giving the planner its attempts back is work.
+      expect(tierOf(ACTIONS.retry_planning, halted, 'planning_stalled')).toBe('proposed')
+    },
+  )
+})
+
+/**
+ * H4a: the retry is applied ONCE per goal version and proposed after that.
+ *
+ * A fact about the WORLD, like the re-address tier below and unlike every other arm of the switch:
+ * the cap exists to stop a planner being retried forever, and an autonomous Supervisor that could
+ * reset it on every cooldown would have removed the cap rather than answered it. The second reset
+ * for one goal is a person's call.
+ */
+describe('tierOf -- retry_planning is once per goal version (H4a)', () => {
+  const action: Action = { kind: 'retry_planning' }
+
+  it('applies the first reset under act and proposes the second', () => {
+    const first = world({ autonomy: 'act', planningResetsThisVersion: 0 })
+    const second = world({ autonomy: 'act', planningResetsThisVersion: 1 })
+    expect(tierOf(action, first, 'planning_stalled')).toBe('applied')
+    expect(tierOf(action, second, 'planning_stalled')).toBe('proposed')
+  })
+
+  it('proposes it under propose whether or not the version has been reset', () => {
+    expect(tierOf(action, world({ planningResetsThisVersion: 0 }), 'planning_stalled')).toBe('proposed')
+    expect(tierOf(action, world({ planningResetsThisVersion: 1 }), 'planning_stalled')).toBe('proposed')
+  })
+
+  it('applies it under act whatever situation offered it, so long as the version is unreset', () => {
+    for (const kind of SITUATION_KINDS) {
+      expect(tierOf(action, world({ autonomy: 'act' }), kind)).toBe('applied')
+      expect(tierOf(action, world({ autonomy: 'act', planningResetsThisVersion: 2 }), kind)).toBe('proposed')
+    }
   })
 })
 

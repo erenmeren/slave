@@ -4,6 +4,7 @@ import { PERMISSION_TRIP_COUNT } from '../broker/operations.js'
 import { capabilityIndex, projectRoles } from '../capability/taxonomy.js'
 import { isReleasable } from '../lifecycle/release.js'
 import { PERMISSION_KINDS, PERMISSION_LABEL, type PermissionKind } from '../permission/kinds.js'
+import { PLANNING_RETRY_CAP } from '../planning/constants.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
 import { TERMINAL } from '../task/state.js'
 import { isStaffableTask } from './candidates.js'
@@ -33,8 +34,9 @@ import type { SupervisorQuestion, SupervisorSlave, SupervisorTask, SupervisorWor
  * no situation at all, and the staffing proposal that would have fixed it was never offered.
  *
  * Deliberately a parameter rather than a second function: the three staffing predicates below
- * (`no_reviewer`, `no_planner`, `ready_unstaffed`) are about who can be DISPATCHED and have no
- * asker to exclude, so they pass nothing and read exactly as they always did.
+ * (`no_reviewer`, `planning_stalled`'s `no_planner` reason, `ready_unstaffed`) are about who can be
+ * DISPATCHED and have no asker to exclude, so they pass nothing and read exactly as they always
+ * did.
  */
 function roleHasHolder(world: SupervisorWorld, role: string, exceptSlaveId?: string): boolean {
   return world.slaves.some((slave) => slave.id !== exceptSlaveId && slave.runtimeRoles.includes(role))
@@ -142,6 +144,61 @@ function deniedFor(world: SupervisorWorld, slaveId: string): readonly Permission
   )
 }
 
+/**
+ * The three ways planning can be impossible (H4a), and the value `facts.reason` carries.
+ *
+ * A closed list rather than a free string: `candidates` branches on it and `carryOut` reads the
+ * decision back off a stored row months later, so a fourth way of being stuck is a member here and
+ * an arm there, never a sentence somebody wrote once.
+ */
+export const PLANNING_STALLED_REASONS = ['no_runtime', 'no_planner', 'cap_spent'] as const
+export type PlanningStalledReason = (typeof PLANNING_STALLED_REASONS)[number]
+
+/**
+ * What each reason SAYS, to a person and to the decision prompt. One sentence each, naming the
+ * thing that is missing and never the column it is missing from (`docs/ia.md` rule 3) -- except the
+ * manager ROLE, which a person really does set by that name.
+ *
+ * `Record<PlanningStalledReason, ...>` is load-bearing for the reason every other total table here
+ * is: a fourth reason fails the build rather than reaching a person as a bare identifier.
+ */
+const PLANNING_STALLED_SUMMARY: Record<PlanningStalledReason, (world: SupervisorWorld) => string> = {
+  no_runtime: () =>
+    'This project has no runtime configured, so not one model call can be made -- the goal cannot be planned, ' +
+    'and no work could start even if it were.',
+  no_planner: () => `A goal is set, no tasks exist, and no slave holds the "${MANAGER_ROLE}" role to plan it.`,
+  cap_spent: (world) =>
+    `Planning has failed ${String(world.planningFailuresSinceGoal)} time(s) against this goal, which is the ` +
+    `limit (${String(PLANNING_RETRY_CAP)}), so nothing will try again by itself.`,
+}
+
+/**
+ * WHY planning cannot start here, or null when it can (H4a).
+ *
+ * Three preconditions, all three of them about the BOARD rather than about any one row:
+ *
+ * - **A goal exists.** Nothing to plan is not a stall.
+ * - **Nothing on the board came from this goal.** An EMPTY board is the first-plan case, exactly
+ *   `dispatchPlanning`'s own `taskCount === 0`; a board whose highest `goalVersion` is behind the
+ *   workspace's is the re-plan case, exactly `replanIntent`'s `goalMoved` (a hand-made task counts
+ *   as version 0, the same reading `boardVersionOf` takes). A board that IS the plan for this goal
+ *   is not stalled -- it is done being planned.
+ * - **Nothing is planning right now.** A live planning run is planning working, not planning stuck.
+ *
+ * Then the reason, in ROOT-CAUSE order, because that is the order the remedies have to be applied
+ * in: a project with no runtime cannot run the planner it would hire, and a project with no planner
+ * has nothing to spend a retry on. Exactly one fires, and the next pass names the next one.
+ */
+function planningStalledReason(world: SupervisorWorld): PlanningStalledReason | null {
+  if (world.goal === null || world.livePlanning) return null
+  const boardVersion = world.tasks.reduce((highest, task) => Math.max(highest, task.goalVersion ?? 0), 0)
+  if (world.tasks.length > 0 && world.goalVersion <= boardVersion) return null
+  if (!world.runtimeConfigured) return 'no_runtime'
+  if (!roleHasHolder(world, MANAGER_ROLE)) return 'no_planner'
+  if (world.planningFailuresSinceGoal >= PLANNING_RETRY_CAP) return 'cap_spent'
+  return null
+}
+
 /** Within a kind, subject id ascending -- the tiebreak that makes {@link observe} deterministic. */
 function bySubjectId(a: Situation, b: Situation): number {
   return a.subjectId.localeCompare(b.subjectId)
@@ -180,15 +237,28 @@ export function observe(world: SupervisorWorld): readonly Situation[] {
     })
   }
 
-  // no_planner: a goal was set and nothing ever turned it into tasks, because no slave can be
-  // dispatched a planning run. Zero tasks, not "zero open tasks": once a plan exists, a workspace
-  // that has finished it is done, not unplanned.
-  if (world.goal !== null && world.tasks.length === 0 && !roleHasHolder(world, MANAGER_ROLE)) {
+  // planning_stalled (H4a): a goal was set and nothing is ever going to turn it into tasks.
+  //
+  // This is `no_planner` WIDENED, and `no_planner` is retired: that kind only ever covered one of
+  // the three ways planning can be impossible, so the other two were silences. On 2026-09-21 a
+  // project created with no runtime failed planning twice in the same second -- the retry cap spent
+  // by an infrastructure error nobody could see -- and neither the tick nor the Supervisor said a
+  // word about it, for ever.
+  //
+  // `planningStalledReason` is the whole predicate; it returns null when planning is fine, when it
+  // is genuinely in flight, and when the board is already the plan for this goal.
+  const stalled = planningStalledReason(world)
+  if (stalled !== null) {
     add({
-      kind: 'no_planner',
-      subjectId: MANAGER_ROLE,
-      summary: `A goal is set, no tasks exist, and no slave holds the "${MANAGER_ROLE}" role to plan it.`,
-      facts: { role: MANAGER_ROLE, goal: world.goal },
+      kind: 'planning_stalled',
+      // COMPOUND (`permission_blocked`'s shape): the three reasons are remedied in sequence, and a
+      // bare workspace id would make the second remedy wait out the first one's cooldown.
+      subjectId: `${world.workspaceId}:${stalled}`,
+      summary: PLANNING_STALLED_SUMMARY[stalled](world),
+      // Exactly two facts, both flat scalars (`situationSchema`): WHICH of the three it is, and
+      // which goal it is about -- the pair `carryOut` and a reader months later need, and the pair
+      // `candidates` branches on.
+      facts: { reason: stalled, goalVersion: world.goalVersion },
     })
   }
 

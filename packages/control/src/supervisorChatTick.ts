@@ -292,7 +292,7 @@ async function recordReplyActions(
  * What the person asked for, per action kind, as a noun phrase that reads after "I could not
  * record " (fix round 1, I1).
  *
- * A total `Record<ActionKind, string>`, so a twenty-third action kind fails the build here rather
+ * A total `Record<ActionKind, string>`, so a twenty-fifth action kind fails the build here rather
  * than putting `note_for_planner` in front of somebody in a sentence about their own project.
  */
 const ASKED_FOR: Readonly<Record<Action['kind'], string>> = {
@@ -316,6 +316,10 @@ const ASKED_FOR: Readonly<Record<Action['kind'], string>> = {
   clear_halt: 'clearing the halt',
   request_goal_change: 'that change to the goal',
   note_for_planner: 'that note for the planner',
+  // H4a: the two remedies for planning that cannot start, in the words a person would use for
+  // them -- neither names a `ProviderConfiguration` row or a retry cap.
+  configure_runtime: 'giving this project a runtime',
+  retry_planning: 'letting planning start over',
   escalate_to_human: 'raising that with a person',
   no_action: 'doing nothing',
 }

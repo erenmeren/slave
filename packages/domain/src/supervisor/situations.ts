@@ -12,13 +12,36 @@ import { z } from 'zod'
  */
 export const SITUATION_KINDS = [
   'no_reviewer',
+  /**
+   * RETIRED by H4a (2026-09-21) and kept for ever: {@link observe} no longer emits it, and
+   * `planning_stalled { reason: 'no_planner' }` is what says the same thing now.
+   *
+   * The member stays because a Postgres enum value is never taken away -- `SupervisorSituationKind`
+   * carries it, rows already carry it, and `listDecisions` parses every status, so removing it here
+   * would make a decision a person took last week unreadable. {@link SITUATION_LABEL} keeps its
+   * words for the same reason.
+   */
   'no_planner',
+  /**
+   * H4a: the goal exists and NOTHING will ever turn it into tasks, for one of three reasons the
+   * `facts.reason` names -- no runtime is configured (no model call can be made at all), no seat
+   * holds the manager role, or the planning retries against this goal are spent. `subjectId` is
+   * `<workspaceId>:<reason>`, `permission_blocked`'s COMPOUND shape and for its reason: the
+   * situation key is `(workspaceId, kind, subjectId)`, the three reasons are remedied in sequence
+   * (configure the runtime, then retry), and a bare workspace id would leave the second remedy
+   * waiting out the first one's cooldown.
+   *
+   * Directly after the kind it folds in. Observed 2026-09-21: a project created with no runtime
+   * failed planning twice in one second, spent `PLANNING_RETRY_CAP`, and went silent for ever --
+   * `no_planner` only ever covered "nobody holds the manager role", so nothing said a word.
+   */
+  'planning_stalled',
   /**
    * M48 R5: a goal exists, the board is empty and no way of working has been chosen -- the one
    * moment at which adopting a runbook changes what the next run is asked for. `subjectId` is the
    * WORKSPACE id, so a project has one of these rather than one per candidate runbook.
    *
-   * Directly after `no_planner` (plan decision D3) because that is how the pair reads: "nobody can
+   * Directly after the planning pair (plan decision D3) because that is how they read: "nothing can
    * plan it", and then "and here is how it could be planned". It fires only when
    * `recommendRunbooks` has an opinion -- no keyword hit anywhere, no situation at all.
    */
@@ -138,7 +161,8 @@ export type SituationKind = (typeof SITUATION_KINDS)[number]
  * the task id for the task situations (`stale_task` included), the message id for the question
  * situations, the ROLE NAME
  * for `no_reviewer`/`no_planner`/`ready_unstaffed` (so ten ready tasks missing one role are one
- * situation, not ten), the CAPABILITY KEY for `capability_unstaffed` (M47 R4, same rule one level
+ * situation, not ten), `<workspaceId>:<reason>` for `planning_stalled` (H4a -- one reason planning
+ * cannot start, not one project), the CAPABILITY KEY for `capability_unstaffed` (M47 R4, same rule one level
  * more specific), the WORKSPACE id for `runbook_recommended` -- which is about the project rather
  * than about any row in it -- the SLAVE id for `engagement_over` (M50 R3, the first kind whose
  * subject is a worker: one situation per person, however many rows their runs left behind), the
@@ -172,14 +196,18 @@ export const situationSchema: z.ZodType<Situation> = z.object({
  * key rendered as prose is the leak M44 closes -- the Supervisor panel's recent-decision rows read
  * `no_reviewer · proposed · pending · by model`.
  *
- * `Record<SituationKind, string>` is load-bearing: a NINETEENTH kind fails the build here rather
- * than turning up on the page as an identifier (eighteen as of the chat's `operator_request`).
+ * `Record<SituationKind, string>` is load-bearing: a TWENTIETH kind fails the build here rather
+ * than turning up on the page as an identifier (nineteen as of H4a's `planning_stalled`).
  * Each label says what is STUCK, in the words the report already uses; the decision's own
  * `situation.summary` carries the specifics beside it.
  */
 export const SITUATION_LABEL: Record<SituationKind, string> = {
   no_reviewer: 'No reviewer',
+  // RETIRED (H4a): nothing emits this kind any more. The words stay because the rows do.
   no_planner: 'No planner',
+  // H4a: what is STUCK, in the words a person uses. WHY it is stuck -- no runtime, no planner, the
+  // retries are gone -- is the situation's own summary, beside it.
+  planning_stalled: 'Planning cannot start',
   runbook_recommended: 'A way of working to adopt',
   review_cap_blocked: 'Review attempts used up',
   task_failed: 'Task failed',

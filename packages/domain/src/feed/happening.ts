@@ -1,4 +1,5 @@
 import type { ExecutionEvent } from '../events/schema.js'
+import { PROVIDER_LABEL, type ProviderKind } from '../provider/kind.js'
 import { feedSummary } from './feedSummary.js'
 
 /**
@@ -103,6 +104,16 @@ function verbPhrase(p: Record<string, unknown>): string {
       return 'unblocked a task'
     case 'steer_run':
       return 'steered a worker'
+    // H4a: the two remedies for planning that cannot start. `configure_runtime` is applied under
+    // `act` even while a project is halted, so its sentence is one a person really does meet --
+    // and it says the runtime's WORDS, never the column value (`docs/ia.md` rule 3).
+    case 'configure_runtime': {
+      const provider = str(fields, 'provider')
+      const label = provider === null ? null : (PROVIDER_LABEL[provider as ProviderKind] ?? null)
+      return label === null ? 'gave this project a runtime' : `set this project's runtime to ${label}`
+    }
+    case 'retry_planning':
+      return 'let planning start over'
     default:
       return `applied ${kind ?? 'something'}`
   }
@@ -144,6 +155,14 @@ function verbInfinitive(p: Record<string, unknown>): string {
       return 'unblock a task'
     case 'steer_run':
       return 'steer a worker'
+    // H4a: the infinitives of the pair above, for the "could not" line.
+    case 'configure_runtime': {
+      const provider = str(fields, 'provider')
+      const label = provider === null ? null : (PROVIDER_LABEL[provider as ProviderKind] ?? null)
+      return label === null ? 'give this project a runtime' : `set this project's runtime to ${label}`
+    }
+    case 'retry_planning':
+      return 'let planning start over'
     default:
       return `apply ${kind ?? 'something'}`
   }

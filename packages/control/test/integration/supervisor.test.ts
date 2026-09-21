@@ -2863,3 +2863,155 @@ describe('applyDecision -- the two conversation actions', () => {
     expect(await eventsOfType('supervisor_applied')).toHaveLength(0)
   })
 })
+
+/**
+ * H4a: the two remedies for planning that cannot start, carried out end to end.
+ *
+ * Both are about the PROJECT rather than about any row on its board, so both are recorded against
+ * the compound subject `observe` gives them -- `<workspaceId>:<reason>` -- and neither touches a
+ * task, a worker or a run.
+ */
+describe('applyDecision -- planning_stalled (H4a)', () => {
+  let f: Fixture
+
+  /** `subject` is the situation KEY's second half -- `observe` writes `<workspaceId>:<reason>`, and
+   *  the two cases that record a SECOND decision about the same reason need a distinct one or
+   *  `recordDecision` refuses them on the cooldown before the arm is ever reached. */
+  const planningStalled = (reason: string, goalVersion = 1, subject = reason): Situation => ({
+    kind: 'planning_stalled',
+    subjectId: `${f.workspaceId}:${subject}`,
+    summary: 'planning cannot start',
+    facts: { reason, goalVersion },
+  })
+
+  beforeEach(async () => {
+    await reset()
+    f = await seed()
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { goal: 'Ship the checkout flow', goalVersion: 1 } })
+  })
+
+  it('carries out configure_runtime through setWorkspaceProvider: the project gets one runtime row', async () => {
+    expect(await prisma.providerConfiguration.findMany({ where: { workspaceId: f.workspaceId } })).toHaveLength(0)
+
+    const decision = await record(f, { kind: 'configure_runtime', provider: 'claude_code' }, 'applied', {
+      subjectId: `${f.workspaceId}:no_runtime`,
+      situation: planningStalled('no_runtime'),
+    })
+    expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
+
+    // EXACTLY ONE row is the whole point: `workspaceDefaultProvider` resolves a default only for a
+    // project that has one, so two rows would leave the project as unrunnable as none.
+    const rows = await prisma.providerConfiguration.findMany({ where: { workspaceId: f.workspaceId } })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.kind).toBe('claude_code')
+    const [applied] = await eventsOfType('supervisor_applied')
+    expect(applied?.payload).toMatchObject({ decisionId: decision.id, action: { kind: 'configure_runtime' } })
+  })
+
+  it('replaces the runtime rather than adding a second one', async () => {
+    await prisma.providerConfiguration.create({ data: { workspaceId: f.workspaceId, kind: 'cursor', settings: {} } })
+    const decision = await record(f, { kind: 'configure_runtime', provider: 'claude_code' }, 'applied', {
+      subjectId: `${f.workspaceId}:no_runtime`,
+      situation: planningStalled('no_runtime'),
+    })
+    expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
+
+    const rows = await prisma.providerConfiguration.findMany({ where: { workspaceId: f.workspaceId } })
+    expect(rows.map((row) => row.kind)).toEqual(['claude_code'])
+  })
+
+  it('carries out retry_planning: one workspace.planning_reset naming the version and who reset it', async () => {
+    const decision = await record(f, { kind: 'retry_planning' }, 'applied', {
+      subjectId: `${f.workspaceId}:cap_spent`,
+      situation: planningStalled('cap_spent'),
+    })
+    expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
+
+    const resets = await eventsOfType('workspace_planning_reset')
+    expect(resets).toHaveLength(1)
+    expect(resets[0]?.payload).toEqual({ version: 1, by: 'supervisor' })
+    expect(resets[0]?.workspaceId).toBe(f.workspaceId)
+    const [applied] = await eventsOfType('supervisor_applied')
+    expect(applied?.payload).toMatchObject({ decisionId: decision.id, action: { kind: 'retry_planning' } })
+  })
+
+  // The version is read at APPLY time, not off the situation: a proposal can be approved a day
+  // later, and the version `dispatchPlanning` will count against is the one the project has then.
+  it('resets the version the project has NOW, not the one the situation was raised about', async () => {
+    const decision = await record(f, { kind: 'retry_planning' }, 'applied', {
+      subjectId: `${f.workspaceId}:cap_spent`,
+      situation: planningStalled('cap_spent', 1),
+    })
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { goalVersion: 4 } })
+
+    expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
+    expect((await eventsOfType('workspace_planning_reset'))[0]?.payload).toEqual({ version: 4, by: 'supervisor' })
+  })
+
+  // `clear_halt`'s own precedent: the bound is checked where the offer is made AND where it is
+  // applied, because a proposal can be approved long after the rules stopped offering it.
+  it('refuses a SECOND reset of the same goal version, and records the refusal on the row', async () => {
+    const first = await record(f, { kind: 'retry_planning' }, 'applied', {
+      subjectId: `${f.workspaceId}:cap_spent`,
+      situation: planningStalled('cap_spent'),
+    })
+    expect((await applyDecision(first.id, 'system')).ok).toBe(true)
+
+    const second = await record(f, { kind: 'retry_planning' }, 'applied', {
+      subjectId: `${f.workspaceId}:cap_spent:again`,
+      situation: planningStalled('cap_spent', 1, 'cap_spent:again'),
+    })
+    const outcome = await applyDecision(second.id, 'system')
+    expect(outcome.ok).toBe(false)
+    if (!outcome.ok) expect(outcome.error.kind).toBe('planning_already_reset')
+    const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: second.id } })
+    expect(row.status).toBe('failed')
+    expect(row.failureReason).not.toBe('')
+    expect(await eventsOfType('workspace_planning_reset')).toHaveLength(1)
+  })
+
+  it('allows a reset again once the goal has moved: a new version has its own attempts', async () => {
+    const first = await record(f, { kind: 'retry_planning' }, 'applied', {
+      subjectId: `${f.workspaceId}:cap_spent`,
+      situation: planningStalled('cap_spent'),
+    })
+    expect((await applyDecision(first.id, 'system')).ok).toBe(true)
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { goalVersion: 2 } })
+
+    const second = await record(f, { kind: 'retry_planning' }, 'applied', {
+      subjectId: `${f.workspaceId}:cap_spent:v2`,
+      situation: planningStalled('cap_spent', 2, 'cap_spent:v2'),
+    })
+    expect((await applyDecision(second.id, 'system')).ok).toBe(true)
+    expect((await eventsOfType('workspace_planning_reset')).map((row) => row.payload)).toEqual([
+      { version: 1, by: 'supervisor' },
+      { version: 2, by: 'supervisor' },
+    ])
+  })
+
+  /**
+   * The role precision the fold must not lose. `planning_stalled`'s facts name the REASON, not a
+   * role -- the situation is about a project -- and `no_planner` means exactly one thing, so
+   * approving the staffing offer adds `manager` and nothing else, never re-granting a role an
+   * operator revoked while the proposal waited (the delta-union rule, spec §4).
+   */
+  it('adds only manager for a planning_stalled/no_planner staffing approval', async () => {
+    const decision = await record(f, { kind: 'set_runtime_roles', slaveId: f.slaveId, roles: ['backend', 'manager'] }, 'proposed', {
+      subjectId: `${f.workspaceId}:no_planner`,
+      situation: planningStalled('no_planner'),
+    })
+    await prisma.slave.update({ where: { id: f.slaveId }, data: { runtimeRoles: [] } })
+
+    expect((await approveDecision(decision.id, { userId: f.userId })).ok).toBe(true)
+    expect((await prisma.slave.findUniqueOrThrow({ where: { id: f.slaveId } })).runtimeRoles).toEqual(['manager'])
+  })
+
+  it('records a person as the resetter when a person approved it', async () => {
+    const decision = await record(f, { kind: 'retry_planning' }, 'proposed', {
+      subjectId: `${f.workspaceId}:cap_spent`,
+      situation: planningStalled('cap_spent'),
+    })
+    expect((await approveDecision(decision.id, { userId: f.userId })).ok).toBe(true)
+    expect((await eventsOfType('workspace_planning_reset'))[0]?.payload).toEqual({ version: 1, by: 'human' })
+  })
+})

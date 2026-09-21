@@ -3,9 +3,16 @@ import { capabilityLabel as capabilityLabelIn, projectRoles } from '../capabilit
 import { formTeam, type TeamPlan, type TeamProposal, type TeamRanking } from '../capability/team.js'
 import { profileKeyOf } from '../evidence/derive.js'
 import { PERMISSION_KINDS, PERMISSION_LABEL, type PermissionKind } from '../permission/kinds.js'
+import { PROVIDER_LABEL } from '../provider/kind.js'
 import { recommendRunbooks } from '../runbook/recommend.js'
 import type { Action, Candidate } from './actions.js'
-import { boundReason, HALT_CLEAR_INTERVAL_MS, RETRIES_MAX } from './constants.js'
+import {
+  boundReason,
+  HALT_CLEAR_INTERVAL_MS,
+  MANAGER_ROLE,
+  RETRIES_MAX,
+  SUPERVISOR_DEFAULT_PROVIDER,
+} from './constants.js'
 import { readFailure, type FailureDiagnosis } from './diagnosis.js'
 import { rosterCapabilities, staffableSlaves } from './observe.js'
 import { mayAnswer, tierOf } from './policy.js'
@@ -666,9 +673,51 @@ export function candidates(situation: Situation, world: SupervisorWorld): readon
     case 'no_reviewer':
     case 'no_planner':
     case 'ready_unstaffed':
-      // `subjectId` IS the missing role for all three kinds (spec section 2).
+      // `subjectId` IS the missing role for all three kinds (spec section 2). `no_planner` is
+      // RETIRED -- `observe` stopped emitting it in H4a -- and the arm stays because a stored
+      // decision row carrying it is still read back, re-offered on an approval, and shown.
       offers.push(...staffingCandidates(world, situation.kind, situation.subjectId))
       break
+
+    case 'planning_stalled': {
+      // H4a: one remedy per reason, read off the situation's OWN facts -- `subjectId` is
+      // `<workspaceId>:<reason>` and nothing here parses it (`permission_blocked`'s rule). A
+      // reason this catalogue does not know (a hand-edited row, a payload from a later version)
+      // falls through to the two last resorts below, which is every other arm's shape.
+      const reason = String(situation.facts['reason'] ?? '')
+      if (reason === 'no_runtime') {
+        // The INSTALLATION's default, never a vendor the rules picked: `SUPERVISOR_DEFAULT_PROVIDER`
+        // is the same answer the chat tick and the panel resolve a null provider to. A project that
+        // wanted the other one says so with `set-provider`, in one call.
+        offers.push(
+          candidate(
+            { kind: 'configure_runtime', provider: SUPERVISOR_DEFAULT_PROVIDER },
+            world,
+            situation.kind,
+            `Nothing here can make a single model call until this project has a runtime. ${PROVIDER_LABEL[SUPERVISOR_DEFAULT_PROVIDER]} is this installation's default; if it is the wrong one, changing it later is one setting.`,
+          ),
+        )
+      }
+      if (reason === 'no_planner') {
+        // VERBATIM what the retired `no_planner` kind offered: the same staffing path, on the same
+        // role, in the same order. A fold that changed the remedy would be two changes at once.
+        offers.push(...staffingCandidates(world, situation.kind, MANAGER_ROLE))
+      }
+      // ONCE PER GOAL VERSION, checked where the offer is MADE as well as where it is applied (the
+      // `clear_halt` precedent): a version whose cap has already been given back once is a person's
+      // call, and the escalation below is what they read.
+      if (reason === 'cap_spent' && world.planningResetsThisVersion === 0) {
+        offers.push(
+          candidate(
+            { kind: 'retry_planning' },
+            world,
+            situation.kind,
+            `Planning has failed ${String(world.planningFailuresSinceGoal)} time(s) against this goal and nothing will try again by itself. This gives it its attempts back, once for this goal; if it fails again, a person decides.`,
+          ),
+        )
+      }
+      break
+    }
 
     case 'capability_unstaffed': {
       // `subjectId` IS the capability key (spec §2 as M47 extends it). `formTeam` has already made

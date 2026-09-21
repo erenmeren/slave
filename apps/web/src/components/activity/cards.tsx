@@ -607,6 +607,20 @@ function WorkspaceReplanStartedCard(props: ActivityCardProps): ReactElement {
 
 /** M48 R5: a runbook adopted, or cleared. `idle` rather than `starting`: nothing is running --
  *  a decision about how the work will be done has been recorded. */
+/**
+ * H4a: the planning retry cap, given back for one goal version -- the Supervisor's `retry_planning`
+ * or a person approving it. `idle` rather than `starting`: nothing is running yet, the next tick is
+ * what dispatches the planner.
+ */
+function WorkspacePlanningResetCard(props: ActivityCardProps): ReactElement {
+  const payload = props.event.payload as { version: number; by: 'supervisor' | 'human' }
+  return (
+    <ActivityCard {...props}>
+      <Transition tone="idle" label={`planning may try again for goal v${String(payload.version)}`} />
+    </ActivityCard>
+  )
+}
+
 function WorkspaceRunbookAdoptedCard(props: ActivityCardProps): ReactElement {
   const payload = props.event.payload as { runbookId: string; key: string; name: string; cleared?: boolean }
   return (
@@ -1513,6 +1527,7 @@ export const ACTIVITY_CARDS = {
   'workspace.plan_created': WorkspacePlanCreatedCard,
   'workspace.replan_started': WorkspaceReplanStartedCard,
   'workspace.replanned': WorkspaceReplannedCard,
+  'workspace.planning_reset': WorkspacePlanningResetCard,
   'task.cancelled': TaskCancelledCard,
   'workspace.company_assigned': WorkspaceCompanyAssignedCard,
   'workspace.settings_changed': WorkspaceSettingsChangedCard,

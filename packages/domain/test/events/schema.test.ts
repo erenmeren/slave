@@ -764,6 +764,29 @@ describe('parseExecutionEvent', () => {
     expect(parseExecutionEvent({ ...BASE, type: 'workspace.replan_started', payload: { version: 2 } }).ok).toBe(false)
   })
 
+  /**
+   * H4a: the event `retry_planning` writes, and the row `dispatchPlanning` will count its failures
+   * from. `version` is which goal's retries were given back and `by` is who gave them back -- the
+   * Supervisor by itself, or a person approving its proposal.
+   */
+  it('accepts a workspace.planning_reset naming the version and who reset it', () => {
+    const result = parseExecutionEvent({
+      ...BASE,
+      type: 'workspace.planning_reset',
+      payload: { version: 3, by: 'supervisor' },
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok && result.value.type === 'workspace.planning_reset') {
+      expect(result.value.payload).toEqual({ version: 3, by: 'supervisor' })
+    }
+    expect(parseExecutionEvent({ ...BASE, type: 'workspace.planning_reset', payload: { version: 3, by: 'human' } }).ok).toBe(true)
+  })
+
+  it('rejects a planning reset that names no version, and one reset by nobody the vocabulary knows', () => {
+    expect(parseExecutionEvent({ ...BASE, type: 'workspace.planning_reset', payload: { by: 'supervisor' } }).ok).toBe(false)
+    expect(parseExecutionEvent({ ...BASE, type: 'workspace.planning_reset', payload: { version: 1, by: 'the tick' } }).ok).toBe(false)
+  })
+
   it('accepts a workspace.replanned event with all three lists, dropped cancellations included', () => {
     const result = parseExecutionEvent({
       ...BASE,
