@@ -1301,9 +1301,12 @@ describe('the five-column board', () => {
     expect(screen.getByTestId('task-step').textContent).toBe('1/3')
   })
 
-  it('says unassigned rather than showing an empty avatar', () => {
+  it('says nobody holds this role yet rather than showing an empty avatar', () => {
+    // H2: a task is assigned the moment it is created, so a nameless card means something narrower
+    // than it used to -- nobody on this project holds the role the task needs. "Unassigned" read as
+    // an oversight somebody could fix by assigning it; this says what is actually missing.
     render(<TaskCard workspaceGoalVersion={0} task={task({ assigneeName: null })} onSelect={() => {}} />)
-    expect(screen.getByTestId('task-assignee').textContent).toBe('unassigned')
+    expect(screen.getByTestId('task-assignee').textContent).toBe('nobody holds this role yet')
     expect(screen.queryByTestId('avatar-tile')).toBeNull()
   })
 

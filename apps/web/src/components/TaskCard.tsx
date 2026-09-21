@@ -171,7 +171,7 @@ export function TaskCard({
       <span className="mt-[8px] flex items-center gap-[6px]">
         {task.assigneeName === null ? (
           <span data-testid="task-assignee" className="text-[10px] text-text-dim">
-            unassigned
+            nobody holds this role yet
           </span>
         ) : (
           <>

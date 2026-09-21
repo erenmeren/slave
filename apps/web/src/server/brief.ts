@@ -233,8 +233,12 @@ export async function buildProjectBrief(
           // with `CompanySlave` and was already unread.
           person: { select: { name: true, lifecycle: true, releasedAt: true, releaseReason: true } },
           // The LIVE run, the same predicate AND the same ordering `server/overview.ts` uses for
-          // its slave cards: a worker's task is the one its run is on, because nothing in the
-          // pipeline writes `Task.assigneeId`. Newest first, so a worker that somehow holds two
+          // its slave cards: a worker's task is the one its run is ON, which is a narrower question
+          // than what they have been assigned. `Task.assigneeId` has carried an answer since H2, and
+          // this band deliberately does not read it -- the band says what somebody is DOING right
+          // now, and a queued task nobody has started yet is not that.
+          //
+          // Newest first, so a worker that somehow holds two
           // non-terminal runs shows the one it is actually on rather than an arbitrary row. The
           // whole row, because `toRunState` takes one -- narrowing the `select` here would mean
           // spelling that mapper's four fields out a second time.

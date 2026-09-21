@@ -237,10 +237,10 @@ describe('buildTasksSnapshot', () => {
   })
 
   it('names the live run slave while work is in flight, and the implementer once it is finished', async (): Promise<void> => {
-    // `Task.assigneeId` is written by nothing in this product -- a run is linked to its worker
-    // through `SlaveRun.slaveId` -- so this name is derived from the runs. Deriving it from the
-    // LIVE run alone left every finished task reading `unassigned`, which is not what the board
-    // knows: somebody did that work, and the row said nobody had.
+    // A run is linked to its worker through `SlaveRun.slaveId`, and that is what happened -- so it
+    // outranks `Task.assigneeId` (written since H2), which says who HOLDS the task. Deriving the
+    // name from the LIVE run alone left every finished task reading nobody, which is not what the
+    // board knows: somebody did that work, and the row said nobody had.
 
     const runningTask = await prisma.task.create({
       data: {
@@ -283,10 +283,10 @@ describe('buildTasksSnapshot', () => {
     expect(snapshot?.tasks.find((t) => t.id === doneTask.id)?.assigneeName).toBe('Alex')
   })
 
-  it('leaves a task NOBODY has run unassigned, which is what unassigned should mean', async (): Promise<void> => {
-    // The word has to keep meaning something. A queued task genuinely has nobody on it -- this
-    // product dispatches on a role match when a slot frees, it does not hand tasks out in advance
-    // -- and that is the one case the board should say so.
+  it('names nobody for a task nobody has run and nobody holds', async (): Promise<void> => {
+    // The one case the board should say nobody: a task with no run behind it whose role no seat on
+    // the project holds. H2 made this the exception rather than the rule -- a planned task arrives
+    // with `assigneeId` already on it -- and a hand-made task like this one still has nobody.
     const queued = await prisma.task.create({
       data: {
         workspaceId: fixture.workspaceId,
@@ -300,6 +300,62 @@ describe('buildTasksSnapshot', () => {
 
     const snapshot = await buildTasksSnapshot(fixture.workspaceId)
     expect(snapshot?.tasks.find((t) => t.id === queued.id)?.assigneeName).toBeNull()
+  })
+
+  it('names the seat a queued task was ASSIGNED to, with no run behind it at all (H2)', async (): Promise<void> => {
+    // The whole point of H2: planning wrote `assigneeId` when it created the task, so the card names
+    // the person the moment the board appears rather than waiting for a run to start.
+    const queued = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Waiting its turn',
+        description: 'x',
+        status: 'ready',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+        assigneeId: fixture.slaveId,
+      },
+    })
+
+    const snapshot = await buildTasksSnapshot(fixture.workspaceId)
+    expect(snapshot?.tasks.find((t) => t.id === queued.id)?.assigneeName).toBe('Alex')
+  })
+
+  it('lets the run that did the work outrank a stale assignee (H2)', async (): Promise<void> => {
+    // The column is a FIRST answer: dispatch may have handed the work to a different holder of the
+    // role, and `startRun` rewrites the column when it does. A projection that preferred the column
+    // would name the wrong person for as long as the row disagreed, so the run wins here too.
+    const stale = await prisma.slave.create({
+      data: {
+        teamId: (await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })).id,
+        role: 'backend',
+        personId: (await prisma.person.create({ data: { name: 'Nina' } })).id,
+      },
+    })
+    const task = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Somebody else did it',
+        description: 'x',
+        status: 'done',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+        assigneeId: stale.id,
+      },
+    })
+    await prisma.slaveRun.create({
+      data: {
+        taskId: task.id,
+        slaveId: fixture.slaveId,
+        kind: 'implementation',
+        status: 'succeeded',
+        terminalAt: new Date(),
+        endedAt: new Date(),
+      },
+    })
+
+    const snapshot = await buildTasksSnapshot(fixture.workspaceId)
+    expect(snapshot?.tasks.find((t) => t.id === task.id)?.assigneeName).toBe('Alex')
   })
 
   it('credits the IMPLEMENTER of a finished task, not the reviewer who looked at it', async (): Promise<void> => {

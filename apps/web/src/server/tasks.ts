@@ -252,6 +252,21 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
     }
   }
 
+  // H2: the NAMES of the seats the board's tasks are assigned to. One read over the distinct
+  // non-null `assigneeId` values already on the rows this function loaded -- the same "bound it by
+  // what is already in hand" rule `waitingFor` and `stamped` above follow -- and no query at all for
+  // a board where every task has a run behind it. A run's own seat is already joined below; this is
+  // for the task nobody has run yet, which before H2 could only read as nobody.
+  const assignedSeatIds = [...new Set(tasks.map((task) => task.assigneeId).filter((id): id is string => id !== null))]
+  const assigneeNameBySeat = new Map<string, string>()
+  if (assignedSeatIds.length > 0) {
+    const seats = await prisma.slave.findMany({
+      where: { id: { in: assignedSeatIds } },
+      select: { id: true, person: { select: { name: true } } },
+    })
+    for (const seat of seats) assigneeNameBySeat.set(seat.id, seat.person.name)
+  }
+
   // ONE parse for the whole board: `parseRunbookStages` validates a JSON column, and a task list
   // of thirty would otherwise re-validate it thirty times. A column that will not parse leaves the
   // map empty, which reads as "no title known" -- the same as no runbook at all.
@@ -266,18 +281,23 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
     shellFacts,
     tasks: tasks.map((task) => {
       const liveRun = task.runs.find((run) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status))
-      // Who is on this task: whoever is running it now, and once nothing is, whoever DID the work.
-      //
-      // `Task.assigneeId` is not the answer -- nothing in this product writes that column, it is
-      // there for hand-assignment alone -- so the name is derived from the runs. The live run
-      // cannot be the whole answer either: it goes terminal the moment the work finishes, and a
-      // finished task then read as `unassigned`, which is the one thing the board did know was
-      // false.
+      // Who is on this task, in three readings, most-recent fact first: whoever is running it now;
+      // once nothing is, whoever DID the work; and failing both, whoever it was ASSIGNED to.
       //
       // The IMPLEMENTATION run, not simply the newest one: a review run is newer and belongs to
       // the reviewer, and naming them as the person who did the work is a claim an operator would
       // act on. `implementerOf` (`apps/orchestrator/src/verify.ts`) settles this the same way, and
       // two surfaces answering "who did this" differently is worse than either answer.
+      //
+      // `Task.assigneeId` comes LAST, and it is no longer the dead column this comment used to
+      // describe: since H2 planning writes it when it creates the task (`chooseAssignee`) and
+      // `startRun` rewrites it to the seat the run went to, so a task on the board has a holder
+      // before anything has run. It ranks below the runs because a run is what actually HAPPENED
+      // -- dispatch may have handed the work to another holder of the role, and the column can
+      // still name the person who was expected to take it.
+      //
+      // All three null is now a narrow state: nobody on this project holds the role this task
+      // needs, which is what the card says in those words.
       const worker = liveRun ?? task.runs.find((run) => run.kind === 'implementation')
       return {
         id: task.id,
@@ -287,7 +307,9 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         priority: task.priority,
         attempt: task.attempt,
         maxAttempts: task.maxAttempts,
-        assigneeName: worker?.slave.person.name ?? null,
+        assigneeName:
+          worker?.slave.person.name ??
+          (task.assigneeId === null ? null : (assigneeNameBySeat.get(task.assigneeId) ?? null)),
         branch: task.branch,
         lastRejectionReason: task.lastRejectionReason,
         goalVersion: task.goalVersion,
