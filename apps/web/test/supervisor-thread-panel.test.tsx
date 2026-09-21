@@ -88,27 +88,55 @@ function choose(input: HTMLElement, files: readonly File[]): void {
   fireEvent.change(input)
 }
 
+/** What `/api/providers/<kind>/models` answers here. BOTH models, because the two that matter --
+ *  what a project is set to and what somebody switches it to -- have to be in the list for a
+ *  `<select>` to offer either. */
+const MODELS = JSON.stringify({
+  models: [
+    { id: 'claude-sonnet-5', label: 'Sonnet 5' },
+    { id: 'claude-opus-5', label: 'Opus 5' },
+  ],
+  source: 'account',
+})
+
+type FetchInit = { readonly method?: string; readonly body?: string }
+
+/**
+ * One case's answers, with the model listing answered for it.
+ *
+ * The header's model field asks for the EFFECTIVE runtime's models on every mount (fix round 1,
+ * I1), and `ModelSelect` reads `models.length` off whatever comes back -- so a case that replaced
+ * the stub and forgot this route would crash the panel it was measuring, for a reason that has
+ * nothing to do with what it was measuring. Answered once, here.
+ */
+function stubFetch(own: (url: string, init?: FetchInit) => Promise<Response>): void {
+  fetchMock.mockImplementation(async (url: string, init?: FetchInit) =>
+    url.includes('/api/providers/') ? new Response(MODELS, { status: 200 }) : own(url, init),
+  )
+}
+
 let fetchMock: ReturnType<typeof vi.fn>
 
 beforeEach((): void => {
   // The model listing is cached per provider kind for the whole module, so a listing one case
   // stubbed would otherwise be the listing every case after it reads.
   clearModelSelectCache()
-  fetchMock = vi.fn(async (url: string) => {
+  fetchMock = vi.fn()
+  vi.stubGlobal('fetch', fetchMock)
+  // The default, through the same helper every case uses, so there is one path for all of them.
+  stubFetch(async (url: string) => {
     if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
-    if (url.includes('/api/providers/')) {
-      return new Response(JSON.stringify({ models: [{ id: 'claude-sonnet-5', label: 'Sonnet 5' }], source: 'account' }), { status: 200 })
-    }
     // The view's own GET (`/api/w/:id/supervisor`, no further path) -- what the scope line's
     // autonomy switch reads on mount. Matched by suffix rather than `includes('/supervisor')`,
     // which would also catch `/supervisor/threads` and the settings/decisions routes below.
     if (url.endsWith('/supervisor')) return new Response(view(), { status: 200 })
     return new Response(JSON.stringify({ ok: true }), { status: 200 })
   })
-  vi.stubGlobal('fetch', fetchMock)
 })
 
 afterEach((): void => {
+  // The two poll cases fake the clock; every other case must not inherit it.
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -155,7 +183,7 @@ describe('the Supervisor panel', () => {
         ],
       },
     ]
-    fetchMock.mockImplementation(async (url: string) =>
+    stubFetch(async (url: string) =>
       url.includes('/supervisor/threads') ? new Response(JSON.stringify(twice), { status: 200 }) : new Response('{}', { status: 200 }),
     )
     render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
@@ -240,7 +268,7 @@ describe('the Supervisor panel', () => {
   })
 
   it('renders the route s refusal in its own line', async (): Promise<void> => {
-    fetchMock.mockImplementation(async (url: string) =>
+    stubFetch(async (url: string) =>
       url.includes('/supervisor/threads')
         ? new Response(JSON.stringify(THREADS), { status: 200 })
         : new Response(JSON.stringify({ error: 'this project is halted: the budget is exhausted' }), { status: 409 }),
@@ -276,7 +304,7 @@ describe('the Supervisor panel', () => {
     // The route's own guards are the backstop, not the UX: the button goes down the moment a POST
     // leaves, so a double click is one message and one model call.
     let release: (() => void) | null = null
-    fetchMock.mockImplementation(async (url: string) => {
+    stubFetch(async (url: string) => {
       if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
       if (url.endsWith('/supervisor')) return new Response(view(), { status: 200 })
       return new Promise<Response>((resolve) => {
@@ -289,6 +317,10 @@ describe('the Supervisor panel', () => {
     fireEvent.click(screen.getByTestId('supervisor-request-send'))
 
     expect((screen.getByTestId('supervisor-request-send') as HTMLButtonElement).disabled).toBe(true)
+    // Fix round 1, M4: the whole box goes down with it. `send` read the words and the tray once,
+    // so anything typed or attached while it is out would be cleared unsent when it lands.
+    expect((screen.getByTestId('supervisor-request-input') as HTMLTextAreaElement).disabled).toBe(true)
+    expect((screen.getByTestId('supervisor-attach-button') as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByTestId('supervisor-request-send'))
     await act(async (): Promise<void> => {
       release?.()
@@ -297,7 +329,7 @@ describe('the Supervisor panel', () => {
   })
 
   it('shows a refusal without clearing what was typed', async (): Promise<void> => {
-    fetchMock.mockImplementation(async (url: string) =>
+    stubFetch(async (url: string) =>
       url.includes('/supervisor/threads')
         ? new Response(JSON.stringify(THREADS), { status: 200 })
         : new Response(JSON.stringify({ error: 'a message must not be blank' }), { status: 409 }),
@@ -313,7 +345,7 @@ describe('the Supervisor panel', () => {
   })
 
   it('says so, once, when there is no conversation yet', async (): Promise<void> => {
-    fetchMock.mockImplementation(async (url: string) =>
+    stubFetch(async (url: string) =>
       url.includes('/supervisor/threads') ? new Response('[]', { status: 200 }) : new Response('{}', { status: 200 }),
     )
     render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
@@ -343,7 +375,7 @@ describe('the Supervisor panel', () => {
   it('renders the autonomy switch off the view, PATCHes it on toggle, and disables it while the request is in flight', async (): Promise<void> => {
     let currentAutonomy: 'propose' | 'act' = 'propose'
     let resolvePatch: (() => void) | null = null
-    fetchMock.mockImplementation(async (url: string, init?: { method?: string; body?: string }) => {
+    stubFetch(async (url: string, init?: { method?: string; body?: string }) => {
       if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
       if (url.endsWith('/supervisor/settings')) {
         return new Promise<Response>((resolve) => {
@@ -381,7 +413,7 @@ describe('the Supervisor panel', () => {
   // been -- the state never moves until `loadSettings` confirms it -- and the one switch that
   // decides whether this project runs itself disagreed with the person holding it, silently.
   it('says so when the autonomy PATCH is refused, and leaves the switch where it was', async (): Promise<void> => {
-    fetchMock.mockImplementation(async (url: string) => {
+    stubFetch(async (url: string) => {
       if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
       if (url.endsWith('/supervisor/settings')) {
         return new Response(JSON.stringify({ error: 'this project is archived' }), { status: 409 })
@@ -425,7 +457,7 @@ describe('the Supervisor panel', () => {
       decisionId: null,
       status: 'answering',
     })
-    fetchMock.mockImplementation(async (url: string) =>
+    stubFetch(async (url: string) =>
       url.includes('/supervisor/threads')
         ? new Response(JSON.stringify(waiting), { status: 200 })
         : new Response(url.endsWith('/supervisor') ? view() : '{}', { status: 200 }),
@@ -445,7 +477,7 @@ describe('the Supervisor panel', () => {
       // Anything else is the PROVIDER's own words, which are not this panel's to rewrite.
       { id: 'msg:d', messageId: 'd', who: 'supervisor', text: '', at: '2026-09-20T09:00:04.000Z', refs: [], decisionId: null, status: 'failed', failureReason: 'the runtime exited with code 1' },
     )
-    fetchMock.mockImplementation(async (url: string) =>
+    stubFetch(async (url: string) =>
       url.includes('/supervisor/threads')
         ? new Response(JSON.stringify(failures), { status: 200 })
         : new Response(url.endsWith('/supervisor') ? view() : '{}', { status: 200 }),
@@ -465,7 +497,7 @@ describe('the Supervisor panel', () => {
       { id: 'msg:a', messageId: 'a', who: 'supervisor', text: 'Nothing is running: the planner has no seat.', at: '2026-09-20T09:00:01.000Z', refs: [], decisionId: null, status: 'answered', sourced: true },
       { id: 'msg:b', messageId: 'b', who: 'supervisor', text: 'I think so.', at: '2026-09-20T09:00:02.000Z', refs: [], decisionId: null, status: 'answered', sourced: false },
     )
-    fetchMock.mockImplementation(async (url: string) =>
+    stubFetch(async (url: string) =>
       url.includes('/supervisor/threads')
         ? new Response(JSON.stringify(answered), { status: 200 })
         : new Response(url.endsWith('/supervisor') ? view() : '{}', { status: 200 }),
@@ -483,7 +515,7 @@ describe('the Supervisor panel', () => {
       ...ASKED,
       attachments: [{ path: 'docs/inbox/2026-09-20-brief.md', name: 'brief.md', bytes: 1400, kind: 'text' }],
     })
-    fetchMock.mockImplementation(async (url: string) =>
+    stubFetch(async (url: string) =>
       url.includes('/supervisor/threads')
         ? new Response(JSON.stringify(withFile), { status: 200 })
         : new Response(url.endsWith('/supervisor') ? view() : '{}', { status: 200 }),
@@ -517,7 +549,7 @@ describe('the Supervisor panel', () => {
         { decisionId: 'd-7', tier: 'applied', kind: 'note_for_planner' },
       ],
     })
-    fetchMock.mockImplementation(async (url: string) =>
+    stubFetch(async (url: string) =>
       url.includes('/supervisor/threads')
         ? new Response(JSON.stringify(proposed), { status: 200 })
         : new Response(url.endsWith('/supervisor') ? view() : '{}', { status: 200 }),
@@ -553,7 +585,7 @@ describe('the Supervisor panel', () => {
   it('uploads what was attached FIRST, then sends the message with the paths the upload answered', async (): Promise<void> => {
     const stored = { path: 'docs/inbox/2026-09-20-brief.md', name: 'brief.md', bytes: 1400, kind: 'text' }
     const seen: string[] = []
-    fetchMock.mockImplementation(async (url: string) => {
+    stubFetch(async (url: string) => {
       seen.push(url)
       if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
       if (url.includes('/supervisor/uploads')) return new Response(JSON.stringify({ attachments: [stored] }), { status: 200 })
@@ -599,7 +631,7 @@ describe('the Supervisor panel', () => {
   })
 
   it('keeps the words and the file when the upload is refused, and sends no message', async (): Promise<void> => {
-    fetchMock.mockImplementation(async (url: string) => {
+    stubFetch(async (url: string) => {
       if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
       if (url.includes('/supervisor/uploads')) {
         return new Response(JSON.stringify({ error: 'nothing here can read a .exe: attach a document or an image' }), { status: 415 })
@@ -628,14 +660,8 @@ describe('the Supervisor panel', () => {
   // ==============================================================================================
 
   it('binds the two selects to the project s settings and PATCHes a change at once', async (): Promise<void> => {
-    fetchMock.mockImplementation(async (url: string) => {
+    stubFetch(async (url: string) => {
       if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
-      if (url.includes('/api/providers/')) {
-        return new Response(
-          JSON.stringify({ models: [{ id: 'claude-sonnet-5', label: 'Sonnet 5' }, { id: 'claude-opus-5', label: 'Opus 5' }], source: 'account' }),
-          { status: 200 },
-        )
-      }
       if (url.endsWith('/supervisor')) return new Response(view({ provider: 'claude_code', model: 'claude-sonnet-5' }), { status: 200 })
       return new Response('{}', { status: 200 })
     })
@@ -663,12 +689,12 @@ describe('the Supervisor panel', () => {
     )
   })
 
-  it('sends null for both when the runtime is cleared -- null IS the installation default', async (): Promise<void> => {
-    fetchMock.mockImplementation(async (url: string) => {
+  // Fix round 1, I1: `null` and `claude_code` are two spellings of ONE runtime (R4 — null is the
+  // installation default, and that default is `claude_code`), so moving between them is not a
+  // change of vendor and must not take the model with it.
+  it('sends provider null when the runtime is cleared, and leaves the model alone', async (): Promise<void> => {
+    stubFetch(async (url: string) => {
       if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
-      if (url.includes('/api/providers/')) {
-        return new Response(JSON.stringify({ models: [{ id: 'claude-sonnet-5', label: 'Sonnet 5' }], source: 'account' }), { status: 200 })
-      }
       if (url.endsWith('/supervisor')) return new Response(view({ provider: 'claude_code', model: 'claude-sonnet-5' }), { status: 200 })
       return new Response('{}', { status: 200 })
     })
@@ -681,16 +707,68 @@ describe('the Supervisor panel', () => {
     })
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/w/w1/supervisor/settings',
-      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ provider: null, model: null }) }),
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ provider: null }) }),
+    )
+    expect((screen.getByTestId('supervisor-model') as HTMLSelectElement).value).toBe('claude-sonnet-5')
+  })
+
+  it('shows the model of a project on the default runtime, editable', async (): Promise<void> => {
+    stubFetch(async (url: string) => {
+      if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
+      // A project that never chose a runtime, with a model set from the CLI.
+      if (url.endsWith('/supervisor')) return new Response(view({ provider: null, model: 'claude-opus-5' }), { status: 200 })
+      return new Response('{}', { status: 200 })
+    })
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    const field = await screen.findByTestId('supervisor-model')
+    // The EFFECTIVE runtime is what the model list is asked for, so the field is a live select
+    // showing what the project is set to rather than "choose a provider first".
+    await waitFor(() => expect((field as HTMLSelectElement).value).toBe('claude-opus-5'))
+    expect((field as HTMLSelectElement).disabled).toBe(false)
+    expect((screen.getByTestId('supervisor-provider') as HTMLSelectElement).value).toBe('')
+
+    await act(async (): Promise<void> => {
+      fireEvent.change(field, { target: { value: 'claude-sonnet-5' } })
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/w/w1/supervisor/settings',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ model: 'claude-sonnet-5' }) }),
+    )
+  })
+
+  it('naming the default runtime out loud is not a change of vendor, so the model survives it', async (): Promise<void> => {
+    stubFetch(async (url: string) => {
+      if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
+      if (url.endsWith('/supervisor')) return new Response(view({ provider: null, model: 'claude-opus-5' }), { status: 200 })
+      return new Response('{}', { status: 200 })
+    })
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    const provider = await screen.findByTestId('supervisor-provider')
+    await waitFor(() => expect((screen.getByTestId('supervisor-model') as HTMLSelectElement).value).toBe('claude-opus-5'))
+
+    await act(async (): Promise<void> => {
+      fireEvent.change(provider, { target: { value: 'claude_code' } })
+    })
+    // No `model: null` in the patch, and the field still shows what it showed.
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/w/w1/supervisor/settings',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ provider: 'claude_code' }) }),
+    )
+    expect((screen.getByTestId('supervisor-model') as HTMLSelectElement).value).toBe('claude-opus-5')
+
+    // A real change of vendor still does take it.
+    await act(async (): Promise<void> => {
+      fireEvent.change(screen.getByTestId('supervisor-provider'), { target: { value: 'cursor' } })
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/w/w1/supervisor/settings',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ provider: 'cursor', model: null }) }),
     )
   })
 
   it('says so and puts the runtime back when the settings PATCH is refused', async (): Promise<void> => {
-    fetchMock.mockImplementation(async (url: string) => {
+    stubFetch(async (url: string) => {
       if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
-      if (url.includes('/api/providers/')) {
-        return new Response(JSON.stringify({ models: [{ id: 'claude-sonnet-5', label: 'Sonnet 5' }], source: 'account' }), { status: 200 })
-      }
       if (url.endsWith('/supervisor/settings')) {
         return new Response(JSON.stringify({ error: 'this installation has no such provider: cursor' }), { status: 400 })
       }
@@ -711,7 +789,7 @@ describe('the Supervisor panel', () => {
   })
 
   it('shows what the conversation has cost, and says how many turns nobody could price', async (): Promise<void> => {
-    fetchMock.mockImplementation(async (url: string) =>
+    stubFetch(async (url: string) =>
       url.includes('/supervisor/threads')
         ? new Response(JSON.stringify(THREADS), { status: 200 })
         : new Response(url.endsWith('/supervisor') ? view({ costUsd: 0.42, unmeasured: 2 }) : '{}', { status: 200 }),
@@ -721,8 +799,48 @@ describe('the Supervisor panel', () => {
     expect(line.textContent).toBe('$0.42 so far, 2 turns unpriced')
   })
 
+  it('uploads each file ONCE, even when the message after the upload is refused', async (): Promise<void> => {
+    // The upload WRITES AND COMMITS. A retry that sent the file again would leave two copies in
+    // `docs/inbox/` under two dated paths, and two commits nobody asked for.
+    const stored = { path: 'docs/inbox/2026-09-20-brief.md', name: 'brief.md', bytes: 1400, kind: 'text' }
+    let refuse = true
+    stubFetch(async (url: string) => {
+      if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
+      if (url.includes('/supervisor/uploads')) return new Response(JSON.stringify({ attachments: [stored] }), { status: 200 })
+      if (url.includes('/supervisor/messages')) {
+        return refuse
+          ? new Response(JSON.stringify({ error: 'this project is halted: the budget is exhausted' }), { status: 409 })
+          : new Response(JSON.stringify({ ok: true }), { status: 200 })
+      }
+      if (url.endsWith('/supervisor')) return new Response(view(), { status: 200 })
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    })
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    await waitFor(() => expect(screen.getByTestId('supervisor-attach')).toBeTruthy())
+
+    choose(screen.getByTestId('supervisor-attach-input'), [new File(['# what I want'], 'brief.md', { type: 'text/markdown' })])
+    fireEvent.change(screen.getByTestId('supervisor-request-input'), { target: { value: 'use this brief' } })
+    fireEvent.click(screen.getByTestId('supervisor-request-send'))
+
+    await waitFor(() => expect(screen.getByTestId('supervisor-request-error').textContent).toContain('budget is exhausted'))
+    const uploads = (): number => fetchMock.mock.calls.filter((call) => String(call[0]).includes('/supervisor/uploads')).length
+    expect(uploads()).toBe(1)
+    // The file is still on the tray, under the name the repository knows it by.
+    expect(screen.getByTestId('supervisor-attach-chip').textContent).toContain('brief.md')
+
+    refuse = false
+    fireEvent.click(screen.getByTestId('supervisor-request-send'))
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.filter((call) => String(call[0]).includes('/supervisor/messages'))).toHaveLength(2),
+    )
+    expect(uploads()).toBe(1)
+    const last = fetchMock.mock.calls.filter((call) => String(call[0]).includes('/supervisor/messages')).at(-1)
+    expect((last?.[1] as { body: string }).body).toBe(JSON.stringify({ text: 'use this brief', attachments: [stored] }))
+    await waitFor(() => expect(screen.queryByTestId('supervisor-attach-chip')).toBeNull())
+  })
+
   it('leaves the unpriced half off when every turn was measured', async (): Promise<void> => {
-    fetchMock.mockImplementation(async (url: string) =>
+    stubFetch(async (url: string) =>
       url.includes('/supervisor/threads')
         ? new Response(JSON.stringify(THREADS), { status: 200 })
         : new Response(url.endsWith('/supervisor') ? view({ costUsd: 1.5 }) : '{}', { status: 200 }),
@@ -730,5 +848,93 @@ describe('the Supervisor panel', () => {
     render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
     const line = await screen.findByTestId('supervisor-cost')
     expect(line.textContent).toBe('$1.50 so far')
+  })
+
+  // ==============================================================================================
+  // F R2/R8: the one clock, and what it is for.
+  // ==============================================================================================
+
+  /** The conversation before and after the reply lands. Only `status` and `text` differ -- what is
+   *  measured here is WHO re-reads which endpoint, and when. */
+  const WAITING = chatThread(ASKED, {
+    id: 'msg:m2',
+    messageId: 'm2',
+    who: 'supervisor',
+    text: '',
+    at: '2026-09-20T09:00:01.000Z',
+    refs: [],
+    decisionId: null,
+    status: 'answering',
+  })
+  const LANDED = chatThread(ASKED, {
+    id: 'msg:m2',
+    messageId: 'm2',
+    who: 'supervisor',
+    text: 'Nothing is running: the planner has no seat.',
+    at: '2026-09-20T09:00:01.000Z',
+    refs: [],
+    decisionId: null,
+    status: 'answered',
+  })
+
+  /** Everything the mount fetched, settled, with the clock faked. `advanceTimersByTimeAsync`
+   *  flushes the microtask queue between timers, which is what lets a `fetch` stub resolve. */
+  async function settle(ms = 0): Promise<void> {
+    await act(async (): Promise<void> => {
+      await vi.advanceTimersByTimeAsync(ms)
+    })
+  }
+
+  const threadReads = (): number =>
+    fetchMock.mock.calls.filter((call) => String(call[0]).includes('/supervisor/threads')).length
+
+  it('re-reads the thread every two seconds while a reply is being written, and stops when it lands', async (): Promise<void> => {
+    vi.useFakeTimers()
+    let landed = false
+    stubFetch(async (url: string) => {
+      if (url.includes('/supervisor/threads')) {
+        return new Response(JSON.stringify(landed ? LANDED : WAITING), { status: 200 })
+      }
+      if (url.endsWith('/supervisor')) return new Response(view(), { status: 200 })
+      return new Response('{}', { status: 200 })
+    })
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    await settle()
+    expect(screen.getByTestId('supervisor-thinking')).toBeTruthy()
+
+    const before = threadReads()
+    await settle(2_000)
+    expect(threadReads()).toBe(before + 1)
+
+    landed = true
+    await settle(2_000)
+    expect(screen.queryByTestId('supervisor-thinking')).toBeNull()
+    // The interval is cleared with the waiting: nothing is read again, however long nobody
+    // touches the panel.
+    const after = threadReads()
+    await settle(10_000)
+    expect(threadReads()).toBe(after)
+  })
+
+  // Fix round 1, I2: the cost of a turn is written WITH the reply, and the poll above re-reads the
+  // THREAD alone -- so a conversation answering all afternoon would sit under "$0.00 so far".
+  it('re-reads the view when the reply lands, so the cost line is not one turn behind', async (): Promise<void> => {
+    vi.useFakeTimers()
+    let landed = false
+    stubFetch(async (url: string) => {
+      if (url.includes('/supervisor/threads')) {
+        return new Response(JSON.stringify(landed ? LANDED : WAITING), { status: 200 })
+      }
+      if (url.endsWith('/supervisor')) return new Response(view({ costUsd: landed ? 0.42 : 0 }), { status: 200 })
+      return new Response('{}', { status: 200 })
+    })
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    await settle()
+    expect(screen.getByTestId('supervisor-cost').textContent).toBe('$0.00 so far')
+
+    landed = true
+    await settle(2_000)
+    await settle()
+    expect(screen.getByTestId('supervisor-cost').textContent).toBe('$0.42 so far')
   })
 })

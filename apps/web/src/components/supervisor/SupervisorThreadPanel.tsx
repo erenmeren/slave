@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { SITUATION_LABEL, TIER_LABEL, type ChatAttachment, type Tier } from '@slave-of-ai/domain'
+import { ATTACHMENT_KIND_BY_EXTENSION, SITUATION_LABEL, TIER_LABEL, type ChatAttachment, type Tier } from '@slave-of-ai/domain'
 import { postControl, postForm, sendControl } from '../../lib/postControl'
 import { useShellFacts } from '../../hooks/useShellFacts'
 import { plural } from '../../lib/plural'
@@ -50,6 +50,47 @@ interface AskedAction {
  *  read it off, and the chip must still say what kind of thing it is. */
 const OPERATOR_REQUEST = 'operator_request'
 
+/**
+ * WHICH runtime answers a project that has chosen none (F R4).
+ *
+ * `Workspace.supervisorProvider` is nullable and `null` means this, which is what
+ * `packages/control/src/supervisorChatTick.ts:336` resolves it to before it looks a decider up.
+ * The panel needs the same answer for one reason: a project on the default still has a MODEL, and
+ * a model field that cannot say which vendor's names it is offering is a model field that has to
+ * be disabled. There is no shared constant to import -- the repository spells this literal at
+ * every site that resolves it -- so it is spelt once here, beside the two selects that need it.
+ */
+const DEFAULT_PROVIDER: ProviderKind = 'claude_code'
+
+/** What a selection of "the installation default" really resolves to — the one place this panel
+ *  turns an empty select into a runtime, so the model list and the "did the vendor change?" test
+ *  can never disagree about it. */
+function effectiveKind(selected: ProviderKind | ''): ProviderKind {
+  return selected === '' ? DEFAULT_PROVIDER : selected
+}
+
+/** What the file dialog offers, straight off the allow-list the upload verb enforces
+ *  ({@link ATTACHMENT_KIND_BY_EXTENSION} -- the one place an extension becomes a kind). A HINT and
+ *  never a check: a browser honours `accept` in its picker and ignores it on a drop, and
+ *  `storeSupervisorUploads` is what actually refuses a `.exe` either way. Derived rather than
+ *  respelt, so a kind added to the domain shows up in the dialog without a second edit. */
+const ACCEPT = Object.keys(ATTACHMENT_KIND_BY_EXTENSION)
+  .map((extension) => `.${extension}`)
+  .join(',')
+
+/**
+ * One thing waiting to go out with the next message (F R6).
+ *
+ * `stored` is what the upload verb answered for this file, and it is kept when the MESSAGE after
+ * a successful upload is refused: the file is already committed to the repository, so a retry that
+ * uploaded it again would write a second copy under a second path and commit it. Null until it has
+ * been through the route at all.
+ */
+interface PendingFile {
+  readonly file: File
+  readonly stored: ChatAttachment | null
+}
+
 /** How often the thread is re-read while a reply is still being written (F R2/R8).
  *
  * The panel's own refresh is the shell's wake-up (`useShellFacts`'s identity), which fires when
@@ -59,14 +100,19 @@ const OPERATOR_REQUEST = 'operator_request'
  * while a row is `answering`, and it stops the moment the reply lands. */
 const ANSWER_POLL_MS = 2_000
 
-/** The three reasons the chat tick records itself, in the words a person reads (F R8).
+/** The reasons the chat TICK records itself, as against the ones a runtime reports. Its own
+ *  union so {@link FAILURE_SENTENCE} is TOTAL over it: a fourth reason added to the tick is a
+ *  compile error here rather than a row that silently falls through to its raw member. */
+type KnownFailureReason = 'no_decider_for_provider' | 'budget_exhausted' | 'turn_unreadable'
+
+/** Those three in the words a person reads (F R8).
  *
  * The RAW member is what the row stores and what `title` keeps (docs/ia.md rule 3), because a
  * reason recorded months ago must still be readable by whatever renders it then. The three keys
  * are `NO_DECIDER_REASON`, `BUDGET_EXHAUSTED_REASON` and `TURN_UNREADABLE_REASON` in
  * `@slave-of-ai/control`, spelled out here rather than imported: control value-imports Prisma,
  * and this is a client component. */
-const FAILURE_SENTENCE: Readonly<Record<string, string>> = {
+const FAILURE_SENTENCE: Readonly<Record<KnownFailureReason, string>> = {
   no_decider_for_provider: 'No runtime can answer for this provider on this daemon.',
   budget_exhausted: "The project's budget is spent; the conversation waits for more.",
   turn_unreadable: 'The message could not be read back; send it again.',
@@ -77,7 +123,9 @@ const FAILURE_SENTENCE: Readonly<Record<string, string>> = {
  *  a runtime meant, and paraphrasing it would be inventing a diagnosis. */
 function failureSentence(reason: string | null): string {
   if (reason === null || reason === '') return 'The Supervisor could not answer this one.'
-  return FAILURE_SENTENCE[reason] ?? reason
+  // The cast is the question being asked -- "is this one of the three?" -- and the `??` is its
+  // answer for every string that is not.
+  return FAILURE_SENTENCE[reason as KnownFailureReason] ?? reason
 }
 
 /** An action kind as words rather than the identifier the row stores (docs/ia.md rule 3).
@@ -269,11 +317,13 @@ export function SupervisorThreadPanel({
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [draft, setDraft] = useState('')
-  /** What is waiting to be uploaded when the next message goes (F R6). Files, not paths: nothing
-   *  is written to the repository until somebody presses Send, so a person who attaches the wrong
-   *  thing and takes it back off has committed nothing. */
-  const [files, setFiles] = useState<readonly File[]>([])
+  /** What is waiting to go with the next message (F R6). Files, not paths: nothing is written to
+   *  the repository until somebody presses Send, so a person who attaches the wrong thing and
+   *  takes it back off has committed nothing. */
+  const [files, setFiles] = useState<readonly PendingFile[]>([])
   const fileInput = useRef<HTMLInputElement>(null)
+  /** Whether something is being dragged over the composer, for the one class that says so. */
+  const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(false)
   const [errorText, setErrorText] = useState<string | null>(null)
   // R1/R8 (Task 7): the scope line's own switch. `null` until the view answers once -- `useShellFacts`
@@ -288,6 +338,10 @@ export function SupervisorThreadPanel({
   // first read would PATCH "default" over a project that had chosen something.
   const [provider, setProvider] = useState<ProviderKind | ''>('')
   const [model, setModel] = useState('')
+  /** The runtime that will really answer, which is what the model field lists models FOR: a
+   *  project on the default still has a model, and a disabled "choose a provider first" would make
+   *  the one the CLI can set unreadable and unfixable here (fix round 1, I1). */
+  const effectiveProvider = effectiveKind(provider)
   const [runtimeRead, setRuntimeRead] = useState(false)
   const [runtimePending, setRuntimePending] = useState(false)
   /** F R8's "cost so far": the measured money and the turns nobody could price, side by side and
@@ -327,21 +381,25 @@ export function SupervisorThreadPanel({
     }
   }, [workspaceId])
 
+  // The PROJECT changed. The selects go dead until this project's own pair has been read, because
+  // this component is not remounted between projects (`RightPanelHost` renders it without a key)
+  // and for the length of one round trip they would otherwise show the LAST project's runtime,
+  // enabled -- and a change made in that window would PATCH the new project with the old one's
+  // pair. `autonomy`'s own `null` guard is the same rule, said for the switch. Its own effect, so
+  // that a REFRESH of the same project (below) never blinks the controls.
+  useEffect((): void => {
+    setRuntimeRead(false)
+  }, [workspaceId])
+
   // Two triggers, both existing: the workspace changed, or its stream woke the shell up. No
-  // `EventSource` of this panel's own -- `hooks/useShellFacts.ts:18-24` is the rule.
+  // `EventSource` of this panel's own -- `hooks/useShellFacts.ts:18-24` is the rule. BOTH reads
+  // happen here (fix round 1, I2): the view carries the conversation's cost, which moves every
+  // time a turn settles, so reading it once per project would leave "$0.00 so far" under a thread
+  // that had been answering all afternoon.
   useEffect((): void => {
     void load()
-  }, [load, facts])
-
-  useEffect((): void => {
-    // Disabled again whenever the PROJECT changes, not only on the first mount: this component is
-    // not remounted between projects (`RightPanelHost` renders it without a key), so for the
-    // length of one round trip the two selects would otherwise show the last project's runtime,
-    // enabled -- and a change made in that window would PATCH the new project with the old one's
-    // pair. `autonomy`'s own `null` guard is the same rule, said for the switch.
-    setRuntimeRead(false)
     void loadSettings()
-  }, [loadSettings])
+  }, [load, loadSettings, facts])
 
   const thread = useMemo(
     () => threads.find((candidate) => candidate.id === selectedId) ?? threads[0] ?? null,
@@ -360,6 +418,16 @@ export function SupervisorThreadPanel({
       clearInterval(timer)
     }
   }, [waitingOnReply, load])
+
+  /** Was a reply still being written the last time this rendered? The cost of a turn is written
+   *  WITH the reply, and the poll above re-reads the thread alone -- so the one moment the view is
+   *  certainly stale is the moment the waiting ends, and that is when it is read again. A ref
+   *  rather than state: it is a comparison against the last render, not something anything draws. */
+  const wasWaiting = useRef(false)
+  useEffect((): void => {
+    if (wasWaiting.current && !waitingOnReply) void loadSettings()
+    wasWaiting.current = waitingOnReply
+  }, [waitingOnReply, loadSettings])
 
   const toggleAutonomy = async (checked: boolean): Promise<void> => {
     setAutonomyPending(true)
@@ -403,15 +471,24 @@ export function SupervisorThreadPanel({
   const chooseProvider = (next: ProviderKind | ''): void => {
     const wasProvider = provider
     const wasModel = model
+    // WHICH RUNTIME WILL ACTUALLY ANSWER, on both sides of the change (fix round 1, I1): "the
+    // installation default" and "claude_code" are two spellings of one runtime, so moving between
+    // them is not a change of vendor and must not take the model with it.
+    const changed = effectiveKind(next) !== effectiveProvider
     setProvider(next)
-    // A model id is a name ONE vendor knows, so it goes with the runtime it belonged to: keeping
-    // `claude-sonnet-5` across a switch to Cursor would ask Cursor for a Claude model, which is a
-    // turn that fails at the far end for a reason nothing here would explain.
-    setModel('')
-    void setRuntime({ provider: next === '' ? null : next, model: null }, (): void => {
-      setProvider(wasProvider)
-      setModel(wasModel)
-    })
+    if (changed) {
+      // A model id is a name ONE vendor knows, so it goes with the runtime it belonged to: keeping
+      // `claude-sonnet-5` across a switch to Cursor would ask Cursor for a Claude model, which is
+      // a turn that fails at the far end for a reason nothing here would explain.
+      setModel('')
+    }
+    void setRuntime(
+      { provider: next === '' ? null : next, ...(changed ? { model: null } : {}) },
+      (): void => {
+        setProvider(wasProvider)
+        setModel(wasModel)
+      },
+    )
   }
 
   const chooseModel = (next: string): void => {
@@ -462,8 +539,11 @@ export function SupervisorThreadPanel({
   }, [pending, thread])
 
   const addFiles = (chosen: FileList | readonly File[] | null): void => {
-    if (chosen === null) return
-    const added = [...chosen]
+    // Not while a send is out (fix round 1, M4): `send` reads the tray once, so anything added
+    // after it started would be cleared unsent on success. The controls are disabled too; this is
+    // the guard for the drop zone, which a browser will still fire on.
+    if (chosen === null || busy) return
+    const added = [...chosen].map((file): PendingFile => ({ file, stored: null }))
     if (added.length === 0) return
     // NOT capped here, and not checked against the allow-list here: `storeSupervisorUploads` owns
     // both, and it names the file that broke the rule in a sentence this panel shows. A second
@@ -479,18 +559,25 @@ export function SupervisorThreadPanel({
    * `docs/inbox/`, so a message can only ever name a file that is really in the repository — and a
    * refused upload stops here, with the words and the files still on screen, rather than sending a
    * message about a brief nobody can open.
+   *
+   * EACH FILE IS UPLOADED ONCE (fix round 1, M5). An upload WRITES AND COMMITS, so when the upload
+   * lands and the message after it is refused, what the route answered is kept on the tray and the
+   * retry sends only the files that have never been through it. Without that, pressing Send twice
+   * against a halted project would leave two copies of the brief in `docs/inbox/` under two dated
+   * paths, and two commits nobody asked for.
    */
   const send = async (): Promise<void> => {
     const text = draft.trim()
     if (text.length === 0 || busy) return
     setBusy(true)
     setErrorText(null)
-    let attachments: readonly ChatAttachment[] = []
-    if (files.length > 0) {
+    let ready = files
+    const fresh = files.filter((entry) => entry.stored === null)
+    if (fresh.length > 0) {
       const form = new FormData()
       // One field name for every file: the route takes every `File` value in the form whatever the
       // control that produced it called them.
-      for (const file of files) form.append('files', file)
+      for (const entry of fresh) form.append('files', entry.file)
       const stored = await postForm<{ attachments: readonly ChatAttachment[] }>(
         `/api/w/${workspaceId}/supervisor/uploads`,
         form,
@@ -500,8 +587,18 @@ export function SupervisorThreadPanel({
         setErrorText(stored.error)
         return
       }
-      attachments = stored.data.attachments
+      // One attachment per file, in the order they were sent -- the route maps the form's values
+      // straight through. An answer SHORTER than what went up leaves that entry unstored, so it
+      // would be uploaded again rather than sent as a file nobody can name.
+      const answered = new Map<File, ChatAttachment>()
+      fresh.forEach((entry, index) => {
+        const attachment = stored.data.attachments[index]
+        if (attachment !== undefined) answered.set(entry.file, attachment)
+      })
+      ready = files.map((entry) => (entry.stored !== null ? entry : { file: entry.file, stored: answered.get(entry.file) ?? null }))
+      setFiles(ready)
     }
+    const attachments = ready.flatMap((entry) => (entry.stored === null ? [] : [entry.stored]))
     const sent = await postControl(`/api/w/${workspaceId}/supervisor/messages`, {
       text,
       ...(attachments.length === 0 ? {} : { attachments }),
@@ -588,7 +685,10 @@ export function SupervisorThreadPanel({
         * Supervisor call for the project -- decisions and answers to workers as much as this
         * thread -- which is why it sits on the conversation's own chrome rather than in Settings
         * alone: it is the thing a person changes when the answers are not good enough. */}
-      <div className="flex flex-none items-center gap-[6px] px-[16px] pb-[8px] text-[11px] text-t3">
+      {/* `flex-wrap`: the panel is 340 px and the two selects plus a price do not fit on one line
+        * at every width, so the cost drops to a second line instead of squeezing the model field
+        * to nothing. */}
+      <div className="flex flex-none flex-wrap items-center gap-[6px] px-[16px] pb-[8px] text-[11px] text-t3">
         <ProviderSelect
           testId="supervisor-provider"
           ariaLabel="Supervisor runtime"
@@ -599,7 +699,11 @@ export function SupervisorThreadPanel({
           className="rounded-card border border-line2 bg-card px-[6px] py-[3px] text-[11px] text-t1"
         />
         <ModelSelect
-          provider={provider}
+          // The EFFECTIVE runtime (fix round 1, I1): a project on the installation default still
+          // has a model, and `ModelSelect` renders a disabled "choose a provider first" for `''`.
+          // Passing what will really answer lists that runtime's models and leaves the field
+          // editable, so a model set from the CLI is readable and changeable here.
+          provider={effectiveProvider}
           value={model}
           onChange={chooseModel}
           disabled={runtimePending || !runtimeRead}
@@ -766,29 +870,38 @@ export function SupervisorThreadPanel({
           * is attached to the message they are typing. */}
         <div
           data-testid="supervisor-attach"
+          data-dragging={dragging ? 'true' : undefined}
           onDragOver={(event) => {
             // Without this the browser opens the file instead, which navigates away from the
             // conversation somebody was in the middle of writing.
             event.preventDefault()
+            if (!busy) setDragging(true)
           }}
+          onDragLeave={() => setDragging(false)}
           onDrop={(event) => {
             event.preventDefault()
+            setDragging(false)
             addFiles(event.dataTransfer.files)
           }}
-          className="flex flex-col gap-2 rounded-surface border border-line2 bg-card py-2 pl-3 pr-2"
+          className={`flex flex-col gap-2 rounded-surface border bg-card py-2 pl-3 pr-2 ${
+            dragging ? 'border-accent' : 'border-line2'
+          }`}
         >
           {files.length > 0 && (
             <div className="flex flex-wrap gap-[5px]">
-              {files.map((file, index) => (
-                <span key={`${file.name}-${String(index)}`} data-testid="supervisor-attach-chip" className={CHIP_CLASS}>
-                  {file.name} · {formatBytes(file.size)}
+              {files.map((entry, index) => (
+                <span key={`${entry.file.name}-${String(index)}`} data-testid="supervisor-attach-chip" className={CHIP_CLASS}>
+                  {/* The STORED name and size once the upload has answered for this file -- it is
+                    * the same file, and what the repository holds is the honest figure for it. */}
+                  {entry.stored?.name ?? entry.file.name} · {formatBytes(entry.stored?.bytes ?? entry.file.size)}
                   <button
                     type="button"
                     data-testid="supervisor-attach-remove"
-                    aria-label={`Take ${file.name} back off`}
-                    title={`Take ${file.name} back off`}
+                    aria-label={`Take ${entry.file.name} back off`}
+                    title={`Take ${entry.file.name} back off`}
+                    disabled={busy}
                     onClick={() => setFiles((was) => was.filter((_, at) => at !== index))}
-                    className="ml-1 border-0 bg-transparent text-t3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                    className="ml-1 border-0 bg-transparent text-t3 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
                   >
                     ×
                   </button>
@@ -801,6 +914,10 @@ export function SupervisorThreadPanel({
               data-testid="supervisor-request-input"
               rows={2}
               value={draft}
+              // Every control in this box goes down while a send is out (fix round 1, M4): `send`
+              // reads the words and the tray once, so anything typed or attached after it started
+              // would be cleared unsent when it succeeds.
+              disabled={busy}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
                 // Enter sends, Shift+Enter newlines (README "Supervisor panel" → Composer).
@@ -811,7 +928,7 @@ export function SupervisorThreadPanel({
               }}
               placeholder="Ask, instruct, or steer… (Enter to send)"
               aria-label="Message the Supervisor"
-              className="min-h-[40px] flex-1 resize-none border-0 bg-transparent py-[2px] text-[13.5px] leading-[1.45] text-t1 outline-none"
+              className="min-h-[40px] flex-1 resize-none border-0 bg-transparent py-[2px] text-[13.5px] leading-[1.45] text-t1 outline-none disabled:opacity-50"
             />
             {/* The control itself is never shown: a bare file input carries the browser's own
               * wording ("No file chosen") and cannot be styled to look like anything else here. */}
@@ -819,8 +936,10 @@ export function SupervisorThreadPanel({
               ref={fileInput}
               type="file"
               multiple
+              accept={ACCEPT}
               data-testid="supervisor-attach-input"
               aria-label="Files to attach"
+              disabled={busy}
               onChange={(event) => addFiles(event.target.files)}
               className="hidden"
             />
@@ -829,8 +948,9 @@ export function SupervisorThreadPanel({
               data-testid="supervisor-attach-button"
               aria-label="Attach files"
               title="Attach a document or an image"
+              disabled={busy}
               onClick={() => fileInput.current?.click()}
-              className="rounded-card border border-line2 bg-transparent px-2 py-[6px] text-[11.5px] font-medium text-t2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              className="rounded-card border border-line2 bg-transparent px-2 py-[6px] text-[11.5px] font-medium text-t2 disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             >
               Attach
             </button>

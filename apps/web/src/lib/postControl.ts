@@ -80,7 +80,35 @@ export async function postControl(
  * Added here rather than a second `fetch` idiom inside `project/SupervisorRequest.tsx`: this file
  * is the one place this app dials `fetch` for a mutation, and the 401 handling below is exactly
  * why that rule exists.
+ *
+ * That call site is gone twice over now — the widget in M57, and the Supervisor composer's own
+ * goal request in F R2, which sends a MESSAGE. The live caller is `shell/Header.tsx`'s fan-out,
+ * two of whose four buttons answer a report; `postForm` below is the same contract for a body the
+ * browser has to frame itself.
  */
+export async function postJson<T>(
+  url: string,
+  body?: Record<string, unknown>,
+): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+  try {
+    const response =
+      body === undefined
+        ? await fetch(url, { method: 'POST' })
+        : await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          })
+    const data: unknown = await response.json().catch(() => null)
+    if (response.ok) return { ok: true, data: data as T }
+    // The same door every other control surface lands on (M20 §3.4).
+    if (response.status === 401) onUnauthorized()
+    return { ok: false, error: errorMessage(data, response.status) }
+  } catch (cause) {
+    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) }
+  }
+}
+
 /**
  * A POST carrying FILES, whose answer matters (F R6).
  *
@@ -100,29 +128,6 @@ export async function postForm<T>(
 ): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
   try {
     const response = await fetch(url, { method: 'POST', body })
-    const data: unknown = await response.json().catch(() => null)
-    if (response.ok) return { ok: true, data: data as T }
-    // The same door every other control surface lands on (M20 §3.4).
-    if (response.status === 401) onUnauthorized()
-    return { ok: false, error: errorMessage(data, response.status) }
-  } catch (cause) {
-    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) }
-  }
-}
-
-export async function postJson<T>(
-  url: string,
-  body?: Record<string, unknown>,
-): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
-  try {
-    const response =
-      body === undefined
-        ? await fetch(url, { method: 'POST' })
-        : await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          })
     const data: unknown = await response.json().catch(() => null)
     if (response.ok) return { ok: true, data: data as T }
     // The same door every other control surface lands on (M20 §3.4).
