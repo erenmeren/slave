@@ -916,6 +916,34 @@ describe('workspaceStats', () => {
     expect(snapshot.haltedReason).toBe('emergency stop')
     expect(snapshot.spend.runsMeasuredUsd).toBe(1.25)
   })
+
+  // H4b: a missing binary is not a worker failing three times. A run that never reached the model
+  // is left OUT of the streak -- neither a rung of it nor a break in it.
+  it('leaves a run that never reached the model out of the failure streak', async (): Promise<void> => {
+    const fixture = await seed()
+    const slave = await prisma.slave.create({ data: { teamId: fixture.teamId, role: 'backend', runtimeRoles: ['backend'], personId: (await prisma.person.create({ data: { name: 'Alex' } })).id } })
+    const at = (minutesAgo: number): Date => new Date(NOW.getTime() - minutesAgo * 60_000)
+    const run = async (status: 'failed' | 'succeeded', terminalAt: Date, spawnFailed = false): Promise<void> => {
+      await prisma.slaveRun.create({
+        data: { slaveId: slave.id, status, kind: 'implementation', startedAt: terminalAt, terminalAt, spawnFailed },
+      })
+    }
+
+    // Three spawn failures on top of one real one: a streak of one, not four.
+    await run('failed', at(40))
+    await run('failed', at(30), true)
+    await run('failed', at(20), true)
+    await run('failed', at(10), true)
+    expect((await workspaceStats(fixture.workspaceId)).stats.consecutiveFailures).toBe(1)
+
+    // And a spawn failure between two real ones does not break them up either.
+    await prisma.slaveRun.deleteMany({ where: { slaveId: slave.id } })
+    await run('succeeded', at(50))
+    await run('failed', at(40))
+    await run('failed', at(30), true)
+    await run('failed', at(20))
+    expect((await workspaceStats(fixture.workspaceId)).stats.consecutiveFailures).toBe(2)
+  })
 })
 
 describe('workspaceSpend', () => {
@@ -1676,8 +1704,33 @@ describe('loadSupervisorWorld -- the failure facts (E R2/R3)', () => {
       // The whole reason the column is on the fact: a `retry_task` that bundles a grant has to name
       // the worker the grant is for, and a failed task's run is in neither `runs` nor `denials`.
       slaveId: robin,
+      // H4b: the process ran (the row's default), so the reading is the sentence's.
+      spawnFailed: false,
     })
     expect(taskIn(world, taskId)?.retries).toBe(1)
+  })
+
+  // H4b: the fact is read off the RUN, not off the sentence -- a reason no marker matches still
+  // reads as infrastructure when the row says the model was never asked.
+  it('says when the newest failed run never reached the model, off the run row', async (): Promise<void> => {
+    const fixture = await seed()
+    const alex = await worker(fixture, 'Alex')
+    const taskId = await makeTask(fixture, { title: 'the audit', status: 'blocked' })
+    const run = await prisma.slaveRun.create({
+      data: { taskId, slaveId: alex, kind: 'implementation', status: 'failed', spawnFailed: true },
+    })
+    await appendEvent({
+      type: 'run.failed',
+      workspaceId: fixture.workspaceId,
+      taskId,
+      slaveId: alex,
+      runId: run.id,
+      actor: 'system',
+      payload: { reason: 'the runtime for this seat is not installed here', phase: 'spawn' },
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+    expect(taskIn(world, taskId)?.latestFailure).toMatchObject({ runKind: 'implementation', spawnFailed: true })
   })
 
   it('carries the distinct capabilities the task has been refused across ALL its runs, including ended ones', async (): Promise<void> => {
@@ -1772,13 +1825,18 @@ describe('loadSupervisorWorld -- the planning facts (H4a)', () => {
   beforeEach(reset)
 
   /** A planning run of this workspace, which needs a seat to hang off. */
-  async function planningRun(fixture: Fixture, status: 'working' | 'failed' | 'succeeded', startedAt?: Date): Promise<string> {
+  async function planningRun(
+    fixture: Fixture,
+    status: 'working' | 'failed' | 'succeeded',
+    startedAt?: Date,
+    spawnFailed = false,
+  ): Promise<string> {
     const person = await prisma.person.create({ data: { name: `Planner ${String(Math.random()).slice(2)}` } })
     const slave = await prisma.slave.create({
       data: { teamId: fixture.teamId, role: 'Team Lead', runtimeRoles: ['manager'], personId: person.id },
     })
     const run = await prisma.slaveRun.create({
-      data: { slaveId: slave.id, kind: 'planning', status, ...(startedAt === undefined ? {} : { startedAt }) },
+      data: { slaveId: slave.id, kind: 'planning', status, spawnFailed, ...(startedAt === undefined ? {} : { startedAt }) },
     })
     return run.id
   }
@@ -1835,6 +1893,23 @@ describe('loadSupervisorWorld -- the planning facts (H4a)', () => {
 
     const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
     expect(world.planningFailuresSinceGoal).toBe(2)
+  })
+
+  // H4b: the incident's own rows. Two runs that failed before the model was ever asked are not
+  // two failures of the planner, and the cap they used to spend is untouched.
+  it('leaves a planning run that never reached the model out of the count', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship it', goalVersion: 1 })
+    await eventAt(fixture, 'workspace.goal_set', { goal: 'Ship it', version: 1 }, ago(3 * 3_600_000))
+    await planningRun(fixture, 'failed', ago(2 * 3_600_000), true)
+    await planningRun(fixture, 'failed', ago(2 * 3_600_000), true)
+    await planningRun(fixture, 'failed', ago(3_600_000))
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.planningFailuresSinceGoal).toBe(1)
+    // With a runtime in place, one real failure under a cap of two is not a stall at all.
+    await prisma.providerConfiguration.create({ data: { workspaceId: fixture.workspaceId, kind: 'claude_code', settings: {} } })
+    const { world: withRuntime } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(observe(withRuntime).some((situation) => situation.kind === 'planning_stalled')).toBe(false)
   })
 
   // The remedy would be spent the instant it was applied if the count did not move with it.

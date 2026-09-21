@@ -41,6 +41,7 @@ import {
 import { evidenceForProfiles } from './evidence.js'
 import { staleCandidateCount } from './memory.js'
 import { stillPendingQuestion, waitingSenderRunIds } from './messaging.js'
+import { planningCountSince } from './planningCount.js'
 import { workspaceDefaultProvider } from './runtime.js'
 import { workspaceStats, type WorkspaceStatsSnapshot } from './stats.js'
 
@@ -429,9 +430,11 @@ async function loadLatestGuardrails(
  * happened in. Bounded to the caller's task ids, which is what makes it an index probe on
  * `(workspaceId, taskId, seq)` rather than a scan of every event the project has written.
  *
- * JOINED to `SlaveRun` for one column, `kind`: the Supervisor's reading of a failure turns on
+ * JOINED to `SlaveRun` for two columns. `kind`: the Supervisor's reading of a failure turns on
  * whether a REVIEW broke or the work did (a broken reviewer is retried, broken work is reworked),
- * and the event does not carry it. The join is also the bound that drops a `run.failed` with no run
+ * and the event does not carry it. `spawnFailed` (H4b): whether the run's process ever started,
+ * which makes the `infrastructure` reading a fact off the row rather than a match on the sentence.
+ * The join is also the bound that drops a `run.failed` with no run
  * behind it -- there is none the pipeline writes, and a row that cannot say which kind of run it
  * was is a fact the domain could not act on. The `RunKind` enum has exactly the three members
  * `TaskFailure.runKind` names, which is what makes the cast below a projection rather than a guess
@@ -457,6 +460,7 @@ async function loadLatestFailures(
       readonly runKind: string | null
       readonly ts: Date
       readonly slaveId: string | null
+      readonly spawnFailed: boolean
     }[]
   >`
     SELECT DISTINCT ON (e."taskId")
@@ -464,7 +468,8 @@ async function loadLatestFailures(
            e.payload->>'reason' AS reason,
            r.kind::text AS "runKind",
            e.ts AS ts,
-           e."slaveId" AS "slaveId"
+           e."slaveId" AS "slaveId",
+           r."spawnFailed" AS "spawnFailed"
     FROM "ExecutionEvent" e
     JOIN "SlaveRun" r ON r.id = e."runId"
     WHERE e."workspaceId" = ${workspaceId}
@@ -484,6 +489,9 @@ async function loadLatestFailures(
                 reason: row.reason,
                 at: row.ts.getTime(),
                 slaveId: row.slaveId,
+                // H4b: off the same joined row as `kind` -- the run says whether its process ever
+                // started, and the reading `infrastructure` is then a fact rather than a match.
+                spawnFailed: row.spawnFailed,
               },
             ] as const,
           ],
@@ -805,26 +813,6 @@ function runbookOf(row: {
   }
 }
 
-/**
- * How far back H4a's one planning-event read scans.
- *
- * `workspace.goal_set` and `workspace.planning_reset` are both workspace-LIFETIME events -- one per
- * goal edit, one per reset -- so the rows that can name the current version are by construction the
- * newest few, while an unbounded scan would grow with the project's whole history and be paid on
- * every tick of every unplanned project. `replanIntent`'s `RECENT_EVENTS` is the same number for
- * the same reason, and the two are deliberately not shared: they bound different reads in different
- * packages and either may move without the other.
- */
-const PLANNING_EVENTS_SCANNED = 20
-
-/** The `version` off a `workspace.planning_reset` payload, or null for a row that names none. The
- *  payload is a `Json` column and a hand-edited one must not throw a whole world load away. */
-function versionOf(payload: unknown): number | null {
-  if (payload === null || typeof payload !== 'object') return null
-  const version = (payload as Record<string, unknown>)['version']
-  return typeof version === 'number' ? version : null
-}
-
 /** A bound, for `CATALOG_ENTRIES_MAX`'s reason: one catalog import translates a persona runbook per
  *  persona, and a Supervisor world is built once a tick. Key ascending, so the same rows come back
  *  in the same order and `recommendRunbooks` is still deterministic when the bound bites. */
@@ -1100,46 +1088,18 @@ export async function loadSupervisorWorld(
       // and asked on `tx` so it is part of the same snapshot as everything beside it.
       const runtimeConfigured = couldBeStalled ? (await workspaceDefaultProvider(workspaceId, tx)) !== null : true
 
-      // The two event-derived facts, from ONE bounded read: the newest `workspace.goal_set` and
-      // `workspace.planning_reset` rows. Both are workspace-LIFETIME events (one per goal edit, one
-      // per reset), so the ones that can name the current version are by construction the last
-      // written -- `replanIntent`'s own `RECENT_EVENTS` argument, and its own bound.
-      const planningEvents = couldBeStalled
-        ? await tx.executionEvent.findMany({
-            where: { workspaceId, type: { in: ['workspace_goal_set', 'workspace_planning_reset'] } },
-            orderBy: { seq: 'desc' },
-            take: PLANNING_EVENTS_SCANNED,
-            select: { type: true, ts: true, payload: true },
-          })
-        : []
-      // Since the goal was last set OR last reset, whichever is LATER -- `dispatchPlanning`'s own
-      // anchor, widened by the reset the Supervisor's `retry_planning` writes. A project whose goal
-      // was hand-seeded has neither event and counts from the epoch, exactly as the tick does.
-      //
-      // The max by `ts`, not the newest by `seq`: the two agree on every row this product appends,
-      // and "whichever is later" is a claim about TIME, which is the column the run count is then
-      // compared against.
-      const planningSince = new Date(
-        planningEvents.reduce((latest, row) => Math.max(latest, row.ts.getTime()), 0),
-      )
-      // How many times THIS version's cap has already been given back. Read off the payload in JS,
-      // not in the query: `payload.path` on a JSON number is a subtlety `replanIntent` deliberately
-      // does not depend on either.
-      const planningResetsThisVersion = planningEvents.filter(
-        (row) =>
-          row.type === 'workspace_planning_reset' &&
-          versionOf(row.payload) === workspace.goalVersion,
-      ).length
-      const planningFailuresSinceGoal = couldBeStalled
-        ? await tx.slaveRun.count({
-            where: {
-              kind: 'planning',
-              status: 'failed',
-              startedAt: { gt: planningSince },
-              slave: { team: { workspaceId } },
-            },
-          })
-        : 0
+      // The two event-derived facts and the failure count, from `planningCountSince` (H4b): THE
+      // reading `dispatchPlanning` stops at, asked on `tx` so it is part of this snapshot. Since
+      // the goal was last set OR last reset, whichever is LATER -- the reset the Supervisor's
+      // `retry_planning` writes is what gives a spent cap back -- and excluding every run that
+      // never reached the model, which is infrastructure and spends nothing. One function for the
+      // tick and the loader, so the cap the tick enforces and the cap the Supervisor announces
+      // cannot be two numbers.
+      const planningCount = couldBeStalled
+        ? await planningCountSince(workspaceId, workspace.goalVersion, { tx })
+        : { since: new Date(0), failures: 0, resetsOfVersion: 0 }
+      const planningResetsThisVersion = planningCount.resetsOfVersion
+      const planningFailuresSinceGoal = planningCount.failures
 
       // M48 R5. The ADOPTED runbook is read whenever the column is set -- `observe`'s escalation
       // sentence, the panel and `verify` all read the same row. The CATALOGUE is read only when a

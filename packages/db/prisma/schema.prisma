@@ -1268,6 +1268,18 @@ model SlaveRun {
   /// meets a `permissions.json` whose `tokenHash` it cannot match and is refused every tool call,
   /// which is the correct failure for an unidentifiable worker.
   runTokenHash      String?       @unique
+  /// H4b: this run FAILED BEFORE THE MODEL WAS EVER ASKED -- the runtime could not be resolved
+  /// (no `ProviderConfiguration`, a chain naming a model with no provider), the adapter refused
+  /// the pairing, or the spawn itself threw (a missing binary, a worktree that is not there). Set
+  /// by the three dispatch catches (`startRun`, `dispatchReview`, `dispatchPlanning`) exactly when
+  /// no `RunHandle` was ever returned; false for a run whose process started, however it ended.
+  ///
+  /// What it is FOR: a failure like this spends nothing. It does not count against the planning
+  /// retry cap (`planningCountSince`), it does not join the circuit breaker's streak
+  /// (`workspaceStats`), and the Supervisor reads it as `infrastructure`. On 2026-09-21 two
+  /// planning runs failed in the same second at spawn and spent the whole cap, and nothing could
+  /// re-plan -- an installation problem read as a planner that cannot plan.
+  spawnFailed       Boolean       @default(false)
   pid               Int?
   worktreePath      String?
   startedAt         DateTime      @default(now())

@@ -256,7 +256,16 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     // zero. A provider that does not report cost produces a `null` here, not a `0`.
     payload: z.object({ numTurns: z.number().int(), costUsd: z.number().nullable() }),
   }),
-  z.object({ ...envelope, type: z.literal('run.failed'), payload: z.object({ reason: z.string() }) }),
+  // H4b: `phase: 'spawn'` marks a run that failed BEFORE the model was ever asked -- the runtime
+  // could not be resolved, the adapter refused the pairing, or the spawn itself threw. Written by
+  // the three dispatch catches beside `SlaveRun.spawnFailed`, and optional for the same
+  // back-compat reason as every optional payload field here: every `run.failed` row before H4b
+  // carries no phase, and a reader treats its absence as "the process ran".
+  z.object({
+    ...envelope,
+    type: z.literal('run.failed'),
+    payload: z.object({ reason: z.string(), phase: z.literal('spawn').optional() }),
+  }),
   z.object({
     ...envelope,
     type: z.literal('task.dependency_added'),

@@ -1,0 +1,14 @@
+-- H4b, infrastructure failures spend nothing (2026-09-21).
+--
+-- ONE column and nothing else. PURELY ADDITIVE, with a default: every existing row reads back
+-- `false`, which is the honest reading of a run recorded before this column existed -- nothing can
+-- say after the fact whether its process ever started, and a failure that counted yesterday keeps
+-- counting today.
+--
+-- `true` marks a run that FAILED BEFORE THE MODEL WAS EVER ASKED: the runtime could not be
+-- resolved (no `ProviderConfiguration`), the adapter refused the pairing, or the spawn itself threw.
+-- Written by the three dispatch catches (`startRun`, `dispatchReview`, `dispatchPlanning`) exactly
+-- when no run handle was ever returned. Such a run spends nothing: not a planning retry
+-- (`planningCountSince`), not a rung of the circuit breaker's streak (`workspaceStats`). On
+-- 2026-09-21 two planning runs failed in the same second at spawn and spent the whole planning cap.
+ALTER TABLE "SlaveRun" ADD COLUMN "spawnFailed" BOOLEAN NOT NULL DEFAULT false;

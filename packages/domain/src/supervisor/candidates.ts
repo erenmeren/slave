@@ -81,6 +81,9 @@ function readTaskFailure(task: SupervisorTask): FailureDiagnosis {
     // planned before it existed.
     requiredPermissions: [],
     requiredRole: task.requiredRole,
+    // H4b: off the row, so a spawn that never happened reads as infrastructure even when its
+    // reason line names nothing the regular expression knows.
+    spawnFailed: task.latestFailure?.spawnFailed ?? false,
   })
 }
 

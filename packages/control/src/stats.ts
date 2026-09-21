@@ -163,6 +163,13 @@ export async function workspaceStats(
   // The same `COALESCE` sort key the ORDER BY uses, for the same reason: a run's position in the
   // streak is when it CONCLUDED, and `startedAt` stands in for rows written before the pump
   // populated `terminalAt`.
+  //
+  // H4b: a run that never reached the model (`spawnFailed` -- no runtime, an adapter refusal, a
+  // spawn that threw) is left OUT of the window rather than counted as a failure or read as a
+  // break. A missing binary is not a worker failing three times, and the halt this streak raises
+  // would then stop a project for an installation problem the Supervisor's `planning_stalled` is
+  // the remedy for. Left out, not a break: three real failures with a spawn failure between them
+  // are still three real failures in a row.
   const concludedRuns = await client.$queryRaw<{ readonly status: RunStatus }[]>`
     SELECT r.status::text AS status
     FROM "SlaveRun" r
@@ -170,6 +177,7 @@ export async function workspaceStats(
     JOIN "Team" tm ON tm.id = a."teamId"
     WHERE tm."workspaceId" = ${workspaceId}
       AND r.status::text = ANY(${[...CONCLUDED_RUN_STATUSES]}::text[])
+      AND NOT r."spawnFailed"
       AND (
         ${workspace.haltClearedAt}::timestamp IS NULL
         OR COALESCE(r."terminalAt", r."startedAt") > ${workspace.haltClearedAt}::timestamp

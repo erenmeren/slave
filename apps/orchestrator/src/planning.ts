@@ -17,6 +17,7 @@ import {
   admitProvider,
   amendRunOutcome,
   listCapabilities,
+  planningCountSince,
   readRunbookById,
   refusalText,
   runbookForWorkspace,
@@ -494,27 +495,22 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   })
   if (livePlanning > 0) return null
 
-  // 4. Retry cap (spec Decision 8). Counted since the goal was last (re)set -- a hand-seeded goal
-  // with no `workspace.goal_set` event counts from the epoch, so every planning run against it
-  // counts. Silent at the cap: the two `run.failed` events already written are the escalation.
+  // 4. Retry cap (spec Decision 8). Counted since the goal was last (re)set OR since the
+  // Supervisor's `retry_planning` last gave the cap back (`workspace.planning_reset`), whichever is
+  // later -- a hand-seeded goal with neither event counts from the epoch, so every planning run
+  // against it counts. `planningCountSince` (H4b) is THE reading: the same function the Supervisor's
+  // world loader raises `planning_stalled/cap_spent` from, so the number the tick stops at and the
+  // number the Supervisor announces cannot drift apart -- and it leaves out every run that never
+  // reached the model (`spawnFailed`), which is the installation failing, not the planner, and
+  // spends nothing. Silent at the cap: the `run.failed` events already written are the
+  // escalation, and the Supervisor's situation is the remedy.
   // The FIRST-plan path only: a re-plan counts its own failures since its own version's
-  // `goal_set`, inside `replanIntent`, because "since the latest goal_set" would let a further
-  // goal edit reset a cap the version being re-planned had already spent.
+  // `goal_set` and its own version's resets, inside `replanIntent`, because "since the latest
+  // goal_set" would let a further goal edit reset a cap the version being re-planned had already
+  // spent.
   if (replan === null) {
-    const latestGoalSet = await prisma.executionEvent.findFirst({
-      where: { workspaceId: deps.workspaceId, type: 'workspace_goal_set' },
-      orderBy: { seq: 'desc' },
-    })
-    const since = latestGoalSet?.ts ?? new Date(0)
-    const failedSinceGoal = await prisma.slaveRun.count({
-      where: {
-        kind: 'planning',
-        status: 'failed',
-        startedAt: { gt: since },
-        slave: { team: { workspaceId: deps.workspaceId } },
-      },
-    })
-    if (failedSinceGoal >= PLANNING_RETRY_CAP) return null
+    const { failures } = await planningCountSince(deps.workspaceId, workspace.goalVersion)
+    if (failures >= PLANNING_RETRY_CAP) return null
   }
 
   // 5. Staffing. `'manager' ∈ runtimeRoles` (M37 §5) -- the same convention `dispatchReview` uses
@@ -774,10 +770,17 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       (cancelError === null
         ? ''
         : ` -- AND THE CANCEL FAILED (${String(cancelError)}): the process may still be running.`)
+    // H4b: no handle means the model was never asked -- the runtime could not be resolved, the
+    // adapter refused the pairing, the context could not be built, or the spawn itself threw.
+    // Such a run spends nothing: `planningCountSince` leaves it out of the retry cap and the
+    // breaker leaves it out of its streak, so the remedy is the Supervisor's `planning_stalled`
+    // (a runtime, a planner) rather than a cap a person has to give back. A run whose process DID
+    // start and then failed on the way to its pump is a real attempt, however short.
+    const spawnFailed = handle === null
     const now = new Date()
     await prisma.slaveRun.update({
       where: { id: run.id },
-      data: { status: 'failed', terminalAt: now, endedAt: now },
+      data: { status: 'failed', terminalAt: now, endedAt: now, spawnFailed },
     })
     await appendEvent({
       type: 'run.failed',
@@ -785,7 +788,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
       slaveId: manager.id,
       runId: run.id,
       actor: 'system',
-      payload: { reason },
+      payload: { reason, ...(spawnFailed ? { phase: 'spawn' as const } : {}) },
     })
     return null
   }

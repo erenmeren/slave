@@ -18,6 +18,7 @@ import {
   dependsTransitivelyOn,
   listCapabilities,
   loadSupervisorWorld,
+  planningCountSince,
   readRunbookById,
   recordDecision,
   refusalText,
@@ -126,16 +127,17 @@ export interface ReplanVerdict {
  *    got. A FAILED one is not -- it produced nothing -- so it falls through to the cap below,
  *    which is the thing that eventually stops retrying.
  * 3. **The retries for this version are spent.** `PLANNING_RETRY_CAP` failures since THIS
- *    version's `workspace.goal_set`, exactly as the first-plan path counts since the latest one.
- *    Silent at the cap, also exactly as the first-plan path is (`dispatchPlanning`'s check 4): the
- *    `run.failed` events already written are the escalation, and inventing a `guardrail.tripped`
- *    here would make a re-plan louder than the first plan whose failure leaves a workspace with no
- *    board at all.
+ *    version's `workspace.goal_set` or its `workspace.planning_reset`, whichever is later (H4b's
+ *    `planningCountSince`, the one reading the first-plan path and the Supervisor share; a run
+ *    that never reached the model is left out). Silent at the cap, also exactly as the first-plan
+ *    path is (`dispatchPlanning`'s check 4): the `run.failed` events already written are the
+ *    escalation, and inventing a `guardrail.tripped` here would make a re-plan louder than the
+ *    first plan whose failure leaves a workspace with no board at all.
  *
- * Both event reads filter in JS rather than in the query, over the newest {@link RECENT_EVENTS}
- * rows: these are workspace-lifetime events (one per goal edit, one per re-plan), the ones that can
- * name the CURRENT version are by construction the last ones written, and a `payload.path` filter
- * on a JSON NUMBER is a subtlety this does not need to depend on.
+ * The `replan_started` read filters in JS rather than in the query, over the newest
+ * {@link RECENT_EVENTS} rows: these are workspace-lifetime events (one per re-plan), the ones that
+ * can name the CURRENT version are by construction the last ones written, and a `payload.path`
+ * filter on a JSON NUMBER is a subtlety this does not need to depend on.
  *
  * M40 t4: the three questions are answered by {@link replanVerdict} and read off it here, so the
  * tick and `replan-status` cannot drift into two ideas of when a re-plan fires.
@@ -170,10 +172,11 @@ function boardVersionOf(tasks: readonly { readonly goalVersion: number | null }[
   return tasks.reduce((highest, task) => Math.max(highest, task.goalVersion ?? 0), 0)
 }
 
-/** How far back the two workspace-lifetime event scans read. Both are looking for the row that
- *  names the CURRENT goal version, and both event types are written in version order, so the row
- *  they want is among the newest few or is not there at all -- while an unbounded scan grows with
- *  the workspace's whole life and was being paid on every tick (final review, Important 2). */
+/** How far back the `replan_started` scan reads. It is looking for the row that names the CURRENT
+ *  goal version, and the event is written in version order, so the row it wants is among the
+ *  newest few or is not there at all -- while an unbounded scan grows with the workspace's whole
+ *  life and was being paid on every tick (final review, Important 2). `planningCountSince` bounds
+ *  its own goal/reset read the same way, for the same reason. */
 const RECENT_EVENTS = 20
 
 /** {@link ReplanVerdict}, computed. Every fact is read even once an earlier one has already
@@ -221,27 +224,15 @@ export async function replanVerdict(
       where: { id: { in: startedRunIds }, status: { in: [...NON_TERMINAL_RUN_STATUSES, 'succeeded'] } },
     })) > 0
 
-  // 3. The cap, counted since this version was set. A version with no `workspace.goal_set` event
-  // (a stamp written by something other than `setGoal`) counts from the epoch, so every planning
-  // failure the workspace ever had counts -- the same conservative reading the first-plan path
-  // gives a hand-seeded goal.
-  const goalSet = (
-    await prisma.executionEvent.findMany({
-      where: { workspaceId, type: 'workspace_goal_set' },
-      orderBy: { seq: 'desc' },
-      take: RECENT_EVENTS,
-      select: { ts: true, payload: true },
-    })
-  ).find((event) => (event.payload as { version?: unknown }).version === goalVersion)
-  const since = goalSet?.ts ?? new Date(0)
-  const failedAttempts = await prisma.slaveRun.count({
-    where: {
-      kind: 'planning',
-      status: 'failed',
-      startedAt: { gt: since },
-      slave: { team: { workspaceId } },
-    },
-  })
+  // 3. The cap, counted since this version was set OR since the Supervisor's `retry_planning`
+  // last gave this version's cap back (`workspace.planning_reset`), whichever is later -- H4b's
+  // `planningCountSince`, the same reading the first-plan path and the Supervisor's world loader
+  // make, anchored on THIS version (`this_version`) rather than the latest goal edit. A version
+  // with no `workspace.goal_set` event (a stamp written by something other than `setGoal`) counts
+  // from the epoch, so every planning failure the workspace ever had counts -- the same
+  // conservative reading the first-plan path gives a hand-seeded goal. A run that never reached
+  // the model is left out: it spent nothing.
+  const { failures: failedAttempts } = await planningCountSince(workspaceId, goalVersion, { anchor: 'this_version' })
 
   // `dispatchPlanning`'s own check 3, which is NOT part of the intent: a live planning run makes
   // the tick wait, and the version keeps its claim on a re-plan until one actually starts.
