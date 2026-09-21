@@ -432,10 +432,27 @@ describe('fake-claude', () => {
       )
       const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
       expect(result?.result).toContain('"replaces":"task-to-redo"')
-      expect(result?.result).toContain('"dependsOn":["task-to-redo"]')
+      // The two optional placeholders are REMOVED, comma and all, when their flags are absent.
+      expect(result?.result).toContain('"dependsOn":["task-to-redo"],"replaces"')
+      expect(result?.result).toContain('"cancel":[]')
       expect(result?.result).not.toContain('$REPLACES_ID')
+      expect(result?.result).not.toContain('$DEPENDS_ID')
+      expect(result?.result).not.toContain('$CANCEL_ID')
+      // The second addition waits on the first by KEY and on the replaced task by id.
+      expect(result?.result).toContain('"dependsOn":["rerun","task-to-redo"]')
       // It is the OTHER delta: the cancel fixture's addition is not in it.
       expect(result?.result).not.toContain(ADDED)
+    })
+
+    it('fills the REPLACES delta\'s other two placeholders from --replan-depends and --replan-cancel (H5 fix round 1)', async (): Promise<void> => {
+      const { stdout } = await run(
+        'node',
+        [FAKE, '--replan-replaces', 'r', '--replan-depends', 'd', '--replan-cancel', 'r', '--fixture', 'm8-flow', '-p', PROMPT],
+        { cwd: repoDir },
+      )
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"dependsOn":["r","d"],"replaces":"r"')
+      expect(result?.result).toContain('"cancel":["r"]')
     })
 
     it('falls back to the cancel delta when --replan-replaces has another flag where its id belongs', async (): Promise<void> => {

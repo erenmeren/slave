@@ -1,6 +1,6 @@
 import {
+  CANCELLABLE_STATUSES,
   NON_TERMINAL_RUN_STATUSES,
-  TERMINAL,
   applyCancelPolicy,
   candidates,
   chooseAssignee,
@@ -15,6 +15,7 @@ import {
 } from '@slave-of-ai/domain'
 import {
   amendRunOutcome,
+  dependsTransitivelyOn,
   listCapabilities,
   loadSupervisorWorld,
   readRunbookById,
@@ -484,7 +485,9 @@ export async function concludeReplan(runId: RunId): Promise<void> {
       // the model asked for and did not get is on the record rather than silently forgotten.
       droppedCancellations: policy.dropped.map((entry) => ({ taskId: entry.taskId, status: entry.status })),
       // ...and the ones that were allowed but did not happen anyway (fix round 1). The three lists
-      // together account for every id the model asked to cancel.
+      // together account for every id the model asked to cancel -- and `proposedCancellations`
+      // may carry one more kind of id the model did NOT ask for: a task an addition `replaces`
+      // (H5), proposed on that account alone, with the replacement named on its decision row.
       failedProposals: proposals.failed,
       // E14: the keys the table does not have, dropped from the tasks that named them. Absent when
       // there were none, exactly as on `workspace.plan_created`.
@@ -802,6 +805,29 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
           })
         }
       }
+      // Fix round 1, I1: a re-point can close a LOOP. A board where D waits on the replaced task,
+      // and a delta whose replacement waits on D, becomes `D -> new -> D` the moment D's edge is
+      // moved -- a cycle `validateDelta` cannot see (it checks plan-local keys, and D is a board
+      // row) and one `dependenciesDone` would evaluate as false for both forever, with nothing in
+      // the log to say why. Every edge the re-point writes points INTO a replacement, so every
+      // cycle it can create passes through one and leaves it by one of its own outgoing edges;
+      // each of those is asked the same question `addTaskDependency` asks before it writes an
+      // edge -- against THIS transaction's graph, which is the one about to commit, and after
+      // EVERY re-point, since two replacements can close one loop between them. A throw here
+      // rolls the whole delta back and reaches `failRun` as `ok: false`, the shape every other
+      // pre-commit failure takes.
+      for (const task of added) {
+        if (task.replaces === null) continue
+        const outgoing = await tx.taskDependency.findMany({ where: { taskId: task.id } })
+        for (const edge of outgoing) {
+          if (await dependsTransitivelyOn(tx, edge.dependsOnTaskId, task.id)) {
+            throw new Error(
+              `added task "${task.title}" (${task.id}) replaces ${task.replaces} and waits on ` +
+                `${edge.dependsOnTaskId}, which now waits on it: the re-point would close a dependency cycle`,
+            )
+          }
+        }
+      }
       return added
     })
 
@@ -832,11 +858,14 @@ interface CancellationRequest {
 /**
  * H5: the replaced tasks that are worth proposing a cancellation for.
  *
- * Two exclusions, and both are about not asking a person a question that has already been
- * answered. A `failed` or `cancelled` task is already off the board's critical path -- with its
- * dependents re-pointed it is simply history, and a proposal to cancel a failed task is noise. And
- * a task the delta ALSO named in `cancel` already has a proposal coming from `applyCancelPolicy`;
- * a second one for the same subject would be a duplicate decision row for one task.
+ * Two exclusions, and both are about not asking a person a question nobody can act on. The
+ * status rule is the POSITIVE one `applyCancelPolicy` applies and `cancelTask` enforces --
+ * `CANCELLABLE_STATUSES`, one list read in all three places (fix round 1, I2): a replaced `failed`
+ * or `cancelled` task is history once its dependents have moved, and a replaced `rework` task,
+ * though it may be replaced, is one the verb would refuse to cancel, so a proposal for it would be
+ * a decision row a person could only fail to apply. And a task the delta ALSO named in `cancel`
+ * already has a proposal coming from `applyCancelPolicy`; a second one for the same subject would
+ * be a duplicate decision row for one task.
  */
 function replacedCancellations(
   applied: Extract<AppliedDelta, { ok: true }>,
@@ -847,7 +876,7 @@ function replacedCancellations(
   for (const task of applied.created) {
     if (task.replaces === null || alreadyAsked.includes(task.replaces)) continue
     const replaced = byId.get(task.replaces)
-    if (replaced === undefined || TERMINAL.includes(replaced.status)) continue
+    if (replaced === undefined || !CANCELLABLE_STATUSES.includes(replaced.status)) continue
     requests.push({ taskId: task.replaces, replacedBy: { id: task.id, title: task.title } })
   }
   return requests

@@ -1,4 +1,4 @@
-import { prisma } from '@slave-of-ai/db/client'
+import { prisma, type Prisma } from '@slave-of-ai/db/client'
 import { type Result, err, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
@@ -22,6 +22,37 @@ import type { ControlRefusal } from './refusal.js'
  */
 const ADD_DEPENDENCY_TIMEOUT_MS = 5_000
 const ADD_DEPENDENCY_MAX_WAIT_MS = 2_000
+
+/**
+ * Does `taskId` wait, directly or through any chain of tasks, on `targetId`?
+ *
+ * Reachability from `taskId` outward, following existing `taskId -> dependsOnTaskId` edges, as one
+ * recursive query against the graph AS THE CALLER'S TRANSACTION SEES IT -- which is the whole
+ * reason it takes a `tx`: a cycle check that read through the process-wide client would not see
+ * the rows the transaction around it has just written, and would answer for a graph that is not
+ * the one about to commit.
+ *
+ * Shared (H5 fix round 1) between {@link addTaskDependency}, which asks it about the edge it is
+ * about to add, and the orchestrator's re-plan, which re-points edges at a task that redoes
+ * another's work and must refuse the delta when one of them closes a loop through it. Asked with
+ * `taskId === targetId` it answers "is this task on a cycle", since the seed row is the task's
+ * own dependencies and the walk only returns to it through a loop.
+ */
+export async function dependsTransitivelyOn(
+  tx: Prisma.TransactionClient,
+  taskId: string,
+  targetId: string,
+): Promise<boolean> {
+  const reach = await tx.$queryRaw<{ id: string }[]>`
+    WITH RECURSIVE reach(id) AS (
+      SELECT "dependsOnTaskId" FROM "TaskDependency" WHERE "taskId" = ${taskId}
+      UNION
+      SELECT td."dependsOnTaskId" FROM "TaskDependency" td JOIN reach r ON td."taskId" = r.id
+    )
+    SELECT id FROM reach WHERE id = ${targetId} LIMIT 1
+  `
+  return reach.length > 0
+}
 
 export async function addTaskDependency(
   taskId: string,
@@ -81,20 +112,10 @@ export async function addTaskDependency(
         }
       }
 
-      // Reachability from `dependsOnTaskId` outward, following existing `taskId -> dependsOnTaskId`
-      // edges. If `taskId` is reachable, adding this edge would close a cycle: something
-      // `dependsOnTaskId` already (transitively) depends on is `taskId` itself. The seed row alone
-      // already covers the direct 2-cycle (dependsOnTaskId depends directly on taskId) -- no
-      // separate check needed; see the "direct 2-cycle" test.
-      const reach = await tx.$queryRaw<{ id: string }[]>`
-        WITH RECURSIVE reach(id) AS (
-          SELECT "dependsOnTaskId" FROM "TaskDependency" WHERE "taskId" = ${dependsOnTaskId}
-          UNION
-          SELECT td."dependsOnTaskId" FROM "TaskDependency" td JOIN reach r ON td."taskId" = r.id
-        )
-        SELECT id FROM reach WHERE id = ${taskId} LIMIT 1
-      `
-      if (reach.length > 0) {
+      // If `dependsOnTaskId` already (transitively) depends on `taskId`, adding this edge would
+      // close a cycle. The seed row alone already covers the direct 2-cycle (dependsOnTaskId
+      // depends directly on taskId) -- no separate check needed; see the "direct 2-cycle" test.
+      if (await dependsTransitivelyOn(tx, dependsOnTaskId, taskId)) {
         return {
           ok: false as const,
           error: { kind: 'dependency_cycle', taskId, dependsOnTaskId } as ControlRefusal,

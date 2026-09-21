@@ -1,5 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { type Result, err, ok } from '@slave-of-ai/domain'
+import { CANCELLABLE_STATUSES, type Result, err, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
@@ -120,7 +120,9 @@ export async function cancelTask(
     if (task.activeRunId !== null) {
       return { ok: false as const, error: { kind: 'task_run_active', taskId, runId: task.activeRunId } as ControlRefusal }
     }
-    if (task.status !== 'backlog' && task.status !== 'ready' && task.status !== 'blocked') {
+    // The domain's own list (H5 fix round 1): `applyCancelPolicy` proposes for exactly these and a
+    // replaced task is proposed for exactly these, so what is proposed can always be applied.
+    if (!CANCELLABLE_STATUSES.includes(task.status)) {
       return {
         ok: false as const,
         error: { kind: 'task_not_cancellable', taskId, status: task.status } as ControlRefusal,

@@ -26,8 +26,10 @@ const REAL_GATE = join(repoRoot, 'scripts/pause-gate.sh')
 
 const V1 = 'Ship the checkout redesign'
 const V2 = 'Ship the checkout redesign, with the market research it was priced on'
-/** The title `fixtures/replan-replaces.ndjson` gives its one addition. */
+/** The titles `fixtures/replan-replaces.ndjson` gives its two additions: the one that REPLACES the
+ *  board task, and the one that waits on both that addition (by key) and the replaced task (by id). */
 const RERUN = 'Competitive and market research (bounded rerun)'
+const REVISION = 'Revise the positioning on the rerun'
 
 function git(args: readonly string[], cwd: string): string {
   return execFileSync('git', [...args], { cwd, encoding: 'utf8' }).trim()
@@ -72,15 +74,30 @@ function singleAdapterRegistry(adapter: ClaudeCodeAdapter): AdapterRegistry {
   return { resolve: () => adapter }
 }
 
+/** What the delta under test says beyond `replaces`: one more board task the replacement waits on
+ *  (fix round 1, I1 -- the shape that can close a cycle), and a task it also cancels outright. */
+interface DeltaShape {
+  readonly dependsOn?: string
+  readonly cancel?: string
+}
+
 /** `deps` for the re-plan under test: the fake CLI's re-plan arm replays the REPLACES delta when
  *  `--replan-replaces <id>` names a row, which no static fixture can know (erratum E3/E6). */
-function depsForReplan(workspaceId: string, replacesTaskId: string): TickDeps {
+function depsForReplan(workspaceId: string, replacesTaskId: string, shape: DeltaShape = {}): TickDeps {
   return {
     workspaceId: brandWorkspaceId(workspaceId),
     registry: singleAdapterRegistry(
       new ClaudeCodeAdapter({
         command: 'node',
-        extraArgs: [FAKE, '--fixture', 'm8-flow', '--replan-replaces', replacesTaskId],
+        extraArgs: [
+          FAKE,
+          '--fixture',
+          'm8-flow',
+          '--replan-replaces',
+          replacesTaskId,
+          ...(shape.dependsOn === undefined ? [] : ['--replan-depends', shape.dependsOn]),
+          ...(shape.cancel === undefined ? [] : ['--replan-cancel', shape.cancel]),
+        ],
         hookPath: REAL_GATE,
       }),
     ),
@@ -152,16 +169,27 @@ describe('a re-plan that replaces a task (H5)', () => {
     return { fixture, replaced: { id: replaced.id, title: replaced.title }, dependents }
   }
 
-  /** The goal moves, the re-plan runs, and the addition it made comes back. */
-  async function replan(board: Board): Promise<{ readonly id: string; readonly title: string }> {
+  /** The goal moves and the re-plan runs; the run's id comes back for the tests that ask about it. */
+  async function replanRun(board: Board, shape: DeltaShape = {}): Promise<string> {
     expect((await setGoal(board.fixture.workspaceId, V2)).ok).toBe(true)
-    const runId = await dispatchPlanning(depsForReplan(board.fixture.workspaceId, board.replaced.id))
+    const runId = await dispatchPlanning(depsForReplan(board.fixture.workspaceId, board.replaced.id, shape))
     expect(runId).not.toBeNull()
     await drainPumps()
+    return runId as string
+  }
+
+  /** {@link replanRun}, and the addition that REPLACES the board task comes back. */
+  async function replan(board: Board, shape: DeltaShape = {}): Promise<{ readonly id: string; readonly title: string }> {
+    await replanRun(board, shape)
     const added = await prisma.task.findFirstOrThrow({
       where: { workspaceId: board.fixture.workspaceId, title: RERUN },
     })
     return { id: added.id, title: added.title }
+  }
+
+  /** The delta's OTHER addition, the one that waits on the rerun and on the replaced task. */
+  async function revisionOf(board: Board): Promise<string> {
+    return (await prisma.task.findFirstOrThrow({ where: { workspaceId: board.fixture.workspaceId, title: REVISION } })).id
   }
 
   /** Who waits on a task, as the board itself says. */
@@ -176,10 +204,49 @@ describe('a re-plan that replaces a task (H5)', () => {
 
     const added = await replan(board)
 
-    // The three tasks that could never have started now wait on the rerun instead, and NOTHING
-    // waits on the replaced task any more -- not even the rerun, whose own `dependsOn` named it.
-    expect(await waitingOn(added.id)).toEqual([...board.dependents].toSorted())
+    // The three tasks that could never have started now wait on the rerun instead -- as does the
+    // delta's own revision task, which named the replaced task too -- and NOTHING waits on the
+    // replaced task any more, not even the rerun, whose own `dependsOn` named it.
+    expect(await waitingOn(added.id)).toEqual([...board.dependents, await revisionOf(board)].toSorted())
     expect(await waitingOn(board.replaced.id)).toEqual([])
+  }, 60_000)
+
+  // Fix round 1, M1: a dependent told to wait on BOTH the replacement (by key) and the replaced task
+  // (by id) ends with ONE edge to the replacement -- the re-point of its second edge would have
+  // duplicated its first, so that edge is dropped rather than moved.
+  it('leaves one edge, not two, on a dependent that named both the replacement and the replaced task', async (): Promise<void> => {
+    const board = await boardWithDependents('failed')
+    const added = await replan(board)
+    const revision = await revisionOf(board)
+
+    const edges = await prisma.taskDependency.findMany({ where: { taskId: revision } })
+    expect(edges.map((edge) => edge.dependsOnTaskId)).toEqual([added.id])
+  }, 60_000)
+
+  // Fix round 1, I1: a board where a dependent waits on the replaced task, and a delta whose
+  // replacement waits on that dependent, is `D -> new -> D` the moment D's edge is moved. The delta
+  // is refused whole, the board is exactly as it was, and the run failed for a named reason.
+  it('refuses the delta, board untouched, when the re-point would close a dependency cycle', async (): Promise<void> => {
+    const board = await boardWithDependents('failed')
+    const first = board.dependents[0] as string
+    const runId = await replanRun(board, { dependsOn: first })
+
+    const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+    expect(run.status).toBe('failed')
+    const failures = await prisma.executionEvent.findMany({ where: { runId, type: 'run_failed' } })
+    expect(failures).toHaveLength(1)
+    expect((failures[0]?.payload as { reason: string }).reason).toContain('cycle')
+    expect((failures[0]?.payload as { reason: string }).reason).toContain(first)
+
+    // Nothing was added, nothing moved, nothing was proposed, nothing was announced.
+    expect(await prisma.task.count({ where: { workspaceId: board.fixture.workspaceId } })).toBe(4)
+    expect(await waitingOn(board.replaced.id)).toEqual([...board.dependents].toSorted())
+    expect(await prisma.supervisorDecision.count({ where: { workspaceId: board.fixture.workspaceId } })).toBe(0)
+    expect(
+      await prisma.executionEvent.count({
+        where: { workspaceId: board.fixture.workspaceId, type: { in: ['task_created', 'workspace_replanned'] } },
+      }),
+    ).toBe(0)
   }, 60_000)
 
   it('never leaves the addition depending on itself or on the work it redoes', async (): Promise<void> => {
@@ -216,9 +283,13 @@ describe('a re-plan that replaces a task (H5)', () => {
 
     const after = (await loadSupervisorWorld(board.fixture.workspaceId, new Date())).world
     expect(after.tasks.find((task) => task.id === board.replaced.id)?.dependents).toBe(0)
-    expect(after.tasks.find((task) => task.id === added.id)?.dependents).toBe(3)
-    // The rerun is startable: nothing it was told to wait for is a dead end any more.
-    expect(after.tasks.find((task) => task.id === added.id)?.status).toBe('ready')
+    // The three board dependents and the delta's own revision task.
+    expect(after.tasks.find((task) => task.id === added.id)?.dependents).toBe(4)
+    // The rerun is startable, by the SAME predicate the scheduler gates on (fix round 1, M2):
+    // nothing it was told to wait for is a dead end any more, because nothing it waits for is left.
+    const rerun = after.tasks.find((task) => task.id === added.id)
+    expect(rerun?.status).toBe('ready')
+    expect(rerun?.dependenciesDone).toBe(true)
     expect(observe(after).filter((s) => s.kind === 'task_failed' && s.subjectId === board.replaced.id)).toEqual([])
   }, 60_000)
 
@@ -246,7 +317,57 @@ describe('a re-plan that replaces a task (H5)', () => {
     const replanned = await prisma.executionEvent.findFirstOrThrow({
       where: { workspaceId: board.fixture.workspaceId, type: 'workspace_replanned' },
     })
-    expect(replanned.payload).toMatchObject({ added: [added.id], proposedCancellations: [board.replaced.id] })
+    expect(replanned.payload).toMatchObject({
+      added: [added.id, await revisionOf(board)],
+      proposedCancellations: [board.replaced.id],
+      droppedCancellations: [],
+      failedProposals: [],
+    })
+  }, 60_000)
+
+  // Fix round 1, M1: `replaces` and `cancel` naming the same task is ONE proposal, the model's own,
+  // not a second decision row for the same subject.
+  it('proposes once when the delta both replaces and cancels the same task', async (): Promise<void> => {
+    const board = await boardWithDependents('ready')
+    const added = await replan(board, { cancel: board.replaced.id })
+
+    const decisions = await prisma.supervisorDecision.findMany({ where: { workspaceId: board.fixture.workspaceId } })
+    expect(decisions).toHaveLength(1)
+    expect(decisions[0]?.subjectId).toBe(board.replaced.id)
+    const replanned = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: board.fixture.workspaceId, type: 'workspace_replanned' },
+    })
+    expect(replanned.payload).toMatchObject({
+      added: [added.id, await revisionOf(board)],
+      proposedCancellations: [board.replaced.id],
+      droppedCancellations: [],
+      failedProposals: [],
+    })
+  }, 60_000)
+
+  // Fix round 1, I2: `rework` may be REPLACED (its result was rejected, and redoing it is the
+  // point) but `cancelTask` refuses it, so a proposal would be a decision nobody could apply.
+  it('proposes nothing for a replaced rework task -- the verb would refuse it', async (): Promise<void> => {
+    const board = await boardWithDependents('rework')
+    const added = await replan(board)
+
+    expect(await waitingOn(added.id)).toEqual([...board.dependents, await revisionOf(board)].toSorted())
+    expect(await prisma.supervisorDecision.count({ where: { workspaceId: board.fixture.workspaceId } })).toBe(0)
+    const replanned = await prisma.executionEvent.findFirstOrThrow({
+      where: { workspaceId: board.fixture.workspaceId, type: 'workspace_replanned' },
+    })
+    expect(replanned.payload).toMatchObject({ proposedCancellations: [], failedProposals: [] })
+  }, 60_000)
+
+  // Fix round 1, M1: the other terminal status a rerun replaces.
+  it('proposes nothing for a replaced task that was already CANCELLED', async (): Promise<void> => {
+    const board = await boardWithDependents('cancelled')
+    const added = await replan(board)
+
+    expect(await waitingOn(added.id)).toEqual([...board.dependents, await revisionOf(board)].toSorted())
+    expect(await waitingOn(board.replaced.id)).toEqual([])
+    expect(await prisma.supervisorDecision.count({ where: { workspaceId: board.fixture.workspaceId } })).toBe(0)
+    expect((await prisma.task.findUniqueOrThrow({ where: { id: board.replaced.id } })).status).toBe('cancelled')
   }, 60_000)
 
   it('proposes nothing for a replaced task that had already FAILED -- it is history, not a decision', async (): Promise<void> => {
@@ -257,7 +378,11 @@ describe('a re-plan that replaces a task (H5)', () => {
     const replanned = await prisma.executionEvent.findFirstOrThrow({
       where: { workspaceId: board.fixture.workspaceId, type: 'workspace_replanned' },
     })
-    expect(replanned.payload).toMatchObject({ added: [added.id], proposedCancellations: [], failedProposals: [] })
+    expect(replanned.payload).toMatchObject({
+      added: [added.id, await revisionOf(board)],
+      proposedCancellations: [],
+      failedProposals: [],
+    })
     expect((await prisma.task.findUniqueOrThrow({ where: { id: board.replaced.id } })).status).toBe('failed')
   }, 60_000)
 })

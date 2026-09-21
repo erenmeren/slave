@@ -278,10 +278,17 @@ export interface BoardTask {
   readonly goalVersion: number | null
 }
 
-/** The statuses a re-plan may cancel (M40 §1): work that has not started. Anything else -- a run
- *  in flight, a review in progress, a merge, a finished or already-terminal task -- is the
- *  model's request DROPPED, because a wrong deletion costs real work (ruling R1). */
-const CANCELLABLE_STATUSES: readonly TaskStatus[] = ['backlog', 'ready', 'blocked']
+/**
+ * The statuses a re-plan may cancel (M40 §1): work that has not started. Anything else -- a run
+ * in flight, a review in progress, a merge, a finished or already-terminal task -- is the
+ * model's request DROPPED, because a wrong deletion costs real work (ruling R1).
+ *
+ * EXPORTED (H5 fix round 1) because it is the same list `cancelTask` refuses everything else
+ * against, and a proposal to cancel a task that verb will refuse is a question nobody can answer:
+ * the verb, the policy that proposes for it, and the replacement rule that proposes for it too
+ * all read this one list, so it cannot be spelt twice and drift.
+ */
+export const CANCELLABLE_STATUSES: readonly TaskStatus[] = ['backlog', 'ready', 'blocked']
 
 export interface CancelPolicyOutcome {
   readonly cancellable: readonly string[]
