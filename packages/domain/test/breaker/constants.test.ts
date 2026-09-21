@@ -24,10 +24,14 @@ describe('the breaker constants', () => {
     expect(BREAKER_WINDOW).toBe(60)
   })
 
-  it('trips a repeat at eight, an error storm at five, and no-progress after two beats', () => {
+  it('trips a repeat at eight, an error storm at five, and no-progress after five beats', () => {
     expect(REPEAT_TRIP_COUNT).toBe(8)
     expect(ERROR_STORM_COUNT).toBe(5)
-    expect(NO_PROGRESS_BEATS).toBe(2)
+    // Five minutes of total silence, not two (H6). A model composing a long answer -- a plan graph,
+    // an architecture document -- makes no tool call for the length of the answer, and two minutes
+    // was the length of a compile: an implementation run writing a document was steered for it,
+    // and the steer, which lands on the next tool call, could not land on a run making none.
+    expect(NO_PROGRESS_BEATS).toBe(5)
   })
 
   it('judges no-progress on an implementation run and on no other kind', () => {

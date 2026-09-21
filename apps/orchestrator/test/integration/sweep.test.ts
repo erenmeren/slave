@@ -1221,22 +1221,29 @@ describe('the breaker beat (M51 R2)', () => {
     expect((await reload(run)).breakerQuietBeats).toBe(0)
   })
 
-  it('trips no_progress on the second quiet beat when the worktree really did not move', async (): Promise<void> => {
+  it('trips no_progress on the NO_PROGRESS_BEATS-th quiet beat when the worktree really did not move', async (): Promise<void> => {
     // The positive control for the case above: the same run, with a probe that can MEASURE, does
     // trip -- so "a null suppresses" is a real difference and not a test that could never fire.
     const run = await quietRun()
     const probe = { ...deps, worktreeProbe: probeReturning('unchanged') }
     // The first beat has no previous fingerprint to compare with, which is itself no evidence.
     await sweep(probe)
-    await ageTheBeat(run.id)
-    await sweep(probe)
-    expect((await reload(run)).breakerQuietBeats).toBe(1)
+    // Every quiet beat short of the threshold counts and does nothing else: five minutes of silence
+    // is the length of a plan, and a worker writing one is not steered for it (H6).
+    for (let quiet = 1; quiet < NO_PROGRESS_BEATS; quiet += 1) {
+      await ageTheBeat(run.id)
+      await sweep(probe)
+      const counted = await reload(run)
+      expect(counted.breakerQuietBeats, `after quiet beat ${String(quiet)}`).toBe(quiet)
+      expect(counted.breakerLevel, `after quiet beat ${String(quiet)}`).toBe('none')
+    }
     await ageTheBeat(run.id)
     await sweep(probe)
     const after = await reload(run)
     expect(after.breakerLevel).toBe('steered')
     const [breaker] = await eventsOfType(run.id, 'run_breaker')
     expect((breaker?.payload as { trip: string }).trip).toBe('no_progress')
+    expect((breaker?.payload as { count: number }).count).toBe(NO_PROGRESS_BEATS)
   })
 
   for (const kind of ['planning', 'review'] as const) {
@@ -1246,8 +1253,9 @@ describe('the breaker beat (M51 R2)', () => {
       // it would send could not land anyway (the gate fires on a tool call).
       const run = await quietRunOfKind(kind)
       const probe = { ...deps, worktreeProbe: probeReturning('unchanged') }
-      // Four beats: one more than the run above needed to reach `steered`.
-      for (let beat = 0; beat < 4; beat += 1) {
+      // One no-evidence beat, then the threshold, then one more: a beat past what the run above
+      // needed to reach `steered`.
+      for (let beat = 0; beat < NO_PROGRESS_BEATS + 2; beat += 1) {
         await sweep(probe)
         expect((await reload(run)).breakerQuietBeats, `after beat ${String(beat + 1)}`).toBe(0)
         await ageTheBeat(run.id)
@@ -1350,13 +1358,19 @@ describe('the breaker beat (M51 R2)', () => {
   })
 
   /**
-   * The run a steer parked and never got out of (final wave, I4/E22).
+   * The run a steer parked and whose pause has not landed (H6, superseding final wave I4/E22).
    *
-   * `steerRun` claims `pause_requested` and the pause lands at the run's NEXT tool call -- which a
-   * `no_progress` run is by definition not making. Without this arm the ladder's own first rung
-   * strands the trip that means "the worker has stopped", and only `run_timeout` ever ends it.
+   * `steerRun` claims `pause_requested` and the pause lands at the run's NEXT tool call. A run
+   * composing a long answer -- a plan graph, an architecture document -- makes none for minutes,
+   * and the sweep used to read that silence as "the worker has stopped" and cancel it after
+   * `NO_PROGRESS_BEATS` beats. Today's evidence says a silent run is usually thinking, so the run
+   * stays where the steer put it until the call that lands the pause, or until the run-timeout
+   * guardrail ends it -- and that guardrail is the ONLY thing that may.
    */
-  const givenStrandedSteer = async (over: { readonly pausedAgo: number }): Promise<{ id: string }> => {
+  const givenStrandedSteer = async (over: {
+    readonly pausedAgo: number
+    readonly startedAt?: Date
+  }): Promise<{ id: string }> => {
     const run = await givenBreakerRun({
       status: 'pause_requested',
       breakerLevel: 'steered',
@@ -1365,6 +1379,7 @@ describe('the breaker beat (M51 R2)', () => {
       pauseReason: 'guardrail',
       queuedMessage: 'stop and rethink',
       worktreePath: repoPath,
+      ...(over.startedAt === undefined ? {} : { startedAt: over.startedAt }),
     })
     await appendEvent({
       type: 'run.pause_requested',
@@ -1382,39 +1397,100 @@ describe('the breaker beat (M51 R2)', () => {
     return run
   }
 
-  it('STOPS a steer that never landed, rather than leaving the ladder stranded', async (): Promise<void> => {
-    // The pause was asked for two beats ago and the run has made no tool call since, so the gate it
-    // rides on is never going to fire. Through the EXISTING behavioural stop path: claim
-    // `stopping`, cancel, `guardrail.tripped` -- and no terminal row, so the pump concludes it
-    // `failed` and the failure streak counts it, exactly as every other rung of this ladder does.
-    const run = await givenStrandedSteer({ pausedAgo: NO_PROGRESS_BEATS * BREAKER_BEAT_MS + 1_000 })
+  it('never cancels a steered run whose pause has not landed, however many beats it stays silent', async (): Promise<void> => {
+    // The live defect (H6): a planner writing its graph and then an implementer writing an
+    // architecture document, each steered for silence and then cancelled because the steer could
+    // not land on a run making no tool calls -- "the pause never landed", three attempts in a row.
+    // The pause was asked for long ago, far past the old stranded-steer threshold, and the run has
+    // made no call since. Ten sweeps, each allowed to beat: nothing happens to it. A steer that has
+    // not landed is not a reason to stop a run.
+    const run = await givenStrandedSteer({ pausedAgo: 10 * NO_PROGRESS_BEATS * BREAKER_BEAT_MS })
+
+    for (let beat = 0; beat < 10; beat += 1) {
+      const report = await sweep(deps)
+      expect(report.breakerStopped, `sweep ${String(beat + 1)}`).toEqual([])
+      expect(report.timedOut, `sweep ${String(beat + 1)}`).toEqual([])
+      const after = await reload(run)
+      expect(after.status, `sweep ${String(beat + 1)}`).toBe('pause_requested')
+      // And no beat is taken on it either: a paused run must not accumulate trips, and a beat
+      // here would de-escalate the level and strand the queued sentence. `ageTheBeat` below is
+      // what a beat would have to be allowed by, so the clock is never AHEAD of what it wrote.
+      expect(
+        after.breakerBeatAt === null || after.breakerBeatAt.getTime() < Date.now() - BREAKER_BEAT_MS,
+        `sweep ${String(beat + 1)} took a beat on a paused run`,
+      ).toBe(true)
+      expect(after.breakerQuietBeats, `sweep ${String(beat + 1)}`).toBe(0)
+      await ageTheBeat(run.id)
+    }
+
+    const after = await reload(run)
+    expect(after.status).toBe('pause_requested')
+    expect(after.breakerLevel).toBe('steered')
+    expect(after.breakerTrips).toBe(1)
+    expect(after.queuedMessage).toBe('stop and rethink')
+    expect(after.endedAt).toBeNull()
+    expect(after.terminalAt).toBeNull()
+    expect(cancelled).toEqual([])
+    expect(await eventsOfType(run.id, 'guardrail_tripped')).toHaveLength(0)
+    expect(await eventsOfType(run.id, 'run_failed')).toHaveLength(0)
+    // One `run.breaker` at most -- the steer that put it here -- and this file wrote none.
+    expect(await eventsOfType(run.id, 'run_breaker')).toHaveLength(0)
+  })
+
+  it('ends such a run only through the run-timeout guardrail, under its own name', async (): Promise<void> => {
+    // The bound for a genuinely hung process, and it already existed: `Workspace.runTimeoutMs`.
+    // The same run, past that limit -- stopped as a `run_timeout`, never as a behavioural stop.
+    const run = await givenStrandedSteer({
+      pausedAgo: 10 * NO_PROGRESS_BEATS * BREAKER_BEAT_MS,
+      startedAt: hoursAgo(2),
+    })
 
     const report = await sweep(deps)
 
-    expect(report.breakerStopped).toEqual([run.id])
+    expect(report.timedOut).toEqual([run.id])
+    expect(report.breakerStopped).toEqual([])
     const after = await reload(run)
     expect(after.status).toBe('stopping')
     expect(after.terminalAt).toBeNull()
     expect(cancelled).toEqual([run.id])
     const [tripped] = await eventsOfType(run.id, 'guardrail_tripped')
-    expect((tripped?.payload as { guardrail: string }).guardrail).toBe('behavioural_loop')
-    // The trip and its detail, through `stopForBehaviour`'s own unchanged sentence -- one stop path
-    // for the whole ladder, so the wording is that path's and not this arm's.
-    expect((tripped?.payload as { detail: string }).detail).toContain('no_progress, the pause never landed')
+    expect((tripped?.payload as { guardrail: string }).guardrail).toBe('run_timeout')
+    expect((tripped?.payload as { detail: string }).detail).not.toContain('never landed')
   })
 
-  it('leaves a steered run alone while it is still making tool calls', async (): Promise<void> => {
-    // The negative control, and the reason the arm reads the call log at all: a run that is still
-    // calling tools is one whose PreToolUse gate is about to fire, so the pause IS landing and the
-    // aged timestamp says nothing.
-    const run = await givenStrandedSteer({ pausedAgo: NO_PROGRESS_BEATS * BREAKER_BEAT_MS + 1_000 })
+  it('still lands a steer the ordinary way once the run makes its next tool call', async (): Promise<void> => {
+    // The steer's own path, unchanged: the run calls a tool, the PreToolUse gate denies it, the
+    // pump parks the run, and the delivery pass resumes it with the sentence. The age of the pause
+    // says nothing -- the same run, with the same long silence behind it, is delivered the moment
+    // it is actually parked.
+    const run = await givenStrandedSteer({ pausedAgo: 10 * NO_PROGRESS_BEATS * BREAKER_BEAT_MS })
     await call(run.id, { tool: 'Bash', args: 'npm test' }, 'toolu_after_pause')
 
     const report = await sweep(deps)
-
     expect(report.breakerStopped).toEqual([])
     expect((await reload(run)).status).toBe('pause_requested')
     expect(cancelled).toEqual([])
+
+    // What the pump does when the gate denies that call: the child is dead and the row parks.
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { status: 'paused', pid: null } })
+    await prisma.checkpoint.create({
+      data: {
+        runId: run.id,
+        sessionId: 's-1',
+        worktreePath: repoPath,
+        pauseFlagPath: join(repoPath, 'pause.flag'),
+        settingsPath: join(repoPath, 'settings.json'),
+        hookPath: join(repoPath, 'pause-gate.sh'),
+        gitAuthorName: 'Alex',
+        gitAuthorEmail: 'alex@slaveofai.local',
+        headCommit: 'abc123',
+      },
+    })
+    await sweep(deps)
+    const after = await reload(run)
+    expect(after.resumeRequestedAt).not.toBeNull()
+    expect(after.queuedMessage).toBe('stop and rethink')
+    expect(after.breakerLevel).toBe('steered')
     expect(await eventsOfType(run.id, 'guardrail_tripped')).toHaveLength(0)
   })
 

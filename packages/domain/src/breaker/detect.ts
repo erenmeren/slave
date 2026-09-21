@@ -283,10 +283,10 @@ function tripOf(window: BreakerWindow, quiet: boolean): BreakerTrip | null {
     return { kind: 'error_storm', count: errors, detail: commonestClass(results.slice(results.length - errors)) }
   }
 
-  // `+ 1` is THIS beat: `quietBeats` is what the caller counted BEFORE it, so two consecutive quiet
-  // beats is one stored beat plus this one. `quiet` is the caller's triple as
-  // {@link detectBehaviour} read it, and it is false on a suppressed beat, so this arm can only
-  // fire on a beat that really was silent.
+  // `+ 1` is THIS beat: `quietBeats` is what the caller counted BEFORE it, so `NO_PROGRESS_BEATS`
+  // consecutive quiet beats is `NO_PROGRESS_BEATS - 1` stored beats plus this one. `quiet` is the
+  // caller's triple as {@link detectBehaviour} read it, and it is false on a suppressed beat, so
+  // this arm can only fire on a beat that really was silent.
   if (quiet && window.quietBeats + 1 >= NO_PROGRESS_BEATS) {
     const beats = window.quietBeats + 1
     return { kind: 'no_progress', count: beats, detail: `${String(beats)} quiet beats` }

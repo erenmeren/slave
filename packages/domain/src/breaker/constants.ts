@@ -34,11 +34,20 @@ export const ERROR_STORM_COUNT = 5
 /**
  * How many CONSECUTIVE beats every progress clock must read false before `no_progress` trips.
  *
- * Two, because one is a pause. A single quiet beat is what a compile, a test run or a slow network
- * call looks like from outside; two in a row, with a finished tool call at the end of the window,
- * is a worker that has stopped.
+ * Five, not two (H6). A model composing a long answer is silent BY DESIGN: it makes no tool call,
+ * writes no output and touches no file for exactly as long as the answer takes to write, and every
+ * clock this arm has reads false the whole time. Two minutes was the length of a compile -- it was
+ * chosen when a quiet beat meant a test run or a slow network call -- and an implementation run
+ * writing an architecture document was steered for it three attempts in a row, each time for
+ * thinking. Five minutes is the length of a plan. A worker that has really stopped is still caught,
+ * five beats later than before, and the steer it gets is the same gentle one.
+ *
+ * The number is the whole of what changed: the steer still lands on the run's next tool call, the
+ * ladder above it is untouched, and what bounds a run that never makes that call is the workspace's
+ * `runTimeoutMs` guardrail -- never this arm, and never a timer of its own (the stranded-steer
+ * cancel of the final wave, I4/E22, is gone for that reason).
  */
-export const NO_PROGRESS_BEATS = 2
+export const NO_PROGRESS_BEATS = 5
 
 /**
  * Whose silence `no_progress` is allowed to judge -- the IMPLEMENTATION run, and nothing else.
@@ -51,13 +60,16 @@ export const NO_PROGRESS_BEATS = 2
  * the same shape: read the diff, then write the verdict. And the rung such a run would climb is
  * undeliverable, because a steer is handed over at the pause gate and the gate fires on the run's
  * NEXT TOOL CALL -- so the trip that means "this worker has stopped" parks a composing run in a
- * pause that never arrives, and the stranded-steer arm then cancels it for that. Observed live: a
- * planning run was cancelled three times over five minutes of ordinary composition, and the three
- * failures halted the project.
+ * pause that arrives only when the composing is done. Observed live: a planning run was steered
+ * three times over five minutes of ordinary composition, and the stranded-steer cancel of that day
+ * (final wave, I4/E22; gone since H6) turned each steer into a failure, and the three failures
+ * halted the project.
  *
  * `repeated_call` and `error_storm` still apply to every kind, because those are judgements about
  * calls the run DID make and they arrive with a call the gate can fire on. What bounds a composing
- * run is the workspace's `runTimeoutMs` guardrail, exactly as it did before the breaker existed.
+ * run of ANY kind is the workspace's `runTimeoutMs` guardrail, exactly as it did before the breaker
+ * existed -- an implementation run that composes past {@link NO_PROGRESS_BEATS} is steered, and the
+ * steer waits, in `pause_requested`, for the call that lands it.
  *
  * ONE place, read by `detect.ts` alone: the arm and the `breakerQuietBeats` column follow from the
  * same expression there, so there is no second copy to forget.
