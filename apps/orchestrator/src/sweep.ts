@@ -688,6 +688,9 @@ async function beatBreaker(
     readonly id: string
     readonly taskId: string | null
     readonly slaveId: string
+    /** `SlaveRun.kind`, read for one reason only: `no_progress` judges an implementation run and no
+     *  other (`NO_PROGRESS_RUN_KINDS`). Passed through to the detector, never branched on here. */
+    readonly kind: 'implementation' | 'review' | 'planning'
     readonly status: RunStatus
     /** `SlaveRun.pauseReason`, as a bare string: only `'guardrail'` is read here, and
      *  {@link stopStrandedSteer} is the one place that reads it. */
@@ -740,6 +743,10 @@ async function beatBreaker(
   const worktreeChanged = distinctKey || output ? true : moved
 
   const verdict = detectBehaviour({
+    // The kind goes to the DETECTOR rather than gating this call, so the exemption is stated once,
+    // purely, beside the arm it exempts -- and `repeated_call` and `error_storm` keep reaching every
+    // kind, which a gate around the whole beat would have quietly taken away.
+    kind: run.kind,
     level: run.breakerLevel,
     trips: run.breakerTrips,
     steers: run.breakerSteers,

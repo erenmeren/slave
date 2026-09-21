@@ -41,6 +41,30 @@ export const ERROR_STORM_COUNT = 5
 export const NO_PROGRESS_BEATS = 2
 
 /**
+ * Whose silence `no_progress` is allowed to judge -- the IMPLEMENTATION run, and nothing else.
+ *
+ * A planner or a reviewer COMPOSES SILENTLY BY DESIGN, and the steer cannot land on a run that makes
+ * no tool calls. Both halves of that sentence are load-bearing. A planning run is one shot that
+ * answers at the end: it reads a handful of files and then spends minutes writing the plan graph,
+ * making no tool call, no output and no change to its worktree -- which is every clock
+ * {@link NO_PROGRESS_BEATS} counts, all false, for as long as the thinking takes. A review run has
+ * the same shape: read the diff, then write the verdict. And the rung such a run would climb is
+ * undeliverable, because a steer is handed over at the pause gate and the gate fires on the run's
+ * NEXT TOOL CALL -- so the trip that means "this worker has stopped" parks a composing run in a
+ * pause that never arrives, and the stranded-steer arm then cancels it for that. Observed live: a
+ * planning run was cancelled three times over five minutes of ordinary composition, and the three
+ * failures halted the project.
+ *
+ * `repeated_call` and `error_storm` still apply to every kind, because those are judgements about
+ * calls the run DID make and they arrive with a call the gate can fire on. What bounds a composing
+ * run is the workspace's `runTimeoutMs` guardrail, exactly as it did before the breaker existed.
+ *
+ * ONE place, read by `detect.ts` alone: the arm and the `breakerQuietBeats` column follow from the
+ * same expression there, so there is no second copy to forget.
+ */
+export const NO_PROGRESS_RUN_KINDS = ['implementation'] as const
+
+/**
  * The minimum gap between two breaker evaluations OF ONE RUN.
  *
  * The daemon ticks about once a second. Without this, a tripping run would climb steer -> constrain

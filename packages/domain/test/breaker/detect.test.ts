@@ -8,7 +8,13 @@ import {
   type BreakerWindow,
   detectBehaviour,
 } from '../../src/breaker/detect.js'
-import { ERROR_STORM_COUNT, NO_PROGRESS_BEATS, REPEAT_TRIP_COUNT, STEERS_PER_RUN_MAX } from '../../src/breaker/constants.js'
+import {
+  ERROR_STORM_COUNT,
+  NO_PROGRESS_BEATS,
+  NO_PROGRESS_RUN_KINDS,
+  REPEAT_TRIP_COUNT,
+  STEERS_PER_RUN_MAX,
+} from '../../src/breaker/constants.js'
 
 let seq = 0
 const call = (key: string, toolUseId: string): BreakerRow => ({
@@ -26,8 +32,10 @@ const result = (toolUseId: string, outcome: 'ok' | 'error', errorClass: string |
 })
 const output = (): BreakerRow => ({ kind: 'output', seq: (seq += 1) })
 
-/** A run that has done nothing interesting: healthy level, no trips, every clock live. */
+/** A run that has done nothing interesting: healthy level, no trips, every clock live -- and of the
+ *  one kind whose silence `no_progress` is allowed to judge. */
 const WINDOW = (rows: readonly BreakerRow[], over: Partial<BreakerWindow> = {}): BreakerWindow => ({
+  kind: 'implementation',
   level: 'none',
   trips: 0,
   steers: 0,
@@ -146,6 +154,52 @@ describe('detectBehaviour: no_progress', () => {
       const progress = { ...quiet, [live]: true }
       expect(detectBehaviour(WINDOW([], { progress, quietBeats: 9 })).trip, live).toBeNull()
     }
+  })
+})
+
+describe('detectBehaviour: no_progress judges an IMPLEMENTATION run and no other kind', () => {
+  const quiet = { distinctKey: false, worktreeChanged: false, output: false }
+
+  it('names implementation and nothing else, in one place', () => {
+    expect(NO_PROGRESS_RUN_KINDS).toEqual(['implementation'])
+  })
+
+  it('never trips no_progress for a planning or a review run, however many beats it is silent', () => {
+    // The live defect: a planner reads six files and then composes its graph for minutes, making no
+    // call, no output and no change -- every clock the arm has, false, by design.
+    for (const kind of ['planning', 'review'] as const) {
+      for (const quietBeats of [NO_PROGRESS_BEATS - 1, NO_PROGRESS_BEATS, 9, 99]) {
+        const verdict = detectBehaviour(WINDOW([], { kind, progress: quiet, quietBeats }))
+        expect(verdict.trip, `${kind} after ${String(quietBeats)} beats`).toBeNull()
+        expect(verdict.level, kind).toBe('none')
+      }
+    }
+  })
+
+  it('reports such a beat as NOT quiet, so the sweep never counts a beat towards a trip it cannot have', () => {
+    for (const kind of ['planning', 'review'] as const) {
+      const verdict = detectBehaviour(WINDOW([], { kind, progress: quiet, quietBeats: 9 }))
+      expect(verdict.quiet, kind).toBe(false)
+      expect(verdict.suppressed, kind).toBe(false)
+    }
+  })
+
+  it('still trips no_progress for an implementation run at the threshold -- the positive control', () => {
+    const verdict = detectBehaviour(
+      WINDOW([], { kind: 'implementation', progress: quiet, quietBeats: NO_PROGRESS_BEATS - 1 }),
+    )
+    expect(verdict.quiet).toBe(true)
+    expect(verdict.trip?.kind).toBe('no_progress')
+  })
+
+  it('still trips repeated_call for a planning run -- a call it really made is still its own', () => {
+    const verdict = detectBehaviour(WINDOW(repeats(REPEAT_TRIP_COUNT), { kind: 'planning', progress: quiet }))
+    expect(verdict.trip).toEqual({ kind: 'repeated_call', count: REPEAT_TRIP_COUNT, detail: 'Bash:aaaa' })
+  })
+
+  it('still trips error_storm for a review run', () => {
+    const rows = ['a', 'b', 'c', 'd', 'e'].flatMap((id, i) => [call(`Tool${String(i)}:x`, id), result(id, 'error')])
+    expect(detectBehaviour(WINDOW(rows, { kind: 'review', progress: quiet })).trip?.kind).toBe('error_storm')
   })
 })
 

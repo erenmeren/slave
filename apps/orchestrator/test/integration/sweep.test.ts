@@ -909,6 +909,7 @@ describe('the breaker beat (M51 R2)', () => {
   const probeReturning = (value: string | null): WorktreeProbe => ({ fingerprint: async () => value })
 
   const givenBreakerRun = async (data: {
+    kind?: 'implementation' | 'review' | 'planning'
     status?: 'working' | 'pause_requested' | 'paused'
     pid?: number | null
     toolCalls?: number
@@ -925,6 +926,7 @@ describe('the breaker beat (M51 R2)', () => {
       data: {
         taskId: fixture.taskId,
         slaveId: fixture.slaveId,
+        ...(data.kind === undefined ? {} : { kind: data.kind }),
         status: data.status ?? 'working',
         pid: data.pid === undefined ? process.pid : data.pid,
         toolCalls: data.toolCalls ?? 0,
@@ -998,6 +1000,19 @@ describe('the breaker beat (M51 R2)', () => {
     const run = await givenBreakerRun({ worktreePath: repoPath })
     await call(run.id, { tool: 'Read', args: 'src/index.ts' }, 'toolu_q')
     await result(run.id, 'toolu_q', 'ok')
+    return run
+  }
+
+  /**
+   * The same silence as {@link quietRun}, from a run that composes its answer BY DESIGN: a planner
+   * reads a few files and then writes the plan graph, a reviewer reads the diff and then writes the
+   * verdict, and neither makes a tool call while it does. The task stays attached because the beat
+   * never reads it -- `kind` is the whole of what this case is about.
+   */
+  async function quietRunOfKind(kind: 'planning' | 'review'): Promise<{ id: string }> {
+    const run = await givenBreakerRun({ kind, worktreePath: repoPath })
+    await call(run.id, { tool: 'Read', args: 'src/index.ts' }, `toolu_q_${kind}`)
+    await result(run.id, `toolu_q_${kind}`, 'ok')
     return run
   }
 
@@ -1223,6 +1238,39 @@ describe('the breaker beat (M51 R2)', () => {
     const [breaker] = await eventsOfType(run.id, 'run_breaker')
     expect((breaker?.payload as { trip: string }).trip).toBe('no_progress')
   })
+
+  for (const kind of ['planning', 'review'] as const) {
+    it(`never trips no_progress on a ${kind} run, however long it composes in silence`, async (): Promise<void> => {
+      // The live defect, through the sweep: exactly the silence the case above trips on, from a run
+      // that makes no tool call BY DESIGN -- so the arm must not count a beat of it, and the steer
+      // it would send could not land anyway (the gate fires on a tool call).
+      const run = await quietRunOfKind(kind)
+      const probe = { ...deps, worktreeProbe: probeReturning('unchanged') }
+      // Four beats: one more than the run above needed to reach `steered`.
+      for (let beat = 0; beat < 4; beat += 1) {
+        await sweep(probe)
+        expect((await reload(run)).breakerQuietBeats, `after beat ${String(beat + 1)}`).toBe(0)
+        await ageTheBeat(run.id)
+      }
+      const after = await reload(run)
+      expect(after.breakerLevel).toBe('none')
+      expect(after.breakerTrips).toBe(0)
+      expect(after.status).toBe('working')
+      // No steer: no sentence queued, no pause asked for, and nothing cancelled.
+      expect(after.queuedMessage).toBeNull()
+      expect(await eventsOfType(run.id, 'run_breaker')).toHaveLength(0)
+      expect(await eventsOfType(run.id, 'guardrail_tripped')).toHaveLength(0)
+      expect(cancelled).toEqual([])
+    })
+
+    it(`still steers a ${kind} run repeating one byte-identical call -- a judgement about calls it made`, async (): Promise<void> => {
+      const run = await loopingRun({ kind, worktreePath: repoPath })
+      await sweep({ ...deps, worktreeProbe: probeReturning('unchanged') })
+      expect((await reload(run)).breakerLevel).toBe('steered')
+      const [breaker] = await eventsOfType(run.id, 'run_breaker')
+      expect((breaker?.payload as { trip: string }).trip).toBe('repeated_call')
+    })
+  }
 
   it('reaches the STOP rung after a relapse, because a re-constrain still writes the rung', async (): Promise<void> => {
     // Fix round 1, Critical 1, through the sweep. The designed path: a run trips, is steered,

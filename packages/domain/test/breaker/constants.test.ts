@@ -7,6 +7,7 @@ import {
   CONSTRAIN_GRACE_CALLS,
   ERROR_STORM_COUNT,
   NO_PROGRESS_BEATS,
+  NO_PROGRESS_RUN_KINDS,
   REPEAT_TRIP_COUNT,
   STEERS_PER_RUN_MAX,
   steerTextFor,
@@ -27,6 +28,12 @@ describe('the breaker constants', () => {
     expect(REPEAT_TRIP_COUNT).toBe(8)
     expect(ERROR_STORM_COUNT).toBe(5)
     expect(NO_PROGRESS_BEATS).toBe(2)
+  })
+
+  it('judges no-progress on an implementation run and on no other kind', () => {
+    // Not decoration either: a planner or a reviewer composes in silence by design, and a list that
+    // grew a second member would cancel one for thinking.
+    expect(NO_PROGRESS_RUN_KINDS).toEqual(['implementation'])
   })
 
   it('beats once a minute, so a one-second tick loop cannot climb the ladder in three seconds', () => {
