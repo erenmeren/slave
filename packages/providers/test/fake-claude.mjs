@@ -137,6 +137,10 @@
 //   was passed. It sits behind the two decision arms and in front of the
 //   planning one: a re-plan answered with a first plan would rebuild the
 //   board.
+//   H5 adds a second delta to the same arm: with `--replan-replaces <id>`
+//   in ARGV it replays `fixtures/replan-replaces.ndjson` instead, whose one
+//   addition carries `"replaces"` (and a `dependsOn`) naming that id -- the
+//   re-plan that redoes a board task and takes its dependents with it.
 //   m41-flow       synthetic, M41's whole-story mode: every arm one gate
 //                  needs, in one file, so a single daemon lineage can plan,
 //                  work, ask, be answered, resume, be reviewed and be
@@ -930,16 +934,29 @@ function fixtureSessionId(name) {
  */
 async function replanArm(prompt) {
   if (!prompt.includes('"replan"')) return false
-  const cancelId = replanCancelId()
+  // H5: `--replan-replaces <id>` picks the delta that REDOES a board task -- one addition carrying
+  // `replaces` (and a `dependsOn` on the very task it replaces, the case that must not become a
+  // self-dependency). Its own fixture rather than a second placeholder in `replan-delta`, because
+  // that one is replayed for every re-plan test there is and most of them cancel a task whose
+  // status `replaces` would refuse outright.
+  const replacesId = replanReplacesId()
+  if (replacesId !== null) await replayDelta('replan-replaces', '$REPLACES_ID', replacesId)
+  await replayDelta('replan-delta', '$CANCEL_ID', replanCancelId())
+}
+
+/** One delta fixture, with the one id it cannot carry statically substituted in -- and a hard
+ *  failure when the file has no placeholder to substitute, which is a fixture nobody meant to
+ *  write rather than a delta about nothing. Never returns: the arm it serves ends the process. */
+async function replayDelta(name, token, id) {
   let substituted = false
-  const lines = readFixtureLines('replan-delta').map((line) => {
-    const patched = substituteCancelId(JSON.parse(line), cancelId, () => {
+  const lines = readFixtureLines(name).map((line) => {
+    const patched = substitutePlaceholder(JSON.parse(line), token, id, () => {
       substituted = true
     })
     return JSON.stringify(patched)
   })
   if (!substituted) {
-    process.stderr.write('fake-claude: replan-delta.ndjson carries no $CANCEL_ID placeholder to substitute\n')
+    process.stderr.write(`fake-claude: ${name}.ndjson carries no ${token} placeholder to substitute\n`)
     process.exit(2)
   }
   await writeLines(lines)
@@ -950,6 +967,14 @@ async function replanArm(prompt) {
  *  another flag where its value should be, which is an omitted value, not an id. */
 function replanCancelId() {
   const index = args.indexOf('--replan-cancel')
+  const named = index === -1 ? undefined : args[index + 1]
+  return named === undefined || named.startsWith('-') ? null : named
+}
+
+/** H5: the id `--replan-replaces <id>` names -- the board task the delta's one addition redoes.
+ *  Same shape as {@link replanCancelId}, and argv for the same reason. */
+function replanReplacesId() {
+  const index = args.indexOf('--replan-replaces')
   const named = index === -1 ? undefined : args[index + 1]
   return named === undefined || named.startsWith('-') ? null : named
 }
@@ -987,22 +1012,23 @@ function isAskingLeg(prompt) {
   return line !== undefined && line.includes(token)
 }
 
-/** Rewrites `$CANCEL_ID` wherever it appears in a parsed fixture line's strings: replaced by the
- *  id when there is one, and otherwise removed ARRAY ELEMENT AND ALL (`"$CANCEL_ID"`, quotes
- *  included, since the delta lives inside a JSON string) so `cancel` comes out empty. Walks the
- *  parsed line rather than the raw text so the escaping of the embedded JSON is JSON's problem
- *  and not a regex's. */
-function substituteCancelId(value, cancelId, onSubstitution) {
+/** Rewrites a `$NAME` placeholder wherever it appears in a parsed fixture line's strings: replaced
+ *  by the id when there is one, and otherwise removed ARRAY ELEMENT AND ALL (`"$NAME"`, quotes
+ *  included, since the delta lives inside a JSON string) so the array it sat in comes out empty.
+ *  Walks the parsed line rather than the raw text so the escaping of the embedded JSON is JSON's
+ *  problem and not a regex's. Taken by name (H5) because a second delta fixture carries a second
+ *  placeholder, and one traversal for both is one rule for both. */
+function substitutePlaceholder(value, name, id, onSubstitution) {
   if (typeof value === 'string') {
-    const token = cancelId === null ? '"$CANCEL_ID"' : '$CANCEL_ID'
+    const token = id === null ? `"${name}"` : name
     if (!value.includes(token)) return value
     onSubstitution()
-    return value.split(token).join(cancelId ?? '')
+    return value.split(token).join(id ?? '')
   }
-  if (Array.isArray(value)) return value.map((entry) => substituteCancelId(entry, cancelId, onSubstitution))
+  if (Array.isArray(value)) return value.map((entry) => substitutePlaceholder(entry, name, id, onSubstitution))
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, substituteCancelId(entry, cancelId, onSubstitution)]),
+      Object.entries(value).map(([key, entry]) => [key, substitutePlaceholder(entry, name, id, onSubstitution)]),
     )
   }
   return value

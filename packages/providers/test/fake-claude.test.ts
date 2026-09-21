@@ -424,6 +424,29 @@ describe('fake-claude', () => {
       expect(result?.result).toContain('"cancel":[]')
     })
 
+    it('replays the REPLACES delta, id substituted, when --replan-replaces names a task (H5)', async (): Promise<void> => {
+      const { stdout } = await run(
+        'node',
+        [FAKE, '--replan-replaces', 'task-to-redo', '--fixture', 'm8-flow', '-p', PROMPT],
+        { cwd: repoDir },
+      )
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"replaces":"task-to-redo"')
+      expect(result?.result).toContain('"dependsOn":["task-to-redo"]')
+      expect(result?.result).not.toContain('$REPLACES_ID')
+      // It is the OTHER delta: the cancel fixture's addition is not in it.
+      expect(result?.result).not.toContain(ADDED)
+    })
+
+    it('falls back to the cancel delta when --replan-replaces has another flag where its id belongs', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--replan-replaces', '--fixture', 'm8-flow', '-p', PROMPT], {
+        cwd: repoDir,
+      })
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain(ADDED)
+      expect(result?.result).not.toContain('"replaces"')
+    })
+
     it('is checked BEFORE the task-graph arm, so a re-plan is never answered with a first plan', async (): Promise<void> => {
       // The trailer a re-plan run carries names the first plan's literal nowhere -- but a prompt
       // that carried both must still reach the delta, because the re-plan arm is the more specific
