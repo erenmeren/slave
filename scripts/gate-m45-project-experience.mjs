@@ -30,8 +30,8 @@
 //      chatter anywhere on the page.
 //   3. The needs-you list has exactly four entries, and every link resolves.
 //   4. Approving the seeded proposal FROM THE TIMELINE cancels the task and the lane updates.
-//   5. "Tell the Supervisor" creates goal v3 with the words stored, and `replan-status` says
-//      willReplan true.
+//   5. "Tell the Supervisor" is a MESSAGE now (F erratum E8): the composer writes the person's own
+//      line and the reply placeholder the daemon settles, and writes no goal version at all.
 //   6. A task row discloses its raw values only inside `Details` groups.
 //   7. `data-simulation` never appears on the project page.
 //   8. Every raw event type stays out of the visible words and inside `data-event-type`/`title`.
@@ -293,8 +293,10 @@ try {
   )
 
   // ---- Seven tasks, one per state, plus the integrated one. -------------------------------------
-  // `goalVersion: 1` on every one of them, so the board is behind the goal and stage 5's
-  // `replan-status` has a real move to report rather than a board that has already caught up.
+  // `goalVersion: 1` on every one of them, so the board is a version behind the goal `request-change`
+  // wrote above -- which is what stage 3's `stale_task` proposal and stage 1's goal tile are about.
+  // (It used to be what stage 5's `replan-status` measured; F moved that claim to
+  // `gate:m39-supervisor-mailbox` stage 6, see stage 5 below.)
   const task = async (title, status, extra = {}) =>
     prisma.task.create({
       data: {
@@ -1179,42 +1181,75 @@ try {
   console.log('stage 4 PASSED: approving from the timeline cancelled the task and the lane updated over the stream, with no reload')
 
   // ============================================================================================
-  // Stage 5: telling the Supervisor makes a version and arms a re-plan.
+  // Stage 5: telling the Supervisor starts a CONVERSATION.
   // ============================================================================================
-  // SCOPED to the shell's right panel (M57 t5): the Supervisor's composer lives there now, and
-  // until Task 6 retires the Overview's own request box the two carry the same three testids. The
-  // panel is the one this milestone keeps, so the panel is the one this stage drives.
+  // REWRITTEN BY F (spec erratum E8), not deleted. The composer used to POST `{ request }` to
+  // `/api/w/:id/goal/request` and this stage read back the goal v3 that came out the other side;
+  // it now posts a MESSAGE, and asking for the goal to change is something the REPLY may propose.
+  // A question that wanted an answer no longer re-plans the whole board.
+  //
+  // So what one send writes is what this stage measures: the person's own line, and the reply
+  // placeholder the daemon will settle. It settles no further here -- this gate starts no daemon
+  // and wires no fake CLI (see the header: it dispatches no run and cannot spend), so the
+  // placeholder stays `answering` for the rest of the run, which is exactly the panel's
+  // "thinking…" row. The other half of the old claim -- a reply that asks for a goal change,
+  // applied under `act`, with an attached brief's path in the new version -- is proven end to end
+  // against a real daemon and the fake CLI in `gate:m39-supervisor-mailbox` stage 6.
+  //
+  // SCOPED to the shell's right panel (M57 t5): the Supervisor's composer lives there.
   const supervisorPanel = page.locator('[data-testid="right-panel"]')
   await supervisorPanel.getByTestId('supervisor-request-input').fill(REQUEST_V3)
+  // The DATABASE is the predicate, not a line on the page: the panel re-reads the thread after a
+  // successful send, so a row is the only thing that says the send really landed rather than that
+  // something was optimistically drawn. A second click cannot double-send -- the send clears the
+  // box and the button is disabled while it is empty.
   await clickUntil(
     supervisorPanel.getByTestId('supervisor-request-send'),
-    async () => supervisorPanel.getByTestId('supervisor-request-result').isVisible(),
+    async () => (await prisma.supervisorMessage.count({ where: { workspaceId, role: 'human' } })) > 0,
     'the "tell the Supervisor" send button',
   )
-  const requestResult = (await supervisorPanel.getByTestId('supervisor-request-result').textContent())?.trim() ?? ''
-  console.log(`stage 5: the box answered ${JSON.stringify(requestResult)}`)
-  if (!requestResult.includes('v3')) {
-    await fail(`stage 5: the request result reads ${JSON.stringify(requestResult)}, expected it to name goal v3`)
+  const conversation = await prisma.supervisorMessage.findMany({ where: { workspaceId }, orderBy: { seq: 'asc' } })
+  for (const row of conversation) {
+    console.log(
+      `stage 5: message seq ${String(row.seq)} ${row.role}/${row.status} text ${JSON.stringify(row.text)} ` +
+        `attachments ${JSON.stringify(row.attachments)} actions ${JSON.stringify(row.actions)}`,
+    )
   }
-  const v3Row = await prisma.goalVersion.findFirst({ where: { workspaceId, version: 3 }, select: { request: true, text: true } })
-  console.log(`stage 5: GoalVersion v3.request = ${JSON.stringify(v3Row?.request)}`)
-  console.log(`stage 5: GoalVersion v3.text = ${JSON.stringify(v3Row?.text)}`)
-  if (v3Row === null) await fail('stage 5: no GoalVersion v3 row was written')
-  if (v3Row.request !== REQUEST_V3) {
-    await fail(`stage 5: GoalVersion v3.request is ${JSON.stringify(v3Row.request)}, expected ${JSON.stringify(REQUEST_V3)}`)
+  if (conversation.length !== 2) {
+    await fail(`stage 5: one send wrote ${String(conversation.length)} message row(s), expected the person's line and one reply`)
   }
-  if (!v3Row.text.includes(GOAL_V1) || !v3Row.text.includes(REQUEST_V3)) {
-    await fail(`stage 5: the amendment did not keep the body: ${JSON.stringify(v3Row.text)}`)
+  const [said, reply] = conversation
+  if (said.role !== 'human' || said.status !== 'sent') {
+    await fail(`stage 5: the first row is ${said.role}/${said.status}, expected human/sent`)
   }
-  // The verdict the TICK would reach, asked of the same helper `dispatchPlanning` asks -- no daemon
-  // is started here and no run is dispatched, which is exactly what `replan-status` is for.
-  const verdict = JSON.parse(runCli(['replan-status', '--workspace', workspaceId]))
-  console.log(`stage 5: replan-status = ${JSON.stringify(verdict)}`)
-  if (verdict.goalVersion !== 3) await fail(`stage 5: replan-status says goal v${String(verdict.goalVersion)}, expected 3`)
-  if (verdict.willReplan !== true) {
-    await fail(`stage 5: replan-status says willReplan ${String(verdict.willReplan)} after a request, expected true`)
+  if (said.text !== REQUEST_V3) {
+    await fail(`stage 5: the person's row reads ${JSON.stringify(said.text)}, expected ${JSON.stringify(REQUEST_V3)}`)
   }
-  console.log('stage 5 PASSED: one sentence became goal v3 with the words kept, and the next tick will re-plan it as a delta')
+  if (reply.role !== 'supervisor' || reply.status !== 'answering') {
+    await fail(`stage 5: the second row is ${reply.role}/${reply.status}, expected supervisor/answering -- the reply placeholder`)
+  }
+  if (reply.text !== '') {
+    await fail(`stage 5: the placeholder already carries text ${JSON.stringify(reply.text)} -- nothing has answered it yet`)
+  }
+  // E8's own claim, as a NEGATIVE: the composer writes no goal version at all any more. Without
+  // this the stage would pass just as happily against the old route, which is what it used to
+  // measure.
+  const v3Row = await prisma.goalVersion.findFirst({ where: { workspaceId, version: 3 } })
+  console.log(`stage 5: GoalVersion v3 = ${v3Row === null ? 'none, as F intends' : JSON.stringify(v3Row)}`)
+  if (v3Row !== null) {
+    await fail('stage 5: the composer wrote a goal version -- F R2 makes it a message, and a goal change is what a REPLY may propose')
+  }
+  // THE `replan-status` ASSERTIONS ARE GONE, and this is where they went. They read "a FRESH goal
+  // version arms the next tick's re-plan", and the only fresh version in this gate was the one the
+  // composer wrote: stage 0 seeds a `workspace.replan_started` for v2 against a succeeded run, so
+  // v2 reads `alreadyReplanned: true` / `blockedBy: "dedup"` and asking the same question here would
+  // measure M40's dedup rather than anything a person did in the panel. The goal-change path a
+  // conversation takes -- a reply asking for one, applied under `act`, the new version carrying an
+  // attached brief's path -- is proven end to end against a real daemon and the fake CLI in
+  // `gate:m39-supervisor-mailbox` stage 6, which is where a goal version now comes from.
+  console.log(
+    'stage 5 PASSED: one sentence became the person\'s own line and a reply waiting on the daemon, and not one goal version',
+  )
 
   // ============================================================================================
   // Stage 6: the raw values are FOLDED, not hidden.

@@ -28,6 +28,37 @@ function candidateLines(candidates: readonly Candidate[]): string {
 }
 
 /**
+ * `text` at most `max` characters.
+ *
+ * The loader caps too; this is the cap that actually bounds the CALL, applied where the prompt is
+ * built rather than trusted from upstream. Every Supervisor prompt uses it, which is why it lives
+ * in this module rather than in whichever one needed it first: two copies would be two answers to
+ * "how much of somebody else's text reaches a model", and only one of them would be the one a
+ * reader found.
+ */
+export function cap(text: string, max: number): string {
+  return text.length <= max ? text : text.slice(0, max)
+}
+
+/**
+ * The WORKSPACE section: the four facts every Supervisor prompt opens with, heading included.
+ *
+ * Shared rather than spelt twice (Supervisor chat R2): `buildDecisionPrompt` and
+ * `buildSupervisorChatPrompt` show a model the same project, and two renderings of it would drift
+ * -- a goal phrased one way in a decision and another in a conversation is two projects as far as
+ * the model can tell.
+ */
+export function workspaceLines(world: SupervisorWorld): readonly string[] {
+  return [
+    'WORKSPACE',
+    `  id: ${world.workspaceId}`,
+    `  goal: ${world.goal ?? 'none set'}`,
+    `  scheduling: ${world.halted === null ? 'running' : `halted (${world.halted.reason})`}`,
+    `  tasks: ${world.tasks.length}, slaves: ${world.slaves.length}, pending questions: ${world.questions.length}`,
+  ]
+}
+
+/**
  * The one prompt a Supervisor model call ever sends (M38 section 3).
  *
  * It asks for an INDEX into a rule-built catalogue, never for an action: the literal
@@ -56,11 +87,7 @@ export function buildDecisionPrompt(input: {
   if (profile !== null && profile !== '') blocks.push(PROFILE_HEADING, profile, '')
 
   blocks.push(
-    'WORKSPACE',
-    `  id: ${world.workspaceId}`,
-    `  goal: ${world.goal ?? 'none set'}`,
-    `  scheduling: ${world.halted === null ? 'running' : `halted (${world.halted.reason})`}`,
-    `  tasks: ${world.tasks.length}, slaves: ${world.slaves.length}, pending questions: ${world.questions.length}`,
+    ...workspaceLines(world),
     '',
     'SITUATION',
     `  kind: ${situation.kind}`,

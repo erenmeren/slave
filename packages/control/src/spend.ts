@@ -6,7 +6,8 @@ import { INTAKE_PER_CALL_CAP_USD, SUPERVISOR_PER_CALL_CAP_USD } from '@slave-of-
  *  project spent $4" and "this project spent at least $4 and we stopped being able to tell". */
 export interface WorkspaceSpend {
   /** `runsMeasuredUsd + supervisorMeasuredUsd + supervisorUnmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD
-   *  + intakeMeasuredUsd + intakeUnmeasuredCalls * INTAKE_PER_CALL_CAP_USD`. */
+   *  + intakeMeasuredUsd + intakeUnmeasuredCalls * INTAKE_PER_CALL_CAP_USD
+   *  + chatMeasuredUsd + chatUnmeasuredTurns * SUPERVISOR_PER_CALL_CAP_USD`. */
   readonly spentUsd: number
   /** Σ `SlaveRun.costUsd` over every run of the workspace, whatever its status. Postgres' `sum()`
    *  skips NULLs, so an unmeasured RUN contributes nothing here -- deliberately, and unchanged
@@ -27,6 +28,11 @@ export interface WorkspaceSpend {
    *  same rule as the Supervisor's above, for the same reason: a provider that reports no cost
    *  must not be able to make money disappear. */
   readonly intakeUnmeasuredCalls: number
+  /** Σ `SupervisorMessage.modelCostUsd` -- what TALKING to the Supervisor has cost (F R2). */
+  readonly chatMeasuredUsd: number
+  /** Conversation turns whose cost never came back (`SupervisorMessage.unmeasured`), charged at
+   *  `SUPERVISOR_PER_CALL_CAP_USD`. Every Cursor turn is one of these (erratum E2). */
+  readonly chatUnmeasuredTurns: number
 }
 
 /**
@@ -60,6 +66,17 @@ export interface WorkspaceSpend {
  * Supervisor's -- measured cost summed, and a call whose cost never came back charged at
  * `INTAKE_PER_CALL_CAP_USD` rather than counted as free. Every reader of `workspaceSpend` sees
  * this money without asking about intakes at all.
+ *
+ * THE CONVERSATION'S MONEY (F R2, task 4 fix round 1). A chat turn is a Supervisor model call: it
+ * is capped at `SUPERVISOR_PER_CALL_CAP_USD` like every other, and a person who can type is a
+ * person who can spend. It is counted HERE, once per turn, on the intake's terms -- measured cost
+ * summed, an unmeasured turn charged at the cap rather than at zero -- and NOT on the
+ * `SupervisorDecision` rows a reply's actions produce, which carry `modelCalled: false` for
+ * exactly this reason: one call is charged once, however many things the reply asked for.
+ *
+ * The loop this closes is the one that mattered: `world.budgetExhausted` is this total, and
+ * `startChatTurn` refuses to call a model when it is true. Without this term a project past its
+ * budget could be talked further past it, one turn at a time, forever.
  *
  * `client` exists so the caller can run this INSIDE its own snapshot: `loadWorld` reads the world
  * in one `RepeatableRead` transaction, and a spend figure fetched on the shared client afterwards
@@ -101,17 +118,38 @@ export async function workspaceSpend(
   const intakeMeasuredUsd = intake?.modelCostUsd ?? 0
   const intakeUnmeasuredCalls = intake?.unmeasuredCalls ?? 0
 
+  // ONE `groupBy`, for the decision term above's reason: this runs inside `loadWorld`'s
+  // transaction on the tick's hot path. Grouped on `unmeasured` rather than counting non-null
+  // costs, because `unmeasured` is a COLUMN here and the two are not the same question -- a row
+  // can honestly have no cost and not be unmeasured (the placeholder of a turn nobody has answered
+  // yet, a turn that failed before any call was made), and charging those at the cap would bill a
+  // project a dollar for pressing Enter.
+  const chat = await client.supervisorMessage.groupBy({
+    by: ['unmeasured'],
+    where: { workspaceId },
+    _sum: { modelCostUsd: true },
+    _count: { _all: true },
+  })
+  // Summed across BOTH groups, the decision term's own rule: money that was spent belongs in the
+  // total rather than filtered out of it.
+  const chatMeasuredUsd = chat.reduce((total, group) => total + (group._sum.modelCostUsd ?? 0), 0)
+  const chatUnmeasuredTurns = chat.find((group) => group.unmeasured)?._count._all ?? 0
+
   return {
     runsMeasuredUsd,
     supervisorMeasuredUsd,
     supervisorUnmeasuredCalls,
     intakeMeasuredUsd,
     intakeUnmeasuredCalls,
+    chatMeasuredUsd,
+    chatUnmeasuredTurns,
     spentUsd:
       runsMeasuredUsd +
       supervisorMeasuredUsd +
       supervisorUnmeasuredCalls * SUPERVISOR_PER_CALL_CAP_USD +
       intakeMeasuredUsd +
-      intakeUnmeasuredCalls * INTAKE_PER_CALL_CAP_USD,
+      intakeUnmeasuredCalls * INTAKE_PER_CALL_CAP_USD +
+      chatMeasuredUsd +
+      chatUnmeasuredTurns * SUPERVISOR_PER_CALL_CAP_USD,
   }
 }

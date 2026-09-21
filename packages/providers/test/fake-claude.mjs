@@ -83,8 +83,27 @@
 //                  (`ClaudeCodeAdapter.resume` appends it); keying off the
 //                  resume prompt's wording would make this fake agree with a
 //                  sentence in `deliver.ts` rather than with the protocol.
-//   Every prompt-sniffing mode above also carries M38's SUPERVISOR arm,
-//   checked FIRST: a prompt containing the literal `"candidateIndex"`
+//   Supervisor chat's CHAT arm is checked FIRST in every prompt-sniffing
+//   mode AND inside the `complete` name: a prompt containing the literal
+//   `"supervisorReply"` (`SUPERVISOR_CHAT_MARKER`, which
+//   `buildSupervisorChatPrompt`'s instruction line always emits) is
+//   answered with `{"supervisorReply": {"text": "On it.", "actions": <from
+//   --chat-actions-json-base64 in ARGV, default []>, "sources": []}}`.
+//   First because its literal is the most specific one here: it is in
+//   `ROUTING_LITERALS`, so every other prompt's quoted copies are defused
+//   and a LIVE `"supervisorReply"` appears in exactly one prompt this
+//   repository builds. Being ahead of the ANSWER arm below is the half that
+//   is load-bearing -- that same instruction line also carries `"sources"`,
+//   because a reply cites what it answered from, so an answer arm in front
+//   would swallow every chat turn there is. ARGV and base64 for the reasons
+//   `--ask-json-base64` gives (M52 R3, erratum E6): no environment variable
+//   reaches a decision call's child, and an action carries quotes and
+//   braces. It is in the `complete` name as well as the flow modes because
+//   the CLI's own integration tests have one fixed `SLAVEOFAI_CLAUDE_ARGS`
+//   and no flow mode of their own -- R7's capability-map arm's reason,
+//   verbatim.
+//   Behind it, every prompt-sniffing mode above also carries M38's
+//   SUPERVISOR arm: a prompt containing the literal `"candidateIndex"`
 //   (which `buildDecisionPrompt` always emits) replays the
 //   `supervisor-decision` fixture and does nothing else -- no commit, no
 //   file. It is checked before `"verdict"`/`"task graph"` so a supervisor
@@ -422,6 +441,89 @@ async function supervisorArm(prompt) {
   return true
 }
 
+/**
+ * Supervisor chat (R2): ONE TURN of the conversation between a person and the Supervisor,
+ * recognised by `SUPERVISOR_CHAT_MARKER` -- the literal `"supervisorReply"` that
+ * `buildSupervisorChatPrompt`'s instruction line always carries.
+ *
+ * IT IS CHECKED FIRST IN EVERY MODE, ahead of the intake, supervisor and answer arms, because its
+ * literal is the most specific one there is: `supervisorReply` is in `ROUTING_LITERALS`, so
+ * `defuseRoutingLiterals` rewrites `"supervisorReply"` in every text any other prompt quotes back
+ * -- a profile, a person's message, a feed sentence, an attachment. A LIVE `"supervisorReply"`
+ * therefore appears in exactly one prompt this repository builds, and matching it first can steal
+ * nothing from anybody.
+ *
+ * Being ahead of {@link answerArm} specifically is not decoration but the load-bearing half: the
+ * chat prompt's instruction line names BOTH routing literals, because a reply cites its sources in
+ * the same envelope it answers in, and `"sources"` alone is what the answer arm keys on. With the
+ * two the other way round every chat turn in the system would be handed a worker's answer fixture
+ * and `parseSupervisorReply` would read no envelope at all.
+ *
+ * SYNTHETIC rather than a fixture replay, `intakeArm`'s reason: the actions a turn asks for are
+ * chosen by the caller a moment before the call, and no recording made in advance could carry a
+ * task id that was minted for this test.
+ */
+async function chatArm(prompt) {
+  if (!prompt.includes('"supervisorReply"')) return false
+  const sessionId = 'fake-session-chat'
+  const text = JSON.stringify({ supervisorReply: { text: 'On it.', actions: chatActions(), sources: [] } })
+  await writeLines([
+    JSON.stringify({ type: 'system', subtype: 'init', cwd: process.cwd(), session_id: sessionId, model: 'fake-claude', permissionMode: 'bypassPermissions' }),
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        model: 'fake-claude',
+        id: 'msg_fake_chat',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text }],
+      },
+      session_id: sessionId,
+    }),
+    JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      terminal_reason: 'completed',
+      stop_reason: 'end_turn',
+      num_turns: 1,
+      // The other decision arms' own figure: a chat turn is one call and it is MEASURED, which is
+      // what lets a test tell a Claude turn from a Cursor one (the latter reports no cost at all).
+      total_cost_usd: 0.01,
+      permission_denials: [],
+      session_id: sessionId,
+      result: text,
+    }),
+  ])
+  process.exit(0)
+}
+
+/**
+ * What {@link chatArm} puts in the reply's `actions` -- `--chat-actions-json-base64 <base64 of the
+ * JSON array>` from ARGV, or none at all.
+ *
+ * ARGV AND ONLY ARGV, and base64 for `--ask-json-base64`'s two reasons (M52 R3, M39 erratum E6): a
+ * decision call's child is spawned with `buildDecisionEnv()` -- PATH, HOME, LANG and TERM and
+ * nothing else -- so no environment variable a caller exports ever reaches this process, while
+ * `SLAVEOFAI_CLAUDE_ARGS` rides through as `extraArgs` exactly as `--fixture` does; and an action
+ * carries quotes, braces and a person's own sentence, none of which survive a shell-split argv
+ * unencoded.
+ *
+ * An absent flag, a flag whose value is another flag, and an encoding that does not decode to a
+ * JSON array all mean NO actions: a reply that answers and asks for nothing is the ordinary turn,
+ * and inventing one here would put a decision card in front of a test that asked for none.
+ */
+function chatActions() {
+  const encoded = flagValue('--chat-actions-json-base64')
+  if (encoded === undefined) return []
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'))
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
 /** M39 (erratum E3): the Supervisor's ANSWER call -- the second call it makes about a question,
  *  recognised by the one literal `buildAnswerPrompt` guarantees. Which fixture it replays comes
  *  from the environment, not from this file, so one gate can spawn a daemon that answers from a
@@ -574,13 +676,41 @@ async function workFixtureArm() {
  */
 const REDACTED_ENV_NAMES = new Set(['SLAVEOFAI_RUN_TOKEN'])
 
+/**
+ * ARGV and the SETTINGS FILE ride along with the environment (F R7). A spawn is three things --
+ * what it was told (argv), what it was given (env) and what it was pointed at (the settings file
+ * naming the hook) -- and the read-only tool mode changes one of each: `--tools Read,Glob,Grep`,
+ * `SLAVEOFAI_PERMISSIONS_FILE`, and the gate the settings register. Read from inside the child
+ * because the caller deletes its per-call temp directory the moment the call ends, so nothing
+ * outside can read that settings file afterwards. `null` when there is no `--settings` argument or
+ * it does not parse -- a dump is evidence, never an assertion of its own.
+ */
+function settingsFileContents() {
+  const settingsPath = flagValue('--settings')
+  if (settingsPath === undefined) return null
+  try {
+    return JSON.parse(readFileSync(settingsPath, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
 function dumpChildEnv() {
   const out = flagValue('--env-out') ?? process.env.FAKE_ENV_OUT
   if (out === undefined || out === '') return
   const env = Object.fromEntries(
     Object.entries(process.env).map(([name, value]) => [name, REDACTED_ENV_NAMES.has(name) ? '<present>' : value]),
   )
-  appendFileSync(out, `${JSON.stringify({ runId: process.env.SLAVEOFAI_RUN_ID ?? null, cwd: process.cwd(), env })}\n`)
+  appendFileSync(
+    out,
+    `${JSON.stringify({
+      runId: process.env.SLAVEOFAI_RUN_ID ?? null,
+      cwd: process.cwd(),
+      env,
+      argv: args,
+      settings: settingsFileContents(),
+    })}\n`,
+  )
 }
 
 /**
@@ -895,6 +1025,11 @@ async function main() {
   }
 
   if (fixtureName === 'env-echo') {
+    // `--env-out` is honoured here too (F R7), not only on the `--work-fixture` arm: a DECISION
+    // call surfaces none of this fixture's result payload -- `decideWithModel` normalizes the line
+    // into `ModelDecisionOutcome` and drops `env`, `cwd` and `argv` -- so the dump file is the only
+    // way a decision's own spawn can be measured from the child. No-op when no path is named.
+    dumpChildEnv()
     // Synthetic by necessity: no real capture carries the child's own
     // process.env, process.cwd(), or process.argv, because nothing about
     // the CLI's stream format ever would. A later task uses this to prove
@@ -937,6 +1072,7 @@ async function main() {
 
   if (fixtureName === 'm36-flow') {
     const prompt = await promptText()
+    if (await chatArm(prompt)) return
     if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
     if (await answerArm(prompt)) return
@@ -987,6 +1123,7 @@ async function main() {
 
   if (fixtureName === 'm8-flow') {
     const prompt = await promptText()
+    if (await chatArm(prompt)) return
     if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
     if (await answerArm(prompt)) return
@@ -1013,6 +1150,7 @@ async function main() {
 
   if (fixtureName === 'm41-flow') {
     const prompt = await promptText()
+    if (await chatArm(prompt)) return
     if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
     if (await answerArm(prompt)) return
@@ -1072,6 +1210,7 @@ async function main() {
 
   if (fixtureName === 'm8a-flow') {
     const prompt = await promptText()
+    if (await chatArm(prompt)) return
     if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
     if (await answerArm(prompt)) return
@@ -1090,6 +1229,7 @@ async function main() {
 
   if (fixtureName === 'complete') {
     const prompt = await promptText()
+    if (await chatArm(prompt)) return
     if (await capabilityMapArm(prompt)) return
     await replayFixture('complete')
     return

@@ -130,12 +130,53 @@ same content `position: fixed` at the right, glass, no scrim, with the grid's th
 remembers being closed**: `collapsed` is read from `localStorage['supervisor']` after hydration and
 written on every collapse and expand. `Mod+J` toggles it, and a keyboard toggle animates nothing.
 
-Its default content is the **Supervisor**, which is a conversation over events that already exist: a
-thread is one local calendar day of this project's `workspace.goal_set` (the operator's own typed
-words, which M45 put on the payload) and `supervisor.*` rows, its decision cards are the same
-pending list the command strip's needs-you bar reads, and its composer is the same
-`POST /api/w/:id/goal/request` the M45 request box posted to. There is no conversation table and no
-new event type.
+Its default content is the **Supervisor**, which is a conversation: a thread is one local calendar
+day of this project's `workspace.goal_set` (the operator's own typed words, which M45 put on the
+payload), its `supervisor.*` rows and — since F — the conversation's own turns, and its decision
+cards are the same pending list the command strip's needs-you bar reads. M57 added no table and no
+event type; F added the one table, and no event type.
+
+**F gives the conversation rows of its own, and three routes.** The composer is a MESSAGE now, not
+a goal change: it sends to `POST /api/w/:id/supervisor/messages` (`{ text, attachments? }` → the
+person's line and the reply placeholder; 409 for a message past the cap or an attachment that is
+not a file this conversation put in the inbox), and the panel reads the thread back from `GET` on
+the same path (`?limit=`, newest end). Asking for the goal to change is something the REPLY may
+propose — a `request_goal_change` card under it, answered like every other proposal — so a question
+that wanted an answer no longer re-plans the whole board. `POST /api/w/:id/goal/request` is
+untouched and still serves the CLI; nothing in the panel calls it.
+
+A reply that has not landed yet is a **thinking…** row (`supervisor-thinking`), and the thread is
+re-read every two seconds while one is on screen — a model call in flight writes nothing, so the
+shell's own wake-up cannot report it. A turn nothing could answer is a `supervisor-failed` row
+carrying the reason as a sentence (no runtime for the provider, the budget, a reply that would not
+parse; anything else is the runtime's own words, shown verbatim with the raw reason in `title`). A
+reply whose every citation checked out wears the **sourced** chip, and the cards under a reply are
+one per action it asked for — the ones the view still holds keep Approve and Decline, and one
+already carried out shows the verb and its tier with nothing to press.
+
+The **Attach** button and the drop zone around the composer hold files until Send, then send a
+multipart form to `POST /api/w/:id/supervisor/uploads` FIRST and post the message with the paths it
+answered — so a message can only ever name a file that is really in the repository, and a refused
+upload keeps the words and the files on screen. That route writes every file into the repository's
+`docs/inbox/` on the base branch, commits it and answers with each path — **413** past twenty
+megabytes, **415** for an extension nothing here can read, **400** for more than five files or a
+name that is a path. What is waiting to go is a chip per file with a way to take it back off; what
+went is a chip per file on the message, name and size, with the path one hover away.
+
+The header's runtime and model selects (`supervisor-provider`, `supervisor-model`) PATCH
+`/api/w/:id/supervisor/settings` the moment they move (`{ provider, model }`, either one `null` for
+the installation default; a provider this installation does not have is a **400**), and a refused
+change puts the select back and says why. Today they govern THIS CONVERSATION and nothing else --
+the project's decisions and its answers to workers still go to the runtime the daemon was started
+with -- and they sit on the thread's own chrome for exactly that reason. Changing the runtime clears
+the model with it: a model id is a name one vendor knows. Beside them is the conversation's
+**cost so far** — the measured money, and `N turns unpriced` when some turn reported none, never
+the two folded together (a Cursor turn reports no price at all).
+
+Those message rows are **merged into the same day buckets as the events above, in time order** — so
+a decision still appears beside the message that caused it — and nothing is deduplicated: a goal set
+that echoes a message somebody typed renders as both, because nothing on either row says one caused
+the other.
 
 Its scope line carries the project's one autonomy switch (`supervisor-autonomy`, label **act on its
 own**), which PATCHes `/api/w/:id/supervisor/settings` and moves `Workspace.supervisorAutonomy`

@@ -1,4 +1,5 @@
 import { BREAKER_COOLDOWN_MS } from '../breaker/constants.js'
+import type { ProviderKind } from '../provider/kind.js'
 import type { SituationKind } from './situations.js'
 
 /**
@@ -54,6 +55,22 @@ export const SUPERVISOR_PER_CALL_CAP_USD = 1
  * default to reuse.
  */
 export const SUPERVISOR_DEFAULT_MODEL = 'claude-sonnet-5'
+
+/**
+ * WHICH runtime answers a project that has chosen none (F R4).
+ *
+ * `Workspace.supervisorProvider` is nullable and every reader resolves `null` to this -- the chat
+ * tick before it looks a decider up, the panel before it decides which vendor's model names to
+ * offer. It was a literal spelt at each of those sites until this task, which is exactly the shape
+ * a default drifts in: one reader updated, the other left offering Claude's model list for a
+ * project the daemon was calling Cursor for.
+ *
+ * Beside {@link SUPERVISOR_DEFAULT_MODEL} because the two are one answer -- "the installation
+ * default" is a PAIR, and a reader who needs one needs the other a line later. Typed
+ * `ProviderKind` rather than left to inference, so a third runtime cannot become the default by a
+ * typo in a string.
+ */
+export const SUPERVISOR_DEFAULT_PROVIDER: ProviderKind = 'claude_code'
 
 /**
  * The runtime role `dispatchReview` staffs from (`apps/orchestrator/src/review.ts`) -- `'reviewer'
@@ -186,3 +203,52 @@ export function boundReason(reason: string): string {
  * by a person an hour after it was proposed.
  */
 export const HALT_CLEAR_INTERVAL_MS = 3_600_000
+
+/**
+ * How much text one of the two OPERATOR-REQUEST actions may carry (Supervisor chat R3).
+ *
+ * Both are strings a model wrote from what a person typed, and both outlive the turn: a
+ * `request_goal_change.request` becomes a goal-change request a person reads and approves, and a
+ * `note_for_planner.text` is COMMITTED to `docs/inbox/NOTES.md` for the next planner to read. Two
+ * thousand characters is {@link RATIONALE_MAX_CHARS}' own bound -- a paragraph or three, enough to
+ * say what is wanted and not enough to be a document -- and it is applied where the action is
+ * VALIDATED as well as where it is built, the `steer_run.text` precedent: a stored row is read
+ * back, printed and acted on, so the bound belongs on the boundary too.
+ */
+export const OPERATOR_REQUEST_MAX_CHARS = 2000
+
+/**
+ * THE ALLOW-LIST for what a person may attach to a message (Supervisor chat R6), and the kind each
+ * extension gets in the prompt.
+ *
+ * `text` is inlined under its own path (up to `CHAT_ATTACHMENT_CHARS`); `image` is named by path
+ * and size and may be OPENED by a read-only turn (R7); `binary` is named and read later by a
+ * worker whose provider can read it. An extension that is not a key here cannot be attached -- an
+ * allow-list, never a deny-list, because the question is what this system can honestly do
+ * something with rather than what somebody thought to forbid.
+ *
+ * In the DOMAIN rather than beside `storeSupervisorUploads`, which is the only writer: the
+ * refusal vocabulary prints the list of what CAN be attached (a person told ".exe is not allowed"
+ * has to guess what is), and `packages/control/src/refusal.ts` must stay free of the Prisma and
+ * `node:fs` imports the upload verb carries.
+ *
+ * Typed against `ChatAttachment['kind']` through {@link AttachmentKind} rather than by importing
+ * `chatPrompt.ts`, which imports this file: one union, spelt where nothing else depends on it.
+ */
+export type AttachmentKind = 'text' | 'image' | 'binary'
+
+export const ATTACHMENT_KIND_BY_EXTENSION: Readonly<Record<string, AttachmentKind>> = {
+  md: 'text',
+  txt: 'text',
+  csv: 'text',
+  json: 'text',
+  yaml: 'text',
+  yml: 'text',
+  png: 'image',
+  jpg: 'image',
+  jpeg: 'image',
+  gif: 'image',
+  webp: 'image',
+  svg: 'image',
+  pdf: 'binary',
+}

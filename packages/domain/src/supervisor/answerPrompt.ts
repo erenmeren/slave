@@ -12,23 +12,32 @@ import {
   SOURCE_QUOTE_MAX_CHARS,
   THREAD_BODY_MAX_CHARS,
 } from './constants.js'
-import { PROFILE_HEADING, firstJsonObject } from './prompt.js'
+import { PROFILE_HEADING, cap, firstJsonObject } from './prompt.js'
 import { boundThread, type SupervisorQuestion, type SupervisorWorld, type ThreadMessage } from './world.js'
 
 /**
- * The four places an answer may come from (M39 §1). Closed, and each one is a text the loader
- * already put in the world: the model cannot cite a file, a web page or its own memory, because
+ * Every place a cited answer may come from. Closed, and each one is a text the caller already put
+ * in front of the model: it cannot cite a file, a web page or its own memory, because
  * `verifySources` has nothing to check such a citation against.
+ *
+ * The first four are the answer path's (M39 §1) -- the asker's task, the workspace goal, the
+ * asker's run context and one message of the thread. The last two are the CONVERSATION's
+ * (Supervisor chat R2): a feed sentence, cited by its `seq`, and an attachment, cited by its path.
+ * One list rather than two, because there is one {@link verifySources} and one definition of
+ * "sourced" wherever a citation comes from; a kind cited on a call that never showed it resolves
+ * to nothing and is rejected, which is the same rule the other four already live under.
  */
-export const SOURCE_KINDS = ['task', 'goal', 'run_context', 'message'] as const
+export const SOURCE_KINDS = ['task', 'goal', 'run_context', 'message', 'feed', 'attachment'] as const
 
 /**
  * One citation: where the answer came from, and the words it came from.
  *
- * `ref` matters only for `kind: 'message'`, where it is the thread message id (erratum E1) -- the
- * other three sources are single-valued for a question (its task, its workspace's goal, its asker's
- * recorded run context), so there is nothing for a ref to disambiguate and a model cannot know a
- * task id to write one anyway. It stays on every source so a stored draft has one shape.
+ * `ref` matters only for the kinds that name ONE row among many: `message`, where it is the thread
+ * message id (erratum E1), and the conversation's `feed` (the sentence's `seq`) and `attachment`
+ * (its path). The other three are single-valued for a question (its task, its workspace's goal,
+ * its asker's recorded run context), so there is nothing for a ref to disambiguate and a model
+ * cannot know a task id to write one anyway. It stays on every source so a stored draft has one
+ * shape.
  */
 export interface Source {
   readonly kind: (typeof SOURCE_KINDS)[number]
@@ -36,12 +45,19 @@ export interface Source {
   readonly quote: string
 }
 
+/** The same citation, under the name the CHAT path reads it by (Supervisor chat R2): a reply's
+ *  `sources` are `SourceCitation[]`, and they are the very things {@link verifySources} checks.
+ *  An alias rather than a second interface, so a citation written in a conversation and a citation
+ *  written in an answer can never be two shapes. */
+export type SourceCitation = Source
+
 /**
  * Validates one citation. Input is `unknown` -- a `ref` that is missing, null OR EMPTY becomes
- * `null` rather than a refusal, since erratum E1 makes it meaningless for three of the four kinds:
+ * `null` rather than a refusal, since erratum E1 makes it meaningless for the single-valued kinds:
  * a model that wrote `"ref": ""` for a `task` citation said nothing wrong, and failing the parse
  * would throw away a whole well-sourced answer over a field that source kind ignores. An empty ref
- * on a `message` citation is the same as no ref -- `verifySources` rejects it as `unknown_ref`.
+ * on a `message`, `feed` or `attachment` citation is the same as no ref -- `verifySources` rejects
+ * it as `unknown_ref`.
  */
 export const sourceSchema: z.ZodType<Source, z.ZodTypeDef, unknown> = z.object({
   kind: z.enum(SOURCE_KINDS),
@@ -103,14 +119,6 @@ export const draftSchema: z.ZodType<Draft, z.ZodTypeDef, unknown> = z.object({
   editedBody: z.string().max(ANSWER_MAX_CHARS).optional(),
 })
 
-/** `text` at most `max` characters. The loader caps too; this is the cap that actually bounds the
- *  call, applied where the prompt is built rather than trusted from upstream. The question's own
- *  body is capped by the same rule as a thread message's: it IS one, and a worker that pasted a
- *  file into its question must not be able to spend the whole call on it. */
-function cap(text: string, max: number): string {
-  return text.length <= max ? text : text.slice(0, max)
-}
-
 /** A source the loader did not fill says so, in the prompt, in words -- a heading with nothing
  *  under it reads as "there was nothing to say", which is how a model comes to invent one. */
 const NONE = 'none recorded'
@@ -141,7 +149,7 @@ function rosterLines(world: SupervisorWorld): string {
  * under a SOURCE heading is what a quote may be taken from (plan erratum E8).
  *
  * DEFUSED, like every other rendering of a contract (M48 final review, Important 4). A handoff is
- * written by the planner -- a model -- or by a person, and the five `ROUTING_LITERALS` are what the
+ * written by the planner -- a model -- or by a person, and the `ROUTING_LITERALS` are what the
  * fake CLI selects its arm on: an acceptance criterion reading `emit a "candidateIndex"` would send
  * this answer call to the decision fixture and, under a real provider, hand a model the words of
  * another protocol. `runContext.ts`'s `handoff` section has gone through this since M48 t2; this is

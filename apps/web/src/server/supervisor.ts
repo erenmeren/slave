@@ -1,4 +1,12 @@
-import { listDecisions, loadSupervisorWorld, supervisorSettings, type DecisionView } from '@slave-of-ai/control'
+import { prisma } from '@slave-of-ai/db/client'
+import {
+  conversationCost,
+  listDecisions,
+  loadSupervisorWorld,
+  supervisorSettings,
+  type DecisionView,
+  type ProviderKind,
+} from '@slave-of-ai/control'
 import { displayName, summarise, type SupervisorQuestion, type SupervisorSlave, type SupervisorReport } from '@slave-of-ai/domain'
 
 /**
@@ -26,7 +34,30 @@ export interface SupervisorView {
   // R1/R8 (Task 7): `autonomy` off `loaded.settings` -- straight off the workspace row the report
   // was computed from, so the panel's switch and the report it sits beside can never disagree
   // about which mode the project is in.
-  readonly settings: { readonly enabled: boolean; readonly profile: string | null; readonly autonomy: 'propose' | 'act' }
+  //
+  // F R4: `provider` and `model` are the pair the header's two selects are bound to -- WHICH
+  // runtime answers this project's CONVERSATION, and today nothing else (erratum E10): the chat
+  // tick is the one reader of these columns, and decisions and answers to workers still go to the
+  // runtime the daemon was started with. `null` on either means the installation default, which is
+  // what an unset column has always meant, so the selects show "default" rather than inventing a
+  // name for it.
+  readonly settings: {
+    readonly enabled: boolean
+    readonly profile: string | null
+    readonly autonomy: 'propose' | 'act'
+    readonly provider: ProviderKind | null
+    readonly model: string | null
+  }
+  /**
+   * F R8's "cost so far": what the CONVERSATION has cost, which is not the project's spend and is
+   * not on the report.
+   *
+   * The MEASURED money and the number of turns nobody could price, side by side rather than folded
+   * together (erratum E2): a Cursor turn reports no price at all, and adding it up as a zero would
+   * put a number under the thread that is quietly too small. The panel prints both.
+   */
+  readonly conversationCostUsd: number
+  readonly conversationUnmeasuredTurns: number
   /**
    * The titles of the tasks on this project's board, by id (M40 §6) -- what a `cancel_task`
    * proposal's sentence names instead of a raw uuid. "cancel task 3f8a…: the re-plan for goal v2 no
@@ -80,9 +111,18 @@ export async function buildSupervisorView(workspaceId: string, now: Date = new D
   if ((await supervisorSettings(workspaceId)) === null) return null
 
   const loaded = await loadSupervisorWorld(workspaceId, now)
-  const [pending, recent] = await Promise.all([
+  const [pending, recent, runtime, cost] = await Promise.all([
     listDecisions(workspaceId, { pending: true }),
     listDecisions(workspaceId, { limit: RECENT_DECISION_LIMIT }),
+    // F R4: the two columns `supervisorSettings` does not read. It is a THREE-column read on the
+    // tick's hot path and stays one -- `supervise()` asks it a dozen times a second per project,
+    // before it has decided whether to load a world at all -- so the pair is read here, where the
+    // one caller that renders them is.
+    prisma.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { supervisorProvider: true, supervisorModel: true },
+    }),
+    conversationCost(workspaceId),
   ])
 
   return {
@@ -90,7 +130,15 @@ export async function buildSupervisorView(workspaceId: string, now: Date = new D
     pending,
     recent,
     questions: loaded.world.questions.map((one) => toQuestionView(one, loaded.world.slaves)),
-    settings: loaded.settings,
+    settings: {
+      ...loaded.settings,
+      // `?? null` for a row that vanished between the pre-check and here: the installation default
+      // is what a project with no override has, and it is the honest answer for one that is gone.
+      provider: runtime?.supervisorProvider ?? null,
+      model: runtime?.supervisorModel ?? null,
+    },
+    conversationCostUsd: cost.usd,
+    conversationUnmeasuredTurns: cost.unmeasuredTurns,
     taskTitles: Object.fromEntries(loaded.world.tasks.map((one) => [one.id, one.title])),
   }
 }

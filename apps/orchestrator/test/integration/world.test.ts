@@ -619,6 +619,9 @@ describe('loadWorld stats.activeRuns and stats.spentUsd', () => {
       // M59 R12: no intake made this project, so its two terms are zero.
       intakeMeasuredUsd: 0,
       intakeUnmeasuredCalls: 0,
+      // F R2: and nobody has talked to its Supervisor.
+      chatMeasuredUsd: 0,
+      chatUnmeasuredTurns: 0,
       spentUsd: 2 + 0.25 + 2 * SUPERVISOR_PER_CALL_CAP_USD,
     })
   })

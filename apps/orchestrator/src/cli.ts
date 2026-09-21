@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { accessSync, appendFileSync, constants, existsSync, readFileSync, realpathSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   addCompanyTeam,
@@ -120,6 +120,9 @@ import {
   setPassword,
   setSupervisorSettings,
   setWorkspaceIntegration,
+  listSupervisorMessages,
+  sendSupervisorMessage,
+  storeSupervisorUploads,
   describeSync,
   DEFAULT_MAX_MODEL_CALLS,
   simulationStatus,
@@ -142,6 +145,7 @@ import {
   type PersonPoolSyncReport,
   type ControlRefusal,
   type CredentialKind,
+  type DeciderRegistry,
   type ImportReport,
   type ModelDecider,
   type Principal,
@@ -204,8 +208,10 @@ import {
   DEFAULT_MODEL_TIMEOUT_MS,
   brokerReplyPathFor,
   buildRegistry,
+  decideWithCursor,
   decideWithModel,
   type AdapterRegistry,
+  type ModelDecisionInput,
   type ProviderKind,
   type ProviderWiring,
 } from '@slave-of-ai/providers'
@@ -226,6 +232,16 @@ import { drainPumps, tick } from './tick.js'
 // Every sector the platform knows, from the registry itself -- a literal `trade|software` here
 // would be a third place to edit when a sector is added (M31b §1 principle 1).
 const SECTOR_CHOICES = Object.keys(sectors).join('|')
+
+/**
+ * How much of the conversation `supervisor-thread` prints when nobody said how much (R8).
+ *
+ * Thirty is a reading, not a dump: the chat prompt itself carries twelve turns
+ * (`CHAT_HISTORY_MAX`), so this is comfortably more history than the Supervisor is working from
+ * and still one screenful. `listSupervisorMessages` has its own ceiling for what `--limit` may
+ * ask for; this is only the default.
+ */
+const CHAT_THREAD_LIMIT = 30
 
 const USAGE = `usage: orchestrator <command> [options]
 
@@ -581,6 +597,22 @@ const USAGE = `usage: orchestrator <command> [options]
                                        proposes -- the body, the citations that verified and the
                                        ones that did not, its confidence (sourced or
                                        interpretation) and the critical flags that stopped it.
+  supervisor-say --workspace <id> --text <t> [--file <path>]...
+                                       say something to this project's Supervisor. The message is
+                                       written with a reply placeholder beside it, and the DAEMON
+                                       answers it on its next pass -- this command spends nothing
+                                       and waits for nothing. Each --file is read from your own
+                                       machine, written into the repository under docs/inbox/ and
+                                       committed (at most 5, 20 MB each; md txt csv json yaml pdf
+                                       png jpg jpeg gif webp svg), so the Supervisor and every
+                                       worker can open it by path. Nothing is written at all if
+                                       any file is refused.
+  supervisor-thread --workspace <id> [--limit <n>]
+                                       the conversation, oldest first -- JSON, one array, the
+                                       shape supervisor-decisions prints. Each turn carries its
+                                       role, status, text, attachments, the actions a reply
+                                       asked for and what it cost. --limit keeps the NEWEST n
+                                       (default 30): a thread is read from the bottom.
   approve-decision --id <id> [--body-file <path>]
                                        a human says yes to a pending proposal: carries out its
                                        action and marks it approved. --body-file replaces a drafted
@@ -592,6 +624,7 @@ const USAGE = `usage: orchestrator <command> [options]
                                        reaches the world. --reason is kept with the decision.
   set-supervisor --workspace <id> [--enable | --disable]
                  [--profile-file <path> | --clear-profile] [--autonomy propose|act]
+                 [--provider claude_code|cursor | --clear-provider] [--model <name> | --clear-model]
                                        switch a workspace's Supervisor on or off, and/or set (from
                                        a file) or clear its persona/house-rules profile. Refused
                                        with no flag at all, with both --enable and --disable, or
@@ -600,6 +633,13 @@ const USAGE = `usage: orchestrator <command> [options]
                                        proposing it; escalations still wait for you, and a halted
                                        project still only proposes. --autonomy propose is the
                                        default and today's behaviour.
+                                       --provider and --model say WHICH runtime answers this
+                                       project's CONVERSATION -- and today nothing else: decisions
+                                       and answers to workers still go to the runtime the daemon was
+                                       started with. --clear-provider / --clear-model put either
+                                       back to the installation default. A Cursor turn cannot be
+                                       capped and reports no price, so it is recorded unpriced and
+                                       charged at the per-call cap.
   set-auto-merge --workspace <id> --on | --off
                                        whether an approved review merges the branch and stamps the
                                        task integrated (--on), or leaves both to you (--off, the
@@ -809,8 +849,14 @@ type Flags = Readonly<Record<string, string | readonly string[] | undefined>>
  * binds `['/opt/deploy.sh', '--now']`. Spelled one element per flag rather than as a single string
  * this file would have to split, because splitting is where a path with a space in it becomes two
  * arguments -- and a binding is the operator's own command line, not a guess about it.
+ *
+ * `file` joined for `supervisor-say --file <path> ...` (Supervisor chat R8): a person attaches
+ * several documents to one message, and without this the parser would keep only the last one. It
+ * is the first name here that an EXISTING single-valued flag already uses -- `set-profile --file`
+ * and `runbooks add --file` read it through {@link flagText}, which is why that function accepts a
+ * one-element array and refuses only a second occurrence.
  */
-const REPEATABLE: ReadonlySet<string> = new Set(['verify', 'setup', 'command'])
+const REPEATABLE: ReadonlySet<string> = new Set(['verify', 'setup', 'command', 'file'])
 
 /**
  * Flags that carry no value at all, so they may be written ANYWHERE in the command (M50 t3, widened
@@ -851,6 +897,12 @@ const VALUELESS: ReadonlySet<string> = new Set([
   'auto-merge',
   'on',
   'off',
+  // F R4: `set-supervisor --clear-provider --clear-model` otherwise records the second flag's own
+  // NAME as the first one's value, so only the provider would be cleared -- a silent half-refusal
+  // of what an operator plainly asked for. Both are bare switches whose presence is the whole
+  // instruction, which is E3's rule for every bare flag a milestone adds.
+  'clear-provider',
+  'clear-model',
 ])
 
 /**
@@ -1001,27 +1053,124 @@ function claudeCommand(): { readonly command: string; readonly extraArgs?: reado
 }
 
 /**
- * The decider the DAEMON injects into `tickSimulations` (M31a §4). The control layer holds no
- * knowledge of how a model is called -- it hands out a prompt and a budget and takes an outcome --
- * so this closure is the whole seam between a simulation's decision point and a real model call.
- * Built here, next to `claudeCommand()` and the gate paths, rather than inside the daemon: this
- * file is the one place that reads the environment for spawn configuration.
+ * The Cursor binary this process spawns for a one-shot call, and any extra argv in front of its
+ * own flags -- {@link claudeCommand}'s sibling, read from the CURSOR manifest's own two variables
+ * (`SLAVEOFAI_CURSOR_BIN`, `SLAVEOFAI_CURSOR_ARGS`) rather than from names spelt here, which is
+ * `buildAdapterRegistry`'s rule since M56a R6.
+ *
+ * No `fakeCliRefusal` check of its own, because {@link buildDeciderRegistry} asks it before it
+ * builds either closure -- the one place that can refuse for BOTH providers at once, which is what
+ * M56a R10 made that function about. Asking again here would be a second spelling of one rule.
  */
-function buildModelDecider(): ModelDecider {
-  return (input) =>
-    decideWithModel({
-      ...claudeCommand(),
-      hookPath: denyAllHookPath(),
-      model: input.model,
-      prompt: input.prompt,
-      maxBudgetUsd: input.maxBudgetUsd,
-      timeoutMs: Number(process.env['SLAVEOFAI_MODEL_TIMEOUT_MS'] ?? DEFAULT_MODEL_TIMEOUT_MS),
-    })
+function cursorCommand(): { readonly command: string; readonly extraArgs?: readonly string[] } {
+  const { binEnvVar, argsEnvVar, binary } = manifestFor('cursor').invocation
+  const extra = process.env[argsEnvVar]
+  return {
+    command: process.env[binEnvVar] ?? binary,
+    ...(extra === undefined || extra === '' ? {} : { extraArgs: extra.split(' ') }),
+  }
+}
+
+/** The ceiling on ONE model call, read where every other spawn variable is read. */
+function modelTimeoutMs(): number {
+  return Number(process.env['SLAVEOFAI_MODEL_TIMEOUT_MS'] ?? DEFAULT_MODEL_TIMEOUT_MS)
+}
+
+/**
+ * The deciders the DAEMON injects into `tickSimulations`, `tickIntakes` and `tickSupervisorChat`,
+ * ONE PER PROVIDER (M31a §4, widened by Supervisor chat R4).
+ *
+ * The control layer holds no knowledge of how a model is called -- it hands out a prompt and a
+ * budget and takes an outcome -- so these closures are the whole seam between a decision point and
+ * a real model call. Built here, next to `claudeCommand()` and the gate paths, rather than inside
+ * the daemon: this file is the one place that reads the environment for spawn configuration, and
+ * every variable above is read at CALL time, inside the closure, so a process that reconfigures
+ * itself between two calls is spawning what it currently says it is.
+ *
+ * A REGISTRY, not one decider, because a project now chooses which runtime answers its Supervisor
+ * (`Workspace.supervisorProvider`). Every caller that wants "the default" takes `.claude_code`,
+ * which is what the installation default has always meant, and `ModelDecider` stays the type of
+ * ONE provider's entry.
+ *
+ * `claude_code` spawns two ways and the difference is one flag and one gate (R7). A text-only turn
+ * -- every simulation step, every intake reply, every Supervisor decision, and every chat turn but
+ * one -- is the call this function has always made: the deny-all gate, `--tools ""`, and nothing
+ * the model could reach. A turn carrying `tools: 'read-only'` gets the RUN gate (`hookPath()`)
+ * instead, armed by its caller with a permissions file granting `read_repo`, so the model can open
+ * a file the person attached. What that does and does not buy is spec §4 erratum E2, and the short
+ * of it is that the grant is by KIND and not by path: the cwd and the prompt are guidance, not a
+ * boundary.
+ *
+ * `cursor` spawns `decideWithCursor`, which takes no budget: `cursor-agent` has no
+ * `--max-budget-usd` and reports no cost, so `maxBudgetUsd` is dropped here rather than passed to
+ * something that would ignore it (erratum E2 again -- a Cursor turn is capped by the timeout and
+ * the vendor account alone, and the turn is recorded `unmeasured`, which erratum E11 says is still
+ * charged at the per-call cap).
+ *
+ * It THROWS on `tools: 'read-only'` rather than dropping the four read-only fields (final fix wave,
+ * M8). Cursor's print mode has no read-only decision mode to ask for: there is no flag that limits
+ * it to `Read,Glob,Grep`, and its gate denies every tool outright. Silently dropping the fields
+ * would spawn a text-only call that looked armed -- a caller that had written a permissions file
+ * and minted a token would be told nothing, and the one thing R7 promises (the model can open the
+ * picture) would quietly not be true. `tickSupervisorChat` never sends them, because it checks the
+ * provider first; this is what makes that check load-bearing instead of a convention.
+ */
+export function buildDeciderRegistry(): DeciderRegistry {
+  // ASKED ONCE, HERE, AND BEFORE ANY CLOSURE IS BUILT (fix round 1, I1) -- `buildAdapterRegistry`'s
+  // own line, for the reason M56a R10 gives it: `fakeCliRefusal` is about EVERY registered
+  // provider's binary, and only the `claude_code` entry below reaches `claudeCommand()` (which
+  // raises it too). A process told it must not reach a vendor account could otherwise build this
+  // registry, never make a Claude call, and spawn the REAL `cursor-agent` for a chat turn on a
+  // project whose provider column says `cursor` -- the silent real spawn the flag exists to stop.
+  const refusal = fakeCliRefusal(process.env)
+  if (refusal !== null) throw new Error(refusal)
+  return {
+    claude_code: (input) => {
+      if (input.tools !== 'read-only') {
+        return decideWithModel({
+          ...claudeCommand(),
+          hookPath: denyAllHookPath(),
+          model: input.model,
+          prompt: input.prompt,
+          maxBudgetUsd: input.maxBudgetUsd,
+          timeoutMs: modelTimeoutMs(),
+        })
+      }
+      // THE ONE CAST `requireReadOnlyInputs` EXISTS FOR, and it is deliberate. `ModelDecider`'s
+      // input is a structural COPY of the provider's union kept in the control package (which may
+      // not import this one), so the three read-only fields arrive as optional here while
+      // `ModelDecisionInput` requires all three together. Rewriting the refusal in this file would
+      // be a second sentence about one rule; `decideWithModel` throws before it spawns anything,
+      // naming the field that is missing.
+      return decideWithModel({
+        ...claudeCommand(),
+        hookPath: hookPath(),
+        model: input.model,
+        prompt: input.prompt,
+        maxBudgetUsd: input.maxBudgetUsd,
+        timeoutMs: modelTimeoutMs(),
+        tools: 'read-only',
+        cwd: input.cwd,
+        permissionsFilePath: input.permissionsFilePath,
+        runToken: input.runToken,
+      } as ModelDecisionInput)
+    },
+    cursor: (input) => {
+      if (input.tools === 'read-only') throw new Error('cursor has no read-only decision mode')
+      return decideWithCursor({
+        ...cursorCommand(),
+        gatePath: cursorGatePath(),
+        model: input.model,
+        prompt: input.prompt,
+        timeoutMs: modelTimeoutMs(),
+      })
+    },
+  }
 }
 
 /**
  * How many simulation model calls the daemon keeps in flight at once (M32 item 2). Read here for
- * the same reason `buildModelDecider` is built here: this file is the one place that reads the
+ * the same reason `buildDeciderRegistry` is built here: this file is the one place that reads the
  * environment for spawn configuration. A value that is not a positive integer is ignored rather
  * than obeyed -- `SLAVEOFAI_MAX_MODEL_CALLS=0` would arm an llm auto-run that can never step, and
  * a typo must not silently do that.
@@ -1173,14 +1322,20 @@ async function eventWorkspace(flags: Flags): Promise<string | null> {
 }
 
 /**
- * The string-typed read every non-repeatable flag goes through, now that `Flags` also holds
- * arrays. A repeated non-repeatable flag can't happen by construction (`REPEATABLE` is the only
- * source of arrays in `parseArgs`), so the throw here is the type guard's honest fallback rather
- * than a reachable user-facing refusal.
+ * The string-typed read every single-valued flag goes through, now that `Flags` also holds arrays.
+ *
+ * ONE occurrence of a repeatable flag is a string as far as this is concerned, and that is what
+ * makes `--file` (Supervisor chat R8) safe to add to `REPEATABLE`: `set-profile --file <path>` and
+ * `runbooks add --file <path.json>` read the same name here and both mean exactly one file. A
+ * SECOND occurrence is the reachable refusal -- `set-profile --file a --file b` names two profiles
+ * and the operator gets told so, where before this it would silently have written the last one.
  */
 function flagText(flags: Flags, name: string): string | undefined {
   const value = flags[name]
-  if (Array.isArray(value)) throw new Error(`--${name} was given more than once`)
+  if (Array.isArray(value)) {
+    if (value.length > 1) throw new Error(`--${name} was given more than once`)
+    return value[0] as string | undefined
+  }
   return value as string | undefined
 }
 
@@ -1592,6 +1747,12 @@ export async function main(argv: readonly string[]): Promise<number> {
     case 'daemon': {
       const period = Number(flagText(flags, 'period') ?? '1000')
       const named = flagText(flags, 'workspace')
+      // ONE registry for the process, and both fields below are read off it: `modelDecider` is
+      // what the simulations, the intakes and the Supervisor's decisions have always called (the
+      // installation default, which is `claude_code`), and `deciders` is what a chat turn picks
+      // its OWN provider from (R4). Two calls here would build two sets of closures over the same
+      // environment and invite them to drift.
+      const deciders = buildDeciderRegistry()
       await runDaemon({
         // M59 R15: `resolveWorkspace` is no longer consulted here. With no `--workspace` the
         // daemon serves EVERY active project and picks up new ones -- which is what makes
@@ -1604,7 +1765,9 @@ export async function main(argv: readonly string[]): Promise<number> {
         // M31a §4: only the daemon carries a decider. The one-shot `tick` above deliberately does
         // not -- a command an operator runs by hand must never start spending on model calls -- so
         // it reports `skippedNoDecider` instead and the llm runs wait for the daemon.
-        modelDecider: buildModelDecider(),
+        modelDecider: deciders.claude_code,
+        // R4: the whole registry, for the one pass that chooses a provider per project.
+        deciders,
         // M38 §5 / spec erratum E3: the Supervisor's own model. Read here, where the environment
         // is read, rather than defaulted inside the tick -- and overridable per host, because a
         // decision prompt is small and cheap and an operator may want a smaller model on it than
@@ -2619,7 +2782,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         const batch = flagText(flags, 'batch')
         const maxBatches = flagText(flags, 'max-batches')
         const report = await mapTemplateCapabilities({
-          decider: buildModelDecider(),
+          decider: buildDeciderRegistry().claude_code,
           model: process.env['SLAVEOFAI_SUPERVISOR_MODEL'] ?? SUPERVISOR_DEFAULT_MODEL,
           only: 'all' in flags ? 'all' : 'stale',
           dryRun,
@@ -3299,7 +3462,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     // ---- M38 t4: the Supervisor's CLI verbs ------------------------------------------------------
     // `supervise` is a SEPARATE one-shot from `tick` -- `tick`'s own supervisor pass (wired in
     // `tick.ts`) always runs rules-only, because a command an operator runs by hand must never
-    // spend on a model call by itself (the same discipline `buildModelDecider` is kept off `tick`
+    // spend on a model call by itself (the same discipline `buildDeciderRegistry` is kept off `tick`
     // for). This verb is the one place an operator asks for a supervised pass WITH the model seam,
     // or previews one with none of it at all.
 
@@ -3323,7 +3486,7 @@ export async function main(argv: readonly string[]): Promise<number> {
 
       const report = await supervise({
         workspaceId,
-        decider: buildModelDecider(),
+        decider: buildDeciderRegistry().claude_code,
         // Same expression `daemon`'s case reads above (spec erratum E3): an operator's one-shot
         // pass thinks with the same model the daemon would, unless the environment says otherwise.
         model: process.env['SLAVEOFAI_SUPERVISOR_MODEL'] ?? SUPERVISOR_DEFAULT_MODEL,
@@ -3348,6 +3511,67 @@ export async function main(argv: readonly string[]): Promise<number> {
       return 0
     }
 
+    // ---- Supervisor chat R8: the conversation, without the panel -------------------------------
+    // The daemon-less path and the gates. Neither verb calls a model: `supervisor-say` writes the
+    // message and the placeholder and returns, and the DAEMON's pass is what answers it -- the
+    // same discipline `buildDeciderRegistry` is kept off `tick` for. An operator running this by
+    // hand spends nothing.
+
+    case 'supervisor-say': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      const text = requireFlag(flags, 'text')
+      // BEFORE a single file is read, let alone written into the repository and committed (fix
+      // round 1, M5). `sendSupervisorMessage` refuses a blank message anyway, but it is reached
+      // AFTER the upload -- so `--text "" --file brief.md` used to leave a committed file in
+      // `docs/inbox/` with no message pointing at it. This is the one refusal worth spelling twice:
+      // it costs one comparison and it is the only one an operator can trip with a shell quoting
+      // mistake rather than with a deliberately long document.
+      if (text.trim() === '') throw new Error('--text must not be blank')
+      // Read from the LOCAL filesystem here, where the operator's own paths are, and handed over
+      // as bytes: `storeSupervisorUploads` decides the name, the repository path and the commit,
+      // and it is the only thing that writes into `docs/inbox/`. `basename`, because the name the
+      // attachment keeps is the one the person's own machine gave the file, never the directory
+      // they happened to run this from.
+      //
+      // THE RESIDUAL THAT IS LEFT, said out loud: the upload still happens before the send, so a
+      // message refused for its LENGTH (past `CHAT_MESSAGE_MAX_CHARS`) leaves the files committed
+      // with no message pointing at them. They are in `docs/inbox/` and named after the day, which
+      // is exactly what an upload that happened looks like, and re-running with the same paths
+      // adds a second copy under a `-2` name rather than overwriting the first. Spelling the
+      // length cap here too would mean keeping the control layer's own number in this file.
+      const paths = flagList(flags, 'file')
+      const files = paths.map((path) => ({ name: basename(path), bytes: readFileSync(path) }))
+      const stored = await storeSupervisorUploads(workspaceId, files)
+      if (!stored.ok) throw new Error(refusalText(stored.error))
+      for (const attachment of stored.value) {
+        process.stdout.write(`attached ${attachment.path} (${attachment.name}, ${plural(attachment.bytes, 'byte')})\n`)
+      }
+      // No `Principal`: the CLI has no session, and every verb here has always acted with none
+      // (`approve-decision`'s own comment). Both functions take it optionally for exactly this
+      // caller, and the rows are honestly authored by nobody.
+      const sent = await sendSupervisorMessage(workspaceId, { text, attachments: stored.value })
+      if (!sent.ok) throw new Error(refusalText(sent.error))
+      // BOTH ids, because they are two different things an operator may want to follow: the
+      // message they sent, and the reply row the daemon will settle (which is what
+      // `supervisor-thread` shows as `answering` until it does).
+      process.stdout.write(`message ${sent.value.messageId} sent; reply ${sent.value.replyId} is waiting for the daemon\n`)
+      return 0
+    }
+
+    case 'supervisor-thread': {
+      const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
+      // `supervisor-decisions`' own two lines, deliberately: one array, pretty-printed, and a
+      // `--limit` that must be a positive integer rather than silently meaning "all of them".
+      const limitText = flagText(flags, 'limit')
+      let limit = CHAT_THREAD_LIMIT
+      if (limitText !== undefined) {
+        limit = Number(limitText)
+        if (!Number.isInteger(limit) || limit <= 0) throw new Error('--limit must be a positive integer')
+      }
+      const messages = await listSupervisorMessages(workspaceId, { limit })
+      process.stdout.write(`${JSON.stringify(messages, null, 2)}\n`)
+      return 0
+    }
     case 'approve-decision': {
       // No `Principal`: the CLI has no session, and every verb here has always acted with none
       // (`Workspace.goalSetByUserId`'s own comment -- "the CLI and the orchestrator act with no
@@ -3399,8 +3623,39 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (autonomy !== undefined && autonomy !== 'propose' && autonomy !== 'act') {
         throw new Error('--autonomy must be propose or act')
       }
-      if (!enableFlag && !disableFlag && profileFile === undefined && !clearProfile && autonomy === undefined) {
-        throw new Error('one of --enable, --disable, --profile-file, --clear-profile or --autonomy is required')
+      // F R4 (E10): WHICH runtime answers this project's conversation with the Supervisor -- and
+      // today nothing else. The `--profile-file | --clear-profile` idiom twice over, because both
+      // columns are nullable and `null` is a real instruction ("back to the installation default")
+      // that an omitted flag cannot say.
+      const providerFlag = flagText(flags, 'provider')
+      const clearProvider = 'clear-provider' in flags
+      if (providerFlag !== undefined && clearProvider) throw new Error('exactly one of --provider or --clear-provider is allowed, not both')
+      let provider: ProviderKind | undefined
+      if (providerFlag !== undefined) {
+        // The VOCABULARY, not the control layer's "a provider must be a configured kind": an
+        // operator who typed `--provider claude` is told the two words this flag takes, which is
+        // `--autonomy`'s own idiom a few lines above. `setSupervisorSettings` still refuses
+        // `invalid_provider` for every other caller.
+        if (!isProviderKind(providerFlag)) throw new Error('--provider must be claude_code or cursor')
+        provider = providerFlag
+      }
+      const model = flagText(flags, 'model')
+      const clearModel = 'clear-model' in flags
+      if (model !== undefined && clearModel) throw new Error('exactly one of --model or --clear-model is allowed, not both')
+      if (
+        !enableFlag &&
+        !disableFlag &&
+        profileFile === undefined &&
+        !clearProfile &&
+        autonomy === undefined &&
+        provider === undefined &&
+        !clearProvider &&
+        model === undefined &&
+        !clearModel
+      ) {
+        throw new Error(
+          'one of --enable, --disable, --profile-file, --clear-profile, --autonomy, --provider, --clear-provider, --model or --clear-model is required',
+        )
       }
 
       const result = await setSupervisorSettings(workspaceId, {
@@ -3409,6 +3664,10 @@ export async function main(argv: readonly string[]): Promise<number> {
         ...(profileFile !== undefined ? { profile: readFileSync(profileFile, 'utf8') } : {}),
         ...(clearProfile ? { profile: null } : {}),
         ...(autonomy === undefined ? {} : { autonomy }),
+        ...(provider === undefined ? {} : { provider }),
+        ...(clearProvider ? { provider: null } : {}),
+        ...(model === undefined ? {} : { model }),
+        ...(clearModel ? { model: null } : {}),
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`supervisor settings updated on ${workspaceId}\n`)

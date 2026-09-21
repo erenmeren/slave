@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { prisma } from '@slave-of-ai/db/client'
@@ -20,8 +20,9 @@ import {
   type Situation,
   type Tier,
 } from '@slave-of-ai/domain'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { syncCapabilityTaxonomy } from '../../src/capability.js'
+import { gitIn } from '../../src/git.js'
 import { STALE_CANDIDATE_REASON, recordMemory } from '../../src/memory.js'
 import { sendMessage } from '../../src/messaging.js'
 import { workspaceSpend } from '../../src/spend.js'
@@ -2159,6 +2160,57 @@ describe('setSupervisorSettings', () => {
     expect((await setSupervisorSettings(f.workspaceId, {})).ok).toBe(true)
     expect(await settingsEvents()).toHaveLength(2)
   })
+
+  // F R4: provider and model are a PROJECT setting -- every Supervisor call for this workspace
+  // uses them, and the chat header is where a person picks them.
+  it('stores the Supervisor provider and model, one settings_changed each', async () => {
+    expect(
+      (await setSupervisorSettings(f.workspaceId, { provider: 'cursor', model: 'claude-opus-5' }, { userId: f.userId })).ok,
+    ).toBe(true)
+    const row = await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })
+    expect(row.supervisorProvider).toBe('cursor')
+    expect(row.supervisorModel).toBe('claude-opus-5')
+
+    const events = await settingsEvents()
+    expect(events.map((event) => event.payload)).toEqual([
+      { field: 'supervisorProvider', from: null, to: 'cursor' },
+      { field: 'supervisorModel', from: null, to: 'claude-opus-5' },
+    ])
+    expect(events[0]?.actor).toBe('human')
+    expect(events[0]?.userId).toBe(f.userId)
+  })
+
+  it('clears either half back to the installation default with an explicit null', async () => {
+    await setSupervisorSettings(f.workspaceId, { provider: 'cursor', model: 'claude-opus-5' })
+    expect((await setSupervisorSettings(f.workspaceId, { provider: null, model: null })).ok).toBe(true)
+    const row = await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })
+    expect(row.supervisorProvider).toBeNull()
+    expect(row.supervisorModel).toBeNull()
+    expect(await settingsEvents()).toHaveLength(4)
+  })
+
+  it('refuses a provider that is not a configured kind, and a model that is not shaped like one', async () => {
+    expect(await setSupervisorSettings(f.workspaceId, { provider: 'gpt' as never })).toEqual({
+      ok: false,
+      error: { kind: 'invalid_provider', provider: 'gpt' },
+    })
+    const bad = await setSupervisorSettings(f.workspaceId, { model: 'gpt 4o' })
+    expect(bad.ok).toBe(false)
+    if (!bad.ok) expect(bad.error.kind).toBe('invalid_model')
+    // Nothing was written by either refusal.
+    const row = await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })
+    expect(row.supervisorProvider).toBeNull()
+    expect(row.supervisorModel).toBeNull()
+    expect(await settingsEvents()).toHaveLength(0)
+  })
+
+  it('emits nothing when the pair it is asked for is the pair it already has', async () => {
+    await setSupervisorSettings(f.workspaceId, { provider: 'claude_code', model: 'claude-sonnet-5' })
+    expect(await settingsEvents()).toHaveLength(2)
+    expect((await setSupervisorSettings(f.workspaceId, { provider: 'claude_code', model: 'claude-sonnet-5' })).ok).toBe(true)
+    expect(await settingsEvents()).toHaveLength(2)
+  })
+
 })
 
 /**
@@ -2709,5 +2761,105 @@ describe('applyDecision -- the diagnosed remedies (E R3/R4)', () => {
 
     expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
     expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).haltedReason).toBeNull()
+  })
+})
+
+/**
+ * Supervisor chat R3: the two actions a CONVERSATION added to the catalogue. Neither is ever
+ * routine under `propose` (`tierOf`) -- a goal is the project's whole point and a note is a commit
+ * to the repository -- so the way here is a person's approval or a project switched to `act`.
+ */
+describe('applyDecision -- the two conversation actions', () => {
+  let f: Fixture
+  let repoPath: string
+
+  /** The situation a turn records: the subject is the MESSAGE, one row per turn. */
+  const operatorRequest = (messageId: string, summary: string): Situation => ({
+    kind: 'operator_request',
+    subjectId: messageId,
+    summary,
+    facts: { messageId },
+  })
+
+  beforeEach(async () => {
+    await reset()
+    f = await seed()
+    repoPath = mkdtempSync(join(tmpdir(), 'slaveofai-supervisor-inbox-'))
+    await gitIn(repoPath, 'init', '-b', 'main')
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { repoPath } })
+  })
+
+  afterEach(() => {
+    rmSync(repoPath, { recursive: true, force: true })
+  })
+
+  it('carries out request_goal_change through requestChange: a new goal version with the words', async () => {
+    const decision = await record(f, { kind: 'request_goal_change', request: 'Add a pricing page' }, 'applied', {
+      subjectId: 'msg-1',
+      situation: operatorRequest('msg-1', 'Add a pricing page'),
+    })
+
+    expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
+
+    const versions = await prisma.goalVersion.findMany({ where: { workspaceId: f.workspaceId }, orderBy: { version: 'asc' } })
+    expect(versions).toHaveLength(1)
+    expect(versions[0]?.request).toBe('Add a pricing page')
+    expect(versions[0]?.text).toContain('Add a pricing page')
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: f.workspaceId } })).goalVersion).toBe(1)
+    const [applied] = await eventsOfType('supervisor_applied')
+    expect(applied?.payload).toMatchObject({ decisionId: decision.id, action: { kind: 'request_goal_change' } })
+  })
+
+  it('carries out note_for_planner: a dated line in docs/inbox/NOTES.md, committed', async () => {
+    const decision = await record(
+      f,
+      { kind: 'note_for_planner', text: 'The brief in docs/inbox/2026-09-20-brief.md is the source of truth' },
+      'applied',
+      { subjectId: 'msg-2', situation: operatorRequest('msg-2', 'remember the brief') },
+    )
+
+    expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
+
+    const notes = readFileSync(join(repoPath, 'docs', 'inbox', 'NOTES.md'), 'utf8')
+    expect(notes.split('\n')[0]).toBe('# Notes for the planner')
+    expect(notes).toMatch(
+      /^- \d{4}-\d{2}-\d{2} — The brief in docs\/inbox\/2026-09-20-brief\.md is the source of truth$/m,
+    )
+    expect(await gitIn(repoPath, 'log', '-1', '--pretty=%s')).toBe('inbox: planner note')
+    expect(await gitIn(repoPath, 'status', '--porcelain')).toBe('')
+  })
+
+  it('appends a second note under the same heading, in one more commit', async () => {
+    for (const text of ['first note', 'second note']) {
+      const decision = await record(f, { kind: 'note_for_planner', text }, 'applied', {
+        subjectId: `msg-${text}`,
+        situation: operatorRequest(`msg-${text}`, text),
+      })
+      expect((await applyDecision(decision.id, 'system')).ok).toBe(true)
+    }
+
+    const notes = readFileSync(join(repoPath, 'docs', 'inbox', 'NOTES.md'), 'utf8')
+    expect(notes.match(/^# /gm)).toHaveLength(1)
+    expect(notes).toContain('first note')
+    expect(notes).toContain('second note')
+    expect((await gitIn(repoPath, 'log', '--pretty=%s')).split('\n')).toEqual([
+      'inbox: planner note',
+      'inbox: planner note',
+    ])
+  })
+
+  it('records the refusal on the row when the repository is gone, and applies nothing', async () => {
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { repoPath: join(repoPath, 'nowhere') } })
+    const decision = await record(f, { kind: 'note_for_planner', text: 'into the void' }, 'applied', {
+      subjectId: 'msg-3',
+      situation: operatorRequest('msg-3', 'into the void'),
+    })
+
+    const outcome = await applyDecision(decision.id, 'system')
+    expect(outcome.ok).toBe(false)
+    const row = await prisma.supervisorDecision.findUniqueOrThrow({ where: { id: decision.id } })
+    expect(row.status).toBe('failed')
+    expect(row.failureReason).not.toBe('')
+    expect(await eventsOfType('supervisor_applied')).toHaveLength(0)
   })
 })

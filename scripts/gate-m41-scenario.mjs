@@ -90,7 +90,8 @@
 // three builders is a control or domain verb they themselves compose, and this gate calls those:
 //   buildSupervisorView().report      = summarise(loadSupervisorWorld(id).world)
 //   buildSupervisorView().pending     = listDecisions(id, { pending: true })
-//   buildSupervisorView().settings    = supervisorSettings(id)
+//   buildSupervisorView().settings    = supervisorSettings(id) + the workspace's own
+//                                       supervisorProvider / supervisorModel columns (F R4)
 //   buildGoalHistory()                = listGoalVersions(id)
 //   TasksSnapshot.workspace.goalVersion / TaskBoardItem.{status,goalVersion,integratedAt}
 //                                     = the Workspace and Task columns of those names

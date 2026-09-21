@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { feedSummary } from '../src/lib/feedSummary.js'
-import { readableEventType } from '../src/lib/eventLabels.js'
+import { feedSummary } from '../../src/feed/feedSummary.js'
+import { readableEventType } from '../../src/feed/eventLabels.js'
 
 describe('feedSummary', () => {
   it("summarizes run.tool_call with its payload's summary", () => {

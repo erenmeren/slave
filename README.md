@@ -976,6 +976,80 @@ same thing on every tick. `--dry-run` writes no decision row, no event and makes
 costs nothing to look. A switched-off Supervisor still reports and still retires stale proposals —
 it just stops deciding.
 
+### Talking to it
+
+The box at the bottom of the Supervisor panel is a **conversation**, not a form. You ask, it
+answers from what it knows about the project — the board, what is waiting on you, the last twenty
+things that happened, the goal, and the rest of this thread — and it changes something only when
+you ask it to. **One message is one model call**, made by the daemon and not by the page: your
+line and a reply placeholder are written immediately, the placeholder reads *thinking…* until the
+call comes back, and nothing about the project's own tick waits for it. A reply whose every
+citation was found verbatim in the thing it named wears the same **sourced** chip a drafted answer
+does; a reply that could not be made at all says why instead — no runtime for the chosen provider,
+the budget is gone, the model's answer would not parse.
+
+**Two verbs, and no others.** A reply may ask for the **goal to change** — the thing the box used
+to do directly, and the reason a question that wanted an answer no longer re-plans the whole board
+— and it may leave a **note for the planner**, a dated line appended to `docs/inbox/NOTES.md` in
+your repository and committed. Each one becomes an ordinary Supervisor decision under the switch
+above: on `propose` it is a card under the reply and a line in *waiting on you*, on `act` it is
+carried out and the card says what was done. The conversation borrows the Supervisor's authority
+and is given none of its own.
+
+**Which runtime answers this conversation is the project's setting.** The panel's header carries a
+runtime and a model select beside the autonomy switch, and today they govern **this conversation and
+nothing else**: the project's decisions and its answers to workers still go to the runtime the
+daemon was started with. Either one left empty means the installation default (`claude_code`, and
+`SLAVEOFAI_SUPERVISOR_MODEL` or `claude-sonnet-5`).
+**A Cursor turn cannot be capped and reports no price**: that CLI takes no budget flag, so the turn
+is recorded *unpriced* — and an unpriced turn is charged at the same $1 cap against the project's
+budget rather than counted as free, so the guardrail does see it even though the conversation's
+*cost so far* can only show it as a turn with no number. Claude turns are capped at that same $1,
+like every other Supervisor call.
+
+```bash
+npm run orchestrator -- set-supervisor --workspace <id> --provider cursor --model auto
+npm run orchestrator -- set-supervisor --workspace <id> --clear-provider   # back to the default
+npm run orchestrator -- set-supervisor --workspace <id> --clear-model
+```
+
+**You can hand it files.** *Attach*, or drop them on the box: at most **5 files** per message,
+**20 MB** each, and only what something here can read — `md txt csv json yaml yml pdf png jpg jpeg
+gif webp svg`. Each one is written into your repository at
+`docs/inbox/<yyyy-mm-dd>-<name>.<ext>`, and the whole request lands in **one commit** titled with
+every file in it (`inbox: brief.md, screenshot.png`, the orchestrator's git identity). That commit
+goes onto whatever the repository is checked out at — the base branch in ordinary operation, since
+runs work in worktrees and nothing here switches a branch out from under you — so **the planner and
+every worker can open it by path**, which is exactly what a reply does when it asks for the goal to
+change and names the file in the request.
+Text files are quoted into the prompt (20,000 characters each, 60,000 in total); images and PDFs
+are named by path and size. A file is refused, and nothing is written at all, if it is too big, has
+an extension that is not on the list, or names a path rather than a file.
+
+**A message with an image in it is looked at**, on `claude_code` only: that turn runs with
+`--tools Read,Glob,Grep` in the repository, armed with a permissions file granting `read_repo` and
+nothing else, so the model can open the picture you attached. **Read that grant literally**: it
+permits a *kind* of tool, not a path, so the call may read any file the daemon's own user can read
+— the prompt and the working directory are guidance, not a boundary. The sandbox that would make it
+one is the same unbuilt thing the permissions matrix already names. A Cursor turn looks at nothing:
+its gate denies every tool, and the reply says the picture was not opened.
+
+**What it costs** is on each turn's own row and totalled on the panel's header — the measured money,
+and *N turns unpriced* beside it rather than folded into it. That money is the project's money: it
+counts against the budget, and a project whose budget is gone answers nothing and says so. A
+**halted** project still talks, deliberately — a halt is exactly when somebody asks why nothing is
+running.
+
+```bash
+npm run orchestrator -- supervisor-say --workspace <id> --text "why is nothing running?"
+npm run orchestrator -- supervisor-say --workspace <id> --text "use this brief" --file brief.md
+npm run orchestrator -- supervisor-thread --workspace <id> [--limit <n>]
+```
+
+`supervisor-say` writes the message and returns; the **daemon** is what answers it, so the command
+spends nothing and waits for nothing. `supervisor-thread` prints the conversation as JSON, oldest
+first, each turn with its status, its attachments, the actions it asked for and what it cost.
+
 ## One Supervisor
 
 You do not manage the workers. You talk to the project's Supervisor, and the project page is that

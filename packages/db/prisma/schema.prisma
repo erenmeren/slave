@@ -115,6 +115,13 @@ model Workspace {
   /// E R1: whether the Supervisor applies its own decisions (`act`) or proposes them for a person
   /// (`propose`, today's behaviour). One switch per project; `tierOf` reads it.
   supervisorAutonomy SupervisorAutonomy @default(propose)
+  /// F R4: the provider this project's CONVERSATION uses, and today nothing else (erratum E10) --
+  /// `tickSupervisorChat` is the one reader. Null is the installation default
+  /// (`SLAVEOFAI_SUPERVISOR_MODEL`'s provider, else `claude_code`).
+  supervisorProvider ProviderKind?
+  /// F R4: the model this project's CONVERSATION uses, and today nothing else (erratum E10). Null
+  /// is the installation default (`SLAVEOFAI_SUPERVISOR_MODEL` or `SUPERVISOR_DEFAULT_MODEL`).
+  supervisorModel    String?
   /// M48 R5: the runbook this project has adopted, or null. SetNull: deleting a runbook must not
   /// destroy a project. Adopting after tasks exist is allowed -- the next re-plan sees it.
   runbookId String?
@@ -149,6 +156,8 @@ model Workspace {
   providerConfigurations ProviderConfiguration[]
   tasks                  Task[]
   supervisorDecisions    SupervisorDecision[]
+  /// F R1: the conversation with the Supervisor, in `seq` order.
+  supervisorMessages     SupervisorMessage[]
   goalVersions           GoalVersion[]
   /// M49 R1: what this PROJECT knows (`scope: workspace`).
   memories               Memory[]
@@ -1679,6 +1688,12 @@ enum SupervisorSituationKind {
   /// M49 R2: unverified observation candidates are piling up on this project.
   memory_candidates_piling
   workspace_halted
+  /// Supervisor chat R3: a person asked for something in the conversation and the reply proposed
+  /// an action about it. The subject is `<messageId>:<actionKind>` (erratum E3) -- the subject is a
+  /// KEY, and the bare message id would have a reply that asked for two things record only the
+  /// first. The second kind `observe` never produces: nothing about the world says a person wants
+  /// something, only their message does.
+  operator_request
 }
 
 /// What happens to a chosen action -- fixed in code by `tierOf`, never chosen by the model.
@@ -1703,6 +1718,56 @@ enum SupervisorDecisionStatus {
 enum SupervisorDecider {
   model
   rules
+}
+
+/// F R1: the conversation with the Supervisor is a table, not an event replay -- a human row and a
+/// supervisor row carry status and cost that events do not. `seq` orders the thread the way
+/// `IntakeMessage.seq` orders an intake; the thread view (`supervisorThreads.ts`) merges these rows
+/// with the event families it already shows, ordered by time.
+model SupervisorMessage {
+  id            String                  @id @default(uuid())
+  workspaceId   String
+  seq           Int
+  role          SupervisorMessageRole
+  status        SupervisorMessageStatus @default(sent)
+  text          String
+  /// R6: `{ path, name, bytes, kind: 'text' | 'image' | 'binary' }[]`, paths relative to the repository root.
+  attachments   Json                    @default("[]")
+  /// R3: the actions the reply proposed, each `{ action, decisionId, tier }`; null on a human row.
+  actions       Json?
+  modelCostUsd  Float?
+  unmeasured    Boolean                 @default(false)
+  /// R2: every citation this reply made checked out against what its own prompt rendered, and it
+  /// made at least one. Stored rather than re-derived -- the feed window and the attachment slices
+  /// the check ran against are gone by the time anybody reads the row.
+  sourced       Boolean                 @default(false)
+  claimedAt     DateTime?
+  claimedBy     String?
+  failureReason String?
+  createdAt     DateTime                @default(now())
+  workspace     Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, seq])
+  @@index([workspaceId, status])
+  /// What `claimSupervisorTurns` scans -- a GLOBAL pass over `answering` rows whose claim is
+  /// absent or stale, like `tickIntakes`'. The workspace-scoped index above cannot serve it.
+  @@index([status, claimedAt])
+}
+
+/// Who wrote one line of the conversation (F R1).
+enum SupervisorMessageRole {
+  human
+  supervisor
+}
+
+/// The life of one turn (F R2). `sent` is a fresh human row; `answering` is the reply placeholder
+/// `tickSupervisorChat` claims under `SKIP LOCKED`, the `IntakeMessage`/`tickIntakes` precedent,
+/// until it settles as `answered` or `failed`.
+enum SupervisorMessageStatus {
+  sent
+  answering
+  answered
+  failed
 }
 
 /// M59 R1: a project that has not been created yet.

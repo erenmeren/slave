@@ -48,9 +48,50 @@ export type ModelOutcome =
       readonly tokens: { readonly input: number; readonly output: number } | null
     }
 
-/** What the daemon injects into `tickSimulations`: the model call itself, as a function. Nothing
- *  in the control layer knows how it is made -- a CLI, a fixture, or a test's `async () => …`. */
-export type ModelDecider = (input: { readonly model: string; readonly prompt: string; readonly maxBudgetUsd: number }) => Promise<ModelOutcome>
+/**
+ * What the daemon injects into `tickSimulations`: the model call itself, as a function. Nothing in
+ * the control layer knows how it is made -- a CLI, a fixture, or a test's `async () => …`.
+ *
+ * THE FOUR OPTIONAL FIELDS ARE THE READ-ONLY TURN (F R7), and they are optional so that every
+ * decider written against this type before them stays valid: a simulation step, an intake reply
+ * and a Supervisor decision all pass three fields and ignore the rest. The provider's own
+ * `decideWithModel` makes them a DISCRIMINATED UNION -- all three of `cwd`, `permissionsFilePath`
+ * and `runToken` travel with `tools: 'read-only'` or none of them do -- and that is where the
+ * requirement is enforced, at runtime as well (`requireReadOnlyInputs`). This type is the seam,
+ * not the contract: this file may not import the providers package (the boundary test
+ * `simulation-boundary.test.ts`), so the union is copied structurally and a caller that fills one
+ * field and not the others is refused by the function it reaches.
+ */
+export type ModelDecider = (input: {
+  readonly model: string
+  readonly prompt: string
+  readonly maxBudgetUsd: number
+  /** `'read-only'` spawns with `Read,Glob,Grep` and the RUN gate; absent and `'none'` are the
+   *  text-only call every caller but the chat's image turn makes. */
+  readonly tools?: 'none' | 'read-only'
+  /** The repository the model is let into -- where a path the person attached resolves. */
+  readonly cwd?: string
+  /** The verdict the gate reads (`SLAVEOFAI_PERMISSIONS_FILE`), written by the CALLER. */
+  readonly permissionsFilePath?: string
+  /** The plaintext of the token whose sha256 that file carries as `tokenHash` (M52 R4). */
+  readonly runToken?: string
+}) => Promise<ModelOutcome>
+
+/**
+ * The deciders a daemon holds, one per provider (F R4).
+ *
+ * A project chooses which runtime answers its Supervisor (`Workspace.supervisorProvider`), so the
+ * daemon can no longer hold ONE decider: `tickSupervisorChat` looks the turn's provider up here.
+ * A TOTAL record over the two kinds, so a third provider added to `ProviderKind` fails the build
+ * at whoever assembles the registry rather than at a turn that silently cannot be answered -- and
+ * a provider a stored column names that this record does not hold (a row written by a future
+ * version) fails that ONE turn with `no_decider_for_provider`, never the pass.
+ *
+ * Spelt with the two literals rather than `Record<ProviderKind, …>` for the boundary test's
+ * reason: this file may not import the providers package, and the two names are the Postgres
+ * enum's own.
+ */
+export type DeciderRegistry = Readonly<Record<'claude_code' | 'cursor', ModelDecider>>
 
 export type PrepareOutcome =
   /** Nothing to decide: the same three watermark checks `autoStepDue` makes under its lock, plus

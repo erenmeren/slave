@@ -40,7 +40,7 @@ export interface SuperviseDeps {
   readonly workspaceId: string
   /**
    * The M31a model seam (`packages/control/src/simulation/llm.ts`), injected by the daemon
-   * (`cli.ts`'s `buildModelDecider`) and faked in tests. Absent is an ordinary state, not an
+   * (`cli.ts`'s `buildDeciderRegistry().claude_code`) and faked in tests. Absent is an ordinary state, not an
    * error: a one-shot `orchestrator tick` and every test that only exercises the loop pass none,
    * and the Supervisor then decides by the rules and spends nothing.
    */

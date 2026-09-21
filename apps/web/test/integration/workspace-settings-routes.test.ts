@@ -3,6 +3,7 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { PUT as providerPUT } from '../../src/app/api/w/[workspaceId]/provider/route.js'
 import { PUT as budgetPUT } from '../../src/app/api/w/[workspaceId]/budget/route.js'
 import { PUT as integrationPUT } from '../../src/app/api/w/[workspaceId]/integration/route.js'
+import { PATCH as supervisorPATCH } from '../../src/app/api/w/[workspaceId]/supervisor/settings/route.js'
 
 interface Fixture {
   readonly workspaceId: string
@@ -22,6 +23,10 @@ async function seed(): Promise<Fixture> {
 
 function jsonRequest(body: unknown): Request {
   return new Request('http://x', { method: 'PUT', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } })
+}
+
+function patchRequest(body: unknown): Request {
+  return new Request('http://x', { method: 'PATCH', body: JSON.stringify(body), headers: { 'content-type': 'application/json' } })
 }
 
 function malformedRequest(): Request {
@@ -160,6 +165,78 @@ describe('the workspace settings routes', () => {
 
     it('404s for an unknown workspace', async (): Promise<void> => {
       const response = await integrationPUT(jsonRequest({ autoMerge: true }), params('00000000-0000-0000-0000-000000000000'))
+      expect(response.status).toBe(404)
+    })
+  })
+
+  /** F R4 (E10): WHICH runtime answers this project's conversation with the Supervisor -- today
+   *  the conversation alone. The pair joins the three settings this route already patched. */
+  describe('PATCH /api/w/[workspaceId]/supervisor/settings', () => {
+    const stored = async (workspaceId: string): Promise<{ provider: string | null; model: string | null }> => {
+      const row = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
+      return { provider: row.supervisorProvider, model: row.supervisorModel }
+    }
+
+    it('writes the provider and the model together', async (): Promise<void> => {
+      const response = await supervisorPATCH(
+        patchRequest({ provider: 'cursor', model: 'auto' }),
+        params(fixture.workspaceId),
+      )
+
+      expect(response.status).toBe(200)
+      expect(await stored(fixture.workspaceId)).toEqual({ provider: 'cursor', model: 'auto' })
+    })
+
+    it('accepts an explicit null on each -- "the installation default"', async (): Promise<void> => {
+      await supervisorPATCH(patchRequest({ provider: 'cursor', model: 'auto' }), params(fixture.workspaceId))
+
+      const response = await supervisorPATCH(patchRequest({ provider: null, model: null }), params(fixture.workspaceId))
+
+      expect(response.status).toBe(200)
+      expect(await stored(fixture.workspaceId)).toEqual({ provider: null, model: null })
+    })
+
+    it('leaves the pair alone on a patch that does not carry it', async (): Promise<void> => {
+      await supervisorPATCH(patchRequest({ provider: 'cursor', model: 'auto' }), params(fixture.workspaceId))
+
+      expect((await supervisorPATCH(patchRequest({ enabled: false }), params(fixture.workspaceId))).status).toBe(200)
+
+      expect(await stored(fixture.workspaceId)).toEqual({ provider: 'cursor', model: 'auto' })
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).supervisorEnabled).toBe(false)
+    })
+
+    it('400s a provider this installation does not have, with the control refusal s own sentence', async (): Promise<void> => {
+      const response = await supervisorPATCH(patchRequest({ provider: 'gpt' }), params(fixture.workspaceId))
+
+      expect(response.status).toBe(400)
+      expect(((await response.json()) as { error: string }).error).toBe('a provider must be a configured kind')
+      expect(await stored(fixture.workspaceId)).toEqual({ provider: null, model: null })
+    })
+
+    it('writes NEITHER field when the provider is unknown and the model is fine', async (): Promise<void> => {
+      const response = await supervisorPATCH(
+        patchRequest({ provider: 'gpt', model: 'sonnet' }),
+        params(fixture.workspaceId),
+      )
+
+      expect(response.status).toBe(400)
+      expect(await stored(fixture.workspaceId)).toEqual({ provider: null, model: null })
+    })
+
+    it('409s a model that is not one word -- the verb s own shape check, not a second one here', async (): Promise<void> => {
+      const response = await supervisorPATCH(patchRequest({ model: 'gpt 4o' }), params(fixture.workspaceId))
+
+      expect(response.status).toBe(409)
+      expect(((await response.json()) as { error: string }).error).toContain('one word')
+    })
+
+    it('400s a provider or a model of the wrong JS type', async (): Promise<void> => {
+      expect((await supervisorPATCH(patchRequest({ provider: 42 }), params(fixture.workspaceId))).status).toBe(400)
+      expect((await supervisorPATCH(patchRequest({ model: 42 }), params(fixture.workspaceId))).status).toBe(400)
+    })
+
+    it('404s for an unknown workspace', async (): Promise<void> => {
+      const response = await supervisorPATCH(patchRequest({ provider: 'cursor' }), params('00000000-0000-0000-0000-000000000000'))
       expect(response.status).toBe(404)
     })
   })

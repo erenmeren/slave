@@ -29,6 +29,13 @@
 // raises no situation at all (`waiting_stale` needs half an hour), so the situation appears when,
 // and only when, the roster changes.
 //
+// WHY STAGE 6 GETS A DAEMON OF ITS OWN. Stages 4 and 5 are tick-only (below), so there is no
+// daemon alive by the time stage 6 starts -- and a conversation turn is answered by the DAEMON's
+// global pass and by nothing else (`tick` carries no decider at all, deliberately). Its daemon is
+// also the only one in this file carrying `--chat-actions-json-base64`: the action the reply asks
+// for names a path that is minted seconds earlier by the upload, so the flag cannot be set on any
+// daemon spawned before it.
+//
 // WHY STAGES 4 AND 5 RUN `tick` RATHER THAN A DAEMON. A one-shot `orchestrator tick` deliberately
 // carries no model decider (`cli.ts`: "a command an operator runs by hand must never start
 // spending on model calls"), so its Supervisor pass decides BY THE RULES -- which is the only way
@@ -66,6 +73,12 @@
 //      A resolved row 31 days old that called no model is gone after a tick; a PENDING row of the
 //      same age is still there; and a resolved row of the same age that DID call a model is still
 //      there with its cost, leaving `workspaceSpend` exactly where it was (erratum E7).
+//   6. A message with a brief becomes a goal (Supervisor chat R2/R3/R6). `supervisor-say --file
+//      <brief.md> --text "..."` writes the file into the repository's `docs/inbox/` and commits it,
+//      and leaves a reply placeholder; the project is on autonomy `act`; the daemon's conversation
+//      pass answers the turn with the fake's CHAT arm, whose reply asks for a `request_goal_change`
+//      naming the brief's path; the decision is APPLIED, the goal's newest version carries the
+//      path, and the reply row is `answered` with that one action on it.
 //
 // Shape borrowed from `gate-m38-supervisor.mjs` (temp git repo + `prisma.workspace.create` setup,
 // `preflightCleanup()`/`dumpGateRows()`/`fail()`/`waitUntil()`, the daemon lifecycle and its
@@ -141,6 +154,20 @@ const KEPT_SUBJECT = 'gate-m39-pending-31-days-old'
 const PAID_SUBJECT = 'gate-m39-resolved-31-days-old-with-a-cost'
 const PAID_COST_USD = 0.42
 
+/** Stage 6's brief, and what the person says about it. The file's NAME is what the stored path's
+ *  slug comes from (`docs/inbox/<yyyy-mm-dd>-brief.md`), and its text is never read by anything
+ *  here -- the fake CLI answers from its argv, not from the prompt -- so it is a document rather
+ *  than a fixture. */
+const BRIEF_NAME = 'brief.md'
+const BRIEF_TEXT = '# Gate brief\n\nThe checkout must take Apple Pay before anything else ships.\n'
+const SAY_TEXT = 'use this brief for the plan'
+/** The path shape R6 promises, as a shape: the stamp is TODAY's, so a literal would be a gate that
+ *  fails at midnight. */
+const INBOX_PATH_PATTERN = /^docs\/inbox\/\d{4}-\d{2}-\d{2}-brief\.md$/
+/** What one turn of the fake's CHAT arm reports as `total_cost_usd`. A conversation turn is one
+ *  call and it is measured, which is what separates it from a Cursor turn that reports none. */
+const FIXTURE_CHAT_COST_USD = 0.01
+
 /** Same as `gate-m38-supervisor.mjs`'s -- a real repository, because the tick provisions a real
  *  worktree in it and the fake CLI commits into that worktree. */
 function makeRepo() {
@@ -212,13 +239,18 @@ async function fail(message) {
   throw new Error(`${message} -- gateRows=${dump}`)
 }
 
-/** A decision row as this gate prints it, DRAFT included: the draft is what four of the five stages
- *  assert on, and a failure that shows only ids is a failure nobody can diagnose from the log. */
+/** A decision row as this gate prints it, DRAFT included: the draft is what four of the six stages
+ *  assert on, and a failure that shows only ids is a failure nobody can diagnose from the log.
+ *
+ *  `situationFacts` is here for stage 6, which asserts on `situation.facts.messageId` -- the way
+ *  back from a decision to the conversation turn that caused it (erratum E3). Every stage prints
+ *  every value it asserts BEFORE asserting it, and that one was being checked unseen. */
 const describeDecision = (row) =>
   JSON.stringify({
     id: row.id,
     situationKind: row.situationKind,
     subjectId: row.subjectId,
+    situationFacts: row.situation?.facts ?? null,
     tier: row.tier,
     status: row.status,
     decidedBy: row.decidedBy,
@@ -245,6 +277,23 @@ const describeMessage = (row) =>
     replyToId: row.replyToId,
     body: row.body,
     createdAt: row.createdAt,
+  })
+
+/** One conversation row as this gate prints it (Supervisor chat R1). The whole row but the claim
+ *  columns: status, money and the actions a reply asked for are what stage 6 asserts on. */
+const describeChatMessage = (row) =>
+  JSON.stringify({
+    id: row.id,
+    seq: row.seq,
+    role: row.role,
+    status: row.status,
+    text: row.text,
+    attachments: row.attachments,
+    actions: row.actions,
+    modelCostUsd: row.modelCostUsd,
+    unmeasured: row.unmeasured,
+    sourced: row.sourced,
+    failureReason: row.failureReason,
   })
 
 /** Two dollar amounts are equal when they are equal as money, not as floats: 0.01 + 0.02 is
@@ -323,13 +372,18 @@ try {
    * one. `extraArgs` do reach it: `decisionArgs` puts them first, which is already how `--fixture`
    * arrives.
    */
-  const childEnv = ({ askJson, answerFixture } = {}) =>
+  const childEnv = ({ askJson, answerFixture, chatActions } = {}) =>
     loopbackChildEnv({
       SLAVEOFAI_CLAUDE_BIN: 'node',
       SLAVEOFAI_CLAUDE_ARGS:
         `${FAKE_CLAUDE} --fixture m36-flow` +
         (answerFixture === undefined ? '' : ` --answer-fixture ${answerFixture}`) +
-        (askJson === undefined ? '' : ` --ask-json-base64 ${Buffer.from(askJson, 'utf8').toString('base64')}`),
+        (askJson === undefined ? '' : ` --ask-json-base64 ${Buffer.from(askJson, 'utf8').toString('base64')}`) +
+        // Supervisor chat: what the fake's CHAT arm puts in the reply's `actions`, on the same
+        // channel and base64 for the same two reasons as the ask envelope above -- a decision
+        // call's child sees PATH, HOME, LANG and TERM and nothing else, and an action carries
+        // braces, quotes and a person's own sentence.
+        (chatActions === undefined ? '' : ` --chat-actions-json-base64 ${Buffer.from(chatActions, 'utf8').toString('base64')}`),
       SLAVEOFAI_REQUIRE_FAKE_CLI: '1',
     })
 
@@ -933,6 +987,146 @@ try {
       'its cost, the project\'s spend is unchanged, and a month-old question to a human is still waiting',
   )
 
+  // ================= Stage 6: a message with a brief becomes a goal ===============================
+  // The conversation, end to end, through the real daemon and the fake CLI: a person hands the
+  // Supervisor a document and says what it is for, the Supervisor answers and asks for the goal to
+  // change, and because this project is on `act` the change is MADE rather than queued. Three
+  // things have to be true at once for that sentence to mean anything, and each is measured below:
+  // the file is really in the repository (committed, under `docs/inbox/`, on the base branch); the
+  // action the reply asked for became an ordinary `operator_request` decision and was applied; and
+  // the goal's newest version names the brief by the path a worker can open.
+
+  const briefPath = join(bodyDir, BRIEF_NAME)
+  writeFileSync(briefPath, BRIEF_TEXT)
+  // E R1's switch, set BEFORE anything is said: `tierOf` reads it when the reply settles, and a
+  // project on `propose` would put this in the needs-you bar instead -- which is the same path
+  // stage 2 already measures for an answer.
+  const autonomyPrinted = runCli(['set-supervisor', '--workspace', workspaceId, '--autonomy', 'act'])
+  console.log(`stage 6 set-supervisor printed: ${JSON.stringify(autonomyPrinted.trim())}`)
+
+  // NO DAEMON IS RUNNING YET, and that is the order this stage needs: `supervisor-say` uploads,
+  // commits and writes the two rows without calling anything, and the path it mints is what the
+  // daemon's reply has to name. Spawning first would race the upload.
+  const sayPrinted = runCli(['supervisor-say', '--workspace', workspaceId, '--file', briefPath, '--text', SAY_TEXT])
+  console.log(`stage 6 supervisor-say printed:\n${sayPrinted}`)
+
+  const conversation = await prisma.supervisorMessage.findMany({ where: { workspaceId }, orderBy: { seq: 'asc' } })
+  console.log(`stage 6 conversation (${String(conversation.length)}): ${conversation.map(describeChatMessage).join('\n  ')}`)
+  if (conversation.length !== 2) {
+    await fail(`stage 6: one message wrote ${String(conversation.length)} row(s), expected the person's line and one reply`)
+  }
+  const [said, placeholder] = conversation
+  if (said.role !== 'human' || said.status !== 'sent') await fail(`stage 6: the first row is ${said.role}/${said.status}, expected human/sent`)
+  if (placeholder.role !== 'supervisor' || placeholder.status !== 'answering') {
+    await fail(`stage 6: the reply row is ${placeholder.role}/${placeholder.status}, expected supervisor/answering`)
+  }
+  const attached = Array.isArray(said.attachments) ? said.attachments : []
+  if (attached.length !== 1) await fail(`stage 6: the message carries ${String(attached.length)} attachment(s), expected one`)
+  const attachment = attached[0]
+  console.log(`stage 6 attachment: ${JSON.stringify(attachment)}`)
+  // The shape R6 promises, asserted as a shape rather than as a string: the day is today's and the
+  // slug is the file's own name, so a literal here would be a gate that fails at midnight.
+  if (!INBOX_PATH_PATTERN.test(attachment.path)) {
+    await fail(`stage 6: the attachment landed at ${JSON.stringify(attachment.path)}, expected docs/inbox/<yyyy-mm-dd>-brief.md`)
+  }
+  if (attachment.kind !== 'text') await fail(`stage 6: a .md attachment is kind ${JSON.stringify(attachment.kind)}, expected text`)
+  // IN THE REPOSITORY, not just in a row: the whole claim of R6 is that every worker can open this
+  // by path, which is only true if the bytes are on the base branch.
+  const onDisk = join(repoPath, attachment.path)
+  const committed = execFileSync('git', ['-C', repoPath, 'log', '-1', '--format=%s'], { encoding: 'utf8' }).trim()
+  const tracked = execFileSync('git', ['-C', repoPath, 'ls-files', '--', attachment.path], { encoding: 'utf8' }).trim()
+  console.log(`stage 6 repository: exists ${String(existsSync(onDisk))}, tracked ${JSON.stringify(tracked)}, newest commit ${JSON.stringify(committed)}`)
+  if (!existsSync(onDisk)) await fail(`stage 6: ${attachment.path} is not in the repository at ${onDisk}`)
+  if (tracked !== attachment.path) await fail(`stage 6: ${attachment.path} was written but never committed -- git ls-files says ${JSON.stringify(tracked)}`)
+  if (!committed.startsWith('inbox: ')) await fail(`stage 6: the newest commit is ${JSON.stringify(committed)}, expected an "inbox: " commit`)
+
+  // What the reply asks for, built NOW because it names the path the upload just minted -- the
+  // whole reason this stage's daemon cannot be one of the four before it.
+  const goalRequest = `Plan from the brief at ${attachment.path}: it is the requirement.`
+  const daemon6 = spawnDaemon('daemon-6', {
+    chatActions: JSON.stringify([{ kind: 'request_goal_change', request: goalRequest }]),
+  })
+
+  const answeredReply = await waitUntil('the Supervisor to answer the message', SUPERVISOR_TIMEOUT_MS, async (note) => {
+    const row = await prisma.supervisorMessage.findUnique({ where: { id: placeholder.id } })
+    note(row === null ? 'the reply row vanished' : `the reply is ${row.status}`)
+    return row !== null && row.status !== 'answering' ? row : null
+  })
+  console.log(`stage 6 reply: ${describeChatMessage(answeredReply)}`)
+  if (answeredReply.status !== 'answered') {
+    await fail(`stage 6: the turn is ${answeredReply.status} (${String(answeredReply.failureReason)}), expected answered`)
+  }
+  if (answeredReply.text.trim() === '') await fail('stage 6: the reply is answered with no text at all')
+  // The turn's own money, on the turn's own row (erratum E5): one chat call, measured, at the
+  // fake's figure. `unmeasured` false is the other half -- a Cursor turn reports no price and this
+  // one is Claude's.
+  if (!sameMoney(answeredReply.modelCostUsd, FIXTURE_CHAT_COST_USD)) {
+    await fail(`stage 6: the turn cost ${String(answeredReply.modelCostUsd)}, expected the fake chat arm's ${String(FIXTURE_CHAT_COST_USD)}`)
+  }
+  if (answeredReply.unmeasured !== false) await fail('stage 6: a turn whose cost the provider reported is marked unmeasured')
+
+  const asked = Array.isArray(answeredReply.actions) ? answeredReply.actions : []
+  if (asked.length !== 1) await fail(`stage 6: the reply carries ${String(asked.length)} action(s), expected exactly one`)
+  const [askedAction] = asked
+  console.log(`stage 6 action: ${JSON.stringify(askedAction)}`)
+  if (askedAction.action.kind !== 'request_goal_change') {
+    await fail(`stage 6: the reply asked for ${String(askedAction.action.kind)}, expected request_goal_change`)
+  }
+  if (askedAction.tier !== 'applied') {
+    await fail(`stage 6: the action is tier ${String(askedAction.tier)} on a project set to act, expected applied`)
+  }
+
+  const chatDecision = await prisma.supervisorDecision.findUnique({ where: { id: askedAction.decisionId } })
+  console.log(`stage 6 decision: ${chatDecision === null ? 'GONE' : describeDecision(chatDecision)}`)
+  if (chatDecision === null) await fail(`stage 6: the reply names decision ${String(askedAction.decisionId)} and there is no such row`)
+  if (chatDecision.situationKind !== 'operator_request') {
+    await fail(`stage 6: the decision is a ${chatDecision.situationKind}, expected operator_request`)
+  }
+  // Erratum E3: the subject is the turn's id AND the action's kind, so a reply that asked for two
+  // things records two rows instead of having the second refused by its own cooldown.
+  if (chatDecision.subjectId !== `${placeholder.id}:request_goal_change`) {
+    await fail(`stage 6: the decision's subject is ${JSON.stringify(chatDecision.subjectId)}, expected ${placeholder.id}:request_goal_change`)
+  }
+  if (chatDecision.situation.facts.messageId !== placeholder.id) {
+    await fail(`stage 6: the decision's facts name message ${String(chatDecision.situation.facts.messageId)}, expected ${placeholder.id}`)
+  }
+  if (chatDecision.status !== 'applied') await fail(`stage 6: the decision is ${chatDecision.status}, expected applied`)
+  if (chatDecision.failureReason !== null) await fail(`stage 6: the decision refused: ${String(chatDecision.failureReason)}`)
+  // Erratum E5's other half: the turn is charged ONCE, on the message row above. A decision from a
+  // reply is `modelCalled: false` or `workspaceSpend` would bill the same call a second time, once
+  // per action the reply asked for.
+  if (chatDecision.modelCalled !== false) {
+    await fail('stage 6: the decision says it called a model -- the conversation pays for its turn on the message row')
+  }
+
+  const newestGoal = await prisma.goalVersion.findFirst({ where: { workspaceId }, orderBy: { version: 'desc' } })
+  const workspaceNow = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
+  console.log(
+    `stage 6 goal: v${String(newestGoal?.version)} request ${JSON.stringify(newestGoal?.request)}\n  text ${JSON.stringify(newestGoal?.text)}`,
+  )
+  console.log(`stage 6 workspace goal is v${String(workspaceNow.goalVersion)}: ${JSON.stringify(workspaceNow.goal)}`)
+  if (newestGoal === null) await fail('stage 6: the applied decision wrote no goal version at all')
+  if (newestGoal.request !== goalRequest) {
+    await fail(`stage 6: the version's request is ${JSON.stringify(newestGoal.request)}, expected ${JSON.stringify(goalRequest)}`)
+  }
+  // THE WHOLE POINT, in one assertion: the document a person dropped on the conversation is named
+  // in the project's requirement, by the path the planner and every worker can open.
+  if (!newestGoal.text.includes(attachment.path)) {
+    await fail(`stage 6: the newest goal does not name the brief: ${JSON.stringify(newestGoal.text)}`)
+  }
+  if (workspaceNow.goalVersion !== newestGoal.version || !workspaceNow.goal.includes(attachment.path)) {
+    await fail(
+      `stage 6: the workspace's own goal is v${String(workspaceNow.goalVersion)} ${JSON.stringify(workspaceNow.goal)}, ` +
+        `expected the newest version v${String(newestGoal.version)}`,
+    )
+  }
+
+  await stopDaemon(daemon6)
+  console.log(
+    'stage 6 complete: a brief handed to the Supervisor in a sentence is in the repository, in a commit, and in the project\'s ' +
+      'own requirement -- one model call, one decision, and nobody asked to click anything',
+  )
+
   const finalDecisions = await prisma.supervisorDecision.findMany({ where: { workspaceId }, orderBy: { createdAt: 'asc' } })
   console.log(`every decision this gate produced (${String(finalDecisions.length)}):\n  ${finalDecisions.map(describeDecision).join('\n  ')}`)
   const finalMessages = await prisma.slaveMessage.findMany({ where: { workspaceId }, orderBy: { seq: 'asc' } })
@@ -942,7 +1136,8 @@ try {
     'PASS: the Supervisor read a real mailbox through a real daemon -- answered the question whose answer it could prove and woke ' +
       'the slave waiting on it, drafted the one it could not and sent nothing until a human rewrote it, refused to answer a ' +
       'question about an API key without paying for a second call to find that out, re-addressed a stale question to the ' +
-      'colleague who could answer it, and threw away only the decisions that had stopped being anybody\'s business',
+      'colleague who could answer it, threw away only the decisions that had stopped being anybody\'s business, and turned a ' +
+      'brief somebody handed it in a sentence into a commit in the repository and a line in the project\'s own requirement',
   )
   exitCode = 0
 } finally {

@@ -114,6 +114,13 @@ export function actionText(action: Action, taskTitles: Readonly<Record<string, s
     // Self-running-project R4: the one remedy for a halted workspace.
     case 'clear_halt':
       return `clear the halt on this workspace: ${action.reason}`
+    // Supervisor chat R3: the two a CONVERSATION asked for. Both quote the person's own words,
+    // because that is the whole of what is being approved -- a goal change is their sentence
+    // amending the standing goal, and a note is their sentence committed for the next planner.
+    case 'request_goal_change':
+      return `ask for the goal to change: “${action.request}”`
+    case 'note_for_planner':
+      return `leave a note for the next planner: “${action.text}”`
     case 'escalate_to_human':
       return `escalate to a human: ${action.summary}`
     case 'no_action':

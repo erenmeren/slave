@@ -225,6 +225,88 @@ describe('verifySources -- what is rejected, and why', () => {
   })
 })
 
+/**
+ * Supervisor chat R2: the two source kinds a CONVERSATION adds, and the one caller that has no
+ * question at all. A chat turn cites the feed and the attachments it was shown, and the same
+ * function checks them -- one definition of "sourced", wherever a citation comes from.
+ */
+describe('verifySources -- the chat kinds (R2)', () => {
+  const CHAT = {
+    feed: [
+      { seq: 40, sentence: 'Alex started "Add the thing".' },
+      { seq: 41, sentence: 'The review is waiting for a reviewer.' },
+    ],
+    attachments: [
+      {
+        path: 'docs/inbox/2026-09-20-notes.md',
+        name: 'notes.md',
+        bytes: 25,
+        kind: 'text' as const,
+        text: 'The invoice total is wrong on the second page.',
+      },
+      { path: 'docs/inbox/2026-09-20-shot.png', name: 'shot.png', bytes: 900, kind: 'image' as const },
+    ],
+  }
+
+  it('verifies a feed sentence cited by its seq', () => {
+    const cited = source({ kind: 'feed', ref: '41', quote: 'waiting for a reviewer' })
+    expect(verifySources([cited], null, WORLD, CHAT).verified).toEqual([cited])
+  })
+
+  it('verifies an attachment cited by its path', () => {
+    const cited = source({ kind: 'attachment', ref: 'docs/inbox/2026-09-20-notes.md', quote: 'the second page' })
+    expect(verifySources([cited], null, WORLD, CHAT).verified).toEqual([cited])
+  })
+
+  it('still verifies the goal on a turn that has no question at all', () => {
+    const cited = source({ kind: 'goal', quote: 'by October' })
+    expect(verifySources([cited], null, WORLD, CHAT).verified).toEqual([cited])
+  })
+
+  it('has no task, no run context and no thread to check when there is no question', () => {
+    const reasons = verifySources(
+      [source({ kind: 'task' }), source({ kind: 'run_context' }), source({ kind: 'message', ref: 'm2' })],
+      null,
+      WORLD,
+      CHAT,
+    ).rejected.map((entry) => entry.reason)
+    expect(reasons).toEqual(['no_such_source', 'no_such_source', 'unknown_ref'])
+  })
+
+  it('rejects a seq the window does not hold, and a path that was never attached', () => {
+    expect(verifySources([source({ kind: 'feed', ref: '99' })], null, WORLD, CHAT).rejected[0]?.reason).toBe(
+      'unknown_ref',
+    )
+    expect(verifySources([source({ kind: 'attachment', ref: 'docs/inbox/other.md' })], null, WORLD, CHAT).rejected[0]?.reason).toBe(
+      'unknown_ref',
+    )
+  })
+
+  // An image is named in the prompt by path and size and never inlined (R6), so there are no words
+  // in it a quote could have been copied from -- a citation of one is a citation of nothing.
+  it('rejects an attachment whose text was never put in the prompt', () => {
+    const cited = source({ kind: 'attachment', ref: 'docs/inbox/2026-09-20-shot.png', quote: 'an invoice' })
+    expect(verifySources([cited], null, WORLD, CHAT).rejected).toEqual([{ source: cited, reason: 'unknown_ref' }])
+  })
+
+  // The answer path passes no chat context, so these two kinds resolve to nothing there. Failing
+  // CLOSED matters: a drafted answer that cited a feed line would otherwise verify against a record
+  // `buildAnswerPrompt` never showed the model.
+  it('rejects both kinds outright on a call that carried no conversation', () => {
+    const reasons = verifySources(
+      [source({ kind: 'feed', ref: '41', quote: 'waiting for a reviewer' }), source({ kind: 'attachment', ref: 'x' })],
+      QUESTION,
+      WORLD,
+    ).rejected.map((entry) => entry.reason)
+    expect(reasons).toEqual(['unknown_ref', 'unknown_ref'])
+  })
+
+  it('rejects a feed quote that is not in the sentence it names', () => {
+    const cited = source({ kind: 'feed', ref: '41', quote: 'everything is fine' })
+    expect(verifySources([cited], null, WORLD, CHAT).rejected).toEqual([{ source: cited, reason: 'quote_not_found' }])
+  })
+})
+
 describe('isSourced', () => {
   const good = source({ quote: 'Wire the reader' })
   const bad = source({ quote: 'nowhere at all' })

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  conversationCost,
   listDecisions,
   listGoalVersions,
   loadSupervisorWorld,
@@ -176,13 +177,41 @@ describe('the gate reads the same facts the web builders publish', () => {
     expect(recent).toEqual(await listDecisions(workspaceId))
   })
 
-  it("the view's settings ARE supervisorSettings()", async (): Promise<void> => {
+  it("the view's settings ARE supervisorSettings(), plus F R4's runtime pair", async (): Promise<void> => {
+    await prisma.workspace.update({
+      where: { id: workspaceId },
+      data: { supervisorProvider: 'cursor', supervisorModel: 'auto' },
+    })
     const view = await buildSupervisorView(workspaceId, new Date())
     const settings = await supervisorSettings(workspaceId)
 
     expect(settings).not.toBeNull()
     expect(settings?.enabled).toBe(true)
-    expect(view?.settings).toEqual(settings)
+    // `supervisorSettings` is a THREE-column read and stays one -- it is on the tick's hot path,
+    // asked a dozen times a second per project. The provider and the model the header's two
+    // selects are bound to come off the same `Workspace` row beside it, so the view is that verb's
+    // answer and nothing else, with the pair added.
+    expect(view?.settings).toEqual({ ...settings, provider: 'cursor', model: 'auto' })
+  })
+
+  it("the conversation's cost so far IS conversationCost()", async (): Promise<void> => {
+    await prisma.supervisorMessage.createMany({
+      data: [
+        { workspaceId, seq: 0, role: 'human', status: 'sent', text: 'what is stuck?' },
+        { workspaceId, seq: 1, role: 'supervisor', status: 'answered', text: 'nothing', modelCostUsd: 0.75 },
+        // A turn nobody could price (erratum E2): counted, never added up as a zero.
+        { workspaceId, seq: 2, role: 'human', status: 'sent', text: 'and now?' },
+        { workspaceId, seq: 3, role: 'supervisor', status: 'answered', text: 'still nothing', unmeasured: true },
+      ],
+    })
+
+    const view = await buildSupervisorView(workspaceId, new Date())
+    const cost = await conversationCost(workspaceId)
+
+    expect(cost.usd).toBeCloseTo(0.75)
+    expect(cost.unmeasuredTurns).toBe(1)
+    expect(view?.conversationCostUsd).toBe(cost.usd)
+    expect(view?.conversationUnmeasuredTurns).toBe(cost.unmeasuredTurns)
   })
 
   it('the goal history IS listGoalVersions()', async (): Promise<void> => {

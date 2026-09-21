@@ -169,6 +169,12 @@ export function tierOf(action: Action, world: SupervisorWorld, situationKind: Si
     case 'retry_task':
     case 'retry_review':
     case 'clear_halt':
+    // Supervisor chat R3: the conversation borrows the Supervisor's authority, gated by the switch
+    // that already exists -- so neither is routine under `propose`, beside `cancel_task` above. A
+    // goal is the project's whole point and a note is a commit to the repository; `act` applies
+    // both, having returned above, and that is the person's own decision to have made.
+    case 'request_goal_change':
+    case 'note_for_planner':
       return 'proposed'
   }
 }

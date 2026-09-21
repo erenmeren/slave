@@ -228,4 +228,31 @@ describe('the workspace settings verbs', () => {
       expect(await prisma.executionEvent.count({ where: { type: 'workspace_settings_changed' } })).toBe(0)
     })
   })
+
+  // F R1/R4 smoke: the schema this task adds, not the verbs later tasks write around it.
+  describe('the Supervisor conversation schema (F R1, R4)', () => {
+    it('defaults a fresh workspace to the installation provider and model: both null', async (): Promise<void> => {
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspace.id } })
+      expect(workspace.supervisorProvider).toBeNull()
+      expect(workspace.supervisorModel).toBeNull()
+    })
+
+    it('stores a conversation turn and reads back its role and default status', async (): Promise<void> => {
+      const message = await prisma.supervisorMessage.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          seq: 1,
+          role: 'human',
+          text: 'why is nothing running?',
+        },
+      })
+
+      const stored = await prisma.supervisorMessage.findUniqueOrThrow({ where: { id: message.id } })
+      expect(stored.role).toBe('human')
+      expect(stored.status).toBe('sent')
+      expect(stored.attachments).toEqual([])
+      expect(stored.actions).toBeNull()
+      expect(stored.unmeasured).toBe(false)
+    })
+  })
 })

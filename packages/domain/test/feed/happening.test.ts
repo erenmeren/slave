@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { HAPPENING_TYPES, happeningSentence } from '../src/lib/happening.js'
+import { HAPPENING_TYPES, happeningSentence } from '../../src/feed/happening.js'
 
 const names = { actor: 'Emma', taskTitle: 'Checkout form' }
 

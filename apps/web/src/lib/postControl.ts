@@ -80,6 +80,11 @@ export async function postControl(
  * Added here rather than a second `fetch` idiom inside `project/SupervisorRequest.tsx`: this file
  * is the one place this app dials `fetch` for a mutation, and the 401 handling below is exactly
  * why that rule exists.
+ *
+ * That call site is gone twice over now — the widget in M57, and the Supervisor composer's own
+ * goal request in F R2, which sends a MESSAGE. The live caller is `shell/Header.tsx`'s fan-out,
+ * two of whose four buttons answer a report; `postForm` below is the same contract for a body the
+ * browser has to frame itself.
  */
 export async function postJson<T>(
   url: string,
@@ -94,6 +99,35 @@ export async function postJson<T>(
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
           })
+    const data: unknown = await response.json().catch(() => null)
+    if (response.ok) return { ok: true, data: data as T }
+    // The same door every other control surface lands on (M20 §3.4).
+    if (response.status === 401) onUnauthorized()
+    return { ok: false, error: errorMessage(data, response.status) }
+  } catch (cause) {
+    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) }
+  }
+}
+
+/**
+ * A POST carrying FILES, whose answer matters (F R6).
+ *
+ * `postJson` above serialises its body and sets `Content-Type: application/json`, which a
+ * multipart request can be neither of. The answer matters for the same reason it does there: the
+ * upload route replies with the PATH each file landed at in the repository, and that list is what
+ * the message posted straight afterwards names -- a caller that threw the body away would have
+ * nothing to send.
+ *
+ * NO `Content-Type` header, deliberately: the browser writes it from the `FormData` itself, with
+ * the boundary token, and setting it by hand is the one reliable way to make a multipart body
+ * unparseable at the other end.
+ */
+export async function postForm<T>(
+  url: string,
+  body: FormData,
+): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+  try {
+    const response = await fetch(url, { method: 'POST', body })
     const data: unknown = await response.json().catch(() => null)
     if (response.ok) return { ok: true, data: data as T }
     // The same door every other control surface lands on (M20 §3.4).
