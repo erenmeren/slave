@@ -97,6 +97,20 @@
 //   named by `--intake-repo`, the literal `NEW REPOSITORY`, or the first
 //   question. Content rather than shared state keeps several conversations
 //   deterministic even when their calls interleave.
+//   Supervisor chat's CHAT arm sits in front of the answer arm in every
+//   prompt-sniffing mode AND inside the `complete` name: a prompt containing
+//   the literal `"supervisorReply"` (`SUPERVISOR_CHAT_MARKER`, which
+//   `buildSupervisorChatPrompt`'s instruction line always emits) is answered
+//   with `{"supervisorReply": {"text": "On it.", "actions": <from
+//   --chat-actions-json-base64 in ARGV, default []>, "sources": []}}`. It has
+//   to be IN FRONT: that same instruction line also carries `"sources"`,
+//   because a reply cites what it answered from, so the answer arm behind it
+//   would swallow every chat turn there is. ARGV and base64 for the reasons
+//   `--ask-json-base64` gives (M52 R3, erratum E6): no environment variable
+//   reaches a decision call's child, and an action carries quotes and braces.
+//   It is in the `complete` name as well as the flow modes because the CLI's
+//   own integration tests have one fixed `SLAVEOFAI_CLAUDE_ARGS` and no flow
+//   mode of their own -- R7's capability-map arm's reason, verbatim.
 //   Right behind it sits M39's ANSWER arm: a prompt containing the literal
 //   `"sources"` (which `buildAnswerPrompt` always emits) replays the fixture
 //   named by `--answer-fixture <name>` in ARGV, or by
@@ -420,6 +434,86 @@ async function supervisorArm(prompt) {
   if (!prompt.includes('"candidateIndex"')) return false
   await replayFixture('supervisor-decision')
   return true
+}
+
+/**
+ * Supervisor chat (R2): ONE TURN of the conversation between a person and the Supervisor,
+ * recognised by `SUPERVISOR_CHAT_MARKER` -- the literal `"supervisorReply"` that
+ * `buildSupervisorChatPrompt`'s instruction line always carries.
+ *
+ * IT MUST BE MATCHED BEFORE {@link answerArm}, and that is not belt and braces: the chat prompt's
+ * instruction line names BOTH routing literals, because a reply cites its sources in the same
+ * envelope it answers in. `"sources"` alone is what the answer arm keys on, so with the two the
+ * other way round every chat turn in the system would be handed a worker's answer fixture and
+ * `parseSupervisorReply` would read no envelope at all. The order between this arm and the two
+ * decision arms in front of it (`"candidateIndex"`, `"intakeAnswer"`) does not matter -- neither
+ * literal survives into a chat prompt, since `defuseRoutingLiterals` rewrites every quoted one in
+ * every text the conversation quotes -- and it is kept only so the arms read in one order
+ * everywhere.
+ *
+ * SYNTHETIC rather than a fixture replay, `intakeArm`'s reason: the actions a turn asks for are
+ * chosen by the caller a moment before the call, and no recording made in advance could carry a
+ * task id that was minted for this test.
+ */
+async function chatArm(prompt) {
+  if (!prompt.includes('"supervisorReply"')) return false
+  const sessionId = 'fake-session-chat'
+  const text = JSON.stringify({ supervisorReply: { text: 'On it.', actions: chatActions(), sources: [] } })
+  await writeLines([
+    JSON.stringify({ type: 'system', subtype: 'init', cwd: process.cwd(), session_id: sessionId, model: 'fake-claude', permissionMode: 'bypassPermissions' }),
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        model: 'fake-claude',
+        id: 'msg_fake_chat',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text }],
+      },
+      session_id: sessionId,
+    }),
+    JSON.stringify({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      terminal_reason: 'completed',
+      stop_reason: 'end_turn',
+      num_turns: 1,
+      // The other decision arms' own figure: a chat turn is one call and it is MEASURED, which is
+      // what lets a test tell a Claude turn from a Cursor one (the latter reports no cost at all).
+      total_cost_usd: 0.01,
+      permission_denials: [],
+      session_id: sessionId,
+      result: text,
+    }),
+  ])
+  process.exit(0)
+}
+
+/**
+ * What {@link chatArm} puts in the reply's `actions` -- `--chat-actions-json-base64 <base64 of the
+ * JSON array>` from ARGV, or none at all.
+ *
+ * ARGV AND ONLY ARGV, and base64 for `--ask-json-base64`'s two reasons (M52 R3, M39 erratum E6): a
+ * decision call's child is spawned with `buildDecisionEnv()` -- PATH, HOME, LANG and TERM and
+ * nothing else -- so no environment variable a caller exports ever reaches this process, while
+ * `SLAVEOFAI_CLAUDE_ARGS` rides through as `extraArgs` exactly as `--fixture` does; and an action
+ * carries quotes, braces and a person's own sentence, none of which survive a shell-split argv
+ * unencoded.
+ *
+ * An absent flag, a flag whose value is another flag, and an encoding that does not decode to a
+ * JSON array all mean NO actions: a reply that answers and asks for nothing is the ordinary turn,
+ * and inventing one here would put a decision card in front of a test that asked for none.
+ */
+function chatActions() {
+  const encoded = flagValue('--chat-actions-json-base64')
+  if (encoded === undefined) return []
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, 'base64').toString('utf8'))
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
 }
 
 /** M39 (erratum E3): the Supervisor's ANSWER call -- the second call it makes about a question,
@@ -972,6 +1066,7 @@ async function main() {
     const prompt = await promptText()
     if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
+    if (await chatArm(prompt)) return
     if (await answerArm(prompt)) return
     if (prompt.includes('"verdict"')) {
       await replayFixture('review-approve')
@@ -1022,6 +1117,7 @@ async function main() {
     const prompt = await promptText()
     if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
+    if (await chatArm(prompt)) return
     if (await answerArm(prompt)) return
     if (await replanArm(prompt)) return
     if (prompt.includes('"task graph"')) {
@@ -1048,6 +1144,7 @@ async function main() {
     const prompt = await promptText()
     if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
+    if (await chatArm(prompt)) return
     if (await answerArm(prompt)) return
     if (await replanArm(prompt)) return
     if (prompt.includes('"task graph"')) {
@@ -1107,6 +1204,7 @@ async function main() {
     const prompt = await promptText()
     if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
+    if (await chatArm(prompt)) return
     if (await answerArm(prompt)) return
     if (prompt.includes('"verdict"')) {
       await replayFixture('review-approve')
@@ -1124,6 +1222,7 @@ async function main() {
   if (fixtureName === 'complete') {
     const prompt = await promptText()
     if (await capabilityMapArm(prompt)) return
+    if (await chatArm(prompt)) return
     await replayFixture('complete')
     return
   }

@@ -805,6 +805,106 @@ describe('fake-claude', () => {
     })
   })
 
+  describe('the chat arm (Supervisor chat R2)', () => {
+    /** The instruction line `buildSupervisorChatPrompt` always ends with. It carries BOTH routing
+     *  literals -- `"supervisorReply"` and `"sources"` -- which is the whole reason the chat arm has
+     *  to be matched before the answer arm. */
+    const PROMPT =
+      'Reply with exactly one JSON object and nothing else on its line:\n' +
+      '{"supervisorReply": {"text": "<your answer to them>", "actions": [], "sources": [{"kind": "task" | "goal", "ref": "<task id>", "quote": "..."}]}}'
+    const GOAL_CHANGE = JSON.stringify([{ kind: 'request_goal_change', request: 'ship the pricing page first' }])
+    const base64 = (json: string): string => Buffer.from(json, 'utf8').toString('base64')
+
+    let repoDir: string
+
+    beforeEach(() => {
+      repoDir = mkdtempSync(path.join(tmpdir(), 'fake-claude-chat-'))
+      execFileSync('git', ['init', '-q'], { cwd: repoDir })
+      execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'initial commit'], {
+        cwd: repoDir,
+      })
+    })
+
+    afterEach(() => {
+      rmSync(repoDir, { recursive: true, force: true })
+    })
+
+    it('answers a chat prompt with the reply envelope, no actions, and a cost', async (): Promise<void> => {
+      const { stdout } = await run('node', [FAKE, '--fixture', 'complete', '-p', PROMPT], { cwd: repoDir })
+      const result = parseLines(stdout).find((l) => l.type === 'result') as
+        | { result?: string; total_cost_usd?: number }
+        | undefined
+      expect(result?.result).toContain('"supervisorReply"')
+      expect(JSON.parse(result?.result as string)).toEqual({
+        supervisorReply: { text: 'On it.', actions: [], sources: [] },
+      })
+      // A decision arm's own cost line, so the turn is measured rather than unmeasured.
+      expect(result?.total_cost_usd).toBe(0.01)
+    })
+
+    it('carries the actions --chat-actions-json-base64 names', async (): Promise<void> => {
+      const { stdout } = await run(
+        'node',
+        [FAKE, '--chat-actions-json-base64', base64(GOAL_CHANGE), '--fixture', 'complete', '-p', PROMPT],
+        { cwd: repoDir },
+      )
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(JSON.parse(result?.result as string)).toEqual({
+        supervisorReply: {
+          text: 'On it.',
+          actions: [{ kind: 'request_goal_change', request: 'ship the pricing page first' }],
+          sources: [],
+        },
+      })
+    })
+
+    it('answers with no actions when the flag value is another flag', async (): Promise<void> => {
+      // The E6 idiom every other ARGV knob here uses: `indexOf(...) + 1` is a flag, not a value,
+      // when the value was omitted.
+      const { stdout } = await run('node', [FAKE, '--chat-actions-json-base64', '--fixture', 'complete', '-p', PROMPT], {
+        cwd: repoDir,
+      })
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"actions":[]')
+    })
+
+    it('reads the prompt off STDIN, which is where a real chat turn puts it', (): void => {
+      const stdout = execFileSync(
+        'node',
+        [FAKE, '--fixture', 'complete', '-p', '--restricted', '--no-session-persistence', '--tools', ''],
+        { cwd: repoDir, input: PROMPT, encoding: 'utf8' },
+      )
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"supervisorReply"')
+    })
+
+    it('is armed in every prompt-sniffing mode AND in complete, ahead of the answer arm', async (): Promise<void> => {
+      for (const mode of ['complete', 'm8-flow', 'm8a-flow', 'm36-flow', 'm41-flow']) {
+        const { stdout } = await run('node', [FAKE, '--fixture', mode, '-p', `${PROMPT} "verdict" "task graph"`], {
+          cwd: repoDir,
+        })
+        const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+        // The answer arm's fixture would have put `"answer"` here: the chat prompt carries
+        // `"sources"` too, so the more specific arm has to be in front of it.
+        expect(result?.result, mode).toContain('"supervisorReply"')
+        expect(result?.result, mode).not.toContain('"answer"')
+      }
+      // A chat turn is a read. A work run would have left a commit in the cwd.
+      expect(execFileSync('git', ['log', '--oneline'], { cwd: repoDir }).toString().trim().split('\n')).toHaveLength(1)
+      expect(execFileSync('git', ['status', '--porcelain'], { cwd: repoDir }).toString().trim()).toBe('')
+    })
+
+    it('leaves a worker answer prompt, which carries "sources" and no envelope, to the answer arm', async (): Promise<void> => {
+      const { stdout } = await run(
+        'node',
+        [FAKE, '--fixture', 'm36-flow', '-p', 'Reply with {"answer": "...", "sources": [...], "critical": false}'],
+        { cwd: repoDir },
+      )
+      const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
+      expect(result?.result).toContain('"quote":"PostgreSQL on port 5433"')
+    })
+  })
+
   describe('m8-flow', () => {
     let repoDir: string
 
