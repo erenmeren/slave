@@ -392,6 +392,37 @@ describe('buildSupervisorChatPrompt -- the vocabulary and the envelope', () => {
     expect(prompt).toContain('Reply with exactly one JSON object and nothing else on its line:')
   })
 
+  // Erratum E12: the offered kinds are exactly the three a CONVERSATION can verify. `task` and
+  // `message` resolve off a question, a chat turn has none, and a citation of one was rejected every
+  // time -- which costs the whole answer its `sourced` chip. The test below proves the pairing
+  // rather than the spelling: what is offered is what `verifySources` can actually check.
+  it('offers only the citation kinds a conversation can check, and no others', () => {
+    const prompt = buildSupervisorChatPrompt(input())
+    expect(prompt).toContain('"kind": "goal" | "feed" | "attachment"')
+    expect(prompt).not.toContain('"task"')
+    expect(prompt).not.toContain('"message"')
+    expect(prompt).not.toContain('"run_context"')
+
+    // And each of the three really does check out against what this same prompt rendered, while a
+    // `task` citation of a task the BOARD shows does not: the checker has no question to read it
+    // against.
+    const turn = input({ feed: [{ seq: 41, sentence: 'waiting for a reviewer' }] })
+    const check = verifySources(
+      [
+        { kind: 'goal', ref: null, quote: WORLD.goal!.slice(0, 12) },
+        { kind: 'feed', ref: '41', quote: 'waiting for a reviewer' },
+        { kind: 'task', ref: WORLD.tasks[0]!.id, quote: WORLD.tasks[0]!.title },
+      ],
+      null,
+      WORLD,
+      renderedChatSources(turn),
+    )
+    expect(check.verified.map((source) => source.kind)).toEqual(['goal', 'feed'])
+    expect(check.rejected).toEqual([
+      { source: { kind: 'task', ref: WORLD.tasks[0]!.id, quote: WORLD.tasks[0]!.title }, reason: 'no_such_source' },
+    ])
+  })
+
   // Fix round 1, I5: the marker is how a reply is ROUTED. A file, a message or a feed sentence
   // carrying a literal envelope would be another party writing this system's own control word.
   it('leaves exactly one live envelope marker in the prompt -- the instruction line', () => {

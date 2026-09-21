@@ -28,7 +28,7 @@ import { writePermissionsFile } from './permission.js'
 import { plural } from './plural.js'
 import { refusalText } from './refusal.js'
 import { DEFAULT_MAX_MODEL_CALLS } from './simulation/auto-run.js'
-import type { DeciderRegistry, ModelDecider, ModelOutcome } from './simulation/llm.js'
+import type { DeciderRegistry, ModelDecider } from './simulation/llm.js'
 import { applyDecision, listDecisions, recordDecision } from './supervisor.js'
 import {
   claimSupervisorTurns,
@@ -149,7 +149,15 @@ async function readAttachmentText(
 }
 
 /**
- * Arms ONE read-only turn and makes the call (F R7, erratum E2).
+ * Arms ONE read-only turn and hands back the four fields that spawn it (F R7, erratum E2).
+ *
+ * IT DOES NOT MAKE THE CALL, and that is I4's fix rather than a preference: arming writes a
+ * directory and a file, either of which can throw on a repository path this host cannot resolve,
+ * and the one place that decides whether a failed turn is `unmeasured` has to be able to tell a
+ * throw BEFORE the spawn from one after it. With the call in here, every throw in this function
+ * looked like a call whose cost nobody measured -- a dollar charged for a turn no vendor ever saw.
+ * So there is exactly one `decider(...)` in this file, with {@link startChatTurn}'s `called` flag
+ * immediately above it.
  *
  * A 32-byte token minted here and written down nowhere: the file carries only its sha256
  * (`writePermissionsFile`), so pointing this child at another turn's verdict would buy nothing.
@@ -168,10 +176,7 @@ async function readAttachmentText(
  * read -- not only the attachment, and not only files under `cwd`. What narrows it is the prompt
  * and the cwd, which are guidance, not a boundary.
  */
-async function readOnlyCall(
-  decider: ModelDecider,
-  input: { readonly model: string; readonly prompt: string; readonly messageId: string; readonly repoPath: string },
-): Promise<ModelOutcome> {
+function armReadOnlyTurn(input: { readonly messageId: string; readonly repoPath: string }): ReadOnlySpawn {
   const { turnDir } = chatTurnFilePaths(input.repoPath, input.messageId)
   const runToken = randomBytes(32).toString('hex')
   const permissionsFilePath = writePermissionsFile(turnDir, {
@@ -185,15 +190,15 @@ async function readOnlyCall(
     runId: input.messageId,
     runToken,
   })
-  return decider({
-    model: input.model,
-    prompt: input.prompt,
-    maxBudgetUsd: SUPERVISOR_PER_CALL_CAP_USD,
-    tools: 'read-only',
-    cwd: input.repoPath,
-    permissionsFilePath,
-    runToken,
-  })
+  return { tools: 'read-only', cwd: input.repoPath, permissionsFilePath, runToken }
+}
+
+/** The four fields that travel together or not at all (`ModelDecider`'s own union). */
+interface ReadOnlySpawn {
+  readonly tools: 'read-only'
+  readonly cwd: string
+  readonly permissionsFilePath: string
+  readonly runToken: string
 }
 
 /**
@@ -332,6 +337,12 @@ function startChatTurn(
   defaultModel: string,
   now: Date,
 ): void {
+  // I4: WAS THE VENDOR EVER ASKED? Everything before the spawn -- the world load, the feed, the
+  // attachments, arming a read-only turn -- can throw, and a throw there is a turn that cost
+  // nothing. `unmeasured: true` on one charges the project `SUPERVISOR_PER_CALL_CAP_USD` for a call
+  // no account ever saw (E5's term), so the catch reports THIS flag rather than the constant it
+  // used to. Set immediately above the one `decider(...)` in this file and nowhere else.
+  let called = false
   const settled = (async (): Promise<void> => {
     try {
       const provider = turn.provider ?? SUPERVISOR_DEFAULT_PROVIDER
@@ -394,9 +405,16 @@ function startChatTurn(
       }
       const prompt = buildSupervisorChatPrompt(input)
       const model = turn.model ?? defaultModel
-      const outcome = readOnly
-        ? await readOnlyCall(decider, { model, prompt, messageId: turn.id, repoPath: workspace.repoPath })
-        : await decider({ model, prompt, maxBudgetUsd: SUPERVISOR_PER_CALL_CAP_USD })
+      const spawn: ReadOnlySpawn | undefined = readOnly
+        ? armReadOnlyTurn({ messageId: turn.id, repoPath: workspace.repoPath })
+        : undefined
+      called = true
+      const outcome = await decider({
+        model,
+        prompt,
+        maxBudgetUsd: SUPERVISOR_PER_CALL_CAP_USD,
+        ...(spawn ?? {}),
+      })
 
       // A call that came back with no cost was still MADE: `unmeasured` is the intake's honesty
       // rule, and on a Cursor turn it is the only honest thing the panel can show (erratum E2).
@@ -453,10 +471,12 @@ function startChatTurn(
       await settle(turn.id, {
         kind: 'failed',
         reason: error instanceof Error ? error.message : String(error),
-        // A throw before the call returned is a call whose cost nobody measured. `unmeasured`
-        // rather than zero, for the intake's reason: silence about money is not the same as none.
+        // A throw AFTER the spawn is a call whose cost nobody measured -- `unmeasured`, for the
+        // intake's reason: silence about money is not the same as none. A throw BEFORE it is a turn
+        // that cost nothing, and saying otherwise bills a dollar for a call the vendor never had
+        // (I4). `called` is the only thing that can tell the two apart.
         costUsd: null,
-        unmeasured: true,
+        unmeasured: called,
       }).catch(() => undefined)
     }
   })()

@@ -52,7 +52,9 @@ export interface SupervisorMessageView {
    *  not a suspect one: this is a conversation, not a sourced answer to a worker. */
   readonly sourced: boolean
   /** The call happened and nobody could price it (a Cursor turn, erratum E2). NOT the same as a
-   *  cost of zero, and the panel must not add it up as one. */
+   *  cost of zero, and the panel must not add it up as one -- though the BUDGET does, at the
+   *  per-call cap (erratum E11). False on a turn that threw before the spawn: that one cost
+   *  nothing, and there is no silence about money to be honest about (I4). */
   readonly unmeasured: boolean
   readonly failureReason: string | null
   readonly createdAt: string
@@ -244,10 +246,19 @@ export async function sendSupervisorMessage(
   }
 
   const outcome = await prisma.$transaction(async (tx) => {
-    const locked = await tx.$queryRaw<{ id: string }[]>`
-      SELECT id FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
-    if (locked.length === 0) {
+    const locked = await tx.$queryRaw<{ id: string; archivedAt: Date | null }[]>`
+      SELECT id, "archivedAt" FROM "Workspace" WHERE id = ${workspaceId} FOR UPDATE`
+    const workspace = locked[0]
+    if (workspace === undefined) {
       return { ok: false as const, error: { kind: 'workspace_not_found', workspaceId } as ControlRefusal }
+    }
+    // I5, and under the SAME lock the seq is read under rather than before the transaction opens:
+    // archiving is a write on this row, so a check outside it could pass for a project archived a
+    // millisecond later and leave a turn nothing will answer. `workspace_archived` is the refusal
+    // every other write path on an archived project already gives, and no row has been written yet
+    // -- a returned `err` inside a transaction COMMITS whatever came before it, and here nothing has.
+    if (workspace.archivedAt !== null) {
+      return { ok: false as const, error: { kind: 'workspace_archived', workspaceId } as ControlRefusal }
     }
     const seq = await nextSeq(tx, workspaceId)
     const message = await tx.supervisorMessage.create({
@@ -278,6 +289,13 @@ export async function sendSupervisorMessage(
  * that held it is gone. The status does not change on a claim -- `answering` is already what the
  * panel draws as "thinking", and a fourth status for "claimed" would be a state nobody renders.
  * The claim is `claimedAt`/`claimedBy`, which is what the TTL and a stuck-row report read.
+ *
+ * AN ARCHIVED PROJECT IS NEVER CLAIMED (final fix wave, I5). Archiving is how a person says "stop
+ * spending on this", and every other write path already refuses one; a turn sent before the archive
+ * -- or a row still `answering` when it happened -- would otherwise be answered afterwards, paying a
+ * vendor for a conversation about a project nobody is working on. It is left `answering` rather than
+ * failed: un-archiving is a thing a person does, and the turn is then due again, exactly as a
+ * stale claim is.
  */
 export async function claimSupervisorTurns(input: {
   readonly by: string
@@ -290,10 +308,17 @@ export async function claimSupervisorTurns(input: {
   const claimed = await prisma.$queryRaw<{ id: string }[]>`
     UPDATE "SupervisorMessage" SET "claimedAt" = ${now}, "claimedBy" = ${input.by}
     WHERE "id" IN (
-      SELECT "id" FROM "SupervisorMessage"
-      WHERE "status" = 'answering'
-        AND ("claimedAt" IS NULL OR "claimedAt" < ${stale})
-      ORDER BY "createdAt" ASC
+      SELECT m."id" FROM "SupervisorMessage" m
+      WHERE m."status" = 'answering'
+        AND (m."claimedAt" IS NULL OR m."claimedAt" < ${stale})
+        -- EXISTS AND NOT A JOIN: FOR UPDATE SKIP LOCKED locks every table in the FROM list, so a
+        -- join would lock the Workspace row too -- and then SKIP would drop a perfectly good turn
+        -- whose project some other transaction happened to be holding. A subquery is not locked, so
+        -- m stays the only table this statement takes a lock on.
+        AND EXISTS (
+          SELECT 1 FROM "Workspace" w WHERE w."id" = m."workspaceId" AND w."archivedAt" IS NULL
+        )
+      ORDER BY m."createdAt" ASC
       FOR UPDATE SKIP LOCKED
       LIMIT ${input.limit}
     )

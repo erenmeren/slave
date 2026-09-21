@@ -198,6 +198,18 @@ describe('sendSupervisorMessage', () => {
     expect(await listSupervisorMessages(f.workspaceId)).toEqual([])
   })
 
+  // Final fix wave, I5: archiving is how a person says "stop spending on this", and every other
+  // write path on an archived project already refuses. Nothing is written -- not the human row, not
+  // the placeholder -- so there is no turn for a daemon to find later either.
+  it('refuses an archived project, and writes neither row', async (): Promise<void> => {
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { archivedAt: new Date() } })
+
+    const sent = await sendSupervisorMessage(f.workspaceId, { text: 'is anyone there?' })
+
+    expect(sent).toEqual({ ok: false, error: { kind: 'workspace_archived', workspaceId: f.workspaceId } })
+    expect(await listSupervisorMessages(f.workspaceId)).toEqual([])
+  })
+
   it('refuses an attachment that is not a file in the inbox', async (): Promise<void> => {
     const outside = await sendSupervisorMessage(f.workspaceId, {
       text: 'read this',
@@ -252,6 +264,22 @@ describe('claimSupervisorTurns and recordSupervisorReply', () => {
       { role: 'human', text: 'what is the plan?' },
       { role: 'supervisor', text: 'three tasks are on the board' },
     ])
+  })
+
+  // Final fix wave, I5: a turn sent before the archive -- or one still `answering` when it happened
+  // -- must not be answered afterwards. Left `answering` rather than failed: un-archiving is a thing
+  // a person does, and the turn is then due again.
+  it('never claims a turn on an archived project, and claims it again once it is back', async (): Promise<void> => {
+    const sent = await say('why is nothing running?')
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { archivedAt: new Date() } })
+
+    expect(await claimSupervisorTurns({ by: 'test', limit: 5 })).toEqual([])
+    const row = await prisma.supervisorMessage.findUniqueOrThrow({ where: { id: sent.replyId } })
+    expect(row.status).toBe('answering')
+    expect(row.claimedAt).toBeNull()
+
+    await prisma.workspace.update({ where: { id: f.workspaceId }, data: { archivedAt: null } })
+    expect((await claimSupervisorTurns({ by: 'test', limit: 5 })).map((turn) => turn.id)).toEqual([sent.replyId])
   })
 
   it('claims a turn once, and again only after the claim has gone stale', async (): Promise<void> => {
@@ -664,6 +692,48 @@ describe('tickSupervisorChat', () => {
     expect(spend.chatMeasuredUsd).toBe(0.25)
     expect(spend.chatUnmeasuredTurns).toBe(1)
     expect(spend.spentUsd).toBe(0.25 + SUPERVISOR_PER_CALL_CAP_USD)
+  })
+
+  // Final fix wave, I4: a throw BEFORE the spawn is a turn no vendor ever saw. It used to record
+  // `unmeasured: true`, which `workspaceSpend` charges at the per-call cap -- a dollar for a call
+  // that never happened. An unresolvable repository path is the cheapest way to reach it: the image
+  // attachment makes the turn a read-only one, and arming it stats `repoPath` first.
+  it('charges nothing for a turn that threw before the model was ever asked', async (): Promise<void> => {
+    await prisma.workspace.update({
+      where: { id: f.workspaceId },
+      data: { repoPath: join(repoPath, 'gone', 'missing-checkout') },
+    })
+    await say('what is wrong with this screen?', [
+      { path: 'docs/inbox/2026-09-20-shot.png', name: 'shot.png', bytes: 16, kind: 'image' },
+    ])
+    const decider = answering({ text: 'never asked', actions: [], sources: [] })
+
+    await run(registryOf(decider))
+
+    expect(decider.calls).toEqual([])
+    const row = (await listSupervisorMessages(f.workspaceId))[1]
+    expect(row?.status).toBe('failed')
+    expect(row?.unmeasured).toBe(false)
+    expect(row?.failureReason).toContain('cannot stat repo path')
+    const spend = await workspaceSpend(f.workspaceId)
+    expect(spend.chatUnmeasuredTurns).toBe(0)
+    expect(spend.chatMeasuredUsd).toBe(0)
+  })
+
+  // The other side of I4, and the reason the flag is not simply `false`: a decider that threw AFTER
+  // it was entered is a call whose cost nobody measured, and silence about money is not none.
+  it('still charges a turn whose call threw after the model was asked', async (): Promise<void> => {
+    await say('take a look')
+    const throwing: ModelDecider = () => {
+      throw new Error('the CLI died mid-answer')
+    }
+
+    await run(registryOf(throwing))
+
+    const row = (await listSupervisorMessages(f.workspaceId))[1]
+    expect(row?.status).toBe('failed')
+    expect(row?.unmeasured).toBe(true)
+    expect((await workspaceSpend(f.workspaceId)).chatUnmeasuredTurns).toBe(1)
   })
 
   // Fix round 1, M2: the chip R2 asks the panel for, stored because it cannot be re-derived.

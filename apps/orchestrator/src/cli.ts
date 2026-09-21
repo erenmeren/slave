@@ -1104,7 +1104,16 @@ function modelTimeoutMs(): number {
  * `cursor` spawns `decideWithCursor`, which takes no budget: `cursor-agent` has no
  * `--max-budget-usd` and reports no cost, so `maxBudgetUsd` is dropped here rather than passed to
  * something that would ignore it (erratum E2 again -- a Cursor turn is capped by the timeout and
- * the vendor account alone, and the turn is recorded `unmeasured`).
+ * the vendor account alone, and the turn is recorded `unmeasured`, which erratum E11 says is still
+ * charged at the per-call cap).
+ *
+ * It THROWS on `tools: 'read-only'` rather than dropping the four read-only fields (final fix wave,
+ * M8). Cursor's print mode has no read-only decision mode to ask for: there is no flag that limits
+ * it to `Read,Glob,Grep`, and its gate denies every tool outright. Silently dropping the fields
+ * would spawn a text-only call that looked armed -- a caller that had written a permissions file
+ * and minted a token would be told nothing, and the one thing R7 promises (the model can open the
+ * picture) would quietly not be true. `tickSupervisorChat` never sends them, because it checks the
+ * provider first; this is what makes that check load-bearing instead of a convention.
  */
 export function buildDeciderRegistry(): DeciderRegistry {
   // ASKED ONCE, HERE, AND BEFORE ANY CLOSURE IS BUILT (fix round 1, I1) -- `buildAdapterRegistry`'s
@@ -1146,14 +1155,16 @@ export function buildDeciderRegistry(): DeciderRegistry {
         runToken: input.runToken,
       } as ModelDecisionInput)
     },
-    cursor: (input) =>
-      decideWithCursor({
+    cursor: (input) => {
+      if (input.tools === 'read-only') throw new Error('cursor has no read-only decision mode')
+      return decideWithCursor({
         ...cursorCommand(),
         gatePath: cursorGatePath(),
         model: input.model,
         prompt: input.prompt,
         timeoutMs: modelTimeoutMs(),
-      }),
+      })
+    },
   }
 }
 

@@ -264,6 +264,31 @@ describe('buildDeciderRegistry', () => {
   })
 
   /**
+   * M8: the cursor arm THROWS on a read-only ask rather than dropping the four fields that came with
+   * it. Cursor's print mode has no read-only decision mode -- no flag limits it to `Read,Glob,Grep`,
+   * and its gate denies every tool -- so a silent drop would spawn a text-only call for a caller that
+   * had already written a permissions file and minted a token, and R7's one promise (the model can
+   * open the picture) would quietly not hold. `tickSupervisorChat` checks the provider before it
+   * arms anything; this is what makes that check load-bearing rather than a convention.
+   */
+  it('refuses a read-only ask on cursor instead of silently dropping it', (): void => {
+    useFakes()
+    const registry = buildDeciderRegistry()
+
+    expect(() =>
+      registry.cursor({
+        model: 'auto',
+        prompt: 'what does the screenshot show?',
+        maxBudgetUsd: 1,
+        tools: 'read-only',
+        cwd: repoRoot,
+        permissionsFilePath: join(repoRoot, 'nowhere.json'),
+        runToken: 'f'.repeat(64),
+      }),
+    ).toThrow('cursor has no read-only decision mode')
+  })
+
+  /**
    * I1: the refusal is asked HERE, before either closure exists, because only the `claude_code`
    * entry reaches `claudeCommand()` -- which raises it. Without this a process told it must not
    * reach a vendor account could build the registry, never make a Claude call, and spawn the real

@@ -371,7 +371,12 @@ export function buildSupervisorChatPrompt(input: ChatTurnInput): string {
     ...ACTION_KINDS.map((kind) => `  ${ACTION_SHAPES[kind]}`),
     '',
     'Reply with exactly one JSON object and nothing else on its line:',
-    `{${SUPERVISOR_CHAT_MARKER}: {"text": "<your answer to them>", "actions": [], "sources": [{"kind": "task" | "goal" | "feed" | "message" | "attachment", "ref": "<task id, feed seq, message id or attachment path, or null>", "quote": "..."}]}}`,
+    // THREE KINDS, NOT FIVE (erratum E12). `verifySources` resolves `task`, `run_context` and
+    // `message` off the QUESTION being answered, and a chat turn passes `question: null` -- so a
+    // citation of either kind offered here resolved to nothing and was rejected every time, which
+    // costs the whole answer its `sourced` chip (`isSourced` is false the moment anything is
+    // rejected). These three are exactly what `renderedChatSources` hands the checker.
+    `{${SUPERVISOR_CHAT_MARKER}: {"text": "<your answer to them>", "actions": [], "sources": [{"kind": "goal" | "feed" | "attachment", "ref": "<feed seq or attachment path; null for the goal>", "quote": "..."}]}}`,
     '',
     'Put an action in "actions" ONLY when the person asked for a change. A question about the',
     'project is answered in "text" and nothing else: an action they did not ask for is a decision',
@@ -379,7 +384,7 @@ export function buildSupervisorChatPrompt(input: ChatTurnInput): string {
     'Some actions are carried out at once and some wait for the person to approve them; which is',
     'which is a setting on this project rather than something you decide, so never promise that a',
     'thing is already done.',
-    `Cite what you took each claim from in "sources", at most ${String(SOURCES_MAX)} of them, each quote copied VERBATIM from the board, the goal, a feed sentence or an attachment above. An answer that quotes nothing is still an answer -- this is a conversation, not a report.`,
+    `Cite what you took each claim from in "sources", at most ${String(SOURCES_MAX)} of them, each quote copied VERBATIM from the goal, a feed sentence or an attachment above -- those three and nothing else are checkable here. An answer that quotes nothing is still an answer -- this is a conversation, not a report.`,
   )
 
   return neutraliseMarkers(blocks.join('\n'))

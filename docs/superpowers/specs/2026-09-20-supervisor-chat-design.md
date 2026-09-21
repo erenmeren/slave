@@ -353,6 +353,20 @@ which is measured money plus a count of unpriced turns and deliberately never fo
 together. E2's sentence conflated the guardrail with that figure; this is the correction, and the
 code was right. **Cost:** one sentence, and no change to a sum.
 
+**E12 -- the chat prompt offered two citation kinds a conversation can never verify (R2, final fix
+wave).** The envelope line advertised `"task" | "goal" | "feed" | "message" | "attachment"`, but
+`verifySources` resolves `task`, `run_context` and `message` off the QUESTION being answered, and a
+chat turn passes `question: null` -- so a citation of either offered kind resolved to nothing and was
+rejected, every time (`no_such_source` for a `task`, `unknown_ref` for a `message`, which is
+`REF_ADDRESSED`'s own distinction and no difference here). That is worse than useless: `isSourced` is
+false the moment anything is rejected, so a model that did as the prompt asked and cited a task lost
+the *sourced* chip for the whole answer and earned the "could not be checked against the record"
+sentence under it. The offered list is now `goal | feed | attachment`, which is exactly what
+`renderedChatSources` hands the checker, and the sentence that said "copied verbatim from the board"
+stopped saying the board. The KINDS are unchanged -- `SOURCE_KINDS` still has all six, because the
+answer path uses the other three -- and a reply that cites `task` anyway is still rejected the same
+way; the prompt simply stopped asking for it. **Cost:** two words out of one line.
+
 **E13 -- what an upload commit really is (R6, final fix wave).** The README said each attachment was
 "committed on its own ... on the base branch". Two corrections, both of which the code was already
 right about. ONE COMMIT PER REQUEST, not per file, titled with every name the person used
