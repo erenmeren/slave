@@ -1198,8 +1198,8 @@ they spend nothing. CI runs `gate:m26-vocabulary`, `gate:m15-boundary`, `gate:m2
 `gate:m46-workforce-catalog`, `gate:m47-team-formation`, `gate:m48-runbooks`, `gate:m49-memory`,
 `gate:m50-ephemeral`, `gate:m51-breaker`, `gate:m52-broker`, `gate:m53-evidence`,
 `gate:m54-triggers`, `gate:m55-catalog`, `gate:m56a-provider-contract`, `gate:m57-ui-redesign` and
-`gate:m58-persons`, `gate:m59-intake` and `gate:m61-simple-mode` on every push — `m36` stops the orchestrator and starts it again
-mid-scenario, to prove a waiting slave's question survives a restart, `m37` reads a real run's prompt and worktree back to prove a slave was
+`gate:m58-persons`, `gate:m59-intake`, `gate:m61-simple-mode` and `gate:h9-restart-chaos` on every push — `m36` stops the orchestrator and starts it again
+mid-scenario, to prove a waiting slave's question survives a restart, `h9` kills its own daemons on a schedule -- a deploy (SIGTERM) and a crash (SIGKILL), turn about -- while a five-task board runs, and proves every unfinished record found an owner within a minute and the board still finished with nobody asked, `m37` reads a real run's prompt and worktree back to prove a slave was
 given the persona and the skills it was assigned, `m38` drives a real daemon until the Supervisor
 proposes the staffing a reviewer-less project needs, waits for a human to approve it, unblocks a
 review-capped task by itself, and escalates a project whose budget is gone without spending a cent

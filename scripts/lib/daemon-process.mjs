@@ -45,13 +45,46 @@ export function isRealDaemonProcess(pid) {
   return false
 }
 
-/** Every pid on this host that `isRealDaemonProcess` confirms. Empty when none is running. */
+/**
+ * The daemon pids a gate is told to look past: `SLAVEOFAI_GATE_IGNORE_DAEMON_PIDS`, comma-separated
+ * (H9a).
+ *
+ * WHEN THIS IS LEGITIMATE, AND ONLY THEN: a daemon known to be serving ANOTHER database and another
+ * state directory -- a person's own installation on the dev database while the gate runs on
+ * `GATE_DATABASE_URL` with the state root `state-dir.mjs` mints. Such a daemon cannot tick the
+ * gate's workspace, cannot hold its global concurrency budget and cannot see its run directories,
+ * so the refusal every daemon-driven gate makes ("somebody else's ticks") does not apply to it. A
+ * daemon on the SAME database is exactly what the refusal exists for, and naming it here makes the
+ * gate measure that daemon's ticks as its own; nothing here can tell the two apart, which is why
+ * this is an explicit, per-pid, operator-set list and never a blanket switch.
+ *
+ * A token that is not a positive integer is ignored rather than refused: the variable is a
+ * developer's convenience on one machine, and a typo in it should cost a refusal to run (the
+ * daemon is then found as before), not a crash in a preflight.
+ */
+function ignoredDaemonPids() {
+  const raw = process.env['SLAVEOFAI_GATE_IGNORE_DAEMON_PIDS'] ?? ''
+  return new Set(
+    raw
+      .split(',')
+      .map((token) => token.trim())
+      .filter((token) => /^[0-9]+$/u.test(token))
+      .map((token) => Number(token))
+      .filter((pid) => pid > 0),
+  )
+}
+
+/** Every pid on this host that `isRealDaemonProcess` confirms, less the ones
+ *  `SLAVEOFAI_GATE_IGNORE_DAEMON_PIDS` names (see {@link ignoredDaemonPids} for when that is
+ *  legitimate). Empty when none is running. */
 export function findRealDaemonPids() {
+  const ignored = ignoredDaemonPids()
   const candidates = spawnSync('pgrep', ['-f', 'cli.js daemon'], { encoding: 'utf8' })
   return (candidates.stdout ?? '')
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line !== '')
     .map((line) => Number(line))
+    .filter((pid) => !ignored.has(pid))
     .filter((pid) => isRealDaemonProcess(pid))
 }

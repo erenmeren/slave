@@ -187,6 +187,24 @@
 //   emits) is answered with the one key `qa.exploratory` for every `persona id: <id>` line the
 //   prompt carries -- synthetic, `env-echo`'s reason: no fixture recorded in advance could name
 //   back an arbitrary batch's own ids.
+//   slow-work      synthetic (H9a, the restart-chaos gate): `m8-flow`'s arms verbatim -- chat,
+//                  intake, Supervisor, answer, re-plan, planning (`--plan-fixture`), review
+//                  (`--review-fixture`) -- with a WORK body that takes TIME rather than
+//                  milliseconds, so a daemon restart can land in the middle of it. The body is an
+//                  init line, then one distinct `Bash` call and its result every
+//                  `--slow-step-ms` (default 1500) for `--slow-steps` (default 10) steps, with
+//                  ONE silent gap of `--slow-quiet-ms` (default 4000) after the middle step -- a
+//                  model composing a long answer, which is when a pid is alive and the stream is
+//                  quiet -- then a real commit in the worktree (cwd) and the terminal result:
+//                  about twenty seconds, long enough for a kill to land mid-run and short enough
+//                  for CI. Distinct calls, deliberately: twelve identical ones would trip M51's
+//                  repeat arm, and this fixture measures restarts, not loops. ARGV first, then
+//                  `SLOW_STEP_MS`/`SLOW_STEPS`/`SLOW_QUIET_MS` from the environment for a direct
+//                  spawn, for `--line-delay-ms`'s reason (M52 R3: a run's child gets an allow
+//                  list, not the daemon's environment). `--line-delay-ms` still paces the fixture
+//                  REPLAYS this mode makes (planning, review, decisions) and nothing else: the
+//                  work body keeps its own clock. The commit lands at the END, after the last
+//                  step, so a run killed mid-way leaves a clean worktree for its retry to adopt.
 //   anything else  replays `fixtures/<name>.ndjson` verbatim, exit 0 -- real
 //                  captures show process exit code 0 even for hook-crash,
 //                  hook-deny, and permission-denied runs, so the fake matches
@@ -1061,6 +1079,99 @@ function substitutePlaceholder(value, name, id, onSubstitution) {
   return value
 }
 
+/**
+ * H9a: one timing knob of the `slow-work` body -- `--<flag> <n>` from ARGV first, then the named
+ * environment variable, then the default. A value that is not a non-negative integer falls through
+ * to the next channel rather than becoming `NaN` sleeps.
+ */
+function slowKnob(flag, envName, fallback) {
+  for (const raw of [flagValue(flag), process.env[envName]]) {
+    if (raw === undefined || raw === '') continue
+    const value = Number(raw)
+    if (Number.isInteger(value) && value >= 0) return value
+  }
+  return fallback
+}
+
+/**
+ * H9a: the `slow-work` mode's WORK body -- see the header. Never returns: it ends the process
+ * exactly as `replayFixture` does.
+ *
+ * SYNTHETIC rather than a fixture with a long idle tail (M51's shape), because the shape under test
+ * is a stream that is still PRODUCING when the daemon goes: a tool call every step, so the
+ * `run.tool_call` rows and the pid's liveness both move while the kill lands, and one silent gap,
+ * so one restart in every few lands on a live pid with nothing on its pipe -- the case the sweep's
+ * dead-pid arm cannot see until the child's next write fails against a reader that is gone.
+ *
+ * Every line is a shape the M51 fixtures' generator already uses: the `assistant`/`tool_use` block
+ * with a `usage`, the `user`/`tool_result` block, the terminal `result` and the routine `Stop`.
+ */
+async function slowWorkBody(prompt) {
+  const stepMs = slowKnob('--slow-step-ms', 'SLOW_STEP_MS', 1500)
+  const steps = slowKnob('--slow-steps', 'SLOW_STEPS', 10)
+  const quietMs = slowKnob('--slow-quiet-ms', 'SLOW_QUIET_MS', 4000)
+  const sessionId = `fake-session-slow-work-${randomBytes(4).toString('hex')}`
+  const usage = { input_tokens: 2, cache_creation_input_tokens: 100, cache_read_input_tokens: 900, output_tokens: 5 }
+  const line = (record) => {
+    process.stdout.write(`${JSON.stringify(record)}\n`)
+  }
+  line({ type: 'system', subtype: 'init', cwd: process.cwd(), session_id: sessionId, model: 'fake-claude', permissionMode: 'bypassPermissions' })
+  const quietAfter = Math.floor(steps / 2)
+  for (let step = 1; step <= steps; step += 1) {
+    const id = `toolu_slow_${String(step).padStart(2, '0')}`
+    line({
+      type: 'assistant',
+      message: {
+        model: 'claude-opus-5',
+        content: [{ type: 'tool_use', id, name: 'Bash', input: { command: `echo step ${String(step)} of ${String(steps)}`, description: `step ${String(step)}` } }],
+        usage,
+      },
+      session_id: sessionId,
+    })
+    line({ type: 'user', message: { content: [{ tool_use_id: id, type: 'tool_result', content: `step ${String(step)} of ${String(steps)}`, is_error: false }] }, session_id: sessionId })
+    if (stepMs > 0) await sleep(stepMs)
+    if (step === quietAfter && quietMs > 0) await sleep(quietMs)
+  }
+  // The work itself, at the end: the m8a-flow body, so the merge pass downstream has a commit to
+  // integrate -- and nothing for a killed run's retry to find but a clean tree. ONE FILE PER TASK,
+  // named from the prompt's own `Task: <title>` line (the one line the run-context `task` section
+  // always renders): two wings built side by side and merged one after the other must not touch
+  // the same path, or the second merge is a conflict and the gate measures `merge_failure` instead
+  // of a restart.
+  const titleLine = prompt.split('\n').find((one) => one.startsWith('Task: ')) ?? 'Task: work'
+  const slug = titleLine.slice('Task: '.length).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'work'
+  writeFileSync(path.join(process.cwd(), `slow-work-${slug}.txt`), `${prompt.slice(0, 80)}\n`)
+  execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
+  execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '-m', `fake slow work: ${slug}`], { cwd: process.cwd() })
+  line({
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    terminal_reason: 'completed',
+    stop_reason: 'end_turn',
+    num_turns: steps,
+    total_cost_usd: 0.05,
+    permission_denials: [],
+    session_id: sessionId,
+    usage: { input_tokens: 26, cache_creation_input_tokens: 1300, cache_read_input_tokens: 11700, output_tokens: 65 },
+    result: `Did ${String(steps)} steps of slow work and committed slow-work-${slug}.txt.`,
+  })
+  line({
+    type: 'system',
+    subtype: 'hook_response',
+    hook_id: 'fake-slow-work-stop',
+    hook_name: 'Stop',
+    hook_event: 'Stop',
+    output: '',
+    stdout: '',
+    stderr: '',
+    exit_code: 1,
+    outcome: 'cancelled',
+    session_id: sessionId,
+  })
+  process.exit(0)
+}
+
 async function main() {
   if (fixtureName === 'hang') {
     // Write nothing and never exit on its own. Without something keeping
@@ -1198,6 +1309,26 @@ async function main() {
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'add', '-A'], { cwd: process.cwd() })
     execFileSync('git', ['-c', 'user.name=Fake Claude', '-c', 'user.email=fake@slaveofai.local', 'commit', '-q', '-m', 'fake work'], { cwd: process.cwd() })
     await replayFixture('complete')
+    return
+  }
+
+  if (fixtureName === 'slow-work') {
+    // H9a: `m8-flow`'s arms, in `m8-flow`'s order, with the slow body where its work body is.
+    const prompt = await promptText()
+    if (await chatArm(prompt)) return
+    if (await intakeArm(prompt)) return
+    if (await supervisorArm(prompt)) return
+    if (await answerArm(prompt)) return
+    if (await replanArm(prompt)) return
+    if (prompt.includes('"task graph"')) {
+      await replayFixture(planFixtureName())
+      return
+    }
+    if (prompt.includes('"verdict"')) {
+      await replayFixture(reviewFixtureName())
+      return
+    }
+    await slowWorkBody(prompt)
     return
   }
 
