@@ -20,6 +20,7 @@ import {
   THREAD_BODY_MAX_CHARS,
   WAITING_STALE_MS,
 } from '../../src/supervisor/constants.js'
+import { PLANNING_RETRY_CAP } from '../../src/planning/constants.js'
 
 // Four of these are read by nothing in this task -- `PENDING_TTL_MS` by control's expiry pass, the
 // cap and the model by the orchestrator's decision loop. Until those land, a slipped unit (hours
@@ -71,5 +72,18 @@ describe('supervisor constants', () => {
     expect(RETRIES_MAX).toBe(2)
     expect(FAILURE_REASON_MAX_CHARS).toBe(300)
     expect(HALT_CLEAR_INTERVAL_MS).toBe(60 * 60 * 1000)
+  })
+
+  /**
+   * H4a: the planning cap, MOVED here from `apps/orchestrator/src/planning.ts`.
+   *
+   * Two things now read it and they are in different packages -- `dispatchPlanning` stops trying at
+   * it, and `observe` raises `planning_stalled { reason: cap_spent }` the moment the world reaches
+   * it. A second copy of the number would let the tick stop at two while the Supervisor waited for
+   * three, which is a project that has gone silent with nothing on any report to say why. The
+   * orchestrator re-exports this one rather than declaring its own.
+   */
+  it('is the planning retry cap the tick and the Supervisor both count to', () => {
+    expect(PLANNING_RETRY_CAP).toBe(2)
   })
 })

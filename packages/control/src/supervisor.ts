@@ -5,6 +5,7 @@ import {
   COOLDOWN_MS,
   DECISION_RETENTION_MS,
   HALT_CLEAR_INTERVAL_MS,
+  MANAGER_ROLE,
   PENDING_TTL_MS,
   PERMISSION_KINDS,
   PROFILE_MAX_CHARS,
@@ -47,6 +48,7 @@ import { MODEL_ID_PATTERN, MODEL_SHAPE_DETAIL } from './staffing.js'
 import { appendPlannerNote } from './supervisorUploads.js'
 import { cancelTask, failTask } from './task.js'
 import { retryTask, unblockTask } from './unblock.js'
+import { setWorkspaceProvider } from './workspace.js'
 
 /**
  * The name the Supervisor acts under inside a verb's PAYLOAD (`setRuntimeRoles`'s `actor`).
@@ -667,6 +669,58 @@ async function carryOut(
       // thrown, like every other arm: a disk that is full is a `failed` decision a person can read,
       // not a crashed pass.
       return reached(await appendPlannerNote(decision.workspaceId, action.text))
+    case 'configure_runtime':
+      // H4a: the project gets a runtime, so a model call can be made at all. `setWorkspaceProvider`
+      // owns the whole of that -- the delete-then-insert under the workspace lock that keeps
+      // "exactly one row or nothing" true, and the `workspace.settings_changed` event beside it, so
+      // the change reads in the Activity feed exactly as an operator's own `set-provider` does.
+      //
+      // Nothing is checked first. The verb refuses a workspace that is gone and a provider that is
+      // not a kind, which is every way this can fail; a project that already HAS a runtime is not
+      // an error here, because the rules only offer this when it has none and a person approving a
+      // day-old proposal is entitled to replace whatever arrived meanwhile.
+      return reached(await setWorkspaceProvider(decision.workspaceId, action.provider, principal))
+    case 'retry_planning': {
+      // H4a: the planning retry cap, counted from zero again -- ONE event and no row anywhere.
+      // `dispatchPlanning` is what reads it and starts the next planning run, on its own next tick.
+      //
+      // The version is read HERE rather than off the situation's facts (`clear_halt`'s precedent):
+      // a proposal can be approved a day after it was made, and the version dispatch will count
+      // against is the one the project has NOW, not the one the rules were looking at.
+      const workspace = await prisma.workspace.findUnique({
+        where: { id: decision.workspaceId },
+        select: { goalVersion: true },
+      })
+      if (workspace === null) return err({ kind: 'workspace_not_found', workspaceId: decision.workspaceId })
+      // ONCE PER VERSION, the second half of the rule `candidates.ts` states at the offer. The cap
+      // exists to stop a planner being asked the same thing for ever, and a reset that could be
+      // applied again and again would have removed the cap rather than answered it.
+      const already = await prisma.executionEvent.count({
+        where: {
+          workspaceId: decision.workspaceId,
+          type: 'workspace_planning_reset',
+          payload: { path: ['version'], equals: workspace.goalVersion },
+        },
+      })
+      if (already > 0) {
+        return err({
+          kind: 'planning_already_reset',
+          workspaceId: decision.workspaceId,
+          version: workspace.goalVersion,
+        })
+      }
+      await appendEvent({
+        type: 'workspace.planning_reset',
+        workspaceId: decision.workspaceId,
+        actor: 'system',
+        // WHO gave the attempts back. `origin` is already the answer -- `human` when a person
+        // approved the proposal, `system` when the tick applied it by itself -- and the envelope
+        // cannot carry it, because the `Actor` enum has no `supervisor` member (M38 erratum E4).
+        payload: { version: workspace.goalVersion, by: origin === 'human' ? 'human' : 'supervisor' },
+        userId: principal?.userId ?? null,
+      })
+      return ok('applied')
+    }
     case 'escalate_to_human':
     case 'no_action':
       return ok('none')
@@ -731,8 +785,15 @@ const sendableBody = (draft: Draft | null): string | null => draft?.editedBody ?
  * nothing granted meanwhile is lost; what the union CANNOT undo is a role the operator deliberately
  * REVOKED while the proposal waited, because the stale array still carries it and the union puts it
  * straight back. The situation names the one role the decision was actually about (`observe.ts`
- * writes `facts.role` for `no_reviewer`, `no_planner` and `ready_unstaffed`), so that is what is
+ * writes `facts.role` for `no_reviewer` and `ready_unstaffed`), so that is what is
  * added and nothing else: approving "give Maya reviewer" grants reviewer, never re-grants backend.
+ *
+ * H4a: `planning_stalled { reason: 'no_planner' }` is the one situation that names a role WITHOUT a
+ * `facts.role`. Its facts are the reason and the goal version, because the situation is about a
+ * PROJECT rather than about a role -- and the role is `MANAGER_ROLE` by construction, since that
+ * reason IS "no seat holds it" and `candidates` offers the staffing path on exactly that string.
+ * Named here rather than added to the facts, so the precision survives the fold; a stored
+ * `no_planner` row from before it still carries `facts.role` and reads through the clause above.
  *
  * The stored array is the fallback, unchanged M38 behaviour, for a situation that names no role --
  * there is nothing more precise to use, and dropping the arm entirely would make the approval a
@@ -743,7 +804,9 @@ function roleDelta(
   situation: Situation,
 ): readonly string[] {
   const role = situation.facts['role']
-  return typeof role === 'string' && role !== '' ? [role] : action.roles
+  if (typeof role === 'string' && role !== '') return [role]
+  if (situation.kind === 'planning_stalled' && situation.facts['reason'] === 'no_planner') return [MANAGER_ROLE]
+  return action.roles
 }
 
 /**

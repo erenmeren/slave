@@ -345,6 +345,25 @@ export const executionEventSchema = z.discriminatedUnion('type', [
     type: z.literal('workspace.replan_started'),
     payload: z.object({ version: z.number().int().positive(), runId: z.string().min(1) }),
   }),
+  /**
+   * H4a: the planning retry cap, given back for ONE goal version.
+   *
+   * `dispatchPlanning` counts its failures from the latest `workspace.goal_set` OR this event,
+   * whichever is later, so a project whose planner failed twice against a broken runtime is not
+   * silent for ever once the runtime is fixed. Written by the Supervisor's `retry_planning`, and
+   * the ONLY thing that resets that count short of a new goal.
+   *
+   * `version` is WHICH goal's retries were given back -- the dedup key for "once per version",
+   * exactly as `workspace.replan_started.version` is for a re-plan. `by` is who gave them back: the
+   * Supervisor applying its own remedy, or a person approving the proposal. Neither is derivable
+   * from the envelope, whose `actor` is `system` for both (the `Actor` enum has no `supervisor`
+   * member -- M38 erratum E4).
+   */
+  z.object({
+    ...envelope,
+    type: z.literal('workspace.planning_reset'),
+    payload: z.object({ version: z.number().int().nonnegative(), by: z.enum(['supervisor', 'human']) }),
+  }),
   // The re-plan concluded. All four lists are ids, and all four may be empty: `added` is the
   // tasks that were created at once, `proposedCancellations` the ones a human is now being asked to
   // approve, `droppedCancellations` the ones the model asked for that the status rule REFUSED

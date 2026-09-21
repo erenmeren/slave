@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { PLANNING_RETRY_CAP } from '../../src/planning/constants.js'
 import {
   COOLDOWN_MS,
   FAILURE_REASON_MAX_CHARS,
@@ -38,23 +39,102 @@ describe('observe -- no_reviewer', () => {
   })
 })
 
-describe('observe -- no_planner', () => {
-  it('reports it when a goal is set, there are no tasks and no slave holds manager', () => {
-    const w = world({ goal: 'Ship the checkout flow', slaves: [slave({ runtimeRoles: ['backend'] })] })
-    expect(keys(observe(w))).toEqual([['no_planner', 'manager']])
+/**
+ * H4a: the three ways planning cannot start, and the one situation that says so.
+ *
+ * `no_planner` FOLDED IN: the kind is retired, not removed (a stored row must still read back), and
+ * every case the old describe made is made here under `planning_stalled`'s own reason.
+ */
+describe('observe -- planning_stalled', () => {
+  const PLANNER = slave({ runtimeRoles: ['manager'] })
+
+  it('reports no_runtime when a goal is set, the board is empty and nothing can run a model call', () => {
+    const w = world({ goal: 'Ship the checkout flow', goalVersion: 1, runtimeConfigured: false, slaves: [PLANNER] })
+    expect(keys(observe(w))).toEqual([['planning_stalled', 'ws-1:no_runtime']])
+    expect(observe(w)[0]?.facts).toEqual({ reason: 'no_runtime', goalVersion: 1 })
+    // It has to survive the round trip through `SupervisorDecision.situation`, like every other kind.
+    expect(situationSchema.safeParse(observe(w)[0]).success).toBe(true)
   })
 
-  it('stays silent when a slave holds manager', () => {
-    const w = world({ goal: 'Ship the checkout flow', slaves: [slave({ runtimeRoles: ['manager'] })] })
-    expect(observe(w)).toEqual([])
+  it('reports no_planner when a goal is set, the board is empty and no slave holds manager', () => {
+    const w = world({ goal: 'Ship the checkout flow', goalVersion: 1, slaves: [slave({ runtimeRoles: ['backend'] })] })
+    expect(keys(observe(w))).toEqual([['planning_stalled', 'ws-1:no_planner']])
+    expect(observe(w)[0]?.facts).toEqual({ reason: 'no_planner', goalVersion: 1 })
+  })
+
+  it('reports cap_spent once the retries against this goal are gone', () => {
+    const w = world({
+      goal: 'Ship it',
+      goalVersion: 3,
+      planningFailuresSinceGoal: PLANNING_RETRY_CAP,
+      slaves: [PLANNER],
+    })
+    expect(keys(observe(w))).toEqual([['planning_stalled', 'ws-1:cap_spent']])
+    expect(observe(w)[0]?.facts).toEqual({ reason: 'cap_spent', goalVersion: 3 })
+    expect(observe(w)[0]?.summary).toContain(String(PLANNING_RETRY_CAP))
+  })
+
+  it('names the ROOT reason first: a missing runtime before a missing planner before a spent cap', () => {
+    const w = world({
+      goal: 'Ship it',
+      goalVersion: 1,
+      runtimeConfigured: false,
+      planningFailuresSinceGoal: PLANNING_RETRY_CAP,
+      slaves: [],
+    })
+    expect(keys(observe(w))).toEqual([['planning_stalled', 'ws-1:no_runtime']])
+  })
+
+  it('prefers a missing planner to a spent cap', () => {
+    const w = world({ goal: 'Ship it', goalVersion: 1, planningFailuresSinceGoal: PLANNING_RETRY_CAP, slaves: [] })
+    expect(keys(observe(w))).toEqual([['planning_stalled', 'ws-1:no_planner']])
+  })
+
+  it('NEVER emits no_planner any more -- the kind is retired', () => {
+    const w = world({ goal: 'Ship the checkout flow', slaves: [slave({ runtimeRoles: ['backend'] })] })
+    expect(observe(w).map((situation) => situation.kind)).not.toContain('no_planner')
+  })
+
+  it('stays silent when nothing is wrong: a planner, a runtime and retries left', () => {
+    expect(observe(world({ goal: 'Ship the checkout flow', goalVersion: 1, slaves: [PLANNER] }))).toEqual([])
   })
 
   it('stays silent when there is no goal to plan', () => {
-    expect(observe(world({ goal: null, slaves: [slave({ runtimeRoles: ['backend'] })] }))).toEqual([])
+    expect(observe(world({ goal: null, runtimeConfigured: false, slaves: [] }))).toEqual([])
   })
 
-  it('stays silent once the goal has become tasks', () => {
-    const w = world({ goal: 'Ship it', tasks: [task({ status: 'running' })], slaves: [slave({ runtimeRoles: ['backend'] })] })
+  it('stays silent once the goal has become tasks for THIS version', () => {
+    const w = world({
+      goal: 'Ship it',
+      goalVersion: 1,
+      runtimeConfigured: false,
+      tasks: [task({ status: 'running', goalVersion: 1 })],
+      slaves: [],
+    })
+    expect(observe(w)).toEqual([])
+  })
+
+  it('reports it again once the goal moves past the board it produced', () => {
+    const w = world({
+      goal: 'Ship it, differently',
+      goalVersion: 2,
+      runtimeConfigured: false,
+      tasks: [task({ status: 'done', goalVersion: 1 })],
+      slaves: [PLANNER],
+    })
+    expect(keys(observe(w))).toEqual([['planning_stalled', 'ws-1:no_runtime']])
+    expect(observe(w)[0]?.facts).toEqual({ reason: 'no_runtime', goalVersion: 2 })
+  })
+
+  it('stays silent while a planning run is actually live -- planning is not stalled, it is working', () => {
+    const w = world({
+      goal: 'Ship it',
+      goalVersion: 1,
+      runtimeConfigured: false,
+      livePlanning: true,
+      planningFailuresSinceGoal: PLANNING_RETRY_CAP,
+      slaves: [],
+    })
     expect(observe(w)).toEqual([])
   })
 })

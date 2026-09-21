@@ -98,6 +98,10 @@ export const TYPES_BY_KIND = {
     // taskId, and an operator asking "what changed about this project" is who reads them.
     'workspace.replan_started',
     'workspace.replanned',
+    // H4a: the planning retry cap given back for one goal version. The same chip as the re-plan
+    // pair above, for their reason -- it carries no taskId and no runId, and the person reading it
+    // is asking what changed about this project.
+    'workspace.planning_reset',
     'workspace.company_assigned',
     'workspace.settings_changed',
     'org.changed',

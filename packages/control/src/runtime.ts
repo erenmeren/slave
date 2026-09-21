@@ -96,8 +96,15 @@ export function resolveRuntime(levels: RuntimeLevels, workspaceDefault: Provider
  * branch is unreached in practice -- but a function this dispatch-critical says what it does
  * rather than leaning on that.
  */
-export async function workspaceDefaultProvider(workspaceId: string): Promise<ProviderKind | null> {
-  const rows = await prisma.providerConfiguration.findMany({ where: { workspaceId }, select: { kind: true } })
+export async function workspaceDefaultProvider(
+  workspaceId: string,
+  // H4a: the Supervisor's world loader asks this INSIDE its own `RepeatableRead` snapshot -- the
+  // whole contract of that load is "the world one decision was made on", and a read taken on the
+  // global client would be a second instant mixed into it. `staleCandidateCount`'s own shape;
+  // every existing caller passes nothing and reads exactly as it always did.
+  tx: Pick<typeof prisma, 'providerConfiguration'> = prisma,
+): Promise<ProviderKind | null> {
+  const rows = await tx.providerConfiguration.findMany({ where: { workspaceId }, select: { kind: true } })
   // The length check just above is what guarantees index 0 exists; `noUncheckedIndexedAccess`
   // cannot see that relationship, hence the assertion rather than a redundant re-check.
   return rows.length === 1 ? rows[0]!.kind : null

@@ -4,7 +4,12 @@ import { PROFILE_MAX_CHARS } from '../run-context/profile.js'
 import { neutraliseMarkers } from '../run-context/render.js'
 import { ACTION_KINDS, actionSchema, type Action, type ActionKind } from './actions.js'
 import { sourceSchema, type SourceCitation } from './answerPrompt.js'
-import { ANSWER_MAX_CHARS, SOURCES_MAX, type AttachmentKind } from './constants.js'
+import {
+  ANSWER_MAX_CHARS,
+  SOURCES_MAX,
+  SUPERVISOR_DEFAULT_PROVIDER,
+  type AttachmentKind,
+} from './constants.js'
 import { PROFILE_HEADING, cap, firstJsonObject, workspaceLines } from './prompt.js'
 import type { ChatSourceContext } from './sourced.js'
 import type { SupervisorWorld } from './world.js'
@@ -133,6 +138,14 @@ export const ACTION_SHAPES: Readonly<Record<ActionKind, string>> = {
   clear_halt: '{"kind": "clear_halt", "workspaceId": "<this project id>", "reason": "<why>"}',
   request_goal_change: '{"kind": "request_goal_change", "request": "<what they asked for, in their words>"}',
   note_for_planner: '{"kind": "note_for_planner", "text": "<the line the next planner should read>"}',
+  // H4a. A REAL value rather than a `<placeholder>`, unlike every other field here: `provider` is a
+  // closed enum (`actionSchema` validates it against `PROVIDER_KINDS`), and a placeholder would
+  // teach a model a string that is then dropped as an action "without the details it needs". The
+  // installation's own default is the honest sample, interpolated rather than typed so the prompt
+  // cannot come to disagree with `SUPERVISOR_DEFAULT_PROVIDER`; the other kind is accepted too, and
+  // a person who asks for it in the conversation gets it.
+  configure_runtime: `{"kind": "configure_runtime", "provider": "${SUPERVISOR_DEFAULT_PROVIDER}"}`,
+  retry_planning: '{"kind": "retry_planning"}',
   escalate_to_human: '{"kind": "escalate_to_human", "summary": "<what a person must decide>"}',
   no_action: '{"kind": "no_action"}',
 }

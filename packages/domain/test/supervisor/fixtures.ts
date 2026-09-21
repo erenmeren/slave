@@ -244,6 +244,14 @@ export function world(overrides: Partial<SupervisorWorld> = {}): SupervisorWorld
     // preference and evidence steps only ever decide in a test that hands the world one.
     staffingPreferences: [],
     evidence: [],
+    // H4a: the four planning facts, all saying "planning is fine here" -- a runtime IS configured,
+    // nothing has failed, nobody has reset the cap and nothing is planning right now. So
+    // `planning_stalled` only ever fires in a test that says which of the three reasons it is
+    // about, and every case written before this hotfix keeps meaning exactly what it meant.
+    runtimeConfigured: true,
+    planningFailuresSinceGoal: 0,
+    planningResetsThisVersion: 0,
+    livePlanning: false,
     ...overrides,
   }
 }

@@ -1759,3 +1759,157 @@ describe('loadSupervisorWorld -- the failure facts (E R2/R3)', () => {
     expect(world.haltClearedAt).toBeNull()
   })
 })
+
+/**
+ * H4a: the four facts `planning_stalled` is decided from.
+ *
+ * Three of them are read only when the board is BEHIND the goal -- an empty board, or one whose
+ * tasks all came from an earlier version -- which is the same gate the pool, the catalog and the
+ * runbook table already wait on: the loader does not pay for a query nobody's plan needs.
+ * `livePlanning` is free, projected off the non-terminal runs the world already reads.
+ */
+describe('loadSupervisorWorld -- the planning facts (H4a)', () => {
+  beforeEach(reset)
+
+  /** A planning run of this workspace, which needs a seat to hang off. */
+  async function planningRun(fixture: Fixture, status: 'working' | 'failed' | 'succeeded', startedAt?: Date): Promise<string> {
+    const person = await prisma.person.create({ data: { name: `Planner ${String(Math.random()).slice(2)}` } })
+    const slave = await prisma.slave.create({
+      data: { teamId: fixture.teamId, role: 'Team Lead', runtimeRoles: ['manager'], personId: person.id },
+    })
+    const run = await prisma.slaveRun.create({
+      data: { slaveId: slave.id, kind: 'planning', status, ...(startedAt === undefined ? {} : { startedAt }) },
+    })
+    return run.id
+  }
+
+  it('says a project with no ProviderConfiguration row has no runtime, and one with exactly one has', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship it', goalVersion: 1 })
+    expect((await loadSupervisorWorld(fixture.workspaceId, NOW)).world.runtimeConfigured).toBe(false)
+
+    await prisma.providerConfiguration.create({ data: { workspaceId: fixture.workspaceId, kind: 'claude_code', settings: {} } })
+    expect((await loadSupervisorWorld(fixture.workspaceId, NOW)).world.runtimeConfigured).toBe(true)
+  })
+
+  // `workspaceDefaultProvider`'s own rule: two rows resolve to no default at all, so a project
+  // holding two is as unrunnable as one holding none and reads the same way here.
+  it('says a project holding TWO runtime rows has no resolvable runtime either', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship it', goalVersion: 1 })
+    await prisma.providerConfiguration.create({ data: { workspaceId: fixture.workspaceId, kind: 'claude_code', settings: {} } })
+    await prisma.providerConfiguration.create({ data: { workspaceId: fixture.workspaceId, kind: 'cursor', settings: {} } })
+
+    expect((await loadSupervisorWorld(fixture.workspaceId, NOW)).world.runtimeConfigured).toBe(false)
+  })
+
+  /**
+   * One event of this type, stamped WHEN the test says rather than when the clock says.
+   *
+   * `appendEvent` takes no `ts` -- it is the wall clock, which on a fixture anchored to
+   * {@link NOW} would put every event a fortnight after every run. The append is what validates the
+   * payload against the domain schema, so the row is written through it and then moved.
+   */
+  async function eventAt(
+    fixture: Fixture,
+    type: 'workspace.goal_set' | 'workspace.planning_reset',
+    payload: Record<string, unknown>,
+    ts: Date,
+  ): Promise<void> {
+    const written = await appendEvent({
+      type,
+      workspaceId: fixture.workspaceId,
+      actor: type === 'workspace.goal_set' ? 'human' : 'system',
+      payload: payload as never,
+    })
+    await prisma.executionEvent.update({ where: { seq: written.seq }, data: { ts } })
+  }
+
+  it('counts the planning runs that failed since the goal was last set, and nothing older', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship it', goalVersion: 1 })
+    await eventAt(fixture, 'workspace.goal_set', { goal: 'Ship it', version: 1 }, ago(3 * 3_600_000))
+    // One attempt against the PREVIOUS goal: it is not this goal's.
+    await planningRun(fixture, 'failed', ago(4 * 3_600_000))
+    await planningRun(fixture, 'failed', ago(2 * 3_600_000))
+    await planningRun(fixture, 'failed', ago(3_600_000))
+    // Not a failed planning attempt.
+    await planningRun(fixture, 'succeeded', ago(60_000))
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.planningFailuresSinceGoal).toBe(2)
+  })
+
+  // The remedy would be spent the instant it was applied if the count did not move with it.
+  it('counts from the planning RESET when that is later than the goal', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship it', goalVersion: 1 })
+    await eventAt(fixture, 'workspace.goal_set', { goal: 'Ship it', version: 1 }, ago(3 * 3_600_000))
+    await planningRun(fixture, 'failed', ago(150 * 60_000))
+    await planningRun(fixture, 'failed', ago(140 * 60_000))
+    await eventAt(fixture, 'workspace.planning_reset', { version: 1, by: 'supervisor' }, ago(3_600_000))
+    await planningRun(fixture, 'failed', ago(30 * 60_000))
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.planningFailuresSinceGoal).toBe(1)
+    expect(world.planningResetsThisVersion).toBe(1)
+  })
+
+  it('counts only the resets of the CURRENT goal version', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship it', goalVersion: 2 })
+    for (const version of [1, 1, 2]) {
+      await appendEvent({
+        type: 'workspace.planning_reset',
+        workspaceId: fixture.workspaceId,
+        actor: 'system',
+        payload: { version, by: 'supervisor' },
+      })
+    }
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.planningResetsThisVersion).toBe(1)
+  })
+
+  it('says whether a planning run is in flight, and ignores a finished one', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship it', goalVersion: 1 })
+    await planningRun(fixture, 'succeeded')
+    expect((await loadSupervisorWorld(fixture.workspaceId, NOW)).world.livePlanning).toBe(false)
+
+    await planningRun(fixture, 'working')
+    expect((await loadSupervisorWorld(fixture.workspaceId, NOW)).world.livePlanning).toBe(true)
+  })
+
+  // The gate, stated as a fact about the WORLD rather than about the query count: a board that is
+  // the plan for this goal is not stalled, and `observe` never reads these three for it.
+  it('leaves the three gated facts at their "nothing is wrong" values for a board that is current', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship it', goalVersion: 1 })
+    await makeTask(fixture, { title: 'Planned', status: 'ready', goalVersion: 1 })
+    await planningRun(fixture, 'failed')
+    await appendEvent({
+      type: 'workspace.planning_reset',
+      workspaceId: fixture.workspaceId,
+      actor: 'system',
+      payload: { version: 1, by: 'supervisor' },
+    })
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.runtimeConfigured).toBe(true)
+    expect(world.planningFailuresSinceGoal).toBe(0)
+    expect(world.planningResetsThisVersion).toBe(0)
+    expect(observe(world).some((situation) => situation.kind === 'planning_stalled')).toBe(false)
+  })
+
+  // End to end: the world the loader really builds raises the situation the incident needed.
+  it('raises planning_stalled/no_runtime for the project of 2026-09-21', async (): Promise<void> => {
+    const fixture = await seed({ goal: 'Ship the checkout flow', goalVersion: 1 })
+    const person = await prisma.person.create({ data: { name: 'Morgan' } })
+    await prisma.slave.create({
+      data: { teamId: fixture.teamId, role: 'Team Lead', runtimeRoles: ['manager'], personId: person.id },
+    })
+    await planningRun(fixture, 'failed')
+    await planningRun(fixture, 'failed')
+
+    const { world } = await loadSupervisorWorld(fixture.workspaceId, NOW)
+    expect(world.runtimeConfigured).toBe(false)
+    expect(world.planningFailuresSinceGoal).toBe(2)
+    const stalled = observe(world).find((situation) => situation.kind === 'planning_stalled')
+    expect(stalled?.subjectId).toBe(`${fixture.workspaceId}:no_runtime`)
+    expect(stalled?.facts).toEqual({ reason: 'no_runtime', goalVersion: 1 })
+  })
+})

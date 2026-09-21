@@ -36,6 +36,10 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   task_not_failed: true,
   retry_ceiling_reached: true,
   halt_recently_cleared: true,
+  // H4a: the second reset of one goal version. 409 by the suffix rule and right to be -- the
+  // project is there, and asking for its planner's attempts back twice is what does not make
+  // sense against what has already happened to it.
+  planning_already_reset: true,
   // The final review's three, all 409 by the suffix rule and all right to be: the worker, the
   // task and the project are there, and the request does not make sense against what a person has
   // already decided about them (an operation a plan may not ask for, a `deny` somebody wrote, a

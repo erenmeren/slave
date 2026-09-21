@@ -103,6 +103,11 @@ export const LANE_BY_TYPE: Record<ExecutionEvent['type'], TimelineLane | null> =
   'task.done': 'verified',
   'task.integrated': 'verified',
   // Everything else: real, kept, and not on this timeline.
+  // H4a: a planning reset is `supervisor.applied`'s own story -- the Supervisor gave the planner
+  // its attempts back, and that event is already on the `decision` lane above. A second line saying
+  // the same thing would double the entry, which is the reason `supervisor.proposed` and
+  // `supervisor.decided` are off this timeline too.
+  'workspace.planning_reset': null,
   'task.rework': null,
   'task.failed': null,
   'task.verify_failed': null,

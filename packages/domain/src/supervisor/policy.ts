@@ -51,6 +51,25 @@ const HALT_REMEDIES: readonly Action['kind'][] = ['clear_halt', 'retry_task']
 const BREAKER_HALT = 'circuit_breaker'
 
 /**
+ * The actions a halt does not demote AT ALL -- under any halt, not just the breaker's (H4a).
+ *
+ * {@link HALT_REMEDIES} above is about the BREAKER because both of its members are about WORK: a
+ * task put back to `rework` starts running the moment the halt lifts, so a budget halt and an
+ * emergency stop must still hold it. This list is about CONFIGURATION, which is a different
+ * question with a different answer. `configure_runtime` writes one `ProviderConfiguration` row;
+ * `decide()` schedules nothing while a workspace is halted; and a project whose money is gone or
+ * whose stop button is down is still a project that should be able to say which runtime it would
+ * use when it runs again. A proposal here is a person asked to confirm that a project with NO
+ * runtime at all needs one.
+ *
+ * The line that keeps this from widening: nothing in it may start a run, spend money, move a task,
+ * change a roster or put words in front of anybody. `retry_planning` is deliberately NOT here --
+ * giving the planner its attempts back is work queued against the moment the halt lifts, which is
+ * exactly the argument that keeps `retry_task` bound to the breaker.
+ */
+const HALT_INERT: readonly Action['kind'][] = ['configure_runtime']
+
+/**
  * What would happen if this action were chosen for this SITUATION (M38 section 3, "tiers are fixed
  * in code"). Pure and total: the model never sees this function, and a workspace setting can only
  * turn the Supervisor OFF, never widen what it may do by itself.
@@ -84,13 +103,24 @@ export function tierOf(action: Action, world: SupervisorWorld, situationKind: Si
   // BREAKER halt ({@link HALT_REMEDIES}, {@link BREAKER_HALT}). Both are applied under `act` there;
   // every other kind, under any halt, `act` or not, is `proposed` while the workspace is halted.
   if (world.halted !== null) {
-    return world.autonomy === 'act' && world.halted.reason === BREAKER_HALT && HALT_REMEDIES.includes(action.kind)
-      ? 'applied'
-      : 'proposed'
+    if (world.autonomy !== 'act') return 'proposed'
+    // H4a: the configuration exception, which is about halts in general rather than about the
+    // breaker -- it starts nothing under any of them ({@link HALT_INERT}).
+    if (HALT_INERT.includes(action.kind)) return 'applied'
+    return world.halted.reason === BREAKER_HALT && HALT_REMEDIES.includes(action.kind) ? 'applied' : 'proposed'
   }
   // R1: the switch. A person who turned autonomy on gets every routine and non-routine action
   // applied; only the escalation stays a question. The halted rule above still wins, except for
   // the two actions that exist to end a breaker halt ({@link HALT_REMEDIES}).
+  //
+  // H4a's ONE exception to "act applies everything": `retry_planning` is applied the FIRST time a
+  // goal version's cap is given back and proposed after that. The cap exists to stop a planner
+  // being asked forever, and a Supervisor that could reset it on every cooldown would have removed
+  // the cap rather than answered it -- the second reset for one goal is a person's call. Checked
+  // above the switch because `act` returns there, and the rule has to survive the return.
+  if (action.kind === 'retry_planning') {
+    return world.autonomy === 'act' && world.planningResetsThisVersion === 0 ? 'applied' : 'proposed'
+  }
   if (world.autonomy === 'act') return 'applied'
   switch (action.kind) {
     case 'unblock_task':
@@ -175,6 +205,12 @@ export function tierOf(action: Action, world: SupervisorWorld, situationKind: Si
     // both, having returned above, and that is the person's own decision to have made.
     case 'request_goal_change':
     case 'note_for_planner':
+    // H4a: giving a project a runtime is a commitment to a vendor, and under `propose` that is a
+    // person's to make -- `act` applies it, having returned above (and above the halt, too, which
+    // is the one thing that makes this action unusual). `retry_planning` is absent from this switch
+    // and that is not an omission: its tier is answered ABOVE the `act` short-circuit, which is why
+    // the compiler has already taken it out of the union by the time the switch is reached.
+    case 'configure_runtime':
       return 'proposed'
   }
 }

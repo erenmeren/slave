@@ -23,7 +23,8 @@ const ENGINEERING_DIVISION = /engineer|develop|software|backend|frontend|platfor
  * seat: a person reading the card sees who carries it.
  *
  * An EMPTY team is left empty, deliberately. "I will staff it myself" is a real answer, and the
- * project then shows M38's `no_planner` situation exactly as an unstaffed project does today.
+ * project then shows the Supervisor's `planning_stalled { reason: 'no_planner' }` situation (H4a;
+ * M38's `no_planner` before the fold) exactly as an unstaffed project does today.
  */
 export function ensureStaffRoles(
   team: readonly IntakeSeat[],

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { SITUATION_LABEL, type Action, type TeamSource } from '@slave-of-ai/domain'
+import { PROVIDER_LABEL, SITUATION_LABEL, type Action, type TeamSource } from '@slave-of-ai/domain'
 // Type-only, so nothing from `server/supervisor.ts` (and nothing it imports -- control, and the
 // Prisma client under it) reaches the client bundle. The same rule `useOverview.ts` states for
 // `OverviewSnapshot`.
@@ -121,6 +121,13 @@ export function actionText(action: Action, taskTitles: Readonly<Record<string, s
       return `ask for the goal to change: “${action.request}”`
     case 'note_for_planner':
       return `leave a note for the next planner: “${action.text}”`
+    // H4a: the two remedies for planning that cannot start. Both are about the PROJECT and name no
+    // row, so neither needs a title map -- and the runtime is named in the WORDS a person reads
+    // (`PROVIDER_LABEL`), never as the column value the action stores.
+    case 'configure_runtime':
+      return `give this project a runtime: ${PROVIDER_LABEL[action.provider]}`
+    case 'retry_planning':
+      return 'let planning start over, once, for this goal'
     case 'escalate_to_human':
       return `escalate to a human: ${action.summary}`
     case 'no_action':

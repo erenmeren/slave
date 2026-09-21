@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { PROVIDER_KINDS, type ProviderKind } from '../provider/kind.js'
 import { OPERATOR_REQUEST_MAX_CHARS } from './constants.js'
 
 /**
@@ -158,6 +159,30 @@ export type Action =
    * `propose`: a commit to the repository is a commit to the repository.
    */
   | { readonly kind: 'note_for_planner'; readonly text: string }
+  /**
+   * H4a: `setWorkspaceProvider` -- the project gets a runtime, so a model call can be made at all.
+   *
+   * The remedy for `planning_stalled { reason: 'no_runtime' }`, and the one action a HALT does not
+   * demote ({@link tierOf}): it writes one `ProviderConfiguration` row and starts nothing, so a
+   * project whose money is gone or whose stop button is down can still be told which runtime it
+   * would use. `provider` is a `ProviderKind` and the candidate fills it with
+   * `SUPERVISOR_DEFAULT_PROVIDER` -- the rules never pick a vendor, they pick the installation's.
+   */
+  | { readonly kind: 'configure_runtime'; readonly provider: ProviderKind }
+  /**
+   * H4a: one `workspace.planning_reset` event -- the planning retry cap, counted from zero again.
+   *
+   * The remedy for `planning_stalled { reason: 'cap_spent' }`. NO FIELDS: which goal version is
+   * being reset is read off the project at apply time (a proposal can be approved a day later, and
+   * the version dispatch will count against is the one it has then), and there is nothing else to
+   * say. It writes an event and moves no row -- `dispatchPlanning` is what reads the event and
+   * starts the next planning run, on its own next tick.
+   *
+   * ONCE PER GOAL VERSION under `act` ({@link tierOf}, `world.planningResetsThisVersion`): the cap
+   * exists to stop a planner being asked forever, and a Supervisor that reset it on every cooldown
+   * would have removed the cap rather than answered it.
+   */
+  | { readonly kind: 'retry_planning' }
   /** No verb at all -- a row a human is asked to look at. The always-available last resort. */
   | { readonly kind: 'escalate_to_human'; readonly summary: string }
   /** Deliberately nothing: the situation is real but waiting is the right move. */
@@ -185,6 +210,9 @@ export const ACTION_KINDS = [
   'clear_halt',
   'request_goal_change',
   'note_for_planner',
+  // H4a: the two remedies for planning that cannot start.
+  'configure_runtime',
+  'retry_planning',
   'escalate_to_human',
   'no_action',
 ] as const
@@ -305,6 +333,11 @@ const actionUnion = z.discriminatedUnion('kind', [
     kind: z.literal('note_for_planner'),
     text: z.string().min(1).max(OPERATOR_REQUEST_MAX_CHARS),
   }),
+  // H4a. `provider` is validated against the domain's own union rather than a bare string: a
+  // stored row is read back and passed straight to `setWorkspaceProvider`, and a third vendor
+  // arriving in the list is a member here, not a runtime refusal.
+  z.object({ kind: z.literal('configure_runtime'), provider: z.enum(PROVIDER_KINDS) }),
+  z.object({ kind: z.literal('retry_planning') }),
   z.object({ kind: z.literal('escalate_to_human'), summary: z.string().min(1) }),
   z.object({ kind: z.literal('no_action') }),
 ])
