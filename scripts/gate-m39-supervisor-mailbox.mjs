@@ -239,13 +239,18 @@ async function fail(message) {
   throw new Error(`${message} -- gateRows=${dump}`)
 }
 
-/** A decision row as this gate prints it, DRAFT included: the draft is what four of the five stages
- *  assert on, and a failure that shows only ids is a failure nobody can diagnose from the log. */
+/** A decision row as this gate prints it, DRAFT included: the draft is what four of the six stages
+ *  assert on, and a failure that shows only ids is a failure nobody can diagnose from the log.
+ *
+ *  `situationFacts` is here for stage 6, which asserts on `situation.facts.messageId` -- the way
+ *  back from a decision to the conversation turn that caused it (erratum E3). Every stage prints
+ *  every value it asserts BEFORE asserting it, and that one was being checked unseen. */
 const describeDecision = (row) =>
   JSON.stringify({
     id: row.id,
     situationKind: row.situationKind,
     subjectId: row.subjectId,
+    situationFacts: row.situation?.facts ?? null,
     tier: row.tier,
     status: row.status,
     decidedBy: row.decidedBy,

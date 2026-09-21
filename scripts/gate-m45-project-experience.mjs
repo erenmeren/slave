@@ -293,8 +293,10 @@ try {
   )
 
   // ---- Seven tasks, one per state, plus the integrated one. -------------------------------------
-  // `goalVersion: 1` on every one of them, so the board is behind the goal and stage 5's
-  // `replan-status` has a real move to report rather than a board that has already caught up.
+  // `goalVersion: 1` on every one of them, so the board is a version behind the goal `request-change`
+  // wrote above -- which is what stage 3's `stale_task` proposal and stage 1's goal tile are about.
+  // (It used to be what stage 5's `replan-status` measured; F moved that claim to
+  // `gate:m39-supervisor-mailbox` stage 6, see stage 5 below.)
   const task = async (title, status, extra = {}) =>
     prisma.task.create({
       data: {

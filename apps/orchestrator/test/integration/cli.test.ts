@@ -3415,18 +3415,11 @@ describe('the orchestrator CLI', () => {
         data: { supervisorProvider: 'cursor', supervisorModel: 'auto' },
       })
 
-      // The `--flag=value` form for BOTH, `--enable=1 --disable=1`'s own reason below: `setFlag`
-      // takes whatever follows a flag as its value "even if it starts with --", so a bare
-      // `--clear-provider` immediately followed by `--clear-model` swallows the second flag's name
-      // as the first one's value and only the provider would be cleared. Neither flag consults its
-      // value, only its presence.
-      const result = await runCli([
-        'set-supervisor',
-        '--workspace',
-        fixture.workspaceId,
-        '--clear-provider=1',
-        '--clear-model=1',
-      ])
+      // THE BARE PAIR, back to back, which is how an operator writes it. Both flags are in
+      // `VALUELESS`, which is the whole reason it works: without that, `setFlag` takes whatever
+      // follows a flag as its value "even if it starts with --", so `--clear-provider` would
+      // swallow `--clear-model`'s own name and only the provider would be cleared.
+      const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--clear-provider', '--clear-model'])
 
       expect(result.code).toBe(0)
       const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
@@ -3438,9 +3431,9 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--provider', 'claude'])
 
       expect(result.code).not.toBe(0)
-      // The CONTROL LAYER's own sentence, which the CLI prints verbatim rather than inventing a
-      // second wording for the same refusal -- `set-model --provider` answers a typo the same way.
-      expect(result.stderr).toMatch(/a provider must be a configured kind/)
+      // THE VOCABULARY, `--autonomy`'s idiom: a person who typed a runtime that does not exist is
+      // told the two words the flag takes, not that "a provider must be a configured kind".
+      expect(result.stderr).toMatch(/--provider must be claude_code or cursor/)
       expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).supervisorProvider).toBeNull()
     })
 
@@ -3504,6 +3497,29 @@ describe('the orchestrator CLI', () => {
       expect(result.code).not.toBe(0)
       expect(result.stderr).toMatch(/exactly one of --profile-file or --clear-profile/)
       rmSync(dir, { recursive: true, force: true })
+    })
+
+    it('refuses set-supervisor given both --provider and --clear-provider, and both --model and --clear-model', async (): Promise<void> => {
+      const provider = await runCli([
+        'set-supervisor',
+        '--workspace',
+        fixture.workspaceId,
+        '--provider',
+        'cursor',
+        '--clear-provider',
+      ])
+      expect(provider.code).not.toBe(0)
+      expect(provider.stderr).toMatch(/exactly one of --provider or --clear-provider/)
+
+      const model = await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--model', 'auto', '--clear-model'])
+      expect(model.code).not.toBe(0)
+      expect(model.stderr).toMatch(/exactly one of --model or --clear-model/)
+
+      // Neither refusal wrote anything: a patch carrying one good field and one bad one writes
+      // neither, and these two never reach `setSupervisorSettings` at all.
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+      expect(workspace.supervisorProvider).toBeNull()
+      expect(workspace.supervisorModel).toBeNull()
     })
 
     it('refuses set-supervisor given both --enable and --disable', async (): Promise<void> => {

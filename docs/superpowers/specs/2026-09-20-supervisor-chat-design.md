@@ -318,6 +318,15 @@ real daemon and the fake CLI: `supervisor-say --file <brief.md>` commits the bri
 it, and the newest goal version carries the path. R5's `disabledKinds` was never built, because E1
 found Cursor's print mode works. **Cost:** one stage rewritten, one stage added.
 
+**E9 — The allow-list is thirteen extensions, not twelve: `yml` is one of them (R6, task 8
+review).** R6 spells the list `md txt csv json yaml pdf png jpg jpeg gif webp svg` and leaves out
+`yml`, which is the same format under the name half the world writes it with. The plan's Global
+Constraints carried `yml` from the start, `ATTACHMENT_KIND_BY_EXTENSION` maps it to `text`, the
+upload verb accepts it, the file dialog offers it and the README names it. So the code is right and
+R6's sentence is a transcription slip; this is the correction, not a change. The full list a person
+may attach is `md txt csv json yaml yml pdf png jpg jpeg gif webp svg`, and
+`ATTACHMENT_KIND_BY_EXTENSION` is the one place it is written down. **Cost:** three letters.
+
 Booked by this milestone and deliberately not fixed: `PUT /api/w/:id/provider` (the project's RUN
 provider) answers **409** for a provider this installation does not have, where the Supervisor's own
 settings route answers **400** for the same refusal; `simulation/auto-run.ts` keeps

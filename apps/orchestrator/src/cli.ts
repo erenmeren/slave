@@ -896,6 +896,12 @@ const VALUELESS: ReadonlySet<string> = new Set([
   'auto-merge',
   'on',
   'off',
+  // F R4: `set-supervisor --clear-provider --clear-model` otherwise records the second flag's own
+  // NAME as the first one's value, so only the provider would be cleared -- a silent half-refusal
+  // of what an operator plainly asked for. Both are bare switches whose presence is the whole
+  // instruction, which is E3's rule for every bare flag a milestone adds.
+  'clear-provider',
+  'clear-model',
 ])
 
 /**
@@ -3608,15 +3614,17 @@ export async function main(argv: readonly string[]): Promise<number> {
       // F R4: WHICH runtime answers this project's Supervisor -- decisions, answers and the
       // conversation alike. The `--profile-file | --clear-profile` idiom twice over, because both
       // columns are nullable and `null` is a real instruction ("back to the installation default")
-      // that an omitted flag cannot say. The provider's two words are checked HERE, as `--autonomy`
-      // above is: `setSupervisorSettings` would refuse `invalid_provider` anyway, and an operator
-      // who typed `--provider claude` deserves to be told what the vocabulary is.
+      // that an omitted flag cannot say.
       const providerFlag = flagText(flags, 'provider')
       const clearProvider = 'clear-provider' in flags
       if (providerFlag !== undefined && clearProvider) throw new Error('exactly one of --provider or --clear-provider is allowed, not both')
       let provider: ProviderKind | undefined
       if (providerFlag !== undefined) {
-        if (!isProviderKind(providerFlag)) throw new Error(refusalText({ kind: 'invalid_provider', provider: providerFlag }))
+        // The VOCABULARY, not the control layer's "a provider must be a configured kind": an
+        // operator who typed `--provider claude` is told the two words this flag takes, which is
+        // `--autonomy`'s own idiom a few lines above. `setSupervisorSettings` still refuses
+        // `invalid_provider` for every other caller.
+        if (!isProviderKind(providerFlag)) throw new Error('--provider must be claude_code or cursor')
         provider = providerFlag
       }
       const model = flagText(flags, 'model')
