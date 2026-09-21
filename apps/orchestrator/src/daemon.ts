@@ -1,5 +1,5 @@
 import { hostname } from 'node:os'
-import { describeSync, drainCapabilityMappingCalls, drainIntakeCalls, drainModelCalls, reconcileTemplateCapabilities, syncSkillCatalog, tickCapabilityMapping, tickIntakes, tickSimulations, WORKTREE_TTL_MS, type ModelDecider } from '@slave-of-ai/control'
+import { describeSync, drainCapabilityMappingCalls, drainIntakeCalls, drainModelCalls, drainSupervisorChatCalls, reconcileTemplateCapabilities, syncSkillCatalog, tickCapabilityMapping, tickIntakes, tickSimulations, tickSupervisorChat, WORKTREE_TTL_MS, type DeciderRegistry, type ModelDecider } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { BROKER_TIMEOUT_MS, SUPERVISOR_DEFAULT_MODEL, workspaceId as brandWorkspaceId, type WorkspaceId } from '@slave-of-ai/domain'
 import { subscribeEvents, type EventSubscription } from '@slave-of-ai/events'
@@ -109,8 +109,9 @@ export interface WorkspaceLoopDeps {
   /**
    * M31a §4: the model seam the tick's Supervisor decision is made through. Optional, and absent in
    * every test that only exercises the loop. The daemon is the only production caller that supplies
-   * one (`apps/orchestrator/src/cli.ts`'s `buildModelDecider`), which is what makes "a decision is
-   * only ever asked for in the daemon" true of the wiring and not just of a guard.
+   * one (`apps/orchestrator/src/cli.ts`'s `buildDeciderRegistry().claude_code`), which is what
+   * makes "a decision is only ever asked for in the daemon" true of the wiring and not just of a
+   * guard.
    */
   readonly modelDecider?: ModelDecider
   /**
@@ -326,8 +327,8 @@ export interface DaemonDeps {
    * Optional, and absent in every test that only exercises the loop -- a pass with no decider steps
    * the rules runs and reports the llm ones as `skippedNoDecider`, spending nothing. The daemon is
    * the only production caller that supplies one (`apps/orchestrator/src/cli.ts`'s
-   * `buildModelDecider`), which is what makes "an llm run only ever steps in the daemon" true of
-   * the wiring and not just of a guard.
+   * `buildDeciderRegistry().claude_code`), which is what makes "an llm run only ever steps in the
+   * daemon" true of the wiring and not just of a guard.
    */
   readonly modelDecider?: ModelDecider
   /**
@@ -340,11 +341,25 @@ export interface DaemonDeps {
    */
   readonly maxConcurrentModelCalls?: number
   /**
+   * Supervisor chat R4: the deciders the CONVERSATION's pass chooses from, one per provider.
+   *
+   * A registry rather than {@link modelDecider} because a project picks which runtime answers its
+   * Supervisor (`Workspace.supervisorProvider`), so one function could not serve both -- and
+   * `modelDecider` stays exactly what it was for every other pass: the installation default,
+   * which `cli.ts` takes off this same registry's `claude_code` entry.
+   *
+   * Optional, and absent in every test that only exercises the loop: a pass with no registry
+   * starts no chat call and says so (the `skippedNoDecider` line below), exactly as a pass with no
+   * `modelDecider` does for the llm runs.
+   */
+  readonly deciders?: DeciderRegistry
+  /**
    * M38 §5: the model the SUPERVISOR's decisions are asked of, read from the environment by
    * `cli.ts`. Separate from `modelDecider` because they are different facts -- the decider is HOW
    * a call is made, this is WHAT is asked -- and because M31a's simulation calls take their model
    * from the simulation intent, so there was no shared name to reuse (spec erratum E3). M59 R14:
-   * the intake pass asks its questions of the same model, for the same reason.
+   * the intake pass asks its questions of the same model, for the same reason. Supervisor chat R2:
+   * a chat turn on a project that pinned no model of its own is asked of it too.
    */
   readonly supervisorModel?: string
   /** Overridable for a test that must not wait ten seconds. Defaults to {@link DAEMON_DISCOVERY_MS}. */
@@ -519,6 +534,43 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
         process.stdout.write(`${JSON.stringify({ intakes })}\n`)
       }
 
+      // Supervisor chat R2: the conversation's pass, beside the intakes and claimed the same way
+      // (`SKIP LOCKED` on the waiting placeholders), so two daemons never answer one message and
+      // neither blocks. GLOBAL rather than part of `tick()` for the intakes' reason: the claim is
+      // over every project's turns at once, and one pass per loop would claim N times as many.
+      //
+      // `skippedNoDecider` IS THIS DAEMON'S WORD, NOT THE TICK'S. The registry
+      // `tickSupervisorChat` takes is total, so a claimed turn always has a decider to try -- a
+      // provider the registry does not hold fails THAT turn with `no_decider_for_provider` rather
+      // than stranding it. What can be missing is the registry itself, which is a daemon built
+      // without one, and then a person watching the panel say "thinking" forever has nothing to
+      // read. `tickSimulations`' own reason (M31a §4): a daemon silently doing nothing for
+      // somebody who is waiting is the failure an operator cannot diagnose from outside.
+      const supervisorChat =
+        deps.deciders === undefined
+          ? {
+              due: await prisma.supervisorMessage.count({ where: { status: 'answering' } }),
+              startedModelCalls: 0,
+              skippedInFlight: 0,
+              skippedNoDecider: true,
+            }
+          : {
+              ...(await tickSupervisorChat({
+                now: new Date(),
+                by: `${String(process.pid)}@${hostname()}`,
+                deciders: deps.deciders,
+                defaultModel: deps.supervisorModel ?? SUPERVISOR_DEFAULT_MODEL,
+                ...(deps.maxConcurrentModelCalls !== undefined ? { maxConcurrentModelCalls: deps.maxConcurrentModelCalls } : {}),
+              })),
+              skippedNoDecider: false,
+            }
+      // The intakes' predicate, with the same deliberate omission `tickSimulations` documents:
+      // `skippedInFlight` is non-zero on every pass for the whole life of a call -- once a second,
+      // for minutes -- and a line printed that often says only that time is passing.
+      if (supervisorChat.startedModelCalls > 0 || (supervisorChat.skippedNoDecider && supervisorChat.due > 0)) {
+        process.stdout.write(`${JSON.stringify({ supervisorChat })}\n`)
+      }
+
       // Catalogue capability mapping (2026-09-20), R7: one batch of stale personas per pass,
       // beside the intakes and for the same reason -- a persona belongs to no workspace.
       // DETACHED (fix round 1), following the intake precedent exactly (M59 R14): one batch is a
@@ -639,6 +691,7 @@ export async function runDaemon(deps: DaemonDeps): Promise<void> {
     await drainModelCalls()
     await drainIntakeCalls()
     await drainCapabilityMappingCalls()
+    await drainSupervisorChatCalls()
     await prisma.$disconnect()
     process.stdout.write('daemon stopped\n')
   }

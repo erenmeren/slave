@@ -1,4 +1,10 @@
-import { resetCapabilityMappingTickForTests, syncCapabilityTaxonomy, type ModelDecider } from '@slave-of-ai/control'
+import {
+  resetCapabilityMappingTickForTests,
+  sendSupervisorMessage,
+  syncCapabilityTaxonomy,
+  type DeciderRegistry,
+  type ModelDecider,
+} from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { emptyProfileSpec, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import type { AdapterRegistry } from '@slave-of-ai/providers'
@@ -69,7 +75,7 @@ describe('runDaemon serving every project', () => {
     workspaceIds: 'all' | string,
     /** What this test needs the daemon BUILT with -- a decider, say. Everything else is the same
      *  daemon every case above runs, so a case that passes nothing is byte-identical to before. */
-    overrides: Partial<Pick<DaemonDeps, 'modelDecider' | 'supervisorModel'>> = {},
+    overrides: Partial<Pick<DaemonDeps, 'modelDecider' | 'deciders' | 'supervisorModel'>> = {},
   ): Promise<() => string> {
     const captured = captureStdout()
     output = captured
@@ -268,6 +274,81 @@ describe('runDaemon serving every project', () => {
     await until(() => text().includes('"capabilityMapping"'))
     const line = text().split('\n').find((l) => l.includes('"capabilityMapping"')) ?? ''
     expect(JSON.parse(line)).toMatchObject({ capabilityMapping: { skippedNoDecider: true, started: false, stale: 1 } })
+  })
+
+  // Supervisor chat R2: the conversation's pass has the same three things to prove the mapping
+  // case above proves, and for the same reason -- the tick's own tests drive `tickSupervisorChat`
+  // directly, which shows neither that a pass reaches it with the registry the daemon was built
+  // with, nor that the DETACHED call (which settles long after that pass returned) is waited for
+  // before Prisma is disconnected.
+  it('answers a waiting turn with the deciders it was built with, prints the pass line and drains the call on shutdown', async (): Promise<void> => {
+    const workspaceId = await seed('Talkative')
+    const sent = await sendSupervisorMessage(workspaceId, { text: 'why is nothing running?' })
+    if (!sent.ok) throw new Error(JSON.stringify(sent.error))
+
+    // Held open until the daemon is on its way down, so the call really is in flight at shutdown
+    // -- which is the state the drain exists for. Scripted in process, not the fake CLI: this test
+    // is about the daemon's own wiring, and a decider is exactly one function.
+    let entered = (): void => {}
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    let release = (): void => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const deciders: DeciderRegistry = {
+      claude_code: async () => {
+        entered()
+        await held
+        return {
+          kind: 'answer',
+          text: JSON.stringify({ supervisorReply: { text: 'Nothing is dispatched yet.', actions: [], sources: [] } }),
+          costUsd: 0.02,
+          tokens: null,
+          numTurns: 1,
+        }
+      },
+      cursor: async () => ({ kind: 'failed', reason: 'no Cursor in this test', costUsd: null, tokens: null }),
+    }
+
+    const text = await start('all', { deciders })
+    await until(() => text().includes('"supervisorChat"'))
+    const line = text().split('\n').find((l) => l.includes('"supervisorChat"')) ?? ''
+    expect(JSON.parse(line)).toMatchObject({ supervisorChat: { due: 1, startedModelCalls: 1, skippedNoDecider: false } })
+
+    await reached
+    stop()
+    release()
+    await finished
+
+    const reply = await prisma.supervisorMessage.findUniqueOrThrow({ where: { id: sent.value.replyId } })
+    expect(reply.status).toBe('answered')
+    expect(reply.text).toBe('Nothing is dispatched yet.')
+  })
+
+  it('prints a supervisorChat line when a turn is waiting and the daemon holds no deciders', async (): Promise<void> => {
+    const workspaceId = await seed('Nobody To Answer')
+    const sent = await sendSupervisorMessage(workspaceId, { text: 'anybody there?' })
+    if (!sent.ok) throw new Error(JSON.stringify(sent.error))
+
+    const text = await start('all')
+    await until(() => text().includes('"supervisorChat"'))
+    const line = text().split('\n').find((l) => l.includes('"supervisorChat"')) ?? ''
+    expect(JSON.parse(line)).toMatchObject({
+      supervisorChat: { due: 1, startedModelCalls: 0, skippedNoDecider: true },
+    })
+    // Nothing was claimed and nothing was spent: the turn is still waiting for a daemon that has
+    // a registry.
+    expect((await prisma.supervisorMessage.findUniqueOrThrow({ where: { id: sent.value.replyId } })).status).toBe('answering')
+  })
+
+  it('says nothing about the conversation on a pass with no turn waiting', async (): Promise<void> => {
+    await seed('Quiet')
+    const text = await start('all')
+    // One pass at least has run by the time the serving line is out, and several more by now.
+    await until(() => text().includes('serving 1 project'))
+    expect(text()).not.toContain('"supervisorChat"')
   })
 })
 

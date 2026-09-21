@@ -3447,6 +3447,117 @@ describe('the orchestrator CLI', () => {
       expect(result.stderr).toMatch(/--enable and --disable are exclusive/)
     })
   })
+
+  // Supervisor chat R8: the conversation without the panel -- the daemon-less path and the gates.
+  describe('the conversation verbs (Supervisor chat R8)', () => {
+    /** Everything this CLI prints about a message: the person's row and the placeholder the daemon
+     *  will settle, in the order `sendSupervisorMessage` writes them. */
+    const idsIn = (stdout: string): readonly string[] => [...stdout.matchAll(/\b([0-9a-f-]{36})\b/gu)].map((m) => m[1] as string)
+
+    it('supervisor-say writes the message and the reply placeholder, and prints both ids', async (): Promise<void> => {
+      const result = await runCli(['supervisor-say', '--workspace', fixture.workspaceId, '--text', 'why is nothing running?'])
+
+      expect(result.code).toBe(0)
+      const rows = await prisma.supervisorMessage.findMany({ where: { workspaceId: fixture.workspaceId }, orderBy: { seq: 'asc' } })
+      expect(rows.map((row) => [row.role, row.status, row.text])).toEqual([
+        ['human', 'sent', 'why is nothing running?'],
+        ['supervisor', 'answering', ''],
+      ])
+      // Both ids, so an operator can follow either row -- the message they sent and the reply the
+      // daemon will settle.
+      expect(idsIn(result.stdout)).toEqual([rows[0]?.id, rows[1]?.id])
+    })
+
+    it('supervisor-say --file commits the upload into docs/inbox and attaches it to the message', async (): Promise<void> => {
+      const dir = mkdtempSync(join(tmpdir(), 'slaveofai-say-file-'))
+      const brief = join(dir, 'brief.md')
+      writeFileSync(brief, 'Ship the pricing page by Friday.')
+
+      const result = await runCli(['supervisor-say', '--workspace', fixture.workspaceId, '--text', 'read this', '--file', brief])
+
+      expect(result.code).toBe(0)
+      const row = await prisma.supervisorMessage.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId, role: 'human' } })
+      const attachments = row.attachments as unknown as readonly { path: string; name: string; kind: string }[]
+      expect(attachments).toHaveLength(1)
+      expect(attachments[0]?.name).toBe('brief.md')
+      expect(attachments[0]?.kind).toBe('text')
+      expect(attachments[0]?.path).toMatch(/^docs\/inbox\/\d{4}-\d{2}-\d{2}-brief\.md$/u)
+      // R6: the file is IN THE REPOSITORY and committed, which is what lets a worker open it later.
+      expect(readFileSync(join(fixture.repoPath, attachments[0]?.path as string), 'utf8')).toBe('Ship the pricing page by Friday.')
+      expect(execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: fixture.repoPath }).toString().trim()).toBe('inbox: brief.md')
+      expect(result.stdout).toContain(attachments[0]?.path as string)
+      rmSync(dir, { recursive: true, force: true })
+    })
+
+    it('supervisor-say takes several --file flags, in the order they were written', async (): Promise<void> => {
+      const dir = mkdtempSync(join(tmpdir(), 'slaveofai-say-files-'))
+      writeFileSync(join(dir, 'one.md'), 'first')
+      writeFileSync(join(dir, 'two.txt'), 'second')
+
+      const result = await runCli([
+        'supervisor-say', '--workspace', fixture.workspaceId, '--text', 'both of these',
+        '--file', join(dir, 'one.md'), '--file', join(dir, 'two.txt'),
+      ])
+
+      expect(result.code).toBe(0)
+      const row = await prisma.supervisorMessage.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId, role: 'human' } })
+      const attachments = row.attachments as unknown as readonly { name: string }[]
+      expect(attachments.map((one) => one.name)).toEqual(['one.md', 'two.txt'])
+      rmSync(dir, { recursive: true, force: true })
+    })
+
+    it('supervisor-say refuses a file whose kind is not on the allow-list, and writes no message at all', async (): Promise<void> => {
+      const dir = mkdtempSync(join(tmpdir(), 'slaveofai-say-refused-'))
+      const binary = join(dir, 'payload.exe')
+      writeFileSync(binary, 'not a document')
+
+      const result = await runCli(['supervisor-say', '--workspace', fixture.workspaceId, '--text', 'take this', '--file', binary])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toMatch(/payload\.exe/u)
+      expect(await prisma.supervisorMessage.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+      rmSync(dir, { recursive: true, force: true })
+    })
+
+    it('exits non-zero for supervisor-say with no --text', async (): Promise<void> => {
+      const result = await runCli(['supervisor-say', '--workspace', fixture.workspaceId])
+
+      expect(result.code).not.toBe(0)
+      expect(`${result.stdout}${result.stderr}`).toMatch(/--text is required/u)
+    })
+
+    it('supervisor-thread prints the conversation as JSON, oldest first, and --limit caps it', async (): Promise<void> => {
+      for (const text of ['first', 'second']) {
+        expect((await runCli(['supervisor-say', '--workspace', fixture.workspaceId, '--text', text])).code).toBe(0)
+      }
+
+      const all = await runCli(['supervisor-thread', '--workspace', fixture.workspaceId])
+      expect(all.code).toBe(0)
+      const thread = JSON.parse(all.stdout) as readonly { role: string; text: string; status: string }[]
+      expect(thread.map((one) => [one.role, one.text])).toEqual([
+        ['human', 'first'],
+        ['supervisor', ''],
+        ['human', 'second'],
+        ['supervisor', ''],
+      ])
+      expect(thread[1]?.status).toBe('answering')
+
+      // The NEWEST end is what a limit keeps: a thread is read from the bottom.
+      const limited = await runCli(['supervisor-thread', '--workspace', fixture.workspaceId, '--limit', '1'])
+      expect(limited.code).toBe(0)
+      expect(JSON.parse(limited.stdout)).toHaveLength(1)
+
+      const refused = await runCli(['supervisor-thread', '--workspace', fixture.workspaceId, '--limit', '0'])
+      expect(refused.code).not.toBe(0)
+    })
+
+    it('supervisor-thread prints an empty list for a project nobody has said anything to', async (): Promise<void> => {
+      const result = await runCli(['supervisor-thread', '--workspace', fixture.workspaceId])
+
+      expect(result.code).toBe(0)
+      expect(JSON.parse(result.stdout)).toEqual([])
+    })
+  })
   // M42 t4: the import verbs. Every invocation still writes `--dry-run` LAST -- `parseArgs` takes
   // whatever follows a flag as its value (erratum E11), so `--dry-run --by me` would record
   // `dry-run: '--by'` and drop `--by` entirely.
