@@ -7,6 +7,7 @@ import {
   CHAT_FEED_MAX,
   CHAT_MESSAGE_MAX_CHARS,
   SITUATION_LABEL,
+  SUPERVISOR_DEFAULT_PROVIDER,
   SUPERVISOR_PER_CALL_CAP_USD,
   buildSupervisorChatPrompt,
   isSourced,
@@ -333,7 +334,7 @@ function startChatTurn(
 ): void {
   const settled = (async (): Promise<void> => {
     try {
-      const provider = turn.provider ?? 'claude_code'
+      const provider = turn.provider ?? SUPERVISOR_DEFAULT_PROVIDER
       const decider: ModelDecider | undefined = deciders[provider]
       if (decider === undefined) {
         // Ruling 1: the workspace names a runtime this daemon cannot call. ONE turn fails, with a
@@ -374,6 +375,12 @@ function startChatTurn(
       // to open has anything to spawn them for. A Cursor turn is always text-only (its gate denies
       // everything), and `imagesReadable: false` is what stops the prompt offering to open a
       // picture the call cannot open.
+      //
+      // THE LITERAL AND NOT `SUPERVISOR_DEFAULT_PROVIDER`, here and in `readOnlyCall`'s
+      // permissions file: the two are the same string today and they are not the same claim. This
+      // one says "Claude Code is the runtime that has a read-only tool mode", a fact about the
+      // vendor -- and the day the installation default moved to another runtime, a comparison
+      // against the default would silently arm read-only spawns for a CLI that has no such mode.
       const readOnly = provider === 'claude_code' && attachments.some((attachment) => attachment.kind === 'image')
       const input: ChatTurnInput = {
         world,

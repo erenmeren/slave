@@ -1,4 +1,5 @@
 import { BREAKER_COOLDOWN_MS } from '../breaker/constants.js'
+import type { ProviderKind } from '../provider/kind.js'
 import type { SituationKind } from './situations.js'
 
 /**
@@ -54,6 +55,22 @@ export const SUPERVISOR_PER_CALL_CAP_USD = 1
  * default to reuse.
  */
 export const SUPERVISOR_DEFAULT_MODEL = 'claude-sonnet-5'
+
+/**
+ * WHICH runtime answers a project that has chosen none (F R4).
+ *
+ * `Workspace.supervisorProvider` is nullable and every reader resolves `null` to this -- the chat
+ * tick before it looks a decider up, the panel before it decides which vendor's model names to
+ * offer. It was a literal spelt at each of those sites until this task, which is exactly the shape
+ * a default drifts in: one reader updated, the other left offering Claude's model list for a
+ * project the daemon was calling Cursor for.
+ *
+ * Beside {@link SUPERVISOR_DEFAULT_MODEL} because the two are one answer -- "the installation
+ * default" is a PAIR, and a reader who needs one needs the other a line later. Typed
+ * `ProviderKind` rather than left to inference, so a third runtime cannot become the default by a
+ * typo in a string.
+ */
+export const SUPERVISOR_DEFAULT_PROVIDER: ProviderKind = 'claude_code'
 
 /**
  * The runtime role `dispatchReview` staffs from (`apps/orchestrator/src/review.ts`) -- `'reviewer'

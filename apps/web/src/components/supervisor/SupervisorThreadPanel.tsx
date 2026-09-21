@@ -2,7 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ATTACHMENT_KIND_BY_EXTENSION, SITUATION_LABEL, TIER_LABEL, type ChatAttachment, type Tier } from '@slave-of-ai/domain'
+import {
+  ATTACHMENT_KIND_BY_EXTENSION,
+  SITUATION_LABEL,
+  SUPERVISOR_DEFAULT_PROVIDER,
+  TIER_LABEL,
+  type ChatAttachment,
+  type Tier,
+} from '@slave-of-ai/domain'
 import { postControl, postForm, sendControl } from '../../lib/postControl'
 import { useShellFacts } from '../../hooks/useShellFacts'
 import { plural } from '../../lib/plural'
@@ -50,23 +57,17 @@ interface AskedAction {
  *  read it off, and the chip must still say what kind of thing it is. */
 const OPERATOR_REQUEST = 'operator_request'
 
-/**
- * WHICH runtime answers a project that has chosen none (F R4).
- *
- * `Workspace.supervisorProvider` is nullable and `null` means this, which is what
- * `packages/control/src/supervisorChatTick.ts:336` resolves it to before it looks a decider up.
- * The panel needs the same answer for one reason: a project on the default still has a MODEL, and
- * a model field that cannot say which vendor's names it is offering is a model field that has to
- * be disabled. There is no shared constant to import -- the repository spells this literal at
- * every site that resolves it -- so it is spelt once here, beside the two selects that need it.
- */
-const DEFAULT_PROVIDER: ProviderKind = 'claude_code'
-
 /** What a selection of "the installation default" really resolves to — the one place this panel
  *  turns an empty select into a runtime, so the model list and the "did the vendor change?" test
- *  can never disagree about it. */
+ *  can never disagree about it.
+ *
+ *  {@link SUPERVISOR_DEFAULT_PROVIDER} is the domain's own answer to the same question, and the
+ *  one the chat tick resolves a null `Workspace.supervisorProvider` with before it looks a decider
+ *  up. The panel needs it for one reason: a project on the default still has a MODEL, and a model
+ *  field that cannot say which vendor's names it is offering is a model field that has to be
+ *  disabled. It was a literal spelt here until Task 8 shared the constant. */
 function effectiveKind(selected: ProviderKind | ''): ProviderKind {
-  return selected === '' ? DEFAULT_PROVIDER : selected
+  return selected === '' ? SUPERVISOR_DEFAULT_PROVIDER : selected
 }
 
 /** What the file dialog offers, straight off the allow-list the upload verb enforces

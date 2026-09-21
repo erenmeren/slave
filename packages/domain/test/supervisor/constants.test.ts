@@ -14,6 +14,7 @@ import {
   SOURCES_MAX,
   SOURCE_QUOTE_MAX_CHARS,
   SUPERVISOR_DEFAULT_MODEL,
+  SUPERVISOR_DEFAULT_PROVIDER,
   SUPERVISOR_MAX_MODEL_DECISIONS_PER_TICK,
   SUPERVISOR_PER_CALL_CAP_USD,
   THREAD_BODY_MAX_CHARS,
@@ -33,6 +34,14 @@ describe('supervisor constants', () => {
     expect(SUPERVISOR_MAX_MODEL_DECISIONS_PER_TICK).toBe(3)
     expect(SUPERVISOR_PER_CALL_CAP_USD).toBe(1)
     expect(SUPERVISOR_DEFAULT_MODEL).toBe('claude-sonnet-5')
+  })
+
+  // F R4: the OTHER half of "the installation default". Pinned for the same reason the model is --
+  // nothing in this package reads it, the chat tick and the panel do, and a default that quietly
+  // became `cursor` would send every project that chose no runtime to a vendor whose turns cannot
+  // be capped or costed (spec erratum E2).
+  it('is the runtime a project that chose none is answered by', () => {
+    expect(SUPERVISOR_DEFAULT_PROVIDER).toBe('claude_code')
   })
 
   // The mailbox's caps (M39). Same reason: nothing in this task reads `DECISION_RETENTION_MS` or

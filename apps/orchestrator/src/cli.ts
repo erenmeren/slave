@@ -624,6 +624,7 @@ const USAGE = `usage: orchestrator <command> [options]
                                        reaches the world. --reason is kept with the decision.
   set-supervisor --workspace <id> [--enable | --disable]
                  [--profile-file <path> | --clear-profile] [--autonomy propose|act]
+                 [--provider claude_code|cursor | --clear-provider] [--model <name> | --clear-model]
                                        switch a workspace's Supervisor on or off, and/or set (from
                                        a file) or clear its persona/house-rules profile. Refused
                                        with no flag at all, with both --enable and --disable, or
@@ -632,6 +633,12 @@ const USAGE = `usage: orchestrator <command> [options]
                                        proposing it; escalations still wait for you, and a halted
                                        project still only proposes. --autonomy propose is the
                                        default and today's behaviour.
+                                       --provider and --model say WHICH runtime answers this
+                                       project's Supervisor -- its decisions, its answers and the
+                                       conversation alike. --clear-provider / --clear-model put
+                                       either back to the installation default. A Cursor turn is
+                                       neither capped nor costed: that CLI takes no budget and
+                                       reports no price.
   set-auto-merge --workspace <id> --on | --off
                                        whether an approved review merges the branch and stamps the
                                        task integrated (--on), or leaves both to you (--off, the
@@ -3598,8 +3605,37 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (autonomy !== undefined && autonomy !== 'propose' && autonomy !== 'act') {
         throw new Error('--autonomy must be propose or act')
       }
-      if (!enableFlag && !disableFlag && profileFile === undefined && !clearProfile && autonomy === undefined) {
-        throw new Error('one of --enable, --disable, --profile-file, --clear-profile or --autonomy is required')
+      // F R4: WHICH runtime answers this project's Supervisor -- decisions, answers and the
+      // conversation alike. The `--profile-file | --clear-profile` idiom twice over, because both
+      // columns are nullable and `null` is a real instruction ("back to the installation default")
+      // that an omitted flag cannot say. The provider's two words are checked HERE, as `--autonomy`
+      // above is: `setSupervisorSettings` would refuse `invalid_provider` anyway, and an operator
+      // who typed `--provider claude` deserves to be told what the vocabulary is.
+      const providerFlag = flagText(flags, 'provider')
+      const clearProvider = 'clear-provider' in flags
+      if (providerFlag !== undefined && clearProvider) throw new Error('exactly one of --provider or --clear-provider is allowed, not both')
+      let provider: ProviderKind | undefined
+      if (providerFlag !== undefined) {
+        if (!isProviderKind(providerFlag)) throw new Error(refusalText({ kind: 'invalid_provider', provider: providerFlag }))
+        provider = providerFlag
+      }
+      const model = flagText(flags, 'model')
+      const clearModel = 'clear-model' in flags
+      if (model !== undefined && clearModel) throw new Error('exactly one of --model or --clear-model is allowed, not both')
+      if (
+        !enableFlag &&
+        !disableFlag &&
+        profileFile === undefined &&
+        !clearProfile &&
+        autonomy === undefined &&
+        provider === undefined &&
+        !clearProvider &&
+        model === undefined &&
+        !clearModel
+      ) {
+        throw new Error(
+          'one of --enable, --disable, --profile-file, --clear-profile, --autonomy, --provider, --clear-provider, --model or --clear-model is required',
+        )
       }
 
       const result = await setSupervisorSettings(workspaceId, {
@@ -3608,6 +3644,10 @@ export async function main(argv: readonly string[]): Promise<number> {
         ...(profileFile !== undefined ? { profile: readFileSync(profileFile, 'utf8') } : {}),
         ...(clearProfile ? { profile: null } : {}),
         ...(autonomy === undefined ? {} : { autonomy }),
+        ...(provider === undefined ? {} : { provider }),
+        ...(clearProvider ? { provider: null } : {}),
+        ...(model === undefined ? {} : { model }),
+        ...(clearModel ? { model: null } : {}),
       })
       if (!result.ok) throw new Error(refusalText(result.error))
       process.stdout.write(`supervisor settings updated on ${workspaceId}\n`)

@@ -3390,6 +3390,58 @@ describe('the orchestrator CLI', () => {
       expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).supervisorAutonomy).toBe('propose')
     })
 
+    // F R4: WHICH runtime answers this project's Supervisor, from the shell. Two cases, the pair
+    // the flags come in: set both, then clear both back to the installation default.
+    it('set-supervisor --provider and --model choose the runtime that answers this project', async (): Promise<void> => {
+      const result = await runCli([
+        'set-supervisor',
+        '--workspace',
+        fixture.workspaceId,
+        '--provider',
+        'cursor',
+        '--model',
+        'auto',
+      ])
+
+      expect(result.code).toBe(0)
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+      expect(workspace.supervisorProvider).toBe('cursor')
+      expect(workspace.supervisorModel).toBe('auto')
+    })
+
+    it('set-supervisor --clear-provider and --clear-model put both back to the installation default', async (): Promise<void> => {
+      await prisma.workspace.update({
+        where: { id: fixture.workspaceId },
+        data: { supervisorProvider: 'cursor', supervisorModel: 'auto' },
+      })
+
+      // The `--flag=value` form for BOTH, `--enable=1 --disable=1`'s own reason below: `setFlag`
+      // takes whatever follows a flag as its value "even if it starts with --", so a bare
+      // `--clear-provider` immediately followed by `--clear-model` swallows the second flag's name
+      // as the first one's value and only the provider would be cleared. Neither flag consults its
+      // value, only its presence.
+      const result = await runCli([
+        'set-supervisor',
+        '--workspace',
+        fixture.workspaceId,
+        '--clear-provider=1',
+        '--clear-model=1',
+      ])
+
+      expect(result.code).toBe(0)
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+      expect(workspace.supervisorProvider).toBeNull()
+      expect(workspace.supervisorModel).toBeNull()
+    })
+
+    it('refuses a runtime this installation does not have, writing nothing', async (): Promise<void> => {
+      const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--provider', 'claude'])
+
+      expect(result.code).not.toBe(0)
+      expect(result.stderr).toMatch(/claude/)
+      expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).supervisorProvider).toBeNull()
+    })
+
     it('refuses an autonomy that is not one of the two words, writing nothing', async (): Promise<void> => {
       const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--autonomy', 'whenever'])
 
@@ -3437,7 +3489,7 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId])
 
       expect(result.code).not.toBe(0)
-      expect(result.stderr).toMatch(/one of --enable, --disable, --profile-file, --clear-profile or --autonomy is required/)
+      expect(result.stderr).toMatch(/one of --enable, --disable, --profile-file, --clear-profile, --autonomy, --provider, --clear-provider, --model or --clear-model is required/)
     })
 
     it('refuses set-supervisor given both --profile-file and --clear-profile', async (): Promise<void> => {
