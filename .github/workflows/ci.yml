@@ -81,6 +81,10 @@ jobs:
       - run: npm run gate:m49-memory
       - run: npm run gate:m50-ephemeral
       - run: npm run gate:m51-breaker
+      # H9a: kills its own daemons mid-run (a deploy and a crash, turn about) and proves every
+      # unfinished record found an owner. H9-F1 is waived until H9c stops announcing concurrency
+      # as a halt.
+      - run: npm run gate:h9-restart-chaos -- --known-gaps H9-F1
       - run: npm run gate:m52-broker
       - run: npm run gate:m53-evidence
       - run: npm run gate:m54-triggers
