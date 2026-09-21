@@ -22,6 +22,8 @@ const SNAPSHOT: TasksSnapshot = {
       attempt: 1,
       maxAttempts: 3,
       assigneeName: 'Alex',
+      // H2 fix round 1: required on the DTO.
+      requiredRole: 'backend',
       branch: 'feature/add-the-thing',
       lastRejectionReason: null,
       goalVersion: null,

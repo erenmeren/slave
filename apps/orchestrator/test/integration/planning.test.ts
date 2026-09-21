@@ -574,6 +574,56 @@ describe('concludePlanning', () => {
     for (const task of tasks) expect(task.assigneeId).toBe(beryl)
   })
 
+  it('passes over a CLOSED seat and a RELEASED person when it names the holder (H2)', async (): Promise<void> => {
+    const fixture = await seed('Ship the checkout redesign')
+    repos.push(fixture.repoPath)
+    await addManager(fixture.teamId)
+    // Explicit ids, lowest first: if a closed seat or a released person were still a candidate, the
+    // tie-break would hand every task to one of them, so this cannot pass by luck.
+    const closed = await prisma.slave.create({
+      data: {
+        id: '00000000-0000-4000-8000-000000000001',
+        teamId: fixture.teamId,
+        role: 'backend',
+        runtimeRoles: ['backend'],
+        closedAt: new Date(),
+        personId: (await prisma.person.create({ data: { name: 'Gone Seat' } })).id,
+      },
+    })
+    const released = await prisma.slave.create({
+      data: {
+        id: '00000000-0000-4000-8000-000000000002',
+        teamId: fixture.teamId,
+        role: 'backend',
+        runtimeRoles: ['backend'],
+        personId: (
+          await prisma.person.create({ data: { name: 'Gone Person', releasedAt: new Date(), releaseReason: 'done' } })
+        ).id,
+      },
+    })
+    const open = await prisma.slave.create({
+      data: {
+        id: 'ffffffff-0000-4000-8000-000000000003',
+        teamId: fixture.teamId,
+        role: 'backend',
+        runtimeRoles: ['backend'],
+        personId: (await prisma.person.create({ data: { name: 'Beryl' } })).id,
+      },
+    })
+
+    const runId = await dispatchPlanning(depsFor(fixture.workspaceId))
+    expect(runId).not.toBeNull()
+    await drainPumps()
+
+    const tasks = await prisma.task.findMany({ where: { workspaceId: fixture.workspaceId } })
+    expect(tasks).toHaveLength(3)
+    for (const task of tasks) {
+      expect(task.assigneeId).toBe(open.id)
+      expect(task.assigneeId).not.toBe(closed.id)
+      expect(task.assigneeId).not.toBe(released.id)
+    }
+  })
+
   it('(b) a subsequent dispatchPlanning starts nothing once the graph became the board', async (): Promise<void> => {
     const fixture = await seed('Ship the checkout redesign')
     repos.push(fixture.repoPath)

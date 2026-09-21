@@ -299,7 +299,10 @@ describe('buildTasksSnapshot', () => {
     })
 
     const snapshot = await buildTasksSnapshot(fixture.workspaceId)
-    expect(snapshot?.tasks.find((t) => t.id === queued.id)?.assigneeName).toBeNull()
+    const card = snapshot?.tasks.find((t) => t.id === queued.id)
+    expect(card?.assigneeName).toBeNull()
+    // Carried so the card can tell "nobody holds this role yet" from "not started yet" (fix round 1).
+    expect(card?.requiredRole).toBe('backend')
   })
 
   it('names the seat a queued task was ASSIGNED to, with no run behind it at all (H2)', async (): Promise<void> => {

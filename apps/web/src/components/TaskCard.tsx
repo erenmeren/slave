@@ -171,7 +171,15 @@ export function TaskCard({
       <span className="mt-[8px] flex items-center gap-[6px]">
         {task.assigneeName === null ? (
           <span data-testid="task-assignee" className="text-[10px] text-text-dim">
-            nobody holds this role yet
+            {/* Two different facts, and only one of them is a hole in the roster (H2 fix round 1,
+                I1). A task that names a role and has nobody on it means nobody here holds that role
+                -- every other planned task is named at creation, and the tick names an older board
+                on its next pass. A task that names NO role explains nothing about staffing: it is
+                simply work nobody has picked up. An empty role reads as no role, the way dispatch
+                reads it. */}
+            {task.requiredRole === null || task.requiredRole === ''
+              ? 'not started yet'
+              : 'nobody holds this role yet'}
           </span>
         ) : (
           <>

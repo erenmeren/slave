@@ -226,6 +226,103 @@ describe('tick', () => {
     expect(task.assigneeId).toBe(run.slaveId)
   })
 
+  describe('the backfill: a board nobody holds is named on the next pass (H2 fix round 1, I1)', () => {
+    /** The fixture's only seat, mid-run on something else: `decide()` then starts nothing, so what
+     *  these cases see is the backfill and not `startRun`'s own write. */
+    async function occupyTheSeat(): Promise<void> {
+      await prisma.slaveRun.create({ data: { slaveId: fixture.slaveId, kind: 'implementation', status: 'working' } })
+    }
+
+    it('names a ready task that nobody holds, from the roster as it stands now', async (): Promise<void> => {
+      // Every board planned before H2 is exactly this: rows with a `requiredRole` and no assignee.
+      // The daemon's first pass names them, and so does the pass after a hire or a role change --
+      // the tick is what carries a roster change onto the board.
+      await occupyTheSeat()
+      const older = await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title: 'Planned before anybody was assigned',
+          description: 'x',
+          status: 'ready',
+          requiredRole: 'backend',
+          maxAttempts: 3,
+        },
+      })
+
+      const report = await tick(deps)
+      expect(report.started).toHaveLength(0)
+
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: older.id } })).assigneeId).toBe(fixture.slaveId)
+      // The fixture's own ready task is named by the same pass.
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })).assigneeId).toBe(fixture.slaveId)
+    })
+
+    it('names a rework task too, and leaves a task with no role at all alone', async (): Promise<void> => {
+      await occupyTheSeat()
+      const reworking = await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title: 'Sent back',
+          description: 'x',
+          status: 'rework',
+          attempt: 2,
+          requiredRole: 'backend',
+          maxAttempts: 3,
+        },
+      })
+      // No role at all: nothing derives a holder from nothing, and inventing one would put a name
+      // on a card that says nothing about who can do the work.
+      const roleless = await prisma.task.create({
+        data: { workspaceId: fixture.workspaceId, title: 'Hand made', description: 'x', status: 'ready', maxAttempts: 3 },
+      })
+
+      await tick(deps)
+
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: reworking.id } })).assigneeId).toBe(fixture.slaveId)
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: roleless.id } })).assigneeId).toBeNull()
+    })
+
+    it('leaves a task nobody holds the role for unnamed, and never touches one already named', async (): Promise<void> => {
+      await occupyTheSeat()
+      const unheld = await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title: 'Needs a designer',
+          description: 'x',
+          status: 'ready',
+          requiredRole: 'design',
+          maxAttempts: 3,
+        },
+      })
+      const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+      const other = await prisma.slave.create({
+        data: {
+          teamId: team.id,
+          role: 'backend',
+          runtimeRoles: ['backend'],
+          personId: (await prisma.person.create({ data: { name: 'Nina' } })).id,
+        },
+      })
+      const alreadyHeld = await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title: 'Somebody has this',
+          description: 'x',
+          status: 'ready',
+          requiredRole: 'backend',
+          maxAttempts: 3,
+          assigneeId: other.id,
+        },
+      })
+
+      await tick(deps)
+
+      // `ready_unstaffed` is what puts this in front of a person; the board does not invent a name.
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: unheld.id } })).assigneeId).toBeNull()
+      expect((await prisma.task.findUniqueOrThrow({ where: { id: alreadyHeld.id } })).assigneeId).toBe(other.id)
+    })
+  })
+
   describe("the recipient's next run sees the question (M36 t3)", () => {
     /** A question from somebody else, addressed to the slave this fixture is about to dispatch. */
     async function askTheFixtureSlave(body: string): Promise<string> {

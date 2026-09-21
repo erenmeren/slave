@@ -65,6 +65,9 @@ const task = (over: Partial<TaskBoardItem>): TaskBoardItem => ({
   attempt: 1,
   maxAttempts: 3,
   assigneeName: 'Alex',
+  // H2: a board's tasks come from a plan, and a planned task always names the role it needs -- so
+  // the fixture says what the card's "nobody holds this role yet" sentence is about.
+  requiredRole: 'backend',
   branch: 'feature/add-the-thing',
   lastRejectionReason: null,
   goalVersion: null,

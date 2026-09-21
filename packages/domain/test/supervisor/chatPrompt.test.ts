@@ -93,6 +93,33 @@ describe('buildSupervisorChatPrompt -- the sections (R2)', () => {
     expect(prompt).toContain('  t1/Add the thing — reviewing — Alex — 2h ago')
   })
 
+  // H2: a planned task names its holder before anything has run, and the digest is where the model
+  // reads who has what. Before it, every un-started task on this line said "nobody".
+  it('names the holder of a task that has not started, off the column and with no run in sight', () => {
+    const prompt = buildSupervisorChatPrompt(
+      input({
+        world: world({
+          tasks: [task({ id: 't2', title: 'Document the endpoint', status: 'ready', assigneeId: 's1' })],
+          slaves: [slave({ id: 's1', name: 'Alex' })],
+        }),
+      }),
+    )
+    expect(prompt).toContain('  t2/Document the endpoint — ready — Alex — ')
+  })
+
+  it('says somebody no longer here for an assignee the world no longer carries, never a raw id', () => {
+    const prompt = buildSupervisorChatPrompt(
+      input({
+        world: world({
+          tasks: [task({ id: 't2', title: 'Document the endpoint', status: 'ready', assigneeId: 's-gone' })],
+          slaves: [slave({ id: 's1', name: 'Alex' })],
+        }),
+      }),
+    )
+    expect(prompt).toContain('  t2/Document the endpoint — ready — somebody no longer here — ')
+    expect(prompt).not.toContain('s-gone')
+  })
+
   it('says so in words when the board is empty, rather than leaving a heading with nothing under it', () => {
     const prompt = buildSupervisorChatPrompt(input({ world: world() }))
     expect(prompt).toContain('BOARD\n  nothing on the board yet')

@@ -172,13 +172,18 @@ function ago(now: number, at: number): string {
  *
  * The id leads because it is the only thing the model may write back: an action names a task by
  * id, and `parseSupervisorReply` drops one that names anything else. "Who" is read off the runs
- * in flight first (a task being worked on has somebody on it right now) and off a hand-assignment
- * second, by NAME -- a person reading the reply knows their colleagues by name, and the ids are in
- * this same line for the machine.
+ * in flight first (a task being worked on has somebody on it right now) and off `assigneeId`
+ * second -- which since H2 is every planned task's holder from the moment it was created, not the
+ * rare hand-assignment it used to be, so an un-started task names a person here instead of
+ * "nobody". By NAME: a person reading the reply knows their colleagues by name, and the ids are in
+ * this same line for the machine. An assignee the world no longer carries -- a seat closed, a
+ * person released, a row the loader dropped -- is "somebody no longer here" rather than a raw id,
+ * which would be a token the model might write back into an action.
  */
 function boardLines(world: SupervisorWorld): readonly string[] {
   if (world.tasks.length === 0) return [noneLine('nothing on the board yet')]
-  const nameOf = (slaveId: string): string => world.slaves.find((one) => one.id === slaveId)?.name ?? slaveId
+  const nameOf = (slaveId: string): string =>
+    world.slaves.find((one) => one.id === slaveId)?.name ?? 'somebody no longer here'
   return world.tasks.map((task) => {
     const run = world.runs.find((one) => one.taskId === task.id)
     const who = run !== undefined ? nameOf(run.slaveId) : task.assigneeId === null ? 'nobody' : nameOf(task.assigneeId)

@@ -107,6 +107,15 @@ export interface TaskBoardItem {
   readonly attempt: number
   readonly maxAttempts: number
   readonly assigneeName: string | null
+  /**
+   * The role this task needs (`Task.requiredRole`), or null for a hand-made one that asks for none.
+   *
+   * On the DTO for one sentence alone (H2 fix round 1, I1): a card with nobody on it says "nobody
+   * holds this role yet" when there IS a role and "not started yet" when there is not, and the two
+   * are different facts -- one is a hole in the roster, the other is a task nobody has picked up.
+   * Never rendered as a word itself (`docs/ia.md` rule 3).
+   */
+  readonly requiredRole: string | null
   readonly branch: string | null
   readonly lastRejectionReason: string | null
   /**
@@ -252,16 +261,34 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
     }
   }
 
-  // H2: the NAMES of the seats the board's tasks are assigned to. One read over the distinct
-  // non-null `assigneeId` values already on the rows this function loaded -- the same "bound it by
-  // what is already in hand" rule `waitingFor` and `stamped` above follow -- and no query at all for
-  // a board where every task has a run behind it. A run's own seat is already joined below; this is
-  // for the task nobody has run yet, which before H2 could only read as nobody.
-  const assignedSeatIds = [...new Set(tasks.map((task) => task.assigneeId).filter((id): id is string => id !== null))]
+  // Who did this task's work, or is doing it now: the live run's seat, and once nothing is live the
+  // IMPLEMENTATION run's -- a review run is newer and belongs to the reviewer, and naming them as
+  // the person who did the work is a claim an operator would act on. `implementerOf`
+  // (`apps/orchestrator/src/verify.ts`) settles this the same way, and two surfaces answering "who
+  // did this" differently is worse than either answer.
+  //
+  // One function because the answer is needed TWICE: here, to bound the seat-name read below, and
+  // again per task in the projection.
+  const workerOf = (task: (typeof tasks)[number]): (typeof tasks)[number]['runs'][number] | undefined =>
+    task.runs.find((run) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status)) ??
+    task.runs.find((run) => run.kind === 'implementation')
+
+  // H2: the NAMES of the seats the board's un-run tasks are assigned to. Bounded to the tasks whose
+  // runs cannot answer -- a run's own seat is already joined onto the row -- so this is one read for
+  // the rows that need it and NO query at all for a board where every task has a run behind it. The
+  // same "bound it by what is already in hand" rule `waitingFor` and `stamped` above follow.
+  const unrunSeatIds = [
+    ...new Set(
+      tasks
+        .filter((task) => workerOf(task) === undefined)
+        .map((task) => task.assigneeId)
+        .filter((id): id is string => id !== null),
+    ),
+  ]
   const assigneeNameBySeat = new Map<string, string>()
-  if (assignedSeatIds.length > 0) {
+  if (unrunSeatIds.length > 0) {
     const seats = await prisma.slave.findMany({
-      where: { id: { in: assignedSeatIds } },
+      where: { id: { in: unrunSeatIds } },
       select: { id: true, person: { select: { name: true } } },
     })
     for (const seat of seats) assigneeNameBySeat.set(seat.id, seat.person.name)
@@ -282,23 +309,19 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
     tasks: tasks.map((task) => {
       const liveRun = task.runs.find((run) => (NON_TERMINAL_RUN_STATUSES as readonly string[]).includes(run.status))
       // Who is on this task, in three readings, most-recent fact first: whoever is running it now;
-      // once nothing is, whoever DID the work; and failing both, whoever it was ASSIGNED to.
-      //
-      // The IMPLEMENTATION run, not simply the newest one: a review run is newer and belongs to
-      // the reviewer, and naming them as the person who did the work is a claim an operator would
-      // act on. `implementerOf` (`apps/orchestrator/src/verify.ts`) settles this the same way, and
-      // two surfaces answering "who did this" differently is worse than either answer.
+      // once nothing is, whoever DID the work ({@link workerOf} above, which settles both); and
+      // failing both, whoever it was ASSIGNED to.
       //
       // `Task.assigneeId` comes LAST, and it is no longer the dead column this comment used to
-      // describe: since H2 planning writes it when it creates the task (`chooseAssignee`) and
-      // `startRun` rewrites it to the seat the run went to, so a task on the board has a holder
-      // before anything has run. It ranks below the runs because a run is what actually HAPPENED
-      // -- dispatch may have handed the work to another holder of the role, and the column can
-      // still name the person who was expected to take it.
+      // describe: since H2 planning writes it when it creates the task (`chooseAssignee`), the tick
+      // names a board nobody holds on its next pass, and `startRun` rewrites it to the seat the run
+      // went to -- so a task on the board has a holder before anything has run. It ranks below the
+      // runs because a run is what actually HAPPENED: dispatch may have handed the work to another
+      // holder of the role, and the column can still name whoever was expected to take it.
       //
       // All three null is now a narrow state: nobody on this project holds the role this task
-      // needs, which is what the card says in those words.
-      const worker = liveRun ?? task.runs.find((run) => run.kind === 'implementation')
+      // needs -- or the task names no role at all, which is the other sentence the card has.
+      const worker = workerOf(task)
       return {
         id: task.id,
         title: task.title,
@@ -310,6 +333,8 @@ export async function buildTasksSnapshot(workspaceId: string): Promise<TasksSnap
         assigneeName:
           worker?.slave.person.name ??
           (task.assigneeId === null ? null : (assigneeNameBySeat.get(task.assigneeId) ?? null)),
+        // H2 fix round 1, I1: which of the two "nobody" sentences the card may say.
+        requiredRole: task.requiredRole,
         branch: task.branch,
         lastRejectionReason: task.lastRejectionReason,
         goalVersion: task.goalVersion,
