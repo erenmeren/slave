@@ -37,6 +37,7 @@ export function ModelSelect({
   onChange,
   disabled = false,
   ariaLabel,
+  testId = 'model-select',
   inputTestId,
   className = '',
 }: {
@@ -45,6 +46,18 @@ export function ModelSelect({
   readonly onChange: (next: string) => void
   readonly disabled?: boolean
   readonly ariaLabel: string
+  /**
+   * A NAME for the `<select>`, where a surface has to say which field it means (F R8): the
+   * Supervisor panel's header carries this one as `supervisor-model` beside `supervisor-provider`,
+   * and a testid that is the same on every model field in the app cannot be asked for by a gate
+   * driving one panel. Defaults to `model-select`, which is what the three older call sites and
+   * their tests already read, so passing nothing changes nothing.
+   *
+   * It names the field in every mode this component has -- the listing's select, and the disabled
+   * placeholder shown before a provider is chosen. The free-text fallback keeps {@link inputTestId},
+   * which is the testid those call sites had before the select existed.
+   */
+  readonly testId?: string
   readonly inputTestId: string
   readonly className?: string
 }): React.JSX.Element {
@@ -71,7 +84,7 @@ export function ModelSelect({
   if (provider === '') {
     return (
       <span className="flex flex-col gap-1">
-        <select data-testid="model-select" aria-label={ariaLabel} disabled value="" className={shell} onChange={() => {}}>
+        <select data-testid={testId} aria-label={ariaLabel} disabled value="" className={shell} onChange={() => {}}>
           <option value="">— none —</option>
         </select>
         <span className="text-[10px] text-text-3">choose a provider first</span>
@@ -109,7 +122,7 @@ export function ModelSelect({
   const known = models.some((m) => m.id === value)
   return (
     <select
-      data-testid="model-select"
+      data-testid={testId}
       aria-label={ariaLabel}
       value={value}
       disabled={disabled || listing === null}

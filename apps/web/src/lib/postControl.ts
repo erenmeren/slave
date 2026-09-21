@@ -81,6 +81,35 @@ export async function postControl(
  * is the one place this app dials `fetch` for a mutation, and the 401 handling below is exactly
  * why that rule exists.
  */
+/**
+ * A POST carrying FILES, whose answer matters (F R6).
+ *
+ * `postJson` above serialises its body and sets `Content-Type: application/json`, which a
+ * multipart request can be neither of. The answer matters for the same reason it does there: the
+ * upload route replies with the PATH each file landed at in the repository, and that list is what
+ * the message posted straight afterwards names -- a caller that threw the body away would have
+ * nothing to send.
+ *
+ * NO `Content-Type` header, deliberately: the browser writes it from the `FormData` itself, with
+ * the boundary token, and setting it by hand is the one reliable way to make a multipart body
+ * unparseable at the other end.
+ */
+export async function postForm<T>(
+  url: string,
+  body: FormData,
+): Promise<{ ok: true; data: T } | { ok: false; error: string }> {
+  try {
+    const response = await fetch(url, { method: 'POST', body })
+    const data: unknown = await response.json().catch(() => null)
+    if (response.ok) return { ok: true, data: data as T }
+    // The same door every other control surface lands on (M20 §3.4).
+    if (response.status === 401) onUnauthorized()
+    return { ok: false, error: errorMessage(data, response.status) }
+  } catch (cause) {
+    return { ok: false, error: cause instanceof Error ? cause.message : String(cause) }
+  }
+}
+
 export async function postJson<T>(
   url: string,
   body?: Record<string, unknown>,

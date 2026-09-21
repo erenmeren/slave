@@ -2,6 +2,7 @@
 import { fireEvent, render, screen, act, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SupervisorThreadPanel, type PendingDecision } from '../src/components/supervisor/SupervisorThreadPanel.js'
+import { clearModelSelectCache } from '../src/components/ModelSelect.js'
 import type { SupervisorThread } from '../src/server/supervisorThreads.js'
 
 vi.mock('next/navigation', () => ({
@@ -38,18 +39,71 @@ const DECISIONS: readonly PendingDecision[] = [
   },
 ]
 
+/** The view `GET /api/w/:id/supervisor` answers, as this panel reads it (F R4/R8): the settings
+ *  its three controls are bound to and the conversation's two cost figures. */
+function view(
+  over: {
+    readonly autonomy?: 'propose' | 'act'
+    readonly provider?: string | null
+    readonly model?: string | null
+    readonly costUsd?: number
+    readonly unmeasured?: number
+  } = {},
+): string {
+  return JSON.stringify({
+    settings: {
+      enabled: true,
+      profile: null,
+      autonomy: over.autonomy ?? 'propose',
+      provider: over.provider ?? null,
+      model: over.model ?? null,
+    },
+    conversationCostUsd: over.costUsd ?? 0,
+    conversationUnmeasuredTurns: over.unmeasured ?? 0,
+  })
+}
+
+/** One conversation of CHAT rows (F R1) -- the shape `supervisorThreads.ts` builds from
+ *  `SupervisorMessage`, with every field an event row does not carry. */
+function chatThread(...messages: SupervisorThread['messages']): readonly SupervisorThread[] {
+  return [{ id: '2026-09-20', title: 'why is nothing running?', when: 'today', messages }]
+}
+
+const ASKED: SupervisorThread['messages'][number] = {
+  id: 'msg:m1',
+  messageId: 'm1',
+  who: 'operator',
+  text: 'why is nothing running?',
+  at: '2026-09-20T09:00:00.000Z',
+  refs: [],
+  decisionId: null,
+  status: 'sent',
+}
+
+/** jsdom's `files` is a getter on the prototype, so the property is DEFINED on the element rather
+ *  than assigned through `fireEvent`'s target spread -- the same reason a `value` needs React's
+ *  own setter. The handler reads `event.target.files` and only ever iterates it. */
+function choose(input: HTMLElement, files: readonly File[]): void {
+  Object.defineProperty(input, 'files', { value: files, configurable: true })
+  fireEvent.change(input)
+}
+
 let fetchMock: ReturnType<typeof vi.fn>
 
 beforeEach((): void => {
+  // The model listing is cached per provider kind for the whole module, so a listing one case
+  // stubbed would otherwise be the listing every case after it reads.
+  clearModelSelectCache()
   fetchMock = vi.fn(async (url: string) => {
     if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
+    if (url.includes('/api/providers/')) {
+      return new Response(JSON.stringify({ models: [{ id: 'claude-sonnet-5', label: 'Sonnet 5' }], source: 'account' }), { status: 200 })
+    }
     // The view's own GET (`/api/w/:id/supervisor`, no further path) -- what the scope line's
     // autonomy switch reads on mount. Matched by suffix rather than `includes('/supervisor')`,
     // which would also catch `/supervisor/threads` and the settings/decisions routes below.
-    if (url.endsWith('/supervisor')) {
-      return new Response(JSON.stringify({ settings: { enabled: true, profile: null, autonomy: 'propose' } }), { status: 200 })
-    }
-    return new Response(JSON.stringify({ ok: true, version: 3 }), { status: 200 })
+    if (url.endsWith('/supervisor')) return new Response(view(), { status: 200 })
+    return new Response(JSON.stringify({ ok: true }), { status: 200 })
   })
   vi.stubGlobal('fetch', fetchMock)
 })
@@ -162,7 +216,10 @@ describe('the Supervisor panel', () => {
     )
   })
 
-  it('sends the composer to the EXISTING goal/request route, on Enter', async (): Promise<void> => {
+  // F R2/R8: the composer's verb. It posted `{ request }` to `/goal/request` until this milestone,
+  // which re-planned the whole board for a question that wanted an answer -- asking for the goal
+  // to change is a `request_goal_change` action the REPLY may propose now (R3).
+  it('sends the composer to the messages route, on Enter', async (): Promise<void> => {
     render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
     await waitFor(() => expect(screen.getByTestId('supervisor-composer')).toBeTruthy())
     const box = screen.getByTestId('supervisor-request-input')
@@ -173,15 +230,16 @@ describe('the Supervisor panel', () => {
     fireEvent.keyDown(box, { key: 'Enter' })
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        '/api/w/w1/goal/request',
-        expect.objectContaining({ method: 'POST', body: JSON.stringify({ request: 'add 3-D Secure' }) }),
+        '/api/w/w1/supervisor/messages',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ text: 'add 3-D Secure' }) }),
       ),
     )
-    // The SUCCESS line `gate-m45` stage 5 waits for, naming the version the route answered with.
-    await waitFor(() => expect(screen.getByTestId('supervisor-request-result').textContent).toContain('goal v3'))
+    // Nothing is posted to the goal route any more, by the composer or by anything else here.
+    expect(fetchMock.mock.calls.filter((call) => String(call[0]).includes('/goal/request'))).toHaveLength(0)
+    await waitFor(() => expect((screen.getByTestId('supervisor-request-input') as HTMLTextAreaElement).value).toBe(''))
   })
 
-  it('renders the route s refusal in its own line, with no success line beside it', async (): Promise<void> => {
+  it('renders the route s refusal in its own line', async (): Promise<void> => {
     fetchMock.mockImplementation(async (url: string) =>
       url.includes('/supervisor/threads')
         ? new Response(JSON.stringify(THREADS), { status: 200 })
@@ -196,12 +254,11 @@ describe('the Supervisor panel', () => {
     await waitFor(() =>
       expect(screen.getByTestId('supervisor-request-error').textContent).toBe('this project is halted: the budget is exhausted'),
     )
-    expect(screen.queryByTestId('supervisor-request-result')).toBeNull()
   })
 
   // M57 t6: three cases that lived on `project/SupervisorRequest`'s own describe until that
-  // component was deleted. The composer is the one box posting to `/goal/request` now, and these
-  // are behaviours it still has -- so they moved here rather than dying with the widget.
+  // component was deleted. The composer is the one box the panel sends from, and these are
+  // behaviours it still has -- so they moved here rather than dying with the widget.
   it('will not send an empty request, and names its box for a screen reader', async (): Promise<void> => {
     render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
     await waitFor(() => expect(screen.getByTestId('supervisor-composer')).toBeTruthy())
@@ -215,14 +272,15 @@ describe('the Supervisor panel', () => {
     expect((screen.getByTestId('supervisor-request-send') as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it('will not send the same request twice while the first is still in flight', async (): Promise<void> => {
-    // `duplicate_request` is the route's backstop, not the UX: the button goes down the moment a
-    // POST leaves, so a double click is one write.
+  it('will not send the same message twice while the first is still in flight', async (): Promise<void> => {
+    // The route's own guards are the backstop, not the UX: the button goes down the moment a POST
+    // leaves, so a double click is one message and one model call.
     let release: (() => void) | null = null
     fetchMock.mockImplementation(async (url: string) => {
       if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
+      if (url.endsWith('/supervisor')) return new Response(view(), { status: 200 })
       return new Promise<Response>((resolve) => {
-        release = () => resolve(new Response(JSON.stringify({ ok: true, version: 3 }), { status: 200 }))
+        release = () => resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }))
       })
     })
     render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
@@ -235,24 +293,21 @@ describe('the Supervisor panel', () => {
     await act(async (): Promise<void> => {
       release?.()
     })
-    expect(fetchMock.mock.calls.filter((call) => String(call[0]).includes('/goal/request'))).toHaveLength(1)
+    expect(fetchMock.mock.calls.filter((call) => String(call[0]).includes('/supervisor/messages'))).toHaveLength(1)
   })
 
   it('shows a refusal without clearing what was typed', async (): Promise<void> => {
     fetchMock.mockImplementation(async (url: string) =>
       url.includes('/supervisor/threads')
         ? new Response(JSON.stringify(THREADS), { status: 200 })
-        : new Response(
-            JSON.stringify({ error: 'project w1 already recorded exactly this change request at version 3: nothing was recorded' }),
-            { status: 409 },
-          ),
+        : new Response(JSON.stringify({ error: 'a message must not be blank' }), { status: 409 }),
     )
     render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
     await waitFor(() => expect(screen.getByTestId('supervisor-composer')).toBeTruthy())
     fireEvent.change(screen.getByTestId('supervisor-request-input'), { target: { value: 'add 3-D Secure' } })
     fireEvent.click(screen.getByTestId('supervisor-request-send'))
 
-    await waitFor(() => expect(screen.getByTestId('supervisor-request-error').textContent).toContain('nothing was recorded'))
+    await waitFor(() => expect(screen.getByTestId('supervisor-request-error').textContent).toContain('must not be blank'))
     // A refusal that emptied the box would delete the words a person has to read to understand it.
     expect((screen.getByTestId('supervisor-request-input') as HTMLTextAreaElement).value).toBe('add 3-D Secure')
   })
@@ -299,11 +354,7 @@ describe('the Supervisor panel', () => {
           }
         })
       }
-      if (url.endsWith('/supervisor')) {
-        return new Response(JSON.stringify({ settings: { enabled: true, profile: null, autonomy: currentAutonomy } }), {
-          status: 200,
-        })
-      }
+      if (url.endsWith('/supervisor')) return new Response(view({ autonomy: currentAutonomy }), { status: 200 })
       return new Response('{}', { status: 200 })
     })
 
@@ -335,11 +386,7 @@ describe('the Supervisor panel', () => {
       if (url.endsWith('/supervisor/settings')) {
         return new Response(JSON.stringify({ error: 'this project is archived' }), { status: 409 })
       }
-      if (url.endsWith('/supervisor')) {
-        return new Response(JSON.stringify({ settings: { enabled: true, profile: null, autonomy: 'propose' } }), {
-          status: 200,
-        })
-      }
+      if (url.endsWith('/supervisor')) return new Response(view(), { status: 200 })
       return new Response('{}', { status: 200 })
     })
 
@@ -361,5 +408,327 @@ describe('the Supervisor panel', () => {
     render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
     const toggle = await screen.findByTestId('supervisor-autonomy')
     expect(screen.getByLabelText('act on its own')).toBe(toggle)
+  })
+
+  // ==============================================================================================
+  // F R8: the conversation's own rows -- thinking, failed, sourced, attachments.
+  // ==============================================================================================
+
+  it('draws a reply nobody has answered yet as thinking, not as an empty bubble', async (): Promise<void> => {
+    const waiting = chatThread(ASKED, {
+      id: 'msg:m2',
+      messageId: 'm2',
+      who: 'supervisor',
+      text: '',
+      at: '2026-09-20T09:00:01.000Z',
+      refs: [],
+      decisionId: null,
+      status: 'answering',
+    })
+    fetchMock.mockImplementation(async (url: string) =>
+      url.includes('/supervisor/threads')
+        ? new Response(JSON.stringify(waiting), { status: 200 })
+        : new Response(url.endsWith('/supervisor') ? view() : '{}', { status: 200 }),
+    )
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    const thinking = await screen.findByTestId('supervisor-thinking')
+    expect(thinking.textContent).toContain('thinking')
+    // Inside the reply's own bubble, so it reads where the answer will appear.
+    expect(screen.getAllByTestId('supervisor-message')[1]?.contains(thinking)).toBe(true)
+  })
+
+  it('says why a turn failed, in a sentence, for each reason the tick records', async (): Promise<void> => {
+    const failures = chatThread(
+      { id: 'msg:a', messageId: 'a', who: 'supervisor', text: '', at: '2026-09-20T09:00:01.000Z', refs: [], decisionId: null, status: 'failed', failureReason: 'no_decider_for_provider' },
+      { id: 'msg:b', messageId: 'b', who: 'supervisor', text: '', at: '2026-09-20T09:00:02.000Z', refs: [], decisionId: null, status: 'failed', failureReason: 'budget_exhausted' },
+      { id: 'msg:c', messageId: 'c', who: 'supervisor', text: '', at: '2026-09-20T09:00:03.000Z', refs: [], decisionId: null, status: 'failed', failureReason: 'turn_unreadable' },
+      // Anything else is the PROVIDER's own words, which are not this panel's to rewrite.
+      { id: 'msg:d', messageId: 'd', who: 'supervisor', text: '', at: '2026-09-20T09:00:04.000Z', refs: [], decisionId: null, status: 'failed', failureReason: 'the runtime exited with code 1' },
+    )
+    fetchMock.mockImplementation(async (url: string) =>
+      url.includes('/supervisor/threads')
+        ? new Response(JSON.stringify(failures), { status: 200 })
+        : new Response(url.endsWith('/supervisor') ? view() : '{}', { status: 200 }),
+    )
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    await waitFor(() => expect(screen.getAllByTestId('supervisor-failed')).toHaveLength(4))
+    const said = screen.getAllByTestId('supervisor-failed').map((row) => row.textContent)
+    expect(said[0]).toBe('No runtime can answer for this provider on this daemon.')
+    expect(said[1]).toBe("The project's budget is spent; the conversation waits for more.")
+    expect(said[2]).toBe('The message could not be read back; send it again.')
+    expect(said[3]).toBe('the runtime exited with code 1')
+    expect(screen.queryByTestId('supervisor-thinking')).toBeNull()
+  })
+
+  it('marks a reply every citation checked out for with the sourced chip', async (): Promise<void> => {
+    const answered = chatThread(
+      { id: 'msg:a', messageId: 'a', who: 'supervisor', text: 'Nothing is running: the planner has no seat.', at: '2026-09-20T09:00:01.000Z', refs: [], decisionId: null, status: 'answered', sourced: true },
+      { id: 'msg:b', messageId: 'b', who: 'supervisor', text: 'I think so.', at: '2026-09-20T09:00:02.000Z', refs: [], decisionId: null, status: 'answered', sourced: false },
+    )
+    fetchMock.mockImplementation(async (url: string) =>
+      url.includes('/supervisor/threads')
+        ? new Response(JSON.stringify(answered), { status: 200 })
+        : new Response(url.endsWith('/supervisor') ? view() : '{}', { status: 200 }),
+    )
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    await waitFor(() => expect(screen.getAllByTestId('supervisor-message')).toHaveLength(2))
+    const chips = screen.getAllByTestId('supervisor-sourced')
+    expect(chips).toHaveLength(1)
+    expect(chips[0]?.textContent).toBe('sourced')
+    expect(screen.getAllByTestId('supervisor-message')[0]?.contains(chips[0]!)).toBe(true)
+  })
+
+  it('shows what a sent message carried, by name and size', async (): Promise<void> => {
+    const withFile = chatThread({
+      ...ASKED,
+      attachments: [{ path: 'docs/inbox/2026-09-20-brief.md', name: 'brief.md', bytes: 1400, kind: 'text' }],
+    })
+    fetchMock.mockImplementation(async (url: string) =>
+      url.includes('/supervisor/threads')
+        ? new Response(JSON.stringify(withFile), { status: 200 })
+        : new Response(url.endsWith('/supervisor') ? view() : '{}', { status: 200 }),
+    )
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    const chip = await screen.findByTestId('supervisor-attachment')
+    expect(chip.textContent).toContain('brief.md')
+    expect(chip.textContent).toContain('1.4 kB')
+    // The PATH is the whole identity of an attachment (R6), one hover away.
+    expect(chip.getAttribute('title')).toBe('docs/inbox/2026-09-20-brief.md')
+  })
+
+  // ==============================================================================================
+  // F R3: a card per action a reply asked for.
+  // ==============================================================================================
+
+  it('draws one card per action under the reply that asked for it, and never the same one twice', async (): Promise<void> => {
+    const proposed = chatThread(ASKED, {
+      id: 'msg:m2',
+      messageId: 'm2',
+      who: 'supervisor',
+      text: 'The planner has no seat. I can ask for the goal to change and leave a note.',
+      at: '2026-09-20T09:00:01.000Z',
+      refs: [],
+      // `supervisorThreads.ts` puts the FIRST action's decision here too -- a card drawn from both
+      // fields would be a card drawn twice.
+      decisionId: 'd-1',
+      status: 'answered',
+      actions: [
+        { decisionId: 'd-1', tier: 'proposed', kind: 'request_goal_change' },
+        { decisionId: 'd-7', tier: 'applied', kind: 'note_for_planner' },
+      ],
+    })
+    fetchMock.mockImplementation(async (url: string) =>
+      url.includes('/supervisor/threads')
+        ? new Response(JSON.stringify(proposed), { status: 200 })
+        : new Response(url.endsWith('/supervisor') ? view() : '{}', { status: 200 }),
+    )
+    render(<SupervisorThreadPanel workspaceId="w1" pending={DECISIONS} />)
+    await waitFor(() => expect(screen.getAllByTestId('supervisor-decision-card')).toHaveLength(2))
+    const cards = screen.getAllByTestId('supervisor-decision-card')
+    const reply = screen.getAllByTestId('supervisor-message')[1]
+    expect(cards.every((card) => reply?.contains(card))).toBe(true)
+
+    // The one the view still holds is answerable, and says what the proposal is about.
+    const open = cards.find((card) => card.getAttribute('data-decision-id') === 'd-1')
+    expect(open?.textContent).toContain('nobody can review')
+    expect(open?.querySelector('[data-testid="supervisor-decision-approve"]')).toBeTruthy()
+
+    // The one it does not is the kind and the tier, and nothing to press: it was carried out in
+    // the same settlement, so there is no open question to approve.
+    const settled = cards.find((card) => card.getAttribute('data-decision-id') === 'd-7')
+    expect(settled?.textContent).toContain('note for planner')
+    expect(settled?.textContent).toContain('Done')
+    expect(settled?.querySelector('[data-testid="supervisor-decision-approve"]')).toBeNull()
+    // The raw member stays readable (docs/ia.md rule 3) without being the visible word.
+    expect(settled?.querySelector('[data-testid="supervisor-decision-asked"]')?.getAttribute('title')).toBe('note_for_planner')
+
+    // And a proposal drawn under a reply is not drawn a second time in the tail below the thread.
+    expect(screen.queryByText('Waiting on you')).toBeNull()
+  })
+
+  // ==============================================================================================
+  // F R6/R8: the attach flow.
+  // ==============================================================================================
+
+  it('uploads what was attached FIRST, then sends the message with the paths the upload answered', async (): Promise<void> => {
+    const stored = { path: 'docs/inbox/2026-09-20-brief.md', name: 'brief.md', bytes: 1400, kind: 'text' }
+    const seen: string[] = []
+    fetchMock.mockImplementation(async (url: string) => {
+      seen.push(url)
+      if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
+      if (url.includes('/supervisor/uploads')) return new Response(JSON.stringify({ attachments: [stored] }), { status: 200 })
+      if (url.endsWith('/supervisor')) return new Response(view(), { status: 200 })
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    })
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    await waitFor(() => expect(screen.getByTestId('supervisor-attach')).toBeTruthy())
+
+    choose(screen.getByTestId('supervisor-attach-input'), [new File(['# what I want'], 'brief.md', { type: 'text/markdown' })])
+    // What is waiting to go is on screen before it goes, with its name and its size.
+    const pending = await screen.findByTestId('supervisor-attach-chip')
+    expect(pending.textContent).toContain('brief.md')
+
+    fireEvent.change(screen.getByTestId('supervisor-request-input'), { target: { value: 'use this brief' } })
+    fireEvent.click(screen.getByTestId('supervisor-request-send'))
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/w/w1/supervisor/messages',
+        expect.objectContaining({ method: 'POST', body: JSON.stringify({ text: 'use this brief', attachments: [stored] }) }),
+      ),
+    )
+    // The ORDER is the contract: a message may only name a file that is already in the repository.
+    expect(seen.indexOf('/api/w/w1/supervisor/uploads')).toBeLessThan(seen.indexOf('/api/w/w1/supervisor/messages'))
+    const upload = fetchMock.mock.calls.find((call) => String(call[0]).includes('/supervisor/uploads'))
+    const form = (upload?.[1] as { body: FormData }).body
+    expect(form).toBeInstanceOf(FormData)
+    expect([...form.values()].map((value) => (value as File).name)).toEqual(['brief.md'])
+    // Sent: the box and the tray are both empty again.
+    await waitFor(() => expect(screen.queryByTestId('supervisor-attach-chip')).toBeNull())
+    expect((screen.getByTestId('supervisor-request-input') as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('takes a file dropped on the composer, and lets it be taken back off', async (): Promise<void> => {
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    const zone = await screen.findByTestId('supervisor-attach')
+    fireEvent.drop(zone, { dataTransfer: { files: [new File(['x'], 'shot.png', { type: 'image/png' })] } })
+    const chip = await screen.findByTestId('supervisor-attach-chip')
+    expect(chip.textContent).toContain('shot.png')
+    fireEvent.click(screen.getByTestId('supervisor-attach-remove'))
+    await waitFor(() => expect(screen.queryByTestId('supervisor-attach-chip')).toBeNull())
+  })
+
+  it('keeps the words and the file when the upload is refused, and sends no message', async (): Promise<void> => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
+      if (url.includes('/supervisor/uploads')) {
+        return new Response(JSON.stringify({ error: 'nothing here can read a .exe: attach a document or an image' }), { status: 415 })
+      }
+      if (url.endsWith('/supervisor')) return new Response(view(), { status: 200 })
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    })
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    await waitFor(() => expect(screen.getByTestId('supervisor-attach')).toBeTruthy())
+
+    choose(screen.getByTestId('supervisor-attach-input'), [new File(['MZ'], 'tool.exe', { type: 'application/octet-stream' })])
+    fireEvent.change(screen.getByTestId('supervisor-request-input'), { target: { value: 'read this' } })
+    fireEvent.click(screen.getByTestId('supervisor-request-send'))
+
+    await waitFor(() =>
+      expect(screen.getByTestId('supervisor-request-error').textContent).toContain('nothing here can read a .exe'),
+    )
+    // Nothing was said in the conversation, and nothing a person typed or chose was thrown away.
+    expect(fetchMock.mock.calls.filter((call) => String(call[0]).includes('/supervisor/messages'))).toHaveLength(0)
+    expect((screen.getByTestId('supervisor-request-input') as HTMLTextAreaElement).value).toBe('read this')
+    expect(screen.getByTestId('supervisor-attach-chip').textContent).toContain('tool.exe')
+  })
+
+  // ==============================================================================================
+  // F R4/R8: the runtime pair and the conversation's cost.
+  // ==============================================================================================
+
+  it('binds the two selects to the project s settings and PATCHes a change at once', async (): Promise<void> => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
+      if (url.includes('/api/providers/')) {
+        return new Response(
+          JSON.stringify({ models: [{ id: 'claude-sonnet-5', label: 'Sonnet 5' }, { id: 'claude-opus-5', label: 'Opus 5' }], source: 'account' }),
+          { status: 200 },
+        )
+      }
+      if (url.endsWith('/supervisor')) return new Response(view({ provider: 'claude_code', model: 'claude-sonnet-5' }), { status: 200 })
+      return new Response('{}', { status: 200 })
+    })
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    const provider = await screen.findByTestId('supervisor-provider')
+    await waitFor(() => expect((provider as HTMLSelectElement).value).toBe('claude_code'))
+    await waitFor(() => expect((screen.getByTestId('supervisor-model') as HTMLSelectElement).value).toBe('claude-sonnet-5'))
+
+    await act(async (): Promise<void> => {
+      fireEvent.change(screen.getByTestId('supervisor-model'), { target: { value: 'claude-opus-5' } })
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/w/w1/supervisor/settings',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ model: 'claude-opus-5' }) }),
+    )
+
+    // A runtime the model does not belong to takes the model with it: a model id is a name one
+    // vendor knows, and keeping it across a switch would ask Cursor for a Claude model.
+    await act(async (): Promise<void> => {
+      fireEvent.change(screen.getByTestId('supervisor-provider'), { target: { value: 'cursor' } })
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/w/w1/supervisor/settings',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ provider: 'cursor', model: null }) }),
+    )
+  })
+
+  it('sends null for both when the runtime is cleared -- null IS the installation default', async (): Promise<void> => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
+      if (url.includes('/api/providers/')) {
+        return new Response(JSON.stringify({ models: [{ id: 'claude-sonnet-5', label: 'Sonnet 5' }], source: 'account' }), { status: 200 })
+      }
+      if (url.endsWith('/supervisor')) return new Response(view({ provider: 'claude_code', model: 'claude-sonnet-5' }), { status: 200 })
+      return new Response('{}', { status: 200 })
+    })
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    const provider = await screen.findByTestId('supervisor-provider')
+    await waitFor(() => expect((provider as HTMLSelectElement).value).toBe('claude_code'))
+
+    await act(async (): Promise<void> => {
+      fireEvent.change(provider, { target: { value: '' } })
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/w/w1/supervisor/settings',
+      expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ provider: null, model: null }) }),
+    )
+  })
+
+  it('says so and puts the runtime back when the settings PATCH is refused', async (): Promise<void> => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('/supervisor/threads')) return new Response(JSON.stringify(THREADS), { status: 200 })
+      if (url.includes('/api/providers/')) {
+        return new Response(JSON.stringify({ models: [{ id: 'claude-sonnet-5', label: 'Sonnet 5' }], source: 'account' }), { status: 200 })
+      }
+      if (url.endsWith('/supervisor/settings')) {
+        return new Response(JSON.stringify({ error: 'this installation has no such provider: cursor' }), { status: 400 })
+      }
+      if (url.endsWith('/supervisor')) return new Response(view({ provider: 'claude_code', model: 'claude-sonnet-5' }), { status: 200 })
+      return new Response('{}', { status: 200 })
+    })
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    const provider = await screen.findByTestId('supervisor-provider')
+    await waitFor(() => expect((provider as HTMLSelectElement).value).toBe('claude_code'))
+
+    await act(async (): Promise<void> => {
+      fireEvent.change(provider, { target: { value: 'cursor' } })
+    })
+    expect((await screen.findByTestId('supervisor-request-error')).textContent).toContain('no such provider')
+    // The select shows what the project IS set to, not what was refused.
+    await waitFor(() => expect((screen.getByTestId('supervisor-provider') as HTMLSelectElement).value).toBe('claude_code'))
+    expect((screen.getByTestId('supervisor-model') as HTMLSelectElement).value).toBe('claude-sonnet-5')
+  })
+
+  it('shows what the conversation has cost, and says how many turns nobody could price', async (): Promise<void> => {
+    fetchMock.mockImplementation(async (url: string) =>
+      url.includes('/supervisor/threads')
+        ? new Response(JSON.stringify(THREADS), { status: 200 })
+        : new Response(url.endsWith('/supervisor') ? view({ costUsd: 0.42, unmeasured: 2 }) : '{}', { status: 200 }),
+    )
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    const line = await screen.findByTestId('supervisor-cost')
+    expect(line.textContent).toBe('$0.42 so far, 2 turns unpriced')
+  })
+
+  it('leaves the unpriced half off when every turn was measured', async (): Promise<void> => {
+    fetchMock.mockImplementation(async (url: string) =>
+      url.includes('/supervisor/threads')
+        ? new Response(JSON.stringify(THREADS), { status: 200 })
+        : new Response(url.endsWith('/supervisor') ? view({ costUsd: 1.5 }) : '{}', { status: 200 }),
+    )
+    render(<SupervisorThreadPanel workspaceId="w1" pending={[]} />)
+    const line = await screen.findByTestId('supervisor-cost')
+    expect(line.textContent).toBe('$1.50 so far')
   })
 })
