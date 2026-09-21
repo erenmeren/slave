@@ -128,3 +128,37 @@ export function evaluateGuardrails(
 
   return breaches
 }
+
+/**
+ * The halts under which even a RESUME is refused (H8).
+ *
+ * A resume continues a run that is already counted and starts nothing, so the halts that exist to
+ * stop NEW work -- `concurrency`, `global_concurrency`, `circuit_breaker` -- must not stand in its
+ * way. They used to: on 2026-09-21 three runs parked by the breaker held every slot of their
+ * workspace, `decide()` halted on `concurrency`, the tick's halt branch returned before its resume
+ * pass, and the person's own resume request sat for four hours behind a halt the parked runs
+ * themselves caused. The two here are different in kind: an emergency stop is a person saying
+ * nothing may move, and an empty purse cannot pay for the continuation either.
+ *
+ * ONE set, read by both sides: the tick decides whether its halt branch resumes by it, and
+ * `requestResume` (`packages/control`) refuses by it, so a CLI or web resume into an empty purse
+ * is refused where the person can read why rather than recorded and carried out by whichever
+ * tick next finds the budget raised.
+ */
+export const HALTS_THAT_REFUSE_A_RESUME: ReadonlySet<GuardrailKind> = new Set<GuardrailKind>([
+  'emergency_stop',
+  'budget_exhausted',
+])
+
+/**
+ * The first breach that refuses a resume, or `null` -- decided from the WHOLE list (H8 fix round
+ * 1, I1).
+ *
+ * `decide()` reports only the first halting breach, and {@link evaluateGuardrails} lists
+ * `concurrency` ahead of `budget_exhausted`: a full workspace that is also over budget halts as
+ * `concurrency`, and a caller judging by that name alone would resume a run into an empty purse.
+ * So the question is asked of every breach, not of the halt's name.
+ */
+export function breachRefusingResume(breaches: readonly GuardrailBreach[]): GuardrailBreach | null {
+  return breaches.find((breach) => HALTS_THAT_REFUSE_A_RESUME.has(breach.guardrail)) ?? null
+}

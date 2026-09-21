@@ -1183,6 +1183,16 @@ model SlaveRun {
   /// never sit in `resuming` without a process — the orphan sweep would destroy it.
   resumeRequestedAt DateTime?
   queuedMessage     String?
+  /// H8: when this row last became `paused`, written by every pause route at the moment the status
+  /// is, and cleared by `claimResume` -- which adds the span to `pausedMs` in the same statement.
+  /// Null on a run that is not parked. Read by the sweep's run-timeout arithmetic (a resumed run
+  /// does not age while it sat) and by the sweep's reconcile of a breaker steer whose resume an
+  /// earlier daemon never issued (`BREAKER_RESUME_GRACE_MS`).
+  pausedAt          DateTime?
+  /// H8: the milliseconds this run has spent `paused` over its life, summed at each resume claim.
+  /// `runTimeoutMs` bounds WORKING time: on 2026-09-21 three runs that had worked for four minutes
+  /// were killed on resume because `startedAt` was four hours old.
+  pausedMs          Int           @default(0)
   /// Stop intent (M5 gate-fix B): `requestStop` writes both columns in the same conditioned
   /// update that claims `status: stopping`, before it kills the child -- so a run's stream ending
   /// with no terminal result can tell an operator's stop (this record present) from the guardrail

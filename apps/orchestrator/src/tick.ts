@@ -12,6 +12,7 @@ import {
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import {
+  breachRefusingResume,
   chooseAssignee,
   decide,
   evaluateGuardrails,
@@ -294,6 +295,10 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
 
   const { world, skippedNoRole, unservedRoles, statsSnapshot } = await loadWorld(deps.workspaceId)
   const commands = decide(world)
+  // The WHOLE breach list, once: `decide()` already evaluated it and kept only the first halting
+  // breach, and two readers below need every one of them -- the halt branch's resume rule (H8 fix
+  // round 1, I1) and the budget warning. `evaluateGuardrails` is pure and cheap.
+  const breaches = evaluateGuardrails(world.limits, world.stats)
 
   const halt = commands.find((command) => command.kind === 'halt')
   if (halt !== undefined) {
@@ -313,6 +318,19 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
       if (halt.reason === 'budget_exhausted') {
         await pauseActiveRuns(deps.workspaceId, 'budget guardrail', 'guardrail')
       }
+    }
+    // A resume asked for is carried out under every halt but the two that refuse it (H8,
+    // `HALTS_THAT_REFUSE_A_RESUME`): the claim is what decides ownership and it is claimed once,
+    // so this is the ONE resume pass of a halted tick -- the ordinary pass below is never reached
+    // on this branch. Decided from the WHOLE breach list and not from `halt.reason` (fix round 1,
+    // I1): `decide()` names only the first halting breach, and `concurrency` sorts ahead of
+    // `budget_exhausted`, so a full workspace that is also over budget halts as `concurrency`.
+    // The answer delivery rides under the same rule (fix round 1, M3): a run waiting for an answer
+    // is `paused` and holds a slot, and once it held the last one the answer that would have woken
+    // it was never delivered -- the same deadlock, one pass earlier.
+    if (breachRefusingResume(breaches) === null) {
+      await deliverAnswers(deps.workspaceId)
+      await resumeRequestedRuns(deps)
     }
     // The Supervisor still runs on this branch (spec §5, clarified in fix round 1). A halted
     // workspace is precisely the one an operator most needs a decision about -- `workspace_halted`
@@ -342,11 +360,8 @@ export async function tick(deps: TickDeps): Promise<TickReport> {
   //
   // The one-shot is a durable existence query against the event log, not an in-memory latch like
   // `haltAnnounced`: spec §5 wants the warning to survive a daemon restart, and an in-memory map
-  // starts empty on every restart. `evaluateGuardrails` is pure and cheap, so calling it again
-  // here -- after `decide()` already called it once inside this same tick -- is not worth avoiding.
-  const warning = evaluateGuardrails(world.limits, world.stats).find(
-    (breach) => breach.guardrail === 'budget_warning',
-  )
+  // starts empty on every restart.
+  const warning = breaches.find((breach) => breach.guardrail === 'budget_warning')
   if (warning !== undefined) {
     const announced = await prisma.executionEvent.findFirst({
       where: {
@@ -440,11 +455,17 @@ async function superviseQuietly(deps: TickDeps, stats?: WorkspaceStatsSnapshot):
  * is exactly the shape it destroys. Claiming and spawning inside one process narrows that window to
  * the width the CLI's `resume` has always had.
  *
- * Deliberately placed *after* the halt bail above rather than beside it: a halt is raised by a gate
- * failure or an unverifiable workspace, and picking up a queued resume while one stands relaunches
- * a slave whose gate may still be broken. The intent is left untouched -- visible, unconsumed, and
- * waiting for the operator who clears the halt -- rather than refused, because the request was
- * legitimate when it was made.
+ * Called from BOTH branches of the tick, once each (H8): the ordinary pass below the halt, and
+ * the halt branch itself unless a breach in `HALTS_THAT_REFUSE_A_RESUME` (the domain's set) is
+ * standing. A resume continues a run that is already counted -- the parked run holds its slot and
+ * sits in the streak exactly as it did -- so a concurrency or circuit-breaker halt has no reason
+ * to block it, and until this it did, which deadlocked: the parked runs caused the halt, and the
+ * halt blocked their resume. Under an emergency stop the intent is left untouched -- visible,
+ * unconsumed, and waiting for the operator who clears the halt -- rather than refused, because the
+ * request was legitimate when it was made, and a halt raised by a gate failure or an unverifiable
+ * workspace must not relaunch a slave whose gate may still be broken. An exhausted budget refuses
+ * for the plainer reason, and `requestResume` itself refuses one now, so an intent recorded
+ * against an empty purse can only predate that check.
  *
  * A resume that throws leaves the run `resuming` with a dead pid -- and nothing in a long-lived
  * daemon ever revisits that on its own. `sweep()` is the only thing that would notice, and it has no

@@ -16,7 +16,14 @@ import {
 import { appendEvent } from '@slave-of-ai/events'
 import type { SlaveRuntimeAdapter } from '@slave-of-ai/providers'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { noteTickRan, reconcileOrphans, resetTickObservation, sweep, type SweepDeps } from '../../src/sweep.js'
+import {
+  BREAKER_RESUME_GRACE_MS,
+  noteTickRan,
+  reconcileOrphans,
+  resetTickObservation,
+  sweep,
+  type SweepDeps,
+} from '../../src/sweep.js'
 
 /**
  * A pid that genuinely does not exist: a real child, spawned and reaped.
@@ -95,6 +102,8 @@ describe('sweep and reconcileOrphans', () => {
     pid?: number | null
     toolCalls?: number
     startedAt?: Date
+    pausedMs?: number
+    pausedAt?: Date
     worktreePath?: string
     taskId?: string
     kind?: 'implementation' | 'review' | 'planning'
@@ -108,6 +117,8 @@ describe('sweep and reconcileOrphans', () => {
         pid: data.pid === undefined ? DEAD_PID : data.pid,
         toolCalls: data.toolCalls ?? 0,
         ...(data.startedAt === undefined ? {} : { startedAt: data.startedAt }),
+        ...(data.pausedMs === undefined ? {} : { pausedMs: data.pausedMs }),
+        ...(data.pausedAt === undefined ? {} : { pausedAt: data.pausedAt }),
         ...(data.worktreePath === undefined ? {} : { worktreePath: data.worktreePath }),
       },
     })
@@ -323,6 +334,57 @@ describe('sweep and reconcileOrphans', () => {
     expect(report.timedOut).toEqual([run.id])
     expect(cancelled).toEqual([run.id])
     expect(await eventTypesFor(fixture.workspaceId)).toEqual(['guardrail.tripped'])
+  })
+
+  /**
+   * H8. On 2026-09-21 three runs that had worked for four minutes were killed together the moment
+   * they were resumed: they had sat `paused` for four hours behind a halt, and `startedAt` was the
+   * only clock the timeout read. `runTimeoutMs` bounds WORKING time, and the time a run sat is
+   * subtracted -- the spans already summed at each resume claim (`pausedMs`), and the one still
+   * open (`pausedAt`) for a row the sweep reaches mid-pause.
+   */
+  describe('paused time is not running time (H8)', () => {
+    const minutes = (n: number): number => n * 60 * 1000
+
+    it('leaves a run alone whose wall clock is past the limit but whose working time is not', async (): Promise<void> => {
+      // Started two hours ago, parked for 1h55m of it: five minutes of work against a 30-minute limit.
+      const run = await givenRun({ status: 'working', pid: process.pid, startedAt: hoursAgo(2), pausedMs: minutes(115) })
+
+      const report = await sweep(deps)
+
+      expect(report.timedOut).toEqual([])
+      expect(cancelled).toEqual([])
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('working')
+    })
+
+    it('still cancels the same run when none of that time was a pause', async (): Promise<void> => {
+      const run = await givenRun({ status: 'working', pid: process.pid, startedAt: hoursAgo(2), pausedMs: 0 })
+
+      const report = await sweep(deps)
+
+      expect(report.timedOut).toEqual([run.id])
+      expect(cancelled).toEqual([run.id])
+    })
+
+    it('cancels a run whose working time is past the limit however long it also sat', async (): Promise<void> => {
+      // Two hours on the clock, one hour of it parked: an hour of work against a 30-minute limit.
+      const run = await givenRun({ status: 'working', pid: process.pid, startedAt: hoursAgo(2), pausedMs: minutes(60) })
+
+      const report = await sweep(deps)
+
+      expect(report.timedOut).toEqual([run.id])
+    })
+
+    it('does not count an open pause either, for a row the sweep reaches with pausedAt still set', async (): Promise<void> => {
+      // The row is `resuming` -- claimed, and the pump not yet at its `working` write -- but this
+      // row's `pausedAt` was never cleared. Belt and braces: the open span is subtracted too.
+      const run = await givenRun({ status: 'resuming', pid: process.pid, startedAt: hoursAgo(2), pausedAt: hoursAgo(1.9) })
+
+      const report = await sweep(deps)
+
+      expect(report.timedOut).toEqual([])
+      expect((await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe('resuming')
+    })
   })
 
   it('cancels a run past the tool-call ceiling', async (): Promise<void> => {
@@ -920,6 +982,7 @@ describe('the breaker beat (M51 R2)', () => {
     breakerSteers?: number
     queuedMessage?: string
     pauseReason?: 'human' | 'guardrail'
+    pausedAt?: Date
     worktreePath?: string
   }) =>
     prisma.slaveRun.create({
@@ -932,6 +995,7 @@ describe('the breaker beat (M51 R2)', () => {
         toolCalls: data.toolCalls ?? 0,
         ...(data.toolCallCap === undefined ? {} : { toolCallCap: data.toolCallCap }),
         ...(data.startedAt === undefined ? {} : { startedAt: data.startedAt }),
+        ...(data.pausedAt === undefined ? {} : { pausedAt: data.pausedAt }),
         ...(data.breakerLevel === undefined ? {} : { breakerLevel: data.breakerLevel }),
         ...(data.breakerTrips === undefined ? {} : { breakerTrips: data.breakerTrips }),
         ...(data.breakerSteers === undefined ? {} : { breakerSteers: data.breakerSteers }),
@@ -1551,5 +1615,107 @@ describe('the breaker beat (M51 R2)', () => {
     const after = await reload(run)
     expect(after.resumeRequestedAt).not.toBeNull()
     expect(after.queuedMessage).toBe('stop and rethink')
+  })
+
+  /**
+   * H8. A steer lands as `paused` + `guardrail` + a queued sentence, and the resume that completes
+   * it is asked for by whichever tick next finds the run parked. On 2026-09-21 that tick never
+   * came: the daemon was stopped as three steers landed, and the next daemon never asked. A run in
+   * that shape, older than the grace, gets its resume asked for again under a name a reader can
+   * tell from the original -- and a run a PERSON paused is never touched.
+   */
+  describe('a resume an earlier daemon dropped is asked for again (H8)', () => {
+    const parkedSteer = async (over: {
+      pauseReason?: 'human' | 'guardrail'
+      pausedAt?: Date
+      breakerLevel?: 'none' | 'steered' | 'constrained'
+      breakerSteers?: number
+      queuedMessage?: string | null
+    }): Promise<{ id: string }> => {
+      const run = await givenBreakerRun({
+        status: 'paused',
+        pid: null,
+        breakerLevel: over.breakerLevel ?? 'none',
+        breakerTrips: 1,
+        breakerSteers: over.breakerSteers ?? 1,
+        pauseReason: over.pauseReason ?? 'guardrail',
+        ...(over.queuedMessage === null ? {} : { queuedMessage: over.queuedMessage ?? 'stop and rethink' }),
+        pausedAt: over.pausedAt ?? new Date(Date.now() - BREAKER_RESUME_GRACE_MS - 1_000),
+      })
+      await prisma.checkpoint.create({
+        data: {
+          runId: run.id,
+          sessionId: 's-1',
+          worktreePath: '/tmp/worktree',
+          pauseFlagPath: '/tmp/pause.flag',
+          settingsPath: '/tmp/settings.json',
+          hookPath: '/tmp/pause-gate.sh',
+          gitAuthorName: 'Alex',
+          gitAuthorEmail: 'alex@slaveofai.local',
+          headCommit: 'abc123',
+        },
+      })
+      return run
+    }
+
+    it('asks for the resume of a steer parked past the grace, under the reconciled name', async (): Promise<void> => {
+      // `breakerLevel: 'none'`: the marker `deliverBreakerSteer` reads is gone, which is exactly
+      // the run the ordinary delivery pass can no longer see.
+      const run = await parkedSteer({})
+
+      await sweep(deps)
+
+      const after = await reload(run)
+      expect(after.resumeRequestedAt).not.toBeNull()
+      expect(after.queuedMessage).toBe('stop and rethink')
+      const [event] = await eventsOfType(run.id, 'run_resume_requested')
+      expect(event?.payload).toEqual({ requestedBy: 'circuit breaker (reconciled)', message: null })
+    })
+
+    it('never touches a run a person paused', async (): Promise<void> => {
+      const run = await parkedSteer({ pauseReason: 'human' })
+
+      await sweep(deps)
+
+      expect((await reload(run)).resumeRequestedAt).toBeNull()
+      expect(await eventsOfType(run.id, 'run_resume_requested')).toEqual([])
+    })
+
+    it('waits out the grace: a steer that has just landed is the delivery pass\'s to complete', async (): Promise<void> => {
+      const run = await parkedSteer({ pausedAt: secondsAgo(10) })
+
+      await sweep(deps)
+
+      expect((await reload(run)).resumeRequestedAt).toBeNull()
+    })
+
+    it('leaves a guardrail pause with no sentence queued alone: nothing was dropped', async (): Promise<void> => {
+      // The budget fan-out's shape: `guardrail`, and nothing to deliver.
+      const run = await parkedSteer({ queuedMessage: null })
+
+      await sweep(deps)
+
+      expect((await reload(run)).resumeRequestedAt).toBeNull()
+    })
+
+    it('leaves a guardrail pause with a sentence the breaker never sent alone (fix round 1, I2)', async (): Promise<void> => {
+      // `breakerSteers: 0`: the sentence was queued by somebody else -- an instruction typed into
+      // the panel of a budget-paused run -- and nothing was dropped that this pass may re-issue.
+      const run = await parkedSteer({ breakerSteers: 0 })
+
+      await sweep(deps)
+
+      expect((await reload(run)).resumeRequestedAt).toBeNull()
+      expect(await eventsOfType(run.id, 'run_resume_requested')).toEqual([])
+    })
+
+    it('asks once: a run whose resume is already asked for is not asked for again', async (): Promise<void> => {
+      const run = await parkedSteer({})
+
+      await sweep(deps)
+      await sweep(deps)
+
+      expect(await eventsOfType(run.id, 'run_resume_requested')).toHaveLength(1)
+    })
   })
 })

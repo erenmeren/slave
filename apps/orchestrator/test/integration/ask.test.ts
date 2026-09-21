@@ -202,6 +202,8 @@ describe('a slave that asks, and waits', () => {
     expect(run.endedAt).toBeNull()
     expect(run.terminalAt).toBeNull()
     expect(run.pausedAtStep).toBe(1)
+    // H8: a run waiting for an answer is parked like any other, and the wait is not working time.
+    expect(run.pausedAt).not.toBeNull()
     // Final review: the child has already exited by the time this path runs, so the pid it left
     // behind names a process that is gone -- and pids are recycled. Kept, `requestResume`'s
     // `isAlive(run.pid)` could refuse `run_still_stopping` and never deliver the answer.

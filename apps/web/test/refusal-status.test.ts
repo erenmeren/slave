@@ -18,6 +18,9 @@ const ALL_KINDS: Record<ControlRefusal['kind'], true> = {
   live_runs: true,
   no_checkpoint: true,
   run_still_stopping: true,
+  // H8 (fix round 1, I1): a resume into an empty purse. 409 by the suffix rule and right to be --
+  // the run is there, and the request does not make sense until the budget is raised.
+  budget_exhausted: true,
   pause_unsignalled: true,
   // M51 R3: the breaker's two. Neither ends in `_not_found`, so both answer 409 -- the run exists
   // and the request does not make sense against it, which is what the neighbouring run refusals

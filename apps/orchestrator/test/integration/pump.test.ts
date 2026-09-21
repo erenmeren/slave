@@ -639,6 +639,8 @@ describe('pumpRun', () => {
     const run = await prisma.slaveRun.findUniqueOrThrow({ where: { id: ids.runId } })
     expect(run.status).toBe('paused')
     expect(run.pausedAtStep).toBe(1)
+    // H8: the moment the run was parked, so the sweep's timeout can leave the pause out.
+    expect(run.pausedAt).not.toBeNull()
     expect(await eventTypesFor(ids.runId)).toContain('run.paused')
 
     // A pause is not an outcome, and the adapter's synthetic terminal result on a deny reports

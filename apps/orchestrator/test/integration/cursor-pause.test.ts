@@ -119,6 +119,8 @@ describe('pumpRun, when a paused Cursor run ends', () => {
     // every `endedAt: null` guard a later resume depends on.
     expect(run.endedAt).toBeNull()
     expect(run.pausedAtStep).toBe(4)
+    // H8: this route parks the run too, and the sweep's timeout leaves the pause out.
+    expect(run.pausedAt).not.toBeNull()
     expect(await eventTypesFor(ids.runId)).toContain('run.paused')
     expect(await eventTypesFor(ids.runId)).not.toContain('run.failed')
   })

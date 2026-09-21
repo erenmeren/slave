@@ -1,12 +1,16 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { type Result, err, ok } from '@slave-of-ai/domain'
+import { type Result, breachRefusingResume, err, evaluateGuardrails, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { capabilitiesOf, type ProviderKind } from '@slave-of-ai/providers'
 import { isAlive } from './kill.js'
 import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
+import { workspaceStats } from './stats.js'
 
 const RESUMABLE_STATUSES = ['paused'] as const
+
+/** The largest value `SlaveRun.pausedMs` can hold: a Postgres INTEGER (H8). */
+const PAUSED_MS_MAX = 2_147_483_647
 
 /**
  * Whether this run's runtime can be resumed at all -- the refusal, or `null` for "carry on".
@@ -79,6 +83,19 @@ export async function requestResume(
   const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.slave.team.workspaceId } })
   if (workspace.haltedReason !== null) {
     return err({ kind: 'workspace_halted', workspaceId: workspace.id, reason: workspace.haltedReason })
+  }
+
+  // The other halt that refuses even a resume (H8 fix round 1, I1): the SAME set the tick's halt
+  // branch decides by, read from the whole breach list -- `decide()` names only the first halting
+  // breach, and `concurrency` sorts ahead of `budget_exhausted`. Refused here rather than only at
+  // the daemon, for the durable halt's own reason above: an intent recorded now would be carried
+  // out the moment somebody raised the budget, by a tick that cannot know it was asked against an
+  // empty purse. The set's other member, `emergency_stop`, is the check above -- the durable
+  // column is what that breach is derived from -- so only the budget can reach this line.
+  const snapshot = await workspaceStats(workspace.id)
+  const refusing = breachRefusingResume(evaluateGuardrails(snapshot.limits, snapshot.stats))
+  if (refusing?.guardrail === 'budget_exhausted') {
+    return err({ kind: 'budget_exhausted', workspaceId: workspace.id, detail: refusing.detail })
   }
 
   // Ahead of the status and checkpoint checks on purpose: those two ask whether THIS run is in a
@@ -209,6 +226,14 @@ export interface ClaimResumeOptions {
  * run's `pauseReason`: a `waiting` task pointing at THIS run exists only because this run asked, so
  * the task-side pair is the stronger evidence, and it cannot flip a task some other resume owns.
  *
+ * **The pause's span is closed here too (H8).** `pausedAt` was stamped by whichever route parked
+ * the run, and this claim is the one moment every resume goes through -- the tick's intent pass,
+ * the CLI's command, the answer delivery -- so it is the one place the elapsed span is added to
+ * `pausedMs` and the open stamp cleared, in the same statement as the transition. The sweep's run
+ * timeout subtracts the sum: on 2026-09-21 three runs that had worked for four minutes were killed
+ * on resume because they had sat four hours behind a halt and `startedAt` was the only clock read.
+ * A row with no stamp (parked before the column existed) adds nothing, which is what it did before.
+ *
  * The caller must be the process that then spawns the child. A claim without a spawn behind it is
  * a `resuming` row with no process, which is what the orphan sweep exists to fail.
  */
@@ -217,16 +242,32 @@ export async function claimResume(
   options: ClaimResumeOptions = {},
 ): Promise<{ claimed: boolean; queuedMessage: string | null }> {
   return prisma.$transaction(async (tx) => {
-    // Read inside the transaction and before the update, because the update clears the column: this
-    // is the only moment the message and the claim can be observed together.
-    const run = await tx.slaveRun.findUnique({ where: { id: runId }, select: { queuedMessage: true, taskId: true } })
+    // Read inside the transaction and before the update, because the update clears the columns:
+    // this is the only moment the message, the pause stamp and the claim can be observed together.
+    const run = await tx.slaveRun.findUnique({
+      where: { id: runId },
+      select: { queuedMessage: true, taskId: true, pausedAt: true, pausedMs: true },
+    })
+    // Clamped so the sum fits the column: `pausedMs` is a Postgres INTEGER, and a run left parked
+    // for a month would otherwise make this claim throw on every tick for the rest of its life.
+    // Past 24 days the exact figure changes nothing the timeout could decide.
+    const pausedFor =
+      run?.pausedAt == null
+        ? 0
+        : Math.min(Math.max(0, Date.now() - run.pausedAt.getTime()), PAUSED_MS_MAX - run.pausedMs)
     const claimed = await tx.slaveRun.updateMany({
       where: {
         id: runId,
         status: 'paused',
         ...(options.requireIntent === false ? {} : { resumeRequestedAt: { not: null } }),
       },
-      data: { status: 'resuming', resumeRequestedAt: null, queuedMessage: null },
+      data: {
+        status: 'resuming',
+        resumeRequestedAt: null,
+        queuedMessage: null,
+        pausedAt: null,
+        pausedMs: { increment: pausedFor },
+      },
     })
     if (claimed.count !== 1) return { claimed: false, queuedMessage: null }
 

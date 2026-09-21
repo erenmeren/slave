@@ -85,7 +85,13 @@ is schedule first, then resume, then plan, review, merge (tick.ts:239-257):
    worktree, spawns the implementation run, unchanged since M3/M7.
 2. **Reconcile/resume** (`resumeRequestedRuns`) — claims and spawns any run a control-layer
    `resume` left as an intent (`paused`, `resumeRequestedAt` set), the same claim-then-spawn split
-   §3.4's orphan pass depends on.
+   §3.4's orphan pass depends on. Since H8 (2026-09-21) this pass also runs on the tick's *halt*
+   branch for every halt except `emergency_stop` and `budget_exhausted`: a resume continues a run
+   that is already counted and starts nothing, and a `concurrency` halt caused by parked runs used
+   to block the very resume that would have lifted it. Two related H8 rules live beside it: the
+   sweep re-asks for the resume of a breaker steer an earlier daemon parked and never resumed
+   (`BREAKER_RESUME_GRACE_MS`, `sweep.ts`), and `SlaveRun.pausedAt`/`pausedMs` keep the time a run
+   sat parked out of the sweep's `runTimeoutMs` check — `runTimeoutMs` bounds working time.
 3. **Plan** (`dispatchPlanning`, `planning.ts`) — when the workspace has a `goal` and an empty
    board, starts a planning run for the `manager`-role slave **in the primary checkout**
    (`workspace.repoPath`), not a worktree: there is no task yet, so there is nothing to provision.

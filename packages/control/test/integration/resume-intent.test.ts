@@ -113,6 +113,33 @@ describe('the resume intent', () => {
     expect(after.resumeRequestedAt).toBeNull()
   })
 
+  // H8 (fix round 1, I1): the same two halts the tick refuses a resume under, applied at the verb
+  // -- so a CLI or web resume into an empty purse is refused where the person can read why,
+  // rather than recorded and carried out by whichever tick next finds the budget raised.
+  it('refuses under an exhausted budget, naming it', async (): Promise<void> => {
+    const { run } = fixture
+    // Past the workspace's default $20, on this very run: spend counts whatever the run's status.
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { costUsd: 999 } })
+
+    const result = await requestResume(run.id, null, 'meren')
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.kind).toBe('budget_exhausted')
+      expect(refusalText(result.error)).toContain('budget')
+    }
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.resumeRequestedAt).toBeNull()
+    expect(await prisma.executionEvent.count({ where: { runId: run.id, type: 'run_resume_requested' } })).toBe(0)
+  })
+
+  it('still records the intent under a budget warning, and under a full concurrency slot', async (): Promise<void> => {
+    const { run, workspace } = fixture
+    await prisma.workspace.update({ where: { id: workspace.id }, data: { maxConcurrentRuns: 1 } })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { costUsd: 17 } })
+
+    expect((await requestResume(run.id, null, 'meren')).ok).toBe(true)
+  })
+
   it('refuses a run that is not paused / has no checkpoint', async (): Promise<void> => {
     const { run } = fixture
     await prisma.checkpoint.delete({ where: { runId: run.id } })
@@ -152,6 +179,53 @@ describe('the resume intent', () => {
     expect(after.queuedMessage).toBeNull()
 
     expect((await claimResume(run.id)).claimed).toBe(false)
+  })
+
+  // H8: paused time is not running time. The claim is the one moment the pause's span is known
+  // and closed, so it is the one place the sum is kept.
+  it('claimResume adds the time the run sat to pausedMs and closes pausedAt', async (): Promise<void> => {
+    const { run } = fixture
+    await prisma.slaveRun.update({
+      where: { id: run.id },
+      data: { pausedAt: new Date(Date.now() - 90_000), pausedMs: 30_000 },
+    })
+    await requestResume(run.id, null, 'meren')
+
+    expect((await claimResume(run.id)).claimed).toBe(true)
+
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.pausedAt).toBeNull()
+    // Summed, not replaced: a second pause adds to what the first already cost.
+    expect(after.pausedMs).toBeGreaterThanOrEqual(120_000)
+    expect(after.pausedMs).toBeLessThan(125_000)
+  })
+
+  it('claimResume still claims a run parked longer than the column can count', async (): Promise<void> => {
+    const { run } = fixture
+    // Forty days: past what a Postgres INTEGER holds in milliseconds. The claim must land, not
+    // throw -- a claim that throws is a resume that fails on every tick for the rest of the run.
+    await prisma.slaveRun.update({
+      where: { id: run.id },
+      data: { pausedAt: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000), pausedMs: 1_000 },
+    })
+    await requestResume(run.id, null, 'meren')
+
+    expect((await claimResume(run.id)).claimed).toBe(true)
+
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.status).toBe('resuming')
+    expect(after.pausedMs).toBe(2_147_483_647)
+  })
+
+  it('claimResume leaves pausedMs alone for a row that never recorded when it was parked', async (): Promise<void> => {
+    const { run } = fixture
+    await requestResume(run.id, null, 'meren')
+
+    expect((await claimResume(run.id)).claimed).toBe(true)
+
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.pausedAt).toBeNull()
+    expect(after.pausedMs).toBe(0)
   })
 
   it('claimResume refuses a paused run with no intent recorded', async (): Promise<void> => {

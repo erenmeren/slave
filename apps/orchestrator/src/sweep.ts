@@ -4,6 +4,8 @@ import {
   isAlive,
   realWorktreeProbe,
   recordRunEvidence,
+  refusalText,
+  requestResume,
   type WorktreeProbe,
 } from '@slave-of-ai/control'
 import { prisma as db } from '@slave-of-ai/db/client'
@@ -104,6 +106,39 @@ const TERMINAL: readonly RunStatus[] = ['stopped', 'succeeded', 'failed']
  * {@link strandedClaimGraceMs}.
  */
 export const STRANDED_CLAIM_GRACE_MS = 30_000
+
+/**
+ * How long a breaker steer may sit parked with its resume unasked before this daemon asks for it
+ * (H8).
+ *
+ * A steer lands as `paused` + `guardrail` + a queued sentence, and {@link deliverBreakerSteers}
+ * asks for the resume on the tick that finds it parked -- ordinarily the very next one. On
+ * 2026-09-21 that tick never came: the daemon was stopped as three steers landed, and the daemon
+ * that replaced it never asked. Past this grace the shape can only be a dropped resume, and
+ * {@link reissueDroppedResumes} asks for it under a name a reader can tell from the original,
+ * without reading the level marker the delivery pass depends on. Thirty seconds is far past one
+ * tick and far short of anything a person would notice.
+ */
+export const BREAKER_RESUME_GRACE_MS = 30_000
+
+/** The `requestedBy` a re-issued breaker resume is recorded under. Distinct from the breaker's
+ *  own `'circuit breaker'` on purpose: a reader matching the pause to its resume months later must
+ *  be able to see that THIS one was asked for by a later daemon, not by the tick the steer landed
+ *  on. */
+const RECONCILED_BREAKER_ACTOR = 'circuit breaker (reconciled)'
+
+/**
+ * The refusal kind last logged per run by {@link reissueDroppedResumes} (H8 fix round 1, M5).
+ *
+ * The pass retries every tick, deliberately -- a refusal such as `run_still_stopping` or an
+ * exhausted budget clears on its own or by a person's hand -- but a run refused for good would
+ * otherwise be retried in silence for the rest of the daemon's life. One line per run per refusal
+ * kind; a run that is finally re-issued is forgotten, so a later refusal on it logs again. Bounded
+ * the way `worktreeFingerprints` is: past {@link REISSUE_LOG_MEMORY_MAX} entries the memory is
+ * dropped whole, and the cost is one repeated line.
+ */
+const reissueRefusalLogged = new Map<string, string>()
+const REISSUE_LOG_MEMORY_MAX = 500
 
 /** The workspace fields {@link strandedClaimGraceMs} needs -- the row `sweep` already loads. */
 export interface StrandedClaimGraceWorkspace {
@@ -466,6 +501,9 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
   // killing the child. And a steer that has been queued should land as soon as the run is actually
   // parked, not up to a minute later.
   await deliverBreakerSteers(deps)
+  // After the delivery pass, not before: a steer the pass above can still see is asked for there,
+  // under the breaker's own name, and this only reaches what it could not (H8).
+  await reissueDroppedResumes(deps)
 
   for (const run of runs) {
     // The pid, not liveness, is what tells a dead run from one that is mid-spawn: Task 13 records
@@ -482,7 +520,17 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
       continue
     }
 
-    const timedOutNow = Date.now() - run.startedAt.getTime() > workspace.runTimeoutMs
+    // WORKING time, not wall-clock time (H8): the spans this run sat `paused` are subtracted --
+    // the ones already closed into `pausedMs` by each resume claim, and the one still open on a
+    // row the sweep reaches with `pausedAt` set. `paused` itself is not in `SWEEPABLE`, so the
+    // open-span term is for a claimed row the pump has not yet moved on; the closed sum is for
+    // the resumed run, which is the one that used to die here. On 2026-09-21 three runs that had
+    // worked for four minutes were cancelled together on resume, because they had sat four hours
+    // behind a halt and `startedAt` was the only clock this line read.
+    const now = Date.now()
+    const openPauseMs = run.pausedAt === null ? 0 : Math.max(0, now - run.pausedAt.getTime())
+    const workingMs = now - run.startedAt.getTime() - run.pausedMs - openPauseMs
+    const timedOutNow = workingMs > workspace.runTimeoutMs
     // M51 R3: the run's OWN cap when the breaker wrote one, the workspace's otherwise -- one
     // comparison and one new column, and the breach it produces is the EXISTING `tool_call_ceiling`.
     // A constrained run really is past its tool-call ceiling; giving the same fact a second name is
@@ -640,6 +688,66 @@ async function deliverBreakerSteers(deps: SweepDeps): Promise<number> {
     if (result.ok) delivered += 1
   }
   return delivered
+}
+
+/**
+ * Ask again for the resume of a steer an earlier daemon parked and never resumed (H8).
+ *
+ * The shape is {@link deliverBreakerSteers}' marker with two differences. The LEVEL is not read:
+ * the level is what the beat measures and steps down, and a run whose level has read `none` since
+ * its steer landed is precisely the one the delivery pass can no longer see. And the run must have
+ * sat past {@link BREAKER_RESUME_GRACE_MS}: a steer that landed a moment ago is the delivery
+ * pass's to complete, on this tick or the next, under the breaker's own name.
+ *
+ * `breakerSteers > 0` is what makes "a queued sentence on a guardrail pause" mean a BREAKER
+ * steer and nothing else: `steerRun` increments it in the same statement that queues the
+ * sentence. Without the clause, an instruction a person typed into the panel of a budget-paused
+ * run would be resumed by this pass on their behalf. Nothing resets the counter, so once a run has
+ * been steered the clause holds for the rest of its life -- a person's later instruction on such a
+ * run's guardrail pause IS re-issued by this pass (parked, fix round 1 M4).
+ *
+ * A run a PERSON paused (`pauseReason: 'human'`) is never here: the query says `guardrail`, and
+ * nothing auto-resumes what somebody chose to stop. `requestResume` re-checks everything under
+ * its own read -- the halt, the budget, the checkpoint, the pid -- so a refusal is an ordinary
+ * outcome and the pass tries again next tick. It is LOGGED once per run per refusal kind (fix
+ * round 1, M5) rather than counted in silence: a run refused for good -- no checkpoint, a provider
+ * that cannot resume -- would otherwise be retried every second for the life of the daemon with
+ * nothing in the log to say so.
+ */
+async function reissueDroppedResumes(deps: SweepDeps): Promise<number> {
+  const dropped = await db.slaveRun.findMany({
+    where: {
+      slave: { team: { workspaceId: deps.workspaceId } },
+      status: 'paused',
+      pauseReason: 'guardrail',
+      queuedMessage: { not: null },
+      resumeRequestedAt: null,
+      breakerSteers: { gt: 0 },
+      pausedAt: { lt: new Date(Date.now() - BREAKER_RESUME_GRACE_MS) },
+    },
+    select: { id: true },
+  })
+
+  let reissued = 0
+  for (const run of dropped) {
+    // `null` as the message, for `deliverBreakerSteer`'s reason: the sentence is already queued
+    // and a resume asked for with no message leaves it there. `'system'` as the actor: nobody
+    // pressed anything.
+    const result = await requestResume(run.id, null, RECONCILED_BREAKER_ACTOR, undefined, 'system')
+    if (result.ok) {
+      reissued += 1
+      reissueRefusalLogged.delete(run.id)
+      continue
+    }
+    if (reissueRefusalLogged.get(run.id) === result.error.kind) continue
+    if (reissueRefusalLogged.size >= REISSUE_LOG_MEMORY_MAX) reissueRefusalLogged.clear()
+    reissueRefusalLogged.set(run.id, result.error.kind)
+    console.error(
+      `[sweep] the resume of run ${run.id} could not be re-issued (${result.error.kind}): ` +
+        `${refusalText(result.error)}. It will be tried again on the next tick.`,
+    )
+  }
+  return reissued
 }
 
 /**
