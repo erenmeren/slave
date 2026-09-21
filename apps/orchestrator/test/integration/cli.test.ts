@@ -3438,7 +3438,9 @@ describe('the orchestrator CLI', () => {
       const result = await runCli(['set-supervisor', '--workspace', fixture.workspaceId, '--provider', 'claude'])
 
       expect(result.code).not.toBe(0)
-      expect(result.stderr).toMatch(/claude/)
+      // The CONTROL LAYER's own sentence, which the CLI prints verbatim rather than inventing a
+      // second wording for the same refusal -- `set-model --provider` answers a typo the same way.
+      expect(result.stderr).toMatch(/a provider must be a configured kind/)
       expect((await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })).supervisorProvider).toBeNull()
     })
 
