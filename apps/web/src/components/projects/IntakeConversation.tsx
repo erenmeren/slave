@@ -10,6 +10,8 @@ import {
   INTAKE_STEP_STATUS_LABEL,
   intakeRepositoryPath,
   intakeRepositorySlug,
+  PROVIDER_LABEL,
+  SUPERVISOR_DEFAULT_PROVIDER,
   VERIFY_SOURCE_LABEL,
   type IntakeDraft,
   type IntakeFacts,
@@ -469,15 +471,28 @@ export function IntakeConversation({ onClose }: { readonly onClose: () => void }
             />
             <label className="flex flex-col gap-1">
               <FieldLabel>provider</FieldLabel>
+              {/* H3: a project born from a conversation is born with a runtime -- so a draft the
+                * model left at `null` is shown PRESELECTED on the installation default, not on an
+                * empty "none", and `acceptIntake` (`draft.provider ?? SUPERVISOR_DEFAULT_PROVIDER`)
+                * is what actually resolves it. The state stays `null` until the person explicitly
+                * picks something: submitting an untouched card still posts `provider: null`, the
+                * same body the route schema already accepted, and control applies the default --
+                * the "null means the installation default" idiom this codebase already uses for
+                * the Supervisor's own runtime pair (`workspace-settings-routes`, `supervisorChat`). */}
               <ProviderSelect
                 ariaLabel="project provider"
                 testId="intake-draft-provider"
-                value={edited.provider ?? ''}
+                value={edited.provider ?? SUPERVISOR_DEFAULT_PROVIDER}
                 onChange={(value: ProviderKind | '') => setEdited({ ...edited, provider: value === '' ? null : value })}
                 disabled={pending}
-                placeholder="none"
+                placeholder="installation default"
                 className={INPUT_SHELL}
               />
+              {edited.provider === null && (
+                <span data-testid="intake-draft-provider-default" className="text-[11.5px] text-text-3">
+                  {PROVIDER_LABEL[SUPERVISOR_DEFAULT_PROVIDER]} is the installation default.
+                </span>
+              )}
             </label>
           </div>
 
