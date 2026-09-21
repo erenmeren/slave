@@ -241,9 +241,10 @@ call of ANY shape in this stream is already an `isolation_breach`), and what a f
    equivalent, so `decideWithCursor` spawns with no spend cap at all, and its `result` line reports
    no cost, so nothing can be billed to the workspace afterwards either. The only limits on a
    Cursor turn are the timeout and the vendor account's own. A project switched to `cursor` in R4's
-   provider setting therefore drops out of the budget guardrail for its Supervisor turns: the
-   conversation's "cost so far" (R8) counts nothing, and `unmeasured` on the message row is the
-   only honest thing the panel can show.
+   provider setting therefore drops out of the budget guardrail for its Supervisor turns **(wrong,
+   and corrected in E11 -- an unpriced turn is charged at the cap and the guardrail does see it; see
+   E11)**: the conversation's "cost so far" (R8) counts nothing, and `unmeasured` on the message row
+   is the only honest thing the panel can show.
 
 **E3 — A decision from a reply is keyed by the message AND the action (R3, task 4).** The subject
 is `<messageId>:<actionKind>`, not the bare message id. `recordDecision` treats
@@ -326,6 +327,42 @@ upload verb accepts it, the file dialog offers it and the README names it. So th
 R6's sentence is a transcription slip; this is the correction, not a change. The full list a person
 may attach is `md txt csv json yaml yml pdf png jpg jpeg gif webp svg`, and
 `ATTACHMENT_KIND_BY_EXTENSION` is the one place it is written down. **Cost:** three letters.
+
+**E10 -- the provider/model pair governs the CONVERSATION, and today nothing else (R4, final fix
+wave).** R4 reads as though the two columns re-aimed the whole Supervisor, and eight sentences in the
+package said so. They do not. `tickSupervisorChat` is the ONLY reader of
+`Workspace.supervisorProvider`/`supervisorModel`: the decision pass takes `deps.supervisorDecider`
+and `deps.supervisorModel`, and the intake and capability passes take `deps.modelDecider`, all three
+of which `cli.ts` fills once from `SLAVEOFAI_SUPERVISOR_MODEL` and the registry's `claude_code` entry
+when the daemon starts. So a project set to `cursor` talks to Cursor and still DECIDES with Claude
+Code, and that is the shipped behaviour rather than a bug: a decision applies changes to somebody's
+repository, and moving which runtime may do that is a bigger switch than picking who answers a
+question. The eight sentences are narrowed to say "this conversation"; widening the pair to the
+decision and answer passes is booked as a follow-up, and the day it lands this erratum is what says
+what changed. **Cost:** one word in eight places.
+
+**E11 -- an unpriced turn IS charged, so Cursor does not escape the budget (R8, final fix wave;
+corrects E2's second half).** E2 says a project on `cursor` "drops out of the budget guardrail for
+its Supervisor turns". Only the first half of that is true. The CALL takes no cap -- `cursor-agent`
+has no `--max-budget-usd`, so nothing limits one turn's spend at the vendor -- but the TURN is
+charged afterwards: `workspaceSpend` counts `chatUnmeasuredTurns * SUPERVISOR_PER_CALL_CAP_USD`
+(E5's own term), so every unpriced turn bills the project a dollar and a project on Cursor reaches
+`budgetExhausted` at the same rate as one on Claude Code, whereupon its next turn fails
+`budget_exhausted` without making the call. What really counts nothing is the PANEL's *cost so far*,
+which is measured money plus a count of unpriced turns and deliberately never folds the two
+together. E2's sentence conflated the guardrail with that figure; this is the correction, and the
+code was right. **Cost:** one sentence, and no change to a sum.
+
+**E13 -- what an upload commit really is (R6, final fix wave).** The README said each attachment was
+"committed on its own ... on the base branch". Two corrections, both of which the code was already
+right about. ONE COMMIT PER REQUEST, not per file, titled with every name the person used
+(`inbox: brief.md, screenshot.png`) and scoped to exactly those paths -- five files attached to one
+message are one record of one act, and `git add -- <paths>` plus `commit -- <paths>` is what keeps an
+operator's own staged work out of it. And it commits onto WHATEVER THE REPOSITORY IS CHECKED OUT AT,
+which in ordinary operation is the base branch because runs work in worktrees, but is not promised to
+be: nothing here switches a checkout out from under the person standing in it, which is the lesser of
+the two evils and is said out loud in `storeSupervisorUploads`' own "two residuals". **Cost:** two
+sentences.
 
 Booked by this milestone and deliberately not fixed: `PUT /api/w/:id/provider` (the project's RUN
 provider) answers **409** for a provider this installation does not have, where the Supervisor's own

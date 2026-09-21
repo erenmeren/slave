@@ -36,9 +36,11 @@ export interface SupervisorView {
   // about which mode the project is in.
   //
   // F R4: `provider` and `model` are the pair the header's two selects are bound to -- WHICH
-  // runtime answers this project's Supervisor, decisions, answers and the conversation alike.
-  // `null` on either means the installation default, which is what an unset column has always
-  // meant, so the selects show "default" rather than inventing a name for it.
+  // runtime answers this project's CONVERSATION, and today nothing else (erratum E10): the chat
+  // tick is the one reader of these columns, and decisions and answers to workers still go to the
+  // runtime the daemon was started with. `null` on either means the installation default, which is
+  // what an unset column has always meant, so the selects show "default" rather than inventing a
+  // name for it.
   readonly settings: {
     readonly enabled: boolean
     readonly profile: string | null

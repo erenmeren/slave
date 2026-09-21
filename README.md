@@ -996,13 +996,16 @@ above: on `propose` it is a card under the reply and a line in *waiting on you*,
 carried out and the card says what was done. The conversation borrows the Supervisor's authority
 and is given none of its own.
 
-**Which runtime answers is the project's setting.** The panel's header carries a runtime and a
-model select beside the autonomy switch, and they govern *every* Supervisor call for that project —
-its decisions, its answers to workers, and this conversation. Either one left empty means the
-installation default (`claude_code`, and `SLAVEOFAI_SUPERVISOR_MODEL` or `claude-sonnet-5`).
-**A Cursor turn is neither capped nor costed**: that CLI takes no budget flag and reports no price,
-so the turn is marked *unpriced* and the budget guardrail never sees it. Claude turns are capped at
-the same $1 as every other Supervisor call.
+**Which runtime answers this conversation is the project's setting.** The panel's header carries a
+runtime and a model select beside the autonomy switch, and today they govern **this conversation and
+nothing else**: the project's decisions and its answers to workers still go to the runtime the
+daemon was started with. Either one left empty means the installation default (`claude_code`, and
+`SLAVEOFAI_SUPERVISOR_MODEL` or `claude-sonnet-5`).
+**A Cursor turn cannot be capped and reports no price**: that CLI takes no budget flag, so the turn
+is recorded *unpriced* — and an unpriced turn is charged at the same $1 cap against the project's
+budget rather than counted as free, so the guardrail does see it even though the conversation's
+*cost so far* can only show it as a turn with no number. Claude turns are capped at that same $1,
+like every other Supervisor call.
 
 ```bash
 npm run orchestrator -- set-supervisor --workspace <id> --provider cursor --model auto
@@ -1013,9 +1016,12 @@ npm run orchestrator -- set-supervisor --workspace <id> --clear-model
 **You can hand it files.** *Attach*, or drop them on the box: at most **5 files** per message,
 **20 MB** each, and only what something here can read — `md txt csv json yaml yml pdf png jpg jpeg
 gif webp svg`. Each one is written into your repository at
-`docs/inbox/<yyyy-mm-dd>-<name>.<ext>` on the base branch and committed on its own (`inbox: <name>`,
-the orchestrator's git identity), so **the planner and every worker can open it by path** — which
-is exactly what a reply does when it asks for the goal to change and names the file in the request.
+`docs/inbox/<yyyy-mm-dd>-<name>.<ext>`, and the whole request lands in **one commit** titled with
+every file in it (`inbox: brief.md, screenshot.png`, the orchestrator's git identity). That commit
+goes onto whatever the repository is checked out at — the base branch in ordinary operation, since
+runs work in worktrees and nothing here switches a branch out from under you — so **the planner and
+every worker can open it by path**, which is exactly what a reply does when it asks for the goal to
+change and names the file in the request.
 Text files are quoted into the prompt (20,000 characters each, 60,000 in total); images and PDFs
 are named by path and size. A file is refused, and nothing is written at all, if it is too big, has
 an extension that is not on the list, or names a path rather than a file.

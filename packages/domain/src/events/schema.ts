@@ -421,7 +421,7 @@ export const executionEventSchema = z.discriminatedUnion('type', [
      * `from`/`to` are the two booleans.
      *
      * The Supervisor chat's R4 adds `supervisorProvider` and `supervisorModel`, the pair that says
-     * WHICH runtime answers this project's Supervisor -- decisions, answers and conversation alike.
+     * WHICH runtime answers this project's CONVERSATION -- and today nothing else (erratum E10).
      * The same verb again (`setSupervisorSettings`), so the same event: a person reading "what
      * changed about this project" gets one stream, and `null` on either end is a real value
      * (the installation default, which is what an unset column means).

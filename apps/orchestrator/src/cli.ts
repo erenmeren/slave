@@ -634,11 +634,12 @@ const USAGE = `usage: orchestrator <command> [options]
                                        project still only proposes. --autonomy propose is the
                                        default and today's behaviour.
                                        --provider and --model say WHICH runtime answers this
-                                       project's Supervisor -- its decisions, its answers and the
-                                       conversation alike. --clear-provider / --clear-model put
-                                       either back to the installation default. A Cursor turn is
-                                       neither capped nor costed: that CLI takes no budget and
-                                       reports no price.
+                                       project's CONVERSATION -- and today nothing else: decisions
+                                       and answers to workers still go to the runtime the daemon was
+                                       started with. --clear-provider / --clear-model put either
+                                       back to the installation default. A Cursor turn cannot be
+                                       capped and reports no price, so it is recorded unpriced and
+                                       charged at the per-call cap.
   set-auto-merge --workspace <id> --on | --off
                                        whether an approved review merges the branch and stamps the
                                        task integrated (--on), or leaves both to you (--off, the

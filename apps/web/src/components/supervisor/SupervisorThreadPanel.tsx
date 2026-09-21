@@ -682,10 +682,11 @@ export function SupervisorThreadPanel({
         </label>
       </div>
 
-      {/* F R4/R8: WHO answers this conversation, and what it has cost. The pair governs every
-        * Supervisor call for the project -- decisions and answers to workers as much as this
-        * thread -- which is why it sits on the conversation's own chrome rather than in Settings
-        * alone: it is the thing a person changes when the answers are not good enough. */}
+      {/* F R4/R8: WHO answers this conversation, and what it has cost. The pair governs THIS
+        * CONVERSATION and, today, nothing else (erratum E10) -- decisions and answers to workers
+        * still go to the runtime the daemon was started with -- which is why it sits on the
+        * conversation's own chrome rather than in Settings: it is the thing a person changes when
+        * the answers here are not good enough. */}
       {/* `flex-wrap`: the panel is 340 px and the two selects plus a price do not fit on one line
         * at every width, so the cost drops to a second line instead of squeezing the model field
         * to nothing. */}

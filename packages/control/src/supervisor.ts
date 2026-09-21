@@ -1277,10 +1277,12 @@ function parsedOrThrow<T>(
  * operator wrote). Trimmed, and an emptied text becomes `null` rather than `''`, exactly as
  * `setProfile` normalises a worker's: "cleared" is a real state and only `null` says it.
  *
- * `provider`/`model` (F R4) are the pair that says WHICH runtime answers this project's Supervisor
- * -- decisions, answers and the conversation alike. Both nullable, both meaning "the installation
- * default" when null, and both validated before anything is written: a patch carrying one good
- * field and one bad one writes neither.
+ * `provider`/`model` (F R4) are the pair that says WHICH runtime answers this project's
+ * CONVERSATION. TODAY THAT IS ALL THEY GOVERN (erratum E10): `tickSupervisorChat` is the one pass
+ * that reads these columns, and the decision and answer passes still take the runtime the daemon
+ * was started with. Both nullable, both meaning "the installation default" when null, and both
+ * validated before anything is written: a patch carrying one good field and one bad one writes
+ * neither.
  *
  * One `workspace.settings_changed` per field that actually MOVED, and none at all when nothing
  * did, so the timeline does not fill with re-saves of an unchanged form. The profile's event

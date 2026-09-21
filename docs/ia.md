@@ -166,9 +166,10 @@ went is a chip per file on the message, name and size, with the path one hover a
 The header's runtime and model selects (`supervisor-provider`, `supervisor-model`) PATCH
 `/api/w/:id/supervisor/settings` the moment they move (`{ provider, model }`, either one `null` for
 the installation default; a provider this installation does not have is a **400**), and a refused
-change puts the select back and says why. They govern every Supervisor call for the project, not
-just this thread, which is why they sit here rather than in Settings alone. Changing the runtime
-clears the model with it: a model id is a name one vendor knows. Beside them is the conversation's
+change puts the select back and says why. Today they govern THIS CONVERSATION and nothing else --
+the project's decisions and its answers to workers still go to the runtime the daemon was started
+with -- and they sit on the thread's own chrome for exactly that reason. Changing the runtime clears
+the model with it: a model id is a name one vendor knows. Beside them is the conversation's
 **cost so far** — the measured money, and `N turns unpriced` when some turn reported none, never
 the two folded together (a Cursor turn reports no price at all).
 

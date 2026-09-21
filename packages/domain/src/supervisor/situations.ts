@@ -113,8 +113,10 @@ export const SITUATION_KINDS = [
   'workspace_halted',
   /**
    * Supervisor chat R3: a person asked the Supervisor for something in the conversation, and the
-   * reply proposed an action about it. `subjectId` is the MESSAGE id -- one situation per turn,
-   * so two requests in two messages are two rows and a cooldown over one never silences the other.
+   * reply proposed an action about it. `subjectId` is `<messageId>:<actionKind>` (erratum E3), not
+   * the bare message id: `(workspaceId, situationKind, subjectId)` is a KEY, so a reply that asked
+   * for two things would have the second refused `supervisor_cooldown` on the id alone. The turn is
+   * still findable from it -- the message id is the prefix, and `facts.messageId` carries it exactly.
    *
    * The SECOND kind {@link observe} never emits, and for `stale_task`'s own reason: it is not a
    * predicate over rows. Nothing about the world says a person wants something; only their message

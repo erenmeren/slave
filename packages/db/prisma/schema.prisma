@@ -115,11 +115,12 @@ model Workspace {
   /// E R1: whether the Supervisor applies its own decisions (`act`) or proposes them for a person
   /// (`propose`, today's behaviour). One switch per project; `tierOf` reads it.
   supervisorAutonomy SupervisorAutonomy @default(propose)
-  /// F R4: the provider a chat turn, and every other Supervisor call for this project, uses. Null
-  /// is the installation default (`SLAVEOFAI_SUPERVISOR_MODEL`'s provider, else `claude_code`).
+  /// F R4: the provider this project's CONVERSATION uses, and today nothing else (erratum E10) --
+  /// `tickSupervisorChat` is the one reader. Null is the installation default
+  /// (`SLAVEOFAI_SUPERVISOR_MODEL`'s provider, else `claude_code`).
   supervisorProvider ProviderKind?
-  /// F R4: the model a chat turn, and every other Supervisor call for this project, uses. Null is
-  /// the installation default (`SLAVEOFAI_SUPERVISOR_MODEL` or `SUPERVISOR_DEFAULT_MODEL`).
+  /// F R4: the model this project's CONVERSATION uses, and today nothing else (erratum E10). Null
+  /// is the installation default (`SLAVEOFAI_SUPERVISOR_MODEL` or `SUPERVISOR_DEFAULT_MODEL`).
   supervisorModel    String?
   /// M48 R5: the runbook this project has adopted, or null. SetNull: deleting a runbook must not
   /// destroy a project. Adopting after tasks exist is allowed -- the next re-plan sees it.
@@ -1688,8 +1689,10 @@ enum SupervisorSituationKind {
   memory_candidates_piling
   workspace_halted
   /// Supervisor chat R3: a person asked for something in the conversation and the reply proposed
-  /// an action about it. The subject is the MESSAGE. The second kind `observe` never produces:
-  /// nothing about the world says a person wants something, only their message does.
+  /// an action about it. The subject is `<messageId>:<actionKind>` (erratum E3) -- the subject is a
+  /// KEY, and the bare message id would have a reply that asked for two things record only the
+  /// first. The second kind `observe` never produces: nothing about the world says a person wants
+  /// something, only their message does.
   operator_request
 }
 

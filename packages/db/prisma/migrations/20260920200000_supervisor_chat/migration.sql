@@ -46,7 +46,8 @@ CREATE INDEX "SupervisorMessage_workspaceId_status_idx" ON "SupervisorMessage"("
 -- project must not be blocked by its own thread.
 ALTER TABLE "SupervisorMessage" ADD CONSTRAINT "SupervisorMessage_workspaceId_fkey" FOREIGN KEY ("workspaceId") REFERENCES "Workspace"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
--- R4: NULL means the installation default. `setSupervisorSettings` writes these; every Supervisor
--- call for the workspace -- decisions, answers, chat -- resolves them the same way.
+-- R4: NULL means the installation default. `setSupervisorSettings` writes these, and the chat tick
+-- is what resolves them: today they govern the workspace's CONVERSATION and nothing else (erratum
+-- E10), while its decisions and its answers to workers take the daemon's own runtime.
 ALTER TABLE "Workspace" ADD COLUMN "supervisorProvider" "ProviderKind";
 ALTER TABLE "Workspace" ADD COLUMN "supervisorModel" TEXT;
