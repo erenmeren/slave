@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_GUARDRAIL_LIMITS,
+  HALTS_THAT_REFUSE_A_RESUME,
+  breachRefusingResume,
   evaluateGuardrails,
   type WorkspaceStats,
 } from '../../src/guardrails/evaluate.js'
@@ -139,5 +141,43 @@ describe('evaluateGuardrails', () => {
   it('does not breach on circuit breaker just below the consecutive failure limit', () => {
     const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, consecutiveFailures: 2 })
     expect(breaches).toHaveLength(0)
+  })
+})
+
+/**
+ * H8 (fix round 1, I1). `decide()` reports only the FIRST halting breach, and `concurrency` sorts
+ * ahead of `budget_exhausted` -- so a full workspace over budget halts as `concurrency`, and a
+ * tick deciding by the halt's name alone would resume a run into an empty purse. The answer has
+ * to come from the whole list.
+ */
+describe('breachRefusingResume (H8)', () => {
+  it('names the two halts that refuse even a resume, and no others', () => {
+    expect([...HALTS_THAT_REFUSE_A_RESUME].toSorted()).toEqual(['budget_exhausted', 'emergency_stop'])
+  })
+
+  it('finds the exhausted budget behind a concurrency halt that sorts ahead of it', () => {
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, activeRuns: 3, spentUsd: 20 })
+    expect(breaches[0]?.guardrail).toBe('concurrency')
+    expect(breachRefusingResume(breaches)?.guardrail).toBe('budget_exhausted')
+  })
+
+  it('refuses under an emergency stop', () => {
+    const breaches = evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, { ...CALM, emergencyStopped: true })
+    expect(breachRefusingResume(breaches)?.guardrail).toBe('emergency_stop')
+  })
+
+  it('lets a resume through a concurrency halt, a circuit-breaker halt and a budget warning', () => {
+    for (const stats of [
+      { ...CALM, activeRuns: 3 },
+      { ...CALM, globalActiveRuns: 6 },
+      { ...CALM, consecutiveFailures: 3 },
+      { ...CALM, spentUsd: 16 },
+    ]) {
+      expect(breachRefusingResume(evaluateGuardrails(DEFAULT_GUARDRAIL_LIMITS, stats))).toBeNull()
+    }
+  })
+
+  it('finds nothing in an empty list', () => {
+    expect(breachRefusingResume([])).toBeNull()
   })
 })

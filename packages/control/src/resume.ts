@@ -1,10 +1,11 @@
 import { prisma } from '@slave-of-ai/db/client'
-import { type Result, err, ok } from '@slave-of-ai/domain'
+import { type Result, breachRefusingResume, err, evaluateGuardrails, ok } from '@slave-of-ai/domain'
 import { appendEvent } from '@slave-of-ai/events'
 import { capabilitiesOf, type ProviderKind } from '@slave-of-ai/providers'
 import { isAlive } from './kill.js'
 import type { Principal } from './principal.js'
 import type { ControlRefusal } from './refusal.js'
+import { workspaceStats } from './stats.js'
 
 const RESUMABLE_STATUSES = ['paused'] as const
 
@@ -82,6 +83,19 @@ export async function requestResume(
   const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: run.slave.team.workspaceId } })
   if (workspace.haltedReason !== null) {
     return err({ kind: 'workspace_halted', workspaceId: workspace.id, reason: workspace.haltedReason })
+  }
+
+  // The other halt that refuses even a resume (H8 fix round 1, I1): the SAME set the tick's halt
+  // branch decides by, read from the whole breach list -- `decide()` names only the first halting
+  // breach, and `concurrency` sorts ahead of `budget_exhausted`. Refused here rather than only at
+  // the daemon, for the durable halt's own reason above: an intent recorded now would be carried
+  // out the moment somebody raised the budget, by a tick that cannot know it was asked against an
+  // empty purse. The set's other member, `emergency_stop`, is the check above -- the durable
+  // column is what that breach is derived from -- so only the budget can reach this line.
+  const snapshot = await workspaceStats(workspace.id)
+  const refusing = breachRefusingResume(evaluateGuardrails(snapshot.limits, snapshot.stats))
+  if (refusing?.guardrail === 'budget_exhausted') {
+    return err({ kind: 'budget_exhausted', workspaceId: workspace.id, detail: refusing.detail })
   }
 
   // Ahead of the status and checkpoint checks on purpose: those two ask whether THIS run is in a

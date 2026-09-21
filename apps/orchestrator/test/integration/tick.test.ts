@@ -808,12 +808,132 @@ describe('tick', () => {
       expect(await prisma.executionEvent.count({ where: { runId, type: 'run_resumed' } })).toBe(0)
     }, 60_000)
 
+    it('leaves the intent waiting under an exhausted budget that a concurrency halt masks (fix round 1, I1)', async (): Promise<void> => {
+      const runId = await pauseARun()
+      expect((await requestResume(runId, 'carry on', 'web')).ok).toBe(true)
+      // Both at once: the parked run holds the only slot AND has spent past the budget. `decide()`
+      // reports the FIRST halting breach, and `concurrency` sorts ahead of `budget_exhausted` --
+      // so the halt reads `concurrency`, and a tick deciding by that name alone would resume a
+      // run into an empty purse.
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { maxConcurrentRuns: 1 } })
+      await prisma.slaveRun.update({ where: { id: runId }, data: { costUsd: 999 } })
+
+      const report = await tick({ ...deps, registry: singleAdapterRegistry(fakeAdapter('env-echo')) })
+      await drainPumps()
+
+      expect(report.halted).toBe('concurrency')
+      const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+      expect(after.status).toBe('paused')
+      expect(after.resumeRequestedAt).not.toBeNull()
+      expect(await prisma.executionEvent.count({ where: { runId, type: 'run_resumed' } })).toBe(0)
+    }, 60_000)
+
     it('stamps the pause, so the time the run sat is not the time it worked', async (): Promise<void> => {
       const runId = await pauseARun()
       const parked = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
       expect(parked.pausedAt).not.toBeNull()
       expect(parked.pausedMs).toBe(0)
     }, 60_000)
+
+    /**
+     * Fix round 1, M3. `deliverAnswers` deadlocked the same way: a run waiting for an answer is
+     * `paused`, so it holds a slot; once it holds the last one the halt returned before the
+     * delivery pass, and the answer that would have woken it was never delivered.
+     */
+    describe('an answer is delivered under the same rule', () => {
+      /** A run parked by the ask path, holding this workspace's task, with a question sent and an
+       *  operator's answer waiting -- seeded, because the delivery pass reads only rows. */
+      async function waitingRunWithAnAnswer(): Promise<{ readonly runId: string; readonly answerId: string }> {
+        const run = await prisma.slaveRun.create({
+          data: {
+            taskId: fixture.taskId,
+            slaveId: fixture.slaveId,
+            status: 'paused',
+            pauseReason: 'waiting_for_answer',
+            pausedAt: new Date(),
+            worktreePath: fixture.repoPath,
+          },
+        })
+        await prisma.task.update({ where: { id: fixture.taskId }, data: { status: 'waiting', activeRunId: run.id } })
+        const { runDir, pauseFlagPath } = runFilePaths(fixture.repoPath, brandRunId(run.id))
+        await prisma.checkpoint.create({
+          data: {
+            runId: run.id,
+            sessionId: 's-1',
+            worktreePath: fixture.repoPath,
+            pauseFlagPath,
+            settingsPath: join(runDir, 'settings.json'),
+            hookPath: REAL_GATE,
+            gitAuthorName: 'Alex',
+            gitAuthorEmail: 'alex@slaveofai.local',
+            headCommit: git(['rev-parse', 'HEAD'], fixture.repoPath),
+          },
+        })
+        const question = await prisma.slaveMessage.create({
+          data: {
+            slaveId: fixture.slaveId,
+            workspaceId: fixture.workspaceId,
+            senderRunId: run.id,
+            recipientSlaveId: fixture.slaveId,
+            threadId: 'thread-1',
+            kind: 'question',
+            body: 'Which queue should retries land on?',
+            actor: 'slave',
+            expectsReply: true,
+          },
+        })
+        const answer = await prisma.slaveMessage.create({
+          data: {
+            slaveId: fixture.slaveId,
+            workspaceId: fixture.workspaceId,
+            recipientSlaveId: fixture.slaveId,
+            threadId: 'thread-1',
+            replyToId: question.id,
+            kind: 'answer',
+            body: 'payments-retry',
+            actor: 'human',
+          },
+        })
+        return { runId: run.id, answerId: answer.id }
+      }
+
+      it('wakes the waiting run under the concurrency halt its own seat causes', async (): Promise<void> => {
+        const { runId, answerId } = await waitingRunWithAnAnswer()
+        // The waiting run holds the only slot, and a second ready task proves the halt is real.
+        await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { maxConcurrentRuns: 1 } })
+        await anotherReadyTask()
+
+        const report = await tick({ ...deps, registry: singleAdapterRegistry(fakeAdapter('env-echo')) })
+        await drainPumps()
+
+        expect(report.halted).toBe('concurrency')
+        expect(report.started).toEqual([])
+        // The intent was recorded by the delivery pass and claimed by the resume pass of the same
+        // tick: the run is no longer parked, and the answer is stamped delivered.
+        const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+        expect(after.status).not.toBe('paused')
+        expect(await prisma.executionEvent.count({ where: { runId, type: 'run_resume_requested' } })).toBe(1)
+        expect((await prisma.slaveMessage.findUniqueOrThrow({ where: { id: answerId } })).deliveredAt).not.toBeNull()
+      }, 60_000)
+
+      it('leaves the answer undelivered under an emergency stop', async (): Promise<void> => {
+        const { runId, answerId } = await waitingRunWithAnAnswer()
+        await prisma.workspace.update({
+          where: { id: fixture.workspaceId },
+          data: { haltedReason: 'emergency stop by meren', haltedAt: new Date() },
+        })
+
+        const report = await tick({ ...deps, registry: singleAdapterRegistry(fakeAdapter('env-echo')) })
+        await drainPumps()
+
+        expect(report.halted).toBe('emergency_stop')
+        const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+        expect(after.status).toBe('paused')
+        expect(after.resumeRequestedAt).toBeNull()
+        expect(await prisma.executionEvent.count({ where: { runId, type: 'run_resume_requested' } })).toBe(0)
+        expect((await prisma.slaveMessage.findUniqueOrThrow({ where: { id: answerId } })).deliveredAt).toBeNull()
+      }, 60_000)
+    })
   })
 
   it('announces the budget warning exactly once, and the durable check survives a restart', async (): Promise<void> => {

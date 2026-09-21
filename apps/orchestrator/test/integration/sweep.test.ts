@@ -1629,6 +1629,7 @@ describe('the breaker beat (M51 R2)', () => {
       pauseReason?: 'human' | 'guardrail'
       pausedAt?: Date
       breakerLevel?: 'none' | 'steered' | 'constrained'
+      breakerSteers?: number
       queuedMessage?: string | null
     }): Promise<{ id: string }> => {
       const run = await givenBreakerRun({
@@ -1636,7 +1637,7 @@ describe('the breaker beat (M51 R2)', () => {
         pid: null,
         breakerLevel: over.breakerLevel ?? 'none',
         breakerTrips: 1,
-        breakerSteers: 1,
+        breakerSteers: over.breakerSteers ?? 1,
         pauseReason: over.pauseReason ?? 'guardrail',
         ...(over.queuedMessage === null ? {} : { queuedMessage: over.queuedMessage ?? 'stop and rethink' }),
         pausedAt: over.pausedAt ?? new Date(Date.now() - BREAKER_RESUME_GRACE_MS - 1_000),
@@ -1695,6 +1696,17 @@ describe('the breaker beat (M51 R2)', () => {
       await sweep(deps)
 
       expect((await reload(run)).resumeRequestedAt).toBeNull()
+    })
+
+    it('leaves a guardrail pause with a sentence the breaker never sent alone (fix round 1, I2)', async (): Promise<void> => {
+      // `breakerSteers: 0`: the sentence was queued by somebody else -- an instruction typed into
+      // the panel of a budget-paused run -- and nothing was dropped that this pass may re-issue.
+      const run = await parkedSteer({ breakerSteers: 0 })
+
+      await sweep(deps)
+
+      expect((await reload(run)).resumeRequestedAt).toBeNull()
+      expect(await eventsOfType(run.id, 'run_resume_requested')).toEqual([])
     })
 
     it('asks once: a run whose resume is already asked for is not asked for again', async (): Promise<void> => {

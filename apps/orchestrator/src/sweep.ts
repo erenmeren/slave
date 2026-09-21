@@ -4,6 +4,7 @@ import {
   isAlive,
   realWorktreeProbe,
   recordRunEvidence,
+  refusalText,
   requestResume,
   type WorktreeProbe,
 } from '@slave-of-ai/control'
@@ -125,6 +126,19 @@ export const BREAKER_RESUME_GRACE_MS = 30_000
  *  be able to see that THIS one was asked for by a later daemon, not by the tick the steer landed
  *  on. */
 const RECONCILED_BREAKER_ACTOR = 'circuit breaker (reconciled)'
+
+/**
+ * The refusal kind last logged per run by {@link reissueDroppedResumes} (H8 fix round 1, M5).
+ *
+ * The pass retries every tick, deliberately -- a refusal such as `run_still_stopping` or an
+ * exhausted budget clears on its own or by a person's hand -- but a run refused for good would
+ * otherwise be retried in silence for the rest of the daemon's life. One line per run per refusal
+ * kind; a run that is finally re-issued is forgotten, so a later refusal on it logs again. Bounded
+ * the way `worktreeFingerprints` is: past {@link REISSUE_LOG_MEMORY_MAX} entries the memory is
+ * dropped whole, and the cost is one repeated line.
+ */
+const reissueRefusalLogged = new Map<string, string>()
+const REISSUE_LOG_MEMORY_MAX = 500
 
 /** The workspace fields {@link strandedClaimGraceMs} needs -- the row `sweep` already loads. */
 export interface StrandedClaimGraceWorkspace {
@@ -687,13 +701,18 @@ async function deliverBreakerSteers(deps: SweepDeps): Promise<number> {
  *
  * `breakerSteers > 0` is what makes "a queued sentence on a guardrail pause" mean a BREAKER
  * steer and nothing else: `steerRun` increments it in the same statement that queues the
- * sentence, and nothing resets it. Without the clause, an instruction a person typed into the
- * panel of a budget-paused run would be resumed by this pass on their behalf.
+ * sentence. Without the clause, an instruction a person typed into the panel of a budget-paused
+ * run would be resumed by this pass on their behalf. Nothing resets the counter, so once a run has
+ * been steered the clause holds for the rest of its life -- a person's later instruction on such a
+ * run's guardrail pause IS re-issued by this pass (parked, fix round 1 M4).
  *
  * A run a PERSON paused (`pauseReason: 'human'`) is never here: the query says `guardrail`, and
  * nothing auto-resumes what somebody chose to stop. `requestResume` re-checks everything under
- * its own read -- the halt, the checkpoint, the pid -- so a refusal is an ordinary outcome and is
- * counted rather than logged, exactly as the delivery pass treats its own.
+ * its own read -- the halt, the budget, the checkpoint, the pid -- so a refusal is an ordinary
+ * outcome and the pass tries again next tick. It is LOGGED once per run per refusal kind (fix
+ * round 1, M5) rather than counted in silence: a run refused for good -- no checkpoint, a provider
+ * that cannot resume -- would otherwise be retried every second for the life of the daemon with
+ * nothing in the log to say so.
  */
 async function reissueDroppedResumes(deps: SweepDeps): Promise<number> {
   const dropped = await db.slaveRun.findMany({
@@ -715,7 +734,18 @@ async function reissueDroppedResumes(deps: SweepDeps): Promise<number> {
     // and a resume asked for with no message leaves it there. `'system'` as the actor: nobody
     // pressed anything.
     const result = await requestResume(run.id, null, RECONCILED_BREAKER_ACTOR, undefined, 'system')
-    if (result.ok) reissued += 1
+    if (result.ok) {
+      reissued += 1
+      reissueRefusalLogged.delete(run.id)
+      continue
+    }
+    if (reissueRefusalLogged.get(run.id) === result.error.kind) continue
+    if (reissueRefusalLogged.size >= REISSUE_LOG_MEMORY_MAX) reissueRefusalLogged.clear()
+    reissueRefusalLogged.set(run.id, result.error.kind)
+    console.error(
+      `[sweep] the resume of run ${run.id} could not be re-issued (${result.error.kind}): ` +
+        `${refusalText(result.error)}. It will be tried again on the next tick.`,
+    )
   }
   return reissued
 }

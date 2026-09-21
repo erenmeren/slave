@@ -42,6 +42,15 @@ export type ControlRefusal =
    * cheap: it turns a future ordering regression into a refusal instead of two slaves on one branch.
    */
   | { readonly kind: 'run_still_stopping'; readonly runId: string }
+  /**
+   * H8 (fix round 1, I1): `requestResume` on a workspace whose budget is spent. The same halt the
+   * tick refuses a resume under (`HALTS_THAT_REFUSE_A_RESUME`), applied at the verb -- so a CLI or
+   * web resume into an empty purse is refused where the person can read why, rather than recorded
+   * and carried out by whichever tick next finds the budget raised. `detail` is the guardrail's
+   * own sentence ("Spent $21 of $20."). Its sibling in that set, `emergency_stop`, is refused as
+   * `workspace_halted` above: the durable column is what that breach is derived from.
+   */
+  | { readonly kind: 'budget_exhausted'; readonly workspaceId: string; readonly detail: string }
   /** `requestPause` claimed the run but `signalPause` threw; the claim was rolled back (M13 §3.4). */
   | { readonly kind: 'pause_unsignalled'; readonly runId: string; readonly reason: string }
   /**
@@ -619,6 +628,8 @@ export function refusalText(refusal: ControlRefusal): string {
       return `run ${refusal.runId} has no checkpoint: there is nothing to resume it from`
     case 'run_still_stopping':
       return 'the run is still stopping; retry in a moment'
+    case 'budget_exhausted':
+      return `this project has spent its budget (${refusal.detail}); nothing resumes until the budget is raised`
     case 'pause_unsignalled':
       return `the pause could not be signalled to run ${refusal.runId}: ${refusal.reason}`
     case 'run_not_steerable':

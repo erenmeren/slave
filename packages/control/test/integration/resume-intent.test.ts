@@ -113,6 +113,33 @@ describe('the resume intent', () => {
     expect(after.resumeRequestedAt).toBeNull()
   })
 
+  // H8 (fix round 1, I1): the same two halts the tick refuses a resume under, applied at the verb
+  // -- so a CLI or web resume into an empty purse is refused where the person can read why,
+  // rather than recorded and carried out by whichever tick next finds the budget raised.
+  it('refuses under an exhausted budget, naming it', async (): Promise<void> => {
+    const { run } = fixture
+    // Past the workspace's default $20, on this very run: spend counts whatever the run's status.
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { costUsd: 999 } })
+
+    const result = await requestResume(run.id, null, 'meren')
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.kind).toBe('budget_exhausted')
+      expect(refusalText(result.error)).toContain('budget')
+    }
+    const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: run.id } })
+    expect(after.resumeRequestedAt).toBeNull()
+    expect(await prisma.executionEvent.count({ where: { runId: run.id, type: 'run_resume_requested' } })).toBe(0)
+  })
+
+  it('still records the intent under a budget warning, and under a full concurrency slot', async (): Promise<void> => {
+    const { run, workspace } = fixture
+    await prisma.workspace.update({ where: { id: workspace.id }, data: { maxConcurrentRuns: 1 } })
+    await prisma.slaveRun.update({ where: { id: run.id }, data: { costUsd: 17 } })
+
+    expect((await requestResume(run.id, null, 'meren')).ok).toBe(true)
+  })
+
   it('refuses a run that is not paused / has no checkpoint', async (): Promise<void> => {
     const { run } = fixture
     await prisma.checkpoint.delete({ where: { runId: run.id } })
