@@ -344,7 +344,7 @@ export interface DaemonDeps {
    * Supervisor chat R4: the deciders the CONVERSATION's pass chooses from, one per provider.
    *
    * A registry rather than {@link modelDecider} because a project picks which runtime answers its
-   * Supervisor (`Workspace.supervisorProvider`), so one function could not serve both -- and
+   * conversation (`Workspace.supervisorProvider`, E10), so one function could not serve both -- and
    * `modelDecider` stays exactly what it was for every other pass: the installation default,
    * which `cli.ts` takes off this same registry's `claude_code` entry.
    *

@@ -3623,8 +3623,8 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (autonomy !== undefined && autonomy !== 'propose' && autonomy !== 'act') {
         throw new Error('--autonomy must be propose or act')
       }
-      // F R4: WHICH runtime answers this project's Supervisor -- decisions, answers and the
-      // conversation alike. The `--profile-file | --clear-profile` idiom twice over, because both
+      // F R4 (E10): WHICH runtime answers this project's conversation with the Supervisor -- and
+      // today nothing else. The `--profile-file | --clear-profile` idiom twice over, because both
       // columns are nullable and `null` is a real instruction ("back to the installation default")
       // that an omitted flag cannot say.
       const providerFlag = flagText(flags, 'provider')

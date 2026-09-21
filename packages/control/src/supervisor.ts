@@ -1302,8 +1302,8 @@ export async function setSupervisorSettings(
      */
     readonly autonomy?: 'propose' | 'act'
     /**
-     * F R4: WHICH runtime answers this project's Supervisor -- every call for the workspace, the
-     * conversation included. `null` is the installation default (`claude_code`), which is what an
+     * F R4 (E10): WHICH runtime answers this project's conversation with the Supervisor -- today
+     * the conversation alone. `null` is the installation default (`claude_code`), which is what an
      * unset column has always meant, so clearing is an explicit null rather than an omission.
      */
     readonly provider?: ProviderKind | null

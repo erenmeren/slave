@@ -169,8 +169,8 @@ describe('the workspace settings routes', () => {
     })
   })
 
-  /** F R4: WHICH runtime answers this project's Supervisor -- every call for the workspace, the
-   *  conversation included. The pair joins the three settings this route already patched. */
+  /** F R4 (E10): WHICH runtime answers this project's conversation with the Supervisor -- today
+   *  the conversation alone. The pair joins the three settings this route already patched. */
   describe('PATCH /api/w/[workspaceId]/supervisor/settings', () => {
     const stored = async (workspaceId: string): Promise<{ provider: string | null; model: string | null }> => {
       const row = await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId } })
