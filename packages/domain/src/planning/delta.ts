@@ -15,14 +15,39 @@ import { MAX_TASK_CAPABILITIES, findCycle, planGraphSchema, normalisePlanTask, t
  * a cancellation, because a model that forgot to list a task must not be able to delete it.
  */
 export interface PlanDelta {
-  readonly add: readonly PlanTask[]
+  readonly add: readonly DeltaTask[]
   readonly cancel: readonly string[]
   readonly keep: readonly string[]
 }
 
+/**
+ * One task an `add` list carries: a {@link PlanTask} plus the one thing only a DELTA can say (H5).
+ *
+ * A first plan has nothing to replace -- there is no board yet -- so `replaces` lives here rather
+ * than on `PlanTask`, and `parsePlanGraph` cannot be handed a graph carrying it.
+ */
+export interface DeltaTask extends PlanTask {
+  /**
+   * H5: the task already on the board whose work this one REDOES, when it redoes one.
+   *
+   * The field exists because the planner had no way to say it. A delta that adds a bounded rerun
+   * of a failed research task and a revision task depending on the three tasks the failed one
+   * blocked leaves those three still depending on the FAILED task: the rerun finishes, nothing
+   * moves, and a person has to re-point three dependencies by hand. Naming the replaced task is
+   * what lets `applyDelta` move them, in the same transaction that creates this row.
+   *
+   * Checked against the board by {@link parsePlanDelta}: an unknown id, a task whose work is
+   * finished or already in flight, and two additions claiming the same one are all refused.
+   */
+  readonly replaces?: string | undefined
+}
+
 /** The `add` entries are exactly `parsePlanGraph`'s own task shape -- reused from
- *  {@link planGraphSchema} rather than re-spelt, so a field added to one is added to both. */
-const planTaskSchema = planGraphSchema.shape.tasks.element
+ *  {@link planGraphSchema} rather than re-spelt, so a field added to one is added to both -- plus
+ *  H5's `replaces`, the one field a delta's task has and a first plan's does not. `.nullish()` for
+ *  `handoff`'s reason (spec erratum E18): a planner asked for an optional field answers it two
+ *  ways, and a `null` here means "this task replaces nothing". */
+const planTaskSchema = planGraphSchema.shape.tasks.element.extend({ replaces: z.string().min(1).nullish() })
 
 /**
  * The shape a candidate object must have before {@link validateDelta} looks at its content.
@@ -51,18 +76,38 @@ const planDeltaSchema = z.object({
  * `existingTaskIds` is the board the delta is read against, which is what makes this validator
  * different from `parsePlanGraph`'s: a new task's `dependsOn` may name either a plan-local key or
  * an EXISTING task id (spec §1), and `cancel`/`keep` may name only existing ids.
+ *
+ * `statusByTaskId` is that same board's STATUSES, which only H5's `replaces` needs: what may be
+ * redone is a question about how far a task got, and an id alone cannot answer it. A caller that
+ * passes none can still read every delta that replaces nothing -- and a `replaces` it cannot check
+ * is refused rather than waved through, because the one caller that resolves a delta against real
+ * rows always has the statuses in hand.
  */
 export function parsePlanDelta(
   text: string,
   existingTaskIds: readonly string[],
   stageKeys: readonly string[] = [],
+  statusByTaskId: ReadonlyMap<string, TaskStatus> = new Map(),
 ): Result<PlanDelta, string> {
   for (const candidate of jsonObjectsLastToFirst(text)) {
     const parsed = planDeltaSchema.safeParse(candidate)
-    if (parsed.success) return validateDelta(parsed.data as PlanDelta, existingTaskIds, stageKeys)
+    if (parsed.success) return validateDelta(parsed.data as PlanDelta, existingTaskIds, stageKeys, statusByTaskId)
   }
   return err('no JSON object with { "add": [...], "cancel": [...], "keep": [...] } found in the re-plan output')
 }
+
+/**
+ * The statuses whose work may be REDONE by an addition that names them (H5).
+ *
+ * The mirror of {@link CANCELLABLE_STATUSES} and a wider list on purpose: cancelling asks "has this
+ * work started", while replacing asks "is this work still the board's answer to something". A
+ * `failed` or `cancelled` task is exactly what a rerun exists to replace, a `rework` one is work
+ * whose result was rejected, and `backlog`/`ready`/`blocked` work has not begun. What is NOT here
+ * is `done` -- finished work is not redone by taking its dependents away from it -- and everything
+ * in flight (`assigned`, `running`, `verifying`, `reviewing`, `merging`, `waiting`), where a
+ * replacement would re-point a live run's dependents out from under it.
+ */
+const REPLACEABLE_STATUSES: readonly TaskStatus[] = ['backlog', 'ready', 'blocked', 'rework', 'failed', 'cancelled']
 
 /**
  * Everything about a delta that a zod shape cannot say (spec erratum E1).
@@ -78,6 +123,7 @@ function validateDelta(
   delta: PlanDelta,
   existingTaskIds: readonly string[],
   stageKeys: readonly string[],
+  statusByTaskId: ReadonlyMap<string, TaskStatus>,
 ): Result<PlanDelta, string> {
   const existing = new Set(existingTaskIds)
 
@@ -136,6 +182,33 @@ function validateDelta(
   const cycle = findCycle(planLocal)
   if (cycle !== null) return err(`the added tasks have a dependency cycle through: ${cycle.join(', ')}`)
 
+  // H5: what a task says it REDOES, judged against the same board every other id is judged
+  // against. Three refusals, all of them for a wrong answer that would otherwise be written into
+  // the dependency graph and then have to be undone by hand.
+  const replaced = new Set<string>()
+  for (const task of delta.add) {
+    if (task.replaces == null) continue
+    if (!existing.has(task.replaces)) {
+      return err(`added task "${task.key}" replaces "${task.replaces}", which is not a task on the board`)
+    }
+    // Two additions replacing one task cannot both take its dependents, and whichever ran second
+    // would silently win. A delta that asks for it is a plan that has not decided.
+    if (replaced.has(task.replaces)) {
+      return err(`two added tasks replace the same task: "${task.replaces}"`)
+    }
+    const status = statusByTaskId.get(task.replaces)
+    if (status === undefined) {
+      return err(`added task "${task.key}" replaces "${task.replaces}", whose status this delta was not read against`)
+    }
+    if (!REPLACEABLE_STATUSES.includes(status)) {
+      return err(
+        `added task "${task.key}" replaces "${task.replaces}", which is ${status}: ` +
+          `only ${REPLACEABLE_STATUSES.join(', ')} work can be redone`,
+      )
+    }
+    replaced.add(task.replaces)
+  }
+
   for (const taskId of delta.cancel) {
     if (!existing.has(taskId)) return err(`cancel names a task that is not on the board: "${taskId}"`)
   }
@@ -152,7 +225,17 @@ function validateDelta(
   // the same two reasons: every caller gets `HandoffContract` rather than the loose record the shape
   // let through, and a `null` the planner wrote is DELETED rather than carried into a `Json` column
   // (spec erratum E18).
-  return ok({ ...delta, add: delta.add.map(normalisePlanTask) })
+  return ok({ ...delta, add: delta.add.map(normaliseDeltaTask) })
+}
+
+/**
+ * {@link normalisePlanTask} plus H5's own field, with the same rule applied to it: the key is
+ * REMOVED where the planner wrote `null` or nothing (spec erratum E18), so "this task replaces
+ * nothing" is one value here rather than two.
+ */
+function normaliseDeltaTask(task: DeltaTask): DeltaTask {
+  const { replaces, ...rest } = task
+  return { ...normalisePlanTask(rest), ...(replaces == null ? {} : { replaces }) }
 }
 
 /**
@@ -181,6 +264,7 @@ export const REPLAN_INSTRUCTIONS = [
   'dependsOn may name another new key or an existing task id, and must not form a cycle.',
   'A task that must read the web carries "needs": ["network_fetch"]; one that must run commands beyond the repository\'s own scripts carries "run_commands"; most tasks carry neither.',
   'Put a task id in "cancel" only when the new GOAL no longer needs that work, and in "keep" when it still does. A task you do not mention is kept, and a task must not be in both.',
+  'When a task redoes another one\'s work, name the task it replaces -- "replaces": "<task id>" -- and everything waiting on that task will wait on yours instead.',
   'You never cancel work that is running or done: a cancellation of anything but a backlog, ready or blocked task is dropped, and every cancellation you ask for is a proposal a human approves.',
 ].join('\n')
 
@@ -194,10 +278,17 @@ export interface BoardTask {
   readonly goalVersion: number | null
 }
 
-/** The statuses a re-plan may cancel (M40 §1): work that has not started. Anything else -- a run
- *  in flight, a review in progress, a merge, a finished or already-terminal task -- is the
- *  model's request DROPPED, because a wrong deletion costs real work (ruling R1). */
-const CANCELLABLE_STATUSES: readonly TaskStatus[] = ['backlog', 'ready', 'blocked']
+/**
+ * The statuses a re-plan may cancel (M40 §1): work that has not started. Anything else -- a run
+ * in flight, a review in progress, a merge, a finished or already-terminal task -- is the
+ * model's request DROPPED, because a wrong deletion costs real work (ruling R1).
+ *
+ * EXPORTED (H5 fix round 1) because it is the same list `cancelTask` refuses everything else
+ * against, and a proposal to cancel a task that verb will refuse is a question nobody can answer:
+ * the verb, the policy that proposes for it, and the replacement rule that proposes for it too
+ * all read this one list, so it cannot be spelt twice and drift.
+ */
+export const CANCELLABLE_STATUSES: readonly TaskStatus[] = ['backlog', 'ready', 'blocked']
 
 export interface CancelPolicyOutcome {
   readonly cancellable: readonly string[]

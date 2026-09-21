@@ -137,6 +137,14 @@
 //   was passed. It sits behind the two decision arms and in front of the
 //   planning one: a re-plan answered with a first plan would rebuild the
 //   board.
+//   H5 adds a second delta to the same arm: with `--replan-replaces <id>`
+//   in ARGV it replays `fixtures/replan-replaces.ndjson` instead, whose
+//   first addition carries `"replaces"` (and a `dependsOn`) naming that id
+//   -- the re-plan that redoes a board task and takes its dependents with
+//   it -- and whose second waits on both that addition and the replaced
+//   id. `--replan-depends <id>` gives the first one more board dependency
+//   and `--replan-cancel <id>` fills its `cancel`; either placeholder is
+//   removed when its flag is absent.
 //   m41-flow       synthetic, M41's whole-story mode: every arm one gate
 //                  needs, in one file, so a single daemon lineage can plan,
 //                  work, ask, be answered, resume, be reviewed and be
@@ -930,16 +938,43 @@ function fixtureSessionId(name) {
  */
 async function replanArm(prompt) {
   if (!prompt.includes('"replan"')) return false
-  const cancelId = replanCancelId()
-  let substituted = false
-  const lines = readFixtureLines('replan-delta').map((line) => {
-    const patched = substituteCancelId(JSON.parse(line), cancelId, () => {
-      substituted = true
-    })
+  // H5: `--replan-replaces <id>` picks the delta that REDOES a board task -- an addition carrying
+  // `replaces` (and a `dependsOn` on the very task it replaces, the case that must not become a
+  // self-dependency), beside a second addition that waits on both that key and the replaced id.
+  // Its own fixture rather than more placeholders in `replan-delta`, because that one is replayed
+  // for every re-plan test there is and most of them cancel a task whose status `replaces` would
+  // refuse outright. Its other two placeholders are optional: `--replan-depends <id>` gives the
+  // replacement one more dependency (a board task -- the shape that can close a cycle through
+  // the re-point), and `--replan-cancel <id>` is honoured here exactly as on the other delta.
+  const replacesId = replanReplacesId()
+  if (replacesId !== null) {
+    await replayDelta('replan-replaces', [
+      ['$REPLACES_ID', replacesId],
+      ['$DEPENDS_ID', replanDependsId()],
+      ['$CANCEL_ID', replanCancelId()],
+    ])
+  }
+  await replayDelta('replan-delta', [['$CANCEL_ID', replanCancelId()]])
+}
+
+/** One delta fixture, with every id it cannot carry statically substituted in (or its placeholder
+ *  removed, when the id is null) -- and a hard failure when the file has no such placeholder,
+ *  which is a fixture nobody meant to write rather than a delta about nothing. Never returns: the
+ *  arm it serves ends the process. */
+async function replayDelta(name, placeholders) {
+  const substituted = new Set()
+  const lines = readFixtureLines(name).map((line) => {
+    let patched = JSON.parse(line)
+    for (const [token, id] of placeholders) {
+      patched = substitutePlaceholder(patched, token, id, () => {
+        substituted.add(token)
+      })
+    }
     return JSON.stringify(patched)
   })
-  if (!substituted) {
-    process.stderr.write('fake-claude: replan-delta.ndjson carries no $CANCEL_ID placeholder to substitute\n')
+  for (const [token] of placeholders) {
+    if (substituted.has(token)) continue
+    process.stderr.write(`fake-claude: ${name}.ndjson carries no ${token} placeholder to substitute\n`)
     process.exit(2)
   }
   await writeLines(lines)
@@ -949,9 +984,19 @@ async function replanArm(prompt) {
 /** The id `--replan-cancel <id>` names, or `null` when the flag is absent -- or present with
  *  another flag where its value should be, which is an omitted value, not an id. */
 function replanCancelId() {
-  const index = args.indexOf('--replan-cancel')
-  const named = index === -1 ? undefined : args[index + 1]
-  return named === undefined || named.startsWith('-') ? null : named
+  return flagValue('--replan-cancel') ?? null
+}
+
+/** H5: the id `--replan-replaces <id>` names -- the board task the delta's addition redoes.
+ *  Same shape as {@link replanCancelId}, and argv for the same reason. */
+function replanReplacesId() {
+  return flagValue('--replan-replaces') ?? null
+}
+
+/** H5 fix round 1: the id `--replan-depends <id>` names -- one more board task the replacement
+ *  waits on, or `null` for none. */
+function replanDependsId() {
+  return flagValue('--replan-depends') ?? null
 }
 
 /** M41: the one-word TOKEN naming the task a work run must stop and ask about -- `--ask-on-task <token>` from
@@ -987,22 +1032,30 @@ function isAskingLeg(prompt) {
   return line !== undefined && line.includes(token)
 }
 
-/** Rewrites `$CANCEL_ID` wherever it appears in a parsed fixture line's strings: replaced by the
- *  id when there is one, and otherwise removed ARRAY ELEMENT AND ALL (`"$CANCEL_ID"`, quotes
- *  included, since the delta lives inside a JSON string) so `cancel` comes out empty. Walks the
- *  parsed line rather than the raw text so the escaping of the embedded JSON is JSON's problem
- *  and not a regex's. */
-function substituteCancelId(value, cancelId, onSubstitution) {
+/** Rewrites a `$NAME` placeholder wherever it appears in a parsed fixture line's strings: replaced
+ *  by the id when there is one, and otherwise removed ARRAY ELEMENT AND ALL (`"$NAME"`, quotes
+ *  included, since the delta lives inside a JSON string) so the array it sat in comes out empty.
+ *  Walks the parsed line rather than the raw text so the escaping of the embedded JSON is JSON's
+ *  problem and not a regex's. Taken by name (H5) because a second delta fixture carries a second
+ *  placeholder, and one traversal for both is one rule for both. */
+function substitutePlaceholder(value, name, id, onSubstitution) {
   if (typeof value === 'string') {
-    const token = cancelId === null ? '"$CANCEL_ID"' : '$CANCEL_ID'
-    if (!value.includes(token)) return value
+    if (id !== null) {
+      if (!value.includes(name)) return value
+      onSubstitution()
+      return value.split(name).join(id)
+    }
+    // Removal: the quoted element, and the comma in front of it when it is not the array's first
+    // element (`["a","$X"]` must come out `["a"]`, not `["a",]`).
+    const quoted = `"${name}"`
+    if (!value.includes(quoted)) return value
     onSubstitution()
-    return value.split(token).join(cancelId ?? '')
+    return value.split(`,${quoted}`).join('').split(quoted).join('')
   }
-  if (Array.isArray(value)) return value.map((entry) => substituteCancelId(entry, cancelId, onSubstitution))
+  if (Array.isArray(value)) return value.map((entry) => substitutePlaceholder(entry, name, id, onSubstitution))
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, substituteCancelId(entry, cancelId, onSubstitution)]),
+      Object.entries(value).map(([key, entry]) => [key, substitutePlaceholder(entry, name, id, onSubstitution)]),
     )
   }
   return value

@@ -1,4 +1,5 @@
 import {
+  CANCELLABLE_STATUSES,
   NON_TERMINAL_RUN_STATUSES,
   applyCancelPolicy,
   candidates,
@@ -14,6 +15,7 @@ import {
 } from '@slave-of-ai/domain'
 import {
   amendRunOutcome,
+  dependsTransitivelyOn,
   listCapabilities,
   loadSupervisorWorld,
   readRunbookById,
@@ -443,7 +445,14 @@ export async function concludeReplan(runId: RunId): Promise<void> {
       taskId: task.id,
       actor: 'slave',
       // H2: the same payload a first plan's `task.created` carries, for the same reason.
-      payload: { title: task.title, goalVersion: version, assigneeId: task.assigneeId },
+      // H5 adds the one thing a first plan's never carries: the task this one redoes, so the feed
+      // can say WHY three other tasks changed what they were waiting for.
+      payload: {
+        title: task.title,
+        goalVersion: version,
+        assigneeId: task.assigneeId,
+        ...(task.replaces === null ? {} : { replaces: task.replaces }),
+      },
     })
   }
 
@@ -451,7 +460,13 @@ export async function concludeReplan(runId: RunId): Promise<void> {
   const proposals = await proposeCancellations({
     workspaceId,
     version,
-    cancellable: policy.cancellable,
+    cancellable: [
+      ...policy.cancellable.map((taskId) => ({ taskId, replacedBy: null })),
+      // H5: work that has been REDONE is work the board no longer needs, so it joins the
+      // cancellations the model asked for outright -- with the replacement named, because "why is
+      // this being cancelled" has a better answer here than anywhere else.
+      ...replacedCancellations(applied, policy.cancellable),
+    ],
     board: applied.board,
   })
 
@@ -470,7 +485,9 @@ export async function concludeReplan(runId: RunId): Promise<void> {
       // the model asked for and did not get is on the record rather than silently forgotten.
       droppedCancellations: policy.dropped.map((entry) => ({ taskId: entry.taskId, status: entry.status })),
       // ...and the ones that were allowed but did not happen anyway (fix round 1). The three lists
-      // together account for every id the model asked to cancel.
+      // together account for every id the model asked to cancel -- and `proposedCancellations`
+      // may carry one more kind of id the model did NOT ask for: a task an addition `replaces`
+      // (H5), proposed on that account alone, with the replacement named on its decision row.
       failedProposals: proposals.failed,
       // E14: the keys the table does not have, dropped from the tasks that named them. Absent when
       // there were none, exactly as on `workspace.plan_created`.
@@ -544,7 +561,13 @@ type AppliedDelta =
       readonly ok: true
       /** The tasks the delta added -- `assigneeId` is H2's: whose each one is from the moment it
        *  exists, carried out so `concludeReplan`'s `task.created` says it. */
-      readonly created: readonly { readonly id: string; readonly title: string; readonly assigneeId: string | null }[]
+      readonly created: readonly {
+        readonly id: string
+        readonly title: string
+        readonly assigneeId: string | null
+        /** H5: the board task this addition redoes, or null -- what re-pointed the dependents. */
+        readonly replaces: string | null
+      }[]
       readonly board: readonly BoardRow[]
       readonly delta: PlanDelta
       /** M47 E14: the keys the taxonomy does not have, dropped from the tasks that asked for them
@@ -613,6 +636,10 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
       text,
       board.map((task) => task.id),
       stageKeys,
+      // H5: the same board, by status. What an addition may REPLACE is a question about how far
+      // that task got, and the id list alone cannot answer it -- this is the read that makes
+      // "replaces a task that is already done" a named refusal rather than a re-pointed graph.
+      new Map(board.map((task) => [task.id, task.status] as const)),
     )
     if (!parsed.ok) return { ok: false, reason: `planning run produced no valid re-plan delta: ${parsed.error}` }
 
@@ -683,7 +710,12 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
 
     const created = await prisma.$transaction(async (tx) => {
       const idByKey = new Map<string, string>()
-      const added: Array<{ readonly id: string; readonly title: string; readonly assigneeId: string | null }> = []
+      const added: Array<{
+        readonly id: string
+        readonly title: string
+        readonly assigneeId: string | null
+        readonly replaces: string | null
+      }> = []
       for (const { planTask, keys, requiredRole, maxAttempts } of derived) {
         const task = await tx.task.create({
           data: {
@@ -717,7 +749,14 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
           },
         })
         idByKey.set(planTask.key, task.id)
-        added.push({ id: task.id, title: task.title, assigneeId: task.assigneeId })
+        added.push({
+          id: task.id,
+          title: task.title,
+          assigneeId: task.assigneeId,
+          // H5: what this addition said it redoes, carried out to the event and to the
+          // cancellation proposals. `null` is "it replaces nothing", which is most additions.
+          replaces: planTask.replaces ?? null,
+        })
       }
       for (const planTask of parsed.value.add) {
         const taskId = idByKey.get(planTask.key) as string
@@ -728,6 +767,65 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
           // duplicates -- `TaskDependency`'s primary key does, by rejecting the second one, and
           // that rejection arrives here as a rolled-back transaction and a failed run.
           await tx.taskDependency.create({ data: { taskId, dependsOnTaskId: idByKey.get(dep) ?? dep } })
+        }
+      }
+      // H5, and the whole point of `replaces`: everything that was waiting on the replaced task
+      // now waits on the task that redoes its work. IN THIS TRANSACTION, after the additions and
+      // their own dependencies, so a delta that fails anywhere leaves the graph exactly as it was
+      // -- and after, not before, because a delta may also add a task that depends on the replaced
+      // one, and that task must follow the replacement like every other dependent.
+      for (const task of added) {
+        if (task.replaces === null) continue
+        const waiting = await tx.taskDependency.findMany({ where: { dependsOnTaskId: task.replaces } })
+        for (const row of waiting) {
+          // Two rows are NOT re-pointed, and both are dropped instead, because the edge each one
+          // would become cannot be written:
+          //
+          // - the replacement's own edge to what it replaces, which a planner may well write
+          //   (`dependsOn: [<the failed task>]` beside `replaces`). Re-pointed it is a task
+          //   depending on itself; left alone it is the rerun waiting forever on the very work it
+          //   was added to redo -- the deadlock this whole field exists to end. A task cannot wait
+          //   for the work it redoes, so the line goes.
+          // - a dependent that was told to wait on BOTH: the row it would become is already there,
+          //   and `TaskDependency`'s primary key would reject the second one.
+          const redundant =
+            row.taskId === task.id ||
+            (await tx.taskDependency.findUnique({
+              where: { taskId_dependsOnTaskId: { taskId: row.taskId, dependsOnTaskId: task.id } },
+            })) !== null
+          if (redundant) {
+            await tx.taskDependency.delete({
+              where: { taskId_dependsOnTaskId: { taskId: row.taskId, dependsOnTaskId: task.replaces } },
+            })
+            continue
+          }
+          await tx.taskDependency.update({
+            where: { taskId_dependsOnTaskId: { taskId: row.taskId, dependsOnTaskId: task.replaces } },
+            data: { dependsOnTaskId: task.id },
+          })
+        }
+      }
+      // Fix round 1, I1: a re-point can close a LOOP. A board where D waits on the replaced task,
+      // and a delta whose replacement waits on D, becomes `D -> new -> D` the moment D's edge is
+      // moved -- a cycle `validateDelta` cannot see (it checks plan-local keys, and D is a board
+      // row) and one `dependenciesDone` would evaluate as false for both forever, with nothing in
+      // the log to say why. Every edge the re-point writes points INTO a replacement, so every
+      // cycle it can create passes through one and leaves it by one of its own outgoing edges;
+      // each of those is asked the same question `addTaskDependency` asks before it writes an
+      // edge -- against THIS transaction's graph, which is the one about to commit, and after
+      // EVERY re-point, since two replacements can close one loop between them. A throw here
+      // rolls the whole delta back and reaches `failRun` as `ok: false`, the shape every other
+      // pre-commit failure takes.
+      for (const task of added) {
+        if (task.replaces === null) continue
+        const outgoing = await tx.taskDependency.findMany({ where: { taskId: task.id } })
+        for (const edge of outgoing) {
+          if (await dependsTransitivelyOn(tx, edge.dependsOnTaskId, task.id)) {
+            throw new Error(
+              `added task "${task.title}" (${task.id}) replaces ${task.replaces} and waits on ` +
+                `${edge.dependsOnTaskId}, which now waits on it: the re-point would close a dependency cycle`,
+            )
+          }
         }
       }
       return added
@@ -748,6 +846,40 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
       reason: `planning run produced a re-plan that could not be applied: ${error instanceof Error ? error.message : String(error)}`,
     }
   }
+}
+
+/** One cancellation to propose: the task, and the addition that redid its work when one did
+ *  (H5). `replacedBy` is null for a cancellation the model asked for outright. */
+interface CancellationRequest {
+  readonly taskId: string
+  readonly replacedBy: { readonly id: string; readonly title: string } | null
+}
+
+/**
+ * H5: the replaced tasks that are worth proposing a cancellation for.
+ *
+ * Two exclusions, and both are about not asking a person a question nobody can act on. The
+ * status rule is the POSITIVE one `applyCancelPolicy` applies and `cancelTask` enforces --
+ * `CANCELLABLE_STATUSES`, one list read in all three places (fix round 1, I2): a replaced `failed`
+ * or `cancelled` task is history once its dependents have moved, and a replaced `rework` task,
+ * though it may be replaced, is one the verb would refuse to cancel, so a proposal for it would be
+ * a decision row a person could only fail to apply. And a task the delta ALSO named in `cancel`
+ * already has a proposal coming from `applyCancelPolicy`; a second one for the same subject would
+ * be a duplicate decision row for one task.
+ */
+function replacedCancellations(
+  applied: Extract<AppliedDelta, { ok: true }>,
+  alreadyAsked: readonly string[],
+): readonly CancellationRequest[] {
+  const byId = new Map(applied.board.map((task) => [task.id, task] as const))
+  const requests: CancellationRequest[] = []
+  for (const task of applied.created) {
+    if (task.replaces === null || alreadyAsked.includes(task.replaces)) continue
+    const replaced = byId.get(task.replaces)
+    if (replaced === undefined || !CANCELLABLE_STATUSES.includes(replaced.status)) continue
+    requests.push({ taskId: task.replaces, replacedBy: { id: task.id, title: task.title } })
+  }
+  return requests
 }
 
 /**
@@ -778,7 +910,7 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
 async function proposeCancellations(input: {
   readonly workspaceId: string
   readonly version: number
-  readonly cancellable: readonly string[]
+  readonly cancellable: readonly CancellationRequest[]
   readonly board: readonly { readonly id: string; readonly title: string; readonly goalVersion: number | null }[]
 }): Promise<{ readonly proposed: string[]; readonly failed: string[] }> {
   if (input.cancellable.length === 0) return { proposed: [], failed: [] }
@@ -795,25 +927,33 @@ async function proposeCancellations(input: {
         `(${error instanceof Error ? error.message : String(error)}): ` +
         `${String(input.cancellable.length)} cancellation(s) could not be proposed`,
     )
-    return { proposed: [], failed: [...input.cancellable] }
+    return { proposed: [], failed: input.cancellable.map((entry) => entry.taskId) }
   }
 
   const proposed: string[] = []
   const failed: string[] = []
 
-  for (const taskId of input.cancellable) {
+  for (const { taskId, replacedBy } of input.cancellable) {
     const task = input.board.find((entry) => entry.id === taskId)
     if (task === undefined) continue
     const situation: Situation = {
       kind: 'stale_task',
       subjectId: taskId,
-      summary: `the re-plan for goal v${String(input.version)} no longer needs "${task.title}"`,
+      // H5: the same sentence, plus WHO redoes this work when somebody does -- `candidates` carries
+      // a `stale_task` summary onto the `cancel_task` it offers, so this is the text a person reads
+      // in the proposal itself.
+      summary:
+        `the re-plan for goal v${String(input.version)} no longer needs "${task.title}"` +
+        (replacedBy === null ? '' : `: replaced by "${replacedBy.title}"`),
       facts: {
         // 0 for a hand-made task: it was derived from no version at all, and a null in `facts`
         // would read as "unknown" rather than "none".
         goalVersion: task.goalVersion ?? 0,
         currentVersion: input.version,
         reason: 'replan_cancel',
+        // H5: the addition that took this task's dependents, so the evidence says which row made
+        // the proposal rather than only that a re-plan did. Absent when nothing replaced it.
+        ...(replacedBy === null ? {} : { replacedBy: replacedBy.id }),
       },
     }
     const catalogue = candidates(situation, world)
