@@ -195,6 +195,13 @@ describe('REPLAN_INSTRUCTIONS', () => {
     expect(REPLAN_INSTRUCTIONS).toContain('never cancel work that is running or done')
   })
 
+  // H5: a manager who is not shown the field cannot ask for the dependents to follow, and a
+  // person re-points three dependencies by hand instead.
+  it('tells the model to name the task an addition redoes', () => {
+    expect(REPLAN_INSTRUCTIONS).toContain('"replaces"')
+    expect(REPLAN_INSTRUCTIONS).toContain('redoes another one')
+  })
+
   it('is a shape parsePlanDelta itself accepts -- the example it prints really parses', () => {
     const example = REPLAN_INSTRUCTIONS.split('\n').find((line) => line.startsWith('{"add"'))
     expect(example).toBeDefined()
@@ -203,6 +210,98 @@ describe('REPLAN_INSTRUCTIONS', () => {
     // very parser refuses, printed as the shape to imitate. This assertion is what caught that.
     const placeholders = ['<task id to cancel>', '<task id to keep>', 'other-key-or-existing-task-id']
     expect(parsePlanDelta(example as string, placeholders).ok).toBe(true)
+  })
+})
+
+/**
+ * H5: `replaces` -- "this addition redoes that task's work", the one field a delta's task has and a
+ * first plan's does not. Every case here is a refusal a person would otherwise have had to undo by
+ * hand, because what `replaces` buys is a re-pointed dependency graph.
+ */
+describe('parsePlanDelta -- replaces (H5)', () => {
+  const STATUSES = new Map<string, TaskStatus>([
+    ['task-1', 'failed'],
+    ['task-2', 'ready'],
+    ['task-3', 'done'],
+  ])
+
+  const replacing = (overrides: Record<string, unknown> = {}): string =>
+    json({ add: [addTask({ key: 'rerun', replaces: 'task-1', ...overrides })], cancel: [], keep: [] })
+
+  it('accepts an addition that redoes a failed task', () => {
+    const result = parsePlanDelta(replacing(), EXISTING, [], STATUSES)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.add[0]?.replaces).toBe('task-1')
+  })
+
+  it('accepts an addition that both redoes a task and depends on it -- the graph decides that one', () => {
+    const result = parsePlanDelta(replacing({ dependsOn: ['task-1'] }), EXISTING, [], STATUSES)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.add[0]?.dependsOn).toEqual(['task-1'])
+  })
+
+  it('accepts every status whose work has not been finished or started', () => {
+    const replaceable: readonly TaskStatus[] = ['backlog', 'ready', 'blocked', 'rework', 'failed', 'cancelled']
+    for (const status of replaceable) {
+      const statuses = new Map<string, TaskStatus>([['task-1', status]])
+      expect(parsePlanDelta(replacing(), EXISTING, [], statuses).ok).toBe(true)
+    }
+  })
+
+  // Spec erratum E18's rule, on this field too: a planner answers an optional field two ways.
+  it('reads a null replaces as ABSENT rather than as an id', () => {
+    const result = parsePlanDelta(replacing({ replaces: null }), EXISTING, [], STATUSES)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.add[0]?.replaces).toBeUndefined()
+  })
+
+  it('rejects a replaces naming a task that is not on the board', () => {
+    expect(parsePlanDelta(replacing({ replaces: 'ghost' }), EXISTING, [], STATUSES)).toEqual({
+      ok: false,
+      error: 'added task "rerun" replaces "ghost", which is not a task on the board',
+    })
+  })
+
+  it('rejects redoing work that is DONE -- finished work is not redone by taking its dependents away', () => {
+    const result = parsePlanDelta(replacing({ replaces: 'task-3' }), EXISTING, [], STATUSES)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toContain('replaces "task-3", which is done')
+  })
+
+  it('rejects redoing work that is in flight', () => {
+    const statuses = new Map<string, TaskStatus>([['task-1', 'running']])
+    const result = parsePlanDelta(replacing(), EXISTING, [], statuses)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toContain('replaces "task-1", which is running')
+  })
+
+  it('rejects two additions that replace the same task -- whichever ran second would win silently', () => {
+    const text = json({
+      add: [addTask({ key: 'rerun', replaces: 'task-1' }), addTask({ key: 'redo', replaces: 'task-1' })],
+      cancel: [],
+      keep: [],
+    })
+    expect(parsePlanDelta(text, EXISTING, [], STATUSES)).toEqual({
+      ok: false,
+      error: 'two added tasks replace the same task: "task-1"',
+    })
+  })
+
+  // The one caller that resolves a delta against real rows always has the statuses; a caller that
+  // does not cannot be allowed to wave the rule through.
+  it('rejects a replaces it was given no status for', () => {
+    const result = parsePlanDelta(replacing(), EXISTING)
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toContain('whose status this delta was not read against')
+  })
+
+  it('leaves a delta that replaces nothing exactly as it was', () => {
+    const result = parsePlanDelta(json({ add: [addTask()], cancel: [], keep: [] }), EXISTING, [], STATUSES)
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.add[0]).not.toHaveProperty('replaces')
   })
 })
 

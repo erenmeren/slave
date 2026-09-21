@@ -760,6 +760,33 @@ describe('parseExecutionEvent', () => {
     ).toBe(false)
   })
 
+  it('accepts a task.created naming the task this one redoes, and one that redoes nothing (H5)', () => {
+    const redone = parseExecutionEvent({
+      ...BASE,
+      type: 'task.created',
+      taskId: 't1',
+      payload: { title: 'Market research (bounded rerun)', goalVersion: 2, assigneeId: 'slave-7', replaces: 't0' },
+    })
+    expect(redone.ok).toBe(true)
+    if (redone.ok && redone.value.type === 'task.created') expect(redone.value.payload.replaces).toBe('t0')
+
+    // A first plan's task, and every task.created written before this milestone: the field is
+    // absent, and absent means "this task replaces nothing".
+    const fresh = parseExecutionEvent({
+      ...BASE,
+      type: 'task.created',
+      taskId: 't1',
+      payload: { title: 'Document the endpoint', goalVersion: 2 },
+    })
+    expect(fresh.ok).toBe(true)
+    if (fresh.ok && fresh.value.type === 'task.created') expect(fresh.value.payload.replaces).toBeUndefined()
+
+    // An empty string is not a task id.
+    expect(
+      parseExecutionEvent({ ...BASE, type: 'task.created', taskId: 't1', payload: { title: 'x', replaces: '' } }).ok,
+    ).toBe(false)
+  })
+
   it('accepts a workspace.plan_created event carrying the goal version its tasks were stamped with', () => {
     const result = parseExecutionEvent({
       ...BASE,

@@ -63,6 +63,13 @@ export const executionEventSchema = z.discriminatedUnion('type', [
       // Optional for the reason stated above and null-able for a real state, so the timeline can
       // show a task arriving with a name on it rather than only the run that started days later.
       assigneeId: z.string().min(1).nullable().optional(),
+      // H5: the task on the board this one REDOES, when a re-plan said so -- the delta's
+      // `replaces`, carried here because re-pointing another task's dependents is the largest
+      // thing a re-plan does to a board and the feed would otherwise show a new task appearing and
+      // three others quietly changing what they wait for. Optional and null-able for the reason
+      // stated above: every `task.created` written before this milestone replaced nothing, and a
+      // first plan still replaces nothing.
+      replaces: z.string().min(1).nullable().optional(),
     }),
   }),
   // E R5: `grants` is what the run was given beyond the baseline -- the needs the PLANNER wrote on
