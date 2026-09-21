@@ -1,4 +1,10 @@
-import { ERROR_STORM_COUNT, NO_PROGRESS_BEATS, REPEAT_TRIP_COUNT, STEERS_PER_RUN_MAX } from './constants.js'
+import {
+  ERROR_STORM_COUNT,
+  NO_PROGRESS_BEATS,
+  NO_PROGRESS_RUN_KINDS,
+  REPEAT_TRIP_COUNT,
+  STEERS_PER_RUN_MAX,
+} from './constants.js'
 
 /**
  * How loudly the breaker is currently speaking to one run (M51 R2).
@@ -84,6 +90,17 @@ export type BreakerRow =
  * NOT INCLUDING this one -- the debounce `no_progress` needs and a pure function cannot remember.
  */
 export interface BreakerWindow {
+  /**
+   * `SlaveRun.kind`, and the only thing any arm asks about the run ITSELF rather than about what it
+   * did. {@link NO_PROGRESS_RUN_KINDS} is the whole of what it decides: a planner or a reviewer
+   * composes its answer in silence by design, so its quiet beats are not counted and `no_progress`
+   * can never name it. The other two arms still reach every kind, and what bounds a composing run is
+   * the run timeout.
+   *
+   * `RunKind`'s members, spelled inline as `../run-context/sections.ts` and `../supervisor/world.ts`
+   * spell them, so this package states the union it reads rather than importing a Prisma type.
+   */
+  readonly kind: 'implementation' | 'review' | 'planning'
   readonly level: BreakerLevel
   /** `SlaveRun.breakerTrips` -- every rung this run has ever climbed. Read for the event's own
    *  bookkeeping, never by a trip rule. */
@@ -136,7 +153,14 @@ export interface BreakerVerdict {
   readonly level: BreakerLevel | 'stop'
   readonly trip: BreakerTrip | null
   /**
-   * All three clocks read false on THIS beat, and the beat was not suppressed.
+   * All three clocks read false on THIS beat, the beat was not suppressed, and the run is of a kind
+   * `no_progress` judges ({@link NO_PROGRESS_RUN_KINDS}).
+   *
+   * That third clause is the one place the exemption lives, and it is in the conjunction rather than
+   * beside it on purpose: `quiet` is what the arm reads AND what the sweep's `breakerQuietBeats`
+   * write reads, so a planner's silence is neither tripped on nor counted, from one expression. A
+   * composing planner whose beats were counted but never tripped would still climb towards a trip
+   * the moment somebody widened the list.
    *
    * The sweep increments `SlaveRun.breakerQuietBeats` on `true` and RESETS it to zero on `false`
    * with `suppressed` also false. It is returned rather than left for the caller to re-derive
@@ -180,10 +204,14 @@ export interface BreakerVerdict {
  *    by a different call is a worker that already moved on.
  * 2. **error_storm** -- the trailing run of `outcome: 'error'` results is at least
  *    {@link ERROR_STORM_COUNT} long. Its `detail` is the `errorClass` most of that run carried.
- * 3. **no_progress** -- all three of the CALLER's beat-scoped clocks read false AND this makes
+ * 3. **no_progress** -- the run is of a kind this arm judges ({@link NO_PROGRESS_RUN_KINDS}), all
+ *    three of the CALLER's beat-scoped clocks read false, AND this makes
  *    {@link NO_PROGRESS_BEATS} consecutive quiet beats. The clocks are trusted exactly as passed
  *    and never re-derived from `rows` -- see {@link BreakerWindow.progress} for why that scope is
- *    the difference between an arm that fires on a wedged run and one that never fires at all.
+ *    the difference between an arm that fires on a wedged run and one that never fires at all. The
+ *    kind clause is why a `planning` or `review` run is never evaluated here at all: it composes
+ *    its answer in silence by design, and the steer this arm would send is delivered at a gate that
+ *    fires on a tool call it is never going to make.
  *
  * One beat names ONE trip, in that order, because one rung gets one event and an event with two
  * reasons is an event a person has to choose between.
@@ -203,7 +231,13 @@ export function detectBehaviour(window: BreakerWindow): BreakerVerdict {
   // held by the caller's grace rather than at the source that states it. Saying it here is what
   // makes a second caller safe.
   if (suppressed) return { level: window.level, trip: null, quiet: false, suppressed: true }
-  const quiet = !window.progress.distinctKey && !window.progress.worktreeChanged && !window.progress.output
+  // The exemption, in ONE expression ({@link NO_PROGRESS_RUN_KINDS}): a kind this arm does not judge
+  // has no quiet beat to count, so the arm below cannot fire and the sweep's `breakerQuietBeats`
+  // write -- which reads this same flag -- holds the count at zero. `some` rather than `includes`
+  // because the constant is a narrow tuple and the run's kind is the wider union.
+  const judged = NO_PROGRESS_RUN_KINDS.some((kind) => kind === window.kind)
+  const quiet =
+    judged && !window.progress.distinctKey && !window.progress.worktreeChanged && !window.progress.output
   const trip = tripOf(window, quiet)
   if (trip === null) return { level: deEscalate(window.level), trip: null, quiet, suppressed: false }
   return { level: escalate(window.level, window.steers), trip, quiet, suppressed: false }
