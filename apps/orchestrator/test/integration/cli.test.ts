@@ -1559,6 +1559,24 @@ describe('the orchestrator CLI', () => {
       expect(neither.code).not.toBe(0)
     }, 30_000)
 
+    // Supervisor chat R8 made `--file` repeatable for `supervisor-say`, so `flagText` now sees an
+    // ARRAY here. One element reads as the string it always was; two are two profiles, and an
+    // operator who typed that gets told rather than silently having the last one written.
+    it('refuses set-profile given --file twice, which used to write the last one silently', async (): Promise<void> => {
+      const dir = mkdtempSync(join(tmpdir(), 'slaveofai-profile-twice-'))
+      writeFileSync(join(dir, 'one.md'), 'first persona')
+      writeFileSync(join(dir, 'two.md'), 'second persona')
+
+      const result = await runCli([
+        'set-profile', '--slave', fixture.slaveId, '--file', join(dir, 'one.md'), '--file', join(dir, 'two.md'),
+      ])
+
+      expect(result.code).not.toBe(0)
+      expect(`${result.stdout}${result.stderr}`).toMatch(/--file was given more than once/u)
+      expect((await prisma.slave.findUniqueOrThrow({ where: { id: fixture.slaveId } })).profile).toBeNull()
+      rmSync(dir, { recursive: true, force: true })
+    }, 30_000)
+
     it('sets runtime roles, and an empty --roles parks the slave', async (): Promise<void> => {
       const set = await runCli(['set-runtime-roles', '--slave', fixture.slaveId, '--roles', 'backend, reviewer'])
       expect(set.code).toBe(0)
@@ -3519,6 +3537,24 @@ describe('the orchestrator CLI', () => {
       rmSync(dir, { recursive: true, force: true })
     })
 
+    it('refuses a blank --text before it reads or commits a single file', async (): Promise<void> => {
+      const dir = mkdtempSync(join(tmpdir(), 'slaveofai-say-blank-'))
+      writeFileSync(join(dir, 'brief.md'), 'Ship the pricing page by Friday.')
+      const commitsBefore = execFileSync('git', ['rev-list', '--count', 'HEAD'], { cwd: fixture.repoPath }).toString().trim()
+
+      const result = await runCli([
+        'supervisor-say', '--workspace', fixture.workspaceId, '--text', '   ', '--file', join(dir, 'brief.md'),
+      ])
+
+      expect(result.code).not.toBe(0)
+      expect(`${result.stdout}${result.stderr}`).toMatch(/--text must not be blank/u)
+      // Nothing read, nothing written, nothing committed: the refusal is in front of the upload.
+      expect(existsSync(join(fixture.repoPath, 'docs', 'inbox'))).toBe(false)
+      expect(execFileSync('git', ['rev-list', '--count', 'HEAD'], { cwd: fixture.repoPath }).toString().trim()).toBe(commitsBefore)
+      expect(await prisma.supervisorMessage.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
+      rmSync(dir, { recursive: true, force: true })
+    })
+
     it('exits non-zero for supervisor-say with no --text', async (): Promise<void> => {
       const result = await runCli(['supervisor-say', '--workspace', fixture.workspaceId])
 
@@ -3558,6 +3594,7 @@ describe('the orchestrator CLI', () => {
       expect(JSON.parse(result.stdout)).toEqual([])
     })
   })
+
   // M42 t4: the import verbs. Every invocation still writes `--dry-run` LAST -- `parseArgs` takes
   // whatever follows a flag as its value (erratum E11), so `--dry-run --by me` would record
   // `dry-run: '--by'` and drop `--by` entirely.

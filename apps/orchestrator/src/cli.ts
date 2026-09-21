@@ -1044,10 +1044,9 @@ function claudeCommand(): { readonly command: string; readonly extraArgs?: reado
  * (`SLAVEOFAI_CURSOR_BIN`, `SLAVEOFAI_CURSOR_ARGS`) rather than from names spelt here, which is
  * `buildAdapterRegistry`'s rule since M56a R6.
  *
- * No `fakeCliRefusal` check of its own: `claudeCommand()` raises it, and since M56a R10 that one
- * refusal is about EVERY registered provider's binary -- so a process that may not reach a vendor
- * account is already refused before it builds anything. Asking twice would be two spellings of one
- * rule.
+ * No `fakeCliRefusal` check of its own, because {@link buildDeciderRegistry} asks it before it
+ * builds either closure -- the one place that can refuse for BOTH providers at once, which is what
+ * M56a R10 made that function about. Asking again here would be a second spelling of one rule.
  */
 function cursorCommand(): { readonly command: string; readonly extraArgs?: readonly string[] } {
   const { binEnvVar, argsEnvVar, binary } = manifestFor('cursor').invocation
@@ -1094,6 +1093,14 @@ function modelTimeoutMs(): number {
  * the vendor account alone, and the turn is recorded `unmeasured`).
  */
 export function buildDeciderRegistry(): DeciderRegistry {
+  // ASKED ONCE, HERE, AND BEFORE ANY CLOSURE IS BUILT (fix round 1, I1) -- `buildAdapterRegistry`'s
+  // own line, for the reason M56a R10 gives it: `fakeCliRefusal` is about EVERY registered
+  // provider's binary, and only the `claude_code` entry below reaches `claudeCommand()` (which
+  // raises it too). A process told it must not reach a vendor account could otherwise build this
+  // registry, never make a Claude call, and spawn the REAL `cursor-agent` for a chat turn on a
+  // project whose provider column says `cursor` -- the silent real spawn the flag exists to stop.
+  const refusal = fakeCliRefusal(process.env)
+  if (refusal !== null) throw new Error(refusal)
   return {
     claude_code: (input) => {
       if (input.tools !== 'read-only') {
@@ -3488,19 +3495,25 @@ export async function main(argv: readonly string[]): Promise<number> {
     case 'supervisor-say': {
       const workspaceId = await resolveWorkspace({ ...flags, workspace: requireFlag(flags, 'workspace') })
       const text = requireFlag(flags, 'text')
+      // BEFORE a single file is read, let alone written into the repository and committed (fix
+      // round 1, M5). `sendSupervisorMessage` refuses a blank message anyway, but it is reached
+      // AFTER the upload -- so `--text "" --file brief.md` used to leave a committed file in
+      // `docs/inbox/` with no message pointing at it. This is the one refusal worth spelling twice:
+      // it costs one comparison and it is the only one an operator can trip with a shell quoting
+      // mistake rather than with a deliberately long document.
+      if (text.trim() === '') throw new Error('--text must not be blank')
       // Read from the LOCAL filesystem here, where the operator's own paths are, and handed over
       // as bytes: `storeSupervisorUploads` decides the name, the repository path and the commit,
       // and it is the only thing that writes into `docs/inbox/`. `basename`, because the name the
       // attachment keeps is the one the person's own machine gave the file, never the directory
       // they happened to run this from.
       //
-      // ONE RESIDUAL, said out loud: the upload happens first, so a message the control layer then
-      // refuses (a blank `--text`, one past the length cap) leaves the files committed with no
-      // message pointing at them. They are in `docs/inbox/` and named after the day, which is
-      // exactly what an upload that happened looks like, and re-running the command with the same
-      // paths adds a second copy under a `-2` name rather than overwriting the first. Checking the
-      // message here first would mean spelling the control layer's own rules in this file, which
-      // is the trade this refuses to make.
+      // THE RESIDUAL THAT IS LEFT, said out loud: the upload still happens before the send, so a
+      // message refused for its LENGTH (past `CHAT_MESSAGE_MAX_CHARS`) leaves the files committed
+      // with no message pointing at them. They are in `docs/inbox/` and named after the day, which
+      // is exactly what an upload that happened looks like, and re-running with the same paths
+      // adds a second copy under a `-2` name rather than overwriting the first. Spelling the
+      // length cap here too would mean keeping the control layer's own number in this file.
       const paths = flagList(flags, 'file')
       const files = paths.map((path) => ({ name: basename(path), bytes: readFileSync(path) }))
       const stored = await storeSupervisorUploads(workspaceId, files)

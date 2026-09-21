@@ -83,8 +83,27 @@
 //                  (`ClaudeCodeAdapter.resume` appends it); keying off the
 //                  resume prompt's wording would make this fake agree with a
 //                  sentence in `deliver.ts` rather than with the protocol.
-//   Every prompt-sniffing mode above also carries M38's SUPERVISOR arm,
-//   checked FIRST: a prompt containing the literal `"candidateIndex"`
+//   Supervisor chat's CHAT arm is checked FIRST in every prompt-sniffing
+//   mode AND inside the `complete` name: a prompt containing the literal
+//   `"supervisorReply"` (`SUPERVISOR_CHAT_MARKER`, which
+//   `buildSupervisorChatPrompt`'s instruction line always emits) is
+//   answered with `{"supervisorReply": {"text": "On it.", "actions": <from
+//   --chat-actions-json-base64 in ARGV, default []>, "sources": []}}`.
+//   First because its literal is the most specific one here: it is in
+//   `ROUTING_LITERALS`, so every other prompt's quoted copies are defused
+//   and a LIVE `"supervisorReply"` appears in exactly one prompt this
+//   repository builds. Being ahead of the ANSWER arm below is the half that
+//   is load-bearing -- that same instruction line also carries `"sources"`,
+//   because a reply cites what it answered from, so an answer arm in front
+//   would swallow every chat turn there is. ARGV and base64 for the reasons
+//   `--ask-json-base64` gives (M52 R3, erratum E6): no environment variable
+//   reaches a decision call's child, and an action carries quotes and
+//   braces. It is in the `complete` name as well as the flow modes because
+//   the CLI's own integration tests have one fixed `SLAVEOFAI_CLAUDE_ARGS`
+//   and no flow mode of their own -- R7's capability-map arm's reason,
+//   verbatim.
+//   Behind it, every prompt-sniffing mode above also carries M38's
+//   SUPERVISOR arm: a prompt containing the literal `"candidateIndex"`
 //   (which `buildDecisionPrompt` always emits) replays the
 //   `supervisor-decision` fixture and does nothing else -- no commit, no
 //   file. It is checked before `"verdict"`/`"task graph"` so a supervisor
@@ -97,20 +116,6 @@
 //   named by `--intake-repo`, the literal `NEW REPOSITORY`, or the first
 //   question. Content rather than shared state keeps several conversations
 //   deterministic even when their calls interleave.
-//   Supervisor chat's CHAT arm sits in front of the answer arm in every
-//   prompt-sniffing mode AND inside the `complete` name: a prompt containing
-//   the literal `"supervisorReply"` (`SUPERVISOR_CHAT_MARKER`, which
-//   `buildSupervisorChatPrompt`'s instruction line always emits) is answered
-//   with `{"supervisorReply": {"text": "On it.", "actions": <from
-//   --chat-actions-json-base64 in ARGV, default []>, "sources": []}}`. It has
-//   to be IN FRONT: that same instruction line also carries `"sources"`,
-//   because a reply cites what it answered from, so the answer arm behind it
-//   would swallow every chat turn there is. ARGV and base64 for the reasons
-//   `--ask-json-base64` gives (M52 R3, erratum E6): no environment variable
-//   reaches a decision call's child, and an action carries quotes and braces.
-//   It is in the `complete` name as well as the flow modes because the CLI's
-//   own integration tests have one fixed `SLAVEOFAI_CLAUDE_ARGS` and no flow
-//   mode of their own -- R7's capability-map arm's reason, verbatim.
 //   Right behind it sits M39's ANSWER arm: a prompt containing the literal
 //   `"sources"` (which `buildAnswerPrompt` always emits) replays the fixture
 //   named by `--answer-fixture <name>` in ARGV, or by
@@ -441,15 +446,18 @@ async function supervisorArm(prompt) {
  * recognised by `SUPERVISOR_CHAT_MARKER` -- the literal `"supervisorReply"` that
  * `buildSupervisorChatPrompt`'s instruction line always carries.
  *
- * IT MUST BE MATCHED BEFORE {@link answerArm}, and that is not belt and braces: the chat prompt's
- * instruction line names BOTH routing literals, because a reply cites its sources in the same
- * envelope it answers in. `"sources"` alone is what the answer arm keys on, so with the two the
- * other way round every chat turn in the system would be handed a worker's answer fixture and
- * `parseSupervisorReply` would read no envelope at all. The order between this arm and the two
- * decision arms in front of it (`"candidateIndex"`, `"intakeAnswer"`) does not matter -- neither
- * literal survives into a chat prompt, since `defuseRoutingLiterals` rewrites every quoted one in
- * every text the conversation quotes -- and it is kept only so the arms read in one order
- * everywhere.
+ * IT IS CHECKED FIRST IN EVERY MODE, ahead of the intake, supervisor and answer arms, because its
+ * literal is the most specific one there is: `supervisorReply` is in `ROUTING_LITERALS`, so
+ * `defuseRoutingLiterals` rewrites `"supervisorReply"` in every text any other prompt quotes back
+ * -- a profile, a person's message, a feed sentence, an attachment. A LIVE `"supervisorReply"`
+ * therefore appears in exactly one prompt this repository builds, and matching it first can steal
+ * nothing from anybody.
+ *
+ * Being ahead of {@link answerArm} specifically is not decoration but the load-bearing half: the
+ * chat prompt's instruction line names BOTH routing literals, because a reply cites its sources in
+ * the same envelope it answers in, and `"sources"` alone is what the answer arm keys on. With the
+ * two the other way round every chat turn in the system would be handed a worker's answer fixture
+ * and `parseSupervisorReply` would read no envelope at all.
  *
  * SYNTHETIC rather than a fixture replay, `intakeArm`'s reason: the actions a turn asks for are
  * chosen by the caller a moment before the call, and no recording made in advance could carry a
@@ -1064,9 +1072,9 @@ async function main() {
 
   if (fixtureName === 'm36-flow') {
     const prompt = await promptText()
+    if (await chatArm(prompt)) return
     if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
-    if (await chatArm(prompt)) return
     if (await answerArm(prompt)) return
     if (prompt.includes('"verdict"')) {
       await replayFixture('review-approve')
@@ -1115,9 +1123,9 @@ async function main() {
 
   if (fixtureName === 'm8-flow') {
     const prompt = await promptText()
+    if (await chatArm(prompt)) return
     if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
-    if (await chatArm(prompt)) return
     if (await answerArm(prompt)) return
     if (await replanArm(prompt)) return
     if (prompt.includes('"task graph"')) {
@@ -1142,9 +1150,9 @@ async function main() {
 
   if (fixtureName === 'm41-flow') {
     const prompt = await promptText()
+    if (await chatArm(prompt)) return
     if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
-    if (await chatArm(prompt)) return
     if (await answerArm(prompt)) return
     if (await replanArm(prompt)) return
     if (prompt.includes('"task graph"')) {
@@ -1202,9 +1210,9 @@ async function main() {
 
   if (fixtureName === 'm8a-flow') {
     const prompt = await promptText()
+    if (await chatArm(prompt)) return
     if (await intakeArm(prompt)) return
     if (await supervisorArm(prompt)) return
-    if (await chatArm(prompt)) return
     if (await answerArm(prompt)) return
     if (prompt.includes('"verdict"')) {
       await replayFixture('review-approve')
@@ -1221,8 +1229,8 @@ async function main() {
 
   if (fixtureName === 'complete') {
     const prompt = await promptText()
-    if (await capabilityMapArm(prompt)) return
     if (await chatArm(prompt)) return
+    if (await capabilityMapArm(prompt)) return
     await replayFixture('complete')
     return
   }

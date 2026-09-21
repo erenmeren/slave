@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,6 +9,7 @@ import {
   listSupervisorMessages,
   sendSupervisorMessage,
   tickSupervisorChat,
+  writePermissionsFile,
 } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -46,6 +48,16 @@ const TOUCHED = [
   'SLAVEOFAI_CURSOR_ARGS',
 ]
 const saved = new Map<string, string | undefined>(TOUCHED.map((name) => [name, process.env[name]]))
+
+/** FILE level, so both describes below get it: the integration project is single-threaded, but
+ *  `process.env` is still process-wide and a case that armed the fakes must not decide what the
+ *  next FILE sees. */
+afterEach(() => {
+  for (const [name, value] of saved) {
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
+  }
+})
 
 /** Points both binaries at their fakes, the shape every other orchestrator test spawns the CLI
  *  with. `node <fake.mjs>` is what `SLAVEOFAI_*_ARGS` is for: it rides through as `extraArgs` on
@@ -94,10 +106,6 @@ describe('the Supervisor conversation, end to end through the real registry', ()
   afterEach(async (): Promise<void> => {
     await drainSupervisorChatCalls()
     rmSync(repoPath, { recursive: true, force: true })
-    for (const [name, value] of saved) {
-      if (value === undefined) delete process.env[name]
-      else process.env[name] = value
-    }
   })
 
   /** One message, and the reply the tick settles for it. Drained, because the call is detached. */
@@ -189,5 +197,95 @@ describe('the Supervisor conversation, end to end through the real registry', ()
       modelCostUsd: null,
       unmeasured: true,
     })
+  })
+})
+
+describe('buildDeciderRegistry', () => {
+  /**
+   * R7 at the ORCHESTRATOR's level (fix round 1, M3). The provider package proves what
+   * `decideWithModel` does with `tools: 'read-only'`, and control proves the tick asks for it; what
+   * neither can see is whether THIS file hands over the run gate rather than the deny-all one.
+   *
+   * Measured from inside the child, which is the only place a spawn's three halves are all
+   * visible: `--fixture env-echo --env-out <path>` dumps its own argv, environment, cwd and the
+   * parsed `--settings` file (`dumpChildEnv`). The permissions file is written with the control
+   * layer's own `writePermissionsFile`, granting the `planning` baseline (`read_repo`), because the
+   * run gate's pre-flight runs the REAL `scripts/pause-gate.sh` and a call armed with nothing would
+   * never reach the spawn this case is about.
+   */
+  it('arms a read-only turn with the RUN gate, the read-only tools and the gate channels', async (): Promise<void> => {
+    const dir = mkdtempSync(join(tmpdir(), 'slaveofai-read-only-turn-'))
+    try {
+      const dumpPath = join(dir, 'child.jsonl')
+      useFakes(['--fixture', 'env-echo', '--env-out', dumpPath])
+      const runToken = randomBytes(32).toString('hex')
+      const permissionsFilePath = writePermissionsFile(dir, {
+        rows: [],
+        provider: 'claude_code',
+        runKind: 'planning',
+        runId: 'm-read-only-turn',
+        runToken,
+      })
+
+      await buildDeciderRegistry().claude_code({
+        model: 'claude-sonnet-5',
+        prompt: 'what does the screenshot show?',
+        maxBudgetUsd: 1,
+        tools: 'read-only',
+        cwd: dir,
+        permissionsFilePath,
+        runToken,
+      })
+
+      const dump = JSON.parse(readFileSync(dumpPath, 'utf8').trim()) as {
+        argv: readonly string[]
+        env: Record<string, string>
+        cwd: string
+        settings: unknown
+      }
+      // The one word that changes between the two modes.
+      expect(dump.argv[dump.argv.indexOf('--tools') + 1]).toBe('Read,Glob,Grep')
+      // The RUN gate, not the deny-all one: this is the whole of what R7 buys and the one thing
+      // only this file decides.
+      const settings = JSON.stringify(dump.settings)
+      expect(settings).toContain('pause-gate.sh')
+      expect(settings).not.toContain('deny-all-gate.sh')
+      // The two channels the gate reads. The token is `<present>` because the fake redacts it at
+      // write time -- the NAME is what the assertion needs, and a live token on disk is what it
+      // must not put there.
+      expect(dump.env['SLAVEOFAI_PERMISSIONS_FILE']).toBe(permissionsFilePath)
+      expect(dump.env['SLAVEOFAI_RUN_TOKEN']).toBe('<present>')
+      // The repository, not the call's throwaway directory: it is where a path the person attached
+      // resolves.
+      expect(dump.cwd).toBe(realpathSync(dir))
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  /**
+   * I1: the refusal is asked HERE, before either closure exists, because only the `claude_code`
+   * entry reaches `claudeCommand()` -- which raises it. Without this a process told it must not
+   * reach a vendor account could build the registry, never make a Claude call, and spawn the real
+   * `cursor-agent` for a chat turn on a project whose provider column says `cursor`.
+   * `adapter-registry.test.ts`' own case, for the other registry.
+   */
+  it('refuses to build anything at all when the fake CLI was demanded and not supplied', (): void => {
+    process.env['SLAVEOFAI_REQUIRE_FAKE_CLI'] = '1'
+    process.env['SLAVEOFAI_CLAUDE_BIN'] = 'node'
+    process.env['SLAVEOFAI_CURSOR_BIN'] = '/usr/local/bin/cursor-agent'
+
+    expect(() => buildDeciderRegistry()).toThrow(/SLAVEOFAI_CURSOR_BIN/u)
+  })
+
+  it('refuses before it builds either entry, not at the call that would have spawned', (): void => {
+    process.env['SLAVEOFAI_REQUIRE_FAKE_CLI'] = '1'
+    process.env['SLAVEOFAI_CLAUDE_BIN'] = 'node'
+    delete process.env['SLAVEOFAI_CURSOR_BIN']
+
+    // The throw is the FUNCTION's, so there is no registry to hold and no cursor closure anybody
+    // could call: a refusal that only arrived at the first Claude call would leave the Cursor entry
+    // live and spawning.
+    expect(() => buildDeciderRegistry()).toThrow(/SLAVEOFAI_CURSOR_BIN/u)
   })
 })

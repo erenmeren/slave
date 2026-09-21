@@ -878,15 +878,17 @@ describe('fake-claude', () => {
       expect(result?.result).toContain('"supervisorReply"')
     })
 
-    it('is armed in every prompt-sniffing mode AND in complete, ahead of the answer arm', async (): Promise<void> => {
+    it('is armed FIRST in every prompt-sniffing mode, and in complete too', async (): Promise<void> => {
+      // Every other arm's literal on the same prompt: the chat arm is checked before all of them,
+      // so the only one of these that can decide the answer is its own. `"sources"` is the one
+      // that matters -- the real chat prompt carries it, because a reply cites what it answered
+      // from, and an answer arm in front would swallow every chat turn there is.
+      const everyLiteral = `${PROMPT} "candidateIndex" "intakeAnswer" "personas" "replan" "verdict" "task graph"`
       for (const mode of ['complete', 'm8-flow', 'm8a-flow', 'm36-flow', 'm41-flow']) {
-        const { stdout } = await run('node', [FAKE, '--fixture', mode, '-p', `${PROMPT} "verdict" "task graph"`], {
-          cwd: repoDir,
-        })
+        const { stdout } = await run('node', [FAKE, '--fixture', mode, '-p', everyLiteral], { cwd: repoDir })
         const result = parseLines(stdout).find((l) => l.type === 'result') as { result?: string } | undefined
-        // The answer arm's fixture would have put `"answer"` here: the chat prompt carries
-        // `"sources"` too, so the more specific arm has to be in front of it.
         expect(result?.result, mode).toContain('"supervisorReply"')
+        expect(result?.result, mode).not.toContain('"candidateIndex"')
         expect(result?.result, mode).not.toContain('"answer"')
       }
       // A chat turn is a read. A work run would have left a commit in the cwd.
