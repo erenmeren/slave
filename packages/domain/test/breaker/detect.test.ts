@@ -143,9 +143,15 @@ describe('detectBehaviour: the error class the storm reports', () => {
 describe('detectBehaviour: no_progress', () => {
   const quiet = { distinctKey: false, worktreeChanged: false, output: false }
 
-  it('needs two consecutive quiet beats -- one is a pause, not a loop', () => {
-    expect(detectBehaviour(WINDOW([], { progress: quiet, quietBeats: 0 })).trip).toBeNull()
-    const verdict = detectBehaviour(WINDOW([], { progress: quiet, quietBeats: 1 }))
+  it('needs NO_PROGRESS_BEATS consecutive quiet beats -- fewer is a pause or a long answer, not a loop', () => {
+    // Every beat short of the threshold is silent, in one loop rather than one pinned number: the
+    // threshold is the constant's to set, and this case is what says the detector honours it.
+    for (let quietBeats = 0; quietBeats < NO_PROGRESS_BEATS - 1; quietBeats += 1) {
+      const verdict = detectBehaviour(WINDOW([], { progress: quiet, quietBeats }))
+      expect(verdict.trip, `after ${String(quietBeats + 1)} quiet beats`).toBeNull()
+      expect(verdict.quiet, `after ${String(quietBeats + 1)} quiet beats`).toBe(true)
+    }
+    const verdict = detectBehaviour(WINDOW([], { progress: quiet, quietBeats: NO_PROGRESS_BEATS - 1 }))
     expect(verdict.trip?.kind).toBe('no_progress')
   })
 

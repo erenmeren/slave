@@ -24,7 +24,8 @@
 //   4. STOP -- `guardrail.tripped`, a `failed` run (not `stopped`), a task back in `rework` and an
 //      attempt charged.
 //   5. The error storm trips on its own, on six DIFFERENT commands.
-//   6. THE NEGATIVE: a run whose one tool call has not come back trips nothing across three beats.
+//   6. THE NEGATIVE: a run whose one tool call has not come back trips nothing across one beat
+//      more than `no_progress` would need.
 //   7. Three cost figures on the brief -- and `stats.spentUsd` byte-equal on both sides of them.
 //   8. Tokens mid-run, sampled while stage 1's run is still `working`.
 //   9. In a real browser: the guardrail's LABEL and not its key, the breaker card, and the word
@@ -120,8 +121,9 @@ const COST_BUDGET_USD = 25
  *
  * The three M51 fixtures end with an idle tail of lines the parser answers `ignored`, so this number
  * is what turns that tail into TIME: the evidence lands in the first seconds and the run then stays
- * `working` -- with its pump alive -- for long enough that three back-dated beats, a cancel and the
- * pump's own conclusion all happen on a real live run rather than on a row the gate resurrected.
+ * `working` -- with its pump alive -- for long enough that the back-dated beats (three rungs on the
+ * loop, `QUIET_BEATS` on the quiet build), a cancel and the pump's own conclusion all happen on a
+ * real live run rather than on a row the gate resurrected.
  */
 const LINE_DELAY_MS = 400
 
@@ -135,8 +137,10 @@ const LOOP_CALLS = LOOP_REPEATS + 1
 const STORM_ERRORS = 6
 const STORM_ERROR_CLASS = 'api_error'
 /** How many beats the NEGATIVE stage drives. One more than `no_progress` needs, so a detector that
- *  forgot the outstanding-call suppression would have tripped by the second and be caught by the
- *  third. */
+ *  forgot the outstanding-call suppression would have tripped on the last beat the threshold
+ *  allows and be caught by the one after it. Six since H6 raised the threshold to five: a model
+ *  composing a long answer is silent by design, and the run's idle tail (`LINE_DELAY_MS` per
+ *  fixture line) is what keeps it alive for the extra beats. */
 const QUIET_BEATS = NO_PROGRESS_BEATS + 1
 
 /** The first viewport, `gate-m45`'s own. */
@@ -1164,15 +1168,15 @@ try {
   const quietBreaker = await eventsOf(quietRunId, 'run.breaker')
   const quietGuardrail = await eventsOf(quietRunId, 'guardrail.tripped')
   console.log(`stage 6: the quiet run after ${String(QUIET_BEATS)} beats = ${describeRun(quietFinal)}`)
-  await assertEqual(quietFinal.breakerLevel, 'none', 'stage 6: breakerLevel after three beats')
-  await assertEqual(quietFinal.breakerTrips, 0, 'stage 6: breakerTrips after three beats')
+  await assertEqual(quietFinal.breakerLevel, 'none', `stage 6: breakerLevel after ${String(QUIET_BEATS)} beats`)
+  await assertEqual(quietFinal.breakerTrips, 0, `stage 6: breakerTrips after ${String(QUIET_BEATS)} beats`)
   await assertEqual(quietBreaker.length, 0, 'stage 6: run.breaker rows')
   await assertEqual(quietGuardrail.length, 0, 'stage 6: guardrail.tripped rows')
-  await assertEqual(quietFinal.status, 'working', 'stage 6: the run status after three beats')
+  await assertEqual(quietFinal.status, 'working', `stage 6: the run status after ${String(QUIET_BEATS)} beats`)
   // And the worktree really was untouched for the whole stage, so `no_progress`'s own clock read
   // false on every one of those beats and the suppression is what stopped it.
-  await assertEqual(worktreeHead(), worktreeBefore, 'stage 6: the worktree across three beats')
-  console.log('stage 6 PASSED: three beats, a still worktree, and the breaker said nothing')
+  await assertEqual(worktreeHead(), worktreeBefore, `stage 6: the worktree across ${String(QUIET_BEATS)} beats`)
+  console.log(`stage 6 PASSED: ${String(QUIET_BEATS)} beats, a still worktree, and the breaker said nothing`)
   await stopDaemon(quietDaemon)
 
   const strayAfterRuns = findRealDaemonPids()
