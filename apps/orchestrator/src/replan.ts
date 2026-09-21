@@ -2,6 +2,7 @@ import {
   NON_TERMINAL_RUN_STATUSES,
   applyCancelPolicy,
   candidates,
+  chooseAssignee,
   parsePlanDelta,
   runContextManifestSchema,
   type PlanDelta,
@@ -29,7 +30,7 @@ import { appendEvent } from '@slave-of-ai/events'
 // reason: both are hoisted function declarations, called long after either module is evaluated.
 import { adherenceOf, firstUnstaffedTask, normaliseCapabilitiesStrict, roleOfFirst } from './planning.js'
 import { joinRunOutput } from './runOutput.js'
-import { staffedRolesForWorkspace } from './staffing.js'
+import { assignableSeatsForWorkspace, staffedRolesForWorkspace } from './staffing.js'
 
 /** The `replan` entry of a run's recorded manifest -- the only thing that tells a re-plan run from
  *  a first-plan run, since both are `kind: 'planning'` (spec erratum E2/E4). */
@@ -441,7 +442,8 @@ export async function concludeReplan(runId: RunId): Promise<void> {
       workspaceId,
       taskId: task.id,
       actor: 'slave',
-      payload: { title: task.title, goalVersion: version },
+      // H2: the same payload a first plan's `task.created` carries, for the same reason.
+      payload: { title: task.title, goalVersion: version, assigneeId: task.assigneeId },
     })
   }
 
@@ -540,7 +542,9 @@ interface BoardRow {
 type AppliedDelta =
   | {
       readonly ok: true
-      readonly created: readonly { readonly id: string; readonly title: string }[]
+      /** The tasks the delta added -- `assigneeId` is H2's: whose each one is from the moment it
+       *  exists, carried out so `concludeReplan`'s `task.created` says it. */
+      readonly created: readonly { readonly id: string; readonly title: string; readonly assigneeId: string | null }[]
       readonly board: readonly BoardRow[]
       readonly delta: PlanDelta
       /** M47 E14: the keys the taxonomy does not have, dropped from the tasks that asked for them
@@ -671,9 +675,15 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
       }
     }
 
+    // H2, `concludePlanning`'s own line and for its reasons: one reading of the roster for the whole
+    // delta, beside the staffing boundary above, and the domain decides whose each addition is. A
+    // task a re-plan adds is a task like any other -- it must not reach the board as nobody's while a
+    // first plan's arrives with a name on it.
+    const seats = await assignableSeatsForWorkspace(workspaceId)
+
     const created = await prisma.$transaction(async (tx) => {
       const idByKey = new Map<string, string>()
-      const added: Array<{ readonly id: string; readonly title: string }> = []
+      const added: Array<{ readonly id: string; readonly title: string; readonly assigneeId: string | null }> = []
       for (const { planTask, keys, requiredRole, maxAttempts } of derived) {
         const task = await tx.task.create({
           data: {
@@ -700,10 +710,14 @@ async function applyDelta(runId: RunId, workspaceId: string, version: number): P
             // research task and not its permission would be the very failure R5 exists to stop.
             requiredPermissions: [...(planTask.needs ?? [])],
             goalVersion: version,
+            // H2: the seat that holds the role this addition requires, or null when nobody does.
+            // `concludePlanning`'s rule, through the same pure function -- two paths that created a
+            // planned task differently would put two kinds of task on one board.
+            assigneeId: chooseAssignee(requiredRole, seats),
           },
         })
         idByKey.set(planTask.key, task.id)
-        added.push({ id: task.id, title: task.title })
+        added.push({ id: task.id, title: task.title, assigneeId: task.assigneeId })
       }
       for (const planTask of parsed.value.add) {
         const taskId = idByKey.get(planTask.key) as string

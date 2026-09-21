@@ -733,6 +733,33 @@ describe('parseExecutionEvent', () => {
     expect(parseExecutionEvent({ ...BASE, type: 'task.created', taskId: 't1', payload: { title: 'x' } }).ok).toBe(true)
   })
 
+  it('accepts a task.created carrying the seat the task was assigned to, and a null one (H2)', () => {
+    const assigned = parseExecutionEvent({
+      ...BASE,
+      type: 'task.created',
+      taskId: 't1',
+      payload: { title: 'Document the endpoint', goalVersion: 2, assigneeId: 'slave-7' },
+    })
+    expect(assigned.ok).toBe(true)
+    if (assigned.ok && assigned.value.type === 'task.created') expect(assigned.value.payload.assigneeId).toBe('slave-7')
+
+    // A role nobody on the project holds: the task exists and nobody has it, which is the state
+    // `ready_unstaffed` is about and never a reason to name somebody.
+    const unheld = parseExecutionEvent({
+      ...BASE,
+      type: 'task.created',
+      taskId: 't1',
+      payload: { title: 'Pick a palette', goalVersion: 2, assigneeId: null },
+    })
+    expect(unheld.ok).toBe(true)
+    if (unheld.ok && unheld.value.type === 'task.created') expect(unheld.value.payload.assigneeId).toBeNull()
+
+    // An empty string is not a seat id.
+    expect(
+      parseExecutionEvent({ ...BASE, type: 'task.created', taskId: 't1', payload: { title: 'x', assigneeId: '' } }).ok,
+    ).toBe(false)
+  })
+
   it('accepts a workspace.plan_created event carrying the goal version its tasks were stamped with', () => {
     const result = parseExecutionEvent({
       ...BASE,

@@ -202,6 +202,30 @@ describe('tick', () => {
     expect(run.worktreePath).toContain(join('.slaveofai', 'worktrees'))
   })
 
+  it('hands the task to the seat its run actually went to (H2)', async (): Promise<void> => {
+    // The task arrives assigned to somebody else: a plan named the holder of its role at creation,
+    // the roster moved since, and dispatch put the work in front of whoever holds the role NOW. The
+    // column follows the run, so the card never names a person who is not doing it.
+    const team = await prisma.team.findFirstOrThrow({ where: { workspaceId: fixture.workspaceId } })
+    const stale = await prisma.slave.create({
+      data: {
+        teamId: team.id,
+        role: 'design',
+        runtimeRoles: ['design'],
+        personId: (await prisma.person.create({ data: { name: 'Nina' } })).id,
+      },
+    })
+    await prisma.task.update({ where: { id: fixture.taskId }, data: { assigneeId: stale.id } })
+
+    const report = await tick(deps)
+    expect(report.started).toHaveLength(1)
+
+    const run = await prisma.slaveRun.findFirstOrThrow({ where: { taskId: fixture.taskId } })
+    const task = await prisma.task.findUniqueOrThrow({ where: { id: fixture.taskId } })
+    expect(run.slaveId).toBe(fixture.slaveId)
+    expect(task.assigneeId).toBe(run.slaveId)
+  })
+
   describe("the recipient's next run sees the question (M36 t3)", () => {
     /** A question from somebody else, addressed to the slave this fixture is about to dispatch. */
     async function askTheFixtureSlave(body: string): Promise<string> {

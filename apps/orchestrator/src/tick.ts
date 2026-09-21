@@ -642,7 +642,13 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
   // a live daemon, and a mutex in one process says nothing about the other.
   const claimed = await prisma.task.updateMany({
     where: { id: task.id, status: { in: ['ready', 'rework'] } },
-    data: { status: 'running', activeRunId: run.id, branch },
+    // H2: `assigneeId` moves with the claim, in the SAME write, so the column always names whoever
+    // actually has the work. Planning named the holder of the task's role when it created the task;
+    // dispatch may hand it to a different holder -- a hire since, a release, the first free seat of
+    // several -- and a card naming the person who is not running it would be worse than one naming
+    // nobody. Unconditional rather than "only when it differs": one write, and no reading of the old
+    // value to get wrong.
+    data: { status: 'running', activeRunId: run.id, branch, assigneeId: slave.id },
   })
   if (claimed.count === 0) {
     // Lost the race. This is not a failed run -- nothing was attempted -- so it must not leave a

@@ -4,6 +4,7 @@ import {
   slaveId as brandSlaveId,
   runId as brandRunId,
   capabilityIndex,
+  chooseAssignee,
   measureAdherence,
   parsePlanGraph,
   type CapabilityRecord,
@@ -27,7 +28,7 @@ import { checkpointRunFiles, runTokenHash, type SlaveRuntimeAdapter, type RunHan
 import { resolveRuntime, workspaceDefaultProvider } from './model.js'
 import { resolveAdapter } from './provider.js'
 import { pumpRun } from './pump.js'
-import { staffedRolesForWorkspace } from './staffing.js'
+import { assignableSeatsForWorkspace, staffedRolesForWorkspace } from './staffing.js'
 import { concludeReplan, replanIntent, replanSectionOf, runbookSectionOf, type ReplanIntent } from './replan.js'
 import { buildRunContext } from './runContext.js'
 import { joinRunOutput } from './runOutput.js'
@@ -197,9 +198,21 @@ export async function concludePlanning(runId: RunId): Promise<void> {
     return
   }
 
+  // H2: WHOSE each of these tasks is. Read ONCE for the whole graph, beside the staffing boundary
+  // above and from the same roster, and applied by the domain (`chooseAssignee`) rather than by a
+  // rule written out again here. A task used to reach the board with `assigneeId` null and read
+  // "unassigned" until its first run started, though the role it requires already said who would do
+  // it -- so the board said nobody had work that was somebody's all along.
+  const seats = await assignableSeatsForWorkspace(workspaceId)
+
   const created = await prisma.$transaction(async (tx) => {
     const idByKey = new Map<string, string>()
-    const rows: Array<{ readonly id: string; readonly title: string; readonly role: string }> = []
+    const rows: Array<{
+      readonly id: string
+      readonly title: string
+      readonly role: string
+      readonly assigneeId: string | null
+    }> = []
     for (const { planTask, keys, requiredRole, maxAttempts } of derived) {
       const task = await tx.task.create({
         data: {
@@ -240,6 +253,13 @@ export async function concludePlanning(runId: RunId): Promise<void> {
           // needs `goalVersion < world.goalVersion`, which 0 < 0 is not), and inventing a 1 here
           // would name a `GoalVersion` row that does not exist.
           goalVersion: workspace.goalVersion,
+          // H2: the seat that holds this task's role, from the one reading of the roster above.
+          // Null when nobody holds it -- a state a person has to see rather than one to invent a
+          // name for, and the one the Supervisor's `ready_unstaffed` situation is about. Every task
+          // asking the same role gets the same seat deliberately: this says whose work it is, not
+          // how a tick will spread it, and `startRun` rewrites the column to whoever the run
+          // actually goes to.
+          assigneeId: chooseAssignee(requiredRole, seats),
         },
       })
       idByKey.set(planTask.key, task.id)
@@ -247,7 +267,7 @@ export async function concludePlanning(runId: RunId): Promise<void> {
       // narrowing only -- Prisma types the column `string | null` and the derivation above has
       // already refused every graph that could put a null there -- and if it ever did fire, the
       // payload schema's `min(1)` would say so loudly rather than log an empty role.
-      rows.push({ id: task.id, title: task.title, role: task.requiredRole ?? '' })
+      rows.push({ id: task.id, title: task.title, role: task.requiredRole ?? '', assigneeId: task.assigneeId })
     }
     for (const planTask of parsed.value.tasks) {
       const taskId = idByKey.get(planTask.key) as string
@@ -269,7 +289,9 @@ export async function concludePlanning(runId: RunId): Promise<void> {
       workspaceId,
       taskId: task.id,
       actor: 'slave',
-      payload: { title: task.title, goalVersion: workspace.goalVersion },
+      // H2: the timeline says who the task was given to the moment it existed, so a person reading
+      // it back a week later sees the assignment rather than only the run that started days after.
+      payload: { title: task.title, goalVersion: workspace.goalVersion, assigneeId: task.assigneeId },
     })
   }
 

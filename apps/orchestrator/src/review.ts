@@ -132,7 +132,8 @@ export async function concludeReview(runId: RunId): Promise<void> {
       })
       // M53 R4: the reviewer judged the IMPLEMENTER's work, so the verdict settles on the
       // implementer's row -- the pattern M49 already uses to attribute a verified fact to its
-      // author, never through `Task.assigneeId`, which nothing in this pipeline writes. INSIDE the
+      // author, never through `Task.assigneeId`, which names whoever holds the task and not who did
+      // this work (H2 gave that column a value; it did not make it an authorship record). INSIDE the
       // `count === 1` guard: an approve that lost the race is an approval nobody will ever see
       // land, and a verdict is a fact about work that moved.
       await settleTaskEvidence(task.id, { kind: 'review', verdict: 'approved', attempt: null })

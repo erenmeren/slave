@@ -51,8 +51,9 @@ export function task(overrides: Partial<SupervisorTask> = {}): SupervisorTask {
     // M47: a task planned before capabilities existed asks for none, which is what every fixture
     // in this file means unless it says otherwise.
     requiredCapabilities: [],
-    // M50 R3: nobody is hand-assigned by default. `Task.assigneeId` is written by nothing in the
-    // pipeline, so a fixture that set one would be describing a board this product does not make.
+    // M50 R3: nobody is assigned by default -- a fixture says who holds a task when the case is
+    // about that. A real planned board carries a holder on every task since H2, so a case about
+    // `engagement_over`'s open-work clause has to set this rather than assume the column is dead.
     assigneeId: null,
     // M48: a task planned before runbooks existed belongs to no stage, which is what every fixture
     // in this file means unless it says otherwise -- and a task with no stage carries no

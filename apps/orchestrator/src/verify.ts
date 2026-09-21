@@ -104,7 +104,8 @@ function expectedOutputOf(handoff: unknown): string | null {
  * `hint` is the run the caller already holds, used only when it turns out to be an IMPLEMENTATION
  * run -- `advance`'s is. `concludeReview`'s is the REVIEWER's, so it passes null and this reads the
  * task's newest implementation run instead: the reviewer caught it, the implementer learns from it.
- * `Task.assigneeId` is not an answer -- nothing in the pipeline writes it.
+ * `Task.assigneeId` is not an answer either, H2 or no H2: it names whoever HOLDS the task, which a
+ * re-assignment can move, and what this asks is who WROTE the code a lesson is about.
  */
 export async function implementerOf(taskId: string, hint: string | null): Promise<string | null> {
   if (hint !== null) {
