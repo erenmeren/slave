@@ -244,3 +244,83 @@ call of ANY shape in this stream is already an `isolation_breach`), and what a f
    provider setting therefore drops out of the budget guardrail for its Supervisor turns: the
    conversation's "cost so far" (R8) counts nothing, and `unmeasured` on the message row is the
    only honest thing the panel can show.
+
+**E3 — A decision from a reply is keyed by the message AND the action (R3, task 4).** The subject
+is `<messageId>:<actionKind>`, not the bare message id. `recordDecision` treats
+`(workspaceId, situationKind, subjectId)` as a KEY — an open row on it refuses a second, and a
+resolved one cools the key for `COOLDOWN_MS` — so with the bare id a reply that asked for two
+things would record the first and have the second refused `supervisor_cooldown`: one of the two
+things the person asked for would silently not happen. The ways back to the turn are
+`situation.facts.messageId`, which carries the id exactly, and `SupervisorMessage.actions[].decisionId`,
+which is how the panel finds a reply's cards rather than by reconstructing this key. Two actions of
+the SAME kind in one reply still collide, and that is right: it is a model repeating itself, and the
+second is dropped rather than doubled. **Cost:** a colon in a string.
+
+**E4 — The citation verdict is a column, not a derivation (R2/R8, task 4).**
+`SupervisorMessage.sourced` (migration `20260921000000_supervisor_message_sourced`) is written when
+the turn settles and is `true` only when the reply made at least one citation and none of them was
+rejected. It is STORED rather than re-derived on read because the evidence is gone by then: the
+verdict was reached against the twenty feed sentences and the attachment slices that one prompt
+rendered, and neither is recoverable an hour later. The sentence that says which citations did not
+check out stays in the reply's own text as well — the chip is a summary, and a person reading the
+row months later should not have to trust a boolean. **Cost:** one boolean column.
+
+**E5 — Where the conversation's money lives (R2/R8, task 4).** A chat turn is a Supervisor model
+call and is charged like one, but on the TURN's own row: `SupervisorMessage.modelCostUsd` and
+`unmeasured`. `workspaceSpend` gained a chat term —
+`chatMeasuredUsd + chatUnmeasuredTurns × SUPERVISOR_PER_CALL_CAP_USD` — so an unpriced turn is
+charged at the cap rather than counted as free, which is the same honesty rule every other
+Supervisor call already obeys. The decisions a reply produces are recorded `modelCalled: false`
+*because* of that: `workspaceSpend` charges every `modelCalled` row with no cost at the cap, and
+`true` here would bill the same call again, once per action the reply asked for. Two consequences
+follow and are deliberate: a turn on a project past its budget fails `budget_exhausted` **without
+making the call**, and a HALTED project still chats — a halt is exactly when a person asks why
+nothing is running, and `tierOf` already refuses to apply anything under one. Booked, not fixed:
+the Runtime card's "Supervisor spend" figure still counts only decision rows, so conversation money
+is in the project's total and not in that tile. **Cost:** one term in one sum.
+
+**E6 — What arms a read-only turn (R7, tasks 3 and 4).** The turn writes a permissions file of its
+own under the turn's directory with `runKind: 'planning'` — whose baseline is exactly `read_repo`,
+nothing else — mints a fresh run token, and passes both to `decideWithModel` with `tools:
+'read-only'` and `cwd` set to the repository. The turn's own id goes where a run's id would: the
+gate compares the token's hash against what the file names, and no `SlaveRun` exists for a
+conversation. The tick also refuses to READ a stored attachment whose path resolves outside
+`docs/inbox/` before the prompt is built, so a row hand-edited in the database cannot make the
+Supervisor quote `/etc/shadow` into a prompt. What none of this buys is E2's first half, unchanged.
+**Cost:** a permissions file per image turn.
+
+**E7 — A refusal is a sentence in the reply, not a line in stderr (R1/R2, task 4 fix round 1).**
+`recordDecision` can refuse an action a reply asked for — the project's Supervisor is switched off,
+or the same `(kind, subject)` was decided inside the cooldown — and dropping that into stderr left
+the reply reading as though the thing had happened. Each refusal now joins the same trailing
+`notes` the parser's dropped-action sentences and the citation verdict use, in the person's own
+words ("I could not record that change to the goal: …"), and **the turn still answers**: a refusal
+to record is never a reason to withhold what the model said, and a person whose Supervisor is off
+may be asking exactly why nothing is happening. The three failure reasons a turn can carry —
+`no_decider_for_provider`, `budget_exhausted`, `turn_unreadable` — each have a sentence in the
+panel; any other reason is the runtime's own words, shown verbatim. **Cost:** a list of sentences
+under an answer.
+
+**E8 — The composer stopped writing goal versions, and one gate was rewritten for it (R8/R9, task
+8).** The panel's box posts a MESSAGE; asking for the goal to change is something a REPLY may
+propose. `POST /api/w/:id/goal/request` is untouched and still serves the CLI, and nothing in the
+panel calls it. `gate:m45-project-experience` stage 5 read back the goal v3 the composer used to
+write, so it was rewritten rather than deleted: it now fills the same box with the same words and
+measures the two rows a send really writes — the person's line `human/sent` and the reply
+placeholder `supervisor/answering`, which is the panel's "thinking…" row — plus the negative the
+rewrite exists for, that no `GoalVersion` v3 was written at all. Its `replan-status` assertions are
+gone rather than re-aimed: they read "a FRESH version arms the next tick's re-plan", and the only
+fresh version in that gate was the composer's — stage 0's v2 is already deduped by its own seeded
+`workspace.replan_started`, so asking again would have measured M40's dedup. The conversation's
+whole goal-change path is proven instead in `gate:m39-supervisor-mailbox` **stage 6**, against a
+real daemon and the fake CLI: `supervisor-say --file <brief.md>` commits the brief under
+`docs/inbox/`, the reply asks for a `request_goal_change` naming that path, autonomy `act` applies
+it, and the newest goal version carries the path. R5's `disabledKinds` was never built, because E1
+found Cursor's print mode works. **Cost:** one stage rewritten, one stage added.
+
+Booked by this milestone and deliberately not fixed: `PUT /api/w/:id/provider` (the project's RUN
+provider) answers **409** for a provider this installation does not have, where the Supervisor's own
+settings route answers **400** for the same refusal; `simulation/auto-run.ts` keeps
+its own in-flight set rather than the shared `detachedCalls`; and `--file` is REPEATABLE now, so
+`set-profile --file a --file b` and `runbooks add --file a --file b` refuse two files rather than
+silently taking one.
