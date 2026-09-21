@@ -134,8 +134,23 @@ Its default content is the **Supervisor**, which is a conversation over events t
 thread is one local calendar day of this project's `workspace.goal_set` (the operator's own typed
 words, which M45 put on the payload) and `supervisor.*` rows, its decision cards are the same
 pending list the command strip's needs-you bar reads, and its composer is the same
-`POST /api/w/:id/goal/request` the M45 request box posted to. There is no conversation table and no
+`POST /api/w/:id/goal/request` the M45 request box posted to. M57 added no conversation table and no
 new event type.
+
+**F gives the conversation rows of its own, and three routes.** The composer sends to
+`POST /api/w/:id/supervisor/messages` (`{ text, attachments? }` → the person's line and the reply
+placeholder the panel draws as "thinking"; 409 for a message past the cap or an attachment that is
+not a file this conversation put in the inbox), and the panel reads the thread back from `GET` on
+the same path (`?limit=`, newest end). The attach button and the drop zone send a multipart form to
+`POST /api/w/:id/supervisor/uploads`, which writes every file into the repository's `docs/inbox/`
+on the base branch, commits it and answers with each path — **413** past twenty megabytes,
+**415** for an extension nothing here can read, **400** for more than five files or a name that is
+a path. The header's provider and model selects PATCH `/api/w/:id/supervisor/settings` beside the
+autonomy switch below (`{ provider, model }`, either one `null` for the installation default; a
+provider this installation does not have is a **400**). Those message rows are **merged into the
+same day buckets as the events above, in time order** — so a decision still appears beside the
+message that caused it — and nothing is deduplicated: a goal set that echoes a message somebody
+typed renders as both, because nothing on either row says one caused the other.
 
 Its scope line carries the project's one autonomy switch (`supervisor-autonomy`, label **act on its
 own**), which PATCHes `/api/w/:id/supervisor/settings` and moves `Workspace.supervisorAutonomy`

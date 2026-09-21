@@ -1,6 +1,7 @@
 import { z } from 'zod'
-import { setSupervisorSettings } from '@slave-of-ai/control'
-import { workspaceControlResponse } from '../../../../../../server/workspaceControlRoute'
+import { refusalText, setSupervisorSettings, type ProviderKind } from '@slave-of-ai/control'
+import { archivedRefusal } from '../../../../../../server/workspaceControlRoute'
+import { refusalStatus } from '../../../../../../server/refusalStatus'
 import { requirePrincipal } from '../../../../../../server/principal'
 
 export const dynamic = 'force-dynamic'
@@ -25,10 +26,22 @@ const bodySchema = z.object({
    * because it is the shape of the request that is wrong, not the state of the project.
    */
   autonomy: z.enum(['propose', 'act']).optional(),
+  /**
+   * F R4: which runtime answers this project's Supervisor, and which model it asks for. Both
+   * nullable, and `null` is the value that says "the installation default" -- an omitted field
+   * means "leave it alone", which is a different instruction.
+   *
+   * The STRING is handed on unvalidated, `PUT …/provider`'s rule: `setSupervisorSettings` owns the
+   * `invalid_provider` refusal and its verbatim sentence, and a second list of kinds here would be
+   * a second place for it to go stale. Only the JS TYPE is this schema's business.
+   */
+  provider: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
 })
 
 const BODY_ERROR =
-  'the body must be { "enabled"?: boolean, "profile"?: string | null, "autonomy"?: "propose" | "act" }'
+  'the body must be { "enabled"?: boolean, "profile"?: string | null, "autonomy"?: "propose" | "act", ' +
+  '"provider"?: string | null, "model"?: string | null }'
 
 /**
  * The Supervisor settings a project may change (M38 §6, E R1): whether the Supervisor decides at
@@ -60,9 +73,26 @@ export async function PATCH(
     ...(body.data.enabled === undefined ? {} : { enabled: body.data.enabled }),
     ...(body.data.profile === undefined ? {} : { profile: body.data.profile }),
     ...(body.data.autonomy === undefined ? {} : { autonomy: body.data.autonomy }),
+    // Cast for the same reason `PUT …/provider` casts: the verb is the one validator, and it
+    // refuses a string that is not a kind rather than trusting this signature.
+    ...(body.data.provider === undefined ? {} : { provider: body.data.provider as ProviderKind | null }),
+    ...(body.data.model === undefined ? {} : { model: body.data.model }),
   }
 
-  return workspaceControlResponse(workspaceId, () =>
-    setSupervisorSettings(workspaceId, patch, gate.principal ?? undefined),
+  const refusal = await archivedRefusal(workspaceId)
+  if (refusal !== null) return refusal
+
+  const result = await setSupervisorSettings(workspaceId, patch, gate.principal ?? undefined)
+  if (result.ok) return Response.json({ ok: true })
+  return Response.json(
+    { error: refusalText(result.error), kind: result.error.kind },
+    // `invalid_provider` is the one refusal this route answers 400 rather than
+    // `workspaceControlResponse`'s 409 (F R4): a provider this installation does not have is the
+    // BODY naming something that is not a provider -- the shape of the request, exactly like
+    // `autonomy`'s third word above, which the schema already answers 400. The sentence is still
+    // the control layer's, so an operator reads what the CLI would have told them. Everything
+    // else keeps `refusalStatus`' answer, `invalid_model` (a real 409 -- the field is a string,
+    // and the string is not a model id) included.
+    { status: result.error.kind === 'invalid_provider' ? 400 : refusalStatus(result.error.kind) },
   )
 }

@@ -1112,7 +1112,9 @@ describe('the control routes', () => {
       expect(body.pending[0].rationale).toBe('Nobody can review, and Alex is idle.')
       expect(body.pending[0].situation.summary).toContain('no worker holds the reviewer role')
       expect(body.recent.map((d: { id: string }) => d.id)).toEqual([decisionId])
-      expect(body.settings).toEqual({ enabled: true, profile: null, autonomy: 'propose' })
+      // F R4 added the runtime pair: null on both means the installation default, which is what
+      // an unset column has always meant and what a fresh project has.
+      expect(body.settings).toEqual({ enabled: true, profile: null, autonomy: 'propose', provider: null, model: null })
     })
 
     // M39 §6: the mailbox block. The panel reads the questions off the SAME world the report is
