@@ -164,6 +164,24 @@ describe('sendSupervisorMessage', () => {
     expect(rows[0]?.attachments).toEqual([attachment])
   })
 
+  /** The stored `kind` is DERIVED from the path's extension, never the caller's word for it (fix
+   *  round 1, M5): the kind decides whether the chat prompt INLINES the file's text or only names
+   *  it by path, so a caller that says `image` about a `.md` would hide a brief from the prompt. */
+  it('stores the kind the PATH says, not the one the caller posted', async (): Promise<void> => {
+    const sent = await sendSupervisorMessage(f.workspaceId, {
+      text: 'read this',
+      attachments: [{ path: 'docs/inbox/2026-09-20-brief.md', name: 'brief.md', bytes: 7, kind: 'image' }],
+    })
+    expect(sent.ok).toBe(true)
+
+    const rows = await listSupervisorMessages(f.workspaceId)
+    // `bytes` is left exactly as posted -- it is what the upload verb measured, and nothing here
+    // re-reads the file to second-guess it.
+    expect(rows[0]?.attachments).toEqual([
+      { path: 'docs/inbox/2026-09-20-brief.md', name: 'brief.md', bytes: 7, kind: 'text' },
+    ])
+  })
+
   it('refuses a blank message, one past the cap, and an unknown project', async (): Promise<void> => {
     const blank = await sendSupervisorMessage(f.workspaceId, { text: '   ' })
     expect(blank.ok).toBe(false)

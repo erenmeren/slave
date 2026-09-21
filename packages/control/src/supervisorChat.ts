@@ -221,6 +221,14 @@ export async function sendSupervisorMessage(
   if (attachments.length > SUPERVISOR_UPLOAD_MAX_FILES) {
     return err({ kind: 'too_many_attachments', limit: SUPERVISOR_UPLOAD_MAX_FILES, count: attachments.length })
   }
+  // What is STORED, never what was posted (fix round 1, M5). `kind` is DERIVED from the path's own
+  // extension through `ATTACHMENT_KIND_BY_EXTENSION` -- the one place an extension becomes a kind
+  // -- and the caller's `kind` is ignored entirely. It is a field on a request body, which means a
+  // caller can say `image` about a `.md`, and the kind is what decides whether the chat prompt
+  // INLINES the file's text or only names it by path: believing the caller would let a request
+  // hide a brief from the prompt, or ask for a screenshot to be read as text. `bytes` stays as
+  // posted -- it is what the upload verb measured and nothing here re-reads the file.
+  const stored: ChatAttachment[] = []
   for (const attachment of attachments) {
     // R6: an attachment IS a file in `docs/inbox` -- that is what `storeSupervisorUploads` makes
     // and the only thing the prompt promises a worker can open by path. A path from anywhere else
@@ -228,9 +236,11 @@ export async function sendSupervisorMessage(
     // file in the repository is not what a person attaching a brief asked for.
     if (!isInboxPath(attachment.path)) return err({ kind: 'attachment_path_refused', name: attachment.name })
     const extension = attachment.path.slice(attachment.path.lastIndexOf('.') + 1).toLowerCase()
-    if (ATTACHMENT_KIND_BY_EXTENSION[extension] === undefined) {
+    const kind = ATTACHMENT_KIND_BY_EXTENSION[extension]
+    if (kind === undefined) {
       return err({ kind: 'attachment_kind_not_allowed', name: attachment.name, extension })
     }
+    stored.push({ path: attachment.path, name: attachment.name, bytes: attachment.bytes, kind })
   }
 
   const outcome = await prisma.$transaction(async (tx) => {
@@ -241,7 +251,7 @@ export async function sendSupervisorMessage(
     }
     const seq = await nextSeq(tx, workspaceId)
     const message = await tx.supervisorMessage.create({
-      data: { workspaceId, seq, role: 'human', status: 'sent', text, attachments: asJson(attachments) },
+      data: { workspaceId, seq, role: 'human', status: 'sent', text, attachments: asJson(stored) },
       select: { id: true },
     })
     const reply = await tx.supervisorMessage.create({

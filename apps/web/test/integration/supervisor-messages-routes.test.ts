@@ -125,6 +125,30 @@ describe('the Supervisor messages route', () => {
     expect((await POST(post({ text: '   ' }), params(workspaceId))).status).toBe(409)
   })
 
+  it('lands an inbox attachment on the stored row, with the kind the PATH says', async (): Promise<void> => {
+    const response = await POST(
+      post({
+        text: 'read this brief',
+        // The posted `kind` is a lie (`.md` is text), and the row must not repeat it: the kind is
+        // what decides whether the chat prompt inlines the file or only names it (fix round 1, M5).
+        attachments: [{ path: 'docs/inbox/2026-09-20-brief.md', name: 'brief.md', bytes: 7, kind: 'image' }],
+      }),
+      params(workspaceId),
+    )
+
+    expect(response.status).toBe(200)
+    const rows = await prisma.supervisorMessage.findMany({ where: { workspaceId }, orderBy: { seq: 'asc' } })
+    expect(rows[0]?.attachments).toEqual([
+      { path: 'docs/inbox/2026-09-20-brief.md', name: 'brief.md', bytes: 7, kind: 'text' },
+    ])
+
+    const read = await GET(new Request('http://x'), params(workspaceId))
+    const body = (await read.json()) as MessagesBody
+    expect(body.messages[0]?.attachments).toEqual([
+      { path: 'docs/inbox/2026-09-20-brief.md', name: 'brief.md', bytes: 7, kind: 'text' },
+    ])
+  })
+
   it('409s an attachment that is not a file this conversation put in the inbox', async (): Promise<void> => {
     const response = await POST(
       post({

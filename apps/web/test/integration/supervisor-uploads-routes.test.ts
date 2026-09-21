@@ -53,6 +53,20 @@ function upload(files: readonly { readonly name: string; readonly bytes: BlobPar
   return new Request('http://x', { method: 'POST', body: form })
 }
 
+/** A request that DECLARES more than the route will ever accept without carrying it: the header is
+ *  what the size pre-check reads, and the point of the check is that nothing is decoded first
+ *  (fix round 1, I1). */
+function oversizeRequest(): Request {
+  return new Request('http://x', {
+    method: 'POST',
+    body: 'not really a hundred megabytes',
+    headers: {
+      'content-type': 'multipart/form-data; boundary=----x',
+      'content-length': String(SUPERVISOR_UPLOAD_MAX_FILES * SUPERVISOR_UPLOAD_MAX_BYTES + 1),
+    },
+  })
+}
+
 /** The text of the brief the first case uploads, named so its byte count can be asserted without
  *  respelling the string. */
 const BRIEF = '# What I want\n'
@@ -124,7 +138,10 @@ describe('the Supervisor uploads route', () => {
     expect(((await response.json()) as { kind: string }).kind).toBe('attachment_too_large')
   })
 
-  it('400s more files than one request may carry', async (): Promise<void> => {
+  /** Refused off the form's ENTRIES, before a byte of any file is copied into a `Buffer`
+   *  (fix round 1, I1). The refusal is all this can assert -- and all it needs to: the count is
+   *  the only thing the route looked at to answer. */
+  it('400s more files than one request may carry, before copying any of them', async (): Promise<void> => {
     const files = Array.from({ length: SUPERVISOR_UPLOAD_MAX_FILES + 1 }, (_unused, index) => ({
       name: `note-${String(index)}.md`,
       bytes: 'note',
@@ -133,7 +150,43 @@ describe('the Supervisor uploads route', () => {
     const response = await POST(upload(files), params(workspaceId))
 
     expect(response.status).toBe(400)
-    expect(((await response.json()) as { kind: string }).kind).toBe('too_many_attachments')
+    const body = (await response.json()) as { kind: string; error: string }
+    expect(body.kind).toBe('too_many_attachments')
+    // The VERB's own sentence, so a caller reads the same words whichever check answered first.
+    expect(body.error).toContain(String(SUPERVISOR_UPLOAD_MAX_FILES))
+    expect(existsSync(join(repoPath, 'docs', 'inbox'))).toBe(false)
+  })
+
+  it('413s a request that DECLARES more than the whole cap, without reading the body', async (): Promise<void> => {
+    const response = await POST(oversizeRequest(), params(workspaceId))
+
+    expect(response.status).toBe(413)
+    expect(((await response.json()) as { error: string }).error).toContain(
+      String(SUPERVISOR_UPLOAD_MAX_FILES * SUPERVISOR_UPLOAD_MAX_BYTES),
+    )
+  })
+
+  /** ORDER, proved by the answer (fix round 1, I1): the same oversize declaration that gets a 413
+   *  above gets the ARCHIVED refusal here, which is only possible if the one indexed read runs
+   *  before the size check and both run before the body is touched. */
+  it('answers an archived project before it looks at the size, let alone the body', async (): Promise<void> => {
+    const archived = await seed(makeRepo(), { archived: true })
+
+    const response = await POST(oversizeRequest(), params(archived))
+
+    expect(response.status).toBe(409)
+    expect(((await response.json()) as { error: string }).error).toContain('archived')
+  })
+
+  it('takes a request with no files at all as the no-op the verb says it is', async (): Promise<void> => {
+    const response = await POST(upload([]), params(workspaceId))
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ attachments: [] })
+    // Nothing written and, crucially, nothing COMMITTED: an empty commit would be a record of an
+    // event that did not happen.
+    const log = execFileSync('git', ['log', '-1', '--pretty=%s'], { cwd: repoPath, encoding: 'utf8' }).trim()
+    expect(log).toBe('initial')
   })
 
   it('400s a name that is a path out of the inbox, and writes nothing', async (): Promise<void> => {

@@ -204,6 +204,39 @@ describe('buildSupervisorThreads', () => {
       expect(threads[0]?.messages.map((message) => message.who)).toEqual(['operator', 'supervisor', 'supervisor'])
     })
 
+    /** A question and its reply placeholder are written in ONE transaction and share a `createdAt`
+     *  to the millisecond, so the clock alone cannot order them (fix round 1, M2). */
+    it('keeps a question above its own reply when the two share a millisecond', async (): Promise<void> => {
+      const workspaceId = await seed()
+      const at = new Date()
+      await chatRow(workspaceId, { seq: 1, role: 'supervisor', text: 'because nobody reviews', at })
+      await chatRow(workspaceId, { seq: 0, role: 'human', text: 'why is checkout stuck?', at })
+
+      const [thread] = await buildSupervisorThreads(workspaceId)
+
+      expect(thread?.messages.map((message) => message.text)).toEqual([
+        'why is checkout stuck?',
+        'because nobody reviews',
+      ])
+    })
+
+    it('puts a chat row ABOVE an event stamped the same millisecond', async (): Promise<void> => {
+      const workspaceId = await seed()
+      const event = await appendEvent({
+        type: 'workspace.goal_set',
+        workspaceId,
+        actor: 'system',
+        payload: { goal: 'Ship checkout', version: 2, sha256: 'abc' },
+      })
+      const row = await prisma.executionEvent.findFirstOrThrow({ where: { workspaceId, seq: Number(event.seq) } })
+      await chatRow(workspaceId, { seq: 0, role: 'human', text: 'change the goal', at: row.ts })
+
+      const [thread] = await buildSupervisorThreads(workspaceId)
+
+      // The message is what CAUSED the event, so it reads first even though neither clock moved.
+      expect(thread?.messages.map((message) => message.text)).toEqual(['change the goal', 'Project · goal set'])
+    })
+
     it('gives a chat row an id of its own, prefixed so it can never collide with an event s seq', async (): Promise<void> => {
       const workspaceId = await seed()
       const rowId = await chatRow(workspaceId, { seq: 0, role: 'human', text: 'hello', at: new Date() })

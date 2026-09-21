@@ -191,10 +191,22 @@ export async function buildSupervisorThreads(
 
   // ONE list, sorted by time, and only then bucketed: the two sources have no shared ordering
   // column -- a `seq` on an event and a `seq` on a message count different things -- so the clock
-  // is the only thing they can be interleaved by. A chat row wins a tie against an event stamped
-  // the same millisecond, because a message is what CAUSES the events around it.
-  const timeline: { readonly at: number; readonly rank: 0 | 1; readonly message: SupervisorMessage }[] = [
-    ...chat.map((view) => ({ at: new Date(view.createdAt).getTime(), rank: 0 as const, message: chatMessage(view) })),
+  // is the only thing they can be interleaved by.
+  //
+  // Two tiebreaks, in order, because a millisecond is not fine enough for either source. `rank`
+  // first: a chat row wins against an event stamped the same millisecond, because a message is
+  // what CAUSES the events around it. Then `seq` WITHIN one source -- a question and the reply
+  // placeholder written in the same transaction share a `createdAt` to the millisecond, and a
+  // thread that showed the reply above the question would be wrong in the one place a reader
+  // would notice. The two spaces are never compared against each other: `rank` differs on every
+  // cross-source pair, so the `seq` term is only ever reached between two rows of one kind.
+  const timeline: { readonly at: number; readonly rank: 0 | 1; readonly seq: number; readonly message: SupervisorMessage }[] = [
+    ...chat.map((view) => ({
+      at: new Date(view.createdAt).getTime(),
+      rank: 0 as const,
+      seq: view.seq,
+      message: chatMessage(view),
+    })),
   ]
 
   for (const row of rows.reverse()) {
@@ -213,6 +225,7 @@ export async function buildSupervisorThreads(
     timeline.push({
       at: row.ts.getTime(),
       rank: 1,
+      seq: Number(row.seq),
       message: {
         id: String(row.seq),
         who: request === null ? 'supervisor' : 'operator',
@@ -224,7 +237,7 @@ export async function buildSupervisorThreads(
     })
   }
 
-  timeline.sort((a, b) => a.at - b.at || a.rank - b.rank)
+  timeline.sort((a, b) => a.at - b.at || a.rank - b.rank || a.seq - b.seq)
 
   const byDay = new Map<string, SupervisorMessage[]>()
   for (const entry of timeline) {
