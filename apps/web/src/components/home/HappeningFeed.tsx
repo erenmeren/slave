@@ -1,3 +1,6 @@
+'use client'
+
+import { useEffect, useState } from 'react'
 import type { HappeningNowItem } from '../../server/home'
 import { formatAge } from '../../lib/format'
 import { AvatarTile } from '../ui/AvatarTile'
@@ -13,8 +16,15 @@ import { ScrollArea } from '../ui/ScrollArea'
  * `title={item.type}` carries the raw domain type (`docs/ia.md` rule 3: a label, never a key, as
  * VISIBLE text) -- the sentence is what a person reads; the raw type is still reachable for
  * anyone who needs it.
+ *
+ * The age is drawn only once the component has MOUNTED (`NeedsYouBar`'s own rule): a relative
+ * clock rendered on the server reads "30m ago" and the same line rendered by the browser a moment
+ * later reads "29m ago", and React reports the difference as a hydration mismatch on every Home
+ * load. The byline keeps the project name from the first paint and gains the age on the client.
  */
 export function HappeningFeed({ items }: { readonly items: readonly HappeningNowItem[] }): React.JSX.Element {
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
   return (
     <aside data-testid="home-feed" className="flex min-h-0 flex-col rounded-surface border border-line bg-panel p-3">
       <h2 className="type-label">Happening now</h2>
@@ -29,7 +39,8 @@ export function HappeningFeed({ items }: { readonly items: readonly HappeningNow
                 <div className="min-w-0 flex-1">
                   <p className="type-meta text-t1">{item.sentence}</p>
                   <p className="type-meta text-t3">
-                    {item.workspaceName} · {formatAge(item.at)}
+                    {item.workspaceName}
+                    {mounted ? ` · ${formatAge(item.at)}` : ''}
                   </p>
                 </div>
               </li>
