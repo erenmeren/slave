@@ -352,6 +352,43 @@ describe('IntakeConversation', () => {
     expect(posted.autonomy).toBe('propose')
   })
 
+  /**
+   * H3: a project born from a conversation is born with a runtime. The card shows the
+   * INSTALLATION default preselected rather than an empty "none" when the model left `provider`
+   * at `null`, with a sentence saying so; `acceptIntake` is what actually resolves the `null`, so
+   * an untouched card still posts `provider: null` -- the same body the route schema already
+   * accepted.
+   */
+  it('preselects the installation default when the draft names no provider, and says so', async (): Promise<void> => {
+    const fetchMock = stubFetch([view({ status: 'drafted', draft: DRAFT, facts: FACTS })])
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+
+    expect((screen.getByTestId('intake-draft-provider') as HTMLSelectElement).value).toBe('claude_code')
+    expect(screen.getByTestId('intake-draft-provider-default').textContent).toMatch(/installation default/i)
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('intake-create'))
+    })
+    const accept = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/accept'))
+    expect(JSON.parse(String((accept?.[1] as { body: string }).body)).draft.provider).toBe(null)
+  })
+
+  it('drops the installation-default sentence and posts the explicit choice once the person picks one', async (): Promise<void> => {
+    const fetchMock = stubFetch([view({ status: 'drafted', draft: DRAFT, facts: FACTS })])
+    render(<IntakeConversation onClose={vi.fn()} />)
+    await waitFor(() => expect(screen.getByTestId('intake-draft')).toBeTruthy())
+
+    fireEvent.change(screen.getByTestId('intake-draft-provider'), { target: { value: 'cursor' } })
+    expect(screen.queryByTestId('intake-draft-provider-default')).toBeNull()
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('intake-create'))
+    })
+    const accept = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/accept'))
+    expect(JSON.parse(String((accept?.[1] as { body: string }).body)).draft.provider).toBe('cursor')
+  })
+
   it('posts the EDITED draft and lands on the project', async (): Promise<void> => {
     const fetchMock = stubFetch([view({ status: 'drafted', draft: DRAFT, facts: FACTS })])
     render(<IntakeConversation onClose={vi.fn()} />)

@@ -14,6 +14,7 @@ import {
   INTAKE_MESSAGE_MAX_CHARS,
   INTAKE_STEPS,
   INTAKE_TRANSCRIPT_MAX_CHARS,
+  SUPERVISOR_DEFAULT_PROVIDER,
   err,
   factsSummary,
   ensureStaffRoles,
@@ -719,7 +720,14 @@ export async function acceptIntake(
               : draft.verifyCommands.map((entry) => entry.command),
           setupCommands: [...draft.setupCommands],
           budgetUsd: draft.budgetUsd,
-          provider: draft.provider,
+          // A project born from a conversation is born runnable: the model was free to leave
+          // `provider` null (`intakeDraftSchema` permits it), and a workspace with no
+          // `ProviderConfiguration` row cannot make a single model call -- its planning fails
+          // silently, with no refusal pointing back here. The explicit `create-workspace` CLI
+          // (`createWorkspace` called directly, no `intakeId`) keeps today's behaviour: an
+          // operator who names no provider gets none, because a script is not a person who just
+          // finished describing what they want built.
+          provider: draft.provider ?? SUPERVISOR_DEFAULT_PROVIDER,
           // E R7/R1: the card's two checkboxes, which default ON in `intakeDraftSchema`. A project
           // asked for in a conversation is asked for by somebody who described an outcome, so it
           // merges its own approved work and its Supervisor carries out what it decides -- unless

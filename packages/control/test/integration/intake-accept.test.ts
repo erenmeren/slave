@@ -130,6 +130,42 @@ describe('acceptIntake', () => {
     expect(workspace.supervisorAutonomy).toBe('act')
   })
 
+  /**
+   * H3: a project born from a conversation is born with a runtime. The model was free to leave
+   * `provider` at `null` (`intakeDraftSchema` permits it), and `createWorkspace` writes NO
+   * `ProviderConfiguration` row for `null` -- before this fix that project could not make a
+   * single model call, and its planning failed with nothing pointing back here.
+   */
+  it('creates exactly one ProviderConfiguration of kind claude_code when the draft named none', async (): Promise<void> => {
+    const repo = makeRepo()
+    const id = await opened(`the repository is at ${repo}`)
+
+    const accepted = await acceptIntake(id, draftFor(repo, 'Runnable'))
+
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+    const configurations = await prisma.providerConfiguration.findMany({
+      where: { workspaceId: accepted.value.workspaceId },
+    })
+    expect(configurations).toHaveLength(1)
+    expect(configurations[0]?.kind).toBe('claude_code')
+  })
+
+  it('still creates exactly the provider an explicit draft named, cursor', async (): Promise<void> => {
+    const repo = makeRepo()
+    const id = await opened(`the repository is at ${repo}`)
+
+    const accepted = await acceptIntake(id, { ...draftFor(repo, 'Named Provider'), provider: 'cursor' })
+
+    expect(accepted.ok).toBe(true)
+    if (!accepted.ok) throw new Error('unreachable')
+    const configurations = await prisma.providerConfiguration.findMany({
+      where: { workspaceId: accepted.value.workspaceId },
+    })
+    expect(configurations).toHaveLength(1)
+    expect(configurations[0]?.kind).toBe('cursor')
+  })
+
   it('carries an unchecked card through too: the person said no to both', async (): Promise<void> => {
     const repo = makeRepo()
     const id = await opened(`the repository is at ${repo}`)
