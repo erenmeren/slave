@@ -243,7 +243,16 @@ export async function concludeWithQuestion(input: AskConclusionInput): Promise<A
     // `run_still_stopping` for a live one, which on a recycled pid would refuse to deliver the
     // answer to a run whose process died minutes ago. `executeResume` writes the new child's pid
     // back, so nothing downstream needs the stale one.
-    data: { status: 'paused', pauseReason: WAITING_FOR_ANSWER, pausedAtStep: input.toolCalls, pid: null },
+    //
+    // `pausedAt` (H8): a run waiting for an answer is parked like any other, and the wait is not
+    // working time -- the sweep's run timeout subtracts it once `claimResume` closes the span.
+    data: {
+      status: 'paused',
+      pauseReason: WAITING_FOR_ANSWER,
+      pausedAtStep: input.toolCalls,
+      pausedAt: new Date(),
+      pid: null,
+    },
   })
   if (claimed.count === 0) {
     return { kind: 'refused', reason: 'the run was concluded by something else before it could wait' }

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { refusalText, runFilePaths, type ModelDecider } from '@slave-of-ai/control'
+import { refusalText, requestResume, runFilePaths, type ModelDecider } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE, type DomainEventType } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
 import {
@@ -698,6 +698,122 @@ describe('tick', () => {
     await tick(deps)
     const stillOnce = await prisma.slaveRun.findUniqueOrThrow({ where: { id: activeRun.id } })
     expect(stillOnce.status).toBe('pause_requested')
+  })
+
+  /**
+   * H8. On 2026-09-21 three runs steered by the breaker were parked `paused` as the daemon was
+   * stopped; the new daemon counted them as active, halted on `concurrency`, and the halt branch
+   * returned before the resume pass -- so the person's own resume request sat for four hours
+   * behind a halt the parked runs themselves caused. A resume continues a run that is ALREADY
+   * counted and starts nothing, so a concurrency or streak halt must not stand in its way. Only a
+   * person's stop and an empty purse refuse even a resume.
+   */
+  describe('a paused run resumes under a halt that does not refuse it (H8)', () => {
+    const fakeAdapter = (fixtureName: string): ClaudeCodeAdapter =>
+      new ClaudeCodeAdapter({ command: 'node', extraArgs: [FAKE, '--fixture', fixtureName], hookPath: REAL_GATE })
+
+    /** A genuinely paused run: a tick starts one, the real gate denies its first call, the pump
+     *  parks it and writes the checkpoint `executeResume` will spawn from. */
+    async function pauseARun(): Promise<string> {
+      await tick({ ...deps, registry: singleAdapterRegistry(fakeAdapter('hook-deny')) })
+      await drainPumps()
+      const run = await prisma.slaveRun.findFirstOrThrow()
+      expect(run.status).toBe('paused')
+      await prisma.checkpoint.findUniqueOrThrow({ where: { runId: run.id } })
+      return run.id
+    }
+
+    /** A second ready task, so that "started nothing" is a claim about the halt and not about an
+     *  empty board. */
+    async function anotherReadyTask(): Promise<void> {
+      const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: fixture.workspaceId } })
+      await prisma.task.create({
+        data: {
+          workspaceId: fixture.workspaceId,
+          title: 'Add the other thing',
+          description: 'make it work too',
+          status: 'ready',
+          requiredRole: 'backend',
+          maxAttempts: workspace.maxAttempts,
+        },
+      })
+    }
+
+    it('resumes the run under the concurrency halt its own parked seat causes, and starts nothing', async (): Promise<void> => {
+      const runId = await pauseARun()
+      // `paused` is non-terminal, so the parked run holds the workspace's only slot and `decide()`
+      // halts on `concurrency` -- the deadlock: the run cannot resume until the halt lifts, and
+      // the halt cannot lift until the run resumes.
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { maxConcurrentRuns: 1 } })
+      await anotherReadyTask()
+      expect((await requestResume(runId, 'carry on', 'web')).ok).toBe(true)
+
+      const report = await tick({ ...deps, registry: singleAdapterRegistry(fakeAdapter('env-echo')) })
+      await drainPumps()
+
+      expect(report.halted).toBe('concurrency')
+      expect(report.started).toEqual([])
+      const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+      // `env-echo` runs to a clean end: the resume was claimed, spawned and pumped by this tick.
+      expect(after.status).toBe('succeeded')
+      expect(after.resumeRequestedAt).toBeNull()
+      expect(await prisma.executionEvent.count({ where: { runId, type: 'run_resumed' } })).toBe(1)
+    }, 60_000)
+
+    it('asks once: the halted tick consumes the claim, and the tick after it finds nothing to resume', async (): Promise<void> => {
+      const runId = await pauseARun()
+      await prisma.workspace.update({ where: { id: fixture.workspaceId }, data: { maxConcurrentRuns: 1 } })
+      expect((await requestResume(runId, 'carry on', 'web')).ok).toBe(true)
+
+      await tick({ ...deps, registry: singleAdapterRegistry(fakeAdapter('env-echo')) })
+      await drainPumps()
+      await tick({ ...deps, registry: singleAdapterRegistry(fakeAdapter('env-echo')) })
+      await drainPumps()
+
+      expect(await prisma.executionEvent.count({ where: { runId, type: 'run_resumed' } })).toBe(1)
+    }, 60_000)
+
+    it('leaves the intent waiting under an emergency stop', async (): Promise<void> => {
+      const runId = await pauseARun()
+      expect((await requestResume(runId, 'carry on', 'web')).ok).toBe(true)
+      await prisma.workspace.update({
+        where: { id: fixture.workspaceId },
+        data: { haltedReason: 'emergency stop by meren', haltedAt: new Date() },
+      })
+
+      const report = await tick({ ...deps, registry: singleAdapterRegistry(fakeAdapter('env-echo')) })
+      await drainPumps()
+
+      expect(report.halted).toBe('emergency_stop')
+      const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+      expect(after.status).toBe('paused')
+      expect(after.resumeRequestedAt).not.toBeNull()
+      expect(after.queuedMessage).toBe('carry on')
+      expect(await prisma.executionEvent.count({ where: { runId, type: 'run_resumed' } })).toBe(0)
+    }, 60_000)
+
+    it('leaves the intent waiting under an exhausted budget', async (): Promise<void> => {
+      const runId = await pauseARun()
+      expect((await requestResume(runId, 'carry on', 'web')).ok).toBe(true)
+      // Past the workspace's default $20 on this very run: an empty purse refuses even a resume.
+      await prisma.slaveRun.update({ where: { id: runId }, data: { costUsd: 999 } })
+
+      const report = await tick({ ...deps, registry: singleAdapterRegistry(fakeAdapter('env-echo')) })
+      await drainPumps()
+
+      expect(report.halted).toBe('budget_exhausted')
+      const after = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+      expect(after.status).toBe('paused')
+      expect(after.resumeRequestedAt).not.toBeNull()
+      expect(await prisma.executionEvent.count({ where: { runId, type: 'run_resumed' } })).toBe(0)
+    }, 60_000)
+
+    it('stamps the pause, so the time the run sat is not the time it worked', async (): Promise<void> => {
+      const runId = await pauseARun()
+      const parked = await prisma.slaveRun.findUniqueOrThrow({ where: { id: runId } })
+      expect(parked.pausedAt).not.toBeNull()
+      expect(parked.pausedMs).toBe(0)
+    }, 60_000)
   })
 
   it('announces the budget warning exactly once, and the durable check survives a restart', async (): Promise<void> => {

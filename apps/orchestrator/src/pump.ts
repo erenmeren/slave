@@ -492,9 +492,12 @@ async function recordCursorPauseIfRequested(input: {
   // any other state ended for its own reasons and must keep the conclusion that state implies.
   // `endedAt: null` for the usual reason -- an operator's `cancel` or the sweep may already have
   // concluded this run, and their decision stands.
+  //
+  // `pausedAt` (H8) is the clock the sweep's run timeout subtracts: the time a run sits parked is
+  // not time it worked. Written with the status, in the claim, so the two can never disagree.
   const claimed = await prisma.slaveRun.updateMany({
     where: { id: input.runId, endedAt: null, status: 'pause_requested' },
-    data: { status: 'paused', pausedAtStep: input.toolCalls },
+    data: { status: 'paused', pausedAtStep: input.toolCalls, pausedAt: new Date() },
   })
   if (claimed.count === 0) return false
 
@@ -953,9 +956,12 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
             // on a `working` run (no operator asked; the domain machine does not admit it as `paused`) is
             // still reported as what the runtime did, exactly as before this reordering. Only the ordering
             // moved.
+            //
+            // `pausedAt` (H8) rides with the status: it is the clock the sweep's run timeout
+            // subtracts, and `claimResume` closes it into `pausedMs` on the way back out.
             await prisma.slaveRun.updateMany({
               where: { id: runId, endedAt: null },
-              data: { status: 'paused', pausedAtStep: toolCalls },
+              data: { status: 'paused', pausedAtStep: toolCalls, pausedAt: new Date() },
             })
 
             // 4. And only now is it announced.
