@@ -19,13 +19,31 @@
 // daemon-1, stops it, reads the id of the task the first plan created, and spawns daemon-2 with
 // that id on its command line.
 //
-// WHY NOTHING IS EVER DISPATCHED. The fake plan's three tasks are all `backend` and the workspace
-// holds exactly ONE slave -- Atlas, `runtimeRoles: ['manager']` -- so the scheduler can staff a
-// planning run and nothing else. The board therefore sits still at `ready` for the whole gate,
-// which is what makes every count in it a measurement rather than a race with the pipeline. The
-// Supervisor will keep noticing `ready_unstaffed` and proposing `set_runtime_roles`; those
-// proposals are `proposed` on every branch (`tierOf`), so they change nothing, and every assertion
-// below filters the decision table by `situationKind`.
+// WHY NOTHING IS EVER DISPATCHED. The fake plan's three tasks are all `backend`, and the workspace
+// holds two seats: Atlas, `runtimeRoles: ['manager']`, who can be staffed on a planning run and on
+// nothing else, and Brook, `runtimeRoles: ['backend']`, who is PARKED -- seeded holding one
+// `paused` implementation run, `pauseReason: 'human'`, no pid, no task. Both halves are load-bearing.
+// Since 2026-09-17 (Task 5, `firstUnstaffedTask`) `concludePlanning` refuses a whole graph when a
+// task's role has no staffed seat, and `staffedRolesForWorkspace` counts a busy seat as staffed on
+// purpose ("a role held only by someone mid-run is still a role this project CAN serve"), so Brook
+// is what lets the plan LAND. And `decide()` hands work only to a seat that is not busy, where busy
+// is "holds a non-terminal run" -- so the same seat is what keeps the scheduler from ever starting
+// one. `paused` is the one non-terminal status designed to have no process behind it: the orphan
+// pass, the sweep and the breaker all exclude it by name, `resumeRequestedRuns` waits for a
+// `resumeRequestedAt` that is never set, and the steer delivery pass wants `pauseReason:
+// 'guardrail'` with a queued message. The board therefore sits still at `ready` for the whole
+// gate, which is what makes every count in it a measurement rather than a race with the pipeline.
+//
+// NOT a guardrail halt (`maxConcurrentRuns: 0`, `emergency-stop`, a spent budget): every one of
+// those makes `tick` return before `dispatchPlanning`, so the plan would never land at all, and a
+// recorded halt would also flip stage 2's `replan-status` to `blockedBy: 'halted'`. And NOT a free
+// `backend` seat with looser assertions: the first tick after the plan would start `core`, a task
+// that has left `ready` is no longer in `CANCELLABLE_STATUSES` and the re-plan would DROP the very
+// cancellation stage 2 measures.
+//
+// The Supervisor may still propose things about this board; every proposal it can make here is
+// `proposed` on every branch (`tierOf`), so they change nothing, and every assertion below filters
+// the decision table by `situationKind`.
 //
 // WHY DAEMON-1 IS STOPPED BEFORE THE GOAL MOVES (a correction to the brief's stage ordering). A
 // re-plan fires on the first tick after `setGoal`, and daemon-1 carries NO `--replan-cancel`, so a
@@ -266,10 +284,29 @@ try {
   await prisma.providerConfiguration.create({ data: { workspaceId, kind: 'claude_code', settings: {} } })
 
   const team = await prisma.team.create({ data: { workspaceId, name: 'Engineering' } })
-  // The ONLY slave. It can be staffed as a manager (planning) and as nothing else, and the fake
-  // plan's tasks are all `backend`, so the board this gate measures never moves under it.
-  const atlas = await prisma.slave.create({ data: { teamId: team.id, role: 'Engineering Manager', runtimeRoles: ['manager'], personId: (await prisma.person.upsert({ where: { name: 'Atlas' }, create: { name: 'Atlas' }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id } })
-  console.log(`slaves: Atlas ${atlas.id} runtimeRoles ${JSON.stringify(atlas.runtimeRoles)} -- nobody holds "backend"`)
+  // Two seats, one Person each (see WHY NOTHING IS EVER DISPATCHED). Atlas can be staffed as a
+  // manager (planning) and as nothing else. Brook holds `backend`, the role every task in the fake
+  // plan asks for -- which is what lets `concludePlanning`'s staffing boundary (Task 5) accept the
+  // graph -- and is parked on a `paused` run below, which is what keeps `decide()` from ever
+  // handing Brook one of those tasks.
+  const seedPerson = async (name) =>
+    (await prisma.person.upsert({ where: { name }, create: { name }, update: { templateId: null, profile: null, model: null, provider: null, capabilities: [], lifecycle: 'project', releasedAt: null, releaseReason: null, selectionRationale: null } })).id
+  const atlas = await prisma.slave.create({ data: { teamId: team.id, role: 'Engineering Manager', runtimeRoles: ['manager'], personId: await seedPerson('Atlas') } })
+  const brook = await prisma.slave.create({ data: { teamId: team.id, role: 'Backend Engineer', runtimeRoles: ['backend'], personId: await seedPerson('Brook') } })
+  // The park. A `paused` run is busy (`NON_TERMINAL_RUN_STATUSES`) and has no process by design, so
+  // nothing in the daemon concludes it: `reconcileOrphans` and `sweep` exclude `paused` by name,
+  // `resumeRequestedRuns` waits for a `resumeRequestedAt` nobody sets, and `deliverBreakerSteers`
+  // wants `pauseReason: 'guardrail'` with a queued message. No task: this is not a claim on the
+  // board, only on the seat. It counts one toward `activeRuns` (the planning run makes two, under
+  // the default `maxConcurrentRuns` of 3), and `quiescePlanning` counts `kind: 'planning'` only.
+  const park = await prisma.slaveRun.create({
+    data: { slaveId: brook.id, kind: 'implementation', status: 'paused', pauseReason: 'human', pausedAtStep: 0 },
+  })
+  console.log(
+    `slaves: Atlas ${atlas.id} runtimeRoles ${JSON.stringify(atlas.runtimeRoles)}; ` +
+      `Brook ${brook.id} runtimeRoles ${JSON.stringify(brook.runtimeRoles)}, parked on ${park.status} run ${park.id} ` +
+      `(pauseReason ${String(park.pauseReason)}, pid ${String(park.pid)}) -- "backend" is staffed, and its holder is busy`,
+  )
 
   /**
    * The environment a child of this gate gets: the fake CLI, the refusal that guards it, and -- for
@@ -469,7 +506,7 @@ try {
       await fail(`stage 1's task ${JSON.stringify(task.title)} is stamped goalVersion ${String(task.goalVersion)}, expected 1`)
     }
     if (task.status !== 'ready') {
-      await fail(`stage 1's task ${JSON.stringify(task.title)} is ${task.status}, expected ready -- nobody holds "backend", so nothing may move it`)
+      await fail(`stage 1's task ${JSON.stringify(task.title)} is ${task.status}, expected ready -- the only "backend" holder is parked, so nothing may move it`)
     }
   }
   const coreTask = planned.find((task) => task.title === CORE_TITLE)
