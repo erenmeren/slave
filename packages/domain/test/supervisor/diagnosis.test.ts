@@ -11,7 +11,13 @@ import { NETWORK_ROLES, readFailure } from '../../src/supervisor/diagnosis.js'
 describe('readFailure -- the diagnosis table (spec §3)', () => {
   /** The emptiest input that is still a real failure: nothing denied, no permissions asked for,
    *  and a role no rule names. Each test changes exactly the one fact its row is about. */
-  const base = { reason: null, deniedKinds: [], requiredPermissions: [], requiredRole: 'backend' } as const
+  const base = {
+    reason: null,
+    deniedKinds: [],
+    requiredPermissions: [],
+    requiredRole: 'backend',
+    spawnFailed: false,
+  } as const
 
   it('reads the system failing, not the worker, off the infrastructure markers', () => {
     for (const reason of [
@@ -29,6 +35,20 @@ describe('readFailure -- the diagnosis table (spec §3)', () => {
 
   it('matches an infrastructure marker whatever case it was written in', () => {
     expect(readFailure({ ...base, reason: 'STDOUT MAXBUFFER EXCEEDED' }).reading).toBe('infrastructure')
+  })
+
+  // H4b: the row says the model was never asked, so the sentence is not consulted -- a reason
+  // no marker matches, or none at all, still reads as the system failing.
+  it('reads a run that never reached the model as infrastructure, whatever its reason says', () => {
+    expect(readFailure({ ...base, spawnFailed: true })).toEqual({ reading: 'infrastructure', deniedKind: null })
+    expect(readFailure({ ...base, reason: 'the worker concluded the task could not be done', spawnFailed: true })).toEqual({
+      reading: 'infrastructure',
+      deniedKind: null,
+    })
+    // And the refusal still wins over it, as it does over the markers.
+    expect(
+      readFailure({ ...base, deniedKinds: ['network_fetch'], requiredRole: 'research', spawnFailed: true }).reading,
+    ).toBe('denied_tool')
   })
 
   it('reads a refused tool the task itself asked for, and names the kind', () => {

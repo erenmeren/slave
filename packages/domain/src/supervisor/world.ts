@@ -40,6 +40,15 @@ export interface TaskFailure {
    * LOADER CONTRACT: the `slaveId` of the `run.failed` event {@link reason} came from (Task 4).
    */
   readonly slaveId: string | null
+  /**
+   * H4b: the run FAILED BEFORE THE MODEL WAS EVER ASKED -- no runtime, an adapter refusal, a spawn
+   * that threw. A fact off the row (`SlaveRun.spawnFailed`), not a reading of {@link reason}:
+   * `readFailure` returns `infrastructure` for it whatever the sentence says, so the remedy is the
+   * same run again and never a judgement of work that was never done.
+   *
+   * LOADER CONTRACT: `SlaveRun.spawnFailed` of the run the `run.failed` event names.
+   */
+  readonly spawnFailed: boolean
 }
 
 /** A task, flattened to the facts a situation predicate actually reads. */
@@ -465,9 +474,10 @@ export interface SupervisorWorld {
    * the cap is counted from zero again -- otherwise the remedy would be spent the instant it was
    * applied.
    *
-   * LOADER CONTRACT: 0 unless the board is behind the goal (see {@link livePlanning}); H4b refines
-   * WHICH failures count (a run that died before the model was ever asked is infrastructure, not a
-   * planner that cannot plan).
+   * LOADER CONTRACT: 0 unless the board is behind the goal (see {@link livePlanning}). H4b: a run
+   * that died before the model was ever asked (`SlaveRun.spawnFailed`) is NOT counted -- that is
+   * infrastructure, not a planner that cannot plan -- and the count is `planningCountSince`'s, the
+   * one reading `dispatchPlanning` stops at too.
    */
   readonly planningFailuresSinceGoal: number
   /**

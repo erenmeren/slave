@@ -945,7 +945,11 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
         cancelError = failure
       }
     }
-    await failToStart(workspace.id, task, run.id, slave.id, error, cancelError)
+    // H4b: no handle means the model was never asked (`dispatchPlanning`'s rule) -- the row says
+    // so, and the breaker leaves such a run out of its streak. The TASK's attempt still counts
+    // (spec §13, `failToStart` below): a task whose worktree can never be provisioned must still
+    // stop being handed out, and that cap is the task's, not the worker's.
+    await failToStart(workspace.id, task, run.id, slave.id, error, cancelError, handle === null)
     return null
   }
 }
@@ -965,6 +969,7 @@ async function failToStart(
   slaveId: string,
   error: unknown,
   cancelError: unknown = null,
+  spawnFailed = false,
 ): Promise<void> {
   const reason =
     (error instanceof Error ? error.message : String(error)) +
@@ -975,7 +980,7 @@ async function failToStart(
 
   await prisma.slaveRun.update({
     where: { id: runId },
-    data: { status: 'failed', terminalAt: now, endedAt: now },
+    data: { status: 'failed', terminalAt: now, endedAt: now, spawnFailed },
   })
 
   // Leftovers get `blocked`, not `rework`. `rework` is the exact precondition `acquireWorktree`
@@ -994,7 +999,7 @@ async function failToStart(
     slaveId,
     runId,
     actor: 'system',
-    payload: { reason },
+    payload: { reason, ...(spawnFailed ? { phase: 'spawn' as const } : {}) },
   })
   if (exhausted) {
     await appendEvent({

@@ -645,10 +645,13 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
       (cancelError === null
         ? ''
         : ` -- AND THE CANCEL FAILED (${String(cancelError)}): the process may still be running.`)
+    // H4b: no handle means the model was never asked (`dispatchPlanning`'s rule): the row says
+    // so, and the breaker leaves such a run out of its streak.
+    const spawnFailed = handle === null
     const now = new Date()
     await prisma.slaveRun.update({
       where: { id: run.id },
-      data: { status: 'failed', terminalAt: now, endedAt: now },
+      data: { status: 'failed', terminalAt: now, endedAt: now, spawnFailed },
     })
     // The task stays in `reviewing` -- this is infra failing to start, not the slave's work being
     // judged, so `attempt` (the slave-facing counter) is deliberately left untouched. But the claim
@@ -668,7 +671,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
       slaveId: reviewer.id,
       runId: run.id,
       actor: 'system',
-      payload: { reason },
+      payload: { reason, ...(spawnFailed ? { phase: 'spawn' as const } : {}) },
     })
     return null
   }

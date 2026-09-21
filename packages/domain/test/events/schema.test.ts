@@ -248,6 +248,27 @@ describe('parseExecutionEvent', () => {
     }
   })
 
+  // H4b: the dispatch catches say WHEN the run died, so a reader can tell "the model was never
+  // asked" from "the model ran and failed" without parsing the reason line.
+  it('accepts run.failed with phase: spawn, and refuses any other phase', () => {
+    const spawn = parseExecutionEvent({
+      ...BASE,
+      type: 'run.failed',
+      runId: 'run-1',
+      payload: { reason: 'no runtime could be resolved for this run', phase: 'spawn' },
+    })
+    expect(spawn.ok).toBe(true)
+    if (spawn.ok && spawn.value.type === 'run.failed') expect(spawn.value.payload.phase).toBe('spawn')
+
+    const other = parseExecutionEvent({
+      ...BASE,
+      type: 'run.failed',
+      runId: 'run-1',
+      payload: { reason: 'the run ended', phase: 'verify' },
+    })
+    expect(other.ok).toBe(false)
+  })
+
   it('accepts a run.succeeded event with a null cost — an unmeasured run is not a free one', () => {
     const result = parseExecutionEvent({
       ...BASE,

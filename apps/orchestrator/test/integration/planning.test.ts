@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   adoptRunbook,
+  loadSupervisorWorld,
+  planningCountSince,
   refusalText,
   runbookStatus,
   setGoal,
@@ -14,6 +16,7 @@ import {
 } from '@slave-of-ai/control'
 import { DOMAIN_EVENT_TYPE_BY_DB_VALUE } from '@slave-of-ai/db'
 import { prisma } from '@slave-of-ai/db/client'
+import { appendEvent } from '@slave-of-ai/events'
 import { runId as brandRunId, workspaceId as brandWorkspaceId } from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter, type AdapterRegistry } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -407,6 +410,132 @@ describe('dispatchPlanning', () => {
     const failures = await prisma.executionEvent.findMany({ where: { runId: run.id, type: 'run_failed' } })
     expect(failures).toHaveLength(1)
     expect(failures[0]?.taskId).toBeNull()
+    // H4b: the row and the event both say the model was never asked.
+    expect(run.spawnFailed).toBe(true)
+    expect(failures[0]?.payload).toMatchObject({ phase: 'spawn' })
+  })
+
+  /**
+   * H4b: a run that never reached the model spends nothing, and a planning reset restarts the
+   * count. Observed 2026-09-21: two planning runs failed in the same second at spawn ("no runtime
+   * could be resolved") and spent the whole cap; nothing could re-plan.
+   */
+  describe('what spends the retry cap (H4b)', () => {
+    /** A planning run that FAILED, hand-seeded: a real failure unless `spawnFailed` says the
+     *  model was never asked. `startedAt` defaults to now, which is after any event seeded
+     *  earlier in the same test. */
+    async function failedPlanning(managerId: string, options: { readonly spawnFailed?: boolean; readonly at?: Date } = {}): Promise<void> {
+      const at = options.at ?? new Date()
+      await prisma.slaveRun.create({
+        data: {
+          slaveId: managerId,
+          kind: 'planning',
+          status: 'failed',
+          startedAt: at,
+          terminalAt: at,
+          endedAt: at,
+          spawnFailed: options.spawnFailed ?? false,
+        },
+      })
+    }
+
+    it('spends nothing on a run that never reached the model: two spawn failures, and planning still starts', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      await addManager(fixture.teamId)
+      // The incident's shape, exercised for real rather than by hand-inserting rows: the relative
+      // hookPath makes the adapter throw before any process exists, twice.
+      const broken = depsFor(fixture.workspaceId, 'm8-flow', 'relative/pause-gate.sh')
+      expect(await dispatchPlanning(broken)).toBeNull()
+      expect(await dispatchPlanning(broken)).toBeNull()
+      const runs = await prisma.slaveRun.findMany({ where: { kind: 'planning' } })
+      expect(runs).toHaveLength(2)
+      expect(runs.every((run) => run.status === 'failed' && run.spawnFailed)).toBe(true)
+
+      // The cap is untouched: the third dispatch, with a runtime that works, starts the plan.
+      expect((await planningCountSince(fixture.workspaceId, 0)).failures).toBe(0)
+      expect(await dispatchPlanning(depsFor(fixture.workspaceId))).not.toBeNull()
+      expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(3)
+    })
+
+    it('starts the count again from a planning reset, even after two real failures', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      const managerId = await addManager(fixture.teamId)
+      const past = new Date(Date.now() - 60_000)
+      await failedPlanning(managerId, { at: past })
+      await failedPlanning(managerId, { at: past })
+      expect(await dispatchPlanning(depsFor(fixture.workspaceId))).toBeNull()
+
+      // The event `retry_planning` writes (H4a). Nothing else changes: same goal, same rows.
+      await appendEvent({
+        type: 'workspace.planning_reset',
+        workspaceId: fixture.workspaceId,
+        actor: 'system',
+        payload: { version: 0, by: 'supervisor' },
+      })
+
+      expect((await planningCountSince(fixture.workspaceId, 0)).failures).toBe(0)
+      expect(await dispatchPlanning(depsFor(fixture.workspaceId))).not.toBeNull()
+      expect(await prisma.slaveRun.count({ where: { kind: 'planning' } })).toBe(3)
+    })
+
+    it('counts from the LATER of the goal and the reset, so an old reset gives nothing back', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      const managerId = await addManager(fixture.teamId)
+      // A reset an hour ago, then the goal re-set, then two real failures against THAT goal: the
+      // reset is behind the goal and buys nothing.
+      const reset = await appendEvent({
+        type: 'workspace.planning_reset',
+        workspaceId: fixture.workspaceId,
+        actor: 'system',
+        payload: { version: 0, by: 'supervisor' },
+      })
+      await prisma.executionEvent.update({ where: { seq: reset.seq }, data: { ts: new Date(Date.now() - 3_600_000) } })
+      await prisma.executionEvent.create({
+        data: {
+          type: 'workspace_goal_set',
+          workspaceId: fixture.workspaceId,
+          actor: 'human',
+          payload: { goal: 'Ship the checkout redesign' },
+          ts: new Date(Date.now() - 60_000),
+        },
+      })
+      await failedPlanning(managerId)
+      await failedPlanning(managerId)
+
+      expect((await planningCountSince(fixture.workspaceId, 0)).failures).toBe(2)
+      expect(await dispatchPlanning(depsFor(fixture.workspaceId))).toBeNull()
+    })
+
+    // The whole point of ONE helper: the number the tick stops at is the number the Supervisor
+    // announces. A mixed history -- a real failure before the reset, a spawn failure and a real
+    // failure after it -- reads the same through both.
+    it('reads the same count through the tick and through the Supervisor world', async (): Promise<void> => {
+      const fixture = await seed('Ship the checkout redesign')
+      repos.push(fixture.repoPath)
+      const managerId = await addManager(fixture.teamId)
+      await failedPlanning(managerId, { at: new Date(Date.now() - 120_000) })
+      const reset = await appendEvent({
+        type: 'workspace.planning_reset',
+        workspaceId: fixture.workspaceId,
+        actor: 'system',
+        payload: { version: 0, by: 'supervisor' },
+      })
+      await prisma.executionEvent.update({ where: { seq: reset.seq }, data: { ts: new Date(Date.now() - 60_000) } })
+      await failedPlanning(managerId, { spawnFailed: true })
+      await failedPlanning(managerId)
+
+      const count = await planningCountSince(fixture.workspaceId, 0)
+      expect(count.failures).toBe(1)
+      expect(count.resetsOfVersion).toBe(1)
+      const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
+      expect(world.planningFailuresSinceGoal).toBe(count.failures)
+      expect(world.planningResetsThisVersion).toBe(count.resetsOfVersion)
+      // One failure under a cap of two: the tick agrees there is an attempt left.
+      expect(await dispatchPlanning(depsFor(fixture.workspaceId))).not.toBeNull()
+    })
   })
 })
 

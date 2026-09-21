@@ -5,10 +5,12 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadSupervisorWorld, setGoal } from '@slave-of-ai/control'
 import { prisma } from '@slave-of-ai/db/client'
-import { observe, workspaceId as brandWorkspaceId, type TaskStatus } from '@slave-of-ai/domain'
+import { appendEvent } from '@slave-of-ai/events'
+import { observe, PLANNING_RETRY_CAP, workspaceId as brandWorkspaceId, type TaskStatus } from '@slave-of-ai/domain'
 import { ClaudeCodeAdapter, type AdapterRegistry } from '@slave-of-ai/providers'
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { dispatchPlanning } from '../../src/planning.js'
+import { replanVerdict } from '../../src/replan.js'
 import { drainPumps, type TickDeps } from '../../src/tick.js'
 
 /**
@@ -384,5 +386,106 @@ describe('a re-plan that replaces a task (H5)', () => {
       failedProposals: [],
     })
     expect((await prisma.task.findUniqueOrThrow({ where: { id: board.replaced.id } })).status).toBe('failed')
+  }, 60_000)
+})
+
+/**
+ * H4b: what spends a re-plan's retry cap -- the same rule as the first plan's, anchored on the
+ * version being re-planned. A run that never reached the model spends nothing, and the
+ * Supervisor's `retry_planning` (a `workspace.planning_reset` naming this version) starts the count
+ * again.
+ */
+describe('a re-plan and the retry cap (H4b)', () => {
+  const repos: string[] = []
+
+  beforeEach(async (): Promise<void> => {
+    await prisma.$executeRawUnsafe(
+      'TRUNCATE TABLE "ExecutionEvent", "Checkpoint", "SlaveRun", "TaskDependency", "Task", "Slave", "Person", "Team", "Workspace", "User" RESTART IDENTITY CASCADE',
+    )
+  })
+
+  afterEach(async (): Promise<void> => {
+    await drainPumps()
+  })
+
+  afterAll(async (): Promise<void> => {
+    for (const repo of repos) rmSync(repo, { recursive: true, force: true })
+  })
+
+  /** A board at goal v1, and the goal moved to v2 -- a re-plan is due. */
+  async function goalMoved(): Promise<{ readonly fixture: Fixture; readonly managerId: string; readonly taskId: string }> {
+    const fixture = await seed()
+    repos.push(fixture.repoPath)
+    const managerId = await addSlave(fixture.teamId, 'Atlas', 'Engineering Lead', 'manager')
+    await addSlave(fixture.teamId, 'Beryl', 'backend', 'backend')
+    expect((await setGoal(fixture.workspaceId, V1)).ok).toBe(true)
+    const task = await prisma.task.create({
+      data: {
+        workspaceId: fixture.workspaceId,
+        title: 'Competitive and market research',
+        description: 'Read the market.',
+        status: 'backlog',
+        requiredRole: 'backend',
+        maxAttempts: 3,
+        goalVersion: 1,
+      },
+    })
+    expect((await setGoal(fixture.workspaceId, V2)).ok).toBe(true)
+    return { fixture, managerId, taskId: task.id }
+  }
+
+  /** A failed planning run against the current goal -- a real one unless `spawnFailed`. */
+  async function failedPlanning(managerId: string, spawnFailed = false): Promise<void> {
+    const now = new Date()
+    await prisma.slaveRun.create({
+      data: { slaveId: managerId, kind: 'planning', status: 'failed', startedAt: now, terminalAt: now, endedAt: now, spawnFailed },
+    })
+  }
+
+  it('leaves a re-plan that never reached the model out of its version\'s cap', async (): Promise<void> => {
+    const { fixture, managerId, taskId } = await goalMoved()
+    await failedPlanning(managerId, true)
+    await failedPlanning(managerId, true)
+
+    const verdict = await replanVerdict(fixture.workspaceId, 2, PLANNING_RETRY_CAP)
+    expect(verdict.failedAttempts).toBe(0)
+    expect(verdict.blockedBy).toBeNull()
+    expect(verdict.willReplan).toBe(true)
+    expect(await dispatchPlanning(depsForReplan(fixture.workspaceId, taskId))).not.toBeNull()
+  }, 60_000)
+
+  it('counts again from a reset of THIS version, and not from a reset of an older one', async (): Promise<void> => {
+    const { fixture, managerId, taskId } = await goalMoved()
+    await failedPlanning(managerId)
+    await failedPlanning(managerId)
+    expect(await replanVerdict(fixture.workspaceId, 2, PLANNING_RETRY_CAP)).toMatchObject({
+      failedAttempts: 2,
+      blockedBy: 'retry_cap',
+      willReplan: false,
+    })
+    expect(await dispatchPlanning(depsForReplan(fixture.workspaceId, taskId))).toBeNull()
+
+    // A reset that names the OLD version gives this one nothing back.
+    await appendEvent({
+      type: 'workspace.planning_reset',
+      workspaceId: fixture.workspaceId,
+      actor: 'system',
+      payload: { version: 1, by: 'supervisor' },
+    })
+    expect((await replanVerdict(fixture.workspaceId, 2, PLANNING_RETRY_CAP)).blockedBy).toBe('retry_cap')
+
+    // A reset naming THIS version does.
+    await appendEvent({
+      type: 'workspace.planning_reset',
+      workspaceId: fixture.workspaceId,
+      actor: 'system',
+      payload: { version: 2, by: 'supervisor' },
+    })
+    expect(await replanVerdict(fixture.workspaceId, 2, PLANNING_RETRY_CAP)).toMatchObject({
+      failedAttempts: 0,
+      blockedBy: null,
+      willReplan: true,
+    })
+    expect(await dispatchPlanning(depsForReplan(fixture.workspaceId, taskId))).not.toBeNull()
   }, 60_000)
 })
