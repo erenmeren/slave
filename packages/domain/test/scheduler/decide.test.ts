@@ -63,6 +63,15 @@ describe('decide', () => {
     expect(decide(world({ tasks: [task('TASK-1', { dependenciesDone: false })] }))).toEqual([])
   })
 
+  // H9b R1 (F5): a task the provider just refused waits out its backoff, and the next task in line
+  // takes the seat instead of the refused one being handed straight back into the same refusal.
+  it('skips a task that is backing off from a provider refusal', () => {
+    const commands = decide(
+      world({ tasks: [task('TASK-1', { status: 'rework', backingOff: true, priority: 9 }), task('TASK-2')] }),
+    )
+    expect(startedTaskIds(commands)).toEqual(['TASK-2'])
+  })
+
   it('ignores tasks in a non-startable status', () => {
     expect(decide(world({ tasks: [task('TASK-1', { status: 'running' })] }))).toEqual([])
   })

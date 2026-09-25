@@ -411,7 +411,7 @@ describe('dispatchPlanning', () => {
     expect(failures).toHaveLength(1)
     expect(failures[0]?.taskId).toBeNull()
     // H4b: the row and the event both say the model was never asked.
-    expect(run.spawnFailed).toBe(true)
+    expect(run.failureClass).toBe('platform')
     expect(failures[0]?.payload).toMatchObject({ phase: 'spawn' })
   })
 
@@ -434,7 +434,7 @@ describe('dispatchPlanning', () => {
           startedAt: at,
           terminalAt: at,
           endedAt: at,
-          spawnFailed: options.spawnFailed ?? false,
+          failureClass: options.spawnFailed === true ? 'platform' : 'worker',
         },
       })
     }
@@ -450,7 +450,7 @@ describe('dispatchPlanning', () => {
       expect(await dispatchPlanning(broken)).toBeNull()
       const runs = await prisma.slaveRun.findMany({ where: { kind: 'planning' } })
       expect(runs).toHaveLength(2)
-      expect(runs.every((run) => run.status === 'failed' && run.spawnFailed)).toBe(true)
+      expect(runs.every((run) => run.status === 'failed' && run.failureClass === 'platform')).toBe(true)
 
       // The cap is untouched: the third dispatch, with a runtime that works, starts the plan.
       expect((await planningCountSince(fixture.workspaceId, 0)).failures).toBe(0)

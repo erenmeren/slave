@@ -1,4 +1,5 @@
 import type { PermissionKind } from '../permission/kinds.js'
+import type { FailureClass } from '../run/failure.js'
 
 /**
  * What a failure WAS, as far as rows can say (spec §3).
@@ -42,10 +43,11 @@ export interface FailureFacts {
   readonly requiredPermissions: readonly string[]
   /** `Task.requiredRole`, free text an operator or a planner typed. */
   readonly requiredRole: string
-  /** H4b: the newest failed run never reached the model (`TaskFailure.spawnFailed`). A fact off
-   *  the row, which is what makes the `infrastructure` reading below certain rather than a
-   *  regular expression's guess about a sentence. */
-  readonly spawnFailed: boolean
+  /** H9b R1 (was H4b's `spawnFailed`): whose failure the newest failed run was
+   *  (`TaskFailure.failureClass`). `platform` is a fact off the row, which is what makes the
+   *  `infrastructure` reading below certain rather than a regular expression's guess about a
+   *  sentence. */
+  readonly failureClass: FailureClass | null
 }
 
 /**
@@ -116,10 +118,11 @@ export function readFailure(input: FailureFacts): FailureDiagnosis {
   const reason = input.reason ?? ''
   const deniedKind = deniedKindFor(input)
   if (deniedKind !== null) return { reading: 'denied_tool', deniedKind }
-  // H4b: a run that never reached the model is infrastructure by definition, whatever its reason
-  // line says -- the row knows, so the sentence is not consulted. After `denied_tool` for the
-  // ordering's own reason, and harmlessly so: a run that never spawned was refused nothing.
-  if (input.spawnFailed) return { reading: 'infrastructure', deniedKind: null }
+  // H9b R1: a platform failure is infrastructure by definition, whatever its reason line says --
+  // the row knows, so the sentence is not consulted. After `denied_tool` for the ordering's own
+  // reason, and harmlessly so: a run that never spawned was refused nothing, and a refusal a
+  // crashed or rate-limited run did record is still the wall the retry would walk into.
+  if (input.failureClass === 'platform') return { reading: 'infrastructure', deniedKind: null }
   if (INFRASTRUCTURE.test(reason)) return { reading: 'infrastructure', deniedKind: null }
   // "With no denied kind" is the table's own clause, and it is deliberately ANY refusal rather
   // than only the ones above: a worker that kept meeting a wall nothing here can grant may well be

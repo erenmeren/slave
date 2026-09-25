@@ -57,6 +57,24 @@ export interface RunOutcome {
 }
 
 /**
+ * H9b R1 (F5): did the PROVIDER refuse this run -- a rate limit, an overload, an auth failure --
+ * rather than the work fail?
+ *
+ * Read off `terminalReason`, which is the runtime's own CATEGORY (`terminal_reason` on Claude's
+ * result line) and never our prose: `api_error` is the one category that says the model was not
+ * the one answering. `startsWith` so a degraded result line (`api_error (degraded result line,
+ * missing: ...)`) still reads as the refusal it is. `errorText` separates a passing overload from
+ * an exhausted account, and deliberately does not matter here: both are the platform's, and the
+ * backoff that follows (`PROVIDER_ERROR_BACKOFF_MS`, doubling to ten minutes) serves both.
+ *
+ * Cursor's stream names no such category -- its result line carries a `subtype` and nothing that
+ * says who failed -- so a Cursor refusal reads as the worker's until one is measured.
+ */
+export function isProviderRefusal(outcome: RunOutcome): boolean {
+  return outcome.isError && outcome.terminalReason.startsWith('api_error')
+}
+
+/**
  * The adapter's vocabulary. `parseStreamLine` turns one NDJSON line from the
  * `claude` CLI into exactly one of these.
  *

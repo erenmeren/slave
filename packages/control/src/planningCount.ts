@@ -1,4 +1,5 @@
 import { prisma } from '@slave-of-ai/db/client'
+import { NOT_PLATFORM_FAILURE } from './failureClass.js'
 
 /**
  * H4b: the ONE reading of "how many planning runs have failed against this goal", shared by the
@@ -18,10 +19,11 @@ import { prisma } from '@slave-of-ai/db/client'
  *    TIME, which is the column the runs are then compared against.
  *
  * 2. **Which runs.** `planning` runs of this workspace that FAILED and started after that instant,
- *    EXCLUDING a run that never reached the model (`SlaveRun.spawnFailed`): no runtime, an adapter
- *    refusal, a spawn that threw. Such a failure is the installation's, not the planner's, and it
- *    spends nothing -- on 2026-09-21 two of them landed in the same second and spent the whole
- *    cap, and nothing could re-plan.
+ *    EXCLUDING a PLATFORM failure (`SlaveRun.failureClass`, H9b R1 -- was H4b's `spawnFailed`): a
+ *    spawn that never reached the model, a run orphaned by a daemon crash, a provider refusal.
+ *    Such a failure is the installation's, not the planner's, and it spends nothing -- on
+ *    2026-09-21 two spawn failures landed in the same second and spent the whole cap, and nothing
+ *    could re-plan.
  *
  * Which `goal_set` anchors the count is the one thing the readers legitimately differ on, and
  * {@link PlanningAnchor} names the two readings rather than letting each caller spell its own:
@@ -38,7 +40,7 @@ import { prisma } from '@slave-of-ai/db/client'
 export interface PlanningCount {
   /** When the count starts. The epoch when neither event exists. */
   readonly since: Date
-  /** `planning` runs that FAILED after {@link since}, spawn failures excluded. */
+  /** `planning` runs that FAILED after {@link since}, platform failures excluded. */
   readonly failures: number
   /** `workspace.planning_reset` rows naming `goalVersion` -- how many times THIS version's cap
    *  has already been given back. Read by the once-per-version rule at both the offer and the
@@ -110,7 +112,7 @@ export async function planningCountSince(
     where: {
       kind: 'planning',
       status: 'failed',
-      spawnFailed: false,
+      ...NOT_PLATFORM_FAILURE,
       startedAt: { gt: since },
       slave: { team: { workspaceId } },
     },

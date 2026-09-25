@@ -33,6 +33,7 @@ import {
   type SupervisorWorld,
   type TaskFailure,
   type BreakerTripKind,
+  type FailureClass,
   type RunStatus,
   type TaskStatusName,
   type ThreadMessage,
@@ -432,8 +433,9 @@ async function loadLatestGuardrails(
  *
  * JOINED to `SlaveRun` for two columns. `kind`: the Supervisor's reading of a failure turns on
  * whether a REVIEW broke or the work did (a broken reviewer is retried, broken work is reworked),
- * and the event does not carry it. `spawnFailed` (H4b): whether the run's process ever started,
- * which makes the `infrastructure` reading a fact off the row rather than a match on the sentence.
+ * and the event does not carry it. `failureClass` (H9b R1, was H4b's `spawnFailed`): whether the
+ * platform rather than the worker failed, which makes the `infrastructure` reading a fact off the
+ * row rather than a match on the sentence.
  * The join is also the bound that drops a `run.failed` with no run
  * behind it -- there is none the pipeline writes, and a row that cannot say which kind of run it
  * was is a fact the domain could not act on. The `RunKind` enum has exactly the three members
@@ -460,7 +462,7 @@ async function loadLatestFailures(
       readonly runKind: string | null
       readonly ts: Date
       readonly slaveId: string | null
-      readonly spawnFailed: boolean
+      readonly failureClass: FailureClass | null
     }[]
   >`
     SELECT DISTINCT ON (e."taskId")
@@ -469,7 +471,7 @@ async function loadLatestFailures(
            r.kind::text AS "runKind",
            e.ts AS ts,
            e."slaveId" AS "slaveId",
-           r."spawnFailed" AS "spawnFailed"
+           r."failureClass"::text AS "failureClass"
     FROM "ExecutionEvent" e
     JOIN "SlaveRun" r ON r.id = e."runId"
     WHERE e."workspaceId" = ${workspaceId}
@@ -489,9 +491,9 @@ async function loadLatestFailures(
                 reason: row.reason,
                 at: row.ts.getTime(),
                 slaveId: row.slaveId,
-                // H4b: off the same joined row as `kind` -- the run says whether its process ever
-                // started, and the reading `infrastructure` is then a fact rather than a match.
-                spawnFailed: row.spawnFailed,
+                // H9b R1: off the same joined row as `kind` -- the run says whether the platform
+                // failed it, and the reading `infrastructure` is then a fact rather than a match.
+                failureClass: row.failureClass,
               },
             ] as const,
           ],

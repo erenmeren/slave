@@ -19,7 +19,7 @@ import { drainPumps, tick, type TickDeps } from '../../src/tick.js'
  * two failures of the planner, and nothing could re-plan -- for ever, silently. Two things had to
  * be true for that to stop, and each half of this file proves one of them against real rows:
  *
- *  1. A run that never reached the model spends nothing (`SlaveRun.spawnFailed`), so once the
+ *  1. A run that never reached the model spends nothing (`SlaveRun.failureClass = platform`, H4b's `spawnFailed` before H9b R1), so once the
  *     Supervisor's `configure_runtime` gives the project a runtime, the very next tick plans.
  *  2. A cap spent by REAL failures is given back exactly once per goal version
  *     (`retry_planning` -> `workspace.planning_reset`), and a second spend is a person's call.
@@ -159,7 +159,7 @@ describe('planning that cannot start, end to end through the tick (H4a/H4b)', ()
     expect(first.halted).toBeNull()
 
     const failed = (await planningRuns(fixture.workspaceId))[0]!
-    expect(failed).toMatchObject({ status: 'failed', spawnFailed: true, pid: null })
+    expect(failed).toMatchObject({ status: 'failed', failureClass: 'platform', pid: null })
     const failure = await prisma.executionEvent.findFirstOrThrow({ where: { runId: failed.id, type: 'run_failed' } })
     expect(failure.payload).toMatchObject({ phase: 'spawn' })
     expect((failure.payload as { reason: string }).reason).toContain('no runtime could be resolved')
@@ -184,7 +184,7 @@ describe('planning that cannot start, end to end through the tick (H4a/H4b)', ()
     await drainPumps()
 
     const runs = await planningRuns(fixture.workspaceId)
-    expect(runs.map((run) => [run.status, run.spawnFailed])).toEqual([
+    expect(runs.map((run) => [run.status, run.failureClass === 'platform'])).toEqual([
       ['failed', true],
       ['succeeded', false],
     ])
@@ -205,7 +205,7 @@ describe('planning that cannot start, end to end through the tick (H4a/H4b)', ()
     }
     const spent = await planningRuns(fixture.workspaceId)
     expect(spent).toHaveLength(PLANNING_RETRY_CAP)
-    expect(spent.every((run) => run.status === 'failed' && !run.spawnFailed)).toBe(true)
+    expect(spent.every((run) => run.status === 'failed' && run.failureClass !== 'platform')).toBe(true)
     expect(await prisma.task.count({ where: { workspaceId: fixture.workspaceId } })).toBe(0)
 
     // ---- Tick 3: the cap is spent, and the Supervisor gives it back, once ---------------------

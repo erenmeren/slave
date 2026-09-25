@@ -258,7 +258,7 @@ export const executionEventSchema = z.discriminatedUnion('type', [
   }),
   // H4b: `phase: 'spawn'` marks a run that failed BEFORE the model was ever asked -- the runtime
   // could not be resolved, the adapter refused the pairing, or the spawn itself threw. Written by
-  // the three dispatch catches beside `SlaveRun.spawnFailed`, and optional for the same
+  // the three dispatch catches beside `SlaveRun.failureClass = platform` (H9b R1), and optional for the same
   // back-compat reason as every optional payload field here: every `run.failed` row before H4b
   // carries no phase, and a reader treats its absence as "the process ran".
   z.object({

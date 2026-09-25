@@ -219,6 +219,38 @@ export function hasTickRun(workspaceId: WorkspaceId): boolean {
 /** For tests, which run many independent daemon lifetimes inside one process. */
 export function resetTickObservation(): void {
   tickedWorkspaces.clear()
+  lastSweepAt.clear()
+}
+
+/**
+ * H9b R1 (F11a): how long the gap between two sweep passes of one workspace may be before the pass
+ * that ends it is read as coming after a CLOCK JUMP -- the host slept, or the daemon was frozen.
+ *
+ * Five beats. A healthy daemon sweeps every tick, a tick is seconds apart, and a slow one (a long
+ * merge, a broker call) is still well inside one beat; five beats of nothing is a process that was
+ * not running at all. On 2026-09-22 the host slept from 14:54 to 06:17, and on wake the sweep timed
+ * out three runs by wall clock -- `startedAt` sixteen hours ago against a thirty-minute limit -- and
+ * the breaker halted the project for them. Nothing the workers did had anything to do with it.
+ */
+export const CLOCK_JUMP_MS = 5 * BREAKER_BEAT_MS
+
+/**
+ * When THIS process last swept each workspace. In memory, like {@link tickedWorkspaces}, because
+ * the question is about this process's own clock: a daemon that restarts has no previous pass to
+ * measure from, and every run the dead one left behind is an orphan -- `reconcileOrphans`' platform
+ * failure, not this one's.
+ */
+const lastSweepAt = new Map<string, number>()
+
+/**
+ * Records a sweep pass of `workspaceId` at `at` and says whether the gap since the previous one
+ * was a clock jump ({@link CLOCK_JUMP_MS}). Exported so a test can place the previous pass in the
+ * past, which is the only way to reproduce a host that slept without sleeping.
+ */
+export function noteSweepAt(workspaceId: WorkspaceId, at: number): boolean {
+  const previous = lastSweepAt.get(workspaceId)
+  lastSweepAt.set(workspaceId, at)
+  return previous !== undefined && at - previous > CLOCK_JUMP_MS
 }
 
 /**
@@ -261,7 +293,12 @@ export async function reconcileOrphans(deps: SweepDeps): Promise<number> {
       where: { id: run.id },
       // `terminalAt` matters: it is the key `loadWorld` orders the failure streak by, and an orphan
       // concluded without it sorts by `startedAt` instead — the mixed-clock case Task 10 carried.
-      data: { status: 'failed', terminalAt: now, endedAt: now },
+      //
+      // H9b R1 (F4): `platform`. A process that died with the daemon is the daemon's failure, and
+      // the breaker's streak leaves it out: on 2026-09-21 the restart-chaos gate landed three kills
+      // in a row on one task, each orphan counted as a failure, and the breaker halted the project
+      // and asked a person to decide what the daemon had done to itself.
+      data: { status: 'failed', terminalAt: now, endedAt: now, failureClass: 'platform' },
     })
 
     // Release the task the run was holding. `startRun` (tick.ts) and `dispatchReview` (review.ts,
@@ -471,6 +508,9 @@ export async function reconcileStrandedClaims(
  * what a dead pid means.
  */
 export async function sweep(deps: SweepDeps): Promise<SweepReport> {
+  // H9b R1 (F11a): first, before any read -- the gap is between PASSES, and a pass that throws
+  // halfway is still a pass this process was awake for.
+  const clockJumped = noteSweepAt(deps.workspaceId, Date.now())
   const workspace = await db.workspace.findUniqueOrThrow({ where: { id: deps.workspaceId } })
   // `slave: { team: { workspaceId } }`, not `task: { workspaceId }`: a `planning` run (M8b) has no
   // `Task` row, and the timeout/tool-cap guardrails below must still reach it.
@@ -558,7 +598,16 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     }
 
     const breaches: string[] = []
-    if (timedOutNow) breaches.push(`it has been running longer than the workspace's ${workspace.runTimeoutMs}ms limit`)
+    if (timedOutNow) {
+      breaches.push(
+        `it has been running longer than the workspace's ${workspace.runTimeoutMs}ms limit` +
+          // Said in the event, because the class on the row is invisible from the log: a reader
+          // must be able to tell a sleep from a slow worker without a query.
+          (clockJumped && !overCapNow
+            ? ' (decided after a clock jump -- the host slept or the daemon froze -- so it is the platform\'s failure and costs no attempt)'
+            : ''),
+      )
+    }
     if (overCapNow) {
       // The SAME expression the comparison used (fix round 1, Minor 7). A constrained run has a
       // ceiling of its own, and a sentence naming the workspace's instead told an operator the run
@@ -574,9 +623,17 @@ export async function sweep(deps: SweepDeps): Promise<SweepReport> {
     // forever, the task was never released, the failure streak never saw it, and a
     // `guardrail.tripped` announced a cancellation of a run that had succeeded. Nothing recovered
     // it in-process, because `stopping` is not swept.
+    //
+    // H9b R1 (F11a): a timeout decided on the pass after a clock jump is the PLATFORM's failure, and
+    // the class is written HERE, with the claim, because this pass is the only thing that knows
+    // the clock jumped: the pump concludes the cancelled run `failed` a moment later and leaves the
+    // class alone, `verifyConcludedRun` gives the task its attempt back, and the breaker leaves the
+    // run out of its streak. A tool-call ceiling is the worker's whatever the clock did, so a run
+    // over its cap as well as its time keeps the worker's class.
+    const platformTimeout = clockJumped && timedOutNow && !overCapNow
     const claimed = await db.slaveRun.updateMany({
       where: { id: run.id, status: { in: [...SWEEPABLE] } },
-      data: { status: 'stopping' },
+      data: { status: 'stopping', ...(platformTimeout ? { failureClass: 'platform' as const } : {}) },
     })
     if (claimed.count === 0) continue
 
@@ -1124,9 +1181,12 @@ async function concludeDeadRun(
   },
 ): Promise<void> {
   const now = new Date()
+  // H9b R1 (F4): `platform`, for `reconcileOrphans`' reason. No live pump in this process owns the
+  // run, so the process that was reading it is gone -- a daemon that died, or one that was killed
+  // -- and the child went with it or after it. Not the worker failing.
   const concluded = await db.slaveRun.updateMany({
     where: { id: run.id, status: { in: [...SWEEPABLE] } },
-    data: { status: 'failed', terminalAt: now, endedAt: now },
+    data: { status: 'failed', terminalAt: now, endedAt: now, failureClass: 'platform' },
   })
   if (concluded.count === 0) return
 

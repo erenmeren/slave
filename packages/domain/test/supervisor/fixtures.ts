@@ -86,7 +86,7 @@ export function taskFailure(overrides: Partial<TaskFailure> = {}): TaskFailure {
     slaveId: null,
     // H4b: the process ran, which is what every failure in this file means unless it says
     // otherwise -- a test about a run the model never saw sets this itself.
-    spawnFailed: false,
+    failureClass: null,
     ...overrides,
   }
 }

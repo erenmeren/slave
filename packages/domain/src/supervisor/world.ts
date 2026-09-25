@@ -5,6 +5,7 @@ import type { PermissionKind } from '../permission/kinds.js'
 import type { HandoffContract } from '../handoff/contract.js'
 import type { SlaveLifecycle } from '../lifecycle/types.js'
 import type { Runbook } from '../runbook/spec.js'
+import type { FailureClass } from '../run/failure.js'
 import type { RunStatus } from '../run/state.js'
 import type { TaskStatus } from '../task/state.js'
 import type { ActionKind, DecisionStatus, Tier } from './actions.js'
@@ -41,14 +42,16 @@ export interface TaskFailure {
    */
   readonly slaveId: string | null
   /**
-   * H4b: the run FAILED BEFORE THE MODEL WAS EVER ASKED -- no runtime, an adapter refusal, a spawn
-   * that threw. A fact off the row (`SlaveRun.spawnFailed`), not a reading of {@link reason}:
-   * `readFailure` returns `infrastructure` for it whatever the sentence says, so the remedy is the
-   * same run again and never a judgement of work that was never done.
+   * H9b R1 (was H4b's `spawnFailed`): whose failure this was. `platform` -- a spawn that never
+   * reached the model, a process that died with the daemon, a provider refusal, a timeout decided
+   * after the host slept -- is a fact off the row, not a reading of {@link reason}: `readFailure`
+   * returns `infrastructure` for it whatever the sentence says, so the remedy is the same run again
+   * and never a judgement of work the worker was not allowed to finish.
    *
-   * LOADER CONTRACT: `SlaveRun.spawnFailed` of the run the `run.failed` event names.
+   * LOADER CONTRACT: `SlaveRun.failureClass` of the run the `run.failed` event names; null for a
+   * row written before the column existed, which reads as `worker`.
    */
-  readonly spawnFailed: boolean
+  readonly failureClass: FailureClass | null
 }
 
 /** A task, flattened to the facts a situation predicate actually reads. */
@@ -475,9 +478,10 @@ export interface SupervisorWorld {
    * applied.
    *
    * LOADER CONTRACT: 0 unless the board is behind the goal (see {@link livePlanning}). H4b: a run
-   * that died before the model was ever asked (`SlaveRun.spawnFailed`) is NOT counted -- that is
-   * infrastructure, not a planner that cannot plan -- and the count is `planningCountSince`'s, the
-   * one reading `dispatchPlanning` stops at too.
+   * that failed for the PLATFORM (`SlaveRun.failureClass`, H9b R1 -- a spawn that never reached the
+   * model, a daemon crash, a provider refusal) is NOT counted -- that is infrastructure, not a
+   * planner that cannot plan -- and the count is `planningCountSince`'s, the one reading
+   * `dispatchPlanning` stops at too.
    */
   readonly planningFailuresSinceGoal: number
   /**

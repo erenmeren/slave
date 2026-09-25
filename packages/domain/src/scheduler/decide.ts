@@ -13,6 +13,13 @@ export interface SchedulableTask {
   readonly requiredRole: string
   readonly priority: number
   readonly dependenciesDone: boolean
+  /**
+   * H9b R1 (F5): the task's latest run was refused by the provider (`api_error`) and its backoff
+   * has not run out (`providerBackoffUntil`). Read against the loader's clock rather than carried
+   * as an instant, so `decide()` stays a function of the world alone. Optional because a task
+   * with no refusal behind it -- every test fixture, and nearly every task -- has nothing to say.
+   */
+  readonly backingOff?: boolean
 }
 
 export interface SchedulableSlave {
@@ -53,7 +60,7 @@ export function decide(world: World): readonly Command[] {
   }
 
   const candidates = world.tasks
-    .filter((t) => STARTABLE.includes(t.status) && t.dependenciesDone)
+    .filter((t) => STARTABLE.includes(t.status) && t.dependenciesDone && t.backingOff !== true)
     .toSorted((a, b) => (b.priority - a.priority) || a.id.localeCompare(b.id))
 
   const availableSlaves = new Map<SlaveId, SchedulableSlave>(

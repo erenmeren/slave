@@ -18,6 +18,7 @@ import { appendEvent } from '@slave-of-ai/events'
 import {
   capabilitiesOf,
   classifyGateEvent,
+  isProviderRefusal,
   PERMISSION_DENY_REASON_PREFIX,
   parsePermissionDenyReason,
   type ProviderKind,
@@ -1343,6 +1344,13 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
     if (asked.kind === 'waiting') return null
   }
 
+  // H9b R1 (F5): a provider refusal is the PLATFORM failing, not the worker -- no breaker rung, the
+  // attempt given back (`verifyConcludedRun`), and the task held back for a backoff rather than
+  // handed straight back into the same refusal (`providerError`, read by `providerBackoffUntil`).
+  // Written on every conclusion, not only a failed one, so a run a clock-jump sweep pass had
+  // already marked `platform` (see `sweep.ts`) and that then succeeded after all reads as the
+  // success it is.
+  const refused = failed && isProviderRefusal(outcome)
   const terminalNow = new Date()
   const concluded = await prisma.slaveRun.updateMany({
     where: { id: runId, endedAt: null },
@@ -1351,6 +1359,8 @@ export async function pumpRun(input: PumpRunInput): Promise<RunOutcome | null> {
       costUsd: outcome.costUsd,
       terminalAt: terminalNow,
       endedAt: terminalNow,
+      failureClass: failed ? (refused ? 'platform' : 'worker') : null,
+      providerError: refused,
     },
   })
   // An already-terminal run was concluded by someone else -- an operator's `cancel`, or the sweep.
