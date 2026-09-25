@@ -967,9 +967,12 @@ async function startRun(deps: TickDeps, taskId: TaskId, slaveId: SlaveId): Promi
       }
     }
     // H4b: no handle means the model was never asked (`dispatchPlanning`'s rule) -- the row says
-    // so, and the breaker leaves such a run out of its streak. The TASK's attempt still counts
-    // (spec §13, `failToStart` below): a task whose worktree can never be provisioned must still
-    // stop being handed out, and that cap is the task's, not the worker's.
+    // so (`failureClass = 'platform'`, H9b R1), and the breaker leaves such a run out of its
+    // streak. The TASK's attempt still counts, and this is the one platform failure H9b R1 does not
+    // give the attempt back for (spec §13, `failToStart` below): a spawn failure is decided before
+    // any process exists and recurs on the very next tick, so a task whose worktree can never be
+    // provisioned must still stop being handed out -- given back, it would be handed out once a
+    // tick forever. A crash, a refusal or a sleep is a moment; a missing binary is a state.
     await failToStart(workspace.id, task, run.id, slave.id, error, cancelError, handle === null)
     return null
   }
@@ -1001,7 +1004,7 @@ async function failToStart(
 
   await prisma.slaveRun.update({
     where: { id: runId },
-    data: { status: 'failed', terminalAt: now, endedAt: now, spawnFailed },
+    data: { status: 'failed', terminalAt: now, endedAt: now, failureClass: spawnFailed ? 'platform' : 'worker' },
   })
 
   // Leftovers get `blocked`, not `rework`. `rework` is the exact precondition `acquireWorktree`

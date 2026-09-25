@@ -12,6 +12,7 @@ import {
 import {
   admitProvider,
   amendRunOutcome,
+  NOT_PLATFORM_FAILURE,
   refusalText,
   runFilePaths,
   settleTaskEvidence,
@@ -301,8 +302,11 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
   // next pass. Older than the implementation run it changes nothing, which is what a stamp from a
   // remedy applied before this implementation ran should do.
   const windowFrom = new Date(Math.max(latestImpl.startedAt.getTime(), task.reviewWindowFrom?.getTime() ?? 0))
+  // H9b R1: a PLATFORM failure is not a review attempt -- a reviewer whose process died with the
+  // daemon, or whose call the provider refused, produced no verdict because it was never allowed
+  // to, and three daemon kills must not park a task `blocked` for a reviewer that never failed.
   const reviewAttempts = await prisma.slaveRun.count({
-    where: { taskId: task.id, kind: 'review', startedAt: { gt: windowFrom } },
+    where: { taskId: task.id, kind: 'review', startedAt: { gt: windowFrom }, ...NOT_PLATFORM_FAILURE },
   })
   // The cap is reached, not merely one review failing: a single failed review already leaves the
   // task in `reviewing` for the next attempt (`concludeReview`'s invalid-verdict branch, deliberately
@@ -651,7 +655,7 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     const now = new Date()
     await prisma.slaveRun.update({
       where: { id: run.id },
-      data: { status: 'failed', terminalAt: now, endedAt: now, spawnFailed },
+      data: { status: 'failed', terminalAt: now, endedAt: now, failureClass: spawnFailed ? 'platform' : 'worker' },
     })
     // The task stays in `reviewing` -- this is infra failing to start, not the slave's work being
     // judged, so `attempt` (the slave-facing counter) is deliberately left untouched. But the claim

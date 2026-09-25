@@ -500,9 +500,9 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
   // later -- a hand-seeded goal with neither event counts from the epoch, so every planning run
   // against it counts. `planningCountSince` (H4b) is THE reading: the same function the Supervisor's
   // world loader raises `planning_stalled/cap_spent` from, so the number the tick stops at and the
-  // number the Supervisor announces cannot drift apart -- and it leaves out every run that never
-  // reached the model (`spawnFailed`), which is the installation failing, not the planner, and
-  // spends nothing. Silent at the cap: the `run.failed` events already written are the
+  // number the Supervisor announces cannot drift apart -- and it leaves out every PLATFORM failure
+  // (`failureClass`, H9b R1 -- a spawn that never reached the model, a daemon crash, a provider
+  // refusal), which is the installation failing, not the planner, and spends nothing. Silent at the cap: the `run.failed` events already written are the
   // escalation, and the Supervisor's situation is the remedy.
   // The FIRST-plan path only: a re-plan counts its own failures since its own version's
   // `goal_set` and its own version's resets, inside `replanIntent`, because "since the latest
@@ -780,7 +780,7 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
     const now = new Date()
     await prisma.slaveRun.update({
       where: { id: run.id },
-      data: { status: 'failed', terminalAt: now, endedAt: now, spawnFailed },
+      data: { status: 'failed', terminalAt: now, endedAt: now, failureClass: spawnFailed ? 'platform' : 'worker' },
     })
     await appendEvent({
       type: 'run.failed',

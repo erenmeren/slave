@@ -925,7 +925,7 @@ describe('workspaceStats', () => {
     const at = (minutesAgo: number): Date => new Date(NOW.getTime() - minutesAgo * 60_000)
     const run = async (status: 'failed' | 'succeeded', terminalAt: Date, spawnFailed = false): Promise<void> => {
       await prisma.slaveRun.create({
-        data: { slaveId: slave.id, status, kind: 'implementation', startedAt: terminalAt, terminalAt, spawnFailed },
+        data: { slaveId: slave.id, status, kind: 'implementation', startedAt: terminalAt, terminalAt, failureClass: spawnFailed ? 'platform' : null },
       })
     }
 
@@ -1704,8 +1704,9 @@ describe('loadSupervisorWorld -- the failure facts (E R2/R3)', () => {
       // The whole reason the column is on the fact: a `retry_task` that bundles a grant has to name
       // the worker the grant is for, and a failed task's run is in neither `runs` nor `denials`.
       slaveId: robin,
-      // H4b: the process ran (the row's default), so the reading is the sentence's.
-      spawnFailed: false,
+      // H9b R1: the row names no class (a seeded failure, as every one before the column), so the
+      // reading is the sentence's.
+      failureClass: null,
     })
     expect(taskIn(world, taskId)?.retries).toBe(1)
   })
@@ -1717,7 +1718,7 @@ describe('loadSupervisorWorld -- the failure facts (E R2/R3)', () => {
     const alex = await worker(fixture, 'Alex')
     const taskId = await makeTask(fixture, { title: 'the audit', status: 'blocked' })
     const run = await prisma.slaveRun.create({
-      data: { taskId, slaveId: alex, kind: 'implementation', status: 'failed', spawnFailed: true },
+      data: { taskId, slaveId: alex, kind: 'implementation', status: 'failed', failureClass: 'platform' },
     })
     await appendEvent({
       type: 'run.failed',
@@ -1730,7 +1731,7 @@ describe('loadSupervisorWorld -- the failure facts (E R2/R3)', () => {
     })
 
     const { world } = await loadSupervisorWorld(fixture.workspaceId, new Date())
-    expect(taskIn(world, taskId)?.latestFailure).toMatchObject({ runKind: 'implementation', spawnFailed: true })
+    expect(taskIn(world, taskId)?.latestFailure).toMatchObject({ runKind: 'implementation', failureClass: 'platform' })
   })
 
   it('carries the distinct capabilities the task has been refused across ALL its runs, including ended ones', async (): Promise<void> => {
@@ -1836,7 +1837,7 @@ describe('loadSupervisorWorld -- the planning facts (H4a)', () => {
       data: { teamId: fixture.teamId, role: 'Team Lead', runtimeRoles: ['manager'], personId: person.id },
     })
     const run = await prisma.slaveRun.create({
-      data: { slaveId: slave.id, kind: 'planning', status, spawnFailed, ...(startedAt === undefined ? {} : { startedAt }) },
+      data: { slaveId: slave.id, kind: 'planning', status, failureClass: spawnFailed ? 'platform' : null, ...(startedAt === undefined ? {} : { startedAt }) },
     })
     return run.id
   }

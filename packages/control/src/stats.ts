@@ -164,12 +164,15 @@ export async function workspaceStats(
   // streak is when it CONCLUDED, and `startedAt` stands in for rows written before the pump
   // populated `terminalAt`.
   //
-  // H4b: a run that never reached the model (`spawnFailed` -- no runtime, an adapter refusal, a
-  // spawn that threw) is left OUT of the window rather than counted as a failure or read as a
-  // break. A missing binary is not a worker failing three times, and the halt this streak raises
-  // would then stop a project for an installation problem the Supervisor's `planning_stalled` is
-  // the remedy for. Left out, not a break: three real failures with a spawn failure between them
-  // are still three real failures in a row.
+  // H4b, generalised by H9b R1: a PLATFORM failure (`failureClass = 'platform'` -- a spawn that
+  // never reached the model, a run orphaned by a daemon crash, a provider `api_error`, a timeout
+  // decided after the host slept) is left OUT of the window rather than counted as a failure or
+  // read as a break. A missing binary, a killed daemon or a rate limit is not a worker failing
+  // three times: on 2026-09-21 three daemon kills on one task (F4) and three rate-limit refusals
+  // (F5) each halted a project and asked a person to decide what the platform had done. Left out,
+  // not a break: three real failures with a platform failure between them are still three real
+  // failures in a row. `IS DISTINCT FROM`, not `<>`: a failed row written before the column
+  // existed has no class, counts as the worker's, and `<>` would drop it with the NULL.
   const concludedRuns = await client.$queryRaw<{ readonly status: RunStatus }[]>`
     SELECT r.status::text AS status
     FROM "SlaveRun" r
@@ -177,7 +180,7 @@ export async function workspaceStats(
     JOIN "Team" tm ON tm.id = a."teamId"
     WHERE tm."workspaceId" = ${workspaceId}
       AND r.status::text = ANY(${[...CONCLUDED_RUN_STATUSES]}::text[])
-      AND NOT r."spawnFailed"
+      AND r."failureClass" IS DISTINCT FROM 'platform'
       AND (
         ${workspace.haltClearedAt}::timestamp IS NULL
         OR COALESCE(r."terminalAt", r."startedAt") > ${workspace.haltClearedAt}::timestamp

@@ -340,7 +340,10 @@ export async function verifyConcludedRun(runId: RunId): Promise<void> {
       if (task === null) {
         throw new Error(`run ${run.id} of kind ${run.kind} has no task`)
       }
-      const release = await releaseTaskAfterFailure(task, run.id, 'rework')
+      // H9b R1: a PLATFORM failure -- a provider refusal, a timeout decided after the host slept --
+      // gives the attempt back. The task goes back to `rework` all the same; whether it may be
+      // picked up at once is the scheduler's question (`providerBackoffUntil`), not this one's.
+      const release = await releaseTaskAfterFailure(task, run.id, 'rework', { platform: run.failureClass === 'platform' })
       if (release.exhausted) {
         // The task's own terminal, not just the run's -- §13: no failure is silent, and without
         // this a task that just spent its last attempt drops off the board with `run.failed` as

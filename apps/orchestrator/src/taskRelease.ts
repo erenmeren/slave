@@ -4,7 +4,7 @@ import { prisma } from '@slave-of-ai/db/client'
  * What {@link releaseTaskAfterFailure} did, so the caller can announce it.
  */
 export interface TaskRelease {
-  /** The task's attempt count AFTER the increment. */
+  /** The task's attempt count AFTER the increment -- unchanged for a platform failure. */
   readonly attempt: number
   /** `true` when that count reached `maxAttempts` and the task was parked `failed`. */
   readonly exhausted: boolean
@@ -38,7 +38,15 @@ export async function releaseTaskAfterFailure(
   task: { readonly id: string; readonly maxAttempts: number },
   runId: string,
   parked: 'rework' | 'blocked',
+  /**
+   * H9b R1: the run failed for the PLATFORM (`SlaveRun.failureClass`) -- the task is released
+   * exactly as for any failure, but the attempt is given back: nothing is incremented and nothing
+   * can be exhausted. On 2026-09-21 two platform failures spent a task's attempts and a later
+   * worker failure then parked it `failed` with most of the board behind it (F7b).
+   */
+  options: { readonly platform?: boolean } = {},
 ): Promise<TaskRelease> {
+  const platform = options.platform === true
   return prisma.$transaction(async (tx) => {
     // Both writes inside one transaction (M35 final review, Important 2): the increment and the
     // park used to be two separate `updateMany`s, and a crash between them left the task
@@ -47,12 +55,14 @@ export async function releaseTaskAfterFailure(
     // anything that is not already `blocked`. Wrapping both in `$transaction` makes the pair
     // atomic: either the whole release lands, or neither write does and the task is exactly as it
     // was, for the next caller (a retry, `sweep.ts`, an operator) to find and release properly.
-    await tx.task.updateMany({
-      where: { id: task.id, activeRunId: runId },
-      data: { attempt: { increment: 1 } },
-    })
+    if (!platform) {
+      await tx.task.updateMany({
+        where: { id: task.id, activeRunId: runId },
+        data: { attempt: { increment: 1 } },
+      })
+    }
     const after = await tx.task.findUniqueOrThrow({ where: { id: task.id } })
-    const exhausted = after.attempt >= task.maxAttempts
+    const exhausted = !platform && after.attempt >= task.maxAttempts
     // `exhausted` is reported from THIS write's own outcome, not from the read above: the read can
     // be stale by the time this update runs (a concurrent cancel or sweep can win the race for the
     // same `runId` in between), and reporting `exhausted: true` for a release that actually matched

@@ -1033,6 +1033,12 @@ model ProviderConfiguration {
   @@unique([workspaceId, kind])
 }
 
+/// H9b R1: whose failure a failed `SlaveRun` was -- see `SlaveRun.failureClass`.
+enum FailureClass {
+  worker
+  platform
+}
+
 enum RunKind {
   implementation
   review
@@ -1278,18 +1284,26 @@ model SlaveRun {
   /// meets a `permissions.json` whose `tokenHash` it cannot match and is refused every tool call,
   /// which is the correct failure for an unidentifiable worker.
   runTokenHash      String?       @unique
-  /// H4b: this run FAILED BEFORE THE MODEL WAS EVER ASKED -- the runtime could not be resolved
-  /// (no `ProviderConfiguration`, a chain naming a model with no provider), the adapter refused
-  /// the pairing, or the spawn itself threw (a missing binary, a worktree that is not there). Set
-  /// by the three dispatch catches (`startRun`, `dispatchReview`, `dispatchPlanning`) exactly when
-  /// no `RunHandle` was ever returned; false for a run whose process started, however it ended.
+  /// H9b R1: WHOSE failure this was -- `worker` when the work itself failed (a terminal error, an
+  /// unexcused denial, a gate, a verdict nobody could parse), `platform` when nothing the worker did
+  /// could have changed the outcome. Null on every run that did not fail, and on a failed run a
+  /// reader then treats as `worker` -- the reading every failure had before this column existed.
   ///
-  /// What it is FOR: a failure like this spends nothing. It does not count against the planning
-  /// retry cap (`planningCountSince`), it does not join the circuit breaker's streak
-  /// (`workspaceStats`), and the Supervisor reads it as `infrastructure`. On 2026-09-21 two
-  /// planning runs failed in the same second at spawn and spent the whole cap, and nothing could
-  /// re-plan -- an installation problem read as a planner that cannot plan.
-  spawnFailed       Boolean       @default(false)
+  /// `platform` is, exhaustively: a run that failed BEFORE THE MODEL WAS EVER ASKED (H4b's
+  /// `spawnFailed`, which this column replaced -- no runtime, an adapter refusal, a spawn that
+  /// threw); a run concluded by orphan reconciliation because its process died with no conclusion
+  /// (a daemon crash in any form, `sweep.ts`); a run the provider refused with `api_error` (a rate
+  /// limit, an overload, an auth failure); and a run timed out on a
+  /// sweep pass that came after a clock jump (the host slept or the daemon froze, F11a).
+  ///
+  /// What it is FOR: a platform failure spends nothing. It does not join the circuit breaker's
+  /// streak (`workspaceStats`), it does not count against the planning retry cap
+  /// (`planningCountSince`) or the review retry cap, an implementation run's task gets its attempt
+  /// back, and the Supervisor reads it as `infrastructure`. On 2026-09-21 three daemon kills in a
+  /// row landed on one task and the breaker halted the project for them (F4); the same day three
+  /// rate-limit refusals did the same (F5); the next morning a host that had slept did it again
+  /// (F11). The daemon's own trouble must never cost a project a human decision.
+  failureClass      FailureClass?
   pid               Int?
   worktreePath      String?
   startedAt         DateTime      @default(now())

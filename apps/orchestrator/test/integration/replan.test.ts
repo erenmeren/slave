@@ -438,7 +438,7 @@ describe('a re-plan and the retry cap (H4b)', () => {
   async function failedPlanning(managerId: string, spawnFailed = false): Promise<void> {
     const now = new Date()
     await prisma.slaveRun.create({
-      data: { slaveId: managerId, kind: 'planning', status: 'failed', startedAt: now, terminalAt: now, endedAt: now, spawnFailed },
+      data: { slaveId: managerId, kind: 'planning', status: 'failed', startedAt: now, terminalAt: now, endedAt: now, failureClass: spawnFailed ? 'platform' : 'worker' },
     })
   }
 

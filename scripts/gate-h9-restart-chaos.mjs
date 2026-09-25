@@ -304,7 +304,7 @@ const describeRun = (row) =>
     terminalAt: row.terminalAt?.toISOString?.() ?? row.terminalAt ?? null,
     pauseReason: row.pauseReason ?? null,
     resumeRequestedAt: row.resumeRequestedAt?.toISOString?.() ?? null,
-    spawnFailed: row.spawnFailed,
+    failureClass: row.failureClass ?? null,
   })
 
 async function dumpGateRows() {

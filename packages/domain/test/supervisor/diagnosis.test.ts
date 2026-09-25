@@ -16,7 +16,7 @@ describe('readFailure -- the diagnosis table (spec §3)', () => {
     deniedKinds: [],
     requiredPermissions: [],
     requiredRole: 'backend',
-    spawnFailed: false,
+    failureClass: null,
   } as const
 
   it('reads the system failing, not the worker, off the infrastructure markers', () => {
@@ -37,18 +37,23 @@ describe('readFailure -- the diagnosis table (spec §3)', () => {
     expect(readFailure({ ...base, reason: 'STDOUT MAXBUFFER EXCEEDED' }).reading).toBe('infrastructure')
   })
 
-  // H4b: the row says the model was never asked, so the sentence is not consulted -- a reason
-  // no marker matches, or none at all, still reads as the system failing.
-  it('reads a run that never reached the model as infrastructure, whatever its reason says', () => {
-    expect(readFailure({ ...base, spawnFailed: true })).toEqual({ reading: 'infrastructure', deniedKind: null })
-    expect(readFailure({ ...base, reason: 'the worker concluded the task could not be done', spawnFailed: true })).toEqual({
+  // H4b, generalised by H9b R1: the row says the platform failed (a spawn that never reached the
+  // model, a daemon crash, a provider refusal), so the sentence is not consulted -- a reason no
+  // marker matches, or none at all, still reads as the system failing.
+  it('reads a platform failure as infrastructure, whatever its reason says', () => {
+    expect(readFailure({ ...base, failureClass: 'platform' })).toEqual({ reading: 'infrastructure', deniedKind: null })
+    expect(readFailure({ ...base, reason: 'the worker concluded the task could not be done', failureClass: 'platform' })).toEqual({
       reading: 'infrastructure',
       deniedKind: null,
     })
     // And the refusal still wins over it, as it does over the markers.
     expect(
-      readFailure({ ...base, deniedKinds: ['network_fetch'], requiredRole: 'research', spawnFailed: true }).reading,
+      readFailure({ ...base, deniedKinds: ['network_fetch'], requiredRole: 'research', failureClass: 'platform' }).reading,
     ).toBe('denied_tool')
+    // A `worker` failure is read from its sentence, exactly as a row with no class is.
+    expect(readFailure({ ...base, reason: 'the worker concluded the task could not be done', failureClass: 'worker' }).reading).not.toBe(
+      'infrastructure',
+    )
   })
 
   it('reads a refused tool the task itself asked for, and names the kind', () => {
