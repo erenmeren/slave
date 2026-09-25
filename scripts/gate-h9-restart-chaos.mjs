@@ -305,6 +305,7 @@ const describeRun = (row) =>
     pauseReason: row.pauseReason ?? null,
     resumeRequestedAt: row.resumeRequestedAt?.toISOString?.() ?? null,
     failureClass: row.failureClass ?? null,
+    providerError: row.providerError,
   })
 
 async function dumpGateRows() {

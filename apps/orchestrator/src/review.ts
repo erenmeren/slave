@@ -13,6 +13,7 @@ import {
   admitProvider,
   amendRunOutcome,
   NOT_PLATFORM_FAILURE,
+  providerBackoffFor,
   refusalText,
   runFilePaths,
   settleTaskEvidence,
@@ -355,6 +356,13 @@ async function dispatchReview(deps: TickDeps, task: ReviewableTask): Promise<Run
     }
     return null
   }
+
+  // 2b. H9b R1 (F5): a review the provider just refused waits out its backoff -- sixty seconds,
+  // doubling per consecutive refusal to ten minutes -- instead of being dispatched straight back
+  // into the same rate limit on the next tick. Silent, like a busy reviewer: the `run.failed` that
+  // named the refusal is the record, and the wait ends on its own.
+  const backoffUntil = await providerBackoffFor({ taskId: task.id, kind: 'review', startedAt: { gt: windowFrom } })
+  if (backoffUntil !== null && backoffUntil.getTime() > Date.now()) return null
 
   // 3. Reviewer staffing. `'reviewer' ∈ runtimeRoles` (M37 §5), not `role === 'reviewer'`: `role`
   // is the profile's TITLE since M37, so a worker whose persona heading reads "Senior Engineer"

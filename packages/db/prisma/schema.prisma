@@ -1293,7 +1293,7 @@ model SlaveRun {
   /// `spawnFailed`, which this column replaced -- no runtime, an adapter refusal, a spawn that
   /// threw); a run concluded by orphan reconciliation because its process died with no conclusion
   /// (a daemon crash in any form, `sweep.ts`); a run the provider refused with `api_error` (a rate
-  /// limit, an overload, an auth failure); and a run timed out on a
+  /// limit, an overload, an auth failure -- see {@link providerError}); and a run timed out on a
   /// sweep pass that came after a clock jump (the host slept or the daemon froze, F11a).
   ///
   /// What it is FOR: a platform failure spends nothing. It does not join the circuit breaker's
@@ -1304,6 +1304,12 @@ model SlaveRun {
   /// rate-limit refusals did the same (F5); the next morning a host that had slept did it again
   /// (F11). The daemon's own trouble must never cost a project a human decision.
   failureClass      FailureClass?
+  /// H9b R1 (F5): this run was refused by the PROVIDER -- the terminal result reported `api_error`.
+  /// Always alongside `failureClass = platform`, and kept apart from it because it is the one
+  /// platform failure that must NOT be retried at once: a rate limit answered with an immediate
+  /// retry is answered with the same refusal. The scheduler holds the task back for
+  /// `PROVIDER_ERROR_BACKOFF_MS`, doubling per consecutive refusal (`providerBackoffUntil`).
+  providerError     Boolean       @default(false)
   pid               Int?
   worktreePath      String?
   startedAt         DateTime      @default(now())

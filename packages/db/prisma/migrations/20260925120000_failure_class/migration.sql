@@ -12,6 +12,7 @@
 CREATE TYPE "FailureClass" AS ENUM ('worker', 'platform');
 
 ALTER TABLE "SlaveRun" ADD COLUMN "failureClass" "FailureClass";
+ALTER TABLE "SlaveRun" ADD COLUMN "providerError" BOOLEAN NOT NULL DEFAULT false;
 
 UPDATE "SlaveRun" SET "failureClass" = 'platform' WHERE "spawnFailed";
 UPDATE "SlaveRun" SET "failureClass" = 'worker' WHERE status = 'failed' AND NOT "spawnFailed";

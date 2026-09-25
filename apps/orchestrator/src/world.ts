@@ -4,6 +4,9 @@ import {
   slaveId,
   taskId,
   NON_TERMINAL_RUN_STATUSES,
+  PROVIDER_BACKOFF_ROWS,
+  providerBackoffUntil,
+  type BackoffRun,
   type SchedulableSlave,
   type SchedulableTask,
   type TaskStatus,
@@ -114,6 +117,50 @@ async function loadTaskRows(
   `
 }
 
+interface BackoffWorldRow {
+  readonly taskId: string
+  readonly providerError: boolean
+  readonly concludedAt: Date
+}
+
+/**
+ * H9b R1 (F5): the newest concluded `implementation` runs of every `rework` task in the workspace,
+ * at most {@link PROVIDER_BACKOFF_ROWS} per task and newest first -- what `providerBackoffUntil`
+ * reads a task's backoff from.
+ *
+ * One windowed query rather than one per task, because this runs inside `loadWorld`'s snapshot on
+ * every tick and a board can have many tasks in `rework`. Only `rework`: a provider refusal is
+ * concluded by `verifyConcludedRun`, which parks the task there, and a task in any other status is
+ * either not startable or was not refused. Only `failed` and `succeeded` rows, for
+ * `providerBackoffFor`'s reason: a stop is neither the provider refusing nor the provider answering.
+ */
+async function loadBackoffRows(
+  tx: Prisma.TransactionClient,
+  workspaceId: WorkspaceId,
+): Promise<readonly BackoffWorldRow[]> {
+  return tx.$queryRaw<BackoffWorldRow[]>`
+    SELECT x."taskId", x."providerError", x."concludedAt"
+    FROM (
+      SELECT
+        r."taskId",
+        r."providerError",
+        COALESCE(r."terminalAt", r."startedAt") AS "concludedAt",
+        row_number() OVER (
+          PARTITION BY r."taskId"
+          ORDER BY COALESCE(r."terminalAt", r."startedAt") DESC, r."startedAt" DESC
+        ) AS rank
+      FROM "SlaveRun" r
+      JOIN "Task" t ON t.id = r."taskId"
+      WHERE t."workspaceId" = ${workspaceId}
+        AND t.status = 'rework'
+        AND r.kind = 'implementation'
+        AND r.status IN ('failed', 'succeeded')
+    ) x
+    WHERE x.rank <= ${PROVIDER_BACKOFF_ROWS}::int
+    ORDER BY x."taskId", x.rank
+  `
+}
+
 interface SlaveWorldRow {
   readonly id: string
   /** M37 §5: what the scheduler matches `Task.requiredRole` against. `Slave.role` is the profile's
@@ -181,7 +228,7 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
   // decides from*. A torn read -- `slaves` from one instant, `stats` from another -- lets
   // `decide()` emit a `start_run` for a slave that became busy between two of the reads, and
   // that spawns a real `claude` process spending real money.
-  const { snapshot, taskRows, slaveRows } = await prisma.$transaction(
+  const { snapshot, taskRows, slaveRows, backoffRows } = await prisma.$transaction(
     async (tx) => {
       // Sequential rather than `Promise.all`: an interactive transaction is pinned to a single
       // connection, so queries issued concurrently on `tx` serialize anyway, and under
@@ -195,7 +242,8 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
       const snapshot = await workspaceStats(workspaceId, tx)
       const taskRows = await loadTaskRows(tx, workspaceId)
       const slaveRows = await loadSlaveRows(tx, workspaceId)
-      return { snapshot, taskRows, slaveRows }
+      const backoffRows = await loadBackoffRows(tx, workspaceId)
+      return { snapshot, taskRows, slaveRows, backoffRows }
     },
     {
       isolationLevel: 'RepeatableRead',
@@ -207,6 +255,22 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
       timeout: LOAD_WORLD_TIMEOUT_MS,
       maxWait: LOAD_WORLD_MAX_WAIT_MS,
     },
+  )
+
+  // H9b R1 (F5): which tasks are waiting out a provider refusal, against ONE clock read for the
+  // whole world -- `decide()` is handed a yes or a no, never an instant it would need a clock for.
+  const backoffByTask = new Map<string, BackoffRun[]>()
+  for (const row of backoffRows) {
+    const runs = backoffByTask.get(row.taskId) ?? []
+    runs.push({ providerError: row.providerError, concludedAt: row.concludedAt })
+    backoffByTask.set(row.taskId, runs)
+  }
+  const now = Date.now()
+  const backingOff = new Set(
+    [...backoffByTask].flatMap(([id, runs]) => {
+      const until = providerBackoffUntil(runs)
+      return until !== null && until.getTime() > now ? [id] : []
+    }),
   )
 
   let skippedNoRole = 0
@@ -222,6 +286,7 @@ export async function loadWorld(workspaceId: WorkspaceId): Promise<LoadedWorld> 
       requiredRole: row.requiredRole,
       priority: row.priority,
       dependenciesDone: row.dependenciesDone,
+      ...(backingOff.has(row.id) ? { backingOff: true } : {}),
     })
   }
 

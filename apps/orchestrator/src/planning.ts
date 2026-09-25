@@ -18,6 +18,7 @@ import {
   amendRunOutcome,
   listCapabilities,
   planningCountSince,
+  providerBackoffFor,
   readRunbookById,
   refusalText,
   runbookForWorkspace,
@@ -494,6 +495,13 @@ export async function dispatchPlanning(deps: TickDeps): Promise<RunId | null> {
     },
   })
   if (livePlanning > 0) return null
+
+  // 3b. H9b R1 (F5): a planner the provider just refused waits out its backoff -- sixty seconds,
+  // doubling per consecutive refusal to ten minutes. A refusal spends none of the retry cap below,
+  // so without this wait a rate-limited planner would be dispatched into the same refusal once a
+  // tick, each dispatch another refused call against the very limit that refused it.
+  const backoffUntil = await providerBackoffFor({ kind: 'planning', slave: { team: { workspaceId: deps.workspaceId } } })
+  if (backoffUntil !== null && backoffUntil.getTime() > Date.now()) return null
 
   // 4. Retry cap (spec Decision 8). Counted since the goal was last (re)set OR since the
   // Supervisor's `retry_planning` last gave the cap back (`workspace.planning_reset`), whichever is
